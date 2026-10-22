@@ -5,6 +5,7 @@
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/menu/EditorMenuPlatform.h"
+#include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
 
 #include <algorithm>
 #include <array>
@@ -93,7 +94,8 @@ namespace Horo::Editor {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0F);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0F);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
-            ImGui::Begin(id, nullptr, flags);
+            // Structural docks/rails must not steal explicit document focus when they first appear later in the frame.
+            ImGui::Begin(id, nullptr, flags | ImGuiWindowFlags_NoFocusOnAppearing);
         }
 
         void DrawAllocationTarget(const AllocationTarget &target, const EditorWorkspaceViewModel &viewModel,
@@ -345,13 +347,16 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc EditorWorkspaceView::~EditorWorkspaceView */
+    EditorWorkspaceView::~EditorWorkspaceView() = default;
+
     EditorWorkspaceView::EditorWorkspaceView(const EditorGuiContext &context, const WorkspacePanelRegistry &panelRegistry,
                                              const std::uintptr_t logoTexture, Input::InputRouter &inputRouter,
                                              Input::InputContextToken &workspaceInputContext, Extensions::EditorActivityHost *activityHost,
                                              IEditorGuiRenderer *renderer)
         : m_extensions(context, activityHost, renderer), m_extensionRecovery(context, activityHost ? &activityHost->Registry() : nullptr),
-          m_context(context), m_panelRegistry(panelRegistry), m_logoTexture(logoTexture), m_inputRouter(inputRouter),
-          m_workspaceInputContext(workspaceInputContext) {}
+          m_context(context), m_uiCanvasInspector(std::make_unique<UiCanvasInspectorPanel>()), m_panelRegistry(panelRegistry),
+          m_logoTexture(logoTexture), m_inputRouter(inputRouter), m_workspaceInputContext(workspaceInputContext) {}
 
     bool EditorWorkspaceView::EnsurePanelDragCapture() {
         if (m_panelDragCapture.IsActive()) {
@@ -449,11 +454,13 @@ namespace Horo::Editor {
 
     void EditorWorkspaceView::Draw(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
                                    const GuiContentRegion &contentRegion) {
+        outCommand.sourceTextInputOwned = false;
         if (!m_inputRouter.Snapshot().State(Input::PointerButton::Primary).down) {
             m_panelDragCapture.Release();
             m_panelDragContext.Reset();
             m_panelDragCandidateId.clear();
         }
+        m_extensions.SetInputAdmitted(m_inputRouter.IsContextActive(m_workspaceInputContext));
         m_extensionRecovery.Draw();
         const ImVec2 display{contentRegion.width, contentRegion.height};
 

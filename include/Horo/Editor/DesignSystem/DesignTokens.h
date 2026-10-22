@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <imgui.h>
+#include <optional>
 
 namespace Horo::Editor::DesignSystem {
 
@@ -148,6 +149,30 @@ namespace Horo::Editor::DesignSystem {
         float propertyRowGap; /**< Vertical separation between adjacent Inspector property controls. */
     };
 
+    /** @brief Optional semantic source colors; absent entries inherit the active editor palette. */
+    struct SourceColorTokens {
+        std::optional<ImVec4> text;
+        std::optional<ImVec4> keyword;
+        std::optional<ImVec4> type;
+        std::optional<ImVec4> string;
+        std::optional<ImVec4> number;
+        std::optional<ImVec4> comment;
+        std::optional<ImVec4> directive;
+        std::optional<ImVec4> property;
+    };
+
+    /** @brief Host theme motion policy; extension presentation cannot override reduced motion. */
+    struct MotionTokens {
+        float fast{0.10F};
+        float normal{0.18F};
+        float slow{0.30F};
+        float hover{0.12F};
+        float press{0.08F};
+        float focus{0.15F};
+        float modal{0.22F};
+        bool reduceMotion{};
+    };
+
     /** @brief Resolved immutable editor design tokens for one rendered frame. */
     struct DesignTokens {
         ColorTokens colors;
@@ -156,6 +181,8 @@ namespace Horo::Editor::DesignSystem {
         SizeTokens sizes;
         SpacingTokens spacing;
         ComponentTokens components;
+        MotionTokens motion;
+        SourceColorTokens sourceSyntax{};
     };
 
     /**
@@ -297,6 +324,7 @@ namespace Horo::Editor::DesignSystem {
                 },
                 std::array{0.0F, 4.0F, 8.0F, 12.0F, 16.0F, 24.0F},
             },
+            MotionTokens{},
         };
     }
 

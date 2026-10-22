@@ -2,10 +2,13 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <algorithm>
 #include <filesystem>
 
 namespace Horo::Editor {
     void EditorWorkspaceController::ProcessCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (m_prefabRefreshing)
+            return;
         // A transient overlay must not survive the interaction or workspace action that owns it.
         if (!m_viewport.Current().transformPreviews.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
             cmd.command != EditorWorkspaceViewCommand::PreviewObjectTransform &&
@@ -19,23 +22,109 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelLightComponentPreview) {
             CancelLightComponentPreview();
         }
-        if (m_assetPlacementPreviewActive && cmd.command != EditorWorkspaceViewCommand::None &&
+        if ((m_assetPlacementPreviewActive || m_prefabDrop) && cmd.command != EditorWorkspaceViewCommand::None &&
             cmd.command != EditorWorkspaceViewCommand::PreviewAssetPlacement &&
             cmd.command != EditorWorkspaceViewCommand::InstantiateAsset &&
             cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {
             CancelAssetPlacementPreview();
         }
+        if (cmd.command != EditorWorkspaceViewCommand::None && cmd.command != EditorWorkspaceViewCommand::EditPCGGraph)
+            for (auto &document : m_viewModel.pcgDocuments)
+                CancelPCGCanvasGesture(document.canvas);
+        if (!m_viewModel.selectedColliders.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
+            cmd.command != EditorWorkspaceViewCommand::SelectPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::CommitPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::NavigateViewport && cmd.command != EditorWorkspaceViewCommand::AlignViewportToAxis &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeViewportProjection &&
+            cmd.command != EditorWorkspaceViewCommand::FocusViewportSelection &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformTool &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformSpace) {
+            m_viewModel.selectedColliders.clear();
+            ++m_viewModel.colliderSelectionRevision;
+        }
         DispatchWorkspaceCommand(cmd);
+        RefreshWorldDocumentProjection();
+        UpdateWorldBake();
         RefreshSourceDocumentProjection();
+        RefreshPrefabDocuments();
     }
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
-        static_cast<void>(ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
-                          ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
+        if (cmd.command == EditorWorkspaceViewCommand::WorldLayerAuthoring) {
+            const auto result = cmd.worldLayerIntent
+                                    ? ApplyWorldLayerIntent(*cmd.worldLayerIntent)
+                                    : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            m_viewModel.worldLayerFailure = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
+            RefreshWorldDocumentProjection();
+            return;
+        }
+        if (ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
+            ProcessWorldSourceCommand(cmd) || ProcessUiCanvasCommand(cmd) || ProcessPrefabDocumentCommand(cmd) ||
+            ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) ||
+            ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
+            ProcessLayoutCommand(cmd))
+            return;
+        if (m_activePrefabDocument) {
+            ProcessFocusedPrefabCommand(cmd);
+            return;
+        }
+        static_cast<void>(ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) || ProcessCreatePrefabCommand(cmd) ||
                           ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
-                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
-                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd));
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplyWorldLayerIntent */
+    Result<PartitionedWorldSnapshotLease> EditorWorkspaceController::ApplyWorldLayerIntent(const WorldLayerOutlinerIntent &intent) {
+        using enum WorldLayerOutlinerAction;
+        switch (intent.action) {
+            case Execute:
+                return intent.command ? m_worldDocuments.ExecuteLayerCommand(*intent.command, intent.expected)
+                                      : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            case Undo:
+            case Redo:
+                return m_worldDocuments.ReplayLayerCommand(intent.action == Redo, intent.expected);
+            default:
+                return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Unsupported));
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::ProcessFocusedPrefabCommand */
+    void EditorWorkspaceController::ProcessFocusedPrefabCommand(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == DiscardSceneRecovery) {
+            static_cast<void>(ProcessDocumentCommand(command));
+            return;
+        }
+        if (command.command == StopPlay || command.command == PausePlay || command.command == ResumePlay || command.command == StepPlay) {
+            static_cast<void>(ProcessPlayCommand(command));
+            return;
+        }
+        using enum PrefabDocumentAction;
+        PrefabDocumentAction action;
+        switch (command.command) {
+            case SaveScene:
+                action = Save;
+                break;
+            case UndoScene:
+                action = Undo;
+                break;
+            case RedoScene:
+                action = Redo;
+                break;
+            default:
+                return;
+        }
+        const auto entry = std::ranges::find_if(m_prefabDocuments, [this](const auto &document) {
+            return document->Instance() == m_activePrefabDocument;
+        });
+        if (entry == m_prefabDocuments.end())
+            return;
+        EditorWorkspaceViewCommandData request;
+        request.command = PrefabDocument;
+        request.prefabFence = (*entry)->Snapshot().fence;
+        request.prefabAction = action;
+        static_cast<void>(ProcessPrefabDocumentCommand(request));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

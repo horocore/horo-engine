@@ -209,8 +209,8 @@ namespace Horo::Editor {
         return SourceFilePolicy{
             .nativeSourceExtensions = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp"},
             .horoScriptExtensions = {".horo_script", ".lua"},
-            .projectTextExtensions = {".cfg", ".cmake", ".glsl", ".hlsl", ".ini", ".json", ".md", ".metal", ".shader", ".toml", ".txt",
-                                      ".vert", ".frag", ".xml", ".yaml", ".yml"},
+            .projectTextExtensions = {".cfg", ".cmake", ".glsl", ".hlsl", ".horoworld", ".ini", ".json", ".md", ".metal", ".shader",
+                                      ".toml", ".txt", ".vert", ".frag", ".xml", ".yaml", ".yml"},
             .projectTextFileNames = {".gitignore", "LICENSE"},
             .allowSymlinkedFiles = true,
             .embeddedEditorAvailable = true,
@@ -218,6 +218,7 @@ namespace Horo::Editor {
             .uiCanvasExtensions = {".uicanvas"},
             .pcgGraphExtensions = {".hpcg"},
             .sequenceExtensions = {".hsequence"},
+            .prefabExtensions = {".prefab"},
         };
     }
 
@@ -239,6 +240,7 @@ namespace Horo::Editor {
         policy_.pcgGraphExtensions = NormalizeValues(policy_.pcgGraphExtensions, true);
         policy_.sequenceExtensions = NormalizeValues(policy_.sequenceExtensions, true);
         policy_.uiCanvasExtensions = NormalizeValues(policy_.uiCanvasExtensions, true);
+        policy_.prefabExtensions = NormalizeValues(policy_.prefabExtensions, true);
     }
 
     SourceFileOpenService::SourceFileOpenService(SourceFileOpenService &&other) noexcept
@@ -272,6 +274,8 @@ namespace Horo::Editor {
             return SourceFileClassification{NativeSource, extension};
         if (Contains(policy_.horoScriptExtensions, extension))
             return SourceFileClassification{HoroScript, extension};
+        if (Contains(policy_.prefabExtensions, extension))
+            return SourceFileClassification{Prefab, extension};
         if (Contains(policy_.pcgGraphExtensions, extension))
             return SourceFileClassification{PCGGraph, extension};
         if (Contains(policy_.sequenceExtensions, extension))
@@ -373,7 +377,9 @@ namespace Horo::Editor {
                                                                  const SourceFileClassification &classification,
                                                                  const SourceOpenLocation &location) {
         DocumentKind documentKind = DocumentKind::Source;
-        if (classification.kind == SourceFileKind::PCGGraph)
+        if (classification.kind == SourceFileKind::Prefab)
+            documentKind = DocumentKind::Prefab;
+        else if (classification.kind == SourceFileKind::PCGGraph)
             documentKind = DocumentKind::PCGGraph;
         else if (classification.kind == SourceFileKind::Sequence)
             documentKind = DocumentKind::Sequence;

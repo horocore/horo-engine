@@ -9,7 +9,7 @@ namespace Horo::Editor {
     bool EditorWorkspaceController::HasDirtySourceDocuments() {
         RefreshSourceDocumentProjection();
         return std::ranges::any_of(m_viewModel.workspacePanelHost.DocumentTabs(), [](const WorkspaceDocumentTab &tab) {
-            return tab.identity.key.kind == DocumentKind::Source && tab.dirty;
+            return (tab.identity.key.kind == DocumentKind::Source || tab.identity.key.kind == DocumentKind::UiCanvas) && tab.dirty;
         });
     }
 
@@ -26,6 +26,18 @@ namespace Horo::Editor {
             if (item.result.Value().disposition != SourceSaveDisposition::Durable)
                 return Result<void>::Failure(*item.result.Value().diagnostic);
         }
+        for (auto &canvas : m_uiCanvasDocuments) {
+            if (!canvas.IsDirty())
+                continue;
+            if (!m_mutations)
+                return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
+            const auto saved = canvas.Save(m_viewModel.projectRoot, *m_mutations, files);
+            if (saved.HasError())
+                return Result<void>::Failure(saved.ErrorValue());
+            if (saved.Value().status != UiCanvasDocumentSaveStatus::Saved)
+                return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+        }
+        RefreshUiCanvasProjection();
         return Result<void>::Success();
     }
 
@@ -33,6 +45,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshSourceDocumentProjection() {
         auto &host = m_viewModel.workspacePanelHost;
         host.RefreshDocuments();
+        RefreshUiCanvasProjection();
         auto &sources = m_viewModel.sourceDocuments;
         std::size_t index = 0;
         for (const auto &tab : host.DocumentTabs()) {
@@ -64,6 +77,35 @@ namespace Horo::Editor {
                 sources.insert(first, source.Value());
         }
         sources.resize(index);
+        auto &history = m_viewModel.sourceHistory;
+        history.clear();
+        history.reserve(sources.size());
+        for (const auto &tab : host.DocumentTabs()) {
+            if (tab.identity.key.kind != DocumentKind::Source)
+                continue;
+            const auto state = m_sourceOpenService.Documents().History(tab.identity.instance);
+            history.push_back(state.HasValue() ? state.Value() : SourceHistoryState{});
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::CloseUiCanvasSource */
+    void EditorWorkspaceController::CloseUiCanvasSource(const DocumentInstanceId instance) {
+        const auto canvas = std::ranges::find_if(m_uiCanvasDocuments, [instance](const auto &entry) {
+            return entry.Identity().instance == instance;
+        });
+        if (canvas == m_uiCanvasDocuments.end())
+            return;
+        auto &host = m_viewModel.workspacePanelHost;
+        const auto closed = canvas->Close();
+        if (closed.HasValue() && host.CloseDocument(instance, WorkspaceDocumentClosePolicy::DiscardChanges).HasValue())
+            m_uiCanvasDocuments.erase(canvas);
+        else if (closed.HasError()) {
+            const auto projection = std::ranges::find_if(m_viewModel.uiCanvasDocuments, [instance](const auto &entry) {
+                return entry.identity.instance == instance;
+            });
+            if (projection != m_viewModel.uiCanvasDocuments.end())
+                projection->diagnostic = closed.ErrorValue();
+        }
     }
 
     /** @copydoc EditorWorkspaceController::ProcessWorkspaceDocumentCommand */
@@ -104,8 +146,7 @@ namespace Horo::Editor {
             return entry.Identity().instance == instance;
         });
                    canvas != m_uiCanvasDocuments.end()) {
-            if (canvas->Close().HasValue() && host.CloseDocument(instance, WorkspaceDocumentClosePolicy::DiscardChanges).HasValue())
-                m_uiCanvasDocuments.erase(canvas);
+            CloseUiCanvasSource(instance);
         } else {
             // Navigation's owner processes its request at the existing settings safe point.
             for (const auto &tab : m_viewModel.navigationDocuments)
@@ -119,6 +160,11 @@ namespace Horo::Editor {
     bool EditorWorkspaceController::ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command) {
         NativeDurableFileSystem files;
         switch (command.command) {
+            case EditorWorkspaceViewCommand::SourceDocumentInteraction:
+                m_viewModel.sourceEditingResult =
+                    command.sourceInteraction ? SubmitSourceEditingCommand(m_sourceOpenService.Documents(), *command.sourceInteraction)
+                                              : Result<SourceEditingPublication>::Failure(MakeError(SourceDocumentErrors::Invalid));
+                return true;
             case EditorWorkspaceViewCommand::SaveSourceDocument:
                 if (command.sourceSave)
                     m_sourceSaveOutcome = m_sourceOpenService.Documents().Save(*command.sourceSave, files);

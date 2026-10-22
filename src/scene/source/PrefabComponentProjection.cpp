@@ -144,7 +144,7 @@ namespace Horo::SceneSource {
             const bool collection = kind == Kind::Collider || kind == Kind::PhysicsConstraint;
             const Json value{{std::string(field), collection ? Json::array({payload.Value()}) : payload.Value()}};
             std::size_t recognized{};
-            auto decoded = Detail::ParseComponents(value, recognized);
+            auto decoded = Detail::ParseComponents(value, recognized, Runtime::PhysicsValidationDetail::BodyReferenceDomain::PrefabLocal);
             if (decoded.HasError())
                 return Result<SceneObjectComponentSet>::Failure(WrapError(Prefab::PrefabErrors::CorruptedPayload, decoded.ErrorValue()));
             if (recognized != 1)
@@ -167,6 +167,34 @@ namespace Horo::SceneSource {
             return Result<bool>::Success(true);
         }
     }  // namespace
+
+    /** @copydoc EncodePrefabNavigationComponent */
+    Result<Prefab::RawComponentPayload> EncodePrefabNavigationComponent(const Kind kind, const Prefab::PrefabComponentInstanceId instance,
+                                                                        const SceneObjectComponentSet &components) {
+        using Return = Result<Prefab::RawComponentPayload>;
+        if (kind < Kind::NavigationSurface || kind > Kind::NavigationAgent || instance.Value() == 0)
+            return Return::Failure(MakeError(Prefab::PrefabErrors::ComponentTypeUnregistered));
+        auto encoded = Detail::ComponentsJson(components);
+        const auto field = std::string(Field(kind));
+        const auto &fields = encoded.get_ref<Detail::WireJson::object_t &>();
+        const auto selected = std::ranges::find(fields, field, &Detail::WireJson::object_t::value_type::first);
+        if (selected == fields.end())
+            return Return::Failure(MakeError(Prefab::PrefabErrors::CorruptedPayload));
+        const auto schema = std::ranges::find(Runtime::BuiltinSceneComponentSchemas(), kind, &Runtime::BuiltinSceneComponentSchema::kind);
+        const auto type = Gameplay::ComponentTypeId::Parse(schema->typeId);
+        if (type.HasError())
+            return Return::Failure(type.ErrorValue());
+        Prefab::RawComponentPayload result{instance, {.typeId = type.Value()}};
+        const auto bytes = selected->second.dump(0);
+        result.component.payload.reserve(bytes.size());
+        for (const auto byte : bytes)
+            result.component.payload.push_back(static_cast<std::byte>(byte));
+        Runtime::RuntimeComponentSet checked;
+        std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
+        if (auto valid = ProjectPrefabBuiltinComponent(result, checked, primitive); valid.HasError())
+            return Return::Failure(valid.ErrorValue());
+        return Return::Success(std::move(result));
+    }
 
     /** @copydoc ProjectPrefabBuiltinComponent */
     Result<bool> ProjectPrefabBuiltinComponent(const Prefab::RawComponentPayload &source, Runtime::RuntimeComponentSet &destination,

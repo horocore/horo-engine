@@ -24,6 +24,7 @@ foreach(source_file IN ITEMS
         include/Horo/Extensions/EditorActivityAbi.h
         include/Horo/Extensions/EditorPageAbi.h
         include/Horo/Extensions/EditorInspectorAbi.h
+        include/Horo/Extensions/EditorViewportAbi.h
         scripts/project.py
         sdk/ExtensionSdkREADME.md.in
         sdk/CompatibilityMatrix.json.in
@@ -80,8 +81,9 @@ set(expected_files
     bin/project.py
     include/Horo/Extensions/ExtensionAbi.h
     include/Horo/Extensions/EditorActivityAbi.h
-        include/Horo/Extensions/EditorPageAbi.h
-        include/Horo/Extensions/EditorInspectorAbi.h
+    include/Horo/Extensions/EditorPageAbi.h
+    include/Horo/Extensions/EditorInspectorAbi.h
+    include/Horo/Extensions/EditorViewportAbi.h
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfig.cmake
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfigVersion.cmake
     share/horo/extension-sdk/ci/extension-author-ci.yml

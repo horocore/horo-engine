@@ -186,6 +186,51 @@ namespace Horo::Editor::Theme {
             OverrideFloat(object, "iconSize", metrics.iconSize);
         }
 
+        /** @brief Applies optional semantic source roles without inventing a separate default palette. */
+        void ReadSourceSyntaxOverrides(const nlohmann::json &tokenJson, SourceColorTokens &tokens) {
+            const auto syntax = tokenJson.find("sourceSyntax");
+            if (syntax == tokenJson.end() || !syntax->is_object())
+                return;
+            const auto overrideColor = [&](const char *key, std::optional<ImVec4> &target) {
+                const auto found = syntax->find(key);
+                ImVec4 color;
+                if (found != syntax->end() && found->is_string() && ParseHexColor(found->get<std::string>(), color))
+                    target = color;
+            };
+            overrideColor("text", tokens.text);
+            overrideColor("keyword", tokens.keyword);
+            overrideColor("type", tokens.type);
+            overrideColor("string", tokens.string);
+            overrideColor("number", tokens.number);
+            overrideColor("comment", tokens.comment);
+            overrideColor("directive", tokens.directive);
+            overrideColor("property", tokens.property);
+        }
+
+        /** @brief Reads finite bounded host motion settings from the selected user theme. */
+        void ReadMotionOverrides(const nlohmann::json &root, MotionTokens &motion) {
+            const auto found = root.find("motion");
+            if (found == root.end() || !found->is_object())
+                return;
+            const auto duration = [&](const char *name, float &value) {
+                const auto field = found->find(name);
+                if (field != found->end() && field->is_number()) {
+                    const float candidate = field->get<float>();
+                    if (std::isfinite(candidate) && candidate >= 0 && candidate <= 2)
+                        value = candidate;
+                }
+            };
+            duration("fast", motion.fast);
+            duration("normal", motion.normal);
+            duration("slow", motion.slow);
+            duration("hover", motion.hover);
+            duration("press", motion.press);
+            duration("focus", motion.focus);
+            duration("modal", motion.modal);
+            if (const auto field = found->find("reduceMotion"); field != found->end() && field->is_boolean())
+                motion.reduceMotion = field->get<bool>();
+        }
+
         void ReadDesignTokenOverrides(const nlohmann::json &root, DesignTokens &tokens) {
             const auto tokenIt = root.find("tokens");
             if (tokenIt == root.end() || !tokenIt->is_object())
@@ -210,6 +255,8 @@ namespace Horo::Editor::Theme {
                 OverrideFloat(*spacingIt, "propertyRowGap", tokens.spacing.propertyRowGap);
             }
 
+            ReadSourceSyntaxOverrides(tokenJson, tokens.sourceSyntax);
+
             if (const auto typographyIt = tokenJson.find("typography"); typographyIt != tokenJson.end() && typographyIt->is_object()) {
                 OverrideFloat(*typographyIt, "sansBase", tokens.typography.sansBase);
                 OverrideFloat(*typographyIt, "sansCompactBase", tokens.typography.sansCompactBase);
@@ -227,6 +274,7 @@ namespace Horo::Editor::Theme {
                 OverrideFloat(*radiiIt, "card", tokens.radii.card);
                 OverrideFloat(*radiiIt, "modal", tokens.radii.modal);
             }
+            ReadMotionOverrides(tokenJson, tokens.motion);
             NormalizeDesignTokens(tokens);
         }
 

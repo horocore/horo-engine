@@ -40,6 +40,16 @@ namespace Horo::Runtime::Ui {
         return storage_ && storage_->clipped ? &*storage_->clipped : nullptr;
     }
 
+    /** @copydoc UiAnimationFrameLease::PresentationSelection */
+    const UiPresentationProfileSelection *UiAnimationFrameLease::PresentationSelection() const noexcept {
+        return storage_->selection ? &*storage_->selection : nullptr;
+    }
+
+    /** @copydoc UiAnimationFrameLease::Attachments */
+    std::span<const UiAnimationAttachmentFrame> UiAnimationFrameLease::Attachments() const noexcept {
+        return storage_->attachments;
+    }
+
     /** @copydoc UiAnimationFrameLease::Routes */
     std::span<const UiRouteInstance> UiAnimationFrameLease::Routes() const noexcept {
         return storage_ ? std::span<const UiRouteInstance>{storage_->routes} : std::span<const UiRouteInstance>{};

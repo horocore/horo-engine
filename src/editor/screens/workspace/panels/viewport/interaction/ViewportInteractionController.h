@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.h"
 #include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.h"
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.h"
 #include "editor/screens/workspace/panels/viewport/navigation/ViewportNavigationController.h"
@@ -16,6 +17,7 @@ namespace Horo::Editor {
         EditorWorkspaceViewCommandData &command;
         const EditorGuiContext &gui;
         float deltaSeconds{0.0F};
+        std::optional<int> contributedAxis; /**< Host-validated exact current provider pick. */
         Math::ClipDepthRange depthRange{Math::ClipDepthRange::NegativeOneToOne};
     };
 
@@ -36,7 +38,14 @@ namespace Horo::Editor {
         /** @brief Emits an already-queued cancellation while routed input is blocked. */
         [[nodiscard]] bool ConsumePendingCancellation(EditorWorkspaceViewCommandData &command) noexcept;
 
+        /** @brief Release transient input when no usable viewport surface can process pointer releases.
+         * @param command Receives an existing object-preview cancellation when required; collider previews remain local.
+         */
+        void CancelForUnavailableSurface(EditorWorkspaceViewCommandData &command) noexcept;
+
         void Draw(const ViewportInteractionDrawContext &context);
+        /** @brief Cancels a provider-owned interaction through normal preview rollback. */
+        void CancelContribution() noexcept;
 
         void OnViewportCaptureCancelled(Input::CaptureCancellationReason reason) noexcept override;
 
@@ -44,5 +53,6 @@ namespace Horo::Editor {
         ViewportInteractionCapture capture_;
         ViewportNavigationController navigation_;
         TransformGizmoController gizmo_;
+        ColliderGizmoController colliders_;
     };
 }  // namespace Horo::Editor

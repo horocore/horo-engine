@@ -652,6 +652,45 @@ Required source editor constraints:
   mode until a streaming editor contract exists;
 - editor shortcuts participate in the workspace shortcut conflict policy.
 
+### Source syntax and theme projection
+
+`SourceSyntax` is a GUI-private Horo lexical projection of the authoritative
+`SourceDocumentSnapshot`. It uses exact original UTF-8 byte offsets, including
+BOM and authored CRLF bytes. Widget adapters translate these offsets into their
+private normalized display coordinates; a widget coordinate is never a document
+byte offset. Language classification and tokenization do not mutate the document,
+select language services, or access files. The initial lexer recognizes C/C++,
+Lua/Horo Script, GLSL/HLSL/Metal, JSON, TOML, YAML, INI/CFG, XML and CMake.
+
+Lexical spans are sorted half-open ranges and are rebuilt only when a document
+publication changes. Work admission is bounded to 2 MiB, 64 KiB per line and
+65,536 spans. Unknown families, incomplete strings/comments and over-budget
+inputs yield no lexical spans, retaining the ordinary readable source style.
+This is a lexical readability service, not a language parser or semantic/LSP
+validation authority; syntactically invalid but lexically complete input can
+retain highlighting.
+
+`SourceEditorTheme` is resolved separately from the active frame design tokens.
+All open source surfaces apply that frame's styles when drawn, including surfaces
+first exposed after a theme change. Semantic roles are text, keyword, type,
+string, number, comment, directive and property. Custom theme resources may
+specify `tokens.sourceSyntax` entries with those names as `#RRGGBB`; omitted
+entries derive from the existing semantic editor palette. The source surface
+uses `surfaceWindow`, `actionPrimarySoft` selection and body typography. Source
+foregrounds are corrected toward a readable luminance endpoint when necessary
+to preserve WCAG 4.5:1 contrast against the opaque source surface and the
+alpha-composed selection overlay, including custom/light themes. Source typography
+uses the packaged IBM Plex Mono regular/emphasis faces with the same cell size;
+no smaller caption tier is introduced for comments or fallback text.
+
+This extends the existing design token and font carriers additively. Existing
+custom themes need no migration: absent source overrides inherit the active
+palette. Source widget consumers remain GUI-private and no Zep type enters a
+public header. Public-header consumers continue to use the existing owning GUI
+target for `DesignTokens.h` and `EditorTheme.h`. The in-process font carrier adds
+two borrowed atlas pointers; GUI consumers must be rebuilt together. No serialized
+format changes, alternate palette authority, or compatibility shim is introduced.
+
 ## Embedded Node Editors
 
 Node-based authoring surfaces appear inside workspace panels or dedicated editor
@@ -801,6 +840,39 @@ translation handles between visible axis pairs. Pointer hit testing covers the
 shaft, tip, and plane handles while leaving the hub clear of axis capture. Plane
 drags project the pointer ray onto the selected world-space plane and convert
 the resulting displacement through the parent inverse before previewing it.
+
+Physics collider editing uses the same routed pointer-capture and transform-gizmo
+geometry. PhysicsInspector exposes the explicit body's contributor hierarchy by
+stable object/component identity, including contributors stored on other objects.
+Guides follow the selected body/contributor or explicit child selection, keeping
+normal scene drawing free of unrelated collider geometry. Edit Child selects one
+contributor; Edit All selects the admitted flat compound.
+Ctrl/Command-click toggles children in the viewport. Move, Rotate and Scale edit
+body-local poses and positive authored bounds; Ctrl snaps relative to the captured
+primary (0.1 m in the active Local/World axes, 15 degrees, 10 percent).
+The group evaluator takes the explicit world orientation of those axes; an identity
+orientation selects the world grid. Screen input and overlay widths use logical
+pixels; framebuffer scale affects the render-target extent only. Picking intersects
+actual oriented boxes, spheres, capsules and plane equations, using the renderer's
+clip convention and world-distance ray limits.
+
+`ColliderGizmoController` retains a detached baseline and preview only. It never
+mutates Physics runtime state or authored Scene data while dragging. Release submits
+one generation-, document- and selection-fenced multi-child batch through the
+existing `SceneDocumentTransactions` port and `EditorHistory`. Escape, capture loss,
+panel detach, unavailable/zero-size render surfaces, selection changes, reload and
+play transitions discard the transient preview. Hidden, disabled, generated or
+locked contributors cannot grant edit
+permission; an explicit body's inherited lock also protects its contributors.
+
+The additive `PhysicsInspector.h` collider contracts keep the existing owner and
+callers intact; no persisted schema or public-header ownership migration is needed.
+Existing Inspector callers continue using `PreparePhysicsInspectorEdit`; viewport
+callers prepare `ColliderTransformEdit` batches against that same document owner.
+Cooked asset interiors have no editable source document in this composition and
+return `physics.operation.unsupported`; no mesh-derived or fabricated children are
+substituted. Nonuniform sphere/capsule scale, unsupported body scale and affine
+shear reject explicitly. Native solver handles never enter the editor contract.
 
 Content Browser assets that support scene instantiation follow the same preview
 boundary. While the primary pointer remains held over the viewport, the editor
@@ -1248,3 +1320,47 @@ how to ask the user and display each error without writing files itself. Save As
 retargets the workspace registry through `SourceFileOpenService`, preserving instance
 identity. No widget teardown, presentation detach or implicit watcher event authorizes
 save, overwrite, or dirty discard.
+
+### Source editing history and view restoration (HORO-223)
+
+`SourceDocumentService` is the sole text history authority. A successful semantic
+`Edit` stores a bounded owning UTF-8 byte delta, not a widget snapshot or an old
+disk publication. Undo and redo publish a fresh monotonic revision while retaining
+the current saved base, durability and external observation. Save and inspection
+preserve history. Successful explicit reload, close and shutdown release it.
+Rejected, cancelled, no-op and allocation-failed operations preserve both directions;
+a successful new edit invalidates redo.
+
+The default per-document history cap is 256 entries and 2 MiB of retained inserted
+and removed bytes. Oldest entries are evicted first. An edit larger than the byte
+cap remains editable but clears that document's history. `SourceHistoryState`
+reports `Evicted` or `OversizedEdit`; the GUI must display the localized limitation
+and must not imply unlimited undo. Hosts can reduce either bound, including zero.
+These retained delta bytes have their own finite limit, separate from the text/base
+replacement-overlap reservation. Detached snapshots remain independently owned.
+
+`SourceEditingView` is history metadata, never canonical live document selection.
+The host issues a project-session-scoped `SourceEditingViewId` for each view and
+includes matching before/after IDs with a semantic edit. Undo/redo returns the
+originating view metadata. Only that exact live view restores its recorded caret
+and logical scroll position; other views preserve their independent presentation
+state and clamp invalid positions to valid UTF-8/newline boundaries. A destroyed
+view is not resurrected by replay. The GUI clears view registries on project exit.
+An edit originating outside a view uses ID zero.
+
+`SourceEditingCommands` plans Horo-owned, revision-fenced atomic replacements,
+line indentation, literal case-sensitive find/replace and scalar-column line
+navigation. It preserves exact BOM/newline bytes, excludes the BOM from editable
+selections, and rejects split scalars or CRLF cursors. The new public header belongs
+to `HoroEditorServices`; its staged consumer coverage extends the existing source
+consumer target. Existing `SourceTextEdit` callers migrate incrementally through
+optional view metadata; they already participate in the same document history.
+The private widget retains no competing undo authority and performs no save I/O.
+
+The editing planners borrow `SourceEditingView` by const reference during the
+call; `SourceDocumentService` similarly borrows its constructor limits and copies
+them into its owned storage. Plans and history still own their captured view
+metadata. Existing value/temporary call sites need no source migration, but
+consumers must rebuild for the changed C++ signatures; function-pointer adapters
+must use const-reference parameters. The staged public-header consumer exercises
+all five planners alongside the existing source service consumers.

@@ -7,6 +7,11 @@ namespace Horo::Runtime {
         /** @brief Rejects malformed explicit application composition before any owned canvas is admitted. */
         [[nodiscard]] bool ValidConfig(const UiAnimationRuntimeConfig &config) noexcept {
             const auto &view = config.viewport;
+            if (view.presentation &&
+                (!view.presentation->revision.IsValid() || view.presentation->formFactor > Ui::UiPresentationFormFactor::Television ||
+                 view.presentation->viewRole > Ui::UiPresentationViewRole::Split ||
+                 (static_cast<std::uint8_t>(view.presentation->available) & 240U) != 0))
+                return false;
             return config.application <= UiAnimationApplication::Manual && config.clockCommands > 0 && config.clockCommands <= 4'096 &&
                    view.constraints.IsValid() && view.content.IsValid() && view.fontScale.IsValid() && view.intrinsic.IsValid() &&
                    view.canvas.IsValid() && view.policy.IsValid();
@@ -113,6 +118,62 @@ namespace Horo::Runtime {
         storage_->consumption.reset();
         storage_->controls->frameReserved = false;
         storage_->owner.Shutdown();
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::PrimaryAttachment */
+    Ui::UiPresentationAttachmentId UiAnimationRuntimeParticipant::PrimaryAttachment() const noexcept {
+        return storage_ && !storage_->stopped ? storage_->owner.PrimaryAttachment() : Ui::UiPresentationAttachmentId{};
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::Attach */
+    Result<Ui::UiPresentationAttachmentId> UiAnimationRuntimeParticipant::Attach(const Ui::UiRenderViewId view,
+                                                                                 Ui::UiAnimationViewport viewport) {
+        if (!storage_ || storage_->stopped || storage_->controls->frameReserved)
+            return Result<Ui::UiPresentationAttachmentId>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.Attach(view, std::move(viewport));
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::UpdateAttachment */
+    Result<void> UiAnimationRuntimeParticipant::UpdateAttachment(const Ui::UiPresentationAttachmentId attachment,
+                                                                 Ui::UiAnimationViewport viewport) {
+        if (!storage_ || storage_->stopped || storage_->controls->frameReserved)
+            return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.UpdateAttachment(attachment, std::move(viewport));
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::Detach */
+    Result<void> UiAnimationRuntimeParticipant::Detach(const Ui::UiPresentationAttachmentId attachment) {
+        if (!storage_ || storage_->stopped || storage_->controls->frameReserved)
+            return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.Detach(attachment);
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::SetViewport */
+    Result<void> UiAnimationRuntimeParticipant::SetViewport(Ui::UiAnimationViewport viewport) {
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->controls->frameReserved)
+            return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        auto config = storage_->config;
+        config.viewport = viewport;
+        if (!ValidConfig(config))
+            return Result<void>::Failure(MakeError(Ui::UiErrors::PresentationProfileMalformed));
+        if (storage_->config.viewport.presentation && storage_->config.viewport != viewport &&
+            (!viewport.presentation || viewport.presentation->revision <= storage_->config.viewport.presentation->revision))
+            return Result<void>::Failure(MakeError(Ui::UiErrors::PresentationProfileSourceStale));
+        storage_->config.viewport = std::move(viewport);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::ConfigureInspection */
+    Result<void> UiAnimationRuntimeParticipant::ConfigureInspection(const Ui::UiPresentationAttachmentId attachment,
+                                                                    const Ui::UiLayoutInspectorLimits limits, const bool enabled) {
+        if (!storage_ || storage_->stopped || storage_->controls->frameReserved)
+            return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.ConfigureInspection(attachment, limits, enabled);
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::Inspect */
+    std::optional<Ui::UiLayoutInspectionSnapshot> UiAnimationRuntimeParticipant::Inspect() const noexcept {
+        return storage_ ? storage_->owner.Inspect() : std::nullopt;
     }
 
     /** @copydoc UiAnimationRuntimeParticipant::Acquire */

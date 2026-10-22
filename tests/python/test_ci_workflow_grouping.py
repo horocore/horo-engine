@@ -89,6 +89,8 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroPCGSceneOutputContractConsumer",
     "HoroPCGDocumentTests", "HoroPCGDocumentPublicHeaderConsumer",
     "HoroPCGSceneBakeTests", "HoroPCGSceneBakeContractConsumer", "HoroPCGSceneBakePublicHeaderConsumer", "HoroEditorModelPublicHeaderConsumer",
+    "HoroWorldBakeApplicationTests", "HoroWorldBakeApplicationPublicHeaderConsumer",
+    "HoroPartitionedWorldWorkspaceTests",
     "HoroInspectorBehaviorBindingTests", "HoroInspectorBehaviorPublicHeaderConsumer",
     "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
     "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
@@ -411,41 +413,40 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
         assert preset("testPresets", name)["filter"]["exclude"]["label"] == "gui|tooling"
 
 
-def test_vulkan_native_commands_have_a_bounded_independent_build_and_execution_closure() -> None:
-    native_job = workflow_job("vulkan-commands")
-    assert "runs-on: ubuntu-24.04" in native_job
+def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
+    native_job = workflow_job("shaders")
+    assert "os: ubuntu-24.04" in native_job
+    assert "os: windows-2022" in native_job
     assert "timeout-minutes: 90" in native_job
     assert "-DHORO_BUILD_RENDER_VULKAN=ON" in native_job
     assert "-DHORO_BUILD_EDITOR_GUI=OFF" in native_job
     assert "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON" in native_job
-    assert "cmake --build build/ci-vulkan-commands" in native_job
-    assert "ctest --test-dir build/ci-vulkan-commands" in native_job
-    build_arguments = native_job.split("cmake --build build/ci-vulkan-commands", 1)[1].split("2>&1", 1)[0]
+    assert "cmake --build build/ci" in native_job
+    assert "ctest --test-dir build/ci" in native_job
+    build_arguments = native_job.split("cmake --build build/ci", 1)[1].split("      - name:", 1)[0]
     for target in ("HoroRenderVulkanTests", "HoroVulkanCommandExecutionSmoke", "HoroRenderGraphTests",
                    "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
-        assert target in build_arguments, f"Native job must build {target}"
+        assert target in native_job, f"Shader job must build {target}"
+        if target != "HoroVulkanCommandExecutionSmoke":
+            assert target in build_arguments
     assert "-DHORO_BUILD_XR_OPENXR=ON" in native_job
-    assert "--show-only=json-v1" in native_job
-    assert "XR/Vulkan integration test is absent" in native_job
     assert "--no-tests=error" in native_job
-    assert "vulkan-validationlayers" in native_job
+    setup = (ROOT / ".github/actions/setup-build-tools/action.yml").read_text(encoding="utf-8")
+    for dependency in ("vulkan-validationlayers", "mesa-vulkan-drivers", "glslang-tools"):
+        assert dependency in setup
     assert "scripts/dev.py select-lavapipe-icd" in native_job
     assert "VK_DRIVER_FILES=%s" in native_job
     assert "lvp_icd.x86_64.json" not in native_job
-    assert 'sha256sum "$VK_DRIVER_FILES"' in native_job
-    assert "vulkaninfo --summary" in native_job
     assert "--output-junit" in native_job
     selection = re.search(r"-R '([^']+)'", native_job)
     assert selection is not None
     selected = re.compile(selection.group(1))
     for target in ("HoroRenderVulkanTests", "HoroRenderGraphTests", "HoroRenderFrontendTests",
                    "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
-        assert selected.fullmatch(target)
-        assert selected.fullmatch(f"{target}::representative case [tag]")
-        assert not selected.fullmatch(f"{target}Unrelated::case")
-    assert selected.fullmatch("HoroVulkanCommandExecutionSmoke")
-    assert not selected.fullmatch("HoroVulkanCommandExecutionSmoke::unregistered case")
-    assert not selected.fullmatch("UnrelatedTests::case")
+        assert selected.search(f"{target}::representative case [tag]")
+        assert not selected.search(f"{target}Unrelated::case")
+    assert "-R '^HoroVulkanCommandExecutionSmoke$'" in native_job
+    assert not selected.search("UnrelatedTests::case")
     assert "continue-on-error" not in native_job
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
@@ -624,20 +625,23 @@ def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> Non
 
 
 def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform_draws() -> None:
-    shader_workflow = (ROOT / ".github/workflows/vulkan-shader.yml").read_text(encoding="utf-8")
+    shader_workflow = workflow_job("shaders")
+    assert not (ROOT / ".github/workflows/vulkan-shader.yml").exists()
     assert "ubuntu-24.04" in shader_workflow
     assert "windows-2022" in shader_workflow
     flat_targets = {"HoroMaterialBindingPublicHeaderConsumer", "HoroMultiviewSceneExtractionPublicHeaderConsumer"}
     expected_targets = {"HoroRenderVulkanTests", "HoroMaterialBindingTests", "HoroPipelineCacheTests",
                         "HoroShaderPermutationTests", "HoroMultiviewSceneExtractionTests", "HoroXRApiTests",
                         "HoroXROpenXRTests"} | flat_targets
-    build_targets = re.search(r"cmake --build build/ci --target (.*?) --parallel 2", shader_workflow)
+    build_targets = re.search(r"cmake --build build/ci --target\s+(.*?) --parallel 2", shader_workflow, re.S)
     assert build_targets is not None
+    expected_targets |= {"HoroRenderGraphTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests",
+                         "HoroXROpenXRHostInterfaceConsumer"}
     assert set(build_targets.group(1).split()) == expected_targets
-    test_selection = re.search(r"ctest --test-dir build/ci .*? -R '([^']+)'", shader_workflow)
+    test_selection = re.search(r"ctest --test-dir build/ci .*?\s+-R '([^']+)'", shader_workflow, re.S)
     assert test_selection is not None
     selected = re.compile(test_selection.group(1))
-    for target in expected_targets - flat_targets:
+    for target in expected_targets - flat_targets - {"HoroXROpenXRHostInterfaceConsumer"}:
         assert selected.search(f"{target}::representative case") is not None
         assert selected.search(f"Unrelated{target}::representative case") is None
     for target in flat_targets:

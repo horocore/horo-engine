@@ -68,6 +68,20 @@ play-session, or panel lifetime; those remain in the workspace/application host.
 
 ## Document Model
 
+### Partitioned world metadata workspace (WST-009.2)
+
+`PartitionedWorldWorkspace`, owned by `HoroEditorModel`, is the headless Editor
+authority for a partitioned world's authored settings, stable layers, immutable
+source-page/object metadata and separate transient open-page working set. It does
+not replace `SceneDocument` or equate authoring pages with cooked cells. Typed
+owner/generation/publication fences guard complete atomic metadata transactions;
+changed pages additionally require their exact immutable revision successor.
+Working-set changes never delete source metadata or mark it saved. Dirty-preserving
+close/replacement/shutdown, cancellation and immutable reader lifetimes are explicit.
+The additive public contract, dependency direction, limits, integration obligations
+and excluded UI/payload/persistence work are recorded in the
+[partitioned-world document migration guide](../../guides/partitioned-world-document-migration.md).
+
 ### Editable Source Ownership (EDT-003.4)
 
 `SourceFileOpenService` owns `SourceDocumentService` in the workspace controller,
@@ -322,6 +336,63 @@ and Initialization remain separate Inspector models and command schemas.
 Intermediate transaction state is not observable by tabs or panels until the
 transaction commits, unless the transaction is explicitly marked as a preview
 transaction.
+
+## Prefab Document Sessions And Stages
+
+`PrefabDocumentSession` owns the sole editable `PrefabDocument` for one shared
+`DocumentIdentityRegistry` open key of kind `Prefab`. The persistent key is the
+canonical project-relative source path; the sidecar/registry AssetId remains the
+asset authority. Workspace incarnation plus instance and monotonic command
+revision fence all edits. Canonical source digest, accepted on-disk byte identity,
+saved-state digest, recovery capture revision and successful preview generation
+are separate values. Undo/redo stores bounded semantic name/transform deltas,
+never runtime entities or full-document history snapshots.
+
+The workspace routes durable source edits and persistence through typed commands,
+`ProjectMutationCoordinator`, `PublishAssetSource` and `DocumentRecoveryService`.
+Host source capture and isolated-stage factories are grouped in the private
+`EditorWorkspacePrefabServices` dependency value (`sources`, `stageFactory`); callers
+migrate the former individual dependency fields together. Session factories retain
+a private construction key, and command admission borrows immutable fences.
+A native replacement whose directory durability cannot be confirmed keeps the
+source dirty and requires reconciliation. External changes reject saves; malformed
+reload and rejected dirty close retain the complete source/history/stage. Recovery
+acceptance requires the exact inspected record and unchanged source base. An explicit
+discard-candidate command can remove a foreign or obsolete record while preserving
+current source edits and history; exact-record comparison prevents a stale UI command
+from deleting a newer candidate. Autosave then publishes a new owned recovery record.
+
+The authoring stage replaces the captured resolver root with the current immutable
+in-memory source, then uses canonical resolution, identity remapping, built-in
+component projection and prefab subtree expansion to construct an isolated runtime
+scene. It never changes the Scene document or starts gameplay callbacks. The
+reserved `0x4000000000000000` runtime identity namespace is separate from ordinary
+scene previews and Play; a workspace advances identities for each attempt. Stage resources and
+renderer extraction leases retire on edit, switch, reload, close and shutdown.
+Retained immutable source snapshots remain readable. Source widgets retain bounded
+transient name buffers per publication rather than copying/resizing strings on every
+draw. Scene hierarchy/inspector controls are inactive while the isolated source stage
+is focused; navigation, document switching and workspace layout remain available.
+Failed required component or
+asset preparation produces an explicit unavailable preview, preserving source and
+recovery rather than publishing a partial hierarchy. The application explicitly
+injects the same project/native/committed-asset composition used by Scene into a
+separate authoring-stage capability and identity range. Bounded owner-lane ticks
+advance pending asset preparation; preview revision advances only after complete
+Scene activation. Cancellation and host shutdown retire prepared and resident
+resources. No behavior runtime or fixed update is started. Unknown portable project
+components remain typed opaque runtime payloads. An omitted factory admits only
+assetless test compositions; it cannot invent asset leases or select a backend.
+
+Migration: `.prefab` now routes through `SourceFileOpenService` as a typed authored
+document rather than generic text/external fallback. Existing text source save-as
+cannot target it. `DocumentKind::Prefab` appends the stable `prefab` wire spelling;
+existing kind values and open keys retain their meanings. The shared source public
+consumer and document-identity round-trip coverage protect this additive change.
+The session header is a non-installed exact-header internal contract, staged by
+`HoroPrefabDocumentSessionInternal`; the pure hierarchy/model target does not
+inherit the stage host capability. No public ownership or repository-wide include
+root is added.
 
 ## Preview Edits
 
@@ -776,3 +847,66 @@ Required tests cover:
 - [Cinematic Sequencer](../runtime/cinematic-sequencer-architecture.md)
 - [VFX And Particles](../runtime/vfx-and-particles-architecture.md)
 - [Terrain And Foliage](../runtime/terrain-and-foliage-architecture.md)
+
+### Manual partitioned-page residency
+
+`PartitionedWorldWorkspace` extends its metadata authority with actual immutable
+SceneDocument payloads, explicit manual load/unload/pins, and page-scoped selection.
+Load admits exact source revisions after Scene decoding and document validation;
+loaded metadata/content successors commit atomically. Metadata-only edits cannot
+invalidate loaded pages. Dirty, selected or pinned pages cannot be silently
+unloaded, and runtime eviction has no access to this owner. The controller composes
+the owner and its selection adapter; the ordinary leave guard includes its dirty
+state and requires exact revision-fenced discard consent. Reader leases survive
+owner teardown. See the [migration contract](../../guides/partitioned-world-document-migration.md#manual-page-residency-and-selection-horo-1635)
+for capacity, lifecycle, consumer migration and validation requirements.
+
+### Partitioned-world selected object inspection
+
+`PartitionedWorldWorkspace` owns transient page-scoped object selection alongside
+its immutable source root. Selection and source currentness use one exact
+`WorldDocumentFence`; removal prunes selection atomically and replacement clears
+it. `InspectSelectedObjects` returns a bounded immutable bounds/coverage/override
+explanation using WorldStreaming's source assignment and spanning kernels. It
+neither loads pages nor mutates runtime demand. Presentation retains the result
+lease and queries only after an owner revision changes. See the
+[world document migration guide](../../guides/partitioned-world-document-migration.md#object-assignment-and-bounds-inspection-wst-0095)
+for diagnostics, budgets, lifecycle and consumer migration.
+
+
+## World Composition projection
+
+The registered persistent `WorldCompositionTab` is a presentation surface over the
+controller's canonical `PartitionedWorldWorkspace`, never another source or
+selection authority. Project-relative `.horoworld` source admission is an explicit
+bounded command-phase operation through the Platform read capability and the
+existing Open/Replace dirty/revision guards. `Browse` derives bounded cell coverage
+through the ordinary authoring spatial-assignment kernel and publishes complete
+immutable source-fenced cell/layer results. Search/status/layer filters change
+presentation only. Authoring working-set, loaded payload, cooked availability and
+runtime residency remain independent. See the partitioned-world document migration
+guide for schema, ownership, rejection and lifecycle details.
+
+### World Composition offline bake
+
+The persistent World Composition tab submits typed revision-fenced bake/validation
+commands to the controller-owned `WorldBakeApplication`. Actual immutable page
+content and root-bound source capture feed the canonical Scene conversion, cell
+cooker, HOROCELL encoder and `ValidateWorldBuild` pipeline. Operations and Build
+Output project their shared bounded stores; panel lifetime never owns the job.
+Fresh successful bake output is retained independently from source dirty state,
+runtime activation and Assets release publication. The complete source, identity,
+cancellation, publication and migration contract is in the
+[world bake workflow guide](../../guides/world-bake-workflow.md).
+
+### Workspace source authority composition
+
+The executable host supplies `WorkspaceReadSourceFactory` for project opening.
+Its capture returns one fresh workspace identity and retained registry/world
+read capabilities bound to that identity at generation one. The factory outlives
+its screen-host registration; captured readers outlive any controller work that
+uses them. `CaptureWorkspaceReadSources` rejects missing factories, relative
+roots and incomplete pairs before a controller is published. Host capture errors
+retain their typed identity. GUI code consumes these interfaces and never selects
+a native reader as a fallback. Concrete native creation belongs in application
+or test composition roots.

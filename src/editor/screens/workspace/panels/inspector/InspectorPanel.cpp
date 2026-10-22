@@ -44,6 +44,7 @@ namespace Horo::Editor {
         if (ctx.extensionInspectors && ctx.extensionTheme)
             m_contributions = std::make_unique<InspectorContributionView>(*ctx.extensionInspectors, *ctx.extensionTheme);
         m_inputRouter = ctx.inputRouter;
+        m_workspaceInputContext = ctx.workspaceInputContext;
     }
 
     void InspectorPanel::OnDetach() {
@@ -53,7 +54,9 @@ namespace Horo::Editor {
         m_prefabPresentation.reset();
         m_nameInputContext.Reset();
         m_physicsSession.Clear();
+        m_navigationSession.Clear();
         m_inputRouter = nullptr;
+        m_workspaceInputContext = nullptr;
     }
 
     void InspectorPanel::DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, const ImU32 color) {
@@ -101,6 +104,7 @@ namespace Horo::Editor {
             AdoptCommand(cmd, m_editSession.Clear());
             m_nameInputContext.Reset();
             DrawPrefabSelection(vm, cmd, ctx);
+            DrawNavigationInspector(m_navigationSession, vm, cmd, ctx);
         } else if (!selectedObjects.empty() && FindSelectedObject(vm) != nullptr) {
             DrawSelection(vm, selectedObjects, cmd, ctx);
             if (selectedObjects.size() == 1) {
@@ -109,6 +113,7 @@ namespace Horo::Editor {
             }
         } else {
             m_physicsSession.Clear();
+            m_navigationSession.Clear();
             DrawEmptyState(cmd, ctx);
         }
 
@@ -118,8 +123,11 @@ namespace Horo::Editor {
 
     void InspectorPanel::DrawSelection(const EditorWorkspaceViewModel &viewModel, const std::span<const SceneObjectId> selectedObjects,
                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        if (m_contributions)
+        if (m_contributions) {
+            m_contributions->SetInputAdmitted(m_inputRouter && m_workspaceInputContext &&
+                                              m_inputRouter->IsContextActive(*m_workspaceInputContext));
             m_contributions->Synchronize(viewModel, selectedObjects);
+        }
         AdoptCommand(command, m_editSession.BeginSelection(viewModel.objects, selectedObjects, viewModel.primarySelection,
                                                            viewModel.documentRevision));
         const SceneObject *primaryObject = FindSelectedObject(viewModel);
@@ -144,6 +152,7 @@ namespace Horo::Editor {
                                        context.localization.Get("editor", "workspace.inspector.transform_invalid"), context.theme.fonts,
                                        8.0F);
 
+        DrawNavigationInspector(m_navigationSession, viewModel, command, context);
         if (m_editSession.Draft().selectedObjectCount == 1)
             DrawComponentEditors(*primaryObject, viewModel, command, context);
         else if (m_contributions)

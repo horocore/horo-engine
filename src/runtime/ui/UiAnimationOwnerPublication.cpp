@@ -1,6 +1,53 @@
 #include "UiAnimationOwnerInternal.h"
 
 namespace Horo::Runtime::Ui {
+    /** @copydoc UiAnimationOwner::PublishAttachments */
+    void UiAnimationOwner::PublishAttachments(Storage &storage) noexcept {
+        auto &frame = *storage.frames[storage.candidate.frameSlot];
+        frame.selection = storage.candidate.selection;
+        frame.attachments.clear();
+        frame.focusGeometry.clear();
+        for (auto &entry : storage.attachments) {
+            if (!entry || !entry->active)
+                continue;
+            auto &attachment = *entry;
+            auto layout = attachment.layout.PublishValidated(std::move(*attachment.preparedLayout));
+            std::optional<UiLayoutClipSnapshot> clipping;
+            if (attachment.preparedClipping)
+                clipping.emplace(attachment.clipping->PublishValidated(std::move(*attachment.preparedClipping)));
+            const auto focusOffset = frame.focusGeometry.size();
+            frame.focusGeometry.insert(frame.focusGeometry.end(), attachment.focusGeometry.begin(), attachment.focusGeometry.end());
+            const auto focus =
+                std::span<const UiAnimationFocusGeometry>{frame.focusGeometry}.subspan(focusOffset, attachment.focusGeometry.size());
+            frame.attachments.push_back(
+                {attachment.id, attachment.view, *attachment.selection, std::move(layout), std::move(clipping), focus});
+            attachment.preparedLayout.reset();
+            attachment.preparedClipping.reset();
+            attachment.selection.reset();
+        }
+        storage.presentation = storage.candidate.presentation.IsValid() ? storage.candidate.presentation : storage.presentation;
+        storage.publishedViewport = storage.candidate.viewport;
+        storage.attachmentDirty = false;
+    }
+
+    /** @copydoc UiAnimationOwner::PublishSemanticInteraction */
+    void UiAnimationOwner::PublishSemanticInteraction(Storage &storage, UiReloadCanvas &canvas, const UiLayoutSnapshot &layout) noexcept {
+        auto &candidate = storage.candidate;
+        if (canvas.focus)
+            canvas.focus->PublishPreparedLayout(layout);
+        for (auto *control : candidate.controls)
+            control->PublishInteractionReplacement();
+        candidate.controls.clear();
+        if (candidate.actionSources)
+            candidate.actionSources->PublishActionInteractionReplacements();
+        candidate.actionSources = nullptr;
+        if (candidate.canvasActions)
+            candidate.canvasActions->PublishInteractionReplacement();
+        candidate.canvasActions = nullptr;
+        if (canvas.captures)
+            canvas.captures->PublishInteractionValidated(canvas.tree.Canvas(), layout.Descriptor().interaction);
+    }
+
     /** @copydoc UiAnimationOwner::Commit */
     Result<void> UiAnimationOwner::Commit(Prepared &prepared) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || !prepared.admitted_ ||
@@ -22,19 +69,8 @@ namespace Horo::Runtime::Ui {
         } else {
             frame.clipped.reset();
         }
-        if (canvas->focus)
-            canvas->focus->PublishPreparedLayout(*frame.layout);
-        for (auto *control : candidate.controls)
-            control->PublishInteractionReplacement();
-        candidate.controls.clear();
-        if (candidate.actionSources)
-            candidate.actionSources->PublishActionInteractionReplacements();
-        candidate.actionSources = nullptr;
-        if (candidate.canvasActions)
-            candidate.canvasActions->PublishInteractionReplacement();
-        candidate.canvasActions = nullptr;
-        if (canvas->captures)
-            canvas->captures->PublishInteractionValidated(canvas->tree.Canvas(), frame.layout->Descriptor().interaction);
+        PublishAttachments(*storage_);
+        PublishSemanticInteraction(*storage_, *canvas, *frame.layout);
         canvas->layout = *frame.layout;
         frame.generation = candidate.source;
         for (std::size_t index = 0; index < storage_->timelines.size(); ++index)
@@ -50,6 +86,7 @@ namespace Horo::Runtime::Ui {
         candidate.layout.reset();
         candidate.clipping.reset();
         candidate.source = {};
+        CaptureInspection(*storage_);
         return Result<void>::Success();
     }
 }  // namespace Horo::Runtime::Ui

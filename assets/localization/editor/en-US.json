@@ -4,6 +4,22 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab_document.source_controls": { "text": "Prefab source controls are in the document. Return to the Scene viewport to edit the Scene." },
+    "workspace.prefab_document.undo": { "text": "Undo source edit" },
+    "workspace.prefab_document.redo": { "text": "Redo source edit" },
+    "workspace.prefab_document.reload": { "text": "Reload saved source" },
+    "workspace.prefab_document.recover": { "text": "Restore recovery candidate" },
+    "workspace.prefab_document.discard_recovery": { "text": "Discard recovery candidate (keep source edits)" },
+    "workspace.prefab_document.discard_reload": { "text": "Discard changes and reload source" },
+    "workspace.prefab_document.discard_close": { "text": "Discard changes and close prefab" },
+    "workspace.prefab_document.conflict": { "text": "The source changed outside this session. Reload or preserve recovery before continuing." },
+    "workspace.prefab_document.name": { "text": "Source object name" },
+    "workspace.prefab_document.preview_unavailable": { "text": "The isolated runtime preview is unavailable. Source and recovery remain available." },
+    "workspace.content_browser.asset.unregistered": {"text": "Unregistered asset — inspect identity metadata"},
+    "workspace.content_browser.prefab.type": {"text": "Prefab"},
+    "workspace.content_browser.preview.queued": {"text": "Preparing preview…"},
+    "workspace.content_browser.preview.unavailable": {"text": "Preview unavailable — inspect diagnostic"},
+    "workspace.content_browser.prefab.migration_required": {"text": "Migration required"},
     "render_graph.renderer": {
       "text": "Renderer"
     },
@@ -199,6 +215,22 @@
     "workspace.sequence.keys": {
       "text": "Keys"
     },
+    "workspace.source_edit.undo": { "text": "Undo" },
+    "workspace.source_edit.redo": { "text": "Redo" },
+    "workspace.source_edit.find": { "text": "Find" },
+    "workspace.source_edit.replace": { "text": "Replace" },
+    "workspace.source_edit.replace_all": { "text": "Replace all" },
+    "workspace.source_edit.next": { "text": "Next match" },
+    "workspace.source_edit.previous": { "text": "Previous match" },
+    "workspace.source_edit.go_to": { "text": "Go to line" },
+    "workspace.source_edit.query": { "text": "Find literal text" },
+    "workspace.source_edit.replacement": { "text": "Replacement text" },
+    "workspace.source_edit.line": { "text": "Line number" },
+    "workspace.source_edit.no_match": { "text": "No match found." },
+    "workspace.source_edit.invalid": { "text": "The edit could not be applied. The document remains unchanged." },
+    "workspace.source_edit.history_evicted": { "text": "Undo history is limited to the most recent edits." },
+    "workspace.source_edit.history_oversized": { "text": "This large edit exceeded the undo limit and cleared this document’s history." },
+    "workspace.source_edit.close_search": { "text": "Close search" },
     "workspace.documents.close": { "text": "Close" },
     "workspace.documents.move_left": { "text": "Move left" },
     "workspace.documents.move_right": { "text": "Move right" },
@@ -214,6 +246,145 @@
     "workspace.sequence.close": {
       "text": "Close"
     },
+    "workspace.pcg.preview.refresh": {
+      "text": "Preview"
+    },
+    "workspace.pcg.preview.cancel": {
+      "text": "Clear preview"
+    },
+    "workspace.pcg.preview.running": {
+      "text": "Evaluating captured graph…"
+    },
+    "workspace.pcg.preview.failed": {
+      "text": "Preview failed. The graph and Scene are unchanged."
+    },
+    "workspace.pcg.preview.current": {
+      "text": "Current preview · top-down points and output bounds · at most 8192 points"
+    },
+    "workspace.pcg.preview.empty": {
+      "text": "Isolated sandbox: grid 1, box 2, surface 3. Preview does not modify the Scene."
+    },
+    "workspace.pcg.undo": {"text": "Undo"},
+    "workspace.pcg.redo": {"text": "Redo"},
+    "workspace.pcg.reset_view": {"text": "Reset view"},
+    "workspace.pcg.focus": {"text": "Focus selection"},
+    "workspace.pcg.zoom": {"text": "Zoom"},
+    "workspace.pcg.navigation_hint": {"text": "Drag node headers to move. Middle-drag to pan; Ctrl-wheel to zoom. Ctrl-click selects multiple nodes. Escape cancels a gesture."},
+    "workspace.pcg.palette": {"text": "Node palette"},
+    "workspace.pcg.filter": {"text": "Filter nodes"},
+    "workspace.pcg.no_catalog": {"text": "No node recipes are available from this workspace catalog."},
+    "workspace.pcg.unknown": {"text": "Unavailable node"},
+    "workspace.pcg.input": {"text": "Input"},
+    "workspace.pcg.output": {"text": "Output"},
+    "workspace.pcg.inspector": {"text": "Node inspector"},
+    "workspace.pcg.select_hint": {"text": "Select a node to inspect its identity, schema and connections."},
+    "workspace.pcg.remove": {"text": "Remove selected nodes"},
+    "workspace.pcg.identity": {"text": "Node identity"},
+    "workspace.pcg.version": {"text": "Schema version"},
+    "workspace.pcg.payload": {"text": "Settings bytes"},
+    "workspace.pcg.connections": {"text": "Connections"},
+    "workspace.pcg.disconnect": {"text": "Disconnect"},
+    "workspace.pcg.cancel_connection": {"text": "Cancel connection"},
+    "workspace.pcg.rejected": {"text": "The edit was rejected. Check pin types, direction, input cardinality and cycles, or retry against the current document."},
+    "workspace.pcg.nodes.grid": {"text": "Snapshot grid"},
+    "workspace.pcg.nodes.density_filter": {"text": "Density filter"},
+    "workspace.pcg.nodes.merge": {"text": "Merge points"},
+    "workspace.pcg.nodes.forward": {"text": "Forward points"},
+    "workspace.pcg.nodes.jitter": {"text": "Grid jitter"},
+    "workspace.pcg.nodes.stratified": {"text": "Stratified sampling"},
+    "workspace.pcg.nodes.poisson": {"text": "Poisson scatter"},
+    "workspace.pcg.nodes.density_range": {"text": "Density range"},
+    "workspace.pcg.nodes.bounds": {"text": "Bounds filter"},
+    "workspace.pcg.nodes.slope": {"text": "Slope filter"},
+    "workspace.pcg.nodes.distance": {"text": "Distance filter"},
+    "workspace.pcg.nodes.attribute": {"text": "Attribute filter"},
+    "workspace.pcg.nodes.transform": {"text": "Transform points"},
+    "workspace.pcg.nodes.alignment": {"text": "Surface alignment"},
+    "workspace.pcg.nodes.offset": {"text": "Random offset"},
+    "workspace.pcg.nodes.perlin": {"text": "Perlin noise"},
+    "workspace.pcg.nodes.simplex": {"text": "Simplex noise"},
+    "workspace.pcg.types.points": {"text": "Point set"},
+    "workspace.pcg.types.boolean": {"text": "Boolean"},
+    "workspace.pcg.types.signed": {"text": "Signed integer"},
+    "workspace.pcg.types.unsigned": {"text": "Unsigned integer"},
+    "workspace.pcg.types.scalar": {"text": "Scalar"},
+    "workspace.pcg.types.vector2": {"text": "Vector2"},
+    "workspace.pcg.types.vector3": {"text": "Vector3"},
+    "workspace.pcg.types.vector4": {"text": "Vector4"},
+    "workspace.pcg.authoring.input_key": {"text": "Input key"},
+    "workspace.pcg.authoring.remove_input": {"text": "Remove exposed input"},
+    "workspace.pcg.authoring.expose_input": {"text": "Expose graph input"},
+    "workspace.pcg.authoring.title": {"text": "Inputs and properties"},
+    "workspace.pcg.authoring.invalid_value": {"text": "Enter a finite value of the declared type."},
+    "workspace.pcg.authoring.unsupported": {"text": "Unsupported by the active catalog or capabilities; the authored value is preserved."},
+    "workspace.pcg.authoring.unavailable": {"text": "Authoring schemas are unavailable."},
+    "workspace.pcg.authoring.rejected": {"text": "The edit was rejected. No source values changed."},
+    "workspace.pcg.authoring.apply": {"text": "Apply changes"},
+    "workspace.pcg.authoring.cancel": {"text": "Cancel changes"},
+    "workspace.pcg.authoring.no_properties": {"text": "This node has no settings payload."},
+    "workspace.pcg.authoring.deterministic_defaults": {"text": "The seed and defaults are deterministic authored values. Apply records the whole edit once."},
+    "workspace.pcg.authoring.external_input": {"text": "An external runtime input may override this default; its captured value participates in generation provenance."},
+    "workspace.pcg.authoring.non_deterministic": {"text": "This node is best-effort preview only and is not deterministic."},
+    "workspace.pcg.authoring.profile_deterministic": {"text": "Deterministic within the captured numeric profile and provider inputs."},
+    "workspace.pcg.authoring.add_default": {"text": "Add typed default"},
+    "workspace.pcg.authoring.remove_default": {"text": "Remove default"},
+    "workspace.pcg.authoring.tier": {"text": "Operational tier"},
+    "workspace.pcg.authoring.baseline": {"text": "Baseline"},
+    "workspace.pcg.authoring.standard": {"text": "Standard"},
+    "workspace.pcg.authoring.high": {"text": "High"},
+    "workspace.pcg.authoring.mode": {"text": "Generation mode"},
+    "workspace.pcg.authoring.offline": {"text": "Offline"},
+    "workspace.pcg.authoring.runtime": {"text": "Runtime"},
+    "workspace.pcg.authoring.hybrid": {"text": "Hybrid"},
+    "workspace.pcg.authoring.seed": {"text": "Deterministic seed"},
+    "workspace.pcg.authoring.grid": {"text": "Grid identity"},
+    "workspace.pcg.authoring.volume": {"text": "Volume identity"},
+    "workspace.pcg.authoring.fraction": {"text": "Jitter fraction [0, 1]"},
+    "workspace.pcg.authoring.strata": {"text": "Strata (X, Y, Z)"},
+    "workspace.pcg.authoring.count": {"text": "Point count"},
+    "workspace.pcg.authoring.attempts": {"text": "Attempt budget"},
+    "workspace.pcg.authoring.minimum_distance": {"text": "Minimum distance"},
+    "workspace.pcg.authoring.minimum": {"text": "Minimum"},
+    "workspace.pcg.authoring.maximum": {"text": "Maximum"},
+    "workspace.pcg.authoring.minimum_degrees": {"text": "Minimum slope (degrees)"},
+    "workspace.pcg.authoring.maximum_degrees": {"text": "Maximum slope (degrees)"},
+    "workspace.pcg.authoring.attribute": {"text": "Attribute key"},
+    "workspace.pcg.authoring.comparison": {"text": "Comparison"},
+    "workspace.pcg.authoring.equal": {"text": "Equal"},
+    "workspace.pcg.authoring.not_equal": {"text": "Not equal"},
+    "workspace.pcg.authoring.less": {"text": "Less"},
+    "workspace.pcg.authoring.less_equal": {"text": "Less or equal"},
+    "workspace.pcg.authoring.greater": {"text": "Greater"},
+    "workspace.pcg.authoring.greater_equal": {"text": "Greater or equal"},
+    "workspace.pcg.authoring.predicate": {"text": "Predicate value"},
+    "workspace.pcg.authoring.predicate_type": {"text": "Predicate type"},
+    "workspace.pcg.authoring.translation": {"text": "Translation (X, Y, Z)"},
+    "workspace.pcg.authoring.rotation": {"text": "Quaternion (X, Y, Z, W)"},
+    "workspace.pcg.authoring.scale": {"text": "Scale (X, Y, Z)"},
+    "workspace.pcg.authoring.space": {"text": "Coordinate space"},
+    "workspace.pcg.authoring.snapshot": {"text": "Snapshot space"},
+    "workspace.pcg.authoring.point_local": {"text": "Point local space"},
+    "workspace.pcg.authoring.maximum_vertical_distance": {"text": "Maximum vertical distance"},
+    "workspace.pcg.authoring.half_extent": {"text": "Half extent (X, Y, Z)"},
+    "workspace.pcg.authoring.salt": {"text": "Stream salt"},
+    "workspace.pcg.authoring.attribute_type": {"text": "Attribute type"},
+    "workspace.pcg.authoring.boolean": {"text": "Boolean"},
+    "workspace.pcg.authoring.signed": {"text": "Signed integer"},
+    "workspace.pcg.authoring.unsigned": {"text": "Unsigned integer"},
+    "workspace.pcg.authoring.scalar": {"text": "Scalar"},
+    "workspace.pcg.authoring.vector2": {"text": "Vector2"},
+    "workspace.pcg.authoring.vector3": {"text": "Vector3"},
+    "workspace.pcg.authoring.vector4": {"text": "Vector4"},
+    "workspace.pcg.authoring.frequency": {"text": "Frequency"},
+    "workspace.pcg.authoring.amplitude": {"text": "Amplitude"},
+    "workspace.pcg.authoring.octaves": {"text": "Octaves [1, 16]"},
+    "workspace.pcg.authoring.persistence": {"text": "Persistence [0, 1]"},
+    "workspace.pcg.authoring.lacunarity": {"text": "Lacunarity [1, 8]"},
+    "workspace.pcg.authoring.normalization": {"text": "Normalization"},
+    "workspace.pcg.authoring.signed_noise": {"text": "Signed [-1, 1]"},
+    "workspace.pcg.authoring.unit_interval": {"text": "Unit interval [0, 1]"},
+    "workspace.pcg.authoring.default": {"text": "Exposed default"},
+    "workspace.pcg.authoring.pin_default": {"text": "Input pin default"},
     "workspace.sequence.zoom": {
       "text": "Timeline zoom"
     },
@@ -1346,6 +1517,71 @@
     "workspace.panel.inspector": {"text": "Inspector"},
     "workspace.panel.scene": {"text": "Scene"},
     "workspace.panel.viewport": {"text": "Viewport"},
+    "workspace.streaming.accepted": {"text": "Accepted"},
+    "workspace.streaming.deferred": {"text": "Deferred"},
+    "workspace.streaming.rejected": {"text": "Rejected"},
+    "workspace.streaming.pinned": {"text": "Pinned residency floor"},
+    "workspace.streaming.predicted": {"text": "Predicted source / target"},
+    "workspace.streaming.source": {"text": "Source / target"},
+    "workspace.streaming.visible_counts": {"text": "Visible / outside precision window"},
+    "workspace.streaming.capacity": {"text": "Streaming preview exceeds its cell or geometry budget"},
+    "workspace.streaming.stale": {"text": "Streaming preview publications are stale; waiting for a coherent capture"},
+    "workspace.streaming.inspection": {"text": "Mount a cooked index for read-only streaming inspection. No cell loading or budget usage is inferred."},
+    "workspace.streaming.index_path": {"text": "Project-relative path to world.index"},
+    "workspace.streaming.mount": {"text": "Mount streaming preview"},
+    "workspace.streaming.unmount": {"text": "Stop streaming preview"},
+    "workspace.streaming.preparing": {"text": "Preparing the actual bounded source plan…"},
+    "workspace.streaming.mount_failed": {"text": "Streaming preview mount failed; current mount was preserved when possible"},
+    "workspace.streaming.stability": {"text": "Planner retention reason"},
+    "workspace.streaming.retained": {"text": "Retained demand"},
+    "workspace.streaming.lingering": {"text": "Linger interval after source exit"},
+    "workspace.streaming.cooldown": {"text": "Reload cooldown"},
+    "workspace.streaming.watching": {"text": "Watching boundary history"},
+    "workspace.streaming.legend": {"text": "Streaming: boundary = desired, dot = actual; hover a dot for reasons"},
+    "workspace.streaming.unavailable": {"text": "Streaming preview unavailable: no current mounted runtime capture"},
+    "workspace.streaming.unknown": {"text": "Unknown / not observed"},
+    "workspace.streaming.unloaded": {"text": "Unloaded"},
+    "workspace.streaming.loaded": {"text": "Loaded"},
+    "workspace.streaming.activated": {"text": "Activated"},
+    "workspace.streaming.loading": {"text": "Loading"},
+    "workspace.streaming.resident": {"text": "Resident"},
+    "workspace.streaming.active": {"text": "Active"},
+    "workspace.streaming.evicting": {"text": "Evicting"},
+    "workspace.streaming.failed": {"text": "Failed"},
+    "workspace.streaming.succeeded": {"text": "Succeeded"},
+    "workspace.streaming.cancelled": {"text": "Cancelled"},
+    "workspace.streaming.replaced": {"text": "Replaced"},
+    "workspace.streaming.shutdown": {"text": "Shutdown"},
+    "workspace.streaming.cell": {"text": "Cell / LOD / layer"},
+    "workspace.streaming.desired": {"text": "Desired"},
+    "workspace.streaming.runtime": {"text": "Actual runtime"},
+    "workspace.streaming.reason": {"text": "Authority reason"},
+    "workspace.streaming.evidence_counts": {"text": "Sources / attempts / failures / decisions"},
+    "workspace.streaming.no_demand": {"text": "No planned demand"},
+    "workspace.panel.world_composition": {"text": "World Composition"},
+    "workspace.world.source_hint": {"text": "Open a project-relative .horoworld source document. Replacing a dirty document requires resolving its unsaved changes."},
+    "workspace.world.path": {"text": "Project-relative source path"},
+    "workspace.world.open_source": {"text": "Open world source"},
+    "workspace.world.close_source": {"text": "Close world source"},
+    "workspace.world.no_document": {"text": "No partitioned world is open."},
+    "workspace.world.error": {"text": "World Composition could not complete the operation. Current source state is preserved."},
+    "workspace.world.authoring_status": {"text": "Source coverage and authoring working set. Cooked availability and runtime residency are independent."},
+    "workspace.world.search": {"text": "Search layer name, layer ID, cell coordinates or LOD"},
+    "workspace.world.all": {"text": "All statuses"},
+    "workspace.world.all_layers": {"text": "All layers"},
+    "workspace.world.open": {"text": "Open in authoring set"},
+    "workspace.world.closed": {"text": "Outside authoring set"},
+    "workspace.world.mixed": {"text": "Partially open"},
+    "workspace.world.layers": {"text": "Layers"},
+    "workspace.world.cells": {"text": "Cells"},
+    "workspace.world.layer": {"text": "Layer"},
+    "workspace.world.id": {"text": "ID"},
+    "workspace.world.status": {"text": "Authoring status"},
+    "workspace.world.objects": {"text": "Objects"},
+    "workspace.world.always_present": {"text": "Always present"},
+    "workspace.world.coordinate": {"text": "Cell coordinates"},
+    "workspace.world.lod": {"text": "LOD"},
+    "workspace.world.no_matches": {"text": "No cells or layers match the filters."},
     "workspace.panel.game": {"text": "Game"},
     "workspace.panel.global_dock": {"text": "Bottom Dock"},
     "workspace.game.idle": {"text": "Press Play to start the game."},
@@ -1666,6 +1902,102 @@
     "workspace.value.on": {"text": "On"},
     "workspace.value.off": {"text": "Off"},
     "workspace.value.static": {"text": "✓ Static"},
+    "workspace.world_sources.radius": {
+      "text": "Radius (mm)"
+    },
+    "workspace.world_sources.maximum_extent": {
+      "text": "Maximum extent (mm)"
+    },
+    "workspace.world_sources.half_extent": {
+      "text": "Half extent (mm)"
+    },
+    "workspace.world_sources.plane_normal": {
+      "text": "Plane normal"
+    },
+    "workspace.world_sources.plane_distance": {
+      "text": "Plane distance (mm)"
+    },
+    "workspace.world_sources.normalize": {
+      "text": "Normalize normal"
+    },
+    "workspace.world_sources.add_point": {
+      "text": "Add path point"
+    },
+    "workspace.world_sources.remove_point": {
+      "text": "Remove last point"
+    },
+    "workspace.world_sources.title": {
+      "text": "Streaming sources"
+    },
+    "workspace.world_sources.unavailable": {
+      "text": "Open a partitioned world to edit streaming sources."
+    },
+    "workspace.world_sources.authoring_only": {
+      "text": "Edit source shapes and streaming demand. Drag handles to change positions and dimensions."
+    },
+    "workspace.world_sources.sphere": {
+      "text": "Create sphere"
+    },
+    "workspace.world_sources.box": {
+      "text": "Create box"
+    },
+    "workspace.world_sources.frustum": {
+      "text": "Create frustum"
+    },
+    "workspace.world_sources.path": {
+      "text": "Create path volume"
+    },
+    "workspace.world_sources.priority": {
+      "text": "Priority"
+    },
+    "workspace.world_sources.target": {
+      "text": "Target state"
+    },
+    "workspace.world_sources.unloaded": {
+      "text": "Unloaded"
+    },
+    "workspace.world_sources.loaded": {
+      "text": "Loaded"
+    },
+    "workspace.world_sources.activated": {
+      "text": "Activated"
+    },
+    "workspace.world_sources.intent": {
+      "text": "Intent"
+    },
+    "workspace.world_sources.camera": {
+      "text": "Camera"
+    },
+    "workspace.world_sources.gameplay": {
+      "text": "Gameplay"
+    },
+    "workspace.world_sources.network": {
+      "text": "Network relevance"
+    },
+    "workspace.world_sources.preload": {
+      "text": "Preload"
+    },
+    "workspace.world_sources.color": {
+      "text": "Debug color"
+    },
+    "workspace.world_sources.apply": {
+      "text": "Apply source"
+    },
+    "workspace.world_sources.remove": {
+      "text": "Remove source"
+    },
+    "workspace.world_sources.cancel": {
+      "text": "Cancel preview"
+    },
+    "workspace.world_sources.undo": {
+      "text": "Undo source edit"
+    },
+    "workspace.world_sources.redo": {
+      "text": "Redo source edit"
+    },
+    "workspace.world_sources.rejected": {
+      "text": "Source edit rejected"
+    },
     "workspace.viewport.object_count": {"text": "{} object(s)"},
     "workspace.viewport.perspective": {"text": "Perspective"},
     "workspace.viewport.orthographic": {"text": "Orthographic"},
@@ -2466,6 +2798,12 @@
     "workspace.packages.recovery_hint": {
       "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
     },
+    "workspace.physics.compound_children": {"text": "Body collider children"},
+    "workspace.physics.edit_child": {"text": "Edit child in viewport"},
+    "workspace.physics.edit_compound": {"text": "Edit all compound children"},
+    "workspace.physics.gizmo_hint": {"text": "Collider editing · Ctrl: snap 0.1 m / 15° / 10% · Ctrl-click: toggle child · Escape: cancel"},
+    "workspace.physics.gizmo_rejected": {"text": "Collider edit rejected. Use valid positive bounds and uniform sphere/capsule scale. See diagnostics."},
+    "workspace.physics.gizmo_unsupported": {"text": "Cooked shape children require their owning source document; viewport editing is unavailable."},
     "workspace.physics.title": {
       "text": "Physics"
     },
@@ -2988,6 +3326,578 @@
     },
     "settings.navigation.override_cost": {
       "text": "Overridden traversal cost"
+    },
+    "workspace.world_layers.title": {"text": "Layers"},
+    "workspace.world_layers.create": {"text": "Create layer"},
+    "workspace.world_layers.undo": {"text": "Undo layer command"},
+    "workspace.world_layers.redo": {"text": "Redo layer command"},
+    "workspace.world_layers.filter": {"text": "Filter layers"},
+    "workspace.world_layers.all_owners": {"text": "All owners"},
+    "workspace.world_layers.streaming": {"text": "World streaming"},
+    "workspace.world_layers.gameplay": {"text": "Gameplay script"},
+    "workspace.world_layers.network": {"text": "Network replication"},
+    "workspace.world_layers.current": {"text": "Current authoring layer"},
+    "workspace.world_layers.set_current": {"text": "Make current"},
+    "workspace.world_layers.clear_current": {"text": "Clear current layer"},
+    "workspace.world_layers.move_up": {"text": "Move up"},
+    "workspace.world_layers.move_down": {"text": "Move down"},
+    "workspace.world_layers.empty": {"text": "No layers match this filter."},
+    "workspace.world_layers.current_hidden": {"text": "The current authoring layer is hidden by the filter."},
+    "workspace.world_layers.name": {"text": "Layer name"},
+    "workspace.world_layers.name_hint": {"text": "Enter a non-empty layer name."},
+    "workspace.world_layers.cancel": {"text": "Cancel"},
+    "workspace.world_layers.stale": {"text": "The world changed or closed. Cancel and reopen this dialog."},
+    "workspace.world.bake": {"text": "Bake streaming cells"},
+    "workspace.world.validate": {"text": "Validate streaming cells"},
+    "workspace.world.cancel_bake": {"text": "Cancel bake"},
+    "workspace.world.bake_running": {"text": "Processing world cells. See Operations for progress and Build Output for diagnostics."},
+    "workspace.world.bake_current": {"text": "The baked cells match this world and project revision."},
+    "workspace.world.bake_needed": {"text": "Bake or validate the complete world. Diagnostics appear in Build Output."},
+    "workspace.world_layers.rejected": {"text": "Layer creation was rejected. Check the name and document limits."},
+    "workspace.prefab.create.action": {
+      "text": "Create Prefab from Subtree..."
+    },
+    "workspace.prefab.create.title": {
+      "text": "Create Prefab"
+    },
+    "workspace.prefab.create.help": {
+      "text": "Create a reusable prefab and replace this subtree with a linked instance. Unsupported or external references must be resolved first."
+    },
+    "workspace.prefab.create.path": {
+      "text": "Project-relative prefab path"
+    },
+    "workspace.prefab.create.cancel": {
+      "text": "Cancel"
+    },
+    "workspace.prefab.create.confirm": {
+      "text": "Create Prefab"
+    },
+    "workspace.prefab.create.failed": {
+      "text": "Prefab creation did not commit. Review the reported source and target sites."
+    },
+    "workspace.prefab.create.post_commit": {
+      "text": "Prefab created. Workspace presentation needs refresh; the source and linked instance remain committed."
+    },
+    "workspace.prefab.create.more_diagnostics": {
+      "text": "more reference diagnostics are retained in the transaction result."
+    },
+    "workspace.prefab.create.expired": {
+      "text": "The workspace session ended. Reopen the project before creating a prefab."
+    },
+    "workspace.navigation_overlay.title": {"text": "Navigation overlays"},
+    "workspace.navigation_overlay.show": {"text": "Show navigation overlays"},
+    "workspace.navigation_overlay.profile": {"text": "Profile"},
+    "workspace.navigation_overlay.area": {"text": "Area"},
+    "workspace.navigation_overlay.surface": {"text": "Surface"},
+    "workspace.navigation_overlay.validity": {"text": "Evidence / validity"},
+    "workspace.navigation_overlay.all": {"text": "All"},
+    "workspace.navigation_overlay.authored": {"text": "Saved authored intent"},
+    "workspace.navigation_overlay.cooked": {"text": "Cooked topology"},
+    "workspace.navigation_overlay.disabled": {"text": "Disabled"},
+    "workspace.navigation_overlay.unvalidated": {"text": "Unvalidated link"},
+    "workspace.navigation_overlay.bounds": {"text": "Surface bounds"},
+    "workspace.navigation_overlay.walkable": {"text": "Walkable areas"},
+    "workspace.navigation_overlay.tiles": {"text": "Tile edges"},
+    "workspace.navigation_overlay.modifiers": {"text": "Modifier volumes"},
+    "workspace.navigation_overlay.links": {"text": "Off-mesh links"},
+    "workspace.navigation_overlay.unavailable": {"text": "No saved navigation capture for this Scene. Open Navigation to reload saved project choices."},
+    "workspace.navigation_overlay.dirty": {"text": "Saved capture: the current Scene has edits or an external conflict. Reload saved choices after saving."},
+    "workspace.navigation_overlay.saved": {"text": "Saved capture; link validation and runtime availability are separate."},
+    "workspace.navigation_overlay.limited": {"text": "Geometry or frame draw budget reached; some evidence is omitted."},
+    "workspace.navigation_bake.reload": {"text": "Reload saved project choices"},
+    "workspace.navigation_bake.selection_mode": {"text": "Use selection"},
+    "workspace.navigation_bake.surface_selected": {"text": "Selected"},
+    "workspace.navigation_bake.title": {"text": "Navigation"},
+    "workspace.navigation_bake.cancel_title": {"text": "Cancel navigation bake?"},
+    "workspace.navigation_bake.cancel_hint": {"text": "Closing this dialog keeps the bake running. Confirm cancellation explicitly to stop uncommitted work. Published output is retained."},
+    "workspace.navigation_bake.confirm_cancel": {"text": "Cancel bake"},
+    "workspace.navigation_bake.keep_running": {"text": "Keep running"},
+    "workspace.navigation_bake.return": {"text": "Return to Navigation"},
+    "workspace.navigation_bake.action_failed": {"text": "The navigation operation could not complete. Review the diagnostic code and shared Operations output."},
+    "workspace.navigation_bake.definition": {"text": "Project definition"},
+    "workspace.navigation_bake.project_profile": {"text": "Project capacity profile / revision"},
+    "workspace.navigation_bake.profiles": {"text": "Authored agent profiles"},
+    "workspace.navigation_bake.profiles_hint": {"text": "Profiles and build settings come from the project definition. This bake preserves the complete profile closure."},
+    "workspace.navigation_bake.selected_only": {"text": "Rebuild selected surfaces only"},
+    "workspace.navigation_bake.selection_required": {"text": "Select at least one surface. Unselected surfaces require verified retained output."},
+    "workspace.navigation_bake.operation": {"text": "Bake operation"},
+    "workspace.navigation_bake.identity": {"text": "Request identity"},
+    "workspace.navigation_bake.shared_operation": {"text": "Shared Operations identity"},
+    "workspace.navigation_bake.queued": {"text": "Queued"},
+    "workspace.navigation_bake.running": {"text": "Running"},
+    "workspace.navigation_bake.waiting": {"text": "Waiting"},
+    "workspace.navigation_bake.cancelling": {"text": "Cancelling"},
+    "workspace.navigation_bake.succeeded": {"text": "Succeeded"},
+    "workspace.navigation_bake.failed": {"text": "Failed"},
+    "workspace.navigation_bake.cancelled": {"text": "Cancelled"},
+    "workspace.navigation_bake.unavailable": {"text": "Navigation bake is unavailable. Review the diagnostic and project navigation settings."},
+    "workspace.navigation_bake.stage": {"text": "Stage identifier"},
+    "workspace.navigation_bake.progress": {"text": "Progress"},
+    "workspace.navigation_bake.indeterminate": {"text": "Progress is not yet measurable."},
+    "workspace.navigation_bake.elapsed": {"text": "Elapsed seconds"},
+    "workspace.navigation_bake.tiles": {"text": "Captured surfaces / tiles"},
+    "workspace.navigation_bake.resources": {"text": "Resource limits: concurrent jobs / resident bytes / temporary bytes"},
+    "workspace.navigation_bake.publication": {"text": "Published tiles: rebuilt / reused"},
+    "workspace.navigation_bake.start": {"text": "Bake and publish"},
+    "workspace.navigation_bake.validate": {"text": "Validate without publishing"},
+    "workspace.navigation_bake.retry": {"text": "Retry with fresh source"},
+    "workspace.navigation_bake.cancel": {"text": "Request cancellation…"},
+    "workspace.navigation_bake.saved_source": {"text": "Bakes capture saved project source. Save definition and Scene edits first. Closing or hiding this panel leaves accepted work running."},
+    "workspace.navigation_bake.preparing": {"text": "Preparing project navigation…"},
+    "workspace.navigation_inspector.surface": {
+      "text": "Navigation surface"
+    },
+    "workspace.navigation_inspector.region": {
+      "text": "Navigation region"
+    },
+    "workspace.navigation_inspector.modifier": {
+      "text": "Navigation modifier"
+    },
+    "workspace.navigation_inspector.link": {
+      "text": "Navigation link"
+    },
+    "workspace.navigation_inspector.agent": {
+      "text": "Navigation agent"
+    },
+    "workspace.navigation_inspector.missing": {
+      "text": "Missing descriptor / retained identity:"
+    },
+    "workspace.navigation_inspector.degraded": {
+      "text": "Navigation descriptors are unavailable. Values remain authored drafts; activation is blocked until their exact descriptors resolve."
+    },
+    "workspace.navigation_inspector.center": {
+      "text": "Local center"
+    },
+    "workspace.navigation_inspector.extents": {
+      "text": "Local half extents"
+    },
+    "workspace.navigation_inspector.profiles": {
+      "text": "Grounded agent profiles"
+    },
+    "workspace.navigation_inspector.remove_missing": {
+      "text": "Remove unresolved profile from draft"
+    },
+    "workspace.navigation_inspector.definition": {
+      "text": "Navigation definition asset"
+    },
+    "workspace.navigation_inspector.scope": {
+      "text": "Bake scope"
+    },
+    "workspace.navigation_inspector.subtree": {
+      "text": "Object subtree"
+    },
+    "workspace.navigation_inspector.bounds": {
+      "text": "Local bounds"
+    },
+    "workspace.navigation_inspector.region_mode": {
+      "text": "Region operation"
+    },
+    "workspace.navigation_inspector.include": {
+      "text": "Include"
+    },
+    "workspace.navigation_inspector.exclude": {
+      "text": "Exclude"
+    },
+    "workspace.navigation_inspector.sources": {
+      "text": "Source selection"
+    },
+    "workspace.navigation_inspector.explicit": {
+      "text": "Explicit contributors"
+    },
+    "workspace.navigation_inspector.static": {
+      "text": "Static collision in bounds"
+    },
+    "workspace.navigation_inspector.shape": {
+      "text": "Volume shape"
+    },
+    "workspace.navigation_inspector.box": {
+      "text": "Box"
+    },
+    "workspace.navigation_inspector.cylinder": {
+      "text": "Y-axis cylinder"
+    },
+    "workspace.navigation_inspector.radius": {
+      "text": "Radius (metres)"
+    },
+    "workspace.navigation_inspector.half_height": {
+      "text": "Half height (metres)"
+    },
+    "workspace.navigation_inspector.operation": {
+      "text": "Modifier operation"
+    },
+    "workspace.navigation_inspector.area": {
+      "text": "Area override"
+    },
+    "workspace.navigation_inspector.area_cost": {
+      "text": "Area and traversal cost"
+    },
+    "workspace.navigation_inspector.cost": {
+      "text": "Traversal cost"
+    },
+    "workspace.navigation_inspector.position": {
+      "text": "Local endpoint position"
+    },
+    "workspace.navigation_inspector.connection_radius": {
+      "text": "Connection radius (metres)"
+    },
+    "workspace.navigation_inspector.start": {
+      "text": "Start endpoint"
+    },
+    "workspace.navigation_inspector.end": {
+      "text": "End endpoint"
+    },
+    "workspace.navigation_inspector.kind": {
+      "text": "Traversal kind"
+    },
+    "workspace.navigation_inspector.jump": {
+      "text": "Jump"
+    },
+    "workspace.navigation_inspector.ladder": {
+      "text": "Ladder"
+    },
+    "workspace.navigation_inspector.door": {
+      "text": "Door"
+    },
+    "workspace.navigation_inspector.teleport": {
+      "text": "Teleport"
+    },
+    "workspace.navigation_inspector.direction": {
+      "text": "Traversal direction"
+    },
+    "workspace.navigation_inspector.forward": {
+      "text": "Start to end"
+    },
+    "workspace.navigation_inspector.both": {
+      "text": "Bidirectional"
+    },
+    "workspace.navigation_inspector.profile": {
+      "text": "Agent profile"
+    },
+    "workspace.navigation_inspector.filter": {
+      "text": "Query filter"
+    },
+    "workspace.navigation_inspector.override_radius": {
+      "text": "Override agent radius"
+    },
+    "workspace.navigation_inspector.enabled": {
+      "text": "Enabled"
+    },
+    "workspace.navigation_inspector.invalid": {
+      "text": "Invalid draft. Repair the highlighted component before applying; no document or runtime state has changed."
+    },
+    "workspace.navigation_inspector.apply": {
+      "text": "Apply all selected navigation edits"
+    },
+    "workspace.navigation_inspector.cancel": {
+      "text": "Discard navigation drafts"
+    },
+    "workspace.navigation_inspector.rejected": {
+      "text": "Navigation edits were rejected. Drafts are retained for repair."
+    },
+    "workspace.ui_canvas.undo": {
+      "text": "Undo"
+    },
+    "workspace.ui_canvas.redo": {
+      "text": "Redo"
+    },
+    "workspace.ui_canvas.reload": {
+      "text": "Reload"
+    },
+    "workspace.ui_canvas.command_failed": {
+      "text": "The canvas operation failed. Check the document state and try again."
+    },
+    "workspace.ui_canvas.search": {
+      "text": "Search element types"
+    },
+    "workspace.ui_canvas.create": {
+      "text": "Create element"
+    },
+    "workspace.ui_canvas.move_up": {
+      "text": "Move earlier"
+    },
+    "workspace.ui_canvas.move_down": {
+      "text": "Move later"
+    },
+    "workspace.ui_canvas.reparent_hint": {
+      "text": "Drag an element onto a container to move it."
+    },
+    "workspace.ui_canvas.no_results": {
+      "text": "No matching elements."
+    },
+    "workspace.ui_canvas.kind.canvas": {
+      "text": "Canvas"
+    },
+    "workspace.ui_canvas.kind.screen": {
+      "text": "Screen"
+    },
+    "workspace.ui_canvas.kind.panel": {
+      "text": "Panel"
+    },
+    "workspace.ui_canvas.kind.frame": {
+      "text": "Frame"
+    },
+    "workspace.ui_canvas.kind.layout_group": {
+      "text": "Layout Group"
+    },
+    "workspace.ui_canvas.kind.text": {
+      "text": "Text"
+    },
+    "workspace.ui_canvas.kind.image": {
+      "text": "Image"
+    },
+    "workspace.ui_canvas.kind.button": {
+      "text": "Button"
+    },
+    "workspace.ui_canvas.kind.progress_bar": {
+      "text": "Progress Bar"
+    },
+    "workspace.ui_canvas.kind.slider": {
+      "text": "Slider"
+    },
+    "workspace.ui_canvas.kind.toggle": {
+      "text": "Toggle"
+    },
+    "workspace.ui_canvas.kind.text_input": {
+      "text": "Text Input"
+    },
+    "workspace.ui_canvas.kind.scroll_view": {
+      "text": "Scroll View"
+    },
+    "workspace.ui_canvas.kind.collection_view": {
+      "text": "Collection View"
+    },
+    "workspace.ui_inspector.auto": {"text": "Auto"},
+    "workspace.ui_inspector.dip": {"text": "DIP (1/64 units)"},
+    "workspace.ui_inspector.percent": {"text": "Percent (64 = 100%)"},
+    "workspace.ui_inspector.logical_value": {"text": "Logical value (1/64 DIP)"},
+    "workspace.ui_inspector.width": {"text": "Width"},
+    "workspace.ui_inspector.height": {"text": "Height"},
+    "workspace.ui_inspector.minimum_width": {"text": "Minimum width"},
+    "workspace.ui_inspector.minimum_height": {"text": "Minimum height"},
+    "workspace.ui_inspector.maximum_width": {"text": "Maximum width"},
+    "workspace.ui_inspector.maximum_height": {"text": "Maximum height"},
+    "workspace.ui_inspector.value": {"text": "Value"},
+    "workspace.ui_inspector.weight": {"text": "Font weight"},
+    "workspace.ui_inspector.stretch": {"text": "Font stretch"},
+    "workspace.ui_inspector.font_style": {"text": "Font style (0–2)"},
+    "workspace.ui_inspector.font_size": {"text": "Font size (1/64 DIP)"},
+    "workspace.ui_inspector.line_height": {"text": "Line height (1/64 DIP)"},
+    "workspace.ui_inspector.letter_spacing": {"text": "Letter spacing (1/64 DIP)"},
+    "workspace.ui_inspector.radius": {"text": "Radius (1/64 DIP)"},
+    "workspace.ui_inspector.border_width": {"text": "Border width (1/64 DIP)"},
+    "workspace.ui_inspector.outline_width": {"text": "Outline width (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_x": {"text": "Shadow X (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_y": {"text": "Shadow Y (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_blur": {"text": "Shadow blur (1/64 DIP)"},
+    "workspace.ui_inspector.duration": {"text": "Duration (microseconds)"},
+    "workspace.ui_inspector.easing": {"text": "Easing ID"},
+    "workspace.ui_inspector.red": {"text": "Linear red"},
+    "workspace.ui_inspector.green": {"text": "Linear green"},
+    "workspace.ui_inspector.blue": {"text": "Linear blue"},
+    "workspace.ui_inspector.alpha": {"text": "Alpha"},
+    "workspace.ui_inspector.color_role": {"text": "Color role"},
+    "workspace.ui_inspector.generic": {"text": "Generic"},
+    "workspace.ui_inspector.text": {"text": "Text"},
+    "workspace.ui_inspector.surface": {"text": "Surface"},
+    "workspace.ui_inspector.border": {"text": "Border"},
+    "workspace.ui_inspector.accent": {"text": "Accent"},
+    "workspace.ui_inspector.status": {"text": "Status"},
+    "workspace.ui_inspector.asset": {"text": "Asset ID"},
+    "workspace.ui_inspector.image_fit": {"text": "Image fit"},
+    "workspace.ui_inspector.stretch_fit": {"text": "Stretch"},
+    "workspace.ui_inspector.contain": {"text": "Contain"},
+    "workspace.ui_inspector.cover": {"text": "Cover"},
+    "workspace.ui_inspector.tile": {"text": "Tile"},
+    "workspace.ui_inspector.margin_left": {"text": "Margin left (1/64 DIP)"},
+    "workspace.ui_inspector.margin_top": {"text": "Margin top (1/64 DIP)"},
+    "workspace.ui_inspector.margin_right": {"text": "Margin right (1/64 DIP)"},
+    "workspace.ui_inspector.margin_bottom": {"text": "Margin bottom (1/64 DIP)"},
+    "workspace.ui_inspector.padding_left": {"text": "Padding left (1/64 DIP)"},
+    "workspace.ui_inspector.padding_top": {"text": "Padding top (1/64 DIP)"},
+    "workspace.ui_inspector.padding_right": {"text": "Padding right (1/64 DIP)"},
+    "workspace.ui_inspector.padding_bottom": {"text": "Padding bottom (1/64 DIP)"},
+    "workspace.ui_inspector.border_left": {"text": "Border left (1/64 DIP)"},
+    "workspace.ui_inspector.border_top": {"text": "Border top (1/64 DIP)"},
+    "workspace.ui_inspector.border_right": {"text": "Border right (1/64 DIP)"},
+    "workspace.ui_inspector.border_bottom": {"text": "Border bottom (1/64 DIP)"},
+    "workspace.ui_inspector.offset_left": {"text": "Offset left (1/64 DIP)"},
+    "workspace.ui_inspector.offset_top": {"text": "Offset top (1/64 DIP)"},
+    "workspace.ui_inspector.offset_right": {"text": "Offset right (1/64 DIP)"},
+    "workspace.ui_inspector.offset_bottom": {"text": "Offset bottom (1/64 DIP)"},
+    "workspace.ui_inspector.slice_left": {"text": "Nine-slice left (1/64 DIP)"},
+    "workspace.ui_inspector.slice_top": {"text": "Nine-slice top (1/64 DIP)"},
+    "workspace.ui_inspector.slice_right": {"text": "Nine-slice right (1/64 DIP)"},
+    "workspace.ui_inspector.slice_bottom": {"text": "Nine-slice bottom (1/64 DIP)"},
+    "workspace.ui_inspector.normalized_value": {"text": "Normalized value (64 = 100%)"},
+    "workspace.ui_inspector.aspect_width": {"text": "Aspect width"},
+    "workspace.ui_inspector.aspect_height": {"text": "Aspect height"},
+    "workspace.ui_inspector.pivot_x": {"text": "Pivot X (0–64)"},
+    "workspace.ui_inspector.pivot_y": {"text": "Pivot Y (0–64)"},
+    "workspace.ui_inspector.gap": {"text": "Gap (1/64 DIP)"},
+    "workspace.ui_inspector.column_count": {"text": "Column count (0–16)"},
+    "workspace.ui_inspector.row_count": {"text": "Row count (0–16)"},
+    "workspace.ui_inspector.flex_grow": {"text": "Flex grow weight"},
+    "workspace.ui_inspector.flex_shrink": {"text": "Flex shrink weight"},
+    "workspace.ui_inspector.grid_column": {"text": "Grid column (0 = auto)"},
+    "workspace.ui_inspector.grid_row": {"text": "Grid row (0 = auto)"},
+    "workspace.ui_inspector.column_span": {"text": "Column span"},
+    "workspace.ui_inspector.row_span": {"text": "Row span"},
+    "workspace.ui_inspector.start": {"text": "Start"},
+    "workspace.ui_inspector.center": {"text": "Center"},
+    "workspace.ui_inspector.end": {"text": "End"},
+    "workspace.ui_inspector.anchor_left": {"text": "Left anchor"},
+    "workspace.ui_inspector.anchor_right": {"text": "Right anchor"},
+    "workspace.ui_inspector.anchor_top": {"text": "Top anchor"},
+    "workspace.ui_inspector.anchor_bottom": {"text": "Bottom anchor"},
+    "workspace.ui_inspector.anchor_horizontal": {"text": "Horizontal anchor alignment"},
+    "workspace.ui_inspector.anchor_vertical": {"text": "Vertical anchor alignment"},
+    "workspace.ui_inspector.preserve_width": {"text": "Preserve anchored width"},
+    "workspace.ui_inspector.preserve_height": {"text": "Preserve anchored height"},
+    "workspace.ui_inspector.horizontal_alignment": {"text": "Horizontal alignment"},
+    "workspace.ui_inspector.vertical_alignment": {"text": "Vertical alignment"},
+    "workspace.ui_inspector.positioning": {"text": "Positioning"},
+    "workspace.ui_inspector.flow": {"text": "Flow"},
+    "workspace.ui_inspector.absolute": {"text": "Absolute"},
+    "workspace.ui_inspector.container_kind": {"text": "Container layout"},
+    "workspace.ui_inspector.stack": {"text": "Stack"},
+    "workspace.ui_inspector.flex": {"text": "Flex"},
+    "workspace.ui_inspector.grid": {"text": "Grid"},
+    "workspace.ui_inspector.orientation": {"text": "Orientation"},
+    "workspace.ui_inspector.horizontal": {"text": "Horizontal"},
+    "workspace.ui_inspector.vertical": {"text": "Vertical"},
+    "workspace.ui_inspector.wrap": {"text": "Wrapping"},
+    "workspace.ui_inspector.no_wrap": {"text": "No wrapping"},
+    "workspace.ui_inspector.wrap_enabled": {"text": "Wrap"},
+    "workspace.ui_inspector.main_alignment": {"text": "Main-axis distribution"},
+    "workspace.ui_inspector.cross_alignment": {"text": "Cross-axis alignment"},
+    "workspace.ui_inspector.space_between": {"text": "Space between"},
+    "workspace.ui_inspector.space_around": {"text": "Space around"},
+    "workspace.ui_inspector.space_evenly": {"text": "Space evenly"},
+    "workspace.ui_inspector.columns": {"text": "Column tracks"},
+    "workspace.ui_inspector.rows": {"text": "Row tracks"},
+    "workspace.ui_inspector.track_kind": {"text": "Track sizing"},
+    "workspace.ui_inspector.track_value": {"text": "Track value (DIP/percent = 1/64 units)"},
+    "workspace.ui_inspector.track_minimum": {"text": "Track minimum"},
+    "workspace.ui_inspector.track_maximum": {"text": "Track maximum"},
+    "workspace.ui_inspector.fraction": {"text": "Fraction weight"},
+    "workspace.ui_inspector.style_asset": {"text": "Style asset ID (optional)"},
+    "workspace.ui_inspector.type_class_asset": {"text": "Type class asset ID (optional)"},
+    "workspace.ui_inspector.type_class_id": {"text": "Type class ID (optional)"},
+    "workspace.ui_inspector.resource_resolution": {"text": "Resource references are validated against pinned project assets and the active style registry before Apply commits."},
+    "workspace.ui_inspector.classes": {"text": "Style classes"},
+    "workspace.ui_inspector.class_asset": {"text": "Class asset ID"},
+    "workspace.ui_inspector.class_id": {"text": "Class ID"},
+    "workspace.ui_inspector.remove_class": {"text": "Remove selected class"},
+    "workspace.ui_inspector.add_class": {"text": "Add class reference"},
+    "workspace.ui_inspector.intrinsic_none": {"text": "None"},
+    "workspace.ui_inspector.intrinsic_image": {"text": "Image"},
+    "workspace.ui_inspector.intrinsic_kind": {"text": "Intrinsic size source"},
+    "workspace.ui_inspector.intrinsic_required": {"text": "Require intrinsic source"},
+    "workspace.ui_inspector.fallback_width": {"text": "Fallback width (1/64 DIP)"},
+    "workspace.ui_inspector.fallback_height": {"text": "Fallback height (1/64 DIP)"},
+    "workspace.ui_inspector.overrides": {"text": "Inline style overrides"},
+    "workspace.ui_inspector.use_token": {"text": "Use style token"},
+    "workspace.ui_inspector.token_asset": {"text": "Token asset ID"},
+    "workspace.ui_inspector.token_id": {"text": "Token ID"},
+    "workspace.ui_inspector.category": {"text": "Literal value category"},
+    "workspace.ui_inspector.category_color": {"text": "Linear color"},
+    "workspace.ui_inspector.category_dimension": {"text": "Dimension"},
+    "workspace.ui_inspector.category_typography": {"text": "Typography"},
+    "workspace.ui_inspector.category_imagery": {"text": "Imagery"},
+    "workspace.ui_inspector.category_shape": {"text": "Shape"},
+    "workspace.ui_inspector.category_scalar": {"text": "Scalar"},
+    "workspace.ui_inspector.category_enum": {"text": "Enum or flags"},
+    "workspace.ui_inspector.category_motion": {"text": "Motion reference"},
+    "workspace.ui_inspector.remove_override": {"text": "Remove selected override"},
+    "workspace.ui_inspector.property_id": {"text": "New property ID"},
+    "workspace.ui_inspector.add_override": {"text": "Add override for this ID"},
+    "workspace.ui_inspector.select_element": {"text": "Select an authored element in the hierarchy to inspect its presentation."},
+    "workspace.ui_inspector.title": {"text": "UI property inspector"},
+    "workspace.ui_inspector.invalid_draft": {"text": "The draft contains invalid values. Correct them or cancel before applying."},
+    "workspace.ui_inspector.apply": {"text": "Apply inspector changes"},
+    "workspace.ui_inspector.cancel": {"text": "Cancel inspector draft"},
+    "workspace.ui_inspector.reset": {"text": "Remove presentation override"},
+    "workspace.ui_inspector.registry_unavailable": {"text": "Style editing requires an active project style registry. Layout, state and message edits remain available."},
+    "workspace.ui_inspector.state_visible": {"text": "Initially visible"},
+    "workspace.ui_inspector.state_enabled": {"text": "Initially enabled"},
+    "workspace.ui_inspector.state_focusable": {"text": "Initially focusable"},
+    "workspace.ui_inspector.initial_override": {"text": "Override initial control value"},
+    "workspace.ui_inspector.initial_checked": {"text": "Initially checked"},
+    "workspace.ui_inspector.initial_text": {"text": "Initial editable text"},
+    "workspace.ui_inspector.scalar_minimum": {"text": "Scalar minimum"},
+    "workspace.ui_inspector.scalar_maximum": {"text": "Scalar maximum"},
+    "workspace.ui_inspector.scalar_step": {"text": "Scalar step"},
+    "workspace.ui_inspector.scalar_initial": {"text": "Initial scalar value"},
+    "workspace.ui_inspector.accessibility_enabled": {"text": "Author accessibility metadata"},
+    "workspace.ui_inspector.accessibility_role": {"text": "Accessibility role"},
+    "workspace.ui_inspector.accessibility_hidden": {"text": "Hide from accessibility"},
+    "workspace.ui_inspector.accessibility_read_only": {"text": "Read-only semantics"},
+    "workspace.ui_inspector.accessibility_required": {"text": "Required semantics"},
+    "workspace.ui_inspector.accessibility_name": {"text": "Localized accessible name"},
+    "workspace.ui_inspector.accessibility_description": {"text": "Localized accessible description"},
+    "workspace.ui_inspector.localized_content": {"text": "Localized text content"},
+    "workspace.ui_inspector.message_namespace": {"text": "Game message namespace"},
+    "workspace.ui_inspector.message_key": {"text": "Semantic message key"},
+    "workspace.ui_inspector.message_fallback": {"text": "Source fallback text"},
+    "workspace.ui_inspector.failure_policy": {"text": "Missing translation policy"},
+    "workspace.ui_inspector.failure.fallback": {"text": "Use authored fallback"},
+    "workspace.ui_inspector.failure.placeholder": {"text": "Use safe placeholder"},
+    "workspace.ui_inspector.failure.required": {"text": "Require translation"},
+    "workspace.ui_inspector.argument_value": {"text": "Typed argument value"},
+    "workspace.ui_inspector.argument_enum_type": {"text": "Stable enum type ID"},
+    "workspace.ui_inspector.argument_modifiers": {"text": "Shortcut modifier bits"},
+    "workspace.ui_inspector.argument_name": {"text": "Argument name"},
+    "workspace.ui_inspector.argument_type": {"text": "Argument type"},
+    "workspace.ui_inspector.remove_argument": {"text": "Remove selected argument"},
+    "workspace.ui_inspector.add_argument": {"text": "Add typed argument"},
+    "workspace.ui_inspector.arg.integer": {"text": "Integer"},
+    "workspace.ui_inspector.arg.decimal": {"text": "Decimal"},
+    "workspace.ui_inspector.arg.boolean": {"text": "Boolean"},
+    "workspace.ui_inspector.arg.date_time": {"text": "Date/time (UTC milliseconds)"},
+    "workspace.ui_inspector.arg.duration": {"text": "Duration (milliseconds)"},
+    "workspace.ui_inspector.arg.enum": {"text": "Stable enum"},
+    "workspace.ui_inspector.arg.text": {"text": "Text"},
+    "workspace.ui_inspector.arg.shortcut": {"text": "Shortcut key"},
+    "workspace.ui_inspector.role.application": {"text": "Application"},
+    "workspace.ui_inspector.role.window": {"text": "Window"},
+    "workspace.ui_inspector.role.screen": {"text": "Screen"},
+    "workspace.ui_inspector.role.dialog": {"text": "Dialog"},
+    "workspace.ui_inspector.role.alert": {"text": "Alert"},
+    "workspace.ui_inspector.role.group": {"text": "Group"},
+    "workspace.ui_inspector.role.heading": {"text": "Heading"},
+    "workspace.ui_inspector.role.static_text": {"text": "Static text"},
+    "workspace.ui_inspector.role.button": {"text": "Button"},
+    "workspace.ui_inspector.role.toggle": {"text": "Toggle"},
+    "workspace.ui_inspector.role.checkbox": {"text": "Checkbox"},
+    "workspace.ui_inspector.role.radio": {"text": "Radio button"},
+    "workspace.ui_inspector.role.slider": {"text": "Slider"},
+    "workspace.ui_inspector.role.text_field": {"text": "Text field"},
+    "workspace.ui_inspector.role.link": {"text": "Link"},
+    "workspace.ui_inspector.role.image": {"text": "Image"},
+    "workspace.ui_inspector.role.progress": {"text": "Progress"},
+    "workspace.ui_inspector.role.list": {"text": "List"},
+    "workspace.ui_inspector.role.list_item": {"text": "List item"},
+    "workspace.ui_inspector.role.menu": {"text": "Menu"},
+    "workspace.ui_inspector.role.menu_item": {"text": "Menu item"},
+    "workspace.ui_inspector.role.tab": {"text": "Tab"},
+    "workspace.ui_inspector.role.tab_item": {"text": "Tab item"},
+    "workspace.ui_inspector.role.tree": {"text": "Tree"},
+    "workspace.ui_inspector.role.tree_item": {"text": "Tree item"},
+    "workspace.ui_inspector.role.table": {"text": "Table"},
+    "workspace.ui_inspector.role.row": {"text": "Row"},
+    "workspace.ui_inspector.role.cell": {"text": "Cell"},
+    "workspace.ui_inspector.role.scroll_view": {"text": "Scroll view"},
+    "workspace.ui_inspector.project_theme": {
+      "text": "Project style theme"
+    },
+    "workspace.ui_inspector.choose_theme": {
+      "text": "Select a registered style asset"
+    },
+    "workspace.ui_inspector.refresh_theme": {
+      "text": "Prepare / refresh selected theme"
+    },
+    "workspace.ui_inspector.preparing_theme": {
+      "text": "Preparing style assets…"
     }
   }
 }

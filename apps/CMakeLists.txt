@@ -92,6 +92,20 @@ foreach(horo_navigation_identity_input IN LISTS horo_navigation_identity_inputs)
     string(APPEND horo_navigation_identity_material ";${horo_navigation_identity_path}=${horo_navigation_identity_digest}")
 endforeach()
 string(SHA256 HORO_NAVIGATION_BUILD_FINGERPRINT "${horo_navigation_identity_material}")
+
+# One non-installed native composition authority for editor, CLI and MCP bake adapters.
+set(HORO_NAVIGATION_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/navigation_host_headers")
+file(MAKE_DIRECTORY "${HORO_NAVIGATION_HOST_HEADERS}")
+configure_file(common/NativeNavigationBakeComposition.h "${HORO_NAVIGATION_HOST_HEADERS}/NativeNavigationBakeComposition.h" COPYONLY)
+add_library(HoroNativeNavigationBakeHost STATIC common/NativeNavigationBakeComposition.cpp)
+target_compile_features(HoroNativeNavigationBakeHost PUBLIC cxx_std_20)
+target_include_directories(HoroNativeNavigationBakeHost PUBLIC "${HORO_NAVIGATION_HOST_HEADERS}")
+target_compile_definitions(HoroNativeNavigationBakeHost PRIVATE
+        HORO_NAVIGATION_BUILD_FINGERPRINT="${HORO_NAVIGATION_BUILD_FINGERPRINT}-$<CONFIG>")
+target_link_libraries(HoroNativeNavigationBakeHost PUBLIC HoroEngine::NavigationBakeAutomation
+        PRIVATE HoroEngine::NavigationRecastDetour HoroEngine::PlatformProjectIo HoroEngine::Platform)
+target_link_libraries(horo-engine PRIVATE HoroNativeNavigationBakeHost)
+
 if(MINGW)
     target_link_options(horo-engine PRIVATE -municode)
 endif()
@@ -214,6 +228,13 @@ add_custom_target(HoroExtensionAuthorCiStage DEPENDS
     HoroExtensionSdkConformanceStage
     HoroExtensionSdkPackageStage)
 
+# Non-installed executable adapter shared with qualification; portable producer remains Editor/Platform-free.
+add_library(HoroEditorUiStyleHostInternal STATIC common/ui_style/EditorUiStylePreparation.cpp)
+target_compile_features(HoroEditorUiStyleHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorUiStyleHostInternal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/common/ui_style")
+target_link_libraries(HoroEditorUiStyleHostInternal PUBLIC HoroEngine::EditorServices HoroEngine::UiStyleWorkspaceApplication
+        HoroEngine::PlatformImmutableFileStorage HoroEngine::Platform HoroEngine::ProjectMutationGuard)
+
 # The graphical executable is an optional composition root. Foundation and
 # headless hosts must remain buildable when the GUI adapter is intentionally off.
 if(HORO_BUILD_EDITOR_GUI)
@@ -223,6 +244,7 @@ if(HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditor
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
+        HoroEditor/app/EditorNavigationBakeHost.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
         HoroEditor/app/EditorAudioPreviewDecode.cpp
@@ -232,6 +254,8 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
         HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
     )
+
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles)
 
     if(APPLE)
         # SDL_GetBasePath resolves to Contents/Resources for an application bundle.
@@ -316,6 +340,7 @@ if(HORO_BUILD_EDITOR_GUI)
     endif()
 
     target_compile_features(HoroEditor PRIVATE cxx_std_20)
+    target_link_libraries(HoroEditor PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo)
 
     if(BUILD_TESTING AND HORO_ENABLE_GPU_SMOKE_TESTS AND HORO_BUILD_RENDER_OPENGL)
         target_sources(HoroEditor PRIVATE HoroEditor/app/EditorSurfaceLifecycleQualification.cpp)
@@ -346,6 +371,7 @@ if(HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditor
         PRIVATE
             HoroPackageProjectHost
+            HoroEditorUiStyleHostInternal
             HoroEngine::ShaderBuild
             HoroEngine::Gui
             HoroEngine::EditorServices

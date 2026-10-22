@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <type_traits>
 #include <utility>
 
@@ -36,10 +37,39 @@ namespace Horo::Editor {
             return true;
         }
 
+        /** @brief Holds every capability required by a custom document edit through canonical transaction completion. */
+        struct InspectorEditAdmission final {
+            Extensions::ExtensionCapabilityUseLease inspector;
+            std::optional<Extensions::ExtensionCapabilityUseLease> composition;
+
+            /** @brief Rechecks both grants immediately before publication. */
+            [[nodiscard]] bool IsUsable() const noexcept {
+                return inspector.IsUsable() && (!composition || composition->IsUsable());
+            }
+        };
+
+        /** @brief Acquires a command-lifetime grant set; cached drawing observation cannot authorize an edit. */
+        Result<InspectorEditAdmission> AcquireCapabilities(const Extensions::EditorInspectorContribution &contribution) {
+            const auto &capability = contribution.context.Surface().kind == Extensions::EditorSurfaceKind::Inspector
+                                         ? Extensions::EditorInspectorCapability
+                                         : Extensions::EditorPropertyDrawerCapability;
+            auto inspector = contribution.context.AcquireCapabilityUse(capability);
+            if (inspector.HasError())
+                return Result<InspectorEditAdmission>::Failure(inspector.ErrorValue());
+            InspectorEditAdmission admission{std::move(inspector).Value(), {}};
+            if (Extensions::RequiresEditorUiComposition(contribution.definition->form)) {
+                auto composition = contribution.context.AcquireCapabilityUse(Extensions::EditorCustomCompositionCapability);
+                if (composition.HasError())
+                    return Result<InspectorEditAdmission>::Failure(composition.ErrorValue());
+                admission.composition.emplace(std::move(composition).Value());
+            }
+            return Result<InspectorEditAdmission>::Success(std::move(admission));
+        }
+
         /** @brief Rechecks the actual project owner's approval, immutable declaration and field constraints for one user gesture. */
-        Result<Extensions::ExtensionCapabilityUseLease> AcquireEdit(const InspectorExtensionEdit &request,
-                                                                    const Extensions::EditorInspectorContribution &contribution,
-                                                                    const std::vector<InspectorProviderApproval> &approvals) {
+        Result<InspectorEditAdmission> AcquireEdit(const InspectorExtensionEdit &request,
+                                                   const Extensions::EditorInspectorContribution &contribution,
+                                                   const std::vector<InspectorProviderApproval> &approvals) {
             if (const auto approval = std::ranges::find_if(approvals,
                                                            [&](const auto &binding) {
                 return binding.provider == request.provider && binding.surface == request.surface && binding.behavior == request.behavior &&
@@ -49,20 +79,17 @@ namespace Horo::Editor {
                        std::ranges::find(binding.fields, request.field) != binding.fields.end();
             });
                 approval == approvals.end())
-                return Reject<Extensions::ExtensionCapabilityUseLease>(SceneTransactionFailure::Unauthorized);
+                return Reject<InspectorEditAdmission>(SceneTransactionFailure::Unauthorized);
             const auto field = std::ranges::find(contribution.definition->fields, request.field, &Extensions::EditorInspectorField::field);
             if (field == contribution.definition->fields.end() ||
                 !Extensions::CanEditEditorInspectorField(*contribution.definition, *field))
-                return Reject<Extensions::ExtensionCapabilityUseLease>(SceneTransactionFailure::Invalid);
+                return Reject<InspectorEditAdmission>(SceneTransactionFailure::Invalid);
             auto value = Scalar(request.value);
             if (value.HasError())
-                return Result<Extensions::ExtensionCapabilityUseLease>::Failure(value.ErrorValue());
+                return Result<InspectorEditAdmission>::Failure(value.ErrorValue());
             if (auto valid = Extensions::ValidateEditorInspectorValue(*field, value.Value()); valid.HasError())
-                return Result<Extensions::ExtensionCapabilityUseLease>::Failure(valid.ErrorValue());
-            const auto &capability = contribution.context.Surface().kind == Extensions::EditorSurfaceKind::Inspector
-                                         ? Extensions::EditorInspectorCapability
-                                         : Extensions::EditorPropertyDrawerCapability;
-            return contribution.context.AcquireCapabilityUse(capability);
+                return Result<InspectorEditAdmission>::Failure(valid.ErrorValue());
+            return AcquireCapabilities(contribution);
         }
     }  // namespace
 

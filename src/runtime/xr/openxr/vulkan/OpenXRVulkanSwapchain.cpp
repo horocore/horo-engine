@@ -3,10 +3,27 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 
 #include <algorithm>
+#include <bit>
+#include <cstddef>
 #include <format>
+#include <type_traits>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
+        // Ordinary same-address-space data-pointer ABI qualification is required; these
+        // SDK layout contracts do not prove pointer representation or grant aliasing.
+        static_assert(std::is_standard_layout_v<XrSwapchainImageVulkanKHR>);
+        static_assert(std::is_standard_layout_v<XrSwapchainImageBaseHeader>);
+        static_assert(std::is_trivially_copyable_v<XrSwapchainImageVulkanKHR *>);
+        static_assert(std::is_trivially_copyable_v<XrSwapchainImageBaseHeader *>);
+        static_assert(sizeof(XrSwapchainImageVulkanKHR *) == sizeof(XrSwapchainImageBaseHeader *));
+        static_assert(alignof(XrSwapchainImageVulkanKHR) >= alignof(XrSwapchainImageBaseHeader));
+        static_assert(offsetof(XrSwapchainImageVulkanKHR, type) == 0);
+        static_assert(offsetof(XrSwapchainImageBaseHeader, type) == 0);
+        static_assert(offsetof(XrSwapchainImageVulkanKHR, next) == offsetof(XrSwapchainImageBaseHeader, next));
+        static_assert(std::is_same_v<decltype(XrSwapchainImageVulkanKHR::type), decltype(XrSwapchainImageBaseHeader::type)>);
+        static_assert(std::is_same_v<decltype(XrSwapchainImageVulkanKHR::next), decltype(XrSwapchainImageBaseHeader::next)>);
+
         /** @brief Exact Horo/native color/depth formats supported by this qualified private adapter. */
         [[nodiscard]] std::optional<std::int64_t> NativeFormat(Render::RenderTextureFormat format) noexcept {
             using enum Render::RenderTextureFormat;
@@ -149,7 +166,7 @@ namespace Horo::XR::OpenXRInternal {
         for (auto &image : images)
             image.type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR;
         std::uint32_t written{};
-        const XrResult result = enumeration.Enumerate(count, &written, reinterpret_cast<XrSwapchainImageBaseHeader *>(images.data()));
+        const XrResult result = enumeration.Enumerate(count, &written, std::bit_cast<XrSwapchainImageBaseHeader *>(images.data()));
         if (XR_FAILED(result))
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationUnavailable,

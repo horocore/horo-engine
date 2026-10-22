@@ -141,6 +141,17 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
+    /** @brief Canonical finite stepped scalar values shared by authoring and control initialization. */
+    struct UiControlScalarValues final {
+        double minimum{};
+        double maximum{1.0};
+        double step{1.0};
+        double value{};
+        /** @brief Checks finite ordered bounds, positive step and contained initial value. @return Whether valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiControlScalarValues &) const noexcept = default;
+    };
+
     /** @brief Typed descriptor for a bounded stepped scalar control. */
     struct UiSliderControlDescriptor final {
         UiControlDescriptorBase base; /**< Shared owner and activation contract. */

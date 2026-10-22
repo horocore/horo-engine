@@ -97,75 +97,101 @@ jobs:
           #include <Horo/Platform/AndroidStorage.h>
           CPP
 
-  vulkan-commands:
-    name: Vulkan 1.3 · Linux native commands
+  shaders:
+    name: Shaders · ${{ matrix.os }}
     needs: tooling
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            preset: ci-linux-debug
+            cc: gcc
+            cxx: g++
+            launcher: ccache
+          - os: windows-2022
+            preset: ci-windows-debug
+            cc: cl
+            cxx: cl
+            launcher: sccache
     env:
-      CC: gcc
-      CXX: g++
-      HORO_COMPILER_LAUNCHER: ccache
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      HORO_COMPILER_LAUNCHER: ${{ matrix.launcher }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      - name: Setup build tools
-        uses: ./.github/actions/setup-build-tools
-      - name: Restore dependency and compiler caches
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: ./.github/actions/setup-build-tools
+      - name: Select software Vulkan driver
+        if: runner.os == 'Linux'
+        run: |
+          selected_icd="$(python3 scripts/dev.py select-lavapipe-icd)"
+          printf 'VK_DRIVER_FILES=%s\n' "$selected_icd" >> "$GITHUB_ENV"
+      - name: Restore compatible main dependency and compiler caches
         uses: ./.github/actions/restore-native-cache
         with:
           profile: native-tests-v1
           mode: Debug
           max-size: 2G
-      - name: Install native Vulkan qualification driver and validation layer
+      - name: Configure focused headless Vulkan composition
+        run: >-
+          cmake --preset "${{ matrix.preset }}"
+          -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=OFF
+          -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
+          -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
+          -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
+      - name: Build native Vulkan contracts
+        run: >-
+          cmake --build build/ci --target
+          HoroMultiviewSceneExtractionTests HoroMultiviewSceneExtractionPublicHeaderConsumer HoroXRApiTests HoroXROpenXRTests
+          HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingTests HoroMaterialBindingPublicHeaderConsumer
+          HoroRenderGraphTests HoroRenderFrontendTests HoroRenderBackendRegistryTests HoroXROpenXRHostInterfaceConsumer --parallel 2
+      - name: Build Vulkan command smoke
+        if: runner.os == 'Linux'
+        run: cmake --build build/ci --target HoroVulkanCommandExecutionSmoke --parallel 2
+      - name: Run Vulkan native-call and lifecycle regressions
+        run: >-
+          ctest --test-dir build/ci --no-tests=error --parallel 1 --timeout 90 --output-on-failure
+          -R '^(HoroMultiviewSceneExtractionTests::|HoroMultiviewSceneExtractionPublicHeaderConsumer$|HoroXRApiTests::|HoroXROpenXRTests::|HoroRenderVulkanTests::|HoroPipelineCacheTests::|HoroShaderPermutationTests::|HoroMaterialBindingTests::|HoroMaterialBindingPublicHeaderConsumer$|HoroRenderGraphTests::|HoroRenderFrontendTests::|HoroRenderBackendRegistryTests::)'
+          --output-junit ctest.xml
+      - name: Compile Vulkan shaders
+        if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends libvulkan1 mesa-vulkan-drivers vulkan-tools vulkan-validationlayers
-      - name: Select installed lavapipe ICD explicitly
+          glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanPreparation.vert -o "$RUNNER_TEMP/preparation.vert.spv"
+          glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanPreparation.frag -o "$RUNNER_TEMP/preparation.frag.spv"
+          glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanTransform.vert -o "$RUNNER_TEMP/transform.vert.spv"
+          glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanTransform.frag -o "$RUNNER_TEMP/transform.frag.spv"
+          glslangValidator --target-env vulkan1.3 -V -D -S vert -e VSMain assets/shaders/runtime/multiview_mesh.hlsl -o "$RUNNER_TEMP/multiview.vert.spv"
+          glslangValidator --target-env vulkan1.3 -V -D -DHORO_MULTIVIEW_LAYER_ROUTING=1 -S vert -e VSMain assets/shaders/runtime/multiview_mesh.hlsl -o "$RUNNER_TEMP/multiview-layer.vert.spv"
+          glslangValidator --target-env vulkan1.3 -V -D -S frag -e PSMain assets/shaders/runtime/multiview_mesh.hlsl -o "$RUNNER_TEMP/multiview.frag.spv"
+      - name: Test Vulkan shaders on lavapipe
+        if: runner.os == 'Linux'
         run: |
-          selected_icd="$(python3 scripts/dev.py select-lavapipe-icd)"
-          printf 'VK_DRIVER_FILES=%s\n' "$selected_icd" >> "$GITHUB_ENV"
-      - name: Record selected native driver provenance
-        run: |
-          mkdir -p build/vulkan-command-evidence
-          git rev-parse HEAD > build/vulkan-command-evidence/checkout.txt
-          printf '%s\n' '${{ github.event.pull_request.head.sha || github.sha }}' > build/vulkan-command-evidence/source-head.txt
-          dpkg-query -W libvulkan1 mesa-vulkan-drivers vulkan-tools vulkan-validationlayers > build/vulkan-command-evidence/packages.txt
-          sha256sum "$VK_DRIVER_FILES" > build/vulkan-command-evidence/icd.sha256
-          vulkaninfo --summary > build/vulkan-command-evidence/driver.txt 2>&1
-      - name: Configure exact headless Vulkan command composition
-        run: |
-          set -o pipefail
-          cmake --preset ci-linux-debug -B build/ci-vulkan-commands -DBUILD_TESTING=ON \
-            -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF \
-            -DHORO_BUILD_EDITOR_GUI=OFF -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_XR_OPENXR=ON \
-            -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF \
-            2>&1 | tee build/vulkan-command-evidence/configure.txt
-      - name: Build actual native command owner and common contract consumers
-        run: |
-          set -o pipefail
-          cmake --build build/ci-vulkan-commands --parallel 2 --target HoroRenderVulkanTests \
-            HoroVulkanCommandExecutionSmoke HoroRenderGraphTests HoroRenderFrontendTests HoroRenderBackendRegistryTests \
-            HoroXROpenXRTests HoroXROpenXRHostInterfaceConsumer \
-            2>&1 | tee build/vulkan-command-evidence/build.txt
-      - name: Run portable contracts and actual installed-driver native commands
-        run: |
-          set -o pipefail
-          ctest --test-dir build/ci-vulkan-commands --show-only=json-v1 > build/vulkan-command-evidence/inventory.json
-          python3 -c "import json; data=json.load(open('build/vulkan-command-evidence/inventory.json')); assert any(t['name'].startswith('HoroRenderVulkanTests::OpenXR production swapchain adapter') for t in data['tests']), 'XR/Vulkan integration test is absent from this composition'"
-          ctest --test-dir build/ci-vulkan-commands --output-on-failure --parallel 1 --no-tests=error \
-            -R '^((HoroRenderVulkanTests|HoroRenderGraphTests|HoroRenderFrontendTests|HoroRenderBackendRegistryTests|HoroXROpenXRTests)(::.+)?|HoroVulkanCommandExecutionSmoke)$' \
-            --output-junit ../vulkan-command-evidence/tests.xml \
-            2>&1 | tee build/vulkan-command-evidence/test.txt
-      - name: Upload native command qualification evidence
+          HORO_MULTIVIEW_VERTEX="$RUNNER_TEMP/multiview.vert.spv" \
+          HORO_MULTIVIEW_LAYER_VERTEX="$RUNNER_TEMP/multiview-layer.vert.spv" \
+          HORO_MULTIVIEW_FRAGMENT="$RUNNER_TEMP/multiview.frag.spv" \
+          HORO_VULKAN_TRANSFORM_VERTEX="$RUNNER_TEMP/transform.vert.spv" \
+          HORO_VULKAN_TRANSFORM_FRAGMENT="$RUNNER_TEMP/transform.frag.spv" \
+          HORO_VULKAN_VERTEX_FIXTURE="$RUNNER_TEMP/preparation.vert.spv" \
+          HORO_VULKAN_FRAGMENT_FIXTURE="$RUNNER_TEMP/preparation.frag.spv" \
+          build/ci/tests/HoroRenderVulkanTests '[native-smoke]' --reporter junit --out build/ci/vulkan-shaders.xml
+      - name: Test Vulkan commands on lavapipe
+        if: runner.os == 'Linux'
+        run: >-
+          ctest --test-dir build/ci --no-tests=error --output-on-failure
+          --timeout 90 -R '^HoroVulkanCommandExecutionSmoke$' --output-junit vulkan-commands.xml
+      - name: Upload shader test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: vulkan-command-qualification
+          name: shader-results-${{ runner.os }}
           path: |
-            build/vulkan-command-evidence/
-            build/ci-vulkan-commands/CMakeCache.txt
-            build/ci-vulkan-commands/compile_commands.json
+            build/ci/*.xml
+            build/ci/Testing/Temporary/LastTest.log
           if-no-files-found: warn
 
   directx-resources:
@@ -191,61 +217,31 @@ jobs:
           profile: native-tests-v1
           mode: Debug
           max-size: 2G
-      - name: Record exact resource qualification provenance
-        env:
-          HORO_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          mkdir -p build/d3d12-resource-evidence
-          python - <<'PYTHON'
-          import json
-          import os
-          from pathlib import Path
-          import platform
-          import subprocess
-          assert platform.system() == "Windows" and platform.machine().lower() in {"amd64", "x86_64"}
-          record = {"sourceHead": os.environ["HORO_SOURCE_HEAD"],
-                    "checkoutRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-                    "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
-                    "runnerOS": os.environ["RUNNER_OS"], "runnerArch": os.environ["RUNNER_ARCH"],
-                    "imageVersion": os.environ.get("ImageVersion"), "adapter": "explicit test-only WARP"}
-          Path("build/d3d12-resource-evidence/provenance.json").write_text(json.dumps(record, indent=2))
-          PYTHON
-      - name: Configure native resource composition
-        run: |
-          set -o pipefail
-          cmake --preset ci-windows-debug -B build/ci-d3d12-resources -DBUILD_TESTING=ON \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DHORO_BUILD_RENDER_VULKAN=OFF \
-            -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF \
-            -DHORO_BUILD_INPUT_SDL3=OFF -DHORO_BUILD_EXAMPLES=OFF \
-            2>&1 | tee build/d3d12-resource-evidence/configure.txt
-      - name: Build actual native resource owner and startup contracts
-        run: |
-          set -o pipefail
-          cmake --build build/ci-d3d12-resources --parallel 2 --target \
-            HoroD3D12InitializationTests HoroD3D12ResourceTests \
-            2>&1 | tee build/d3d12-resource-evidence/build.txt
-      - name: Run startup lifecycle contracts
-        run: |
-          set -o pipefail
-          ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error \
-            -R '^HoroD3D12InitializationTests::' \
-            --output-junit "$PWD/build/d3d12-resource-evidence/initialization.xml" \
-            2>&1 | tee build/d3d12-resource-evidence/initialization.txt
-      - name: Run actual WARP byte descriptor and retirement regressions
-        run: |
-          set -o pipefail
-          build/ci-d3d12-resources/tests/HoroD3D12ResourceTests.exe '[warp]' \
-            --reporter junit --out build/d3d12-resource-evidence/warp.xml \
-            2>&1 | tee build/d3d12-resource-evidence/warp.txt
-      - name: Upload resource qualification evidence
+      - name: Configure D3D12 tests
+        run: >-
+          cmake --preset ci-windows-debug -B build/ci-d3d12-resources
+          -DHORO_BUILD_RENDER_VULKAN=OFF -DHORO_BUILD_PHYSICS_NATIVE=OFF
+          -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF -DHORO_BUILD_INPUT_SDL3=OFF -DHORO_BUILD_EXAMPLES=OFF
+      - name: Build D3D12 tests
+        run: >-
+          cmake --build build/ci-d3d12-resources --parallel 2
+          --target HoroD3D12InitializationTests HoroD3D12ResourceTests
+      - name: Test D3D12 initialization
+        run: >-
+          ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error
+          --timeout 90 -R '^HoroD3D12InitializationTests::' --output-junit initialization.xml
+      - name: Test D3D12 resources on WARP
+        run: >-
+          build/ci-d3d12-resources/tests/HoroD3D12ResourceTests.exe '[warp]'
+          --reporter junit --out build/ci-d3d12-resources/warp.xml
+      - name: Upload D3D12 test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: d3d12-resource-qualification
+          name: d3d12-resource-results
           path: |
-            build/d3d12-resource-evidence/
-            build/ci-d3d12-resources/CMakeCache.txt
-            build/ci-d3d12-resources/compile_commands.json
+            build/ci-d3d12-resources/*.xml
+            build/ci-d3d12-resources/Testing/Temporary/LastTest.log
           if-no-files-found: warn
 
   test:
@@ -346,232 +342,44 @@ jobs:
           build/ci/tests/HoroEditorViewportOpenGLSmoke
           --reporter junit --out build/ci/opengl-editor-composition.xml
 
-      - name: Cook Metal fixture and run native smoke when a device is available
-        if: ${{ !cancelled() && runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
+      - name: Configure Metal shader and presentation tests
+        if: runner.os == 'macOS'
+        run: >-
+          cmake --preset ci-macos-debug -B build/ci-metal
+          -DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"
+          -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_RENDER_OPENGL=OFF
+          -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
+
+      - name: Build Metal shaders and tests
+        if: runner.os == 'macOS'
+        run: >-
+          cmake --build build/ci-metal --parallel 2 --target
+          HoroEditor HoroMetalShaderPreparationSmoke HoroMetalGraphExecutionSmoke
+          HoroRenderDisplayTests HoroRenderFrontendTests HoroRenderBackendRegistryTests HoroRenderMetalTests
+          HoroEditorViewportMetalSmoke HoroMetalUploadShutdownSmoke
+          HoroRenderApiPublicHeaderConsumer HoroRenderFrontendPublicHeaderConsumer
+
+      - name: Test Metal shaders and presentation
+        if: runner.os == 'macOS'
         env:
-          HORO_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          "$HORO_QUALIFICATION_PYTHON" - <<'PYTHON'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-
-          build = Path("build/ci-metal-shader")
-          build.mkdir(parents=True, exist_ok=True)
-          fixture = build / "tests/MetalPreparationFixture.metallib"
-          record = {"sourceHead": os.environ["HORO_SOURCE_HEAD"],
-                    "checkoutRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-                    "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
-                    "runnerOS": os.environ["RUNNER_OS"], "runnerArch": os.environ["RUNNER_ARCH"],
-                    "imageVersion": os.environ.get("ImageVersion"),
-                    "nativeStatus": "not_run", "commands": [], "tools": {}, "sourceSha256": {}}
-
-          def digest(path):
-              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-          def run(command, *, capture=False):
-              record["commands"].append(command)
-              return subprocess.run(command, check=True, text=True,
-                                    stdout=subprocess.PIPE if capture else None).stdout
-
-          try:
-              for source in ["tests/integration/renderer/MetalPreparationFixture.metal",
-                             "tests/integration/renderer/MetalShaderPreparationSmoke.mm"]:
-                  record["sourceSha256"][source] = digest(source)
-              # Fail before cooking if the selected Xcode lacks the offline tools.
-              for name in ["metal", "metallib", "clang"]:
-                  path = run(["xcrun", "-sdk", "macosx", "--find", name], capture=True).strip()
-                  record["tools"][name] = {"path": path, "sha256": digest(path)}
-              record["xcodeVersion"] = run(["xcodebuild", "-version"], capture=True).strip()
-              record["sdkVersion"] = run(["xcrun", "-sdk", "macosx", "--show-sdk-version"], capture=True).strip()
-              run(["cmake", "--preset", "ci-macos-debug", "-B", str(build),
-                   "-DPython3_EXECUTABLE=" + os.environ["HORO_QUALIFICATION_PYTHON"],
-                   "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON", "-DHORO_BUILD_EDITOR_GUI=OFF",
-                   "-DHORO_BUILD_RENDER_OPENGL=OFF", "-DHORO_BUILD_PHYSICS_NATIVE=OFF",
-                   "-DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF"])
-              commands = run(["ninja", "-C", str(build), "-t", "commands", "HoroMetalShaderPreparationSmoke"], capture=True).splitlines()
-              fixture_markers = ["integration/renderer/MetalPreparationFixture.metal",
-                                 "integration/renderer/MetalShaderPreparationSmoke.mm",
-                                 " -o tests/HoroMetalShaderPreparationSmoke "]
-              record["fixtureBuildCommands"] = [command for command in commands
-                                                if any(marker in command for marker in fixture_markers)]
-              assert all(any(marker in command for command in record["fixtureBuildCommands"])
-                         for marker in fixture_markers), "Missing fixture cook, compile or link command"
-              run(["cmake", "--build", str(build), "--target", "HoroMetalShaderPreparationSmoke", "--parallel", "2"])
-              record["fixtureSha256"] = digest(fixture)
-              probe_source = Path(os.environ["RUNNER_TEMP"]) / "horo-metal-device-probe.m"
-              probe_binary = probe_source.with_suffix("")
-              probe_source.write_text("#import <Metal/Metal.h>\nint main(void) { @autoreleasepool { return MTLCreateSystemDefaultDevice() == nil ? 77 : 0; } }\n")
-              run(["xcrun", "clang", "-fobjc-arc", str(probe_source), "-framework", "Metal",
-                   "-framework", "Foundation", "-o", str(probe_binary)])
-              probe = subprocess.run([str(probe_binary)], check=False).returncode
-              record["deviceProbeExit"] = probe
-              if probe == 77:
-                  record["nativeStatus"] = "skipped_no_device"
-                  print("::notice::Metal graph and shader preparation GPU smoke skipped: no Metal device.")
-              elif probe != 0:
-                  raise RuntimeError("Metal device probe failed: " + str(probe))
-              else:
-                  # Keep the existing graph smoke and isolate this opt-in fixture's test registration.
-                  graph = subprocess.run(["build/ci/tests/HoroMetalGraphExecutionSmoke"], check=False).returncode
-                  record["graphSmokeExit"] = graph
-                  record["nativeStatus"] = "failed"
-                  run(["ctest", "--test-dir", str(build), "--parallel", "1", "--output-on-failure",
-                       "--no-tests=error", "-R", "^HoroMetalShaderPreparationSmoke$",
-                       "--output-junit", str(build.resolve() / "ctest.xml")])
-                  record["nativeStatus"] = "passed"
-                  if graph != 0:
-                      raise RuntimeError("Metal graph smoke failed: " + str(graph))
-          except Exception as error:
-              record["error"] = str(error)
-              raise
-          finally:
-              (build / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-                  summary.write("Metal shader preparation native smoke: " + record["nativeStatus"] + ".\n")
-          PYTHON
-
-      - name: Qualify Metal presentation and retained shutdown on an actual device
-        if: ${{ !cancelled() && runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
-        env:
-          HORO_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           MTL_DEBUG_LAYER: '1'
         run: |
-          "$HORO_QUALIFICATION_PYTHON" - <<'PYTHON'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-
-          from xml.etree import ElementTree
-
-          build = Path("build/ci-metal-presentation")
-          build.mkdir(parents=True, exist_ok=True)
-          record = {"sourceHead": os.environ["HORO_SOURCE_HEAD"],
-                    "checkoutRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-                    "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
-                    "validationLayer": os.environ["MTL_DEBUG_LAYER"], "nativeStatus": "not_run", "commands": [],
-                    "qualification": "native encoding/readback; physical EDR requires observed current headroom above one"}
-
-          def run(command, *, capture=False):
-              record["commands"].append(command)
-              return subprocess.run(command, check=True, text=True,
-                                    stdout=subprocess.PIPE if capture else None).stdout
-
-          def record_presentation_result(record, build, returncode):
-              selected = set(record["selectedTests"])
-              owners = ["HoroRenderDisplayTests::", "HoroRenderFrontendTests::", "HoroRenderBackendRegistryTests::",
-                        "HoroRenderMetalTests::", "HoroEditorViewportMetalSmoke::", "HoroMetalUploadShutdownSmoke::"]
-              if any(not any(name.startswith(owner) for name in selected) for owner in owners) or "HoroEditorMetalFirstFrame" not in selected:
-                  raise RuntimeError("Required qualification owner is absent from discovery")
-              prefix = "HoroEditorViewportMetalSmoke::"
-              expected = {name.removeprefix(prefix) for name in selected if name.startswith(prefix)}
-              required = {"Editor Viewport Metal Smoke",
-                          "SDL Metal host policy precedes view creation and publishes actual revisioned display facts",
-                          "Native Metal realizes SDR, validates real drawables and coalesces latest resize before reuse",
-                          "Metal explicit sRGB matching round-trips back to the unchanged unmanaged SDR policy",
-                          "Metal linear EDR qualification uses actual host potential and native layer readback"}
-              if not required.issubset(expected):
-                  raise RuntimeError("Required presentation cases are absent from discovery")
-              common = ElementTree.parse(build / "ctest.xml").findall(".//testcase")
-              presentation = ElementTree.parse(build / "presentation.xml").findall(".//testcase")
-              if {case.attrib["name"] for case in common} != {name for name in selected if not name.startswith(prefix)}:
-                  raise RuntimeError("Common qualification JUnit does not match exact discovery")
-              observed = {name for name in expected for case in presentation
-                          if case.attrib["name"] == name or case.attrib["name"].startswith(name + "/")}
-              unexpected = any(not any(case.attrib["name"] == name or case.attrib["name"].startswith(name + "/")
-                                       for name in expected) for case in presentation)
-              if observed != expected or not presentation or unexpected:
-                  raise RuntimeError("Presentation JUnit does not match required discovered cases")
-              cases = common + presentation
-              skipped = [case.attrib["name"] for case in cases if case.find("skipped") is not None]
-              record["executedCaseCount"] = len(cases) - len(skipped)
-              record["skippedCases"] = skipped
-              if any(case.find("failure") is not None or case.find("error") is not None for case in cases):
-                  raise RuntimeError("Qualification JUnit contains a failure or error")
-              # Only Catch's documented all-skipped exit is non-failing, and only with complete matching skipped evidence.
-              all_skipped = all(case.find("skipped") is not None for case in presentation)
-              if returncode != 0 and not (returncode == 4 and all_skipped):
-                  raise RuntimeError("Native Metal presentation owner failed: " + str(returncode))
-              record["nativeStatus"] = "incomplete_hardware_cases_skipped" if skipped else "passed"
-
-          try:
-              sources = ["apps/HoroEditor/app/HoroEditorApp.cpp",
-                         "include/Horo/Runtime/Render/RenderPresentationOutput.h",
-                         "src/editor/renderer/metal/SdlMetalPresentationPort.mm",
-                         "src/runtime/renderer/modules/metal/MetalRuntime.mm",
-                         "src/runtime/renderer/modules/metal/MetalDrawableAcquisition.mm",
-                         "src/runtime/renderer/modules/metal/MetalPresentationOutput.mm",
-                         "tests/integration/renderer/MetalPresentationSmoke.mm",
-                         "tests/integration/renderer/EditorViewportMetalSmoke.mm",
-                         "tests/integration/renderer/MetalUploadShutdownSmoke.mm"]
-              record["sourceSha256"] = {source: hashlib.sha256(Path(source).read_bytes()).hexdigest() for source in sources}
-              run(["cmake", "--preset", "ci-macos-debug", "-B", str(build),
-                   "-DPython3_EXECUTABLE=" + os.environ["HORO_QUALIFICATION_PYTHON"],
-                   "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON", "-DHORO_BUILD_EDITOR_GUI=ON",
-                   "-DHORO_BUILD_RENDER_METAL=ON", "-DHORO_BUILD_RENDER_OPENGL=OFF",
-                   "-DHORO_BUILD_PHYSICS_NATIVE=OFF", "-DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF"])
-              targets = ["HoroEditor", "HoroRenderDisplayTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests",
-                         "HoroRenderMetalTests", "HoroEditorViewportMetalSmoke", "HoroMetalUploadShutdownSmoke",
-                         "HoroRenderApiPublicHeaderConsumer", "HoroRenderFrontendPublicHeaderConsumer"]
-              record["buildTargets"] = targets
-              record["buildOnlyConsumers"] = targets[-2:]
-              run(["cmake", "--build", str(build), "--parallel", "2", "--target", *targets])
-              probe_source = Path(os.environ["RUNNER_TEMP"]) / "horo-metal-presentation-probe.m"
-              probe_binary = probe_source.with_suffix("")
-              probe_source.write_text('#import <Metal/Metal.h>\n#import <AppKit/AppKit.h>\n#include <stdio.h>\n'
-                                      'int main(void) { @autoreleasepool { id<MTLDevice> d = MTLCreateSystemDefaultDevice(); '
-                                      'if (d == nil) return 77; NSScreen *s = NSScreen.mainScreen; '
-                                      'NSDictionary *facts = @{@"device": d.name, @"registryId": @(d.registryID), '
-                                      '@"screenAttached": @(s != nil), '
-                                      '@"currentLinearHeadroom": @(s.maximumExtendedDynamicRangeColorComponentValue), '
-                                      '@"potentialLinearHeadroom": @(s.maximumPotentialExtendedDynamicRangeColorComponentValue)}; '
-                                      'NSData *json = [NSJSONSerialization dataWithJSONObject:facts options:0 error:nil]; '
-                                      'return fwrite(json.bytes, 1, json.length, stdout) == json.length ? 0 : 1; } }\n')
-              run(["xcrun", "clang", "-fobjc-arc", str(probe_source), "-framework", "Metal",
-                   "-framework", "AppKit", "-framework", "Foundation", "-o", str(probe_binary)])
-              probe = subprocess.run([str(probe_binary)], check=False, capture_output=True, text=True)
-              record["deviceProbeExit"] = probe.returncode
-              if probe.returncode == 77:
-                  record["nativeStatus"] = "skipped_no_device"
-                  print("::notice::Metal presentation qualification UNEXECUTED: no actual Metal device; no native/HDR success claim.")
-              elif probe.returncode != 0:
-                  raise RuntimeError("Metal presentation device probe failed: " + str(probe.returncode))
-              else:
-                  record["deviceAndDisplay"] = json.loads(probe.stdout)
-                  pattern = ("^(HoroRender(Display|Frontend|BackendRegistry|Metal)Tests::|"
-                             "HoroEditorViewportMetalSmoke::|HoroMetalUploadShutdownSmoke::|HoroEditorMetalFirstFrame$)")
-                  record["testRegex"] = pattern
-                  discovery = run(["ctest", "--test-dir", str(build), "--show-only=json-v1", "-R", pattern], capture=True)
-                  (build / "test-discovery.json").write_text(discovery)
-                  record["selectedTests"] = [test["name"] for test in json.loads(discovery)["tests"]]
-                  assert any(name.startswith("HoroEditorViewportMetalSmoke::") for name in record["selectedTests"])
-                  assert any(name.startswith("HoroMetalUploadShutdownSmoke::") for name in record["selectedTests"])
-                  assert "HoroEditorMetalFirstFrame" in record["selectedTests"]
-                  record["nativeStatus"] = "failed"
-                  common = ("^(HoroRender(Display|Frontend|BackendRegistry|Metal)Tests::|"
-                            "HoroMetalUploadShutdownSmoke::|HoroEditorMetalFirstFrame$)")
-                  run(["ctest", "--test-dir", str(build), "--parallel", "1", "--timeout", "90", "--output-on-failure",
-                       "--no-tests=error", "-R", common, "--output-junit", str(build.resolve() / "ctest.xml")])
-                  # Catch's own JUnit distinguishes a skipped HDR case from successful SDR cases. The pinned
-                  # CTest adapter otherwise treats an individually selected all-skipped case's exit 4 as failure.
-                  presentation = [str(build / "tests/HoroEditorViewportMetalSmoke"), "--reporter", "junit",
-                                  "--out", str(build.resolve() / "presentation.xml")]
-                  record["commands"].append(presentation)
-                  completed = subprocess.run(presentation, check=False, timeout=90)
-                  record["presentationExit"] = completed.returncode
-                  record_presentation_result(record, build, completed.returncode)
-          except Exception as error:
-              record["error"] = str(error)
-              raise
-          finally:
-              (build / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-                  summary.write("Metal presentation/output qualification: " + record["nativeStatus"] + ".\n")
-          PYTHON
+          cat > "$RUNNER_TEMP/metal-device.m" <<'OBJC'
+          #import <Metal/Metal.h>
+          int main(void) { @autoreleasepool { return MTLCreateSystemDefaultDevice() == nil ? 77 : 0; } }
+          OBJC
+          xcrun clang -fobjc-arc "$RUNNER_TEMP/metal-device.m" -framework Metal -framework Foundation -o "$RUNNER_TEMP/metal-device"
+          status=0
+          "$RUNNER_TEMP/metal-device" || status=$?
+          if [ "$status" = 77 ]; then
+            echo '::notice::Metal GPU tests skipped: this runner has no Metal device.'
+          elif [ "$status" != 0 ]; then
+            exit "$status"
+          else
+            ctest --test-dir build/ci-metal --parallel 1 --timeout 90 --output-on-failure --no-tests=error \
+              -R '^(HoroRender(Display|Frontend|BackendRegistry|Metal)Tests::|HoroEditorViewportMetalSmoke::|HoroMetalUploadShutdownSmoke::|HoroEditorMetalFirstFrame$|HoroMetal(ShaderPreparation|GraphExecution)Smoke$)' \
+              --output-junit ctest.xml
+          fi
 
       # Debug audio is already in the build above. Release verifies NDEBUG
       # behavior using only the real-time audio group, on this same runner.
@@ -961,13 +769,8 @@ jobs:
           name: test-results-${{ runner.os }}
           path: |
             build/ci*/ctest.xml
-            build/ci-metal-shader/provenance.json
-            build/ci-metal-shader/tests/MetalPreparationFixture.metallib
-            build/ci-metal-shader/Testing/Temporary/LastTest.log
-            build/ci-metal-presentation/provenance.json
-            build/ci-metal-presentation/presentation.xml
-            build/ci-metal-presentation/test-discovery.json
-            build/ci-metal-presentation/Testing/Temporary/LastTest.log
+            build/ci-metal/tests/MetalPreparationFixture.metallib
+            build/ci-metal/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
             build/ci-audio-release/collision-allocation-ctest.xml

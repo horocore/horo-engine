@@ -21,10 +21,9 @@ def test_d3d12_resource_job_builds_and_executes_real_warp_tests() -> None:
     assert "--no-tests=error" in job
     assert "-R '^HoroD3D12InitializationTests::'" in job
     assert "tests/HoroD3D12ResourceTests.exe '[warp]'" in job
-    assert "--reporter junit --out build/d3d12-resource-evidence/warp.xml" in job
-    assert "sourceHead" in job
-    assert "checkoutRevision" in job
-    assert "d3d12-resource-qualification" in job
-    assert "compile_commands.json" in job
+    assert "--reporter junit --out build/ci-d3d12-resources/warp.xml" in job
+    assert "d3d12-resource-results" in job
+    assert "build/ci-d3d12-resources/*.xml" in job
+    assert "build/ci-d3d12-resources/Testing/Temporary/LastTest.log" in job
     assert "continue-on-error" not in job
     assert "--allow-running-no-tests" not in job

@@ -6,13 +6,19 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "WorkspaceSplitterInteraction.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/source_editor/SourceEditorSession.h"
+#include "editor/source_editor/SourceEditorWidget.h"
 
+#include <array>
 #include <cstdint>
 #include <imgui.h>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace Horo::Editor {
     struct GuiContentRegion;
+    class UiCanvasInspectorPanel;
 
     class EditorWorkspaceView final : public Input::IInputCaptureOwner {
     public:
@@ -62,21 +68,28 @@ namespace Horo::Editor {
                             Input::InputRouter &inputRouter, Input::InputContextToken &workspaceInputContext,
                             Extensions::EditorActivityHost *activityHost = nullptr, IEditorGuiRenderer *renderer = nullptr);
 
+        /** @brief Releases transient inspector state before the workspace composition is destroyed. */
+        ~EditorWorkspaceView();
+
         void Draw(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
                   const GuiContentRegion &contentRegion);
 
         [[nodiscard]] std::optional<Extensions::EditorActivitySide> UpdateExtensionActivities() {
+            m_extensions.SetInputAdmitted(m_inputRouter.IsContextActive(m_workspaceInputContext));
             m_extensions.Update();
             m_extensionRecovery.Update();
             return m_extensions.TakeNativePanelClear();
         }
 
         void OnInputCaptureCancelled(Input::CaptureCancellationReason reason) noexcept override;
+        /** @brief Tears down source presentations when their project document owner leaves or is replaced. */
+        void ResetSourceSession() noexcept;
 
     private:
         ExtensionActivityView m_extensions;
         ExtensionRecoveryView m_extensionRecovery;
         const EditorGuiContext &m_context;
+        mutable std::unique_ptr<UiCanvasInspectorPanel> m_uiCanvasInspector;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;
         Input::InputRouter &m_inputRouter;
@@ -112,15 +125,33 @@ namespace Horo::Editor {
         /** @brief Draws the host's ordered instance tabs using shared controls and typed lifecycle commands. */
         void DrawWorkspaceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Presents the active immutable source; text editing belongs to the source widget adapter. */
+        /** @brief Draws cached retained hierarchy and descriptor palette, emitting typed owner commands. */
+        bool DrawUiCanvasDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         bool DrawSourceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Composes one view's tools and concrete widget without taking document mutation ownership. */
+        void DrawSourceEditor(DocumentInstanceId instance, const SourceDocumentSnapshot &source, const SourceHistoryState &history,
+                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         std::optional<DocumentInstanceId> m_lastPresentedDocument;
+
+        mutable SourceEditorSession m_sourceSession;
         /** @brief Resolves theme-sized document chrome, including its overflow affordance. */
         [[nodiscard]] float DocumentTabHeight(WorkspaceDockArea area) const;
         /** @brief Draws either the active document or its explicitly focused native panel. */
         void DrawDockContent(WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Projects the active immutable sequence through the shared timeline control. */
+        /** @brief Draws the active registered PCG document using immutable source and workspace-only state. */
+        bool DrawPCGDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws source-only controls and the isolated stage using shared themed components. */
+        bool DrawPrefabDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Refreshes transient widget drafts only when their immutable source publication changes. */
+        void RefreshPrefabNameDrafts(const PrefabDocumentSnapshot &source) const;
+        /** @brief Emits source-local edits from persistent bounded widget buffers. */
+        void DrawPrefabSourceFields(const PrefabDocumentSnapshot &source, EditorWorkspaceViewCommandData &outCommand) const;
+        mutable std::optional<PrefabDocumentFence> m_prefabNameFence;
+        mutable std::string m_prefabNameScope;
+        mutable std::vector<std::array<char, Prefab::MaximumPrefabObjectNameBytes + 1>> m_prefabNameDrafts;
         void DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Calculates clamped dock geometry from native and extension visibility without mutating layout or submitting UI. */
         [[nodiscard]] WorkspaceLayoutGeometry CalculateWorkspaceGeometry(const EditorWorkspaceViewModel &viewModel, const ImVec2 &display,

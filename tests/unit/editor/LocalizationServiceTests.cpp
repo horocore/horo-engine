@@ -2,6 +2,7 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 
 #include <array>
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
@@ -73,9 +74,18 @@ namespace {
         "workspace.global_dock.localization.fonts",
     };
     constexpr std::array contentBrowserKeys{
-        "workspace.content_browser.loading",   "workspace.content_browser.unavailable",      "workspace.content_browser.no_results",
-        "workspace.content_browser.search",    "workspace.content_browser.filter.all_types", "workspace.content_browser.sort.name",
+        "workspace.content_browser.loading",
+        "workspace.content_browser.unavailable",
+        "workspace.content_browser.no_results",
+        "workspace.content_browser.search",
+        "workspace.content_browser.filter.all_types",
+        "workspace.content_browser.sort.name",
         "workspace.content_browser.sort.type",
+        "workspace.content_browser.asset.unregistered",
+        "workspace.content_browser.prefab.type",
+        "workspace.content_browser.preview.queued",
+        "workspace.content_browser.preview.unavailable",
+        "workspace.content_browser.prefab.migration_required",
     };
     constexpr std::array recoveryKeys{
         "workspace.recovery.available",
@@ -101,8 +111,10 @@ namespace {
     };
 
     template <typename Range> void RequireCatalogKeys(const Horo::Editor::LocalizationService &service, const Range &keys) {
-        for (const char *key : keys)
+        for (const char *key : keys) {
+            INFO("Catalog key: " << key);
             REQUIRE((!service.Get("editor", key).starts_with("[missing:")));
+        }
     }
 
     void ActivatePreparedCatalog(Horo::Editor::LocalizationService &service, const char *locale) {
@@ -112,6 +124,25 @@ namespace {
 
     /** @brief Requires the localized controls and close decisions belonging to persistent document tabs. */
     void RequireDocumentCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array sourceEditingKeys{
+            "workspace.source_edit.undo",
+            "workspace.source_edit.redo",
+            "workspace.source_edit.find",
+            "workspace.source_edit.replace",
+            "workspace.source_edit.replace_all",
+            "workspace.source_edit.next",
+            "workspace.source_edit.previous",
+            "workspace.source_edit.go_to",
+            "workspace.source_edit.query",
+            "workspace.source_edit.replacement",
+            "workspace.source_edit.line",
+            "workspace.source_edit.no_match",
+            "workspace.source_edit.invalid",
+            "workspace.source_edit.history_evicted",
+            "workspace.source_edit.history_oversized",
+            "workspace.source_edit.close_search",
+        };
+        RequireCatalogKeys(service, sourceEditingKeys);
         constexpr std::array documentKeys{"workspace.documents.close",         "workspace.documents.move_left",
                                           "workspace.documents.move_right",    "workspace.documents.save",
                                           "workspace.documents.preview",       "workspace.documents.preview_limit",
@@ -249,6 +280,10 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Project asset dock"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "This folder is empty."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
+        CHECK(service.Get("editor", "workspace.prefab_document.undo") == "Undo source edit");
+        CHECK(service.Get("editor", "workspace.prefab_document.discard_recovery").find("keep source edits") != std::string::npos);
+        CHECK(service.Get("editor", "workspace.prefab_document.source_controls").find("Scene viewport") != std::string::npos);
+        CHECK(service.Get("editor", "workspace.prefab_document.preview_unavailable").find("isolated runtime") != std::string::npos);
         CHECK(service.Get("editor", "render_graph.title") == "Render Graph");
         CHECK(service.Get("editor", "render_graph.unavailable") == "Unavailable");
         CHECK(service.Get("editor", "render_graph.next") == "Next page");
@@ -344,4 +379,230 @@ namespace {
             }
         }
     }
+
+    constexpr std::array PCGCanvasKeys{
+        "workspace.pcg.preview.refresh",
+        "workspace.pcg.preview.cancel",
+        "workspace.pcg.preview.running",
+        "workspace.pcg.preview.failed",
+        "workspace.pcg.preview.current",
+        "workspace.pcg.preview.empty",
+        "workspace.pcg.undo",
+        "workspace.pcg.redo",
+        "workspace.pcg.reset_view",
+        "workspace.pcg.focus",
+        "workspace.pcg.zoom",
+        "workspace.pcg.navigation_hint",
+        "workspace.pcg.palette",
+        "workspace.pcg.filter",
+        "workspace.pcg.no_catalog",
+        "workspace.pcg.unknown",
+        "workspace.pcg.input",
+        "workspace.pcg.output",
+        "workspace.pcg.inspector",
+        "workspace.pcg.select_hint",
+        "workspace.pcg.remove",
+        "workspace.pcg.identity",
+        "workspace.pcg.version",
+        "workspace.pcg.payload",
+        "workspace.pcg.connections",
+        "workspace.pcg.disconnect",
+        "workspace.pcg.cancel_connection",
+        "workspace.pcg.rejected",
+        "workspace.pcg.nodes.grid",
+        "workspace.pcg.nodes.density_filter",
+        "workspace.pcg.nodes.merge",
+        "workspace.pcg.nodes.forward",
+        "workspace.pcg.nodes.jitter",
+        "workspace.pcg.nodes.stratified",
+        "workspace.pcg.nodes.poisson",
+        "workspace.pcg.nodes.density_range",
+        "workspace.pcg.nodes.bounds",
+        "workspace.pcg.nodes.slope",
+        "workspace.pcg.nodes.distance",
+        "workspace.pcg.nodes.attribute",
+        "workspace.pcg.nodes.transform",
+        "workspace.pcg.nodes.alignment",
+        "workspace.pcg.nodes.offset",
+        "workspace.pcg.nodes.perlin",
+        "workspace.pcg.nodes.simplex",
+        "workspace.pcg.types.points",
+        "workspace.pcg.types.boolean",
+        "workspace.pcg.types.signed",
+        "workspace.pcg.types.unsigned",
+        "workspace.pcg.types.scalar",
+        "workspace.pcg.types.vector2",
+        "workspace.pcg.types.vector3",
+        "workspace.pcg.types.vector4",
+    };
+
+    TEST_CASE("PCG canvas and built-in palette copy resolves in both shipped locales", "[unit][editor][pcg][localization]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json")));
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}));
+            REQUIRE(service.ActivatePrepared());
+            RequireCatalogKeys(service, PCGCanvasKeys);
+        }
+    }
+
+    constexpr std::array PCGAuthoringKeys{
+        "workspace.pcg.authoring.input_key",
+        "workspace.pcg.authoring.remove_input",
+        "workspace.pcg.authoring.expose_input",
+        "workspace.pcg.authoring.title",
+        "workspace.pcg.authoring.invalid_value",
+        "workspace.pcg.authoring.unsupported",
+        "workspace.pcg.authoring.unavailable",
+        "workspace.pcg.authoring.rejected",
+        "workspace.pcg.authoring.apply",
+        "workspace.pcg.authoring.cancel",
+        "workspace.pcg.authoring.no_properties",
+        "workspace.pcg.authoring.deterministic_defaults",
+        "workspace.pcg.authoring.external_input",
+        "workspace.pcg.authoring.non_deterministic",
+        "workspace.pcg.authoring.profile_deterministic",
+        "workspace.pcg.authoring.add_default",
+        "workspace.pcg.authoring.remove_default",
+        "workspace.pcg.authoring.tier",
+        "workspace.pcg.authoring.baseline",
+        "workspace.pcg.authoring.standard",
+        "workspace.pcg.authoring.high",
+        "workspace.pcg.authoring.mode",
+        "workspace.pcg.authoring.offline",
+        "workspace.pcg.authoring.runtime",
+        "workspace.pcg.authoring.hybrid",
+        "workspace.pcg.authoring.seed",
+        "workspace.pcg.authoring.grid",
+        "workspace.pcg.authoring.volume",
+        "workspace.pcg.authoring.fraction",
+        "workspace.pcg.authoring.strata",
+        "workspace.pcg.authoring.count",
+        "workspace.pcg.authoring.attempts",
+        "workspace.pcg.authoring.minimum_distance",
+        "workspace.pcg.authoring.minimum",
+        "workspace.pcg.authoring.maximum",
+        "workspace.pcg.authoring.minimum_degrees",
+        "workspace.pcg.authoring.maximum_degrees",
+        "workspace.pcg.authoring.attribute",
+        "workspace.pcg.authoring.comparison",
+        "workspace.pcg.authoring.equal",
+        "workspace.pcg.authoring.not_equal",
+        "workspace.pcg.authoring.less",
+        "workspace.pcg.authoring.less_equal",
+        "workspace.pcg.authoring.greater",
+        "workspace.pcg.authoring.greater_equal",
+        "workspace.pcg.authoring.predicate",
+        "workspace.pcg.authoring.predicate_type",
+        "workspace.pcg.authoring.translation",
+        "workspace.pcg.authoring.rotation",
+        "workspace.pcg.authoring.scale",
+        "workspace.pcg.authoring.space",
+        "workspace.pcg.authoring.snapshot",
+        "workspace.pcg.authoring.point_local",
+        "workspace.pcg.authoring.maximum_vertical_distance",
+        "workspace.pcg.authoring.half_extent",
+        "workspace.pcg.authoring.salt",
+        "workspace.pcg.authoring.attribute_type",
+        "workspace.pcg.authoring.boolean",
+        "workspace.pcg.authoring.signed",
+        "workspace.pcg.authoring.unsigned",
+        "workspace.pcg.authoring.scalar",
+        "workspace.pcg.authoring.vector2",
+        "workspace.pcg.authoring.vector3",
+        "workspace.pcg.authoring.vector4",
+        "workspace.pcg.authoring.frequency",
+        "workspace.pcg.authoring.amplitude",
+        "workspace.pcg.authoring.octaves",
+        "workspace.pcg.authoring.persistence",
+        "workspace.pcg.authoring.lacunarity",
+        "workspace.pcg.authoring.normalization",
+        "workspace.pcg.authoring.signed_noise",
+        "workspace.pcg.authoring.unit_interval",
+        "workspace.pcg.authoring.default",
+        "workspace.pcg.authoring.pin_default",
+    };
+
+    TEST_CASE("PCG authoring catalog keys resolve in both shipped locales", "[unit][editor][pcg][localization]") {
+        const std::filesystem::path root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+        Horo::Editor::LocalizationError error;
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            RequireCatalogKeys(service, PCGAuthoringKeys);
+        }
+    }
+
+    TEST_CASE("World layer outliner messages resolve in both shipped locales", "[unit][editor][localization][layers]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+        Horo::Editor::LocalizationError error;
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            for (const auto key : {
+                     "workspace.world_layers.title",          "workspace.world_layers.create",      "workspace.world_layers.undo",
+                     "workspace.world_layers.redo",           "workspace.world_layers.filter",      "workspace.world_layers.all_owners",
+                     "workspace.world_layers.streaming",      "workspace.world_layers.gameplay",    "workspace.world_layers.network",
+                     "workspace.world_layers.current",        "workspace.world_layers.set_current", "workspace.world_layers.clear_current",
+                     "workspace.world_layers.move_up",        "workspace.world_layers.move_down",   "workspace.world_layers.empty",
+                     "workspace.world_layers.current_hidden", "workspace.world_layers.name",        "workspace.world_layers.name_hint",
+                     "workspace.world_layers.cancel",         "workspace.world_layers.stale",       "workspace.world_layers.rejected",
+                 }) {
+                INFO(locale);
+                INFO(key);
+                CHECK_FALSE(service.Get("editor", key).empty());
+                CHECK(service.Get("editor", key) != key);
+            }
+        }
+    }
 }  // namespace
+
+TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales", "[unit][editor][ui_canvas][localization]") {
+    const std::filesystem::path root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+    Horo::Editor::LocalizationError error;
+    for (const auto locale : {"en-US", "tr-TR"})
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+        REQUIRE(service.ActivatePrepared(&error));
+        for (const auto key : {"undo",
+                               "redo",
+                               "reload",
+                               "command_failed",
+                               "search",
+                               "create",
+                               "move_up",
+                               "move_down",
+                               "reparent_hint",
+                               "no_results",
+                               "kind.canvas",
+                               "kind.screen",
+                               "kind.panel",
+                               "kind.frame",
+                               "kind.layout_group",
+                               "kind.text",
+                               "kind.image",
+                               "kind.button",
+                               "kind.progress_bar",
+                               "kind.slider",
+                               "kind.toggle",
+                               "kind.text_input",
+                               "kind.scroll_view",
+                               "kind.collection_view"}) {
+            const std::string full = std::string{"workspace.ui_canvas."} + key;
+            INFO(locale);
+            INFO(full);
+            CHECK_FALSE(service.Get("editor", full).empty());
+            CHECK(service.Get("editor", full) != full);
+        }
+    }
+}

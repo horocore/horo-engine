@@ -344,6 +344,11 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiBindingStore.h
     Horo/Runtime/Ui/UiCanvasSpace.h
     Horo/Runtime/Ui/UiLocalization.h
+    Horo/Runtime/Ui/UiElementPresentation.h
+    Horo/Runtime/Ui/UiPresentationProfiles.h
+    Horo/Runtime/Ui/UiLayoutWork.h
+    Horo/Runtime/Ui/UiLayoutInspector.h
+    Horo/Runtime/Ui/UiElementCatalog.h
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiAssetLoading.h
     Horo/Runtime/Ui/UiSceneReconciliation.h
@@ -373,6 +378,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiTextLayout.h
     Horo/Runtime/Ui/UiGlyphAtlas.h
     Horo/Runtime/Ui/UiStyle.h
+    Horo/Runtime/Ui/UiStyleAsset.h
     Horo/Runtime/Ui/UiTheme.h
     Horo/Runtime/Ui/UiHitTesting.h
     Horo/Runtime/Ui/UiRenderSnapshot.h
@@ -1217,10 +1223,14 @@ horo_configure_target_header_boundary(HoroRenderVulkan)
 horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
+    Horo/Editor/WorldStreamingPreview.h
+    Horo/Editor/WorldStreamingPreviewRuntime.h
+    Horo/Editor/PartitionedWorldWorkspace.h
     Horo/Editor/NavigationDefinitionDocument.h
     Horo/Editor/NavigationSettingsWorkflow.h
     Horo/Editor/SceneDocumentTransaction.h
     Horo/Editor/InspectorBehaviorBinding.h
+    Horo/Editor/NavigationInspector.h
     Horo/Editor/PhysicsInspector.h
     Horo/Editor/EditorDataBus.h
 )
@@ -1234,6 +1244,9 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/WorkspaceReadSources.h
+    Horo/Editor/NavigationBakeWorkspace.h
+    Horo/Editor/NavigationViewportSnapshot.h
     Horo/Editor/ProjectCollisionSettingsStore.h
     Horo/Editor/NativeAssetRegistrySource.h
     Horo/Editor/CollisionProjectSettingsSession.h
@@ -1271,12 +1284,15 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
     Horo/Editor/SourceDocumentService.h
+    Horo/Editor/SourceEditingCommands.h
     Horo/Editor/SemanticDocumentHistory.h
     Horo/Editor/DocumentRecoveryService.h
     Horo/Editor/PCGGraphDocument.h
     Horo/Editor/PCGGraphDocumentService.h
+    Horo/Editor/PCGPreviewSession.h
     Horo/Editor/SequenceDocument.h
     Horo/Editor/UiCanvasDocument.h
+    Horo/Editor/UiInspectorResources.h
     Horo/Editor/WelcomeController.h
     Horo/Editor/WorkspaceDockArea.h
     Horo/Editor/WorkspaceLayout.h
@@ -1324,6 +1340,8 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/EditorActivityHost.h
     Horo/Extensions/EditorPageDefinition.h
     Horo/Extensions/EditorPageHost.h
+    Horo/Extensions/EditorViewportHost.h
+    Horo/Extensions/EditorViewportAbi.h
     Horo/Extensions/EditorInspectorHost.h
     Horo/Extensions/EditorPageAbi.h
     Horo/Extensions/EditorInspectorAbi.h
@@ -1400,6 +1418,11 @@ horo_configure_target_header_boundary(HoroProjectCollisionSettings PUBLIC_HEADER
 
 horo_configure_target_header_boundary(HoroCliNavigationAdapters PUBLIC_HEADERS Horo/Cli/NavigationCommands.h)
 horo_configure_target_header_boundary(HoroMcpNavigationAdapters PUBLIC_HEADERS Horo/Mcp/NavigationTools.h)
+
+horo_configure_target_header_boundary(HoroUiStyleWorkspaceApplication PUBLIC_HEADERS
+    Horo/Application/UiStyleWorkspace.h
+)
+horo_configure_target_header_boundary(HoroWorldBakeApplication PUBLIC_HEADERS Horo/Application/WorldBakeApplication.h)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

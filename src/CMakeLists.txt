@@ -717,9 +717,20 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
+        runtime/ui/UiElementPresentation.cpp
+        runtime/ui/UiElementAuthoringProjection.cpp
+        runtime/ui/UiStyleAssetValidation.cpp
+        runtime/ui/UiStyleAssetCodec.cpp
+        runtime/ui/UiCoreStyleSchema.cpp
+        runtime/ui/UiElementPresentationCodec.cpp
+        runtime/ui/UiElementAuthoringCodec.cpp
+        runtime/ui/UiElementCatalog.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiRuntimeInstance.cpp
         runtime/ui/UiDocumentCook.cpp
+        runtime/ui/UiPresentationProfiles.cpp
+        runtime/ui/UiPresentationProfileCodec.cpp
+        runtime/ui/UiLayoutInspector.cpp
         runtime/ui/UiAssetLoading.cpp
         runtime/ui/UiAssetLoadingService.cpp
         runtime/ui/UiDocumentSerialization.cpp
@@ -810,6 +821,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAnimationOwnerClocks.cpp
         runtime/ui/UiAnimationOwnerFocusGeometry.cpp
         runtime/ui/UiAnimationOwnerPreparation.cpp
+        runtime/ui/UiAnimationOwnerAttachments.cpp
         runtime/ui/UiAnimationOwnerSampling.cpp
         runtime/ui/UiAnimationOwnerPresentation.cpp
         runtime/ui/UiAnimationOwnerPublication.cpp
@@ -1182,6 +1194,11 @@ target_link_libraries(HoroAssets
 )
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Assets)
 
+# Non-installed identity-domain validation bridge; inert include metadata, no reverse link to its owning model.
+add_library(HoroPhysicsReferenceValidationInternal INTERFACE)
+target_include_directories(HoroPhysicsReferenceValidationInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/scene/physics_validation>)
+
 add_library(HoroPhysicsModel STATIC
         physics/PhysicsErrors.cpp
         physics/PhysicsFilterIdentity.cpp
@@ -1191,6 +1208,9 @@ add_library(HoroPhysicsModel STATIC
 add_library(HoroEngine::PhysicsModel ALIAS HoroPhysicsModel)
 target_compile_features(HoroPhysicsModel PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsModel PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Runtime)
+# Include-only bridge: static PRIVATE link edges leak into the build-tree Gameplay SDK export (CMake 3.25).
+target_include_directories(HoroPhysicsModel PRIVATE
+        $<TARGET_PROPERTY:HoroPhysicsReferenceValidationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::PhysicsModel)
 
 add_library(HoroAudioApi STATIC
@@ -2847,12 +2867,15 @@ target_link_libraries(HoroSceneSource
         PUBLIC HoroEngine::SceneSourceModel
         PRIVATE HoroFoundationJsonInternal nlohmann_json::nlohmann_json HoroJsonEncodingInternal HoroEngine::PrefabAuthoring
 )
+target_include_directories(HoroSceneSource PRIVATE
+        $<TARGET_PROPERTY:HoroPhysicsReferenceValidationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
 
 # Non-installed, narrow codec bridge for existing Editor JSON adapters.
 # Headless applications consume SceneSource, never these implementation headers.
 add_library(HoroSceneSourceCodecInternal INTERFACE)
 target_include_directories(HoroSceneSourceCodecInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/scene/source>
+        $<TARGET_PROPERTY:HoroPhysicsReferenceValidationInternal,INTERFACE_INCLUDE_DIRECTORIES>
 )
 target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
         HoroEngine::SceneSource nlohmann_json::nlohmann_json HoroJsonEncodingInternal
@@ -2883,7 +2906,8 @@ target_link_libraries(HoroSceneCook PUBLIC HoroEngine::RuntimeScene
 add_library(HoroPrefabHierarchyInternal INTERFACE)
 set(_horo_prefab_hierarchy_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_hierarchy_internal")
 file(MAKE_DIRECTORY "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab")
-foreach(header IN ITEMS PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h)
+foreach(header IN ITEMS
+        PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h PrefabCreation.h PrefabAssetPreview.h)
     configure_file("editor/screens/workspace/prefab/${header}"
         "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab/${header}" COPYONLY)
 endforeach()
@@ -2891,14 +2915,31 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
     "$<BUILD_INTERFACE:${_horo_prefab_hierarchy_headers}>")
 
 add_library(HoroEditorModel STATIC
+        editor/document/WorldStreamingPreview.cpp
+        editor/document/WorldStreamingPreviewHost.cpp
+        editor/document/WorldStreamingPreviewRuntime.cpp
+        editor/document/WorldCompositionBrowser.cpp
+        editor/document/PartitionedWorldSource.cpp
+        editor/document/PartitionedWorldWorkspace.cpp
+        editor/document/PartitionedWorldSourceAuthoring.cpp
+        editor/document/WorldSourceValidation.cpp
+        editor/document/WorldSourceGizmo.cpp
+        editor/document/WorldLayerCommands.cpp
+        editor/document/PartitionedWorldResidency.cpp
+        editor/document/PartitionedWorldObjectInspection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentTransaction.cpp
+        editor/document/SceneDocumentTransactionCapture.cpp
         editor/document/InspectorBehaviorBinding.cpp
+        editor/document/NavigationInspector.cpp
         editor/document/PhysicsInspector.cpp
+        editor/document/ColliderEditing.cpp
+        editor/document/ColliderGeometry.cpp
+        editor/document/ColliderGeometryInternal.h
         editor/document/SceneDocumentTransactionErrors.cpp
         editor/navigation/NavigationDefinitionDocument.cpp
         editor/navigation/NavigationSettingsWorkflow.cpp
@@ -2923,6 +2964,7 @@ target_include_directories(HoroEditorModel
 )
 target_link_libraries(HoroEditorModel
         PUBLIC
+        HoroEngine::WorldStreaming
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSourceModel
         HoroEngine::NavigationApi
@@ -2936,6 +2978,24 @@ target_link_libraries(HoroEditorModel
         HoroEngine::RuntimeScene
         PRIVATE nlohmann_json::nlohmann_json HoroSceneSourceCodecInternal HoroPrefabHierarchyInternal
 )
+
+# Application composition above immutable editor metadata and canonical Scene cook owners.
+add_library(HoroWorldBakeApplication STATIC
+        application/world_bake/WorldBakeApplication.cpp
+        application/world_bake/WorldBakeCapture.cpp
+        application/world_bake/WorldBakePlacement.cpp
+        application/world_bake/WorldBakeAdmission.cpp
+        application/world_bake/WorldBakeSources.cpp
+        application/world_bake/WorldBakeDependencies.cpp
+        application/world_bake/WorldBakeCook.cpp
+        application/world_bake/WorldBakeCells.cpp
+        application/world_bake/WorldBakeReferences.cpp
+        application/world_bake/WorldBakeEncoding.cpp)
+add_library(HoroEngine::WorldBakeApplication ALIAS HoroWorldBakeApplication)
+target_compile_features(HoroWorldBakeApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroWorldBakeApplication PUBLIC
+        HoroEngine::EditorModel HoroEngine::SceneCellPayload HoroEngine::WorldStreaming
+        HoroEngine::SceneRuntimeConversion HoroEngine::Foundation HoroEngine::Assets HoroEngine::ProjectReadFilesApi HoroEngine::ProjectMutationGuard)
 
 add_library(HoroEditorViewportScene STATIC
         editor/renderer/EditorViewportScene.cpp
@@ -3029,8 +3089,23 @@ add_library(HoroEditorPlaySceneHostInternal INTERFACE)
 target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_INTERFACE:${_horo_editor_play_host_headers}>")
 target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
 
+add_library(HoroPrefabDocumentSessionInternal INTERFACE)
+set(_horo_prefab_document_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_document_internal")
+file(MAKE_DIRECTORY "${_horo_prefab_document_headers}/editor/screens/workspace/prefab")
+configure_file(editor/screens/workspace/prefab/PrefabDocumentSession.h
+    "${_horo_prefab_document_headers}/editor/screens/workspace/prefab/PrefabDocumentSession.h" COPYONLY)
+target_include_directories(HoroPrefabDocumentSessionInternal INTERFACE "$<BUILD_INTERFACE:${_horo_prefab_document_headers}>")
+target_link_libraries(HoroPrefabDocumentSessionInternal INTERFACE HoroEditorPlaySceneHostInternal)
+
 add_library(HoroEditorServices STATIC
+        editor/document/WorkspaceReadSources.cpp
+        editor/navigation/NavigationViewportSnapshot.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
+        editor/screens/workspace/prefab/PrefabCreation.cpp
+        editor/screens/workspace/prefab/PrefabCreationPublication.cpp
+        editor/screens/workspace/prefab/PrefabDocumentSession.cpp
+        editor/screens/workspace/prefab/PrefabDocumentPersistence.cpp
+        editor/screens/workspace/prefab/PrefabDocumentStage.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
         editor/physics/CollisionIdentityGeneration.cpp
@@ -3042,8 +3117,10 @@ add_library(HoroEditorServices STATIC
         editor/physics/CollisionSourceInventory.cpp
         editor/physics/NativeAssetRegistrySource.cpp
         editor/pcg/PCGDocumentErrors.cpp
+        editor/pcg/PCGGraphAuthoring.cpp
         editor/pcg/PCGGraphDocument.cpp
         editor/pcg/PCGGraphDocumentService.cpp
+        editor/pcg/PCGPreviewSession.cpp
         editor/document/DocumentRecoveryService.cpp
         editor/audio/AudioEditorDocument.cpp
         editor/audio/AudioComponentPreview.cpp
@@ -3057,10 +3134,14 @@ add_library(HoroEditorServices STATIC
         editor/SourceFileOpenService.cpp
         editor/SourceDocumentService.cpp
         editor/SourceDocumentChanges.cpp
+        editor/SourceEditingCommands.cpp
         editor/SourceDocumentSave.cpp
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
+        editor/ui/UiInspectorDraft.cpp
+        editor/ui/UiInspectorResources.cpp
+        editor/UiCanvasDocumentCommands.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
@@ -3072,6 +3153,7 @@ add_library(HoroEditorServices STATIC
         editor/gameplay/ProjectGameplayRegistry.cpp
         editor/gameplay/EditorPlaySessionController.cpp
         editor/screens/workspace/ContentBrowserModel.cpp
+        editor/screens/workspace/prefab/PrefabAssetPreview.cpp
         editor/screens/workspace/GameplayBehaviorRequestValidation.cpp
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
         editor/modals/build_release/BuildReleaseModalSession.cpp
@@ -3109,7 +3191,7 @@ target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
-target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices
@@ -3122,7 +3204,10 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::ProjectReadFilesApi
+        HoroEngine::WorldBakeApplication
         HoroPrefabHierarchyInternal
+        HoroPrefabDocumentSessionInternal
         HoroEngine::ProjectCollisionSettings
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSource
@@ -3146,6 +3231,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::Input
         HoroEngine::ProjectMigrations
         PRIVATE
+        HoroFoundationJsonInternal
         HoroEditorPlaySceneHostInternal
         HoroEngine::ProjectAssetRegistrySource
         HoroEngine::PlatformProjectReadFiles
@@ -3156,6 +3242,11 @@ target_link_libraries(HoroEditorServices
 if (TARGET HoroBuildInfo)
     add_dependencies(HoroEditorServices HoroBuildInfo)
 endif ()
+
+# Non-installed narrow inspector draft/command seam shared with GUI and contract tests.
+add_library(HoroUiInspectorInternal INTERFACE)
+target_include_directories(HoroUiInspectorInternal INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/editor/ui)
+target_link_libraries(HoroUiInspectorInternal INTERFACE HoroEngine::EditorServices)
 
 add_library(HoroEditorPresentationSurfaceInternal STATIC
         editor/renderer/surface/EditorPresentationSurface.cpp
@@ -3236,6 +3327,7 @@ endif ()
 if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
+            editor/design_system/components/EditorUiCustomResources.cpp
             editor/design_system/components/SequenceTimelineControl.cpp
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
@@ -3269,6 +3361,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/packages/PackageModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
+            editor/modals/prefab_creation/PrefabCreationModal.cpp
             editor/screens/welcome/WelcomeView.cpp
             editor/screens/welcome/WelcomeScreen.cpp
             editor/screens/project_creation/ProjectCreationView.cpp
@@ -3276,6 +3369,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabRows.cpp
@@ -3290,6 +3384,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelCharacterWidgets.cpp
+            editor/screens/workspace/panels/inspector/NavigationInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelNavigation.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
@@ -3300,16 +3396,24 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorPanelAudioWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
+            editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
+            editor/screens/workspace/panels/viewport/WorldSourceViewportTool.cpp
+            editor/screens/workspace/panels/viewport/WorldSourceShapeControls.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
+            editor/screens/workspace/panels/viewport/ViewportStreamingPreview.cpp
+            editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
+        editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoMath.cpp
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.cpp
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.cpp
             editor/screens/workspace/panels/viewport/navigation/ViewportNavigationController.cpp
             editor/screens/workspace/WorkspacePanelRegistry.cpp
+            editor/navigation/NavigationTab.cpp
+            editor/navigation/NavigationBakeCancelModal.cpp
             editor/screens/workspace/DefaultWorkspacePanels.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPanel.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.cpp
@@ -3335,6 +3439,7 @@ if (HORO_BUILD_EDITOR_GUI)
         editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldSources.cpp
             editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerDockCommands.cpp
@@ -3349,6 +3454,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorContributions.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorApproval.cpp
+        editor/screens/workspace/EditorWorkspaceControllerNavigationInspector.cpp
         editor/screens/workspace/EditorWorkspaceControllerPhysics.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp
@@ -3357,11 +3463,42 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.cpp
+            editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.cpp
+            editor/screens/workspace/EditorWorkspaceViewUiCanvas.cpp
+            editor/screens/workspace/EditorWorkspaceControllerUiCanvas.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldStreaming.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldBake.cpp
+            editor/source_editor/SourceWidgetPlatform.cpp
+            editor/source_editor/SourceWidgetDisplay.cpp
+            editor/source_editor/SourceWidgetText.cpp
+            editor/source_editor/SourceEditorSession.cpp
+            editor/source_editor/SourceEditorTools.cpp
+            editor/source_editor/SourceEditorWidget.cpp
+            editor/source_editor/SourceSyntax.cpp
+            editor/source_editor/SourceSyntaxProjection.cpp
+            editor/source_editor/SourceEditorTheme.cpp
+            editor/screens/workspace/EditorWorkspaceInputRouting.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPCGPreview.cpp
+            editor/screens/workspace/PCGPreviewSandbox.cpp
+            editor/screens/workspace/PCGPreviewView.cpp
+            editor/screens/workspace/PCGWorkspace.cpp
+            editor/screens/workspace/PCGEditorCatalog.cpp
+            editor/screens/workspace/EditorWorkspaceViewPCG.cpp
+            editor/pcg/PCGAuthoringInspector.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
+            editor/screens/workspace/WorldLayerOutliner.cpp
+            editor/modals/world_layer/CreateWorldLayerModal.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
+            editor/screens/workspace/ExtensionActivityPlot.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
+            editor/screens/workspace/EditorWorkspaceScreenActions.cpp
+            editor/screens/workspace/EditorWorkspaceScreenComposition.cpp
+            editor/screens/workspace/EditorWorkspaceScreenLifecycle.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
         editor/screens/EditorPageFileStore.cpp
@@ -3371,6 +3508,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
+    target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
 
     target_compile_features(HoroGui PUBLIC cxx_std_20)
     target_include_directories(HoroGui
@@ -3387,7 +3525,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication HoroThirdParty::Zep)
     target_link_libraries(HoroGui
             PUBLIC
             HoroEngine::EditorServices
@@ -3426,6 +3564,9 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorActivitySession.cpp
         extensions/host/EditorActivityAction.cpp
         extensions/host/EditorPageHost.cpp
+        extensions/manifest/EditorViewportDefinition.cpp
+        extensions/host/EditorViewportHost.cpp
+        extensions/host/EditorViewportNativeSession.cpp
         extensions/host/EditorInspectorHost.cpp
         extensions/host/EditorInspectorNativeSession.cpp
         extensions/host/EditorInspectorAbiConversion.cpp
@@ -3465,6 +3606,8 @@ add_library(HoroExtensions STATIC
         extensions/manifest/EditorSvgIcon.cpp
     extensions/manifest/EditorUiForm.cpp
     extensions/manifest/EditorUiFormBuilder.cpp
+    extensions/manifest/EditorUiComposition.cpp
+    extensions/manifest/EditorUiPlot.cpp
     extensions/manifest/EditorUiFormRender.cpp
         extensions/manifest/ScriptExportDescriptor.cpp
         extensions/manifest/ScriptExportDescriptorInternal.h
@@ -3643,5 +3786,16 @@ add_library(HoroEngine::PhysicsTriggerVolumeHost ALIAS HoroPhysicsTriggerVolumeH
 target_compile_features(HoroPhysicsTriggerVolumeHost PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsTriggerVolumeHost PUBLIC HoroEngine::ProjectPhysicsCapture HoroEngine::PrefabCookHost
         HoroEngine::PhysicsSceneIntegration HoroEngine::SceneRuntimeConversion)
+
+# Explicit Assets/RuntimeUi tooling bridge; generic Application has no reverse Runtime dependency.
+add_library(HoroUiStyleWorkspaceApplication STATIC
+        application/ui/UiStyleCook.cpp
+        application/ui/UiStyleWorkspace.cpp
+        application/ui/UiStyleWorkspaceCapture.cpp
+        application/ui/UiStyleWorkspaceLoad.cpp
+        application/ui/UiStyleWorkspaceProducer.cpp)
+add_library(HoroEngine::UiStyleWorkspaceApplication ALIAS HoroUiStyleWorkspaceApplication)
+target_compile_features(HoroUiStyleWorkspaceApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroUiStyleWorkspaceApplication PUBLIC HoroEngine::RuntimeUi HoroEngine::Assets)
 
 include(HoroPublicHeaderOwnership)

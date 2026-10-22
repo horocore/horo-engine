@@ -208,15 +208,18 @@ namespace Horo::WorldStreaming {
         }
 
         /** @brief Validates immutable aggregate identity, policy correlation and declared capacities. */
-        Result<void> ValidateSnapshotInput(const WorldStreamingDiagnosticSnapshotInput &input, const StreamingBudgetPolicy &policy,
-                                           const StreamingBudgetSample &sample, const WorldStreamingDiagnosticRows &rows) {
+        Result<void> ValidateSnapshotInput(const WorldStreamingDiagnosticSnapshotInput &input,
+                                           const std::optional<StreamingBudgetPolicy> &policy,
+                                           const std::optional<StreamingBudgetSample> &sample, const WorldStreamingDiagnosticRows &rows) {
             if (!SnapshotIdentityIsValid(input))
                 return Internal::Failure<void>(WorldStreamingErrors::DiagnosticProjectionInvalid);
             if (!IsKnownInstrumentation(input.instrumentation))
                 return Internal::Failure<void>(WorldStreamingErrors::DiagnosticProjectionUnsupported);
             if (const auto queue = ValidateQueue(input); queue.HasError())
                 return queue;
-            if (sample.PolicyRevision() != policy.Revision())
+            if (sample.has_value() != policy.has_value())
+                return Internal::Failure<void>(WorldStreamingErrors::DiagnosticProjectionInvalid);
+            if (sample && sample->PolicyRevision() != policy->Revision())
                 return Internal::Failure<void>(WorldStreamingErrors::DiagnosticProjectionStale);
             if (!RowsFitDeclaredLimits(input, rows.sources, rows.cells, rows.failures, rows.events))
                 return Internal::Failure<void>(WorldStreamingErrors::DiagnosticProjectionCapacityExceeded);
@@ -354,6 +357,20 @@ namespace Horo::WorldStreaming {
                                                                                       const StreamingBudgetPolicy &policy,
                                                                                       const StreamingBudgetSample &sample,
                                                                                       const WorldStreamingDiagnosticRows &rows) {
+        return Capture(input, policy, sample, rows);
+    }
+
+    /** @copydoc WorldStreamingDiagnosticSnapshot::CreateStateOnly */
+    Result<WorldStreamingDiagnosticSnapshot> WorldStreamingDiagnosticSnapshot::CreateStateOnly(
+        const WorldStreamingDiagnosticSnapshotInput &input, const WorldStreamingDiagnosticRows &rows) {
+        return Capture(input, std::nullopt, std::nullopt, rows);
+    }
+
+    /** @copydoc WorldStreamingDiagnosticSnapshot::Capture */
+    Result<WorldStreamingDiagnosticSnapshot> WorldStreamingDiagnosticSnapshot::Capture(const WorldStreamingDiagnosticSnapshotInput &input,
+                                                                                       std::optional<StreamingBudgetPolicy> policy,
+                                                                                       std::optional<StreamingBudgetSample> sample,
+                                                                                       const WorldStreamingDiagnosticRows &rows) {
         if (const auto validInput = ValidateSnapshotInput(input, policy, sample, rows); validInput.HasError())
             return Result<WorldStreamingDiagnosticSnapshot>::Failure(validInput.ErrorValue());
         if (const auto validRecords = ValidateBaseRecords(input, rows); validRecords.HasError())
@@ -411,7 +428,8 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc WorldStreamingDiagnosticSnapshot::WorldStreamingDiagnosticSnapshot */
     WorldStreamingDiagnosticSnapshot::WorldStreamingDiagnosticSnapshot(WorldStreamingDiagnosticSnapshotInput input,
-                                                                       StreamingBudgetPolicy policy, StreamingBudgetSample sample,
+                                                                       std::optional<StreamingBudgetPolicy> policy,
+                                                                       std::optional<StreamingBudgetSample> sample,
                                                                        std::vector<StreamingSourceDesiredState> sources,
                                                                        std::vector<StreamingCellStateRecord> cells,
                                                                        std::vector<StreamingDiagnosticFailureRecord> failures,
@@ -445,13 +463,13 @@ namespace Horo::WorldStreaming {
     }
 
     /** @copydoc WorldStreamingDiagnosticSnapshot::BudgetPolicy */
-    const StreamingBudgetPolicy &WorldStreamingDiagnosticSnapshot::BudgetPolicy() const noexcept {
-        return policy_;
+    const StreamingBudgetPolicy *WorldStreamingDiagnosticSnapshot::BudgetPolicy() const noexcept {
+        return policy_ ? &*policy_ : nullptr;
     }
 
     /** @copydoc WorldStreamingDiagnosticSnapshot::BudgetSample */
-    const StreamingBudgetSample &WorldStreamingDiagnosticSnapshot::BudgetSample() const noexcept {
-        return sample_;
+    const StreamingBudgetSample *WorldStreamingDiagnosticSnapshot::BudgetSample() const noexcept {
+        return sample_ ? &*sample_ : nullptr;
     }
 
     /** @copydoc WorldStreamingDiagnosticSnapshot::Sources */

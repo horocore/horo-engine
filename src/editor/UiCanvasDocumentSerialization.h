@@ -10,5 +10,5 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
     [[nodiscard]] Result<Runtime::Ui::UiDocument> Parse(std::string_view contents);
 
     /** @brief Serializes one validated authored UI document deterministically. */
-    [[nodiscard]] std::string Serialize(const Runtime::Ui::UiDocument &document);
+    [[nodiscard]] Result<std::string> Serialize(const Runtime::Ui::UiDocument &document);
 }  // namespace Horo::Editor::UiCanvasDocumentSerialization

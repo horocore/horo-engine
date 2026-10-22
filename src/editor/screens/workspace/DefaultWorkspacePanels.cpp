@@ -1,13 +1,21 @@
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "editor/navigation/NavigationTab.h"
+#include "editor/screens/workspace/PCGWorkspace.h"
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "editor/screens/workspace/panels/hierarchy/HierarchyPanel.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
+#include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
 
 namespace Horo::Editor {
+    /** @copydoc RegisterNavigationWorkspacePanel */
+    void RegisterNavigationWorkspacePanel(WorkspacePanelRegistry &registry, NavigationBakeWorkspaceAccess access, EditorModalHost &modals) {
+        registry.RegisterPanel(std::make_shared<NavigationTab>(std::move(access), modals));
+    }
+
     /** @copydoc RegisterDefaultWorkspacePanels(WorkspacePanelRegistry&) */
     void RegisterDefaultWorkspacePanels(WorkspacePanelRegistry &registry) {
         RegisterDefaultWorkspacePanels(registry, {});
@@ -26,5 +34,7 @@ namespace Horo::Editor {
         registry.RegisterPanel(std::move(globalDock));
         registry.RegisterPanel(std::make_shared<ViewportPanel>());
         registry.RegisterPanel(std::make_shared<GamePanel>());
+        registry.RegisterPanel(std::make_shared<WorldCompositionTab>());
+        registry.RegisterPanel(CreatePCGGraphWorkspacePanel());
     }
 }  // namespace Horo::Editor

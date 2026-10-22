@@ -1,11 +1,13 @@
+#include "../../helpers/extensions/ViewportContributionTestSupport.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
-#include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
+#include "ViewportPanelRenderSupport.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/panels/viewport/ViewportOverlay.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
+#include "editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -15,72 +17,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 
 namespace {
-    class TestLocalization final : public Horo::Editor::ILocalizationService {
-    public:
-        [[nodiscard]] const std::string &Get(const std::string_view, const std::string_view localKey) const override {
-            std::string_view value = localKey;
-            if (localKey == "workspace.viewport.object_count") {
-                value = "{} objects";
-            }
-            const auto [entry, inserted] = values_.try_emplace(std::string(localKey), value);
-            static_cast<void>(inserted);
-            return entry->second;
-        }
-
-    private:
-        mutable std::unordered_map<std::string, std::string> values_;
-    };
-
-    class FakeViewportRenderer final : public Horo::Editor::IEditorViewportRenderer {
-    public:
-        void RequestExtent(const Horo::Editor::EditorViewportExtent extent) noexcept override {
-            requestedExtent = extent;
-        }
-
-        void RequestGrid(const Horo::Editor::EditorViewportGridOptions &options) noexcept override {
-            gridOptions = options;
-        }
-
-        void RequestLightVisualizer(const Horo::Editor::EditorViewportLightVisualizerOptions &options) noexcept override {
-            lightVisualizerOptions = std::move(options);
-        }
-
-        [[nodiscard]] Horo::Editor::EditorViewportExtent RequestedExtent() const noexcept override {
-            return requestedExtent;
-        }
-
-        [[nodiscard]] Horo::Math::ClipDepthRange ClipDepthRange() const noexcept override {
-            return depthRange;
-        }
-
-        [[nodiscard]] Horo::Result<void> ExecuteStaticMeshPass(const Horo::Render::StaticMeshPassDescriptor &) override {
-            return Horo::Result<void>::Success();
-        }
-
-        [[nodiscard]] Horo::Editor::EditorViewportTextureView TextureView() const noexcept override {
-            return Horo::Editor::EditorViewportTextureView{
-                .textureId = textureId,
-                .u0 = 0.25F,
-                .v0 = 0.75F,
-                .u1 = 0.75F,
-                .v1 = 0.25F,
-            };
-        }
-
-        [[nodiscard]] bool IsReady() const noexcept override {
-            return true;
-        }
-
-        Horo::Editor::EditorViewportExtent requestedExtent{};
-        Horo::Editor::EditorViewportGridOptions gridOptions{};
-        Horo::Editor::EditorViewportLightVisualizerOptions lightVisualizerOptions{};
-        Horo::Math::ClipDepthRange depthRange{Horo::Math::ClipDepthRange::ZeroToOne};
-        static constexpr std::uintptr_t textureId = 42;
-    };
+    using TestLocalization = Horo::Editor::Tests::ViewportRenderSupport::TestLocalization;
+    using FakeViewportRenderer = Horo::Editor::Tests::ViewportRenderSupport::FakeViewportRenderer;
 }  // namespace
 
 TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
@@ -114,16 +55,19 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     Input::RawInputCollector inputCollector;
     Input::InputRouter inputRouter;
     auto workspaceInput = inputRouter.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
+    Horo::Tests::ViewportContribution viewportContribution;
     ViewportPanel panel;
     PanelContext panelContext{
         .dataBus = editorEvents,
         .viewportRenderer = &renderer,
         .inputRouter = &inputRouter,
         .workspaceInputContext = &workspaceInput,
+        .extensionViewport = &viewportContribution.host,
     };
     panel.OnAttach(panelContext);
 
     Input::FrameNumber inputFrame = 1;
+    ImVec2 viewportOrigin;
 
     const auto drawFrame = [&] {
         ImGui::NewFrame();
@@ -139,7 +83,8 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
         ImGui::SetNextWindowSize(ImVec2(420.0F, 320.0F));
         ImGui::Begin("ViewportRenderTest", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
-        panel.DrawPanel(ImGui::GetCursorScreenPos(), ImVec2(400.0F, 280.0F), viewModel, command, context);
+        viewportOrigin = ImGui::GetCursorScreenPos();
+        panel.DrawPanel(viewportOrigin, ImVec2(400.0F, 280.0F), viewModel, command, context);
         ImGui::End();
         ImGui::Render();
     };
@@ -274,6 +219,89 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     drawFrame();
     REQUIRE((command.command == EditorWorkspaceViewCommand::CommitObjectTransform));
     REQUIRE((command.transformPayload.has_value()));
+
+    const std::array tones{std::pair{Extensions::EditorViewportTone::Neutral, Theme::U32(Theme::Text())},
+                           std::pair{Extensions::EditorViewportTone::Accent, Theme::U32(Theme::Accent())},
+                           std::pair{Extensions::EditorViewportTone::X, Theme::U32(Theme::Err())},
+                           std::pair{Extensions::EditorViewportTone::Y, Theme::U32(Theme::Ok())},
+                           std::pair{Extensions::EditorViewportTone::Z, Theme::U32(Theme::Accent())}};
+    Extensions::EditorViewportDefinition guides;
+    for (std::size_t i = 0; i < tones.size(); ++i) {
+        const float y = 0.6F + static_cast<float>(i) * 0.04F;
+        guides.lines.emplace_back(0.1F, y, 0.3F, y, 2.0F, tones[i].first, std::int8_t{-1});
+    }
+    REQUIRE(viewportContribution.Publish(std::move(guides), "fixture.guides", true));
+    auto guideOwner = std::move(*viewportContribution.registration);
+    drawFrame();
+    const ImDrawData *guideDraw = ImGui::GetDrawData();
+    REQUIRE(guideDraw != nullptr);
+    for (std::size_t i = 0; i < tones.size(); ++i) {
+        bool found = false;
+        const float y = viewportOrigin.y + (0.6F + static_cast<float>(i) * 0.04F) * 280.0F;
+        for (int list = 0; list < guideDraw->CmdListsCount; ++list)
+            for (const ImDrawVert &vertex : guideDraw->CmdLists[list]->VtxBuffer)
+                found = found || (vertex.col == tones[i].second && std::abs(vertex.pos.y - y) < 2.0F &&
+                                  vertex.pos.x >= viewportOrigin.x + 40.0F && vertex.pos.x <= viewportOrigin.x + 120.0F);
+        CHECK(found);
+    }
+    guideOwner.Reset();
+
+    // A provider handle far from the built-in gizmo must use the same captured transaction path.
+    REQUIRE(viewportContribution.Publish({"horo.scene.transform",
+                                          Extensions::EditorViewportTool::Move,
+                                          {{0.1F, 0.7F, 0.3F, 0.7F, 2, Extensions::EditorViewportTone::X, 0}}}));
+    const auto beginContributedDrag = [&] {
+        command = {};
+        io.AddMousePosEvent(88.0F, 204.0F);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        drawFrame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        drawFrame();
+        REQUIRE(inputRouter.HasCapture());
+        command = {};
+        io.AddMousePosEvent(108.0F, 204.0F);
+        drawFrame();
+        REQUIRE(command.command == EditorWorkspaceViewCommand::PreviewObjectTransform);
+        REQUIRE(command.objectPayload == SceneObjectId{1});
+    };
+    beginContributedDrag();
+    command = {};
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CommitObjectTransform);
+    CHECK_FALSE(inputRouter.HasCapture());
+    beginContributedDrag();
+    REQUIRE(viewportContribution.host.SetVisible({"fixture.package", "fixture.module", 1}, "fixture.gizmo", false).HasValue());
+    command = {};
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    REQUIRE(viewportContribution.host.SetVisible({"fixture.package", "fixture.module", 1}, "fixture.gizmo", true).HasValue());
+    beginContributedDrag();
+    inputRouter.CancelCapture(Input::CaptureCancellationReason::FocusLost);
+    command = {};
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    beginContributedDrag();
+    command = {};
+    panel.OnPresentationHidden(command);
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    beginContributedDrag();
+    command.command = EditorWorkspaceViewCommand::SaveScene;
+    panel.OnPresentationHidden(command);
+    CHECK(command.command == EditorWorkspaceViewCommand::SaveScene);
+    CHECK_FALSE(inputRouter.HasCapture());
+    beginContributedDrag();
+    viewportContribution.admission->Revoke();
+    command = {};
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    command = {};
+    drawFrame();
 
     viewModel.activeTransformTool = EditorTransformTool::Rotate;
     command = {};
@@ -411,83 +439,25 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     ImGui::DestroyContext();
 }
 
-TEST_CASE("Viewport compass selects both signed ends of each axis", "[unit][editor][viewport]") {
+TEST_CASE("Navigation overlay clips crossing triangles and segments before perspective division", "[editor][viewport][navigation]") {
+    using namespace Horo;
     using namespace Horo::Editor;
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
-    io.DisplaySize = {900.0F, 600.0F};
-    io.DeltaTime = 1.0F / 60.0F;
-    io.Fonts->AddFontDefault();
-    static_cast<void>(io.Fonts->Build());
-    ImFont *font = io.Fonts->Fonts.front();
-    const Theme::Fonts fonts{.sans = font, .sansCompact = font, .sansEmphasis = font};
-    TestLocalization localization;
-    ViewportOverlayState state;
-    state.camera.position = {4.0F, 3.0F, 5.0F};
-    const Horo::Math::Vec3 forward = Horo::Math::TryNormalize(state.camera.target - state.camera.position).Value();
-    const Horo::Math::Vec3 right = Horo::Math::TryNormalize(Horo::Math::Cross(forward, state.camera.up)).Value();
-    const Horo::Math::Vec3 up = Horo::Math::Cross(right, forward);
-    const auto draw = [&] {
-        ImGui::NewFrame();
-        ImGui::SetNextWindowPos({0.0F, 0.0F});
-        ImGui::SetNextWindowSize({900.0F, 600.0F});
-        ImGui::Begin("CompassTest", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
-        const ViewportOverlayAction action = DrawViewportOverlay({0.0F, 0.0F}, {800.0F, 500.0F}, state, fonts, localization);
-        ImGui::End();
-        ImGui::Render();
-        return action;
-    };
-    constexpr std::array endpoints{
-        std::pair{Horo::Math::Vec3{1.0F, 0.0F, 0.0F}, EditorViewportAxisView::PositiveX},
-        std::pair{Horo::Math::Vec3{-1.0F, 0.0F, 0.0F}, EditorViewportAxisView::NegativeX},
-        std::pair{Horo::Math::Vec3{0.0F, 1.0F, 0.0F}, EditorViewportAxisView::PositiveY},
-        std::pair{Horo::Math::Vec3{0.0F, -1.0F, 0.0F}, EditorViewportAxisView::NegativeY},
-        std::pair{Horo::Math::Vec3{0.0F, 0.0F, 1.0F}, EditorViewportAxisView::PositiveZ},
-        std::pair{Horo::Math::Vec3{0.0F, 0.0F, -1.0F}, EditorViewportAxisView::NegativeZ},
-    };
-    for (const auto &[axis, expected] : endpoints) {
-        io.AddMousePosEvent(752.0F + Horo::Math::Dot(axis, right) * 29.0F, 64.0F - Horo::Math::Dot(axis, up) * 29.0F);
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-        static_cast<void>(draw());
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-        static_cast<void>(draw());
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-        REQUIRE(draw().axisView == expected);
+    for (const auto depth : {Math::ClipDepthRange::NegativeOneToOne, Math::ClipDepthRange::ZeroToOne}) {
+        NavigationOverlayPrimitive primitive{.points = {{{-4, 0, 0.5F}, {4, 0, 0.5F}, {0, 4, 0.5F}}}, .triangle = true};
+        const auto triangle = ProjectNavigationOverlay(primitive, Math::Mat4::Identity(), {20, 30}, {640, 480}, depth);
+        REQUIRE(triangle.count >= 3);
+        CHECK(triangle.count <= triangle.points.size());
+        for (std::size_t i = 0; i < triangle.count; ++i) {
+            CHECK(triangle.points[i].x >= 20);
+            CHECK(triangle.points[i].x <= 660);
+            CHECK(triangle.points[i].y >= 30);
+            CHECK(triangle.points[i].y <= 510);
+        }
+        primitive.triangle = false;
+        primitive.points = {{{0, 0, -2}, {0.5F, 0, 0.5F}, {}}};
+        CHECK(ProjectNavigationOverlay(primitive, Math::Mat4::Identity(), {}, {640, 480}, depth).count == 2);
+        primitive.points[1].z = -3;
+        CHECK(ProjectNavigationOverlay(primitive, Math::Mat4::Identity(), {}, {640, 480}, depth).count == 0);
+        CHECK(ProjectNavigationOverlay(primitive, Math::Mat4::Identity(), {}, {0, 480}, depth).count == 0);
     }
-    ImGui::DestroyContext();
-}
-
-TEST_CASE("Viewport grid control follows shading control", "[unit][editor][viewport]") {
-    using namespace Horo::Editor;
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
-    io.DisplaySize = {900.0F, 600.0F};
-    io.DeltaTime = 1.0F / 60.0F;
-    io.Fonts->AddFontDefault();
-    static_cast<void>(io.Fonts->Build());
-    ImFont *font = io.Fonts->Fonts.front();
-    const Theme::Fonts fonts{.sans = font, .sansCompact = font, .sansEmphasis = font};
-    TestLocalization localization;
-    ViewportOverlayState state;
-    const auto draw = [&] {
-        ImGui::NewFrame();
-        ImGui::SetNextWindowPos({0.0F, 0.0F});
-        ImGui::SetNextWindowSize({900.0F, 600.0F});
-        ImGui::Begin("GridTest", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
-        const ViewportOverlayAction action = DrawViewportOverlay({0.0F, 0.0F}, {800.0F, 500.0F}, state, fonts, localization);
-        ImGui::End();
-        ImGui::Render();
-        return action;
-    };
-
-    io.AddMousePosEvent(299.0F, 34.0F);
-    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-    static_cast<void>(draw());
-    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-    static_cast<void>(draw());
-    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-    REQUIRE(draw().toggleGrid);
-    ImGui::DestroyContext();
 }

@@ -100,6 +100,14 @@ namespace Horo::Editor {
                 bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
             return bytes;
         }
+
+        /** @brief Validates and serializes a detached snapshot before admitting any filesystem mutation. */
+        Result<std::string> SerializeSnapshot(const UiCanvasDocumentSnapshot &snapshot) {
+            if (!snapshot.state.IsValid() || !snapshot.document.Id().IsValid() || !snapshot.document.Revision().IsValid() ||
+                snapshot.document.Canvases().empty())
+                return Failure<std::string>(UiCanvasDocumentErrors::InvalidDocument);
+            return UiCanvasDocumentSerialization::Serialize(snapshot.document);
+        }
     }  // namespace
 
     namespace UiCanvasDocumentErrors {
@@ -223,9 +231,10 @@ namespace Horo::Editor {
         const Result<std::filesystem::path> destination = ValidateProjectPath(absoluteProjectRoot, absolutePath);
         if (destination.HasError())
             return Result<UiCanvasDocumentSaveResult>::Failure(destination.ErrorValue());
-        if (!snapshot.state.IsValid() || !snapshot.document.Id().IsValid() || !snapshot.document.Revision().IsValid() ||
-            snapshot.document.Canvases().empty())
-            return Failure<UiCanvasDocumentSaveResult>(UiCanvasDocumentErrors::InvalidDocument);
+        const auto encoded = SerializeSnapshot(snapshot);
+        if (encoded.HasError())
+            return Result<UiCanvasDocumentSaveResult>::Failure(encoded.ErrorValue());
+        const std::string &serialized = encoded.Value();
 
         const Result<ProjectMutationLease> lease = mutations.TryAcquire(ProjectMutationRequest{
             .projectRoot = absoluteProjectRoot,
@@ -235,7 +244,6 @@ namespace Horo::Editor {
         if (lease.HasError())
             return Result<UiCanvasDocumentSaveResult>::Failure(lease.ErrorValue());
 
-        const std::string serialized = UiCanvasDocumentSerialization::Serialize(snapshot.document);
         const Result<UiCanvasFileFingerprint> current = InspectUiCanvasDocumentFingerprint(destination.Value());
         if (current.HasError())
             return Result<UiCanvasDocumentSaveResult>::Failure(current.ErrorValue());
@@ -286,7 +294,49 @@ namespace Horo::Editor {
 
     UiCanvasDocument::UiCanvasDocument(DocumentIdentity identity, std::filesystem::path path, Runtime::Ui::UiDocument document,
                                        UiCanvasFileFingerprint fingerprint) noexcept
-        : identity_(std::move(identity)), path_(std::move(path)), document_(std::move(document)), fingerprint_(std::move(fingerprint)) {}
+        : identity_(std::move(identity)), path_(std::move(path)), document_(std::move(document)), fingerprint_(std::move(fingerprint)) {
+        currentState_.instance = identity_.instance;
+        savedState_.instance = identity_.instance;
+        contentState_.instance = identity_.instance;
+        savedContentState_.instance = identity_.instance;
+    }
+
+    /** @copydoc UiCanvasDocument::UiCanvasDocument */
+    UiCanvasDocument::UiCanvasDocument(UiCanvasDocument &&other) noexcept
+        : history_(std::move(other.history_)), historyCursor_(other.historyCursor_), selection_(other.selection_),
+          identity_(std::move(other.identity_)), path_(std::move(other.path_)), document_(std::move(other.document_)),
+          fingerprint_(std::move(other.fingerprint_)), currentState_(other.currentState_), savedState_(other.savedState_),
+          contentState_(other.contentState_), savedContentState_(other.savedContentState_), closed_(other.closed_) {
+        other.document_.reset();
+        other.history_.clear();
+        other.historyCursor_ = 0;
+        other.selection_ = {};
+        other.closed_ = true;
+    }
+
+    /** @copydoc UiCanvasDocument::operator= */
+    UiCanvasDocument &UiCanvasDocument::operator=(UiCanvasDocument &&other) noexcept {
+        if (this == &other)
+            return *this;
+        history_ = std::move(other.history_);
+        historyCursor_ = other.historyCursor_;
+        selection_ = other.selection_;
+        identity_ = std::move(other.identity_);
+        path_ = std::move(other.path_);
+        document_ = std::move(other.document_);
+        fingerprint_ = std::move(other.fingerprint_);
+        currentState_ = other.currentState_;
+        savedState_ = other.savedState_;
+        contentState_ = other.contentState_;
+        savedContentState_ = other.savedContentState_;
+        closed_ = other.closed_;
+        other.document_.reset();
+        other.history_.clear();
+        other.historyCursor_ = 0;
+        other.selection_ = {};
+        other.closed_ = true;
+        return *this;
+    }
 
     /** @copydoc UiCanvasDocument::Document */
     const Runtime::Ui::UiDocument &UiCanvasDocument::Document() const noexcept {
@@ -298,7 +348,7 @@ namespace Horo::Editor {
     Result<UiCanvasDocumentStateId> UiCanvasDocument::AdvanceState() const {
         if (currentState_.value == std::numeric_limits<std::uint64_t>::max())
             return Failure<UiCanvasDocumentStateId>(UiCanvasDocumentErrors::StateExhausted);
-        return Result<UiCanvasDocumentStateId>::Success({currentState_.value + 1U});
+        return Result<UiCanvasDocumentStateId>::Success({currentState_.value + 1U, identity_.instance});
     }
 
     /** @copydoc UiCanvasDocument::Replace */
@@ -316,6 +366,10 @@ namespace Horo::Editor {
             return Result<void>::Failure(nextState.ErrorValue());
         document_ = std::move(document);
         currentState_ = nextState.Value();
+        contentState_ = currentState_;
+        history_.clear();
+        historyCursor_ = 0;
+        selection_ = {};
         return Result<void>::Success();
     }
 
@@ -332,6 +386,7 @@ namespace Horo::Editor {
             return saved;
         fingerprint_ = saved.Value().fingerprint;
         savedState_ = currentState_;
+        savedContentState_ = contentState_;
         return saved;
     }
 
@@ -353,6 +408,11 @@ namespace Horo::Editor {
         document_ = std::move(snapshot.document);
         currentState_ = nextState.Value();
         savedState_ = currentState_;
+        contentState_ = currentState_;
+        savedContentState_ = contentState_;
+        history_.clear();
+        historyCursor_ = 0;
+        selection_ = {};
         fingerprint_ = std::move(snapshot.fingerprint);
         return Result<void>::Success();
     }
@@ -364,6 +424,9 @@ namespace Horo::Editor {
         if (IsDirty() && policy == UiCanvasClosePolicy::RequireClean)
             return Failure(UiCanvasDocumentErrors::DirtyDocument);
         document_.reset();
+        history_.clear();
+        historyCursor_ = 0;
+        selection_ = {};
         closed_ = true;
         return Result<void>::Success();
     }

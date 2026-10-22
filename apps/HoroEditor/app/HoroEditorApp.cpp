@@ -1,8 +1,12 @@
 #include "HoroEditorApp.h"
 
 #include "EditorAudioPreviewHost.h"
+#include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
+#include "EditorUiStylePreparation.h"
+#include "Horo/Editor/UiInspectorResources.h"
+#include "Horo/Extensions/EditorSurfaceContext.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "ScenePhysicsHost.h"
@@ -17,6 +21,7 @@
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ShaderBuildService.h"
+#include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
@@ -33,11 +38,15 @@
 #include "Horo/Editor/GuiRoute.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
+#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/RecentProjectInspectionService.h"
 #include "Horo/Editor/WelcomeController.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
+#include "Horo/Editor/WorldStreamingPreview.h"
+#include "Horo/Editor/WorldStreamingPreviewRuntime.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -48,6 +57,8 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "PackageHostPolicy.h"
 #include "PackageProjectHost.h"
@@ -421,6 +432,10 @@ namespace Horo::Editor {
             iconCfg.OversampleV = 2;
             iconCfg.RasterizerDensity = rasterizerDensity;
             const std::span iconRanges = Ui::UiIconRegistry::MaterialSymbolGlyphRanges();
+            f.monospace = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf").c_str(),
+                                                       Theme::FontPx::Sans, &sansCfg, ranges);
+            f.monospaceEmphasis = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-SemiBold.ttf").c_str(),
+                                                               Theme::FontPx::Sans, &sansCfg, ranges);
             f.icon = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/MaterialSymbolsOutlined.ttf").c_str(), Theme::FontPx::Icon, &iconCfg,
                                                   iconRanges.data());
             if (f.sans)
@@ -1061,10 +1076,11 @@ namespace Horo::Editor {
             Render::FramebufferExtent committedOutputExtent{};
         };
 
-        /** @brief Borrowed lifecycle authorities; both remain bound until participant shutdown completes. */
+        /** @brief Borrowed lifecycle authorities; all remain bound until participant shutdown completes. */
         struct EditorRuntimeAuthorities final {
             Runtime::RuntimeHost *runtime;
             Application::Internal::PackageProjectHost *packages;
+            EditorNavigationBakeHost *navigation;
         };
 
         /** @brief Value-owned prepared viewport/GUI workload and the mesh generation used to assemble it. */
@@ -1079,9 +1095,9 @@ namespace Horo::Editor {
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
                                      EditorViewportSceneState &viewportSceneState, EditorSettingsSnapshot &settingsSnapshot,
                                      std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock,
-                                     Application::Internal::PackageProjectHost &packages) noexcept
+                                     const EditorRuntimeAuthorities &authorities) noexcept
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), authorities_{nullptr, &packages}, pacing_{clock}
+                  rendererRestart_(&rendererRestart), authorities_(authorities), pacing_{clock}
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                   ,
                   qualification_{params.options.qualifySurfaceLifecycle}
@@ -1377,6 +1393,7 @@ namespace Horo::Editor {
                 screenHost_->OnUpdate(deltaSeconds);
                 // Independent owner pumping continues after modal closure or project route departure.
                 static_cast<void>(authorities_.packages->Pump(Packages::PackageActivationBoundary::Running));
+                authorities_.navigation->Pump();
                 return Result<void>::Success();
             }
 
@@ -1723,6 +1740,24 @@ namespace Horo::Editor {
             return healthy && completed;
         }
 
+        /** @brief Creates one complete native workspace read pair at the application composition boundary. */
+        Result<WorkspaceReadSources> CaptureNativeWorkspaceSources(const std::filesystem::path &root) {
+            std::array<std::uint8_t, 16> bytes{};
+            const auto entropy = Platform::CreateNativeSecureRandomSource();
+            if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(bytes))); generated.HasError())
+                return Result<WorkspaceReadSources>::Failure(generated.ErrorValue());
+            const auto owner = Assets::AssetId::FromBytes(bytes);
+            if (!owner.IsValid())
+                return Result<WorkspaceReadSources>::Failure(MakeError(Platform::ProjectReadErrors::Invalid));
+            auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
+            if (registry.HasError())
+                return Result<WorkspaceReadSources>::Failure(registry.ErrorValue());
+            auto world = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
+            if (world.HasError())
+                return Result<WorkspaceReadSources>::Failure(world.ErrorValue());
+            return Result<WorkspaceReadSources>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
+        }
+
         /** @brief Captures explicit cooked selection and Physics mode before constructing Scene owners. */
         [[nodiscard]] Result<Application::Internal::EditorProjectScenePolicy> CaptureEditorScenePolicy(const EditorGuiOptions &options) {
             Application::Internal::EditorProjectScenePolicy scenePolicy{.physicsMode = options.physicsMode.value(),
@@ -1821,10 +1856,15 @@ namespace Horo::Editor {
             ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
+            const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
             auto capturedPolicy = CaptureEditorScenePolicy(p.options);
             if (capturedPolicy.HasError())
                 return std::nullopt;
             auto scenePolicy = std::move(capturedPolicy).Value();
+            std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
+            if (scenePolicy.cooked)
+                worldBakeDependencies.emplace(scenePolicy.cooked->targetRoot, scenePolicy.cooked->target,
+                                              std::make_shared<NativeDurableFileSystem>());
             auto capturedRoot = CaptureEditorPreviewRoot(p.options);
             if (capturedRoot.HasError())
                 return std::nullopt;
@@ -1840,6 +1880,7 @@ namespace Horo::Editor {
             auto runtimeScene = std::move(preview.scenes);
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playSceneFactory = Application::Internal::MakeEditorProjectSceneFactory(p.background.jobs, scenePolicy);
+            auto prefabStageFactory = Application::Internal::MakeEditorProjectPrefabStageFactory(p.background.jobs, scenePolicy);
             // Null is explicit; canonical activation needs an exact owner receipt.
             CollisionActivationEvidence collisionActivation{.revision = 1};
             if (preview.physicsMode == Physics::PhysicsRuntimeMode::Null)
@@ -1867,8 +1908,13 @@ namespace Horo::Editor {
             }, .retire = [&packages](const std::filesystem::path &root) {
                 return packages->Retire(root);
             }});
+            EditorNavigationBakeHost navigationBakes{p.operationServices.operationStore};
+            const auto navigationBakeAccess = navigationBakes.Access();
+            const NavigationViewportAccess navigationOverlayAccess{.prepare = navigationBakeAccess.prepare,
+                                                                   .query = navigationBakeAccess.overlays};
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
+            RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
             Extensions::ExtensionInventory extensionInventory;
             const Result<void> extensionInventoryRefresh = extensionInventory.Refresh();
             if (extensionInventoryRefresh.HasError()) {
@@ -1883,6 +1929,15 @@ namespace Horo::Editor {
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
             const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
+            auto uiInspectorResourcesFactory =
+                MakeEditorUiInspectorResourcesFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles);
+            WorldStreamingPreviewHost streamingPreview;
+            auto streamingPolicy = MakeWorldStreamingPreviewRuntimePolicy();
+            if (streamingPolicy.HasError()) {
+                LOG_ERROR("editor.streaming", "Cannot compose streaming inspection policy: %s",
+                          streamingPolicy.ErrorValue().message.c_str());
+                return std::nullopt;
+            }
             GuiScreenHost
                 screenHost{guiContext,
                            GuiScreenHostComposition{.modalHost = p.modalHost,
@@ -1903,6 +1958,9 @@ namespace Horo::Editor {
                                                     .nativeDialogs = &nativeDialogs,
                                                     .extensionSettingsFiles = &durableFiles,
                                                     .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
+                                                    .extensionUiPolicy =
+                                                        {.revision = 1,
+                                                         .availableCapabilities = {Extensions::EditorCustomCompositionCapability}},
                                                     .extensionPagePolicy = {.revision = 1,
                                                                             .knownPermissions = {{"editor.settings"},
                                                                                                  {"editor.modal"},
@@ -1921,20 +1979,34 @@ namespace Horo::Editor {
                                                          .knownPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
                                                          .approvedPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
                                                          .availableCapabilities = {{"horo.editor.inspector"},
-                                                                                   {"horo.editor.property-drawer"}}},
+                                                                                   {"horo.editor.property-drawer"},
+                                                                                   Extensions::EditorCustomCompositionCapability}},
+                                                    .extensionViewportPolicy = {.revision = 1,
+                                                                                .knownPermissions = {{"editor.viewport-overlay"},
+                                                                                                     {"editor.gizmo"}},
+                                                                                .approvedPermissions = {{"editor.viewport-overlay"},
+                                                                                                        {"editor.gizmo"}},
+                                                                                .availableCapabilities = {{"horo.editor.viewport-overlay"},
+                                                                                                          {"horo.editor.gizmo"}}},
                                                     .gameplayRetirements = gameplayRetirements}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
+            screenHost.Services().Register<WorldStreamingPreviewHost>(streamingPreview);
+            screenHost.Services().RegisterConst<WorldStreamingPreviewRuntimePolicy>(streamingPolicy.Value());
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
+            screenHost.Services().Register<EditorProjectPrefabStageFactory>(prefabStageFactory);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
+            screenHost.Services().Register<UiInspectorResourcesFactory>(uiInspectorResourcesFactory);
             screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
+            screenHost.Services().RegisterConst<NavigationViewportAccess>(navigationOverlayAccess);
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
             screenHost.Services().RegisterConst<EditorPreviewCollisionReceiptSource>(previewCollisionReceipt);
+            screenHost.Services().RegisterConst<WorkspaceReadSourceFactory>(workspaceReadSources);
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);
             screenHost.Services().Register<DurableFileSystem>(durableFiles);
             screenHost.Services().Register<Application::GameplayBuildService>(gameplayBuildService);
@@ -1943,6 +2015,9 @@ namespace Horo::Editor {
             screenHost.Services().Register<RecentProjectInspectionService>(recentProjectInspection);
             screenHost.Services().RegisterConst<Log::IStructuredLogQuery>(p.logQuery);
             screenHost.Services().RegisterConst<IBuildOutputQuery>(p.operationServices.buildOutputStore);
+            screenHost.Services().Register<BuildOutputStore>(p.operationServices.buildOutputStore);
+            if (worldBakeDependencies)
+                screenHost.Services().RegisterConst<Application::WorldBakeDependencySource>(*worldBakeDependencies);
             screenHost.Services().Register<Application::ShaderBuildService>(p.operationServices.shaderBuild);
             screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);
@@ -1972,8 +2047,9 @@ namespace Horo::Editor {
                 screenHost.Shutdown();
                 return std::nullopt;
             }
-            auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot,
-                                                                          rendererRestart, clock, *packages);
+            auto participant =
+                std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, rendererRestart, clock,
+                                                           EditorRuntimeAuthorities{nullptr, &*packages, &navigationBakes});
             participant->BindHost(*runtime);
             EditorRuntimeParticipant *pacingParticipant = participant.get();
             Result<void> startup = runtime->AddParticipant(std::move(participant));

@@ -4,10 +4,16 @@
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
+#include "Horo/Editor/NavigationInspector.h"
+#include "Horo/Editor/PartitionedWorldWorkspace.h"
 #include "Horo/Editor/PhysicsInspector.h"
 #include "Horo/Editor/SequenceDocument.h"
+#include "Horo/Editor/SourceEditingCommands.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
+#include "Horo/Editor/WorldStreamingPreview.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "editor/document/SceneDocument.h"
@@ -17,6 +23,10 @@
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
+#include "editor/screens/workspace/PCGWorkspace.h"
+#include "editor/screens/workspace/WorldLayerOutliner.h"
+#include "editor/screens/workspace/prefab/PrefabCreation.h"
+#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
 
 #include <filesystem>
@@ -69,19 +79,72 @@ namespace Horo::Editor {
         Render::RenderLight light;
     };
 
+    /** @brief Typed viewport intent, executed only by the controller against its composed world owner. */
+    enum class WorldSourceToolAction : std::uint8_t {
+        Create,
+        Edit,
+        Remove,
+        Undo,
+        Redo
+    };
+
+    struct WorldSourceToolCommand {
+        WorldSourceToolAction action{};
+        WorldSourceEdit edit;
+        Math::WorldCoordinate64 globalOrigin;
+        std::uint64_t viewRevision{};
+    };
+
+    /** @brief Closed prefab application intents; destructive decisions are explicit. */
+    enum class PrefabDocumentAction {
+        Save,
+        Undo,
+        Redo,
+        Reload,
+        DiscardAndReload,
+        Recover,
+        DiscardRecovery,
+        DiscardAndClose
+    };
+
     enum class EditorWorkspaceViewCommand {
         None,
+        WorldSourceTool,
+        WorldLayerAuthoring,
+        OpenCreateWorldLayer,
+
+        MountWorldStreamingPreview,
+        UnmountWorldStreamingPreview,
+        OpenWorldCompositionSource,
+        QueryWorldComposition,
+        CloseWorldComposition,
+        BakeWorldCells,
+        ValidateWorldCells,
+        CancelWorldBake,
+        PrefabDocument,
         FocusWorkspaceDocument,
         CloseWorkspaceDocument,
         MoveWorkspaceDocument,
         FocusSequenceDocument,
         CloseSequenceDocument,
         UpdateSequenceTimeline,
+        EditPCGGraph,
         ReturnToWelcome,
+        SourceDocumentInteraction,
         SaveSourceDocument,
         SaveSourceDocumentAs,
         SaveAllSourceDocuments,
         CloseSourceDocument,
+        UiCanvasSelect,
+        UiCanvasCreate,
+        UiCanvasMove,
+        UiCanvasSearch,
+        UiCanvasUndo,
+        UiCanvasRedo,
+        UiCanvasSave,
+        UiCanvasApplyPresentation,
+        UiCanvasSelectTheme,
+        UiCanvasReload,
         SaveScene,
         SaveSceneAs,
         SaveSceneCopyAs,
@@ -106,6 +169,7 @@ namespace Horo::Editor {
         DeleteSelectedObjects,
         SelectObject,
         PrefabHierarchy,
+        CreatePrefabFromSelection,
         PickViewport,
         NavigateViewport,
         AlignViewportToAxis,
@@ -123,6 +187,9 @@ namespace Horo::Editor {
         UpdateLightComponent,
         UpdateTriggerVolumeComponent,
         UpdatePhysicsComponents,
+        UpdateNavigationComponents,
+        SelectPhysicsColliders,
+        CommitPhysicsColliders,
         UpdateAudioSourceComponent,
         UpdateCharacterComponent,
         StartAudioComponentPreview,
@@ -230,6 +297,29 @@ namespace Horo::Editor {
         SequenceTimelineState timeline;
     };
 
+    /** @brief Cached immutable hierarchy presentation; no source data is rebuilt during drawing. */
+    struct UiCanvasWorkspaceDocument final {
+        DocumentIdentity identity;
+        UiCanvasDocumentStateId state;
+        Runtime::Ui::UiElementId root;
+        Runtime::Ui::UiElementId selection;
+        std::uint64_t selectionRevision{1};
+        Assets::AssetRegistryRevision inspectorAssets;
+        Runtime::Ui::RuntimeStyleGeneration inspectorStyles;
+        std::uint64_t inspectorResourcePublication{};
+        std::shared_ptr<const std::vector<UiInspectorTheme>> inspectorThemes;
+        Runtime::Ui::RuntimeStyleAssetId inspectorTheme;
+        bool inspectorStylePending{};
+        Runtime::Ui::UiDocumentRevision documentRevision;
+        std::optional<Runtime::Ui::UiDocumentElement> selectedElement;
+        std::vector<UiCanvasHierarchyRow> rows;
+        std::string search;
+        std::optional<Error> diagnostic;
+        bool canUndo{};
+        bool canRedo{};
+        bool dirty{};
+    };
+
     struct TransparentStringHash {
         using is_transparent = void;
 
@@ -245,16 +335,59 @@ namespace Horo::Editor {
         PhysicsInspectorValues values;
     };
 
+    /** @brief Detached complete navigation gesture; host proves exact owner, descriptors, sources and selection before publication. */
+    struct NavigationInspectorRequest final {
+        SceneTransactionContext context;
+        std::uint64_t selectionRevision{};
+        std::vector<SceneObjectId> objects;
+        std::optional<PrefabHierarchyTarget> prefab;
+        std::shared_ptr<const PrefabHierarchyProjection> publication;
+        std::vector<NavigationDefinitionSnapshot> definitions;
+        std::vector<NavigationInspectorEdit> edits;
+    };
+
+    /** @brief Detached collider gesture tied to one exact document and collider-selection generation. */
+    struct ColliderViewportRequest final {
+        SceneTransactionContext context;
+        std::uint64_t selectionRevision{};
+        std::vector<ColliderEditTarget> selection;
+        std::vector<ColliderTransformEdit> edits;
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
+        std::optional<WorldBrowserQuery> worldBrowserQuery;
+        std::optional<WorldDocumentFence> worldDocumentFence;
+        std::optional<OperationId> worldBakeOperation; /**< Exact accepted operation targeted by a cancellation intent. */
+        std::optional<WorldSourceToolCommand> worldSource;
+        std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<DocumentInstanceId> documentMoveBefore;
+        std::optional<PrefabDocumentFence> prefabFence;
+        std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
+        std::optional<PrefabSourceEdit> prefabEdit;
+        PrefabDocumentAction prefabAction{PrefabDocumentAction::Save};
+        std::optional<SourceEditingCommand> sourceInteraction;
+        bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
+        UiCanvasDocumentStateId uiCanvasState;
+        Runtime::Ui::UiElementId uiCanvasElement;
+        Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
+        std::optional<UiCanvasMoveElement> uiCanvasMove;
+        std::optional<UiCanvasSetPresentation> uiCanvasPresentation;
+        std::uint64_t uiCanvasSelectionRevision{};
+        Runtime::Ui::UiDocumentRevision uiCanvasDocumentRevision;
+        Assets::AssetRegistryRevision uiCanvasInspectorAssets;
+        Runtime::Ui::RuntimeStyleGeneration uiCanvasInspectorStyles;
+        std::uint64_t uiCanvasInspectorResourcePublication{};
+        Runtime::Ui::RuntimeStyleAssetId uiCanvasTheme;
         std::optional<SequenceTimelineState> sequenceTimeline;
+        std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;
         std::optional<PrefabHierarchyCommand> prefabHierarchy;
+        std::optional<PrefabCreationIntent> prefabCreation;
         std::optional<int> targetIndex = std::nullopt;
         std::optional<SceneObjectId> objectPayload = std::nullopt;
         std::optional<Runtime::PrimitiveId> primitivePayload = std::nullopt;
@@ -268,6 +401,8 @@ namespace Horo::Editor {
         std::optional<Runtime::LightComponent> lightPayload = std::nullopt;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
         std::optional<PhysicsInspectorRequest> physicsPayload;
+        std::optional<NavigationInspectorRequest> navigationPayload;
+        std::optional<ColliderViewportRequest> colliderPayload;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
         std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
         std::optional<Runtime::AudioListenerComponent> audioListenerPayload;
@@ -317,11 +452,29 @@ namespace Horo::Editor {
     };
 
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
+        WorldViewportBinding worldViewport;
+        std::shared_ptr<const WorldStreamingPreviewGeometry> worldStreamingPreview;
+        std::optional<Error> worldStreamingPreviewError;
+        std::optional<Error> worldStreamingMountError;
+        std::string worldStreamingIndexPath;
+        bool worldStreamingPreparing{};
+        std::optional<Error> worldSourceError;
+        std::optional<Error> worldLayerFailure; /**< Canonical layer failure; presentation resolves localized copy. */
+
+        PartitionedWorldSnapshotLease worldDocument; /**< Immutable capture from the controller's canonical owner. */
+        std::optional<WorldBrowserSnapshot> worldBrowser;
+        WorldBrowserQuery worldBrowserQuery;
+        std::optional<Error> worldDocumentError;
+        std::string worldDocumentSource;
+        bool worldBakeAvailable{};
+        std::optional<OperationId> worldBakeOperation;
+        bool worldBakeCurrent{}; /**< Exact published output matches current source and project capture. */
         bool audioPreviewAvailable{};
         std::optional<AudioComponentPreviewSnapshot> audioPreview;
         std::optional<Error> audioPreviewFailure;
         std::vector<NavigationDefinitionEditorTab> navigationDocuments;
         std::string projectRoot;
+        std::filesystem::path navigationScenePath; /**< Exact project-relative Scene namespace for saved navigation overlays. */
         Assets::AssetRegistryRevision assetRegistryRevision{};
         ContentBrowserDirectory contentBrowser;
         std::string contentBrowserOperationError;
@@ -329,18 +482,26 @@ namespace Horo::Editor {
         bool contentBrowserCanNavigateBack{false};
         bool contentBrowserCanNavigateForward{false};
         DocumentRevision documentRevision;
+        AssetSceneDropFence assetDropFence;
         std::uint64_t inspectorDocumentGeneration{};
         std::uint64_t inspectorBehaviorRegistryRevision{};
         std::uint64_t inspectorApprovalRevision{};
         std::uint64_t selectionRevision{};
         std::vector<InspectorProviderApproval> inspectorApprovals;
         SceneTransactionContext physicsContext;
+        std::vector<NavigationDefinitionSnapshot> navigationDefinitions;
+        std::string navigationEditError;
         std::uint64_t physicsSelectionRevision{};
         std::string physicsEditError;
+        std::vector<ColliderPresentation> viewportColliders;
+        std::vector<ColliderEditTarget> selectedColliders;
+        std::uint64_t colliderSelectionRevision{};
         std::vector<SceneObject> objects;
         std::shared_ptr<const PrefabHierarchyProjection> prefabHierarchy; /**< Owner-published bounded cache; no Draw I/O. */
         std::optional<PrefabHierarchyTarget> prefabSelection;
         std::optional<Error> prefabHierarchyError;
+        std::shared_ptr<const PrefabCreationOutcome> prefabCreationOutcome;
+        std::optional<Error> prefabPostCommitError;
         bool prefabHierarchyUnavailable{}; /**< Preparation failed; retained rows are inspection-only, never a fresh publication. */
         std::vector<Gameplay::BehaviorDescriptor> availableBehaviors;
         std::optional<SceneObjectId> hierarchyRevealObject;
@@ -378,7 +539,17 @@ namespace Horo::Editor {
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
+        std::vector<PCGWorkspaceDocument> pcgDocuments;
+        std::vector<PCGPaletteEntry> pcgPalette;
+        PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
+        std::vector<PrefabDocumentSnapshot> prefabDocuments;
+        std::optional<Error> prefabDocumentError;
+        bool prefabRecoveryAvailable{};
+        std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
+        std::vector<SourceHistoryState> sourceHistory;
+        std::optional<Result<SourceEditingPublication>> sourceEditingResult;
 
         float leftPanelWidth = 268.0F;
         float rightPanelWidth = 300.0F;

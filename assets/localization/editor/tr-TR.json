@@ -4,6 +4,22 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab_document.source_controls": { "text": "Prefab kaynak kontrolleri belgededir. Sahneyi düzenlemek için Sahne görünümüne dönün." },
+    "workspace.prefab_document.undo": { "text": "Kaynak düzenlemesini geri al" },
+    "workspace.prefab_document.redo": { "text": "Kaynak düzenlemesini yinele" },
+    "workspace.prefab_document.reload": { "text": "Kaydedilmiş kaynağı yeniden yükle" },
+    "workspace.prefab_document.recover": { "text": "Kurtarma adayını geri yükle" },
+    "workspace.prefab_document.discard_recovery": { "text": "Kurtarma adayını sil (kaynak düzenlemelerini koru)" },
+    "workspace.prefab_document.discard_reload": { "text": "Değişiklikleri bırak ve kaynağı yeniden yükle" },
+    "workspace.prefab_document.discard_close": { "text": "Değişiklikleri bırak ve prefabı kapat" },
+    "workspace.prefab_document.conflict": { "text": "Kaynak bu oturumun dışında değişti. Devam etmeden önce yeniden yükleyin veya kurtarma kaydını koruyun." },
+    "workspace.prefab_document.name": { "text": "Kaynak nesnenin adı" },
+    "workspace.prefab_document.preview_unavailable": { "text": "Yalıtılmış çalışma zamanı önizlemesi kullanılamıyor. Kaynak ve kurtarma kaydı kullanılabilir durumda." },
+    "workspace.content_browser.asset.unregistered": {"text": "Kayıtsız varlık — kimlik meta verisini inceleyin"},
+    "workspace.content_browser.prefab.type": {"text": "Prefab"},
+    "workspace.content_browser.preview.queued": {"text": "Önizleme hazırlanıyor…"},
+    "workspace.content_browser.preview.unavailable": {"text": "Önizleme kullanılamıyor — tanıyı inceleyin"},
+    "workspace.content_browser.prefab.migration_required": {"text": "Geçiş gerekli"},
     "render_graph.renderer": {
       "text": "İşleyici"
     },
@@ -199,6 +215,22 @@
     "workspace.sequence.keys": {
       "text": "Anahtarlar"
     },
+    "workspace.source_edit.undo": { "text": "Geri al" },
+    "workspace.source_edit.redo": { "text": "Yinele" },
+    "workspace.source_edit.find": { "text": "Bul" },
+    "workspace.source_edit.replace": { "text": "Değiştir" },
+    "workspace.source_edit.replace_all": { "text": "Tümünü değiştir" },
+    "workspace.source_edit.next": { "text": "Sonraki eşleşme" },
+    "workspace.source_edit.previous": { "text": "Önceki eşleşme" },
+    "workspace.source_edit.go_to": { "text": "Satıra git" },
+    "workspace.source_edit.query": { "text": "Metin ara" },
+    "workspace.source_edit.replacement": { "text": "Yeni metin" },
+    "workspace.source_edit.line": { "text": "Satır numarası" },
+    "workspace.source_edit.no_match": { "text": "Eşleşme bulunamadı." },
+    "workspace.source_edit.invalid": { "text": "Düzenleme uygulanamadı. Belge değiştirilmedi." },
+    "workspace.source_edit.history_evicted": { "text": "Geri alma geçmişi son düzenlemelerle sınırlıdır." },
+    "workspace.source_edit.history_oversized": { "text": "Bu büyük düzenleme geri alma sınırını aştı ve bu belgenin geçmişini temizledi." },
+    "workspace.source_edit.close_search": { "text": "Aramayı kapat" },
     "workspace.documents.close": { "text": "Kapat" },
     "workspace.documents.move_left": { "text": "Sola taşı" },
     "workspace.documents.move_right": { "text": "Sağa taşı" },
@@ -214,6 +246,145 @@
     "workspace.sequence.close": {
       "text": "Kapat"
     },
+    "workspace.pcg.preview.refresh": {
+      "text": "Önizle"
+    },
+    "workspace.pcg.preview.cancel": {
+      "text": "Önizlemeyi temizle"
+    },
+    "workspace.pcg.preview.running": {
+      "text": "Yakalanan grafik değerlendiriliyor…"
+    },
+    "workspace.pcg.preview.failed": {
+      "text": "Önizleme başarısız. Grafik ve Sahne değişmedi."
+    },
+    "workspace.pcg.preview.current": {
+      "text": "Güncel önizleme · üstten noktalar ve çıktı sınırları · en fazla 8192 nokta"
+    },
+    "workspace.pcg.preview.empty": {
+      "text": "Yalıtılmış çalışma alanı: ızgara 1, kutu 2, yüzey 3. Önizleme Sahneyi değiştirmez."
+    },
+    "workspace.pcg.undo": {"text": "Geri al"},
+    "workspace.pcg.redo": {"text": "Yinele"},
+    "workspace.pcg.reset_view": {"text": "Görünümü sıfırla"},
+    "workspace.pcg.focus": {"text": "Seçime odaklan"},
+    "workspace.pcg.zoom": {"text": "Yakınlaştırma"},
+    "workspace.pcg.navigation_hint": {"text": "Düğümleri başlığından sürükleyin. Orta tuşla kaydırın; Ctrl ve tekerlekle yakınlaştırın. Ctrl ile tıklayarak çoklu seçim yapın. Escape hareketi iptal eder."},
+    "workspace.pcg.palette": {"text": "Düğüm paleti"},
+    "workspace.pcg.filter": {"text": "Düğümleri filtrele"},
+    "workspace.pcg.no_catalog": {"text": "Bu çalışma alanı kataloğunda düğüm şablonu yok."},
+    "workspace.pcg.unknown": {"text": "Kullanılamayan düğüm"},
+    "workspace.pcg.input": {"text": "Girdi"},
+    "workspace.pcg.output": {"text": "Çıktı"},
+    "workspace.pcg.inspector": {"text": "Düğüm denetçisi"},
+    "workspace.pcg.select_hint": {"text": "Kimliğini, şemasını ve bağlantılarını incelemek için bir düğüm seçin."},
+    "workspace.pcg.remove": {"text": "Seçili düğümleri kaldır"},
+    "workspace.pcg.identity": {"text": "Düğüm kimliği"},
+    "workspace.pcg.version": {"text": "Şema sürümü"},
+    "workspace.pcg.payload": {"text": "Ayar baytları"},
+    "workspace.pcg.connections": {"text": "Bağlantılar"},
+    "workspace.pcg.disconnect": {"text": "Bağlantıyı kaldır"},
+    "workspace.pcg.cancel_connection": {"text": "Bağlantıyı iptal et"},
+    "workspace.pcg.rejected": {"text": "Düzenleme reddedildi. Pin türlerini, yönünü, girdi çokluğunu ve döngüleri kontrol edin veya güncel belgede yeniden deneyin."},
+    "workspace.pcg.nodes.grid": {"text": "Anlık görüntü ızgarası"},
+    "workspace.pcg.nodes.density_filter": {"text": "Yoğunluk filtresi"},
+    "workspace.pcg.nodes.merge": {"text": "Noktaları birleştir"},
+    "workspace.pcg.nodes.forward": {"text": "Noktaları ilet"},
+    "workspace.pcg.nodes.jitter": {"text": "Izgara sapması"},
+    "workspace.pcg.nodes.stratified": {"text": "Katmanlı örnekleme"},
+    "workspace.pcg.nodes.poisson": {"text": "Poisson dağılımı"},
+    "workspace.pcg.nodes.density_range": {"text": "Yoğunluk aralığı"},
+    "workspace.pcg.nodes.bounds": {"text": "Sınır filtresi"},
+    "workspace.pcg.nodes.slope": {"text": "Eğim filtresi"},
+    "workspace.pcg.nodes.distance": {"text": "Mesafe filtresi"},
+    "workspace.pcg.nodes.attribute": {"text": "Öznitelik filtresi"},
+    "workspace.pcg.nodes.transform": {"text": "Noktaları dönüştür"},
+    "workspace.pcg.nodes.alignment": {"text": "Yüzey hizalama"},
+    "workspace.pcg.nodes.offset": {"text": "Rastgele sapma"},
+    "workspace.pcg.nodes.perlin": {"text": "Perlin gürültüsü"},
+    "workspace.pcg.nodes.simplex": {"text": "Simplex gürültüsü"},
+    "workspace.pcg.types.points": {"text": "Nokta kümesi"},
+    "workspace.pcg.types.boolean": {"text": "Mantıksal"},
+    "workspace.pcg.types.signed": {"text": "İşaretli tamsayı"},
+    "workspace.pcg.types.unsigned": {"text": "İşaretsiz tamsayı"},
+    "workspace.pcg.types.scalar": {"text": "Skaler"},
+    "workspace.pcg.types.vector2": {"text": "Vektör2"},
+    "workspace.pcg.types.vector3": {"text": "Vektör3"},
+    "workspace.pcg.types.vector4": {"text": "Vektör4"},
+    "workspace.pcg.authoring.input_key": {"text": "Girdi anahtarı"},
+    "workspace.pcg.authoring.remove_input": {"text": "Dışa açık girdiyi kaldır"},
+    "workspace.pcg.authoring.expose_input": {"text": "Grafik girdisini dışa aç"},
+    "workspace.pcg.authoring.title": {"text": "Girdiler ve özellikler"},
+    "workspace.pcg.authoring.invalid_value": {"text": "Bildirilen türde sonlu bir değer girin."},
+    "workspace.pcg.authoring.unsupported": {"text": "Etkin katalog veya yetenekler tarafından desteklenmiyor; yazılan değer korunur."},
+    "workspace.pcg.authoring.unavailable": {"text": "Düzenleme şemaları kullanılamıyor."},
+    "workspace.pcg.authoring.rejected": {"text": "Düzenleme reddedildi. Kaynak değerleri değişmedi."},
+    "workspace.pcg.authoring.apply": {"text": "Değişiklikleri uygula"},
+    "workspace.pcg.authoring.cancel": {"text": "Değişiklikleri iptal et"},
+    "workspace.pcg.authoring.no_properties": {"text": "Bu düğümün ayar verisi yok."},
+    "workspace.pcg.authoring.deterministic_defaults": {"text": "Tohum ve varsayılanlar belirlenimci yazılan değerlerdir. Uygula tüm düzenlemeyi tek işlem olarak kaydeder."},
+    "workspace.pcg.authoring.external_input": {"text": "Harici bir çalışma zamanı girdisi bu varsayılanı geçersiz kılabilir; yakalanan değer üretim kökenine katılır."},
+    "workspace.pcg.authoring.non_deterministic": {"text": "Bu düğüm yalnızca en iyi çaba önizlemesidir ve belirlenimci değildir."},
+    "workspace.pcg.authoring.profile_deterministic": {"text": "Yakalanan sayısal profil ve sağlayıcı girdileri içinde belirlenimci."},
+    "workspace.pcg.authoring.add_default": {"text": "Türlü varsayılan ekle"},
+    "workspace.pcg.authoring.remove_default": {"text": "Varsayılanı kaldır"},
+    "workspace.pcg.authoring.tier": {"text": "İşletim katmanı"},
+    "workspace.pcg.authoring.baseline": {"text": "Temel"},
+    "workspace.pcg.authoring.standard": {"text": "Standart"},
+    "workspace.pcg.authoring.high": {"text": "Yüksek"},
+    "workspace.pcg.authoring.mode": {"text": "Üretim modu"},
+    "workspace.pcg.authoring.offline": {"text": "Çevrimdışı"},
+    "workspace.pcg.authoring.runtime": {"text": "Çalışma zamanı"},
+    "workspace.pcg.authoring.hybrid": {"text": "Karma"},
+    "workspace.pcg.authoring.seed": {"text": "Belirlenimci tohum"},
+    "workspace.pcg.authoring.grid": {"text": "Izgara kimliği"},
+    "workspace.pcg.authoring.volume": {"text": "Hacim kimliği"},
+    "workspace.pcg.authoring.fraction": {"text": "Titreşim oranı [0, 1]"},
+    "workspace.pcg.authoring.strata": {"text": "Katmanlar (X, Y, Z)"},
+    "workspace.pcg.authoring.count": {"text": "Nokta sayısı"},
+    "workspace.pcg.authoring.attempts": {"text": "Deneme bütçesi"},
+    "workspace.pcg.authoring.minimum_distance": {"text": "En az mesafe"},
+    "workspace.pcg.authoring.minimum": {"text": "En az"},
+    "workspace.pcg.authoring.maximum": {"text": "En çok"},
+    "workspace.pcg.authoring.minimum_degrees": {"text": "En az eğim (derece)"},
+    "workspace.pcg.authoring.maximum_degrees": {"text": "En çok eğim (derece)"},
+    "workspace.pcg.authoring.attribute": {"text": "Öznitelik anahtarı"},
+    "workspace.pcg.authoring.comparison": {"text": "Karşılaştırma"},
+    "workspace.pcg.authoring.equal": {"text": "Eşit"},
+    "workspace.pcg.authoring.not_equal": {"text": "Eşit değil"},
+    "workspace.pcg.authoring.less": {"text": "Küçük"},
+    "workspace.pcg.authoring.less_equal": {"text": "Küçük veya eşit"},
+    "workspace.pcg.authoring.greater": {"text": "Büyük"},
+    "workspace.pcg.authoring.greater_equal": {"text": "Büyük veya eşit"},
+    "workspace.pcg.authoring.predicate": {"text": "Koşul değeri"},
+    "workspace.pcg.authoring.predicate_type": {"text": "Koşul türü"},
+    "workspace.pcg.authoring.translation": {"text": "Öteleme (X, Y, Z)"},
+    "workspace.pcg.authoring.rotation": {"text": "Kuaterniyon (X, Y, Z, W)"},
+    "workspace.pcg.authoring.scale": {"text": "Ölçek (X, Y, Z)"},
+    "workspace.pcg.authoring.space": {"text": "Koordinat uzayı"},
+    "workspace.pcg.authoring.snapshot": {"text": "Anlık görüntü uzayı"},
+    "workspace.pcg.authoring.point_local": {"text": "Nokta yerel uzayı"},
+    "workspace.pcg.authoring.maximum_vertical_distance": {"text": "En çok dikey mesafe"},
+    "workspace.pcg.authoring.half_extent": {"text": "Yarı boyut (X, Y, Z)"},
+    "workspace.pcg.authoring.salt": {"text": "Akış tuzu"},
+    "workspace.pcg.authoring.attribute_type": {"text": "Öznitelik türü"},
+    "workspace.pcg.authoring.boolean": {"text": "Mantıksal"},
+    "workspace.pcg.authoring.signed": {"text": "İşaretli tamsayı"},
+    "workspace.pcg.authoring.unsigned": {"text": "İşaretsiz tamsayı"},
+    "workspace.pcg.authoring.scalar": {"text": "Skaler"},
+    "workspace.pcg.authoring.vector2": {"text": "Vektör2"},
+    "workspace.pcg.authoring.vector3": {"text": "Vektör3"},
+    "workspace.pcg.authoring.vector4": {"text": "Vektör4"},
+    "workspace.pcg.authoring.frequency": {"text": "Frekans"},
+    "workspace.pcg.authoring.amplitude": {"text": "Genlik"},
+    "workspace.pcg.authoring.octaves": {"text": "Oktavlar [1, 16]"},
+    "workspace.pcg.authoring.persistence": {"text": "Süreklilik [0, 1]"},
+    "workspace.pcg.authoring.lacunarity": {"text": "Boşlukluluk [1, 8]"},
+    "workspace.pcg.authoring.normalization": {"text": "Normalleştirme"},
+    "workspace.pcg.authoring.signed_noise": {"text": "İşaretli [-1, 1]"},
+    "workspace.pcg.authoring.unit_interval": {"text": "Birim aralığı [0, 1]"},
+    "workspace.pcg.authoring.default": {"text": "Dışa açık varsayılan"},
+    "workspace.pcg.authoring.pin_default": {"text": "Giriş pini varsayılanı"},
     "workspace.sequence.zoom": {
       "text": "Zaman çizelgesi yakınlaştırma"
     },
@@ -1346,6 +1517,71 @@
     "workspace.panel.inspector": {"text": "Denetçi"},
     "workspace.panel.scene": {"text": "Sahne"},
     "workspace.panel.viewport": {"text": "Görünüm"},
+    "workspace.streaming.accepted": {"text": "Kabul edildi"},
+    "workspace.streaming.deferred": {"text": "Ertelendi"},
+    "workspace.streaming.rejected": {"text": "Reddedildi"},
+    "workspace.streaming.pinned": {"text": "Sabitlenen asgari ikamet"},
+    "workspace.streaming.predicted": {"text": "Öngörülen kaynak / hedef"},
+    "workspace.streaming.source": {"text": "Kaynak / hedef"},
+    "workspace.streaming.visible_counts": {"text": "Görünür / hassasiyet alanı dışında"},
+    "workspace.streaming.capacity": {"text": "Akış önizlemesi hücre veya geometri bütçesini aşıyor"},
+    "workspace.streaming.stale": {"text": "Akış önizlemesi kayıtları güncel değil; tutarlı kayıt bekleniyor"},
+    "workspace.streaming.inspection": {"text": "Salt okunur akış incelemesi için pişirilmiş dizini bağlayın. Hücre yüklemesi veya bütçe kullanımı varsayılmaz."},
+    "workspace.streaming.index_path": {"text": "Proje içindeki world.index yolu"},
+    "workspace.streaming.mount": {"text": "Akış önizlemesini bağla"},
+    "workspace.streaming.unmount": {"text": "Akış önizlemesini durdur"},
+    "workspace.streaming.preparing": {"text": "Gerçek sınırlı kaynak planı hazırlanıyor…"},
+    "workspace.streaming.mount_failed": {"text": "Akış önizlemesi bağlanamadı; mümkün olduğunda mevcut bağlantı korundu"},
+    "workspace.streaming.stability": {"text": "Planlayıcı tutma nedeni"},
+    "workspace.streaming.retained": {"text": "Tutulan talep"},
+    "workspace.streaming.lingering": {"text": "Kaynak çıkışı sonrası bekleme aralığı"},
+    "workspace.streaming.cooldown": {"text": "Yeniden yükleme bekleme süresi"},
+    "workspace.streaming.watching": {"text": "Sınır geçmişi izleniyor"},
+    "workspace.streaming.legend": {"text": "Akış: sınır = istenen, nokta = gerçek; nedenler için noktanın üzerine gelin"},
+    "workspace.streaming.unavailable": {"text": "Akış önizlemesi kullanılamıyor: güncel bağlı çalışma zamanı kaydı yok"},
+    "workspace.streaming.unknown": {"text": "Bilinmiyor / gözlemlenmedi"},
+    "workspace.streaming.unloaded": {"text": "Yüklenmemiş"},
+    "workspace.streaming.loaded": {"text": "Yüklü"},
+    "workspace.streaming.activated": {"text": "Etkinleştirilmiş"},
+    "workspace.streaming.loading": {"text": "Yükleniyor"},
+    "workspace.streaming.resident": {"text": "Bellekte"},
+    "workspace.streaming.active": {"text": "Etkin"},
+    "workspace.streaming.evicting": {"text": "Boşaltılıyor"},
+    "workspace.streaming.failed": {"text": "Başarısız"},
+    "workspace.streaming.succeeded": {"text": "Başarılı"},
+    "workspace.streaming.cancelled": {"text": "İptal edildi"},
+    "workspace.streaming.replaced": {"text": "Değiştirildi"},
+    "workspace.streaming.shutdown": {"text": "Kapatıldı"},
+    "workspace.streaming.cell": {"text": "Hücre / LOD / katman"},
+    "workspace.streaming.desired": {"text": "İstenen"},
+    "workspace.streaming.runtime": {"text": "Gerçek çalışma zamanı"},
+    "workspace.streaming.reason": {"text": "Otorite nedeni"},
+    "workspace.streaming.evidence_counts": {"text": "Kaynak / deneme / hata / karar"},
+    "workspace.streaming.no_demand": {"text": "Planlanmış talep yok"},
+    "workspace.panel.world_composition": {"text": "Dünya Kompozisyonu"},
+    "workspace.world.source_hint": {"text": "Projeye göreli .horoworld kaynak belgesini açın. Değiştirmeden önce kaydedilmemiş değişiklikleri çözümleyin."},
+    "workspace.world.path": {"text": "Projeye göreli kaynak yolu"},
+    "workspace.world.open_source": {"text": "Dünya kaynağını aç"},
+    "workspace.world.close_source": {"text": "Dünya kaynağını kapat"},
+    "workspace.world.no_document": {"text": "Bölümlenmiş bir dünya açık değil."},
+    "workspace.world.error": {"text": "Dünya Kompozisyonu işlemi tamamlayamadı. Mevcut kaynak durumu korundu."},
+    "workspace.world.authoring_status": {"text": "Kaynak kapsamı ve düzenleme çalışma kümesi. Pişirilmiş kullanılabilirlik ve çalışma zamanı yerleşimi bağımsızdır."},
+    "workspace.world.search": {"text": "Katman adı, kimliği, hücre koordinatları veya LOD ara"},
+    "workspace.world.all": {"text": "Tüm durumlar"},
+    "workspace.world.all_layers": {"text": "Tüm katmanlar"},
+    "workspace.world.open": {"text": "Düzenleme kümesinde açık"},
+    "workspace.world.closed": {"text": "Düzenleme kümesi dışında"},
+    "workspace.world.mixed": {"text": "Kısmen açık"},
+    "workspace.world.layers": {"text": "Katmanlar"},
+    "workspace.world.cells": {"text": "Hücreler"},
+    "workspace.world.layer": {"text": "Katman"},
+    "workspace.world.id": {"text": "Kimlik"},
+    "workspace.world.status": {"text": "Düzenleme durumu"},
+    "workspace.world.objects": {"text": "Nesneler"},
+    "workspace.world.always_present": {"text": "Her zaman mevcut"},
+    "workspace.world.coordinate": {"text": "Hücre koordinatları"},
+    "workspace.world.lod": {"text": "LOD"},
+    "workspace.world.no_matches": {"text": "Filtrelere uyan hücre veya katman yok."},
     "workspace.panel.game": {"text": "Oyun"},
     "workspace.panel.global_dock": {"text": "Alt Panel"},
     "workspace.game.idle": {"text": "Oyunu başlatmak için Oynat'a basın."},
@@ -1666,6 +1902,102 @@
     "workspace.value.on": {"text": "Açık"},
     "workspace.value.off": {"text": "Kapalı"},
     "workspace.value.static": {"text": "✓ Statik"},
+    "workspace.world_sources.radius": {
+      "text": "Yarıçap (mm)"
+    },
+    "workspace.world_sources.maximum_extent": {
+      "text": "Azami kapsam (mm)"
+    },
+    "workspace.world_sources.half_extent": {
+      "text": "Yarı kapsam (mm)"
+    },
+    "workspace.world_sources.plane_normal": {
+      "text": "Düzlem normali"
+    },
+    "workspace.world_sources.plane_distance": {
+      "text": "Düzlem uzaklığı (mm)"
+    },
+    "workspace.world_sources.normalize": {
+      "text": "Normali birimleştir"
+    },
+    "workspace.world_sources.add_point": {
+      "text": "Yol noktası ekle"
+    },
+    "workspace.world_sources.remove_point": {
+      "text": "Son noktayı kaldır"
+    },
+    "workspace.world_sources.title": {
+      "text": "Akış kaynakları"
+    },
+    "workspace.world_sources.unavailable": {
+      "text": "Akış kaynaklarını düzenlemek için bölümlenmiş bir dünya açın."
+    },
+    "workspace.world_sources.authoring_only": {
+      "text": "Kaynak şekillerini ve akış taleplerini düzenleyin. Konum ve boyutları değiştirmek için tutamaçları sürükleyin."
+    },
+    "workspace.world_sources.sphere": {
+      "text": "Küre oluştur"
+    },
+    "workspace.world_sources.box": {
+      "text": "Kutu oluştur"
+    },
+    "workspace.world_sources.frustum": {
+      "text": "Görüş hacmi oluştur"
+    },
+    "workspace.world_sources.path": {
+      "text": "Yol hacmi oluştur"
+    },
+    "workspace.world_sources.priority": {
+      "text": "Öncelik"
+    },
+    "workspace.world_sources.target": {
+      "text": "Hedef durum"
+    },
+    "workspace.world_sources.unloaded": {
+      "text": "Yüklü değil"
+    },
+    "workspace.world_sources.loaded": {
+      "text": "Yüklü"
+    },
+    "workspace.world_sources.activated": {
+      "text": "Etkin"
+    },
+    "workspace.world_sources.intent": {
+      "text": "Amaç"
+    },
+    "workspace.world_sources.camera": {
+      "text": "Kamera"
+    },
+    "workspace.world_sources.gameplay": {
+      "text": "Oynanış"
+    },
+    "workspace.world_sources.network": {
+      "text": "Ağ ilgisi"
+    },
+    "workspace.world_sources.preload": {
+      "text": "Ön yükleme"
+    },
+    "workspace.world_sources.color": {
+      "text": "Hata ayıklama rengi"
+    },
+    "workspace.world_sources.apply": {
+      "text": "Kaynağı uygula"
+    },
+    "workspace.world_sources.remove": {
+      "text": "Kaynağı kaldır"
+    },
+    "workspace.world_sources.cancel": {
+      "text": "Önizlemeyi iptal et"
+    },
+    "workspace.world_sources.undo": {
+      "text": "Kaynak düzenlemesini geri al"
+    },
+    "workspace.world_sources.redo": {
+      "text": "Kaynak düzenlemesini yinele"
+    },
+    "workspace.world_sources.rejected": {
+      "text": "Kaynak düzenlemesi reddedildi"
+    },
     "workspace.viewport.object_count": {"text": "{} nesne"},
     "workspace.viewport.perspective": {"text": "Perspektif"},
     "workspace.viewport.orthographic": {"text": "Ortografik"},
@@ -2466,6 +2798,12 @@
     "workspace.packages.recovery_hint": {
       "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
     },
+    "workspace.physics.compound_children": {"text": "Gövdenin çarpıştırıcı alt öğeleri"},
+    "workspace.physics.edit_child": {"text": "Alt öğeyi görünümde düzenle"},
+    "workspace.physics.edit_compound": {"text": "Tüm bileşik alt öğeleri düzenle"},
+    "workspace.physics.gizmo_hint": {"text": "Çarpıştırıcı düzenleme · Ctrl: 0,1 m / 15° / %10 yakala · Ctrl-tık: alt öğeyi seç · Escape: iptal"},
+    "workspace.physics.gizmo_rejected": {"text": "Çarpıştırıcı düzenlemesi reddedildi. Pozitif sınırlar ve küre/kapsül için eş ölçek kullanın. Tanılamaya bakın."},
+    "workspace.physics.gizmo_unsupported": {"text": "Pişirilmiş şeklin alt öğeleri kendi kaynak belgesini gerektirir; görünümde düzenlenemez."},
     "workspace.physics.title": {
       "text": "Fizik"
     },
@@ -2988,6 +3326,578 @@
     },
     "settings.navigation.override_cost": {
       "text": "Geçersiz kılınan geçiş maliyeti"
+    },
+    "workspace.world_layers.title": {"text": "Katmanlar"},
+    "workspace.world_layers.create": {"text": "Katman oluştur"},
+    "workspace.world_layers.undo": {"text": "Katman komutunu geri al"},
+    "workspace.world_layers.redo": {"text": "Katman komutunu yinele"},
+    "workspace.world_layers.filter": {"text": "Katmanları filtrele"},
+    "workspace.world_layers.all_owners": {"text": "Tüm sahipler"},
+    "workspace.world_layers.streaming": {"text": "Dünya akışı"},
+    "workspace.world_layers.gameplay": {"text": "Oynanış betiği"},
+    "workspace.world_layers.network": {"text": "Ağ çoğaltması"},
+    "workspace.world_layers.current": {"text": "Geçerli düzenleme katmanı"},
+    "workspace.world_layers.set_current": {"text": "Geçerli katman yap"},
+    "workspace.world_layers.clear_current": {"text": "Geçerli katmanı temizle"},
+    "workspace.world_layers.move_up": {"text": "Yukarı taşı"},
+    "workspace.world_layers.move_down": {"text": "Aşağı taşı"},
+    "workspace.world_layers.empty": {"text": "Bu filtreyle eşleşen katman yok."},
+    "workspace.world_layers.current_hidden": {"text": "Geçerli düzenleme katmanı filtre tarafından gizlendi."},
+    "workspace.world_layers.name": {"text": "Katman adı"},
+    "workspace.world_layers.name_hint": {"text": "Boş olmayan bir katman adı girin."},
+    "workspace.world_layers.cancel": {"text": "İptal"},
+    "workspace.world_layers.stale": {"text": "Dünya değişti veya kapatıldı. İptal edip bu iletişim kutusunu yeniden açın."},
+    "workspace.world.bake": {"text": "Akış hücrelerini pişir"},
+    "workspace.world.validate": {"text": "Akış hücrelerini doğrula"},
+    "workspace.world.cancel_bake": {"text": "Pişirmeyi iptal et"},
+    "workspace.world.bake_running": {"text": "Dünya hücreleri işleniyor. İlerlemeyi İşlemler, tanıları Derleme Çıktısı bölümünde izleyin."},
+    "workspace.world.bake_current": {"text": "Pişirilen hücreler bu dünya ve proje revizyonuyla eşleşiyor."},
+    "workspace.world.bake_needed": {"text": "Dünyanın tamamını pişirin veya doğrulayın. Tanılar Derleme Çıktısı bölümünde görünür."},
+    "workspace.world_layers.rejected": {"text": "Katman oluşturma reddedildi. Adı ve belge sınırlarını kontrol edin."},
+    "workspace.prefab.create.action": {
+      "text": "Alt Ağaçtan Prefab Oluştur..."
+    },
+    "workspace.prefab.create.title": {
+      "text": "Prefab Oluştur"
+    },
+    "workspace.prefab.create.help": {
+      "text": "Yeniden kullanılabilir bir prefab oluşturun ve alt ağacı bağlı bir örnekle değiştirin. Desteklenmeyen veya dış referanslar önce çözülmelidir."
+    },
+    "workspace.prefab.create.path": {
+      "text": "Projeye göre prefab yolu"
+    },
+    "workspace.prefab.create.cancel": {
+      "text": "İptal"
+    },
+    "workspace.prefab.create.confirm": {
+      "text": "Prefab Oluştur"
+    },
+    "workspace.prefab.create.failed": {
+      "text": "Prefab oluşturma kaydedilmedi. Bildirilen kaynak ve hedef alanlarını inceleyin."
+    },
+    "workspace.prefab.create.post_commit": {
+      "text": "Prefab oluşturuldu. Çalışma alanı görünümü yenilenmeli; kaynak ve bağlı örnek kaydedildi."
+    },
+    "workspace.prefab.create.more_diagnostics": {
+      "text": "ek başvuru tanısı işlem sonucunda saklanıyor."
+    },
+    "workspace.prefab.create.expired": {
+      "text": "Çalışma alanı oturumu sona erdi. Prefab oluşturmadan önce projeyi yeniden açın."
+    },
+    "workspace.navigation_overlay.title": {"text": "Navigasyon kaplamaları"},
+    "workspace.navigation_overlay.show": {"text": "Navigasyon kaplamalarını göster"},
+    "workspace.navigation_overlay.profile": {"text": "Profil"},
+    "workspace.navigation_overlay.area": {"text": "Alan"},
+    "workspace.navigation_overlay.surface": {"text": "Yüzey"},
+    "workspace.navigation_overlay.validity": {"text": "Kanıt / geçerlilik"},
+    "workspace.navigation_overlay.all": {"text": "Tümü"},
+    "workspace.navigation_overlay.authored": {"text": "Kaydedilmiş tanım"},
+    "workspace.navigation_overlay.cooked": {"text": "Pişirilmiş topoloji"},
+    "workspace.navigation_overlay.disabled": {"text": "Devre dışı"},
+    "workspace.navigation_overlay.unvalidated": {"text": "Doğrulanmamış bağlantı"},
+    "workspace.navigation_overlay.bounds": {"text": "Yüzey sınırları"},
+    "workspace.navigation_overlay.walkable": {"text": "Yürünebilir alanlar"},
+    "workspace.navigation_overlay.tiles": {"text": "Karo kenarları"},
+    "workspace.navigation_overlay.modifiers": {"text": "Değiştirici hacimler"},
+    "workspace.navigation_overlay.links": {"text": "Ağ dışı bağlantılar"},
+    "workspace.navigation_overlay.unavailable": {"text": "Bu sahne için kayıtlı navigasyon yakalaması yok. Kayıtlı proje seçimlerini yenilemek için Navigasyon panelini açın."},
+    "workspace.navigation_overlay.dirty": {"text": "Kayıtlı yakalama: sahnede değişiklik veya harici çakışma var. Kaydettikten sonra kayıtlı seçimleri yenileyin."},
+    "workspace.navigation_overlay.saved": {"text": "Kayıtlı yakalama; bağlantı doğrulaması ve çalışma zamanı kullanılabilirliği ayrıdır."},
+    "workspace.navigation_overlay.limited": {"text": "Geometri veya kare çizim bütçesine ulaşıldı; bazı kanıtlar gösterilmiyor."},
+    "workspace.navigation_bake.reload": {"text": "Kaydedilmiş proje seçeneklerini yenile"},
+    "workspace.navigation_bake.selection_mode": {"text": "Seçimi kullan"},
+    "workspace.navigation_bake.surface_selected": {"text": "Seçili"},
+    "workspace.navigation_bake.title": {"text": "Gezinme"},
+    "workspace.navigation_bake.cancel_title": {"text": "Gezinme üretimi iptal edilsin mi?"},
+    "workspace.navigation_bake.cancel_hint": {"text": "Bu iletişim kutusunu kapatmak üretimi sürdürür. Henüz yayımlanmamış işi durdurmak için iptali açıkça onaylayın. Yayımlanmış çıktı korunur."},
+    "workspace.navigation_bake.confirm_cancel": {"text": "Üretimi iptal et"},
+    "workspace.navigation_bake.keep_running": {"text": "Çalışmaya devam et"},
+    "workspace.navigation_bake.return": {"text": "Gezinmeye dön"},
+    "workspace.navigation_bake.action_failed": {"text": "Gezinme işlemi tamamlanamadı. Tanı kodunu ve ortak İşlemler çıktısını inceleyin."},
+    "workspace.navigation_bake.definition": {"text": "Proje tanımı"},
+    "workspace.navigation_bake.project_profile": {"text": "Proje kapasite profili / revizyon"},
+    "workspace.navigation_bake.profiles": {"text": "Tanımlanmış ajan profilleri"},
+    "workspace.navigation_bake.profiles_hint": {"text": "Profiller ve üretim ayarları proje tanımından alınır. Bu üretim tüm profil kapsamını korur."},
+    "workspace.navigation_bake.selected_only": {"text": "Yalnızca seçili yüzeyleri yeniden üret"},
+    "workspace.navigation_bake.selection_required": {"text": "En az bir yüzey seçin. Seçilmeyen yüzeyler doğrulanmış mevcut çıktı gerektirir."},
+    "workspace.navigation_bake.operation": {"text": "Üretim işlemi"},
+    "workspace.navigation_bake.identity": {"text": "İstek kimliği"},
+    "workspace.navigation_bake.shared_operation": {"text": "Ortak İşlemler kimliği"},
+    "workspace.navigation_bake.queued": {"text": "Kuyrukta"},
+    "workspace.navigation_bake.running": {"text": "Çalışıyor"},
+    "workspace.navigation_bake.waiting": {"text": "Bekliyor"},
+    "workspace.navigation_bake.cancelling": {"text": "İptal ediliyor"},
+    "workspace.navigation_bake.succeeded": {"text": "Başarılı"},
+    "workspace.navigation_bake.failed": {"text": "Başarısız"},
+    "workspace.navigation_bake.cancelled": {"text": "İptal edildi"},
+    "workspace.navigation_bake.unavailable": {"text": "Gezinme üretimi kullanılamıyor. Tanıyı ve proje gezinme ayarlarını inceleyin."},
+    "workspace.navigation_bake.stage": {"text": "Aşama kimliği"},
+    "workspace.navigation_bake.progress": {"text": "İlerleme"},
+    "workspace.navigation_bake.indeterminate": {"text": "İlerleme henüz ölçülemiyor."},
+    "workspace.navigation_bake.elapsed": {"text": "Geçen saniye"},
+    "workspace.navigation_bake.tiles": {"text": "Yakalanan yüzeyler / karolar"},
+    "workspace.navigation_bake.resources": {"text": "Kaynak sınırları: eşzamanlı işler / yerleşik bayt / geçici bayt"},
+    "workspace.navigation_bake.publication": {"text": "Yayımlanan karolar: yeniden üretilen / kullanılan"},
+    "workspace.navigation_bake.start": {"text": "Üret ve yayımla"},
+    "workspace.navigation_bake.validate": {"text": "Yayımlamadan doğrula"},
+    "workspace.navigation_bake.retry": {"text": "Güncel kaynakla yeniden dene"},
+    "workspace.navigation_bake.cancel": {"text": "İptal iste…"},
+    "workspace.navigation_bake.saved_source": {"text": "Üretimler kaydedilmiş proje kaynağını yakalar. Önce tanım ve Sahne düzenlemelerini kaydedin. Bu panelin kapanması veya gizlenmesi kabul edilmiş işi sürdürür."},
+    "workspace.navigation_bake.preparing": {"text": "Proje gezinmesi hazırlanıyor…"},
+    "workspace.navigation_inspector.surface": {
+      "text": "Gezinme yüzeyi"
+    },
+    "workspace.navigation_inspector.region": {
+      "text": "Gezinme bölgesi"
+    },
+    "workspace.navigation_inspector.modifier": {
+      "text": "Gezinme değiştiricisi"
+    },
+    "workspace.navigation_inspector.link": {
+      "text": "Gezinme bağlantısı"
+    },
+    "workspace.navigation_inspector.agent": {
+      "text": "Gezinme aracısı"
+    },
+    "workspace.navigation_inspector.missing": {
+      "text": "Eksik tanımlayıcı / korunan kimlik:"
+    },
+    "workspace.navigation_inspector.degraded": {
+      "text": "Gezinme tanımlayıcıları kullanılamıyor. Değerler taslak olarak korunur; tam tanımlayıcıları çözülene kadar etkinleştirilemez."
+    },
+    "workspace.navigation_inspector.center": {
+      "text": "Yerel merkez"
+    },
+    "workspace.navigation_inspector.extents": {
+      "text": "Yerel yarı boyutlar"
+    },
+    "workspace.navigation_inspector.profiles": {
+      "text": "Yere bağlı aracı profilleri"
+    },
+    "workspace.navigation_inspector.remove_missing": {
+      "text": "Çözümlenemeyen profili taslaktan kaldır"
+    },
+    "workspace.navigation_inspector.definition": {
+      "text": "Gezinme tanımı varlığı"
+    },
+    "workspace.navigation_inspector.scope": {
+      "text": "Üretim kapsamı"
+    },
+    "workspace.navigation_inspector.subtree": {
+      "text": "Nesne alt ağacı"
+    },
+    "workspace.navigation_inspector.bounds": {
+      "text": "Yerel sınırlar"
+    },
+    "workspace.navigation_inspector.region_mode": {
+      "text": "Bölge işlemi"
+    },
+    "workspace.navigation_inspector.include": {
+      "text": "Dahil et"
+    },
+    "workspace.navigation_inspector.exclude": {
+      "text": "Hariç tut"
+    },
+    "workspace.navigation_inspector.sources": {
+      "text": "Kaynak seçimi"
+    },
+    "workspace.navigation_inspector.explicit": {
+      "text": "Açıkça belirtilen katkılar"
+    },
+    "workspace.navigation_inspector.static": {
+      "text": "Sınırlar içindeki statik çarpışma"
+    },
+    "workspace.navigation_inspector.shape": {
+      "text": "Hacim şekli"
+    },
+    "workspace.navigation_inspector.box": {
+      "text": "Kutu"
+    },
+    "workspace.navigation_inspector.cylinder": {
+      "text": "Y eksenli silindir"
+    },
+    "workspace.navigation_inspector.radius": {
+      "text": "Yarıçap (metre)"
+    },
+    "workspace.navigation_inspector.half_height": {
+      "text": "Yarı yükseklik (metre)"
+    },
+    "workspace.navigation_inspector.operation": {
+      "text": "Değiştirici işlemi"
+    },
+    "workspace.navigation_inspector.area": {
+      "text": "Alan geçersiz kılması"
+    },
+    "workspace.navigation_inspector.area_cost": {
+      "text": "Alan ve geçiş maliyeti"
+    },
+    "workspace.navigation_inspector.cost": {
+      "text": "Geçiş maliyeti"
+    },
+    "workspace.navigation_inspector.position": {
+      "text": "Yerel uç noktası konumu"
+    },
+    "workspace.navigation_inspector.connection_radius": {
+      "text": "Bağlantı yarıçapı (metre)"
+    },
+    "workspace.navigation_inspector.start": {
+      "text": "Başlangıç uç noktası"
+    },
+    "workspace.navigation_inspector.end": {
+      "text": "Bitiş uç noktası"
+    },
+    "workspace.navigation_inspector.kind": {
+      "text": "Geçiş türü"
+    },
+    "workspace.navigation_inspector.jump": {
+      "text": "Zıplama"
+    },
+    "workspace.navigation_inspector.ladder": {
+      "text": "Merdiven"
+    },
+    "workspace.navigation_inspector.door": {
+      "text": "Kapı"
+    },
+    "workspace.navigation_inspector.teleport": {
+      "text": "Işınlanma"
+    },
+    "workspace.navigation_inspector.direction": {
+      "text": "Geçiş yönü"
+    },
+    "workspace.navigation_inspector.forward": {
+      "text": "Başlangıçtan bitişe"
+    },
+    "workspace.navigation_inspector.both": {
+      "text": "Çift yönlü"
+    },
+    "workspace.navigation_inspector.profile": {
+      "text": "Aracı profili"
+    },
+    "workspace.navigation_inspector.filter": {
+      "text": "Sorgu filtresi"
+    },
+    "workspace.navigation_inspector.override_radius": {
+      "text": "Aracı yarıçapını geçersiz kıl"
+    },
+    "workspace.navigation_inspector.enabled": {
+      "text": "Etkin"
+    },
+    "workspace.navigation_inspector.invalid": {
+      "text": "Geçersiz taslak. Uygulamadan önce bileşeni düzeltin; belge ve çalışma zamanı durumu değişmedi."
+    },
+    "workspace.navigation_inspector.apply": {
+      "text": "Seçili tüm gezinme düzenlemelerini uygula"
+    },
+    "workspace.navigation_inspector.cancel": {
+      "text": "Gezinme taslaklarını iptal et"
+    },
+    "workspace.navigation_inspector.rejected": {
+      "text": "Gezinme düzenlemeleri reddedildi. Taslaklar düzeltme için korunuyor."
+    },
+    "workspace.ui_canvas.undo": {
+      "text": "Geri al"
+    },
+    "workspace.ui_canvas.redo": {
+      "text": "Yinele"
+    },
+    "workspace.ui_canvas.reload": {
+      "text": "Yeniden yükle"
+    },
+    "workspace.ui_canvas.command_failed": {
+      "text": "Tuval işlemi başarısız oldu. Belge durumunu kontrol edip yeniden deneyin."
+    },
+    "workspace.ui_canvas.search": {
+      "text": "Öğe türlerinde ara"
+    },
+    "workspace.ui_canvas.create": {
+      "text": "Öğe oluştur"
+    },
+    "workspace.ui_canvas.move_up": {
+      "text": "Öne taşı"
+    },
+    "workspace.ui_canvas.move_down": {
+      "text": "Arkaya taşı"
+    },
+    "workspace.ui_canvas.reparent_hint": {
+      "text": "Taşımak için bir öğeyi kapsayıcının üzerine sürükleyin."
+    },
+    "workspace.ui_canvas.no_results": {
+      "text": "Eşleşen öğe yok."
+    },
+    "workspace.ui_canvas.kind.canvas": {
+      "text": "Tuval"
+    },
+    "workspace.ui_canvas.kind.screen": {
+      "text": "Ekran"
+    },
+    "workspace.ui_canvas.kind.panel": {
+      "text": "Panel"
+    },
+    "workspace.ui_canvas.kind.frame": {
+      "text": "Çerçeve"
+    },
+    "workspace.ui_canvas.kind.layout_group": {
+      "text": "Yerleşim Grubu"
+    },
+    "workspace.ui_canvas.kind.text": {
+      "text": "Metin"
+    },
+    "workspace.ui_canvas.kind.image": {
+      "text": "Görsel"
+    },
+    "workspace.ui_canvas.kind.button": {
+      "text": "Düğme"
+    },
+    "workspace.ui_canvas.kind.progress_bar": {
+      "text": "İlerleme Çubuğu"
+    },
+    "workspace.ui_canvas.kind.slider": {
+      "text": "Kaydırıcı"
+    },
+    "workspace.ui_canvas.kind.toggle": {
+      "text": "Anahtar"
+    },
+    "workspace.ui_canvas.kind.text_input": {
+      "text": "Metin Girişi"
+    },
+    "workspace.ui_canvas.kind.scroll_view": {
+      "text": "Kaydırma Görünümü"
+    },
+    "workspace.ui_canvas.kind.collection_view": {
+      "text": "Koleksiyon Görünümü"
+    },
+    "workspace.ui_inspector.auto": {"text": "Otomatik"},
+    "workspace.ui_inspector.dip": {"text": "DIP (1/64 birim)"},
+    "workspace.ui_inspector.percent": {"text": "Yüzde (64 = %100)"},
+    "workspace.ui_inspector.logical_value": {"text": "Mantıksal değer (1/64 DIP)"},
+    "workspace.ui_inspector.width": {"text": "Genişlik"},
+    "workspace.ui_inspector.height": {"text": "Yükseklik"},
+    "workspace.ui_inspector.minimum_width": {"text": "En az genişlik"},
+    "workspace.ui_inspector.minimum_height": {"text": "En az yükseklik"},
+    "workspace.ui_inspector.maximum_width": {"text": "En fazla genişlik"},
+    "workspace.ui_inspector.maximum_height": {"text": "En fazla yükseklik"},
+    "workspace.ui_inspector.value": {"text": "Değer"},
+    "workspace.ui_inspector.weight": {"text": "Yazı kalınlığı"},
+    "workspace.ui_inspector.stretch": {"text": "Yazı genişliği"},
+    "workspace.ui_inspector.font_style": {"text": "Yazı stili (0–2)"},
+    "workspace.ui_inspector.font_size": {"text": "Yazı boyutu (1/64 DIP)"},
+    "workspace.ui_inspector.line_height": {"text": "Satır yüksekliği (1/64 DIP)"},
+    "workspace.ui_inspector.letter_spacing": {"text": "Harf aralığı (1/64 DIP)"},
+    "workspace.ui_inspector.radius": {"text": "Yarıçap (1/64 DIP)"},
+    "workspace.ui_inspector.border_width": {"text": "Kenarlık genişliği (1/64 DIP)"},
+    "workspace.ui_inspector.outline_width": {"text": "Dış çizgi genişliği (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_x": {"text": "Gölge X (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_y": {"text": "Gölge Y (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_blur": {"text": "Gölge bulanıklığı (1/64 DIP)"},
+    "workspace.ui_inspector.duration": {"text": "Süre (mikrosaniye)"},
+    "workspace.ui_inspector.easing": {"text": "Eğri kimliği"},
+    "workspace.ui_inspector.red": {"text": "Doğrusal kırmızı"},
+    "workspace.ui_inspector.green": {"text": "Doğrusal yeşil"},
+    "workspace.ui_inspector.blue": {"text": "Doğrusal mavi"},
+    "workspace.ui_inspector.alpha": {"text": "Alfa"},
+    "workspace.ui_inspector.color_role": {"text": "Renk rolü"},
+    "workspace.ui_inspector.generic": {"text": "Genel"},
+    "workspace.ui_inspector.text": {"text": "Metin"},
+    "workspace.ui_inspector.surface": {"text": "Yüzey"},
+    "workspace.ui_inspector.border": {"text": "Kenarlık"},
+    "workspace.ui_inspector.accent": {"text": "Vurgu"},
+    "workspace.ui_inspector.status": {"text": "Durum"},
+    "workspace.ui_inspector.asset": {"text": "Varlık kimliği"},
+    "workspace.ui_inspector.image_fit": {"text": "Görsel yerleşimi"},
+    "workspace.ui_inspector.stretch_fit": {"text": "Esnet"},
+    "workspace.ui_inspector.contain": {"text": "Sığdır"},
+    "workspace.ui_inspector.cover": {"text": "Kapla"},
+    "workspace.ui_inspector.tile": {"text": "Döşe"},
+    "workspace.ui_inspector.margin_left": {"text": "Dış boşluk sol (1/64 DIP)"},
+    "workspace.ui_inspector.margin_top": {"text": "Dış boşluk üst (1/64 DIP)"},
+    "workspace.ui_inspector.margin_right": {"text": "Dış boşluk sağ (1/64 DIP)"},
+    "workspace.ui_inspector.margin_bottom": {"text": "Dış boşluk alt (1/64 DIP)"},
+    "workspace.ui_inspector.padding_left": {"text": "İç boşluk sol (1/64 DIP)"},
+    "workspace.ui_inspector.padding_top": {"text": "İç boşluk üst (1/64 DIP)"},
+    "workspace.ui_inspector.padding_right": {"text": "İç boşluk sağ (1/64 DIP)"},
+    "workspace.ui_inspector.padding_bottom": {"text": "İç boşluk alt (1/64 DIP)"},
+    "workspace.ui_inspector.border_left": {"text": "Kenarlık sol (1/64 DIP)"},
+    "workspace.ui_inspector.border_top": {"text": "Kenarlık üst (1/64 DIP)"},
+    "workspace.ui_inspector.border_right": {"text": "Kenarlık sağ (1/64 DIP)"},
+    "workspace.ui_inspector.border_bottom": {"text": "Kenarlık alt (1/64 DIP)"},
+    "workspace.ui_inspector.offset_left": {"text": "Konum farkı sol (1/64 DIP)"},
+    "workspace.ui_inspector.offset_top": {"text": "Konum farkı üst (1/64 DIP)"},
+    "workspace.ui_inspector.offset_right": {"text": "Konum farkı sağ (1/64 DIP)"},
+    "workspace.ui_inspector.offset_bottom": {"text": "Konum farkı alt (1/64 DIP)"},
+    "workspace.ui_inspector.slice_left": {"text": "Dokuz dilim sol (1/64 DIP)"},
+    "workspace.ui_inspector.slice_top": {"text": "Dokuz dilim üst (1/64 DIP)"},
+    "workspace.ui_inspector.slice_right": {"text": "Dokuz dilim sağ (1/64 DIP)"},
+    "workspace.ui_inspector.slice_bottom": {"text": "Dokuz dilim alt (1/64 DIP)"},
+    "workspace.ui_inspector.normalized_value": {"text": "Normalize değer (64 = %100)"},
+    "workspace.ui_inspector.aspect_width": {"text": "En oranı"},
+    "workspace.ui_inspector.aspect_height": {"text": "Boy oranı"},
+    "workspace.ui_inspector.pivot_x": {"text": "Dönüş merkezi X (0–64)"},
+    "workspace.ui_inspector.pivot_y": {"text": "Dönüş merkezi Y (0–64)"},
+    "workspace.ui_inspector.gap": {"text": "Aralık (1/64 DIP)"},
+    "workspace.ui_inspector.column_count": {"text": "Sütun sayısı (0–16)"},
+    "workspace.ui_inspector.row_count": {"text": "Satır sayısı (0–16)"},
+    "workspace.ui_inspector.flex_grow": {"text": "Esnek büyüme ağırlığı"},
+    "workspace.ui_inspector.flex_shrink": {"text": "Esnek küçülme ağırlığı"},
+    "workspace.ui_inspector.grid_column": {"text": "Izgara sütunu (0 = otomatik)"},
+    "workspace.ui_inspector.grid_row": {"text": "Izgara satırı (0 = otomatik)"},
+    "workspace.ui_inspector.column_span": {"text": "Sütun kapsamı"},
+    "workspace.ui_inspector.row_span": {"text": "Satır kapsamı"},
+    "workspace.ui_inspector.start": {"text": "Başlangıç"},
+    "workspace.ui_inspector.center": {"text": "Orta"},
+    "workspace.ui_inspector.end": {"text": "Son"},
+    "workspace.ui_inspector.anchor_left": {"text": "Sol çapa"},
+    "workspace.ui_inspector.anchor_right": {"text": "Sağ çapa"},
+    "workspace.ui_inspector.anchor_top": {"text": "Üst çapa"},
+    "workspace.ui_inspector.anchor_bottom": {"text": "Alt çapa"},
+    "workspace.ui_inspector.anchor_horizontal": {"text": "Yatay çapa hizası"},
+    "workspace.ui_inspector.anchor_vertical": {"text": "Dikey çapa hizası"},
+    "workspace.ui_inspector.preserve_width": {"text": "Çapalanan genişliği koru"},
+    "workspace.ui_inspector.preserve_height": {"text": "Çapalanan yüksekliği koru"},
+    "workspace.ui_inspector.horizontal_alignment": {"text": "Yatay hizalama"},
+    "workspace.ui_inspector.vertical_alignment": {"text": "Dikey hizalama"},
+    "workspace.ui_inspector.positioning": {"text": "Konumlandırma"},
+    "workspace.ui_inspector.flow": {"text": "Akış"},
+    "workspace.ui_inspector.absolute": {"text": "Mutlak"},
+    "workspace.ui_inspector.container_kind": {"text": "Kapsayıcı düzeni"},
+    "workspace.ui_inspector.stack": {"text": "Yığın"},
+    "workspace.ui_inspector.flex": {"text": "Esnek"},
+    "workspace.ui_inspector.grid": {"text": "Izgara"},
+    "workspace.ui_inspector.orientation": {"text": "Yön"},
+    "workspace.ui_inspector.horizontal": {"text": "Yatay"},
+    "workspace.ui_inspector.vertical": {"text": "Dikey"},
+    "workspace.ui_inspector.wrap": {"text": "Kaydırma"},
+    "workspace.ui_inspector.no_wrap": {"text": "Kaydırma yok"},
+    "workspace.ui_inspector.wrap_enabled": {"text": "Kaydır"},
+    "workspace.ui_inspector.main_alignment": {"text": "Ana eksen dağılımı"},
+    "workspace.ui_inspector.cross_alignment": {"text": "Çapraz eksen hizası"},
+    "workspace.ui_inspector.space_between": {"text": "Aralara boşluk"},
+    "workspace.ui_inspector.space_around": {"text": "Çevrelere boşluk"},
+    "workspace.ui_inspector.space_evenly": {"text": "Eşit boşluk"},
+    "workspace.ui_inspector.columns": {"text": "Sütun yolları"},
+    "workspace.ui_inspector.rows": {"text": "Satır yolları"},
+    "workspace.ui_inspector.track_kind": {"text": "Yol boyutlandırma"},
+    "workspace.ui_inspector.track_value": {"text": "Yol değeri (DIP/yüzde = 1/64 birim)"},
+    "workspace.ui_inspector.track_minimum": {"text": "En az yol boyutu"},
+    "workspace.ui_inspector.track_maximum": {"text": "En fazla yol boyutu"},
+    "workspace.ui_inspector.fraction": {"text": "Kesir ağırlığı"},
+    "workspace.ui_inspector.style_asset": {"text": "Stil varlığı kimliği (isteğe bağlı)"},
+    "workspace.ui_inspector.type_class_asset": {"text": "Tür sınıfı varlık kimliği (isteğe bağlı)"},
+    "workspace.ui_inspector.type_class_id": {"text": "Tür sınıfı kimliği (isteğe bağlı)"},
+    "workspace.ui_inspector.resource_resolution": {"text": "Kaynak başvuruları, Uygula işlemi kaydetmeden önce sabitlenmiş proje varlıkları ve etkin stil kaydıyla doğrulanır."},
+    "workspace.ui_inspector.classes": {"text": "Stil sınıfları"},
+    "workspace.ui_inspector.class_asset": {"text": "Sınıf varlık kimliği"},
+    "workspace.ui_inspector.class_id": {"text": "Sınıf kimliği"},
+    "workspace.ui_inspector.remove_class": {"text": "Seçili sınıfı kaldır"},
+    "workspace.ui_inspector.add_class": {"text": "Sınıf başvurusu ekle"},
+    "workspace.ui_inspector.intrinsic_none": {"text": "Yok"},
+    "workspace.ui_inspector.intrinsic_image": {"text": "Görsel"},
+    "workspace.ui_inspector.intrinsic_kind": {"text": "İçsel boyut kaynağı"},
+    "workspace.ui_inspector.intrinsic_required": {"text": "İçsel kaynak zorunlu"},
+    "workspace.ui_inspector.fallback_width": {"text": "Yedek genişlik (1/64 DIP)"},
+    "workspace.ui_inspector.fallback_height": {"text": "Yedek yükseklik (1/64 DIP)"},
+    "workspace.ui_inspector.overrides": {"text": "Yerel stil geçersiz kılmaları"},
+    "workspace.ui_inspector.use_token": {"text": "Stil belirteci kullan"},
+    "workspace.ui_inspector.token_asset": {"text": "Belirteç varlık kimliği"},
+    "workspace.ui_inspector.token_id": {"text": "Belirteç kimliği"},
+    "workspace.ui_inspector.category": {"text": "Sabit değer türü"},
+    "workspace.ui_inspector.category_color": {"text": "Doğrusal renk"},
+    "workspace.ui_inspector.category_dimension": {"text": "Boyut"},
+    "workspace.ui_inspector.category_typography": {"text": "Tipografi"},
+    "workspace.ui_inspector.category_imagery": {"text": "Görsel"},
+    "workspace.ui_inspector.category_shape": {"text": "Şekil"},
+    "workspace.ui_inspector.category_scalar": {"text": "Skaler"},
+    "workspace.ui_inspector.category_enum": {"text": "Numaralandırma veya bayraklar"},
+    "workspace.ui_inspector.category_motion": {"text": "Hareket başvurusu"},
+    "workspace.ui_inspector.remove_override": {"text": "Seçili geçersiz kılmayı kaldır"},
+    "workspace.ui_inspector.property_id": {"text": "Yeni özellik kimliği"},
+    "workspace.ui_inspector.add_override": {"text": "Bu kimlik için geçersiz kılma ekle"},
+    "workspace.ui_inspector.select_element": {"text": "Sunumunu incelemek için hiyerarşiden yazılmış bir öğe seçin."},
+    "workspace.ui_inspector.title": {"text": "Arayüz özellik denetçisi"},
+    "workspace.ui_inspector.invalid_draft": {"text": "Taslak geçersiz değerler içeriyor. Uygulamadan önce bunları düzeltin veya iptal edin."},
+    "workspace.ui_inspector.apply": {"text": "Denetçi değişikliklerini uygula"},
+    "workspace.ui_inspector.cancel": {"text": "Denetçi taslağını iptal et"},
+    "workspace.ui_inspector.reset": {"text": "Sunum geçersiz kılmasını kaldır"},
+    "workspace.ui_inspector.registry_unavailable": {"text": "Stil düzenleme için etkin proje stil kaydı gerekir. Düzen, durum ve ileti düzenlemeleri kullanılabilir."},
+    "workspace.ui_inspector.state_visible": {"text": "Başlangıçta görünür"},
+    "workspace.ui_inspector.state_enabled": {"text": "Başlangıçta etkin"},
+    "workspace.ui_inspector.state_focusable": {"text": "Başlangıçta odaklanabilir"},
+    "workspace.ui_inspector.initial_override": {"text": "Başlangıç denetim değerini geçersiz kıl"},
+    "workspace.ui_inspector.initial_checked": {"text": "Başlangıçta işaretli"},
+    "workspace.ui_inspector.initial_text": {"text": "Başlangıç düzenlenebilir metin"},
+    "workspace.ui_inspector.scalar_minimum": {"text": "Skaler alt sınır"},
+    "workspace.ui_inspector.scalar_maximum": {"text": "Skaler üst sınır"},
+    "workspace.ui_inspector.scalar_step": {"text": "Skaler adım"},
+    "workspace.ui_inspector.scalar_initial": {"text": "Başlangıç skaler değeri"},
+    "workspace.ui_inspector.accessibility_enabled": {"text": "Erişilebilirlik meta verisi yaz"},
+    "workspace.ui_inspector.accessibility_role": {"text": "Erişilebilirlik rolü"},
+    "workspace.ui_inspector.accessibility_hidden": {"text": "Erişilebilirlikten gizle"},
+    "workspace.ui_inspector.accessibility_read_only": {"text": "Salt okunur anlamı"},
+    "workspace.ui_inspector.accessibility_required": {"text": "Zorunlu anlamı"},
+    "workspace.ui_inspector.accessibility_name": {"text": "Yerelleştirilmiş erişilebilir ad"},
+    "workspace.ui_inspector.accessibility_description": {"text": "Yerelleştirilmiş erişilebilir açıklama"},
+    "workspace.ui_inspector.localized_content": {"text": "Yerelleştirilmiş metin içeriği"},
+    "workspace.ui_inspector.message_namespace": {"text": "Oyun iletisi ad alanı"},
+    "workspace.ui_inspector.message_key": {"text": "Anlamsal ileti anahtarı"},
+    "workspace.ui_inspector.message_fallback": {"text": "Kaynak yedek metni"},
+    "workspace.ui_inspector.failure_policy": {"text": "Eksik çeviri ilkesi"},
+    "workspace.ui_inspector.failure.fallback": {"text": "Yazılan yedeği kullan"},
+    "workspace.ui_inspector.failure.placeholder": {"text": "Güvenli yer tutucu kullan"},
+    "workspace.ui_inspector.failure.required": {"text": "Çeviri zorunlu"},
+    "workspace.ui_inspector.argument_value": {"text": "Türlü bağımsız değişken değeri"},
+    "workspace.ui_inspector.argument_enum_type": {"text": "Sabit numaralandırma tür kimliği"},
+    "workspace.ui_inspector.argument_modifiers": {"text": "Kısayol değiştirici bitleri"},
+    "workspace.ui_inspector.argument_name": {"text": "Bağımsız değişken adı"},
+    "workspace.ui_inspector.argument_type": {"text": "Bağımsız değişken türü"},
+    "workspace.ui_inspector.remove_argument": {"text": "Seçili bağımsız değişkeni kaldır"},
+    "workspace.ui_inspector.add_argument": {"text": "Türlü bağımsız değişken ekle"},
+    "workspace.ui_inspector.arg.integer": {"text": "Tamsayı"},
+    "workspace.ui_inspector.arg.decimal": {"text": "Ondalık"},
+    "workspace.ui_inspector.arg.boolean": {"text": "Mantıksal"},
+    "workspace.ui_inspector.arg.date_time": {"text": "Tarih/saat (UTC milisaniye)"},
+    "workspace.ui_inspector.arg.duration": {"text": "Süre (milisaniye)"},
+    "workspace.ui_inspector.arg.enum": {"text": "Sabit numaralandırma"},
+    "workspace.ui_inspector.arg.text": {"text": "Metin"},
+    "workspace.ui_inspector.arg.shortcut": {"text": "Kısayol tuşu"},
+    "workspace.ui_inspector.role.application": {"text": "Uygulama"},
+    "workspace.ui_inspector.role.window": {"text": "Pencere"},
+    "workspace.ui_inspector.role.screen": {"text": "Ekran"},
+    "workspace.ui_inspector.role.dialog": {"text": "İletişim kutusu"},
+    "workspace.ui_inspector.role.alert": {"text": "Uyarı"},
+    "workspace.ui_inspector.role.group": {"text": "Grup"},
+    "workspace.ui_inspector.role.heading": {"text": "Başlık"},
+    "workspace.ui_inspector.role.static_text": {"text": "Sabit metin"},
+    "workspace.ui_inspector.role.button": {"text": "Düğme"},
+    "workspace.ui_inspector.role.toggle": {"text": "Anahtar"},
+    "workspace.ui_inspector.role.checkbox": {"text": "Onay kutusu"},
+    "workspace.ui_inspector.role.radio": {"text": "Radyo düğmesi"},
+    "workspace.ui_inspector.role.slider": {"text": "Kaydırıcı"},
+    "workspace.ui_inspector.role.text_field": {"text": "Metin alanı"},
+    "workspace.ui_inspector.role.link": {"text": "Bağlantı"},
+    "workspace.ui_inspector.role.image": {"text": "Görsel"},
+    "workspace.ui_inspector.role.progress": {"text": "İlerleme"},
+    "workspace.ui_inspector.role.list": {"text": "Liste"},
+    "workspace.ui_inspector.role.list_item": {"text": "Liste öğesi"},
+    "workspace.ui_inspector.role.menu": {"text": "Menü"},
+    "workspace.ui_inspector.role.menu_item": {"text": "Menü öğesi"},
+    "workspace.ui_inspector.role.tab": {"text": "Sekme"},
+    "workspace.ui_inspector.role.tab_item": {"text": "Sekme öğesi"},
+    "workspace.ui_inspector.role.tree": {"text": "Ağaç"},
+    "workspace.ui_inspector.role.tree_item": {"text": "Ağaç öğesi"},
+    "workspace.ui_inspector.role.table": {"text": "Tablo"},
+    "workspace.ui_inspector.role.row": {"text": "Satır"},
+    "workspace.ui_inspector.role.cell": {"text": "Hücre"},
+    "workspace.ui_inspector.role.scroll_view": {"text": "Kaydırma görünümü"},
+    "workspace.ui_inspector.project_theme": {
+      "text": "Proje stil teması"
+    },
+    "workspace.ui_inspector.choose_theme": {
+      "text": "Kayıtlı bir stil varlığı seçin"
+    },
+    "workspace.ui_inspector.refresh_theme": {
+      "text": "Seçili temayı hazırla / yenile"
+    },
+    "workspace.ui_inspector.preparing_theme": {
+      "text": "Stil varlıkları hazırlanıyor…"
     }
   }
 }
