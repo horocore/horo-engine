@@ -391,6 +391,48 @@ namespace Horo::Network {
         }
     }
 
+    TEST_CASE("Concrete host disconnect and shutdown fence queued client travel at the canonical safe point",
+              "[integration][network][mode][lifecycle]") {
+        DeterministicClock clock;
+        const std::array worlds{World(NetworkModeWorldKind::Client, 2)};
+        const std::array replacement{World(NetworkModeWorldKind::Client, 102)};
+        const auto owners = std::make_shared<ProductOwners>();
+        auto created = Product(clock, NetworkProjectRole::Client, worlds, {.localPlayer = true}, owners);
+        REQUIRE(created.HasValue());
+        auto host = std::move(created).Value();
+        const auto started = host->Startup();
+        if constexpr (!HORO_TEST_PHYSICS_NATIVE) {
+            REQUIRE(started.HasError());
+            VerifyUnavailableRoles(*host, worlds);
+            host->Shutdown();
+            return;
+        }
+        REQUIRE(started.HasValue());
+        auto active = AdmittedSession();
+        REQUIRE(host->AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 22).HasValue());
+        REQUIRE(host->RequestTravel(replacement, Session()).HasValue());
+        SECTION("Disconnect before safe-point publication") {
+            REQUIRE(host->DisconnectClient(NetworkModeWorldKind::Client, Session()).HasValue());
+            REQUIRE(host->RunFrame().HasValue());
+            const auto failed = host->TakeTravelFailure();
+            REQUIRE(failed.has_value());
+            REQUIRE(failed->code.Value() == NetworkErrors::NetworkModeStale.code.Value());
+            REQUIRE(host->Role(worlds[0].kind, worlds[0].scene).HasValue());
+            REQUIRE_FALSE(host->Role(worlds[0].kind, worlds[0].scene).Value().session.has_value());
+            REQUIRE(host->Role(replacement[0].kind, replacement[0].scene).HasError());
+        }
+        SECTION("Shutdown discards queued travel") {
+            host->Shutdown();
+            REQUIRE(host->RunFrame().HasError());
+            REQUIRE_FALSE(host->TakeTravelFailure().has_value());
+            REQUIRE(host->Role(worlds[0].kind, worlds[0].scene).HasError());
+            REQUIRE(host->Role(replacement[0].kind, replacement[0].scene).HasError());
+            REQUIRE(host->AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 23).HasError());
+            REQUIRE(host->RequestTravel(replacement, Session()).HasError());
+        }
+        host->Shutdown();
+    }
+
     TEST_CASE("Product launch rejects unknown authored replication inventory before client or server publication",
               "[integration][network][mode][inventory]") {
         for (const auto mode : {NetworkProjectRole::Client, NetworkProjectRole::ListenServer, NetworkProjectRole::DedicatedServer}) {

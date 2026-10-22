@@ -164,6 +164,31 @@ Null/simulated evidence qualifies deterministic orchestration only; it never
 qualifies native sockets, encryption, latency, or production throughput and is
 never an implicit fallback from a failed production backend.
 
+`NetworkChaosScenario` is an explicitly composed `NetworkTransportNull` test/preview
+owner, not a decorator around a production transport. Its default profile is
+`Disabled`; release composition must preserve that policy. Every send, close and
+tick carries the exact pinned host/session generation. A scenario cannot discover
+another transport, listener, session, or credential authority.
+
+The versioned replay input copies up to 16 unique initial connection slots, 128
+ordered timeline actions and 64 expected checkpoints into fixed storage. The
+finite duration and declared event-drain budget are part of replay identity.
+Timeline actions run before the tick's delivery drain, using consecutive relative
+ticks. Impairment replacements preserve seed/random-stream identity and fragment
+storage; they affect future sends without rewriting queued deliveries. Stalls
+retain bounded work while rate-budget ticks advance. Disconnect removes pending
+old-generation deliveries; restart opens only the exact next connection generation
+and grants no session authentication or replication authority. Hosts must route
+these lifecycle changes through their ordinary session revocation/admission path.
+
+Checkpoint mismatch terminates and discards the remaining run. Optional evidence
+contains only local ticks and aggregate action/fragment/disconnect/checkpoint
+counts; disabling this evidence does not disable expected-checkpoint validation.
+The immutable copied topology, seed and timeline remain available to the test
+owner for replay. No payload, endpoint, account or secret is captured. Editor
+preset storage, live command authorization and condition-simulator widgets remain
+the separate NET-008.6 workflow; this core does not implement or complete it.
+
 ### 4. `HoroEngine::NetworkTransportGNS`
 
 - **Role**: Production direct-IP reliable and unreliable message transport implemented with open-source GameNetworkingSockets.

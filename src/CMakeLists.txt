@@ -664,6 +664,7 @@ target_include_directories(HoroNetworkApi PRIVATE $<TARGET_PROPERTY:nlohmann_jso
 
 add_library(HoroNetworkTransportNull STATIC
         runtime/networking/null/DeterministicTransport.cpp
+        runtime/networking/null/NetworkChaosScenario.cpp
         runtime/networking/null/NullTransportBackend.cpp
 )
 add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
