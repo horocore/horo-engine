@@ -89,7 +89,7 @@ namespace Horo::XR::OpenXRInternal {
          * @param getProc Official loader dispatch retained by session. @param pacing Finite supported queue policy.
          * @param colorSpace Explicit runtime compositor primaries, requiring XR_FB_color_space for non-default.
          * @return Success or typed unsupported/invalid/native failure without publishing a partial adapter. */
-        [[nodiscard]] Result<void> Bind(PFN_xrGetInstanceProcAddr getProc, NativeFramePacingPolicy pacing,
+        [[nodiscard]] Result<void> Bind(PFN_xrGetInstanceProcAddr getProc, const NativeFramePacingPolicy &pacing,
                                         NativeCompositorColorSpace colorSpace = NativeCompositorColorSpace::RuntimeDefault);
         /** @brief Reserves before native wait and preserves every successful native wait obligation.
          * @return Frame status plus exact debt identity, or native wait failure after cancelling only its reservation. */

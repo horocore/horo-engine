@@ -56,16 +56,18 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRFrameCompositor::Bind */
-    Result<void> OpenXRFrameCompositor::Bind(PFN_xrGetInstanceProcAddr getProc, NativeFramePacingPolicy pacing,
+    Result<void> OpenXRFrameCompositor::Bind(PFN_xrGetInstanceProcAddr getProc, const NativeFramePacingPolicy &pacing,
                                              NativeCompositorColorSpace colorSpace) {
+        // Snapshot before foreign loader callbacks can mutate the caller-owned policy.
+        const NativeFramePacingPolicy admittedPacing = pacing;
         if (thread_ != std::this_thread::get_id() || nativeFrame_.IsValid() || frames_->Snapshot().phase != XRFramePhase::Idle ||
             owner_.IsValid() || closing_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        if (!getProc || pacing.gpuBudgetNanoseconds <= 0 || pacing.compositorMarginNanoseconds < 0 ||
-            pacing.gpuBudgetNanoseconds > std::numeric_limits<std::int64_t>::max() - pacing.compositorMarginNanoseconds ||
-            colorSpace >= NativeCompositorColorSpace::Count || pacing.maximumFramesInFlight == 0)
+        if (!getProc || admittedPacing.gpuBudgetNanoseconds <= 0 || admittedPacing.compositorMarginNanoseconds < 0 ||
+            admittedPacing.gpuBudgetNanoseconds > std::numeric_limits<std::int64_t>::max() - admittedPacing.compositorMarginNanoseconds ||
+            colorSpace >= NativeCompositorColorSpace::Count || admittedPacing.maximumFramesInFlight == 0)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
-        if (pacing.maximumFramesInFlight != 1)
+        if (admittedPacing.maximumFramesInFlight != 1)
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationUnsupported, "Release-complete XR pacing supports one frame in flight."));
         const XRSessionId owner = session_->Session();
@@ -95,7 +97,7 @@ namespace Horo::XR::OpenXRInternal {
                 return Result<void>::Failure(NativeError("set color space", result));
         }
         owner_ = owner;
-        policy_ = pacing;
+        policy_ = admittedPacing;
         wait_ = wait.Value();
         begin_ = begin.Value();
         end_ = end.Value();

@@ -17,6 +17,7 @@ namespace Horo::Tests::OpenXR {
             XrDuration period{11'111'111};
             bool render{true};
             bool missingEnd{};
+            NativeFramePacingPolicy *mutatePacing{};
             std::uint32_t waits{};
             std::uint32_t begins{};
             std::uint32_t ends{};
@@ -66,6 +67,10 @@ namespace Horo::Tests::OpenXR {
             }
 
             static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance, const char *name, PFN_xrVoidFunction *function) {
+                if (active->mutatePacing)
+                    *active->mutatePacing = {.gpuBudgetNanoseconds = 9'000'000,
+                                             .compositorMarginNanoseconds = 9'000'000,
+                                             .maximumFramesInFlight = 2};
                 *function = nullptr;
                 if (std::string_view{name} == "xrWaitFrame")
                     *function = std::bit_cast<PFN_xrVoidFunction>(&Wait);
@@ -214,32 +219,37 @@ namespace Horo::Tests::OpenXR {
                 frames.ResetAfterQuiescence();
             }
 
+            /** @brief Builds one owned predicted view without borrowing temporary pose storage. */
+            XRViewDescriptor View(std::uint32_t index, XRRenderPredictionTime prediction) {
+                const XRPoseDescriptor pose{.session = session,
+                                            .source = {.id = {session, {20 + index, 1}},
+                                                       .kind = XRSpaceKind::View,
+                                                       .worldOriginRevision = local.worldOriginRevision},
+                                            .target = local,
+                                            .purpose = XRPosePurpose::PresentationPrediction,
+                                            .time = {.runtimeSample = IdentityValue<XRRuntimeTime>(1), .renderPrediction = prediction},
+                                            .components = {.positionMeters = {.value = Math::Vec3{0, 1, 0},
+                                                                              .validity = XRPoseComponentValidity::Tracked},
+                                                           .orientation = {.value = Math::Quaternion::Identity(),
+                                                                           .validity = XRPoseComponentValidity::Tracked},
+                                                           .confidence = XRTrackingConfidence::High,
+                                                           .loss = XRTrackingLossState::None}};
+                return {.id = {session, {10 + index, 1}},
+                        .order = index,
+                        .role = index == 0 ? XRViewRole::PrimaryLeft : XRViewRole::PrimaryRight,
+                        .pose = pose,
+                        .projection = {-1, 1, -1, 1},
+                        .recommendedExtent = {800, 600},
+                        .maximumExtent = {800, 600}};
+            }
+
             XRViewRenderPlan Plan(const XRFrameId &frame, const XRSwapchainImageId &image, const XRSwapchainImageId *depthImage = nullptr,
                                   bool requireSampling = false) {
                 const auto prediction = frames.Snapshot().predictedDisplayTime;
                 std::array<XRViewDescriptor, 2> views{};
                 std::array<XRExternalRenderTargetDescriptor, 4> targets{};
                 for (std::uint32_t index = 0; index < 2; ++index) {
-                    const XRPoseDescriptor pose{.session = session,
-                                                .source = {.id = {session, {20 + index, 1}},
-                                                           .kind = XRSpaceKind::View,
-                                                           .worldOriginRevision = local.worldOriginRevision},
-                                                .target = local,
-                                                .purpose = XRPosePurpose::PresentationPrediction,
-                                                .time = {.runtimeSample = IdentityValue<XRRuntimeTime>(1), .renderPrediction = prediction},
-                                                .components = {.positionMeters = {.value = Math::Vec3{0, 1, 0},
-                                                                                  .validity = XRPoseComponentValidity::Tracked},
-                                                               .orientation = {.value = Math::Quaternion::Identity(),
-                                                                               .validity = XRPoseComponentValidity::Tracked},
-                                                               .confidence = XRTrackingConfidence::High,
-                                                               .loss = XRTrackingLossState::None}};
-                    views[index] = {.id = {session, {10 + index, 1}},
-                                    .order = index,
-                                    .role = index == 0 ? XRViewRole::PrimaryLeft : XRViewRole::PrimaryRight,
-                                    .pose = pose,
-                                    .projection = {-1, 1, -1, 1},
-                                    .recommendedExtent = {800, 600},
-                                    .maximumExtent = {800, 600}};
+                    views[index] = View(index, prediction);
                     const auto targetIndex = depthImage ? index * 2 : index;
                     targets[targetIndex] = {.view = views[index].id,
                                             .target = image.target,
@@ -275,6 +285,20 @@ namespace Horo::Tests::OpenXR {
                 return plan.Value();
             }
         };
+
+        TEST_CASE("Native XR compositor snapshots admitted pacing before loader callbacks", "[unit][xr][compositor][pacing]") {
+            CompositorFixture f;
+            NativeFramePacingPolicy pacing;
+            f.script.mutatePacing = &pacing;
+            REQUIRE(f.compositor.Bind(&FrameScript::GetProc, pacing).HasValue());
+            CHECK(pacing.maximumFramesInFlight == 2);
+            const auto frame = f.Begin();
+            const auto observation = f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(8'500'000));
+            REQUIRE(observation.HasValue());
+            CHECK(observation.Value().cpuSubmissionDeadlineNanoseconds == 8'500'000);
+            CHECK(observation.Value().deadline == NativeFrameDeadline::WithinBudget);
+            f.Empty(frame);
+        }
 
         TEST_CASE("Native XR compositor preserves predicted protocol and reports finite renderer deadlines",
                   "[unit][xr][compositor][pacing]") {
