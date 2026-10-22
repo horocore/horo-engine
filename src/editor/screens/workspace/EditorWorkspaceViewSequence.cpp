@@ -101,6 +101,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceView::ResetSourceSession */
     void EditorWorkspaceView::ResetSourceSession() noexcept {
+        m_uiCanvasGesture.reset();
         m_sourceSession.Reset();
     }
 

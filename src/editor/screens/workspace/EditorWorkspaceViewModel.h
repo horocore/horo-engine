@@ -23,6 +23,7 @@
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
+#include "editor/ui/UiCanvasPreview.h"
 
 #include <filesystem>
 #include <memory>
@@ -98,6 +99,8 @@ namespace Horo::Editor {
         UiCanvasSave,
         UiCanvasApplyPresentation,
         UiCanvasSelectTheme,
+        UiCanvasUpdatePreview,
+        UiCanvasCommitLayout,
         UiCanvasReload,
         SaveScene,
         SaveSceneAs,
@@ -255,6 +258,9 @@ namespace Horo::Editor {
         DocumentIdentity identity;
         UiCanvasDocumentStateId state;
         Runtime::Ui::UiElementId root;
+        UiCanvasPreviewState previewState;
+        std::optional<UiCanvasPreview> preview;
+        std::optional<Error> previewDiagnostic;
         Runtime::Ui::UiElementId selection;
         std::uint64_t selectionRevision{1};
         Assets::AssetRegistryRevision inspectorAssets;
@@ -318,6 +324,8 @@ namespace Horo::Editor {
         UiCanvasDocumentStateId uiCanvasState;
         Runtime::Ui::UiElementId uiCanvasElement;
         Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
+        std::optional<UiCanvasPreviewState> uiCanvasPreviewState;
+        Runtime::Ui::UiLogicalPoint uiCanvasLayoutDelta;
         std::optional<UiCanvasMoveElement> uiCanvasMove;
         std::optional<UiCanvasSetPresentation> uiCanvasPresentation;
         std::uint64_t uiCanvasSelectionRevision{};

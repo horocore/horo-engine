@@ -2632,6 +2632,7 @@ add_executable(HoroUiCanvasDocumentTests
         unit/editor/UiInspectorDraftTests.cpp
         unit/editor/UiCanvasInspectorCommandTests.cpp
         unit/editor/UiInspectorResourcesTests.cpp
+        unit/editor/UiCanvasPreviewTests.cpp
         unit/editor/UiCanvasHierarchyTests.cpp
         unit/editor/UiCanvasDocumentTests.cpp
 )

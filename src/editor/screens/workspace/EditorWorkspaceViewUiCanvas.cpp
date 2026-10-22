@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace Horo::Editor {
     namespace {
@@ -181,6 +183,212 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Edits finite workspace controls through the shared editor design system. */
+        bool DrawPreviewControls(const EditorGuiContext &context, UiCanvasPreviewState &state) {
+            const auto label = [&](const char *key) {
+                return Text(context, key);
+            };
+            std::array<std::string, 3> deviceText{label("workspace.ui_canvas.preview.desktop"), label("workspace.ui_canvas.preview.phone"),
+                                                  label("workspace.ui_canvas.preview.tablet")};
+            std::array<const char *, 3> devices{deviceText[0].c_str(), deviceText[1].c_str(), deviceText[2].c_str()};
+            int device = static_cast<int>(state.device);
+            bool changed =
+                Ui::ComboControl("preview_device", &device, devices.data(), static_cast<int>(devices.size()), context.theme.fonts);
+            state.device = static_cast<UiCanvasPreviewDevice>(device);
+            changed |= Ui::CheckboxControl(label("workspace.ui_canvas.preview.rotate").c_str(), &state.rotated, context.theme.fonts);
+            std::array<std::string, 4> toolText{label("workspace.ui_canvas.preview.select"), label("workspace.ui_canvas.preview.move"),
+                                                label("workspace.ui_canvas.preview.resize"), label("workspace.ui_canvas.preview.anchors")};
+            std::array<const char *, 4> tools{toolText[0].c_str(), toolText[1].c_str(), toolText[2].c_str(), toolText[3].c_str()};
+            int tool = static_cast<int>(state.tool);
+            changed |= Ui::ComboControl("preview_tool", &tool, tools.data(), static_cast<int>(tools.size()), context.theme.fonts);
+            state.tool = static_cast<UiCanvasLayoutTool>(tool);
+            changed |= Ui::CheckboxControl(label("workspace.ui_canvas.preview.snap").c_str(), &state.snap, context.theme.fonts);
+            if (Ui::Button({.label = label("workspace.ui_canvas.preview.zoom_out").c_str(),
+                            .enabled = state.zoomPercent > 10,
+                            .font = context.theme.fonts.sans})) {
+                state.zoomPercent = std::max(10U, state.zoomPercent - 10);
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (Ui::Button({.label = label("workspace.ui_canvas.preview.zoom_in").c_str(),
+                            .enabled = state.zoomPercent < 800,
+                            .font = context.theme.fonts.sans})) {
+                state.zoomPercent = std::min(800U, state.zoomPercent + 10);
+                changed = true;
+            }
+            if (Ui::Button({.label = label("workspace.ui_canvas.preview.clear_guides").c_str(),
+                            .enabled = state.verticalGuideCount != 0 || state.horizontalGuideCount != 0,
+                            .font = context.theme.fonts.sans})) {
+                state.verticalGuideCount = 0;
+                state.horizontalGuideCount = 0;
+                changed = true;
+            }
+            return changed;
+        }
+
+        struct PreviewGeometry final {
+            ImVec2 origin;
+            float scale;
+        };
+
+        /** @brief Draws copied Runtime UI layout output and bounded session guides with semantic theme colors. */
+        PreviewGeometry DrawPreviewGeometry(const UiCanvasWorkspaceDocument &document, const ImVec2 start, const ImVec2 available) {
+            const auto &preview = *document.preview;
+            const auto &state = document.previewState;
+            const float padding = Theme::GetActiveTokens().spacing.propertyRowGap * 2;
+            const float pixelWidth = static_cast<float>(preview.viewport.pixelExtent.width);
+            const float pixelHeight = static_cast<float>(preview.viewport.pixelExtent.height);
+            const float fit =
+                std::max(0.001F, std::min((available.x - padding * 2) / pixelWidth, (available.y - padding * 2) / pixelHeight));
+            const float deviceScale = fit * static_cast<float>(state.zoomPercent) / 100;
+            const auto safe = preview.canvas.ContentPixelRect();
+            const float scale = deviceScale * static_cast<float>(safe.width) / static_cast<float>(preview.canvas.logicalExtent.width);
+            const ImVec2 deviceOrigin{start.x + padding + static_cast<float>(state.pan.x) * scale,
+                                      start.y + padding + static_cast<float>(state.pan.y) * scale};
+            const ImVec2 origin{deviceOrigin.x + static_cast<float>(safe.x) * deviceScale,
+                                deviceOrigin.y + static_cast<float>(safe.y) * deviceScale};
+            const float widthDip = static_cast<float>(preview.canvas.logicalExtent.width) / 64;
+            const float heightDip = static_cast<float>(preview.canvas.logicalExtent.height) / 64;
+            const auto point = [&](Runtime::Ui::UiLogicalPoint p) {
+                return ImVec2{origin.x + static_cast<float>(p.x) * scale, origin.y + static_cast<float>(p.y) * scale};
+            };
+            const auto color = ImGui::ColorConvertFloat4ToU32(Theme::Muted());
+            const auto accent = ImGui::GetColorU32(ImGuiCol_ButtonActive);
+            auto *draw = ImGui::GetWindowDrawList();
+            draw->AddRect(deviceOrigin, {deviceOrigin.x + pixelWidth * deviceScale, deviceOrigin.y + pixelHeight * deviceScale}, accent);
+            draw->AddRect(origin, {origin.x + widthDip * 64 * scale, origin.y + heightDip * 64 * scale}, color);
+            // Rulers use bounded major divisions regardless of zoom or document extent.
+            for (int i = 0; i <= 10; ++i) {
+                const float x = origin.x + widthDip * 64 * scale * static_cast<float>(i) / 10;
+                const float y = origin.y + heightDip * 64 * scale * static_cast<float>(i) / 10;
+                draw->AddLine({x, origin.y - padding}, {x, origin.y}, color);
+                draw->AddLine({origin.x - padding, y}, {origin.x, y}, color);
+            }
+            for (std::size_t i = 0; i < state.verticalGuideCount; ++i) {
+                const float x = point({state.verticalGuides[i], 0}).x;
+                draw->AddLine({x, start.y}, {x, start.y + available.y}, accent);
+            }
+            for (std::size_t i = 0; i < state.horizontalGuideCount; ++i) {
+                const float y = point({0, state.horizontalGuides[i]}).y;
+                draw->AddLine({start.x, y}, {start.x + available.x, y}, accent);
+            }
+            for (const auto &box : preview.boxes) {
+                const auto a = point(box.bounds.origin);
+                const ImVec2 b{a.x + static_cast<float>(box.bounds.extent.width) * scale,
+                               a.y + static_cast<float>(box.bounds.extent.height) * scale};
+                draw->AddRect(a, b, box.element == document.selection ? accent : color);
+            }
+            return {origin, scale};
+        }
+    }  // namespace
+
+    /** @copydoc EditorWorkspaceView::DrawUiCanvasPreview */
+    void EditorWorkspaceView::DrawUiCanvasPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const {
+        auto state = document.previewState;
+        const auto label = [&](const char *key) {
+            return Text(m_context, key);
+        };
+        const bool changed = DrawPreviewControls(m_context, state);
+        if (changed) {
+            output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
+            output.uiCanvasPreviewState = state;
+            m_uiCanvasGesture.reset();
+        }
+        if (document.previewDiagnostic || !document.preview) {
+            Ui::ErrorText(label("workspace.ui_canvas.preview.unavailable").c_str(), m_context.theme.fonts);
+            m_uiCanvasGesture.reset();
+            return;
+        }
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, label("workspace.ui_canvas.preview.hint"), Theme::Muted(), m_context.theme.fonts);
+        const auto &preview = *document.preview;
+        const float height = ImGui::GetContentRegionAvail().y * 0.45F;
+        if (height <= 0)
+            return;
+        if (!ImGui::BeginChild("canvas_preview", {0, height})) {
+            ImGui::EndChild();
+            return;
+        }
+        const auto start = ImGui::GetCursorScreenPos();
+        const auto available = ImGui::GetContentRegionAvail();
+        const auto geometry = DrawPreviewGeometry(document, start, available);
+        const auto origin = geometry.origin;
+        const float scale = geometry.scale;
+        const auto point = [&](Runtime::Ui::UiLogicalPoint p) {
+            return ImVec2{origin.x + static_cast<float>(p.x) * scale, origin.y + static_cast<float>(p.y) * scale};
+        };
+        ImGui::InvisibleButton("canvas_interaction", available);
+        const auto mouse = ImGui::GetIO().MousePos;
+        const auto logical = [&](float value) {
+            return static_cast<Runtime::Ui::UiScalar>(
+                std::clamp(std::round(value / scale), static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::min()),
+                           static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::max() / 2)));
+        };
+        if (m_uiCanvasGesture && (m_uiCanvasGesture->document != document.identity.instance || m_uiCanvasGesture->state != document.state ||
+                                  m_uiCanvasGesture->element != document.selection || m_uiCanvasGesture->preview != state ||
+                                  m_uiCanvasGesture->scale != scale || ImGui::IsKeyPressed(ImGuiKey_Escape)))
+            m_uiCanvasGesture.reset();
+        if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle) && !changed) {
+            m_uiCanvasGesture = UiCanvasGesture{document.identity.instance, document.state, document.selection, mouse, scale, state, true};
+        }
+        if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !changed) {
+            if (ImGui::GetIO().KeyShift) {
+                if (ImGui::GetIO().KeyCtrl && state.horizontalGuideCount < state.horizontalGuides.size()) {
+                    state.horizontalGuides[state.horizontalGuideCount++] = logical(mouse.y - origin.y);
+                    output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
+                    output.uiCanvasPreviewState = state;
+                } else if (!ImGui::GetIO().KeyCtrl && state.verticalGuideCount < state.verticalGuides.size()) {
+                    state.verticalGuides[state.verticalGuideCount++] = logical(mouse.x - origin.x);
+                    output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
+                    output.uiCanvasPreviewState = state;
+                }
+            } else {
+                const auto hit = std::find_if(preview.boxes.rbegin(), preview.boxes.rend(), [&](const auto &box) {
+                    const auto a = point(box.bounds.origin);
+                    return mouse.x >= a.x && mouse.y >= a.y && mouse.x <= a.x + static_cast<float>(box.bounds.extent.width) * scale &&
+                           mouse.y <= a.y + static_cast<float>(box.bounds.extent.height) * scale;
+                });
+                if (hit != preview.boxes.rend()) {
+                    if (hit->element != document.selection) {
+                        output.command = EditorWorkspaceViewCommand::UiCanvasSelect;
+                        output.uiCanvasElement = hit->element;
+                    } else if (state.tool != UiCanvasLayoutTool::Select) {
+                        m_uiCanvasGesture = UiCanvasGesture{document.identity.instance, document.state, hit->element, mouse, scale, state};
+                    }
+                }
+            }
+        }
+        if (m_uiCanvasGesture && ImGui::IsMouseReleased(m_uiCanvasGesture->pan ? ImGuiMouseButton_Middle : ImGuiMouseButton_Left)) {
+            const auto gesture = *m_uiCanvasGesture;
+            m_uiCanvasGesture.reset();
+            if (mouse.x == gesture.start.x && mouse.y == gesture.start.y) {
+                ImGui::EndChild();
+                return;
+            }
+            output.command = EditorWorkspaceViewCommand::UiCanvasCommitLayout;
+            output.uiCanvasElement = gesture.element;
+            const auto delta = [&](const float value) {
+                return static_cast<Runtime::Ui::UiScalar>(
+                    std::clamp(std::round(value / gesture.scale), static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::min() / 2),
+                               static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::max() / 2)));
+            };
+            output.uiCanvasLayoutDelta = {delta(mouse.x - gesture.start.x), delta(mouse.y - gesture.start.y)};
+            if (gesture.pan) {
+                state.pan.x = static_cast<Runtime::Ui::UiScalar>(
+                    std::clamp(static_cast<std::int64_t>(state.pan.x) + output.uiCanvasLayoutDelta.x,
+                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::min()),
+                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::max())));
+                state.pan.y = static_cast<Runtime::Ui::UiScalar>(
+                    std::clamp(static_cast<std::int64_t>(state.pan.y) + output.uiCanvasLayoutDelta.y,
+                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::min()),
+                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::max())));
+                output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
+                output.uiCanvasPreviewState = state;
+            }
+        }
+        ImGui::EndChild();
+    }
+
     /** @copydoc EditorWorkspaceView::DrawUiCanvasDocument */
     bool EditorWorkspaceView::DrawUiCanvasDocument(const EditorWorkspaceViewModel &viewModel,
                                                    EditorWorkspaceViewCommandData &outCommand) const {
@@ -189,11 +397,13 @@ namespace Horo::Editor {
         });
         if (document == viewModel.uiCanvasDocuments.end()) {
             m_uiCanvasInspector->Clear();
+            m_uiCanvasGesture.reset();
             return false;
         }
         ImGui::PushID(static_cast<int>(document->identity.instance.Value()));
         DrawToolbar(m_context, *document, outCommand);
         DrawPalette(m_context, *document, outCommand);
+        DrawUiCanvasPreview(*document, outCommand);
         const float available = ImGui::GetContentRegionAvail().x;
         const float minimumColumn = ImGui::CalcTextSize(Text(m_context, "workspace.ui_inspector.title").c_str()).x +
                                     Theme::GetActiveTokens().spacing.propertyRowGap * 2;

@@ -68,7 +68,8 @@ namespace Horo::Editor {
         }
 
         /** @brief Refresh cached authored rows and selected values only after their canonical fences change. */
-        void RefreshDocumentProjection(const UiCanvasDocument &owner, UiCanvasWorkspaceDocument &projection) {
+        void RefreshDocumentProjection(const UiCanvasDocument &owner, UiCanvasWorkspaceDocument &projection,
+                                       const UiInspectorResourceSnapshot &resources) {
             const bool sourceChanged = projection.state != owner.CurrentState();
             const bool selectionChanged = projection.selection != owner.Selection();
             if (selectionChanged && projection.selectionRevision != std::numeric_limits<std::uint64_t>::max())
@@ -87,6 +88,12 @@ namespace Horo::Editor {
                     projection.diagnostic = rows.ErrorValue();
                 }
                 projection.state = owner.CurrentState();
+            }
+            if (sourceChanged || projection.inspectorResourcePublication != resources.publication ||
+                projection.inspectorStyles != resources.StyleGeneration() || projection.inspectorTheme != resources.theme) {
+                auto preview = BuildUiCanvasPreview(owner.Document(), projection.previewState, owner.Identity().instance, &resources);
+                projection.previewDiagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
+                projection.preview = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
             }
         }
     }  // namespace
@@ -116,7 +123,7 @@ namespace Horo::Editor {
                 projections.push_back({.identity = owner.Identity()});
                 projection = projections.end() - 1;
             }
-            RefreshDocumentProjection(owner, *projection);
+            RefreshDocumentProjection(owner, *projection, resources);
             projection->inspectorAssets = resources.assets.Revision();
             projection->inspectorStyles = resources.StyleGeneration();
             projection->inspectorResourcePublication = resources.publication;
@@ -173,6 +180,38 @@ namespace Horo::Editor {
                 result = Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::AssetRegistryStale));
             else
                 result = m_uiInspectorResources->SelectTheme(command.uiCanvasTheme);
+        } else if (command.command == UiCanvasUpdatePreview) {
+            if (!command.uiCanvasPreviewState || !command.uiCanvasPreviewState->IsValid()) {
+                result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
+            } else {
+                const bool resolve = projection->previewState.device != command.uiCanvasPreviewState->device ||
+                                     projection->previewState.rotated != command.uiCanvasPreviewState->rotated;
+                projection->previewState = *command.uiCanvasPreviewState;
+                if (resolve) {
+                    auto preview =
+                        BuildUiCanvasPreview(owner->Document(), projection->previewState, owner->Identity().instance, &resources);
+                    projection->previewDiagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
+                    projection->preview = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
+                }
+            }
+        } else if (command.command == UiCanvasCommitLayout) {
+            if (!projection->preview || !projection->selectedElement || command.uiCanvasElement != owner->Selection()) {
+                result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+            } else {
+                const auto &boxes = projection->preview->boxes;
+                const auto box = std::ranges::find(boxes, owner->Selection(), &UiCanvasPreviewBox::element);
+                if (box == boxes.end()) {
+                    result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+                } else {
+                    const auto parent = std::ranges::find(boxes, projection->selectedElement->parent, &UiCanvasPreviewBox::element);
+                    const auto edit =
+                        PrepareUiCanvasLayoutGesture(*projection->selectedElement, box->bounds, command.uiCanvasLayoutDelta,
+                                                     parent == boxes.end() ? Runtime::Ui::UiLogicalExtent{} : parent->bounds.extent,
+                                                     projection->previewState);
+                    result =
+                        edit.HasError() ? Result<void>::Failure(edit.ErrorValue()) : owner->Execute(command.uiCanvasState, edit.Value());
+                }
+            }
         } else if (command.command == UiCanvasApplyPresentation) {
             if (!command.uiCanvasPresentation || projection->selectionRevision == std::numeric_limits<std::uint64_t>::max())
                 result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));

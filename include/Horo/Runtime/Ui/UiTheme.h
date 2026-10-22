@@ -40,6 +40,21 @@ namespace Horo::Runtime::Ui {
         bool visible{true}; /**< Authored hidden surfaces retain layout while producing zero-opacity paint. */
     };
 
+    /** @brief Complete copied projection from the same computed authority used by UiThemeRuntime. */
+    struct UiThemeSurfaceProjection final {
+        UiLayoutElementDescriptor layout;
+        UiDrawCommand paint;
+    };
+
+    /** @brief Projects one computed surface for isolated authoring consumers without creating another theme authority.
+     * @param snapshot Actual computed style publication. @param input Canonical source surface and selected responsive base layout.
+     * @param properties Actual property bindings for the registered vocabulary.
+     * @return Copied layout/paint projection or the original typed stale/category/invalid-layout failure; no caller data is changed.
+     */
+    [[nodiscard]] Result<UiThemeSurfaceProjection> ProjectUiThemeSurface(const UiComputedStyleSnapshot &snapshot,
+                                                                         const UiThemeSurfaceInput &input,
+                                                                         const UiThemeSurfaceProperties &properties);
+
     /** @brief Load-time capacities and exact ownership of one surface-component canvas. */
     struct UiThemeRuntimeDescriptor final {
         UiStyleResolverDescriptor style;

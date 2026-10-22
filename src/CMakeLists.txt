@@ -3010,6 +3010,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
+        editor/ui/UiCanvasPreview.cpp
         editor/ui/UiInspectorDraft.cpp
         editor/ui/UiInspectorResources.cpp
         editor/UiCanvasDocumentCommands.cpp

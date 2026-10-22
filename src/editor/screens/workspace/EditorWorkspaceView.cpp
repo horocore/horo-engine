@@ -393,6 +393,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceView::OnInputCaptureCancelled(Input::CaptureCancellationReason) noexcept {
+        m_uiCanvasGesture.reset();
         m_panelDragCapture.Release();
         m_panelDragContext.Reset();
         m_panelDragCandidateId.clear();

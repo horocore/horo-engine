@@ -88,6 +88,19 @@ namespace Horo::Editor {
         ExtensionRecoveryView m_extensionRecovery;
         const EditorGuiContext &m_context;
         mutable std::unique_ptr<UiCanvasInspectorPanel> m_uiCanvasInspector;
+
+        struct UiCanvasGesture final {
+            DocumentInstanceId document;
+            UiCanvasDocumentStateId state;
+            Runtime::Ui::UiElementId element;
+            ImVec2 start;
+            float scale{};
+            UiCanvasPreviewState preview;
+            bool pan{};
+        };
+
+        mutable std::optional<UiCanvasGesture> m_uiCanvasGesture;
+        void DrawUiCanvasPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;
         Input::InputRouter &m_inputRouter;
