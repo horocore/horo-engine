@@ -3593,6 +3593,311 @@
     },
     "workspace.navigation_inspector.rejected": {
       "text": "Navigation edits were rejected. Drafts are retained for repair."
+    },
+    "workspace.ui_canvas.undo": {
+      "text": "Undo"
+    },
+    "workspace.ui_canvas.redo": {
+      "text": "Redo"
+    },
+    "workspace.ui_canvas.reload": {
+      "text": "Reload"
+    },
+    "workspace.ui_canvas.command_failed": {
+      "text": "The canvas operation failed. Check the document state and try again."
+    },
+    "workspace.ui_canvas.search": {
+      "text": "Search element types"
+    },
+    "workspace.ui_canvas.create": {
+      "text": "Create element"
+    },
+    "workspace.ui_canvas.move_up": {
+      "text": "Move earlier"
+    },
+    "workspace.ui_canvas.move_down": {
+      "text": "Move later"
+    },
+    "workspace.ui_canvas.reparent_hint": {
+      "text": "Drag an element onto a container to move it."
+    },
+    "workspace.ui_canvas.no_results": {
+      "text": "No matching elements."
+    },
+    "workspace.ui_canvas.kind.canvas": {
+      "text": "Canvas"
+    },
+    "workspace.ui_canvas.kind.screen": {
+      "text": "Screen"
+    },
+    "workspace.ui_canvas.kind.panel": {
+      "text": "Panel"
+    },
+    "workspace.ui_canvas.kind.frame": {
+      "text": "Frame"
+    },
+    "workspace.ui_canvas.kind.layout_group": {
+      "text": "Layout Group"
+    },
+    "workspace.ui_canvas.kind.text": {
+      "text": "Text"
+    },
+    "workspace.ui_canvas.kind.image": {
+      "text": "Image"
+    },
+    "workspace.ui_canvas.kind.button": {
+      "text": "Button"
+    },
+    "workspace.ui_canvas.kind.progress_bar": {
+      "text": "Progress Bar"
+    },
+    "workspace.ui_canvas.kind.slider": {
+      "text": "Slider"
+    },
+    "workspace.ui_canvas.kind.toggle": {
+      "text": "Toggle"
+    },
+    "workspace.ui_canvas.kind.text_input": {
+      "text": "Text Input"
+    },
+    "workspace.ui_canvas.kind.scroll_view": {
+      "text": "Scroll View"
+    },
+    "workspace.ui_canvas.kind.collection_view": {
+      "text": "Collection View"
+    },
+    "workspace.ui_inspector.auto": {"text": "Auto"},
+    "workspace.ui_inspector.dip": {"text": "DIP (1/64 units)"},
+    "workspace.ui_inspector.percent": {"text": "Percent (64 = 100%)"},
+    "workspace.ui_inspector.logical_value": {"text": "Logical value (1/64 DIP)"},
+    "workspace.ui_inspector.width": {"text": "Width"},
+    "workspace.ui_inspector.height": {"text": "Height"},
+    "workspace.ui_inspector.minimum_width": {"text": "Minimum width"},
+    "workspace.ui_inspector.minimum_height": {"text": "Minimum height"},
+    "workspace.ui_inspector.maximum_width": {"text": "Maximum width"},
+    "workspace.ui_inspector.maximum_height": {"text": "Maximum height"},
+    "workspace.ui_inspector.value": {"text": "Value"},
+    "workspace.ui_inspector.weight": {"text": "Font weight"},
+    "workspace.ui_inspector.stretch": {"text": "Font stretch"},
+    "workspace.ui_inspector.font_style": {"text": "Font style (0–2)"},
+    "workspace.ui_inspector.font_size": {"text": "Font size (1/64 DIP)"},
+    "workspace.ui_inspector.line_height": {"text": "Line height (1/64 DIP)"},
+    "workspace.ui_inspector.letter_spacing": {"text": "Letter spacing (1/64 DIP)"},
+    "workspace.ui_inspector.radius": {"text": "Radius (1/64 DIP)"},
+    "workspace.ui_inspector.border_width": {"text": "Border width (1/64 DIP)"},
+    "workspace.ui_inspector.outline_width": {"text": "Outline width (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_x": {"text": "Shadow X (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_y": {"text": "Shadow Y (1/64 DIP)"},
+    "workspace.ui_inspector.shadow_blur": {"text": "Shadow blur (1/64 DIP)"},
+    "workspace.ui_inspector.duration": {"text": "Duration (microseconds)"},
+    "workspace.ui_inspector.easing": {"text": "Easing ID"},
+    "workspace.ui_inspector.red": {"text": "Linear red"},
+    "workspace.ui_inspector.green": {"text": "Linear green"},
+    "workspace.ui_inspector.blue": {"text": "Linear blue"},
+    "workspace.ui_inspector.alpha": {"text": "Alpha"},
+    "workspace.ui_inspector.color_role": {"text": "Color role"},
+    "workspace.ui_inspector.generic": {"text": "Generic"},
+    "workspace.ui_inspector.text": {"text": "Text"},
+    "workspace.ui_inspector.surface": {"text": "Surface"},
+    "workspace.ui_inspector.border": {"text": "Border"},
+    "workspace.ui_inspector.accent": {"text": "Accent"},
+    "workspace.ui_inspector.status": {"text": "Status"},
+    "workspace.ui_inspector.asset": {"text": "Asset ID"},
+    "workspace.ui_inspector.image_fit": {"text": "Image fit"},
+    "workspace.ui_inspector.stretch_fit": {"text": "Stretch"},
+    "workspace.ui_inspector.contain": {"text": "Contain"},
+    "workspace.ui_inspector.cover": {"text": "Cover"},
+    "workspace.ui_inspector.tile": {"text": "Tile"},
+    "workspace.ui_inspector.margin_left": {"text": "Margin left (1/64 DIP)"},
+    "workspace.ui_inspector.margin_top": {"text": "Margin top (1/64 DIP)"},
+    "workspace.ui_inspector.margin_right": {"text": "Margin right (1/64 DIP)"},
+    "workspace.ui_inspector.margin_bottom": {"text": "Margin bottom (1/64 DIP)"},
+    "workspace.ui_inspector.padding_left": {"text": "Padding left (1/64 DIP)"},
+    "workspace.ui_inspector.padding_top": {"text": "Padding top (1/64 DIP)"},
+    "workspace.ui_inspector.padding_right": {"text": "Padding right (1/64 DIP)"},
+    "workspace.ui_inspector.padding_bottom": {"text": "Padding bottom (1/64 DIP)"},
+    "workspace.ui_inspector.border_left": {"text": "Border left (1/64 DIP)"},
+    "workspace.ui_inspector.border_top": {"text": "Border top (1/64 DIP)"},
+    "workspace.ui_inspector.border_right": {"text": "Border right (1/64 DIP)"},
+    "workspace.ui_inspector.border_bottom": {"text": "Border bottom (1/64 DIP)"},
+    "workspace.ui_inspector.offset_left": {"text": "Offset left (1/64 DIP)"},
+    "workspace.ui_inspector.offset_top": {"text": "Offset top (1/64 DIP)"},
+    "workspace.ui_inspector.offset_right": {"text": "Offset right (1/64 DIP)"},
+    "workspace.ui_inspector.offset_bottom": {"text": "Offset bottom (1/64 DIP)"},
+    "workspace.ui_inspector.slice_left": {"text": "Nine-slice left (1/64 DIP)"},
+    "workspace.ui_inspector.slice_top": {"text": "Nine-slice top (1/64 DIP)"},
+    "workspace.ui_inspector.slice_right": {"text": "Nine-slice right (1/64 DIP)"},
+    "workspace.ui_inspector.slice_bottom": {"text": "Nine-slice bottom (1/64 DIP)"},
+    "workspace.ui_inspector.normalized_value": {"text": "Normalized value (64 = 100%)"},
+    "workspace.ui_inspector.aspect_width": {"text": "Aspect width"},
+    "workspace.ui_inspector.aspect_height": {"text": "Aspect height"},
+    "workspace.ui_inspector.pivot_x": {"text": "Pivot X (0–64)"},
+    "workspace.ui_inspector.pivot_y": {"text": "Pivot Y (0–64)"},
+    "workspace.ui_inspector.gap": {"text": "Gap (1/64 DIP)"},
+    "workspace.ui_inspector.column_count": {"text": "Column count (0–16)"},
+    "workspace.ui_inspector.row_count": {"text": "Row count (0–16)"},
+    "workspace.ui_inspector.flex_grow": {"text": "Flex grow weight"},
+    "workspace.ui_inspector.flex_shrink": {"text": "Flex shrink weight"},
+    "workspace.ui_inspector.grid_column": {"text": "Grid column (0 = auto)"},
+    "workspace.ui_inspector.grid_row": {"text": "Grid row (0 = auto)"},
+    "workspace.ui_inspector.column_span": {"text": "Column span"},
+    "workspace.ui_inspector.row_span": {"text": "Row span"},
+    "workspace.ui_inspector.start": {"text": "Start"},
+    "workspace.ui_inspector.center": {"text": "Center"},
+    "workspace.ui_inspector.end": {"text": "End"},
+    "workspace.ui_inspector.anchor_left": {"text": "Left anchor"},
+    "workspace.ui_inspector.anchor_right": {"text": "Right anchor"},
+    "workspace.ui_inspector.anchor_top": {"text": "Top anchor"},
+    "workspace.ui_inspector.anchor_bottom": {"text": "Bottom anchor"},
+    "workspace.ui_inspector.anchor_horizontal": {"text": "Horizontal anchor alignment"},
+    "workspace.ui_inspector.anchor_vertical": {"text": "Vertical anchor alignment"},
+    "workspace.ui_inspector.preserve_width": {"text": "Preserve anchored width"},
+    "workspace.ui_inspector.preserve_height": {"text": "Preserve anchored height"},
+    "workspace.ui_inspector.horizontal_alignment": {"text": "Horizontal alignment"},
+    "workspace.ui_inspector.vertical_alignment": {"text": "Vertical alignment"},
+    "workspace.ui_inspector.positioning": {"text": "Positioning"},
+    "workspace.ui_inspector.flow": {"text": "Flow"},
+    "workspace.ui_inspector.absolute": {"text": "Absolute"},
+    "workspace.ui_inspector.container_kind": {"text": "Container layout"},
+    "workspace.ui_inspector.stack": {"text": "Stack"},
+    "workspace.ui_inspector.flex": {"text": "Flex"},
+    "workspace.ui_inspector.grid": {"text": "Grid"},
+    "workspace.ui_inspector.orientation": {"text": "Orientation"},
+    "workspace.ui_inspector.horizontal": {"text": "Horizontal"},
+    "workspace.ui_inspector.vertical": {"text": "Vertical"},
+    "workspace.ui_inspector.wrap": {"text": "Wrapping"},
+    "workspace.ui_inspector.no_wrap": {"text": "No wrapping"},
+    "workspace.ui_inspector.wrap_enabled": {"text": "Wrap"},
+    "workspace.ui_inspector.main_alignment": {"text": "Main-axis distribution"},
+    "workspace.ui_inspector.cross_alignment": {"text": "Cross-axis alignment"},
+    "workspace.ui_inspector.space_between": {"text": "Space between"},
+    "workspace.ui_inspector.space_around": {"text": "Space around"},
+    "workspace.ui_inspector.space_evenly": {"text": "Space evenly"},
+    "workspace.ui_inspector.columns": {"text": "Column tracks"},
+    "workspace.ui_inspector.rows": {"text": "Row tracks"},
+    "workspace.ui_inspector.track_kind": {"text": "Track sizing"},
+    "workspace.ui_inspector.track_value": {"text": "Track value (DIP/percent = 1/64 units)"},
+    "workspace.ui_inspector.track_minimum": {"text": "Track minimum"},
+    "workspace.ui_inspector.track_maximum": {"text": "Track maximum"},
+    "workspace.ui_inspector.fraction": {"text": "Fraction weight"},
+    "workspace.ui_inspector.style_asset": {"text": "Style asset ID (optional)"},
+    "workspace.ui_inspector.type_class_asset": {"text": "Type class asset ID (optional)"},
+    "workspace.ui_inspector.type_class_id": {"text": "Type class ID (optional)"},
+    "workspace.ui_inspector.resource_resolution": {"text": "Resource references are validated against pinned project assets and the active style registry before Apply commits."},
+    "workspace.ui_inspector.classes": {"text": "Style classes"},
+    "workspace.ui_inspector.class_asset": {"text": "Class asset ID"},
+    "workspace.ui_inspector.class_id": {"text": "Class ID"},
+    "workspace.ui_inspector.remove_class": {"text": "Remove selected class"},
+    "workspace.ui_inspector.add_class": {"text": "Add class reference"},
+    "workspace.ui_inspector.intrinsic_none": {"text": "None"},
+    "workspace.ui_inspector.intrinsic_image": {"text": "Image"},
+    "workspace.ui_inspector.intrinsic_kind": {"text": "Intrinsic size source"},
+    "workspace.ui_inspector.intrinsic_required": {"text": "Require intrinsic source"},
+    "workspace.ui_inspector.fallback_width": {"text": "Fallback width (1/64 DIP)"},
+    "workspace.ui_inspector.fallback_height": {"text": "Fallback height (1/64 DIP)"},
+    "workspace.ui_inspector.overrides": {"text": "Inline style overrides"},
+    "workspace.ui_inspector.use_token": {"text": "Use style token"},
+    "workspace.ui_inspector.token_asset": {"text": "Token asset ID"},
+    "workspace.ui_inspector.token_id": {"text": "Token ID"},
+    "workspace.ui_inspector.category": {"text": "Literal value category"},
+    "workspace.ui_inspector.category_color": {"text": "Linear color"},
+    "workspace.ui_inspector.category_dimension": {"text": "Dimension"},
+    "workspace.ui_inspector.category_typography": {"text": "Typography"},
+    "workspace.ui_inspector.category_imagery": {"text": "Imagery"},
+    "workspace.ui_inspector.category_shape": {"text": "Shape"},
+    "workspace.ui_inspector.category_scalar": {"text": "Scalar"},
+    "workspace.ui_inspector.category_enum": {"text": "Enum or flags"},
+    "workspace.ui_inspector.category_motion": {"text": "Motion reference"},
+    "workspace.ui_inspector.remove_override": {"text": "Remove selected override"},
+    "workspace.ui_inspector.property_id": {"text": "New property ID"},
+    "workspace.ui_inspector.add_override": {"text": "Add override for this ID"},
+    "workspace.ui_inspector.select_element": {"text": "Select an authored element in the hierarchy to inspect its presentation."},
+    "workspace.ui_inspector.title": {"text": "UI property inspector"},
+    "workspace.ui_inspector.invalid_draft": {"text": "The draft contains invalid values. Correct them or cancel before applying."},
+    "workspace.ui_inspector.apply": {"text": "Apply inspector changes"},
+    "workspace.ui_inspector.cancel": {"text": "Cancel inspector draft"},
+    "workspace.ui_inspector.reset": {"text": "Remove presentation override"},
+    "workspace.ui_inspector.registry_unavailable": {"text": "Style editing requires an active project style registry. Layout, state and message edits remain available."},
+    "workspace.ui_inspector.state_visible": {"text": "Initially visible"},
+    "workspace.ui_inspector.state_enabled": {"text": "Initially enabled"},
+    "workspace.ui_inspector.state_focusable": {"text": "Initially focusable"},
+    "workspace.ui_inspector.initial_override": {"text": "Override initial control value"},
+    "workspace.ui_inspector.initial_checked": {"text": "Initially checked"},
+    "workspace.ui_inspector.initial_text": {"text": "Initial editable text"},
+    "workspace.ui_inspector.scalar_minimum": {"text": "Scalar minimum"},
+    "workspace.ui_inspector.scalar_maximum": {"text": "Scalar maximum"},
+    "workspace.ui_inspector.scalar_step": {"text": "Scalar step"},
+    "workspace.ui_inspector.scalar_initial": {"text": "Initial scalar value"},
+    "workspace.ui_inspector.accessibility_enabled": {"text": "Author accessibility metadata"},
+    "workspace.ui_inspector.accessibility_role": {"text": "Accessibility role"},
+    "workspace.ui_inspector.accessibility_hidden": {"text": "Hide from accessibility"},
+    "workspace.ui_inspector.accessibility_read_only": {"text": "Read-only semantics"},
+    "workspace.ui_inspector.accessibility_required": {"text": "Required semantics"},
+    "workspace.ui_inspector.accessibility_name": {"text": "Localized accessible name"},
+    "workspace.ui_inspector.accessibility_description": {"text": "Localized accessible description"},
+    "workspace.ui_inspector.localized_content": {"text": "Localized text content"},
+    "workspace.ui_inspector.message_namespace": {"text": "Game message namespace"},
+    "workspace.ui_inspector.message_key": {"text": "Semantic message key"},
+    "workspace.ui_inspector.message_fallback": {"text": "Source fallback text"},
+    "workspace.ui_inspector.failure_policy": {"text": "Missing translation policy"},
+    "workspace.ui_inspector.failure.fallback": {"text": "Use authored fallback"},
+    "workspace.ui_inspector.failure.placeholder": {"text": "Use safe placeholder"},
+    "workspace.ui_inspector.failure.required": {"text": "Require translation"},
+    "workspace.ui_inspector.argument_value": {"text": "Typed argument value"},
+    "workspace.ui_inspector.argument_enum_type": {"text": "Stable enum type ID"},
+    "workspace.ui_inspector.argument_modifiers": {"text": "Shortcut modifier bits"},
+    "workspace.ui_inspector.argument_name": {"text": "Argument name"},
+    "workspace.ui_inspector.argument_type": {"text": "Argument type"},
+    "workspace.ui_inspector.remove_argument": {"text": "Remove selected argument"},
+    "workspace.ui_inspector.add_argument": {"text": "Add typed argument"},
+    "workspace.ui_inspector.arg.integer": {"text": "Integer"},
+    "workspace.ui_inspector.arg.decimal": {"text": "Decimal"},
+    "workspace.ui_inspector.arg.boolean": {"text": "Boolean"},
+    "workspace.ui_inspector.arg.date_time": {"text": "Date/time (UTC milliseconds)"},
+    "workspace.ui_inspector.arg.duration": {"text": "Duration (milliseconds)"},
+    "workspace.ui_inspector.arg.enum": {"text": "Stable enum"},
+    "workspace.ui_inspector.arg.text": {"text": "Text"},
+    "workspace.ui_inspector.arg.shortcut": {"text": "Shortcut key"},
+    "workspace.ui_inspector.role.application": {"text": "Application"},
+    "workspace.ui_inspector.role.window": {"text": "Window"},
+    "workspace.ui_inspector.role.screen": {"text": "Screen"},
+    "workspace.ui_inspector.role.dialog": {"text": "Dialog"},
+    "workspace.ui_inspector.role.alert": {"text": "Alert"},
+    "workspace.ui_inspector.role.group": {"text": "Group"},
+    "workspace.ui_inspector.role.heading": {"text": "Heading"},
+    "workspace.ui_inspector.role.static_text": {"text": "Static text"},
+    "workspace.ui_inspector.role.button": {"text": "Button"},
+    "workspace.ui_inspector.role.toggle": {"text": "Toggle"},
+    "workspace.ui_inspector.role.checkbox": {"text": "Checkbox"},
+    "workspace.ui_inspector.role.radio": {"text": "Radio button"},
+    "workspace.ui_inspector.role.slider": {"text": "Slider"},
+    "workspace.ui_inspector.role.text_field": {"text": "Text field"},
+    "workspace.ui_inspector.role.link": {"text": "Link"},
+    "workspace.ui_inspector.role.image": {"text": "Image"},
+    "workspace.ui_inspector.role.progress": {"text": "Progress"},
+    "workspace.ui_inspector.role.list": {"text": "List"},
+    "workspace.ui_inspector.role.list_item": {"text": "List item"},
+    "workspace.ui_inspector.role.menu": {"text": "Menu"},
+    "workspace.ui_inspector.role.menu_item": {"text": "Menu item"},
+    "workspace.ui_inspector.role.tab": {"text": "Tab"},
+    "workspace.ui_inspector.role.tab_item": {"text": "Tab item"},
+    "workspace.ui_inspector.role.tree": {"text": "Tree"},
+    "workspace.ui_inspector.role.tree_item": {"text": "Tree item"},
+    "workspace.ui_inspector.role.table": {"text": "Table"},
+    "workspace.ui_inspector.role.row": {"text": "Row"},
+    "workspace.ui_inspector.role.cell": {"text": "Cell"},
+    "workspace.ui_inspector.role.scroll_view": {"text": "Scroll view"},
+    "workspace.ui_inspector.project_theme": {
+      "text": "Project style theme"
+    },
+    "workspace.ui_inspector.choose_theme": {
+      "text": "Select a registered style asset"
+    },
+    "workspace.ui_inspector.refresh_theme": {
+      "text": "Prepare / refresh selected theme"
+    },
+    "workspace.ui_inspector.preparing_theme": {
+      "text": "Preparing style assets…"
     }
   }
 }

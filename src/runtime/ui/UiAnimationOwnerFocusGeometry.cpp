@@ -36,6 +36,32 @@ namespace Horo::Runtime::Ui {
         }
     }  // namespace
 
+    /** @copydoc UiAnimationOwner::ProjectAttachmentFocus */
+    Result<void> UiAnimationOwner::ProjectAttachmentFocus(Storage &storage, const UiLayoutSnapshot &layout,
+                                                          const UiLayoutClipSnapshot *clipping,
+                                                          const std::span<UiAnimationFocusGeometry> output) {
+        const auto records = layout.Records();
+        if (output.size() != records.size() || (clipping && clipping->Records().size() != records.size()))
+            return Result<void>::Failure(MakeError(UiErrors::LayoutClipSourceStale));
+        for (std::size_t index = 0; index < records.size(); ++index) {
+            auto box = records[index].arrangement.hitTest;
+            if (clipping) {
+                if (clipping->Records()[index].element != records[index].element)
+                    return Result<void>::Failure(MakeError(UiErrors::LayoutClipSourceStale));
+                auto projected = Project(box, clipping->Records()[index], clipping->Clips());
+                if (projected.HasError())
+                    return Result<void>::Failure(projected.ErrorValue());
+                box = projected.Value();
+            }
+            const bool eligible = PreparedRouteTargetEligible(storage, records[index].element) &&
+                                  (!clipping || (box.extent.width > 0 && box.extent.height > 0));
+            if (!eligible)
+                box.extent = {};
+            output[index] = {records[index].element, box, eligible};
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiAnimationOwner::PrepareFocusGeometry */
     Result<void> UiAnimationOwner::PrepareFocusGeometry(Storage &storage) {
         auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);

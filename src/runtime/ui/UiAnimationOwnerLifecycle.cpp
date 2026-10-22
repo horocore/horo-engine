@@ -79,6 +79,17 @@ namespace Horo::Runtime::Ui {
         storage_->candidate.layout.reset();
         storage_->candidate.clipping.reset();
         storage_->candidate.source = {};
+        for (auto &entry : storage_->attachments) {
+            if (!entry)
+                continue;
+            entry->preparedLayout.reset();
+            entry->preparedClipping.reset();
+            entry->layout.Shutdown();
+            if (entry->clipping)
+                entry->clipping->Shutdown();
+        }
+        if (storage_->inspector)
+            storage_->inspector->Shutdown();
         CancelRouteValidated(*storage_, UiAnimationCancellation::Shutdown);
         storage_->publisher.Shutdown();
         if (storage_->resolver.State() == UiStyleResolverState::Active)
@@ -166,6 +177,13 @@ namespace Horo::Runtime::Ui {
             owner_->candidate.admitted = false;
             UiAnimationOwner::AbandonControlSources(*owner_);
             owner_->candidate.styles.reset();
+            for (auto &entry : owner_->attachments) {
+                if (!entry)
+                    continue;
+                entry->preparedClipping.reset();
+                entry->preparedLayout.reset();
+                entry->selection.reset();
+            }
             owner_->candidate.layout.reset();
             owner_->candidate.clipping.reset();
             owner_->candidate.source = {};

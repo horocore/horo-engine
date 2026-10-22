@@ -52,7 +52,8 @@ namespace Horo::Runtime::Ui {
         const auto *canvas = replacement.Canvas(definition.canvas);
         if (!canvas || !canvas->tree.WasIssuedBy(allocator))
             return Result<std::shared_ptr<Storage>>::Failure(MakeError(UiErrors::AnimationTargetStale));
-        auto reserved = allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + source.limits.timelines);
+        auto reserved =
+            allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + source.limits.timelines + MaximumUiAnimationAttachments);
         if (reserved.HasError())
             return Result<std::shared_ptr<Storage>>::Failure(reserved.ErrorValue());
         try {

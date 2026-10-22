@@ -352,8 +352,12 @@ deterministic aspect/form-factor/input/split-view selection and neutral fallback
 It owns that decision's limits, per-attachment publication, errors and source/cook
 migration; this document does not duplicate its selector or precedence rules.
 Profiles preserve the existing semantic tree and ownership and supply effective
-layout styles to the ordinary layout engine. The proposal does not claim profile
-selection or the complete RuntimeUiService is implemented on current main.
+layout styles to the ordinary layout engine. The bounded `UiAnimationOwner` implementation
+admits document profile tables, applies attachment-local bases before computed
+property bindings, and publishes geometry under one primary interaction reservation.
+The proposal and ADR status remain Proposed; this does not imply the complete
+RuntimeUiService exists. See the [implementation and migration guide](../../guides/runtime-ui-layout-inspection.md)
+for source 1.4/cooked 4, legacy neutral decoding, immutable inspection and host lifecycle.
 
 ## Element Tree And Layout
 
@@ -841,6 +845,85 @@ state, and old computed styles/dependencies remain leased until old frames retir
 HoroEditor authors and previews these assets through an isolated runtime adapter;
 its own design-system theme is never a runtime inheritance source.
 
+## Runtime Style Source And Cook Contract
+
+`UiStyleAssetDocument` is the inert `.uistyle` source contract, registered as
+`core.ui_style` through the ordinary committed `.horo` identity/type sidecar.
+Source schema 1 has exactly `format: horo.ui_style`, `schemaVersion`, `asset`,
+`revision`, `defaults`, `style` and `dependencies`. The namespace's `asset` equals
+the sidecar `AssetId` in all 16 bytes. Base namespaces, class/token references and
+resource identities keep their complete typed IDs. No file path, display name,
+truncated hash, editor theme or source object position supplies an identity.
+
+The single core provider owns stable property IDs, categories, effects,
+inheritance, ranges and default rules. It is invoked explicitly by the host;
+style asset content cannot register schemas or services. Core IDs use the published
+UUID namespace `8dc94e71-7a69-4ce1-a212-953e6354b8xx`, with these assigned suffixes:
+
+| Property | Suffix | Category |
+| --- | --- | --- |
+| Width | 01 | Dimension |
+| Height | 02 | Dimension |
+| Padding | 03 | Dimension |
+| Fill | 04 | Color |
+| Opacity | 05 | Scalar, 0 through 1 |
+| Typography | 06 | Typography |
+| Image | 07 | Imagery |
+| Shape | 08 | Shape |
+| ImageFit | 09 | Enum, Stretch through Tile |
+| Motion | 0a | Motion |
+
+One explicitly selected root supplies optional typed font/image default **values**
+for the whole candidate. Other namespaces may omit defaults or repeat those exact
+values; conflicting policies fail rather than merging by file order. Resource
+properties are registered only with actual valid defaults and verified typed
+resource evidence. Missing defaults omit those resource categories while ordinary
+width/fill/opacity remain usable. No synthetic resource ID or first-asset fallback
+is supplied. `UiStylePropertyDescriptor::maximumEnumValue` enforces closed core
+enums at the same generic resolver/assignment boundary; its default preserves
+existing unrestricted flag descriptors.
+
+The provider fingerprint binds its version, exact property rules/defaults and
+sorted typed resource identities plus verified complete cooked-envelope digests.
+Generic Assets first prepares required resources, then the style contribution
+uses those exact envelopes and one fingerprint to validate the namespace closure
+through `RuntimeStyleRegistry::Create`. Missing cookers or required resources are
+explicit preparation failures; an inspector does not replace another domain's
+semantic cooker with opaque bytes. Namespace dependencies must be declared; cycles,
+unknown references, mismatched categories, sealed/state rules and invalid values
+remain Style-domain failures.
+
+Cooked style payload 1 has the 8-byte `HUISTYLE` signature, a little-endian 32-bit
+version (1), the 32 raw provider-fingerprint bytes, then canonical bounded UTF-8
+semantic fields (`asset`, `revision`, `defaults`, `style`, `dependencies`). It does
+not admit the source-format envelope or fall back to source files. Token/class
+sets and dependencies are sorted by stable ID; authored assignment/state ordering
+is retained. The generic `AssetCookArtifact` envelope remains version 1. Fresh
+cook, cache reuse and provider loading validate identity/type/target, integrity,
+provider fingerprint, complete dependencies and domain semantics before adoption.
+Unknown/missing/duplicate fields or IDs, malformed/unsupported versions, noncanonical
+cooked encoding, over 4 MiB per source/payload, over 4,096 declarations per namespace,
+or existing Style-domain capacity violations fail closed. This is an additive
+format; there is no prior style source format to migrate. Existing canvas/source
+and generic asset-envelope formats are unchanged.
+
+`HoroUiStyleWorkspaceApplication` prepares a private candidate through real Assets
+capture/catalog/cook/cache/publication and manifest-verified provider loading.
+The selected namespace, workspace incarnation, monotonic request/generation,
+original Assets revision and pinned manifest travel with the candidate. The host
+source lease encloses capture through owner-thread adoption, then is released
+separately from immutable cooked resource leases. Cancellation, drift, failure or
+late completion publishes no inspector capability and retains last-good leases.
+Deletion closes admission through actual registry revisions. Shutdown cancels and
+joins accepted work before borrowed services are destroyed.
+
+Workspace selection is explicit session policy over real registered style assets
+and is available before an active theme. Preparation runs as owned tooling work;
+normal controller polling and inspector drawing perform no filesystem/cook work.
+The executable composes native services; the GUI only edits canonical values and
+submits fenced commands. `headless-null` is the explicit validation cook target,
+not a renderer choice or proof of qualification for a native game target.
+
 ## Animation Clock And Time Domains
 
 [ADR-077](../../adr/077-runtime-ui-animation-clock-and-time-domain.md) replaces raw
@@ -1273,6 +1356,10 @@ The editor authoring UI uses HoroEditor panel/modal systems, but edited content
 remains runtime UI data. Preview creates an isolated ordinary game runtime and
 ADR-073 scopes/attachments. Preview/play mutations apply back only through an
 explicit document-revision-checked editor command with undo.
+
+The implemented retained hierarchy, descriptor palette, revision-checked canvas
+commands and typed layout/style source migration are described in
+[UI Canvas hierarchy and typed presentation](../../guides/ui-canvas-hierarchy-migration.md).
 
 ## Core Vs Package Boundary
 

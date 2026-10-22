@@ -122,6 +122,23 @@ namespace Horo::Runtime {
          * @return Exact frame or typed no-publication/lifecycle failure.
          */
         [[nodiscard]] Result<Ui::UiAnimationFrameLease> Acquire() const;
+        /** @copydoc Ui::UiAnimationOwner::PrimaryAttachment */
+        [[nodiscard]] Ui::UiPresentationAttachmentId PrimaryAttachment() const noexcept;
+        /** @copydoc Ui::UiAnimationOwner::Attach */
+        [[nodiscard]] Result<Ui::UiPresentationAttachmentId> Attach(Ui::UiRenderViewId view, Ui::UiAnimationViewport viewport);
+        /** @copydoc Ui::UiAnimationOwner::UpdateAttachment */
+        [[nodiscard]] Result<void> UpdateAttachment(Ui::UiPresentationAttachmentId attachment, Ui::UiAnimationViewport viewport);
+        /** @copydoc Ui::UiAnimationOwner::Detach */
+        [[nodiscard]] Result<void> Detach(Ui::UiPresentationAttachmentId attachment);
+        /** @brief Admits explicit resolved primary viewport/evidence outside an active phase reservation.
+         * @param viewport Complete typed application facts. @return Admission or typed malformed/lifecycle failure.
+         */
+        [[nodiscard]] Result<void> SetViewport(Ui::UiAnimationViewport viewport);
+        /** @copydoc Ui::UiAnimationOwner::ConfigureInspection */
+        [[nodiscard]] Result<void> ConfigureInspection(Ui::UiPresentationAttachmentId attachment, Ui::UiLayoutInspectorLimits limits,
+                                                       bool enabled);
+        /** @copydoc Ui::UiAnimationOwner::Inspect */
+        [[nodiscard]] std::optional<Ui::UiLayoutInspectionSnapshot> Inspect() const noexcept;
         /** @brief Applies real load-time asset reconciliation outside scheduler dispatch and invalidates old controllers.
          * @param replacement Detached actual cooked replacement. @param allocator Its sole actual tree issuer.
          * @param registry New owned schema. @param styles New style resolver. @param definition New inert authored declarations.

@@ -32,6 +32,8 @@ namespace Horo::Runtime::Ui::ReloadTests {
                             .HasValue());
             }
             REQUIRE(builder.AddRoute(layer.route).HasValue());
+            for (const auto &profiles : layer.profiles)
+                REQUIRE(builder.AddPresentationProfiles(profiles).HasValue());
             auto document = std::move(builder).Build();
             REQUIRE(document.HasValue());
             const auto cooked = CookedUiDocument::Cook(document.Value());

@@ -1,5 +1,8 @@
 #include "editor/UiCanvasDocumentSerialization.h"
 
+#include "Horo/Runtime/Ui/UiDocumentSerialization.h"
+#include "JsonUtils.h"
+
 #include <array>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -12,17 +15,6 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
 
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, std::string message = {}) {
             return Result<T>::Failure(MakeError(descriptor, std::move(message)));
-        }
-
-        [[nodiscard]] std::string EncodeUiId(const Runtime::Ui::SerializedUiId &bytes) {
-            constexpr std::array<char, 16> Hex{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
-            std::string result;
-            result.reserve(bytes.size() * 2U);
-            for (const std::uint8_t byte : bytes) {
-                result.push_back(Hex[byte >> 4U]);
-                result.push_back(Hex[byte & 0x0fU]);
-            }
-            return result;
         }
 
         [[nodiscard]] std::optional<Runtime::Ui::SerializedUiId> DecodeUiId(const std::string_view text) {
@@ -156,72 +148,13 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
             return Result<Runtime::Ui::UiCanvasPresentationPolicy>::Success(presentation);
         }
 
-        [[nodiscard]] std::string RenderModeText(const Runtime::Ui::UiRenderMode mode) {
-            using enum Runtime::Ui::UiRenderMode;
-            switch (mode) {
-                case ScreenSpaceOverlay:
-                    return "screen_space_overlay";
-                case ScreenSpaceCamera:
-                    return "screen_space_camera";
-                case WorldSpace:
-                    return "world_space";
-            }
-            return {};
-        }
-
-        [[nodiscard]] std::string ScaleModeText(const Runtime::Ui::UiScaleMode mode) {
-            using enum Runtime::Ui::UiScaleMode;
-            switch (mode) {
-                case ScaleWithScreenSize:
-                    return "scale_with_screen_size";
-                case ConstantPixelSize:
-                    return "constant_pixel_size";
-                case ConstantPhysicalSize:
-                    return "constant_physical_size";
-            }
-            return {};
-        }
-
-        [[nodiscard]] std::string SafeAreaModeText(const Runtime::Ui::UiSafeAreaMode mode) {
-            using enum Runtime::Ui::UiSafeAreaMode;
-            switch (mode) {
-                case Ignore:
-                    return "ignore";
-                case Inset:
-                    return "inset";
-            }
-            return {};
-        }
-
-        [[nodiscard]] std::string PixelSnapModeText(const Runtime::Ui::UiPixelSnapMode mode) {
-            using enum Runtime::Ui::UiPixelSnapMode;
-            switch (mode) {
-                case Disabled:
-                    return "disabled";
-                case Edges:
-                    return "edges";
-            }
-            return {};
-        }
-
-        [[nodiscard]] Json EncodeScaleFactor(const Runtime::Ui::UiCanvasScaleFactor &factor) {
-            return Json{{"numerator", factor.numerator}, {"denominator", factor.denominator}};
-        }
-
-        [[nodiscard]] Json EncodePresentation(const Runtime::Ui::UiCanvasPresentationPolicy &presentation) {
-            return Json{{"safeArea", SafeAreaModeText(presentation.safeArea)},
-                        {"uiScale", EncodeScaleFactor(presentation.uiScale)},
-                        {"fontScale", EncodeScaleFactor(presentation.fontScale)},
-                        {"pixelSnap", PixelSnapModeText(presentation.pixelSnap)}};
-        }
-
         /** @brief Validates the required top-level UI Canvas fields and format version. */
         [[nodiscard]] Result<void> ValidateDocumentEnvelope(const Json &root) {
             if (!root.is_object() || root.value("format", "") != DocumentFormat)
                 return Failure(UiCanvasDocumentErrors::Malformed, "UI Canvas document format is invalid.");
             if (!root.contains("formatVersion") || !root["formatVersion"].is_number_unsigned())
                 return Failure(UiCanvasDocumentErrors::Malformed, "UI Canvas format version is missing.");
-            if (root["formatVersion"].get<std::uint64_t>() != UiCanvasDocumentFormatVersion)
+            if (root["formatVersion"].get<std::uint64_t>() != 1)
                 return Failure(UiCanvasDocumentErrors::UnsupportedVersion, "UI Canvas format version is not supported by this editor.");
             if (!root.contains("documentId") || !root.contains("revision") || !root.contains("canvases") ||
                 !root.contains("dependencies") || !root["canvases"].is_array() || !root["dependencies"].is_array())
@@ -327,46 +260,35 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
             return built;
         }
 
-        [[nodiscard]] Json SerializeDocument(const Runtime::Ui::UiDocument &document) {
-            Json canvases = Json::array();
-            for (const Runtime::Ui::UiCanvasDescriptor &canvas : document.Canvases()) {
-                canvases.push_back({
-                    {"id", EncodeUiId(canvas.id.Bytes())},
-                    {"rootElement", EncodeUiId(canvas.rootElement.Bytes())},
-                    {"renderMode", RenderModeText(canvas.renderMode)},
-                    {"referenceResolution", {{"width", canvas.referenceResolution.width}, {"height", canvas.referenceResolution.height}}},
-                    {"scaleMode", ScaleModeText(canvas.scaleMode)},
-                    {"presentation", EncodePresentation(canvas.presentation)},
-                });
-            }
-            Json dependencies = Json::array();
-            for (const Runtime::Ui::UiAssetDependency &dependency : document.Dependencies()) {
-                dependencies.push_back({
-                    {"asset", dependency.asset.ToString()},
-                    {"expectedType", dependency.expectedType.Value()},
-                    {"required", dependency.required},
-                });
-            }
-            return Json{
-                {"format", DocumentFormat},
-                {"formatVersion", UiCanvasDocumentFormatVersion},
-                {"documentId", EncodeUiId(document.Id().Bytes())},
-                {"revision", document.Revision().Value()},
-                {"canvases", std::move(canvases)},
-                {"dependencies", std::move(dependencies)},
-            };
-        }
     }  // namespace
 
     Result<Runtime::Ui::UiDocument> Parse(const std::string_view contents) {
         try {
-            return ParseDocument(Json::parse(contents));
+            if (contents.size() > MaximumUiCanvasDocumentBytes)
+                return Failure<Runtime::Ui::UiDocument>(UiCanvasDocumentErrors::Malformed);
+            Horo::Foundation::JsonParseGuard guard{64};
+            const Json root = guard.Parse(contents.begin(), contents.end());
+            if (guard.HasDuplicate() || guard.IsTooDeep() || root.is_discarded())
+                return Failure<Runtime::Ui::UiDocument>(UiCanvasDocumentErrors::Malformed);
+            if (root.is_object() && root.value("format", "") == DocumentFormat && root.contains("formatVersion") &&
+                root["formatVersion"].is_number_unsigned() && root["formatVersion"].get<std::uint64_t>() == UiCanvasDocumentFormatVersion) {
+                if (root.size() != 3 || !root.contains("document") || !root["document"].is_object())
+                    return Failure<Runtime::Ui::UiDocument>(UiCanvasDocumentErrors::Malformed);
+                return Runtime::Ui::DeserializeUiDocument(root["document"].dump());
+            }
+            return ParseDocument(root);
         } catch (const Json::exception &exception) {
             return Failure<Runtime::Ui::UiDocument>(UiCanvasDocumentErrors::Malformed, exception.what());
         }
     }
 
-    std::string Serialize(const Runtime::Ui::UiDocument &document) {
-        return SerializeDocument(document).dump(2) + '\n';
+    Result<std::string> Serialize(const Runtime::Ui::UiDocument &document) {
+        auto encoded = Runtime::Ui::SerializeUiDocument(document);
+        if (encoded.HasError())
+            return Result<std::string>::Failure(encoded.ErrorValue());
+        return Result<std::string>::Success(
+            Json{{"format", DocumentFormat}, {"formatVersion", UiCanvasDocumentFormatVersion}, {"document", Json::parse(encoded.Value())}}
+                .dump(2) +
+            '\n');
     }
 }  // namespace Horo::Editor::UiCanvasDocumentSerialization

@@ -108,6 +108,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 static_cast<void>(packages_.pump(std::filesystem::path{model.projectRoot}, boundary));
             }
             controller_->UpdateNavigationSettingsProjection();
+            controller_->UpdateUiCanvasResources();
             controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
             controller_->UpdateExternalSceneWatch(dt);
             controller_->UpdateGameplaySources(dt);

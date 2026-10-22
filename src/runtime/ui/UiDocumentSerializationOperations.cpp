@@ -1,5 +1,6 @@
 #include "JsonUtils.h"
 #include "UiDocumentSerializationInternal.h"
+#include "UiPresentationProfileCodec.h"
 
 #include <memory>
 #include <new>
@@ -160,6 +161,7 @@ namespace Horo::Runtime::Ui {
             const Internal::Json *localizedAssets;
             const Internal::Json *dependencies;
             const Internal::Json *routes;
+            const Internal::Json *profiles;
         };
 
         [[nodiscard]] Result<UiDocumentSchemaVersion> DecodeSchemaVersion(const Internal::Json &value) {
@@ -199,7 +201,7 @@ namespace Horo::Runtime::Ui {
             if (!Horo::Foundation::HasAllowedFields(root,
                                                     {"schemaVersion", "documentId", "revision", "canvases", "elements", "dependencies",
                                                      "routes"},
-                                                    {"localizedTexts", "localizedAssets"}))
+                                                    {"localizedTexts", "localizedAssets", "presentationProfiles"}))
                 return Failed<DocumentSections>(UiErrors::DocumentSerializationInvalid, "Runtime UI document fields are not canonical.");
             auto version = DecodeSchemaVersion(root.at("schemaVersion"));
             if (version.HasError())
@@ -217,10 +219,13 @@ namespace Horo::Runtime::Ui {
             const auto &localizedAssets = root.contains("localizedAssets") ? root.at("localizedAssets") : emptyArray;
             const auto &dependencies = root.at("dependencies");
             const auto &routes = root.at("routes");
+            const auto &profiles = root.contains("presentationProfiles") ? root.at("presentationProfiles") : emptyArray;
+            if (version.Value() < UiDocumentSchemaVersion{1, 4} && !profiles.empty())
+                return Failed<DocumentSections>(UiErrors::DocumentSchemaUnsupported);
             if (!HasValidDocumentArrays(canvases, elements, localizedTexts, localizedAssets, dependencies, routes, limits))
                 return Failed<DocumentSections>(UiErrors::DocumentPayloadTooLarge);
             return Result<DocumentSections>::Success({version.Value(), id.Value(), typedRevision.Value(), &canvases, &elements,
-                                                      &localizedTexts, &localizedAssets, &dependencies, &routes});
+                                                      &localizedTexts, &localizedAssets, &dependencies, &routes, &profiles});
         }
 
         [[nodiscard]] Result<UiDocument> CloneDocument(const UiDocument &source, const UiDocumentSchemaVersion schemaVersion,
@@ -238,6 +243,9 @@ namespace Horo::Runtime::Ui {
                 return Result<UiDocument>::Failure(result.ErrorValue());
             if (auto result = CopyRoutes(builder, source.Routes()); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
+            for (const auto &profiles : source.PresentationProfiles())
+                if (auto added = builder.AddPresentationProfiles(profiles); added.HasError())
+                    return Result<UiDocument>::Failure(added.ErrorValue());
             auto cloned = std::move(builder).Build();
             if (cloned.HasError())
                 return cloned;
@@ -264,6 +272,12 @@ namespace Horo::Runtime::Ui {
                 return Result<UiDocument>::Failure(result.ErrorValue());
             if (auto result = AppendRoutes(builder, *content.routes, limits); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
+            auto profiles = ProfileCodec::Decode(*content.profiles);
+            if (profiles.HasError())
+                return Result<UiDocument>::Failure(profiles.ErrorValue());
+            for (auto &table : profiles.Value())
+                if (auto added = builder.AddPresentationProfiles(std::move(table)); added.HasError())
+                    return Result<UiDocument>::Failure(added.ErrorValue());
             return std::move(builder).Build();
         }
 
@@ -344,6 +358,8 @@ namespace Horo::Runtime::Ui {
                 root.at("dependencies").push_back(Internal::EncodeDependency(dependency));
             for (const auto &route : document.Routes())
                 root.at("routes").push_back(Internal::EncodeRoute(route));
+            if (document.SchemaVersion() >= UiDocumentSchemaVersion{1, 4})
+                root["presentationProfiles"] = ProfileCodec::Encode(document.PresentationProfiles());
             return root;
         }
     }  // namespace

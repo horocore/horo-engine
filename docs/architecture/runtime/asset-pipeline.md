@@ -676,6 +676,17 @@ provides a typed renderer capability contract that the host validates and
 activates. No renderer is the base, default, or fallback for another, and an
 unavailable target is a typed error rather than an implicit substitution.
 
+### Runtime UI Style Domain Bridge
+
+`core.ui_style` uses the ordinary source/sidecar capture, immutable cooker catalog,
+resource-before-dependent phase, cache, generation manifest and byte-provider
+contracts. `HoroUiStyleWorkspaceApplication` composes those generic services with
+Runtime UI's canonical `.uistyle` serializer/cooker and semantic validator.
+`HoroAssets` does not interpret style properties, tokens, classes, defaults or
+state precedence. Fresh/cache/load admission binds one host-owned provider/default
+fingerprint and actual resource-envelope digests. The style contract and its
+migration/limits are defined in [Runtime UI](game-ui-and-hud.md#runtime-style-source-and-cook-contract).
+
 ### Modular Cooker Catalog
 
 The canonical host-owned authority invariant is: the host owns bounded immutable

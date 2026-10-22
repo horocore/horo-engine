@@ -273,6 +273,8 @@ namespace Horo::Runtime::Ui {
         friend class UiStyleResolver;
         friend class UiLayoutEngine;
         friend class UiLayoutClipEngine;
+        friend class UiPresentationProfileTable;
+        friend class UiLayoutInspector;
         struct Storage;
         /** @brief Pins the actual issuer of this burned range for same-target publication admission. */
         [[nodiscard]] std::shared_ptr<const void> IssuerPin() const noexcept;

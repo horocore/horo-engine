@@ -717,9 +717,20 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
+        runtime/ui/UiElementPresentation.cpp
+        runtime/ui/UiElementAuthoringProjection.cpp
+        runtime/ui/UiStyleAssetValidation.cpp
+        runtime/ui/UiStyleAssetCodec.cpp
+        runtime/ui/UiCoreStyleSchema.cpp
+        runtime/ui/UiElementPresentationCodec.cpp
+        runtime/ui/UiElementAuthoringCodec.cpp
+        runtime/ui/UiElementCatalog.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiRuntimeInstance.cpp
         runtime/ui/UiDocumentCook.cpp
+        runtime/ui/UiPresentationProfiles.cpp
+        runtime/ui/UiPresentationProfileCodec.cpp
+        runtime/ui/UiLayoutInspector.cpp
         runtime/ui/UiAssetLoading.cpp
         runtime/ui/UiAssetLoadingService.cpp
         runtime/ui/UiDocumentSerialization.cpp
@@ -810,6 +821,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAnimationOwnerClocks.cpp
         runtime/ui/UiAnimationOwnerFocusGeometry.cpp
         runtime/ui/UiAnimationOwnerPreparation.cpp
+        runtime/ui/UiAnimationOwnerAttachments.cpp
         runtime/ui/UiAnimationOwnerSampling.cpp
         runtime/ui/UiAnimationOwnerPresentation.cpp
         runtime/ui/UiAnimationOwnerPublication.cpp
@@ -3127,6 +3139,9 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
+        editor/ui/UiInspectorDraft.cpp
+        editor/ui/UiInspectorResources.cpp
+        editor/UiCanvasDocumentCommands.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
@@ -3216,6 +3231,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::Input
         HoroEngine::ProjectMigrations
         PRIVATE
+        HoroFoundationJsonInternal
         HoroEditorPlaySceneHostInternal
         HoroEngine::ProjectAssetRegistrySource
         HoroEngine::PlatformProjectReadFiles
@@ -3226,6 +3242,11 @@ target_link_libraries(HoroEditorServices
 if (TARGET HoroBuildInfo)
     add_dependencies(HoroEditorServices HoroBuildInfo)
 endif ()
+
+# Non-installed narrow inspector draft/command seam shared with GUI and contract tests.
+add_library(HoroUiInspectorInternal INTERFACE)
+target_include_directories(HoroUiInspectorInternal INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/editor/ui)
+target_link_libraries(HoroUiInspectorInternal INTERFACE HoroEngine::EditorServices)
 
 add_library(HoroEditorPresentationSurfaceInternal STATIC
         editor/renderer/surface/EditorPresentationSurface.cpp
@@ -3442,6 +3463,11 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.cpp
+            editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.cpp
+            editor/screens/workspace/EditorWorkspaceViewUiCanvas.cpp
+            editor/screens/workspace/EditorWorkspaceControllerUiCanvas.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldStreaming.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldBake.cpp
@@ -3482,6 +3508,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
+    target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
 
     target_compile_features(HoroGui PUBLIC cxx_std_20)
     target_include_directories(HoroGui
@@ -3759,5 +3786,16 @@ add_library(HoroEngine::PhysicsTriggerVolumeHost ALIAS HoroPhysicsTriggerVolumeH
 target_compile_features(HoroPhysicsTriggerVolumeHost PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsTriggerVolumeHost PUBLIC HoroEngine::ProjectPhysicsCapture HoroEngine::PrefabCookHost
         HoroEngine::PhysicsSceneIntegration HoroEngine::SceneRuntimeConversion)
+
+# Explicit Assets/RuntimeUi tooling bridge; generic Application has no reverse Runtime dependency.
+add_library(HoroUiStyleWorkspaceApplication STATIC
+        application/ui/UiStyleCook.cpp
+        application/ui/UiStyleWorkspace.cpp
+        application/ui/UiStyleWorkspaceCapture.cpp
+        application/ui/UiStyleWorkspaceLoad.cpp
+        application/ui/UiStyleWorkspaceProducer.cpp)
+add_library(HoroEngine::UiStyleWorkspaceApplication ALIAS HoroUiStyleWorkspaceApplication)
+target_compile_features(HoroUiStyleWorkspaceApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroUiStyleWorkspaceApplication PUBLIC HoroEngine::RuntimeUi HoroEngine::Assets)
 
 include(HoroPublicHeaderOwnership)

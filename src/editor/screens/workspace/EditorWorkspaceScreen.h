@@ -14,6 +14,7 @@
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/ProjectOpenService.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -173,7 +174,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         /** @brief Creates the controller under the uncommitted project activation lease. */
         Result<void> InitializeController(const std::filesystem::path &projectRoot);
         /** @brief Binds admitted read and preview owners to the controller's borrowed host services. */
-        EditorWorkspaceDependencies BindControllerDependencies(const std::filesystem::path &projectRoot, WorkspaceReadSources &&sources,
+        EditorWorkspaceDependencies BindControllerDependencies(const std::filesystem::path &projectRoot,
+                                                               UiInspectorResources *uiInspectorResources, WorkspaceReadSources &&sources,
                                                                PCGEditorCatalog &&catalog, PCGPreviewInputs &&previewInputs) const;
         /** @brief Keeps native dialog input ownership through scene publication. */
         bool SaveSceneAs(const bool copyOnly);
@@ -217,6 +219,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         WorkspacePanelServices panelServices_{};
         WorkspaceProjectServices projectServices_{};
         WorkspacePublishedRevisions publishedRevisions_{};
+        std::unique_ptr<UiInspectorResources> uiInspectorResources_;
         std::unique_ptr<EditorWorkspaceController> controller_;
         mutable WorkspaceLeaveCapture leaveCapture_;
         std::unique_ptr<EditorSnackbarHost> snackbarHost_;

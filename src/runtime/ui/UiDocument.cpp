@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiDocument.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Runtime/Ui/UiElementCatalog.h"
 #include "UiAssetDependencyInternal.h"
 
 #include <algorithm>
@@ -286,6 +287,10 @@ namespace Horo::Runtime::Ui {
             if (!element.id.IsValid() || element.type.Value().empty() || element.properties.size() > MaximumUiDocumentProperties ||
                 element.references.size() > MaximumUiDocumentReferences)
                 return Failure(UiErrors::DocumentSerializationInvalid);
+            if (element.presentation && (!element.presentation->IsValid() || !element.properties.empty()))
+                return Failure(UiErrors::DocumentSerializationInvalid);
+            if (auto result = ValidateCoreUiElement(element); result.HasError())
+                return result;
             if (auto result = ValidateElementProperties(element); result.HasError())
                 return result;
             return ValidateElementReferences(element, canvases, elements, dependencies);
@@ -299,6 +304,12 @@ namespace Horo::Runtime::Ui {
                 for (std::size_t previous = 0; previous < index; ++previous)
                     if (elements[previous].id == element.id)
                         return Failure(UiErrors::DocumentDuplicateIdentity);
+                if (element.parent.IsValid()) {
+                    const auto parent = std::ranges::find(elements, element.parent, &UiDocumentElement::id);
+                    const auto *descriptor = parent == elements.end() ? nullptr : UiElementCatalog::Find(parent->type.Value());
+                    if (descriptor && !descriptor->admitsChildren)
+                        return Failure(UiErrors::DocumentHierarchyInvalid);
+                }
                 if (auto result = ValidateElement(element, canvases, elements, dependencies); result.HasError())
                     return result;
             }
@@ -325,6 +336,14 @@ namespace Horo::Runtime::Ui {
             if (auto result = ValidateDocumentEnvelope(schemaVersion, id, revision, canvases, elements, dependencies, routes);
                 result.HasError())
                 return result;
+            if (schemaVersion.minor < 3 && std::ranges::any_of(elements, [](const auto &element) {
+                return element.presentation && element.presentation->UsesAuthoringExtensions();
+            }))
+                return Failure(UiErrors::DocumentSchemaUnsupported);
+            if (schemaVersion.minor < 2 && std::ranges::any_of(elements, [](const auto &element) {
+                return element.presentation.has_value();
+            }))
+                return Failure(UiErrors::DocumentSchemaUnsupported);
             if (auto result = ValidateCanvases(canvases); result.HasError())
                 return result;
             if (auto result = ValidateDependencies(dependencies); result.HasError())
@@ -347,6 +366,7 @@ namespace Horo::Runtime::Ui {
         std::vector<UiLocalizedAssetReference> localizedAssets;
         std::vector<UiAssetDependency> dependencies;
         std::vector<UiRouteMetadata> routes;
+        std::vector<UiDocumentPresentationProfiles> profiles;
     };
 
     /** @copydoc UiDocument::UiDocument */
@@ -354,7 +374,7 @@ namespace Horo::Runtime::Ui {
         : schemaVersion_(state.schemaVersion), id_(state.id), revision_(state.revision), canvases_(std::move(state.canvases)),
           elements_(std::move(state.elements)), localizedTexts_(std::move(state.localizedTexts)),
           localizedAssets_(std::move(state.localizedAssets)), dependencies_(std::move(state.dependencies)),
-          routes_(std::move(state.routes)) {}
+          routes_(std::move(state.routes)), profiles_(std::move(state.profiles)) {}
 
     /** @copydoc UiDocument::SchemaVersion */
     UiDocumentSchemaVersion UiDocument::SchemaVersion() const noexcept {
@@ -399,6 +419,47 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiDocument::Routes */
     std::span<const UiRouteMetadata> UiDocument::Routes() const noexcept {
         return routes_;
+    }
+
+    /** @copydoc UiDocument::PresentationProfiles */
+    std::span<const UiDocumentPresentationProfiles> UiDocument::PresentationProfiles() const noexcept {
+        return profiles_;
+    }
+
+    /** @copydoc UiDocumentBuilder::AddPresentationProfiles */
+    Result<void> UiDocumentBuilder::AddPresentationProfiles(UiDocumentPresentationProfiles profiles) {
+        if (!profiles.canvas.IsValid() || !profiles.revision.IsValid())
+            return Failure(UiErrors::PresentationProfileMalformed);
+        if (schemaVersion_ < UiDocumentSchemaVersion{1, 4})
+            return Failure(UiErrors::DocumentSchemaUnsupported);
+        if (profiles_.size() >= MaximumUiDocumentCanvases)
+            return Failure(UiErrors::CapacityExceeded);
+        if (std::ranges::find(profiles_, profiles.canvas, &UiDocumentPresentationProfiles::canvas) != profiles_.end())
+            return Failure(UiErrors::DocumentDuplicateIdentity);
+        if (const auto valid = ValidateUiPresentationProfiles(profiles.rows); valid.HasError())
+            return valid;
+        std::size_t rows = profiles.rows.size(), overrides = 0;
+        for (const auto &row : profiles.rows)
+            overrides += row.overrides.size();
+        for (const auto &table : profiles_) {
+            rows += table.rows.size();
+            for (const auto &row : table.rows) {
+                overrides += row.overrides.size();
+                for (const auto &incoming : profiles.rows)
+                    if (incoming.id == row.id || incoming.priority == row.priority)
+                        return Failure(UiErrors::DocumentDuplicateIdentity);
+            }
+        }
+        if (rows > MaximumUiPresentationProfiles || overrides > MaximumUiPresentationOverrides)
+            return Failure(UiErrors::CapacityExceeded);
+        std::ranges::sort(profiles.rows, {}, &UiPresentationProfile::priority);
+        for (auto &row : profiles.rows) {
+            std::ranges::sort(row.overrides, {}, &UiPresentationLayoutOverride::element);
+            if (std::ranges::adjacent_find(row.overrides, {}, &UiPresentationLayoutOverride::element) != row.overrides.end())
+                return Failure(UiErrors::DocumentDuplicateIdentity);
+        }
+        profiles_.push_back(std::move(profiles));
+        return Result<void>::Success();
     }
 
     /** @copydoc UiDocumentBuilder::UiDocumentBuilder */
@@ -488,20 +549,37 @@ namespace Horo::Runtime::Ui {
         if (const auto validated = ValidateDocumentContent(schemaVersion_, id_, revision_, canvases_, elements_, dependencies_, routes_);
             validated.HasError())
             return Result<UiDocument>::Failure(validated.ErrorValue());
+        for (const auto &table : profiles_) {
+            const auto canvas = std::ranges::find(canvases_, table.canvas, &UiCanvasDescriptor::id);
+            if (canvas == canvases_.end())
+                return Failure<UiDocument>(UiErrors::PresentationProfileForeignIdentity);
+            for (const auto &row : table.rows)
+                for (const auto &item : row.overrides) {
+                    auto element = std::ranges::find(elements_, item.element, &UiDocumentElement::id);
+                    if (element == elements_.end())
+                        return Failure<UiDocument>(UiErrors::PresentationProfileForeignIdentity);
+                    while (element->parent.IsValid())
+                        element = std::ranges::find(elements_, element->parent, &UiDocumentElement::id);
+                    if (element->id != canvas->rootElement)
+                        return Failure<UiDocument>(UiErrors::PresentationProfileForeignIdentity);
+                }
+        }
+        std::ranges::sort(profiles_, {}, &UiDocumentPresentationProfiles::canvas);
         std::ranges::sort(dependencies_, {}, &UiAssetDependency::asset);
         std::ranges::sort(routes_, {}, &UiRouteMetadata::id);
         return Result<UiDocument>::Success(UiDocument{
             UiDocument::State{schemaVersion_, id_, revision_, std::move(canvases_), std::move(elements_), std::move(localizedTexts_),
-                              std::move(localizedAssets_), std::move(dependencies_), std::move(routes_)}});
+                              std::move(localizedAssets_), std::move(dependencies_), std::move(routes_), std::move(profiles_)}});
     }
 
     /** @copydoc CookedUiDocument::CookedUiDocument */
-    CookedUiDocument::CookedUiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
-                                       std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
-                                       std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes,
-                                       std::vector<std::uint8_t> payload) noexcept
-        : schemaVersion_(schemaVersion), id_(id), revision_(revision), canvases_(std::move(canvases)), elements_(std::move(elements)),
-          dependencies_(std::move(dependencies)), routes_(std::move(routes)), payload_(std::move(payload)) {}
+    CookedUiDocument::CookedUiDocument(const UiDocument &document, std::vector<std::uint8_t> payload)
+        : schemaVersion_(document.SchemaVersion()), id_(document.Id()), revision_(document.Revision()),
+          canvases_(document.Canvases().begin(), document.Canvases().end()),
+          elements_(document.Elements().begin(), document.Elements().end()),
+          dependencies_(document.Dependencies().begin(), document.Dependencies().end()),
+          routes_(document.Routes().begin(), document.Routes().end()),
+          profiles_(document.PresentationProfiles().begin(), document.PresentationProfiles().end()), payload_(std::move(payload)) {}
 
     /** @copydoc CookedUiDocument::Create */
     Result<CookedUiDocument> CookedUiDocument::Create(const UiDocument &document, std::vector<std::uint8_t> payload) {
@@ -510,14 +588,7 @@ namespace Horo::Runtime::Ui {
         if (payload.size() > MaximumCookedUiDocumentBytes)
             return Failure<CookedUiDocument>(UiErrors::CapacityExceeded);
         try {
-            return Result<CookedUiDocument>::Success(CookedUiDocument{document.SchemaVersion(),
-                                                                      document.Id(),
-                                                                      document.Revision(),
-                                                                      {document.Canvases().begin(), document.Canvases().end()},
-                                                                      {document.Elements().begin(), document.Elements().end()},
-                                                                      {document.Dependencies().begin(), document.Dependencies().end()},
-                                                                      {document.Routes().begin(), document.Routes().end()},
-                                                                      std::move(payload)});
+            return Result<CookedUiDocument>::Success(CookedUiDocument{document, std::move(payload)});
         } catch (const std::bad_alloc &) {
             return Failure<CookedUiDocument>(UiErrors::CapacityExceeded);
         }
@@ -556,6 +627,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc CookedUiDocument::Routes */
     std::span<const UiRouteMetadata> CookedUiDocument::Routes() const noexcept {
         return routes_;
+    }
+
+    /** @copydoc CookedUiDocument::PresentationProfiles */
+    std::span<const UiDocumentPresentationProfiles> CookedUiDocument::PresentationProfiles() const noexcept {
+        return profiles_;
     }
 
     /** @copydoc CookedUiDocument::Payload */
@@ -622,6 +698,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRuntimeInstance::Routes */
     std::span<const UiRouteMetadata> UiRuntimeInstance::Routes() const noexcept {
         return document_.Routes();
+    }
+
+    /** @copydoc UiRuntimeInstance::PresentationProfiles */
+    std::span<const UiDocumentPresentationProfiles> UiRuntimeInstance::PresentationProfiles() const noexcept {
+        return document_.PresentationProfiles();
     }
 
     /** @copydoc UiRuntimeInstance::Payload */

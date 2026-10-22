@@ -803,6 +803,32 @@ Detailed ownership and scheduling rules are defined by
 - Public headers compile independently.
 - CI rejects forbidden target and include dependency directions.
 
+The editor source-document implementation may privately consume
+`HoroFoundationJsonInternal` for bounded JSON parsing and duplicate-field rejection
+at the `.uicanvas` persistence envelope. This is the existing non-installed source
+codec interface: its only include directory is `src/foundation/json`, and it
+carries the JSON library privately through the consuming implementation target.
+`HoroEditorServices` declares that direct dependency in the dependency policy;
+consumers of its public document headers receive no JSON implementation headers
+or repository-wide source roots through this edge. Runtime UI retains ownership
+of the authored document schema and its canonical source/cooked codecs.
+
+Runtime UI style asset preparation uses the named `HoroUiStyleWorkspaceApplication`
+bridge. It may depend on `HoroRuntimeUi` and generic `HoroAssets`; it does not add
+Runtime dependencies to generic `HoroApplication`. The bridge has no Editor, GUI,
+ImGui, native renderer or backend-selection authority. Runtime UI owns the style
+source/cooked schema, core property provider, semantic validation and resource
+fingerprint. Assets owns source/sidecar capture, strategy catalogs, cache keys,
+publication manifests, immutable generations and provider bytes.
+
+The non-installed executable adapter `HoroEditorUiStyleHostInternal` composes the
+bridge with actual native storage, project read/mutation authority and process
+jobs. It exports only its dedicated `apps/common/ui_style` internal seam, not a
+repository-wide source root. Its returned workspace capability cancels/joins work
+before the host services die. GUI/controller clients receive typed themes,
+completion values and commands; they do not discover files, cook assets or select
+a renderer. See the [style asset contract](../runtime/game-ui-and-hud.md#runtime-style-source-and-cook-contract).
+
 See [Observability Architecture](../observability/observability.md) for shared C++/Python record
 contracts, CPU/memory metrics, profiler captures, context propagation, and
 storage policy.

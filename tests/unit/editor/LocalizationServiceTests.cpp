@@ -564,3 +564,45 @@ namespace {
         }
     }
 }  // namespace
+
+TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales", "[unit][editor][ui_canvas][localization]") {
+    const std::filesystem::path root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+    Horo::Editor::LocalizationError error;
+    for (const auto locale : {"en-US", "tr-TR"})
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+        REQUIRE(service.ActivatePrepared(&error));
+        for (const auto key : {"undo",
+                               "redo",
+                               "reload",
+                               "command_failed",
+                               "search",
+                               "create",
+                               "move_up",
+                               "move_down",
+                               "reparent_hint",
+                               "no_results",
+                               "kind.canvas",
+                               "kind.screen",
+                               "kind.panel",
+                               "kind.frame",
+                               "kind.layout_group",
+                               "kind.text",
+                               "kind.image",
+                               "kind.button",
+                               "kind.progress_bar",
+                               "kind.slider",
+                               "kind.toggle",
+                               "kind.text_input",
+                               "kind.scroll_view",
+                               "kind.collection_view"}) {
+            const std::string full = std::string{"workspace.ui_canvas."} + key;
+            INFO(locale);
+            INFO(full);
+            CHECK_FALSE(service.Get("editor", full).empty());
+            CHECK(service.Get("editor", full) != full);
+        }
+    }
+}

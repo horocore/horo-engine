@@ -228,6 +228,13 @@ add_custom_target(HoroExtensionAuthorCiStage DEPENDS
     HoroExtensionSdkConformanceStage
     HoroExtensionSdkPackageStage)
 
+# Non-installed executable adapter shared with qualification; portable producer remains Editor/Platform-free.
+add_library(HoroEditorUiStyleHostInternal STATIC common/ui_style/EditorUiStylePreparation.cpp)
+target_compile_features(HoroEditorUiStyleHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorUiStyleHostInternal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/common/ui_style")
+target_link_libraries(HoroEditorUiStyleHostInternal PUBLIC HoroEngine::EditorServices HoroEngine::UiStyleWorkspaceApplication
+        HoroEngine::PlatformImmutableFileStorage HoroEngine::Platform HoroEngine::ProjectMutationGuard)
+
 # The graphical executable is an optional composition root. Foundation and
 # headless hosts must remain buildable when the GUI adapter is intentionally off.
 if(HORO_BUILD_EDITOR_GUI)
@@ -364,6 +371,7 @@ if(HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditor
         PRIVATE
             HoroPackageProjectHost
+            HoroEditorUiStyleHostInternal
             HoroEngine::ShaderBuild
             HoroEngine::Gui
             HoroEngine::EditorServices

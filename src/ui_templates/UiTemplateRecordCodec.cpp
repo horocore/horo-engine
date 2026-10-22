@@ -33,11 +33,14 @@ namespace Horo::UiTemplates::Detail::Codec {
                 return value;
             }))
                 references.push_back(WriteReference(*reference));
-            return {{"id", Hex(element.id.Bytes())},
-                    {"parent", Hex(element.parent.Bytes())},
-                    {"type", element.type.Value()},
-                    {"properties", std::move(properties)},
-                    {"references", std::move(references)}};
+            Json encoded{{"id", Hex(element.id.Bytes())},
+                         {"parent", Hex(element.parent.Bytes())},
+                         {"type", element.type.Value()},
+                         {"properties", std::move(properties)},
+                         {"references", std::move(references)}};
+            if (element.presentation)
+                encoded["presentation"] = Json::parse(Take(SerializeUiElementPresentation(*element.presentation)));
+            return encoded;
         }
 
         /** @brief Restores one ordinary property without accepting rich alternatives in an ordinary codec field. */
@@ -57,7 +60,10 @@ namespace Horo::UiTemplates::Detail::Codec {
 
         /** @brief Restores bounded ordinary slot data; full connected hierarchy/reference admission occurs before expansion. */
         UiDocumentElement ReadElement(const Json &value, DecodeBudget &budget) {
-            Fields(value, {"id", "parent", "type", "properties", "references"});
+            if (value.contains("presentation"))
+                Fields(value, {"id", "parent", "type", "properties", "references", "presentation"});
+            else
+                Fields(value, {"id", "parent", "type", "properties", "references"});
             const auto &properties = Array(value.at("properties"), MaximumUiDocumentProperties);
             const auto &references = Array(value.at("references"), MaximumUiDocumentReferences);
             budget.Add(budget.properties, properties.size(), budget.limits.maximumProperties);
@@ -74,6 +80,8 @@ namespace Horo::UiTemplates::Detail::Codec {
             }
             for (const auto &reference : references)
                 output.references.push_back(ReadReference(reference));
+            if (value.contains("presentation"))
+                output.presentation = Take(DeserializeUiElementPresentation(value.at("presentation").dump()));
             return output;
         }
 

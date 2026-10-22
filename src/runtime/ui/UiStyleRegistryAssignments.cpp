@@ -47,3 +47,17 @@ namespace Horo::Runtime::Ui::StyleInternal {
         return Result<void>::Success();
     }
 }  // namespace Horo::Runtime::Ui::StyleInternal
+
+namespace Horo::Runtime::Ui {
+    /** @copydoc ValidateUiStyleAssignments */
+    Result<void> ValidateUiStyleAssignments(const RuntimeStyleRegistry &registry, const std::span<const UiStyleAssignment> assignments) {
+        if (registry.State() != RuntimeStyleRegistryState::Active)
+            return StyleInternal::Failure(UiErrors::StyleLifecycleUnavailable);
+        if (assignments.size() > MaximumUiStyleProperties)
+            return StyleInternal::Failure(UiErrors::CapacityExceeded);
+        for (const auto &assignment : assignments)
+            if (!assignment.property.IsValid() || !assignment.value.IsValid())
+                return StyleInternal::Failure(UiErrors::StyleInvalid);
+        return StyleInternal::ValidateAssignments(registry, assignments);
+    }
+}  // namespace Horo::Runtime::Ui
