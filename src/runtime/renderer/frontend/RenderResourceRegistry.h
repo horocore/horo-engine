@@ -178,7 +178,8 @@ namespace Horo::Render::Detail {
             bool nativeDestroyRequested{false};
             bool memoryRetirementBegun{false};
             ResourceOperationId operation;
-            std::vector<RenderResourceIdentity> dependencies;
+            // The count constructor keeps MSVC Debug proxy allocation throwable before admission.
+            std::vector<RenderResourceIdentity> dependencies = std::vector<RenderResourceIdentity>(0);
             bool generationExhausted{false};
             bool retirementQueued{false};
         };
@@ -187,8 +188,8 @@ namespace Horo::Render::Detail {
             ResourceOperationId id;
             bool complete{false};
             /** While pending, owns the shutdown failure prepared before admission; completion replaces or publishes it. */
-            std::optional<Error> error;
-            std::optional<Error> rollbackError; /**< Pre-owned cancellation identity for non-allocating admission rollback. */
+            std::unique_ptr<Error> error;
+            std::unique_ptr<Error> rollbackError; /**< Pre-owned cancellation identity for non-allocating admission rollback. */
         };
 
         /** @brief Sole bounded operation history and non-reused identity authority; never owns resource retirement. */
@@ -213,7 +214,7 @@ namespace Horo::Render::Detail {
             [[nodiscard]] ResourceOperationId AppendPending(OperationRecord record);
             /** @brief Looks up a retained record without copying its diagnostic. */
             [[nodiscard]] Result<const OperationRecord *> Lookup(ResourceOperationId operation) const;
-            void Complete(ResourceOperationId operation, std::optional<Error> error) noexcept;
+            void Complete(ResourceOperationId operation, std::unique_ptr<Error> error) noexcept;
             /** @brief Moves the pre-owned rollback error into its exact record without allocating. */
             void CompleteRollback(ResourceOperationId operation) noexcept;
             /** @brief Retains the pre-owned shutdown error while closing the pending record. */

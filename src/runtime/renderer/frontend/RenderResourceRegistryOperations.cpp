@@ -41,7 +41,7 @@ namespace Horo::Render::Detail {
         const auto &record = *found.Value();
         if (!record.complete)
             return Observation::Success(Pending);
-        return Observation::Success(record.error.has_value() ? Failed : Succeeded);
+        return Observation::Success(record.error ? Failed : Succeeded);
     }
 
     Result<void> RenderResourceRegistry::OperationResult(const ResourceOperationId operation) const {
@@ -52,7 +52,7 @@ namespace Horo::Render::Detail {
         if (!record.complete)
             return Result<void>::Failure(
                 ObservationError(FrontendErrors::ResourceOperationPending, "The renderer resource operation has not completed."));
-        if (record.error.has_value())
+        if (record.error)
             return Result<void>::Failure(*record.error);
         return Result<void>::Success();
     }

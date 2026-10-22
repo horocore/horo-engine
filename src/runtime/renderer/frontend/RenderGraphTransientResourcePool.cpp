@@ -26,7 +26,7 @@ namespace Horo::Render::Detail {
         class PendingClaims final {
         public:
             PendingClaims(RenderResourceRegistry &registry, RenderMemoryBudget &budget, bool &rollbackIncomplete)
-                : registry_(registry), budget_(budget), rollbackIncomplete_(rollbackIncomplete) {}
+                : slots_(0), registry_(registry), budget_(budget), rollbackIncomplete_(rollbackIncomplete) {}
 
             PendingClaims(const PendingClaims &) = delete;
             PendingClaims &operator=(const PendingClaims &) = delete;
