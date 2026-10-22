@@ -1,689 +1,130 @@
-name: CI
-
+name: M3 Windows regression diagnostic
+run-name: M3 Windows diagnostic ${{ github.sha }}
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.github/ISSUE_TEMPLATE/**'
-  pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.github/ISSUE_TEMPLATE/**'
-  workflow_dispatch:
-    inputs:
-      save_allocation_diagnostics:
-        description: Run bounded Windows Save allocation stack diagnostics
-        type: boolean
-        required: false
-        default: false
-      source_allocation_diagnostics:
-        description: Run bounded Windows source edit allocation stack diagnostics
-        type: boolean
-        required: false
-        default: false
-
+  workflow_dispatch: {}
 permissions:
   contents: read
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
+  group: m3-windows-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  tooling:
-    name: Format & Tooling Check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      network: ${{ steps.changes.outputs.network }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Select optional network checks
-        id: changes
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
-        with:
-          script: |
-            const networkChanged = require('./.github/scripts/network_changes.js');
-            const selected = await networkChanged({ github, context, core });
-            core.info(`Network checks: ${selected ? 'enabled' : 'skipped; no relevant changes'}`);
-            core.setOutput('network', selected);
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install tooling
-        run: >-
-          pip install --no-cache-dir --only-binary=:all: pytest==8.3.4 clang-format==19.1.7 defusedxml==0.7.1
-
-      - name: Check C++ formatting
-        run: python3 scripts/dev.py format --check
-
-      - name: Test Python tooling
-        run: pytest tests/python/
-
-  android-storage:
-    name: Android Storage · NDK arm64 API 29
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Select pinned adapter qualification NDK
-        shell: bash
-        run: |
-          set -euo pipefail
-          ndk_version=27.3.13750724
-          if [[ ! -d "$ANDROID_HOME/ndk/$ndk_version" ]]; then
-            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk_version"
-          fi
-          printf 'HORO_STORAGE_NDK=%s\n' "$ANDROID_HOME/ndk/$ndk_version" >> "$GITHUB_ENV"
-
-      - name: Compile native adapter and standalone public header
-        shell: bash
-        run: |
-          set -euo pipefail
-          storage_compiler="$HORO_STORAGE_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++"
-          "$storage_compiler" --version
-          "$storage_compiler" -std=c++20 -fsyntax-only -Iinclude -Isrc/platform/android src/platform/android/AndroidStorage.cpp
-          "$storage_compiler" -std=c++20 -fsyntax-only -Iinclude -x c++ - <<'CPP'
-          #include <Horo/Platform/AndroidStorage.h>
-          CPP
-
-  test:
-    name: Test · ${{ matrix.name }}
-    needs: tooling
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+  windows-regressions:
+    name: Windows MSVC - known RED diagnostic
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/test/HORO-1520_m3_windows_regressions'
+    runs-on: windows-2022
+    timeout-minutes: 45
     defaults:
       run:
-        shell: bash
-    env:
-      CC: ${{ matrix.cc }}
-      CXX: ${{ matrix.cxx }}
-      HORO_COMPILER_LAUNCHER: ${{ matrix.launcher }}
-      HORO_LOG_LEVEL: debug
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux / GCC
-            runner: ubuntu-24.04
-            cc: gcc
-            cxx: g++
-            launcher: ccache
-            preset: ci-linux-debug
-          - name: macOS / Clang
-            runner: macos-latest
-            cc: clang
-            cxx: clang++
-            launcher: ccache
-            preset: ci-macos-debug
-          # The full Windows suite is still disabled. This preset builds the
-          # existing focused contracts together in one headless composition.
-          - name: Windows / MSVC
-            runner: windows-2022
-            cc: cl
-            cxx: cl
-            launcher: sccache
-            preset: ci-windows-debug
+        shell: pwsh
     steps:
-      - name: Checkout
+      - name: Checkout diagnostic commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Setup build tools
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Setup existing Windows build tools
         uses: ./.github/actions/setup-build-tools
-
-      # Native publication requires a canonical parent. macOS TMPDIR may contain
-      # /var aliases; establish the host temp root before tools and tests use it.
-      - name: Canonicalize macOS temporary directory
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          python3 - <<'PYTHON'
-          import os
-          import pathlib
-          import tempfile
-
-          root = pathlib.Path(tempfile.gettempdir()).resolve(strict=True)
-          if not root.is_dir() or "\n" in str(root) or "\r" in str(root):
-              raise RuntimeError("The temporary directory must be an existing canonical directory")
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
-              environment.write(f"TMPDIR={root}\n")
-          PYTHON
-
-      - name: Install native allocation verifier dependency
-        id: qualification_python
-        run: |
-          verifier_python="$(python -c 'from pathlib import Path; import sys; print(Path(sys.executable).resolve().as_posix())')"
-          echo "HORO_QUALIFICATION_PYTHON=$verifier_python" >> "$GITHUB_ENV"
-          "$verifier_python" -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
-
-      - name: Restore dependency and compiler caches
-        id: cache
-        uses: ./.github/actions/restore-native-cache
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          # Preserve the existing main Debug checkpoint and build directory.
-          # Compiler entries also validate the flags of auxiliary builds.
-          profile: native-tests-v1
-          dependency-profile: ${{ needs.tooling.outputs.network == 'true' && 'native-gns-v1' || '' }}
-          mode: Debug
-          max-size: 2G
-
-      - name: Configure Debug
-        run: cmake --preset "${{ matrix.preset }}" -DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"
-
-      - name: Build Debug
-        id: debug_build
-        run: cmake --build --preset "${{ matrix.preset }}"
-
-      - name: Qualify OpenGL editor GUI composition with Mesa
-        if: ${{ !cancelled() && runner.os == 'Linux' && steps.debug_build.outcome == 'success' }}
-        timeout-minutes: 2
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
-          GALLIUM_DRIVER: llvmpipe
-        run: >-
-          xvfb-run --auto-servernum --server-args="-screen 0 640x480x24"
-          build/ci/tests/HoroEditorViewportOpenGLSmoke
-          --reporter junit --out build/ci/opengl-editor-composition.xml
-
-      - name: Cook Metal fixture and run native smoke when a device is available
-        if: ${{ !cancelled() && runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
-        env:
-          HORO_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          python-version: '3.12'
+          architecture: x64
+      - name: Capture exact source provenance
+        run: |-
+          @'
+          import hashlib, json, os, pathlib, platform, subprocess
+          root = pathlib.Path.cwd()
+          names = ['cmake/HoroPublicHeaderOwnership.cmake', 'include/Horo/Editor/TerrainBrushTools.h', 'include/Horo/WorldStreaming/StreamingCellDirection.h', 'include/Horo/WorldStreaming/StreamingFeatureBudgetReservations.h', 'src/CMakeLists.txt', 'src/editor/terrain/TerrainBrushAdmission.h', 'src/editor/terrain/TerrainBrushTools.cpp', 'src/runtime/world_streaming/StreamingCellDirection.cpp', 'tests/CMakeLists.txt', 'tests/unit/editor/TerrainBrushAdmissionCompileTests.cpp', 'tests/unit/editor/TerrainBrushToolsTests.cpp', 'tests/unit/runtime/world_streaming/StreamingDirectionFinalizationTestSupport.h', 'tests/unit/runtime/world_streaming/StreamingDirectionFinalizationTests.cpp', 'tests/unit/runtime/world_streaming/StreamingFeatureBudgetReservationsTests.cpp', '.github/workflows/ci.yml']
+          report = {
+              'git_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'event_sha': os.environ['GITHUB_SHA'],
+              'ref': os.environ['GITHUB_REF'],
+              'platform': platform.platform(),
+              'cpu_count': os.cpu_count(),
+              'source_sha256': {name: hashlib.sha256((root/name).read_bytes()).hexdigest() for name in names},
+              'scope': 'Windows-only diagnostic; known RED permitted by user; not a merge-ready PR',
+          }
+          assert report['git_sha'] == report['event_sha']
+          folder = pathlib.Path(os.environ['RUNNER_TEMP']) / 'm3-diagnostic'
+          folder.mkdir(exist_ok=True)
+          (folder/'provenance.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+          print(json.dumps(report, indent=2))
+          '@ | python -
+      - name: Install pinned diagnostic CMake and test dependencies
         run: |
-          "$HORO_QUALIFICATION_PYTHON" - <<'PYTHON'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-
-          build = Path("build/ci-metal-shader")
-          build.mkdir(parents=True, exist_ok=True)
-          fixture = build / "tests/MetalPreparationFixture.metallib"
-          record = {"sourceHead": os.environ["HORO_SOURCE_HEAD"],
-                    "checkoutRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-                    "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
-                    "runnerOS": os.environ["RUNNER_OS"], "runnerArch": os.environ["RUNNER_ARCH"],
-                    "imageVersion": os.environ.get("ImageVersion"),
-                    "nativeStatus": "not_run", "commands": [], "tools": {}, "sourceSha256": {}}
-
-          def digest(path):
-              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-          def run(command, *, capture=False):
-              record["commands"].append(command)
-              return subprocess.run(command, check=True, text=True,
-                                    stdout=subprocess.PIPE if capture else None).stdout
-
-          try:
-              for source in ["tests/integration/renderer/MetalPreparationFixture.metal",
-                             "tests/integration/renderer/MetalShaderPreparationSmoke.mm"]:
-                  record["sourceSha256"][source] = digest(source)
-              # Fail before cooking if the selected Xcode lacks the offline tools.
-              for name in ["metal", "metallib", "clang"]:
-                  path = run(["xcrun", "-sdk", "macosx", "--find", name], capture=True).strip()
-                  record["tools"][name] = {"path": path, "sha256": digest(path)}
-              record["xcodeVersion"] = run(["xcodebuild", "-version"], capture=True).strip()
-              record["sdkVersion"] = run(["xcrun", "-sdk", "macosx", "--show-sdk-version"], capture=True).strip()
-              run(["cmake", "--preset", "ci-macos-debug", "-B", str(build),
-                   "-DPython3_EXECUTABLE=" + os.environ["HORO_QUALIFICATION_PYTHON"],
-                   "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON", "-DHORO_BUILD_EDITOR_GUI=OFF",
-                   "-DHORO_BUILD_RENDER_OPENGL=OFF", "-DHORO_BUILD_PHYSICS_NATIVE=OFF",
-                   "-DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF"])
-              commands = run(["ninja", "-C", str(build), "-t", "commands", "HoroMetalShaderPreparationSmoke"], capture=True).splitlines()
-              fixture_markers = ["integration/renderer/MetalPreparationFixture.metal",
-                                 "integration/renderer/MetalShaderPreparationSmoke.mm",
-                                 " -o tests/HoroMetalShaderPreparationSmoke "]
-              record["fixtureBuildCommands"] = [command for command in commands
-                                                if any(marker in command for marker in fixture_markers)]
-              assert all(any(marker in command for command in record["fixtureBuildCommands"])
-                         for marker in fixture_markers), "Missing fixture cook, compile or link command"
-              run(["cmake", "--build", str(build), "--target", "HoroMetalShaderPreparationSmoke", "--parallel", "2"])
-              record["fixtureSha256"] = digest(fixture)
-              probe_source = Path(os.environ["RUNNER_TEMP"]) / "horo-metal-device-probe.m"
-              probe_binary = probe_source.with_suffix("")
-              probe_source.write_text("#import <Metal/Metal.h>\nint main(void) { @autoreleasepool { return MTLCreateSystemDefaultDevice() == nil ? 77 : 0; } }\n")
-              run(["xcrun", "clang", "-fobjc-arc", str(probe_source), "-framework", "Metal",
-                   "-framework", "Foundation", "-o", str(probe_binary)])
-              probe = subprocess.run([str(probe_binary)], check=False).returncode
-              record["deviceProbeExit"] = probe
-              if probe == 77:
-                  record["nativeStatus"] = "skipped_no_device"
-                  print("::notice::Metal graph and shader preparation GPU smoke skipped: no Metal device.")
-              elif probe != 0:
-                  raise RuntimeError("Metal device probe failed: " + str(probe))
-              else:
-                  # Keep the existing graph smoke and isolate this opt-in fixture's test registration.
-                  graph = subprocess.run(["build/ci/tests/HoroMetalGraphExecutionSmoke"], check=False).returncode
-                  record["graphSmokeExit"] = graph
-                  record["nativeStatus"] = "failed"
-                  run(["ctest", "--test-dir", str(build), "--parallel", "1", "--output-on-failure",
-                       "--no-tests=error", "-R", "^HoroMetalShaderPreparationSmoke$",
-                       "--output-junit", str(build.resolve() / "ctest.xml")])
-                  record["nativeStatus"] = "passed"
-                  if graph != 0:
-                      raise RuntimeError("Metal graph smoke failed: " + str(graph))
-          except Exception as error:
-              record["error"] = str(error)
-              raise
-          finally:
-              (build / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-                  summary.write("Metal shader preparation native smoke: " + record["nativeStatus"] + ".\n")
-          PYTHON
-
-      # Debug audio is already in the build above. Release verifies NDEBUG
-      # behavior using only the real-time audio group, on this same runner.
-      - name: Configure Release audio checks
-        run: cmake --preset ci-audio-release
-
-      - name: Build Release audio checks
-        id: release_build
-        run: cmake --build --preset ci-audio-release
-
-      # MSVC Debug container moves may allocate iterator proxies inside noexcept.
-      # Keep the complete admission/callback allocation sweep mandatory in Release.
-      - name: Build Windows Release allocation qualification
-        id: mcp_release_build
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
-
-      - name: Configure navigation without Recast Detour
-        if: runner.os == 'Linux'
-        run: cmake --preset ci-navigation-null
-
-      - name: Build navigation without Recast Detour
-        id: navigation_build
-        if: runner.os == 'Linux'
-        run: cmake --build --preset ci-navigation-null
-
-      - name: Configure navigation qualification without Physics
-        if: runner.os == 'Linux'
-        run: cmake --preset ci-navigation-physics-null
-
-      - name: Build navigation qualification without Physics
-        id: navigation_physics_null_build
-        if: runner.os == 'Linux'
-        run: cmake --build --preset ci-navigation-physics-null
-
-      - name: Configure navigation qualification without both native providers
-        if: runner.os == 'Linux'
-        run: cmake --preset ci-navigation-providers-null
-
-      - name: Build navigation qualification without both native providers
-        id: navigation_providers_null_build
-        if: runner.os == 'Linux'
-        run: cmake --build --preset ci-navigation-providers-null
-
-      - name: Install macOS network crypto library
-        if: ${{ !cancelled() && runner.os == 'macOS' && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
+          $requirements = Join-Path $env:RUNNER_TEMP 'cmake-diagnostic.txt'
+          'cmake==3.31.6 --hash=sha256:bbaed969cef3c427f4f17591feb28db4ae595e3a4bbd45cb35522cee14df6a32' | Set-Content -Encoding ascii $requirements
+          python -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r $requirements
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install --disable-pip-version-check --only-binary=:all: pytest==8.4.2 defusedxml==0.7.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --version
+          ninja --version
+      - name: Configure exact headless composition
+        id: configure
         run: |
-          brew install openssl@3
-          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
-
-      - name: Configure headless network with GNS
-        id: network_configure
-        if: ${{ !cancelled() && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
-        run: cmake --preset ci-network-gns
-
-      - name: Build headless network with GNS
-        id: network_build
-        if: ${{ !cancelled() && steps.network_configure.outcome == 'success' }}
-        run: cmake --build --preset ci-network-gns
-
-      - name: Verify network without production dependencies
-        if: ${{ !cancelled() && runner.os == 'Linux' && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
-        run: cmake --preset ci-network-disabled
-
-      # This opt-in private backend qualification runs on every platform in the
-      # existing matrix. Injected native dispatch is not physical-device evidence.
-      - name: Configure OpenXR native lifecycle qualification
-        id: xr_configure
-        if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
-        run: cmake --preset ci-xr-openxr
-
-      - name: Build OpenXR lifecycle and header boundaries
-        id: xr_build
-        if: ${{ !cancelled() && steps.xr_configure.outcome == 'success' }}
-        run: cmake --build --preset ci-xr-openxr
-
-      - name: Verify OpenXR omitted target graph
-        if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
-        run: cmake --preset ci-xr-disabled
-
-      - name: Checkpoint main build caches
-        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+          $ErrorActionPreference = 'Continue'
+          $folder = Join-Path $env:RUNNER_TEMP 'm3-diagnostic'
+          $pythonPath = (Get-Command python).Source
+          $arguments = @('-S', '.', '-B', 'build/m3-probe', '-G', 'Ninja',
+              '-DCMAKE_BUILD_TYPE=Debug', '-DBUILD_TESTING=ON',
+              '-DHORO_BUILD_EDITOR_GUI=OFF', '-DHORO_BUILD_RENDER_OPENGL=OFF',
+              '-DHORO_BUILD_RENDER_METAL=OFF', '-DHORO_BUILD_INPUT_SDL3=OFF',
+              '-DHORO_BUILD_AUDIO_SDL3=OFF', '-DHORO_BUILD_PHYSICS_NATIVE=OFF',
+              '-DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF', '-DHORO_BUILD_EXAMPLES=OFF',
+              '-DHORO_ENABLE_OPENTELEMETRY=OFF',
+              '-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON', '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
+              '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded',
+              '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER=',
+              "-DPython3_EXECUTABLE=$pythonPath")
+          & cmake @arguments 2>&1 | Tee-Object -FilePath (Join-Path $folder 'configure.log')
+          exit $LASTEXITCODE
+      - name: Build World regression executable
+        id: world_build
         continue-on-error: true
-        uses: ./.github/actions/save-native-cache
-        with:
-          compiler-key: ${{ steps.cache.outputs.compiler-key }}
-          dependency-key: ${{ steps.cache.outputs.dependency-key }}
-          dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
-          dependency-ready: ${{ steps.xr_configure.outcome == 'success' && (needs.tooling.outputs.network != 'true' || steps.network_configure.outcome == 'success') }}
-
-      - name: Prepare Windows mixer allocation diagnostics
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
-        shell: pwsh
-        run: ./.github/scripts/stage_windows_symbols.ps1 -BinaryDirectory build/ci/tests
-
-      - name: Diagnose Windows Character input allocation timeout
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.number == 3362 && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
-        timeout-minutes: 3
-        shell: pwsh
-        run: ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
-
-      - name: Upload Windows Character input stack text
-        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 3362 && runner.os == 'Windows' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: character-input-stack-text-Windows
-          path: |
-            build/ci/character-input-diagnostics/status.txt
-            build/ci/character-input-diagnostics/threads.txt
-            build/ci/character-input-diagnostics/ctest.xml
-          if-no-files-found: warn
-          retention-days: 3
-
-      - name: Diagnose Windows PCG evaluator completion timeout
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.number == 3403 && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
-        timeout-minutes: 3
-        shell: pwsh
-        run: >-
-          ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
-          -BinaryName HoroPCGTests.exe -EvidenceName pcg-evaluator-diagnostics
-          -TestCase 'HoroPCGTests::PCG catalog work cost is checked before executable allocation admission'
-
-      - name: Upload Windows PCG evaluator stack text
-        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.number == 3403 && runner.os == 'Windows' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: pcg-evaluator-stack-text-Windows
-          path: |
-            build/ci/pcg-evaluator-diagnostics/status.txt
-            build/ci/pcg-evaluator-diagnostics/threads.txt
-            build/ci/pcg-evaluator-diagnostics/ctest.xml
-          if-no-files-found: warn
-          retention-days: 3
-
-      - name: Diagnose Windows Save lifecycle allocation boundary
-        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
-        timeout-minutes: 3
-        shell: pwsh
-        run: >-
-          ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
-          -BinaryName HoroRuntimeSaveSlotLifecycleTests.exe -EvidenceName save-lifecycle-stack
-          -TestCase 'HoroRuntimeSaveSlotLifecycleTests::Lifecycle allocation failure after visibility preserves publication knowledge' -CaptureSymbolEvidence
-
-      - name: Diagnose Windows Save retention allocation boundary
-        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
-        timeout-minutes: 3
-        shell: pwsh
-        run: >-
-          ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
-          -BinaryName HoroRuntimeSaveSlotLifecycleTests.exe -EvidenceName save-retention-stack
-          -TestCase 'HoroRuntimeSaveSlotLifecycleTests::Retention allocation failure after selection preserves publication and binding ownership' -CaptureSymbolEvidence
-
-      - name: Record Windows Save allocation diagnostic provenance
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
-        shell: pwsh
         run: |
-          $diagnosticDirectory = Join-Path $env:RUNNER_TEMP 'save-allocation-diagnostics'
-          New-Item -ItemType Directory -Force -Path $diagnosticDirectory | Out-Null
-          $files = @('build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.exe',
-                     'build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.pdb') | ForEach-Object {
-            $path = Join-Path $env:GITHUB_WORKSPACE $_
-            if (Test-Path -LiteralPath $path -PathType Leaf) {
-              @{ path = $path; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
-            } else {
-              @{ path = $path; missing = $true }
-            }
-          }
-          $tools = @('procdump64.exe', 'cdb.exe') | ForEach-Object {
-            $tool = Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue
-            @{ name = $_; path = @($tool | ForEach-Object { $_.Source }) }
-          }
-          @{
-            source = (git rev-parse HEAD)
-            run = $env:GITHUB_RUN_ID
-            attempt = $env:GITHUB_RUN_ATTEMPT
-            files = @($files)
-            toolsOnPath = @($tools)
-            symbolMatch = 'unverified; file hashes alone do not establish executable/PDB matching'
-            stackCapture = 'not performed; no debugger installation or attachment assumed'
-            timeoutSeconds = 90
-          } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $diagnosticDirectory 'provenance.json')
-
-      - name: Diagnose Windows source edit allocation boundary
-        if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-224_source_edit_allocation_recovery') || (github.event_name == 'workflow_dispatch' && inputs.source_allocation_diagnostics == true)) && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
-        timeout-minutes: 3
-        shell: pwsh
-        run: >-
-          ./.github/scripts/diagnose_character_input_windows.ps1 -BuildDirectory build/ci
-          -BinaryName HoroSourceFileOpenServiceTests.exe -EvidenceName source-edit-stack
-          -TestCase 'HoroSourceFileOpenServiceTests::Cancelled and allocation-failed source operations do not publish partial roots' -CaptureSymbolEvidence
-
-      - name: Test Debug
-        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
-        run: ctest --preset "${{ matrix.preset }}"
-
-      - name: Test Release audio checks
-        if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
-        run: ctest --preset ci-audio-release
-
-      - name: Test Windows Release MCP allocation qualification
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
-        run: >-
-          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
-          --no-tests=error --timeout 120 -R '^HoroMcpSessionTests::'
-          --output-junit build/ci-audio-release/mcp-ctest.xml
-
-      - name: Test Windows Release restore allocation qualification
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
-        run: >-
-          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
-          --no-tests=error --timeout 90 -R '^HoroRuntimeSaveRestoreTransactionTests::'
-          --output-junit build/ci-audio-release/restore-ctest.xml
-
-      - name: Test Windows Release Scene allocation qualification
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
-        shell: pwsh
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:RUNNER_TEMP 'm3-diagnostic/world-build.log'
+          & cmake --build build/m3-probe --target HoroWorldStreamingTests --parallel 2 2>&1 | Tee-Object -FilePath $log
+          exit $LASTEXITCODE
+      - name: Execute World exhaustion regressions - RED expected initially
+        id: world_red
+        if: always() && steps.world_build.outcome == 'success'
+        continue-on-error: true
         run: |
-          $root = 'build/ci-audio-release'
-          ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/scene-allocation-discovery.json" -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-scene --discovery "$root/scene-allocation-discovery.json" --regex-output "$root/scene-allocation-regex.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $pattern = Get-Content -Raw -LiteralPath "$root/scene-allocation-regex.txt"
-          if (Test-Path -LiteralPath "$root/scene-allocation-ctest.xml") {
-            Remove-Item -LiteralPath "$root/scene-allocation-ctest.xml" -ErrorAction Stop
-          }
-          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "scene-allocation-ctest.xml"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-scene --output-junit "$root/scene-allocation-ctest.xml"
-
-      - name: Test Windows Release extension allocation qualification
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
-        shell: pwsh
+          $ErrorActionPreference = 'Continue'
+          $folder = Join-Path $env:RUNNER_TEMP 'm3-diagnostic'
+          Get-FileHash build/m3-probe/tests/HoroWorldStreamingTests.exe -Algorithm SHA256 | Format-List
+          & ./build/m3-probe/tests/HoroWorldStreamingTests.exe '[fix1]' --reporter junit --out (Join-Path $folder 'world-red.xml') 2>&1 | Tee-Object -FilePath (Join-Path $folder 'world-red.log')
+          exit $LASTEXITCODE
+      - name: Compile production-used Terrain arithmetic regressions - RED expected initially
+        id: terrain_red
+        if: always() && steps.configure.outcome == 'success'
+        continue-on-error: true
         run: |
-          $root = 'build/ci-audio-release'
-          ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/extension-allocation-discovery.json" -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-extension --discovery "$root/extension-allocation-discovery.json" --regex-output "$root/extension-allocation-regex.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $pattern = Get-Content -Raw -LiteralPath "$root/extension-allocation-regex.txt"
-          if (Test-Path -LiteralPath "$root/extension-allocation-ctest.xml") {
-            Remove-Item -LiteralPath "$root/extension-allocation-ctest.xml" -ErrorAction Stop
-          }
-          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 --test-output-size-passed 65536 -R $pattern --output-junit "extension-allocation-ctest.xml"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-extension --output-junit "$root/extension-allocation-ctest.xml"
-
-      - name: Test Windows Release Navigation settings allocation qualification
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          $root = 'build/ci-audio-release'
-          ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/navigation-allocation-discovery.json" -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-scene --family navigation --discovery "$root/navigation-allocation-discovery.json" --regex-output "$root/navigation-allocation-regex.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $pattern = Get-Content -Raw -LiteralPath "$root/navigation-allocation-regex.txt"
-          if (Test-Path -LiteralPath "$root/navigation-allocation-ctest.xml") {
-            Remove-Item -LiteralPath "$root/navigation-allocation-ctest.xml" -ErrorAction Stop
-          }
-          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --test-output-size-passed 16384 --output-junit "navigation-allocation-ctest.xml"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-scene --family navigation --output-junit "$root/navigation-allocation-ctest.xml"
-
-      - name: Test Windows Release Collision settings allocation qualification
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          $root = 'build/ci-audio-release'
-          ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/collision-allocation-discovery.json" -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-scene --family collision --discovery "$root/collision-allocation-discovery.json" --regex-output "$root/collision-allocation-regex.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $pattern = Get-Content -Raw -LiteralPath "$root/collision-allocation-regex.txt"
-          if (Test-Path -LiteralPath "$root/collision-allocation-ctest.xml") {
-            Remove-Item -LiteralPath "$root/collision-allocation-ctest.xml" -ErrorAction Stop
-          }
-          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 --test-output-size-passed 16384 -R $pattern --output-junit "collision-allocation-ctest.xml"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-scene --family collision --output-junit "$root/collision-allocation-ctest.xml"
-
-      - name: Test Windows Release Character allocation qualification
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $root = 'build/ci-audio-release'
-          ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/character-allocation-discovery.json" -Encoding utf8
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-character --discovery "$root/character-allocation-discovery.json" --regex-output "$root/character-allocation-regex.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $pattern = Get-Content -Raw -LiteralPath "$root/character-allocation-regex.txt"
-          if (Test-Path -LiteralPath "$root/character-allocation-ctest.xml") {
-            Remove-Item -LiteralPath "$root/character-allocation-ctest.xml" -ErrorAction Stop
-          }
-          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "character-allocation-ctest.xml"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/dev.py qualify-character --output-junit "$root/character-allocation-ctest.xml"
-
-      - name: Test Windows Release Save lifecycle allocation qualification
-        id: save_allocation_release_tests
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
-        run: >-
-          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
-          --no-tests=error --timeout 90
-          -R '^HoroRuntimeSaveSlotLifecycleTests::(Lifecycle allocation failure after visibility preserves publication knowledge|Retention allocation failure after selection preserves publication and binding ownership)$'
-          --test-output-size-passed 16384
-          --output-junit save-allocation-ctest.xml
-
-      - name: Install Windows Save qualification XML parser
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
-        run: >-
-          python -m pip install --no-cache-dir --only-binary=:all: defusedxml==0.7.1
-
-      - name: Verify Windows Release Save allocation variants
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
-        run: python scripts/dev.py qualify-save build/ci-audio-release/save-allocation-ctest.xml
-
-      - name: Test navigation without Recast Detour
-        if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
-        run: ctest --preset ci-navigation-null
-
-      - name: Test navigation qualification without Physics
-        if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_physics_null_build.outcome == 'success' }}
-        run: ctest --preset ci-navigation-physics-null
-
-      - name: Test navigation qualification without both native providers
-        if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_providers_null_build.outcome == 'success' }}
-        run: ctest --preset ci-navigation-providers-null
-
-      - name: Test GNS connections, DNS, delivery and lifecycle
-        if: ${{ !cancelled() && steps.network_build.outcome == 'success' }}
-        run: ctest --preset ci-network-gns
-
-      - name: Test OpenXR rollback replacement and shutdown
-        if: ${{ !cancelled() && steps.xr_build.outcome == 'success' }}
-        run: ctest --preset ci-xr-openxr
-
-      - name: Upload Windows source edit allocation stack evidence
-        if: ${{ always() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-224_source_edit_allocation_recovery') || (github.event_name == 'workflow_dispatch' && inputs.source_allocation_diagnostics == true)) && runner.os == 'Windows' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: source-edit-stack-Windows-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            build/ci/source-edit-stack/status.txt
-            build/ci/source-edit-stack/threads.txt
-            build/ci/source-edit-stack/ctest.xml
-            build/ci/source-edit-stack/provenance.json
-          if-no-files-found: warn
-          retention-days: 3
-
-      - name: Upload Windows Save allocation stack evidence
-        if: ${{ always() && ((github.event_name == 'pull_request' && github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture') || (github.event_name == 'workflow_dispatch' && inputs.save_allocation_diagnostics == true)) && runner.os == 'Windows' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: save-allocation-stack-Windows-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            build/ci/save-lifecycle-stack/status.txt
-            build/ci/save-lifecycle-stack/threads.txt
-            build/ci/save-lifecycle-stack/ctest.xml
-            build/ci/save-lifecycle-stack/provenance.json
-            build/ci/save-retention-stack/status.txt
-            build/ci/save-retention-stack/threads.txt
-            build/ci/save-retention-stack/ctest.xml
-            build/ci/save-retention-stack/provenance.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload Windows Save allocation diagnostics
-        if: ${{ always() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: save-allocation-Windows-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/save-allocation-diagnostics/provenance.json
-            build/ci/Testing/Temporary/LastTest.log
-            build/ci/ctest.xml
-            build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.exe
-            build/ci/tests/HoroRuntimeSaveSlotLifecycleTests.pdb
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload test reports
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:RUNNER_TEMP 'm3-diagnostic/terrain-compiler-red.log'
+          & cmake --build build/m3-probe --target tests/CMakeFiles/HoroTerrainAuthoringTests.dir/unit/editor/TerrainBrushAdmissionCompileTests.cpp.obj --parallel 1 2>&1 | Tee-Object -FilePath $log
+          exit $LASTEXITCODE
+      - name: Record honest step outcomes
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        run: |
+          $result = @{ configure = '${{ steps.configure.outcome }}'; world_build = '${{ steps.world_build.outcome }}'; world_tests = '${{ steps.world_red.outcome }}'; terrain_compilation = '${{ steps.terrain_red.outcome }}' }
+          $folder = Join-Path $env:RUNNER_TEMP 'm3-diagnostic'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          $result | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $folder 'outcomes.json')
+          $result | ConvertTo-Json
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: test-results-${{ runner.os }}
-          path: |
-            build/ci*/ctest.xml
-            build/ci-metal-shader/provenance.json
-            build/ci-metal-shader/tests/MetalPreparationFixture.metallib
-            build/ci-metal-shader/Testing/Temporary/LastTest.log
-            build/ci-audio-release/mcp-ctest.xml
-            build/ci-audio-release/restore-ctest.xml
-            build/ci-audio-release/collision-allocation-ctest.xml
-            build/ci-audio-release/collision-allocation-discovery.json
-            build/ci-audio-release/collision-allocation-regex.txt
-            build/ci-audio-release/extension-allocation-ctest.xml
-            build/ci-audio-release/tests/HoroWorkspaceLayoutPersistenceTests.exe
-            build/ci-audio-release/tests/HoroWorkspaceLayoutPersistenceTests.pdb
-            build/ci-audio-release/save-allocation-ctest.xml
-            build/ci-audio-release/navigation-allocation-ctest.xml
-            build/ci-audio-release/navigation-allocation-discovery.json
-            build/ci-audio-release/navigation-allocation-regex.txt
-          if-no-files-found: warn
-          retention-days: 14
+          name: m3-windows-diagnostic-${{ github.sha }}
+          path: |-
+            ${{ runner.temp }}/m3-diagnostic/
+            build/m3-probe/compile_commands.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Keep RED failures visible - never label expected failures GREEN
+        if: always()
+        run: |
+          if ('${{ steps.configure.outcome }}' -ne 'success' -or '${{ steps.world_build.outcome }}' -ne 'success' -or '${{ steps.world_red.outcome }}' -ne 'success' -or '${{ steps.terrain_red.outcome }}' -ne 'success') { exit 1 }

@@ -13,6 +13,7 @@ namespace Horo::WorldStreaming {
     namespace Detail {
         /** @brief Keeps aggregate reservation revisions distinct from policy and composition revisions. */
         struct StreamingFeatureBudgetRevisionTag;
+        class StreamingFeatureBudgetRevisionTestAccess;
     }  // namespace Detail
 
     /** @brief Non-wrapping revision of one aggregate reservation authority. */
@@ -207,6 +208,7 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] const SharedAssetResidencyLedger &SharedAssets() const noexcept;
 
     private:
+        friend class Detail::StreamingFeatureBudgetRevisionTestAccess;
         using Matrix = StreamingFeatureBudgetPlan::Matrix;
 
         struct Entry {

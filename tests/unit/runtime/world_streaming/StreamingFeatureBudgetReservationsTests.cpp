@@ -1,4 +1,5 @@
 #include "Horo/WorldStreaming/StreamingFeatureBudgetReservations.h"
+#include "StreamingCellDirectionTestSupport.h"
 #include "WorldStreamingTestUtils.h"
 
 #include <algorithm>
@@ -166,6 +167,39 @@ namespace Horo::WorldStreaming {
                                      const WorldStreamingRuntimeComposition &>);
         static_assert(std::is_same_v<decltype(std::declval<StreamingFeatureBudgetReservations &>().SharedAssets()),
                                      const SharedAssetResidencyLedger &>);
+
+        TEST_CASE("Aggregate direction owns one admission and retains peaks through exact retirement",
+                  "[unit][world_streaming][feature_budget][direction]") {
+            Host host;
+            auto ledger = host.Ledger(1);
+            const auto config = DirectionTestSupport::Config();
+            DirectionTestSupport::ParticipantLog log;
+            DirectionTestSupport::Participants participants;
+            auto &participant = DirectionTestSupport::Add(participants, log, config, 1);
+            auto created = StreamingCellDirectionOwner::Create(ledger, config, Plan(Feature::Terrain, Amounts(12)),
+                                                               config.operation.Handle().fence, participants);
+            REQUIRE(created.HasValue());
+            auto owner = std::move(created).Value();
+            REQUIRE(participants.empty());
+            REQUIRE(ledger.Runtime().Scheduler().ReservedCount() == 1);
+            REQUIRE(ledger.Runtime().Scheduler().ReservedCapacityUnits() == config.capacityUnits);
+            REQUIRE(ledger.Used(Axis::CpuResidentBytes).Value() == 12);
+            DirectionTestSupport::Forward(owner, StreamingCellOperationTransition::BeginPreparation);
+            DirectionTestSupport::Demand(owner, StreamingDesiredResidency::Unloaded);
+            auto frame = StreamingOwnerFrameBudget::Create({ledger.Runtime().Scheduler().Owner(),
+                                                            IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                            IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000}).Value();
+            REQUIRE(owner.PollRetirement(frame, 0).Value().State() == StreamingCellOperationState::Retiring);
+            REQUIRE(ledger.Used(Axis::CpuResidentBytes).Value() == 12);
+            REQUIRE(ledger.Runtime().Scheduler().ReservedCount() == 1);
+            participant.ready = true;
+            REQUIRE(owner.PollRetirement(frame, 0).Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
+            REQUIRE(ledger.Used(Axis::CpuResidentBytes).Value() == 0);
+            REQUIRE(ledger.Runtime().Scheduler().ReservedCount() == 0);
+            REQUIRE(owner.TakeTerminalResult().HasValue());
+            RequireError(owner.TakeTerminalResult(), CellDirectionLifecycleUnavailable);
+            RequireError(owner.PollRetirement(frame, 0), CellDirectionLifecycleUnavailable);
+        }
 
         TEST_CASE("Feature slices partition global capacity and general remainder without overflow",
                   "[unit][world_streaming][feature_budget]") {
