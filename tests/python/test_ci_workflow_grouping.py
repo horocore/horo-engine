@@ -81,6 +81,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
     "HoroD3D12InitializationTests", "HoroD3D12ResourceTests",
     "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
+    "HoroMultiviewSceneExtractionPublicHeaderConsumer",
     "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
     "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
     "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
@@ -157,6 +158,17 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroGameplayRuntimePublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
     "HoroGameplayLuaPublicHeaderConsumer", "HoroNavigationRuntimePublicHeaderConsumer",
 })
+
+
+def test_windows_multiview_consumer_shares_build_and_execution_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    consumer = "HoroMultiviewSceneExtractionPublicHeaderConsumer"
+    assert consumer in targets("HORO_CI_WINDOWS_TARGETS")
+    assert f"add_executable({consumer} " in tests_cmake
+    assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
+    registration = re.search(rf'set_tests_properties\({consumer} PROPERTIES LABELS "([^"]+)"\)', tests_cmake)
+    assert registration is not None
+    assert "ci-windows" in registration.group(1).split(";")
 
 
 def test_windows_group_preserves_every_previously_built_target() -> None:

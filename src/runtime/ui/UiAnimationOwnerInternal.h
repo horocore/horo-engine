@@ -4,6 +4,7 @@
 #include "UiAnimationLayoutProjection.h"
 #include "UiAnimationPlayback.h"
 
+#include <memory>
 #include <thread>
 
 namespace Horo::Runtime::Ui {
@@ -72,6 +73,16 @@ namespace Horo::Runtime::Ui {
         };
 
         struct Attachment final {
+            Attachment(UiPresentationAttachmentId id, UiRenderViewId view, UiAnimationViewport viewport, UiLayoutEngine &&layout,
+                       std::optional<UiLayoutClipEngine> &&clipping, std::size_t elements)
+                : id(id), view(view), viewport(std::move(viewport)), layout(std::move(layout)), clipping(std::move(clipping)),
+                  focusGeometry(elements) {}
+
+            Attachment(const Attachment &) = delete;
+            Attachment &operator=(const Attachment &) = delete;
+            Attachment(Attachment &&) = delete;
+            Attachment &operator=(Attachment &&) = delete;
+
             UiPresentationAttachmentId id;
             UiRenderViewId view;
             UiAnimationViewport viewport;
@@ -141,7 +152,7 @@ namespace Horo::Runtime::Ui {
 
         std::optional<UiPresentationProfileTable> profiles;
         UiPresentationAttachmentId primaryAttachment;
-        std::array<std::optional<Attachment>, MaximumUiAnimationAttachments - 1> attachments;
+        std::array<std::unique_ptr<Attachment>, MaximumUiAnimationAttachments - 1> attachments;
         std::array<std::uint32_t, MaximumUiAnimationAttachments - 1> attachmentGenerations{};
         UiLayoutPresentationRevision presentation;
         std::optional<UiAnimationViewport> publishedViewport;

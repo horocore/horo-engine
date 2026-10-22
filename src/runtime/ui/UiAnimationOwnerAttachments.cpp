@@ -110,22 +110,17 @@ namespace Horo::Runtime::Ui {
             auto clipping = CreateAttachmentClipping(*canvas, static_cast<std::uint32_t>(owner.definition.elements.size()), slots);
             if (clipping.HasError())
                 return Result<UiPresentationAttachmentId>::Failure(clipping.ErrorValue());
-            std::vector<UiAnimationFocusGeometry> focusGeometry(owner.definition.elements.size());
+            // Construct in final storage: MSVC Debug vector moves can allocate inside noexcept.
+            // Keep the candidate private until tracker admission succeeds; failure preserves the old drained slot.
+            auto attachment = std::make_unique<Storage::Attachment>(id, view, std::move(viewport), std::move(layout).Value(),
+                                                                    std::move(clipping).Value(), owner.definition.elements.size());
             if (std::ranges::find(canvas->presentations, view, &UiPresentedInteractionState::View) == canvas->presentations.end()) {
                 auto tracker = UiPresentedInteractionState::Create(view, canvas->tree.Canvas());
                 if (tracker.HasError())
                     return Result<UiPresentationAttachmentId>::Failure(tracker.ErrorValue());
                 canvas->presentations.push_back(std::move(tracker).Value());
             }
-            owner.attachments[index].emplace(Storage::Attachment{id,
-                                                                 view,
-                                                                 std::move(viewport),
-                                                                 std::move(layout).Value(),
-                                                                 std::move(clipping).Value(),
-                                                                 {},
-                                                                 {},
-                                                                 {},
-                                                                 std::move(focusGeometry)});
+            owner.attachments[index] = std::move(attachment);
             owner.attachmentGenerations[index] = id.generation;
             owner.attachmentDirty = true;
             ++owner.commandRevision;
