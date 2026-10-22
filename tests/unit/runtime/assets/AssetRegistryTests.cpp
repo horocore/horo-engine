@@ -108,8 +108,12 @@ namespace {
 
     std::filesystem::path TemporaryProject() {
         static std::atomic<unsigned> sequence{};
-        const auto root = std::filesystem::temp_directory_path() / ("horo-assets-registry-" + std::to_string(sequence.fetch_add(1)));
-        std::filesystem::remove_all(root);
+        std::filesystem::path root;
+        // CTest runs cases in separate processes: claim a free root atomically,
+        // without deleting another live test's project when its sequence matches.
+        do {
+            root = std::filesystem::temp_directory_path() / ("horo-assets-registry-" + std::to_string(sequence.fetch_add(1)));
+        } while (!std::filesystem::create_directory(root));
         std::filesystem::create_directories(root / ".horo");
         std::filesystem::create_directories(root / "assets/models");
         return root;
