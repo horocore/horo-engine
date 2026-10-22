@@ -15,6 +15,10 @@
 #include <vulkan/vulkan.h>
 
 namespace Horo::Render {
+    namespace Detail {
+        class VulkanEditorGraphicsBridge;
+    }
+
     /**
      * @brief Platform-owned Vulkan loader and presentation attachment.
      *
@@ -33,6 +37,14 @@ namespace Horo::Render {
         [[nodiscard]] virtual PFN_vkGetInstanceProcAddr GetInstanceProcAddr() noexcept = 0;
         /** @brief Returns the exact platform-selected WSI instance extensions. */
         [[nodiscard]] virtual Result<std::vector<std::string>> RequiredPresentationExtensions() = 0;
+        /** @brief Creates a surface for exactly the supplied backend-owned instance.
+         * @param instance Initialized instance enabling this port's required WSI extensions.
+         * @return Native surface, or typed unsupported/native failure. The runtime owns the returned lease.
+         * @details Called before physical-device enumeration. No second instance or device may be created.
+         */
+        [[nodiscard]] virtual Result<VkSurfaceKHR> CreatePresentationSurface(VkInstance instance);
+        /** @brief Destroys only the matching instance's surface after all device presentation work drains. */
+        virtual void DestroyPresentationSurface(VkInstance instance, VkSurfaceKHR surface) noexcept;
         /** @brief Tests actual-surface presentation support for one native queue family. */
         [[nodiscard]] virtual Result<bool> SupportsPresentation(VkPhysicalDevice device, std::uint32_t queueFamily) = 0;
         /** @brief Applies the host's versioned driver-admission rules to one native device. */
@@ -84,7 +96,8 @@ namespace Horo::Render {
         bool standardApiVariant{true};
         bool portabilitySubset{false};
         bool driverAllowed{true};
-        bool vertexLayerRouting{false}; /**< Queried optional shaderOutputLayer feature; never part of baseline admission. */
+        bool vertexLayerRouting{false};   /**< Queried optional shaderOutputLayer feature; never part of baseline admission. */
+        bool swapchainMaintenance{false}; /**< Actual optional feature; required only for interactive present-resource retirement. */
     };
 
     /** @brief One bounded physical-device enumeration and its non-zero revision. */
@@ -119,7 +132,8 @@ namespace Horo::Render {
         std::vector<std::string> enabledExtensions;
         std::vector<RenderQueueAssignment> queueAssignments;
         std::uint32_t maxFramesInFlight{2};
-        bool enableVertexLayerRouting{false}; /**< Exact optional feature request captured before VkDevice creation. */
+        bool enableVertexLayerRouting{false};   /**< Exact optional feature request captured before VkDevice creation. */
+        bool enableSwapchainMaintenance{false}; /**< Requires admitted extension and instance dependencies; never enabled headless. */
     };
 
     /**
@@ -173,6 +187,16 @@ namespace Horo::Render {
     class IVulkanCommandPort {
     public:
         virtual ~IVulkanCommandPort() = default;
+
+        /** @brief Reports actual initialized WSI ownership independently of offscreen command support. */
+        [[nodiscard]] virtual bool SupportsWindowPresentation() const noexcept {
+            return false;
+        }
+
+        /** @brief Polls bounded acquisition and retirement for an explicitly realized output. */
+        [[nodiscard]] virtual Result<bool> PollPresentationAvailability(FramebufferExtent extent);
+        /** @brief Realizes an explicit idle output transition; DrawableUnavailable retains its native debt for retry. */
+        [[nodiscard]] virtual Result<void> ResizePresentation(FramebufferExtent extent, PresentMode mode);
         /** @brief Starts an offscreen frame in preallocated native storage. */
         [[nodiscard]] virtual Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) = 0;
         /** @brief Encodes exact typed graph submissions, retaining the frontend's one completion lease. */
@@ -185,6 +209,11 @@ namespace Horo::Render {
 
         /** @brief Records reflected draws through this same device command owner. */
         [[nodiscard]] virtual Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &) {
+            return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+
+        /** @brief Admits GUI ownership on the existing frame; only real matching native ports implement this. */
+        [[nodiscard]] virtual Result<void> PrepareGuiComposition(const GuiCompositionRequest &) {
             return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
         }
 
@@ -215,5 +244,6 @@ namespace Horo::Render {
      * @param loaderPort Borrowed platform loader port that outlives the registry and all created backends.
      * @return Registration result; no loader, instance, device, or queue is acquired.
      */
-    [[nodiscard]] Result<void> RegisterVulkanRenderBackend(RenderBackendRegistry &registry, IVulkanLoaderPort &loaderPort);
+    [[nodiscard]] Result<void> RegisterVulkanRenderBackend(RenderBackendRegistry &registry, IVulkanLoaderPort &loaderPort,
+                                                           Detail::VulkanEditorGraphicsBridge *editorBridge = nullptr);
 }  // namespace Horo::Render

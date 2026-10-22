@@ -36,4 +36,6 @@ namespace Horo::Runtime::Ui::SerializationInternal {
     [[nodiscard]] Result<UiAssetDependency> DecodeDependency(const Json &value, const UiDocumentSerializationLimits &limits);
     [[nodiscard]] Result<UiRouteMetadata> DecodeRoute(const Json &value, const UiDocumentSerializationLimits &limits);
     [[nodiscard]] Result<Json> ParseJson(std::string_view source, const UiDocumentSerializationLimits &limits);
+    /** @brief Parse a bounded cooked profile array using the same UTF-8, duplicate and depth policy as document objects. */
+    [[nodiscard]] Result<Json> ParseJsonArray(std::string_view source, const UiDocumentSerializationLimits &limits);
 }  // namespace Horo::Runtime::Ui::SerializationInternal

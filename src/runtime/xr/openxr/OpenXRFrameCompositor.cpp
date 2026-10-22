@@ -17,10 +17,10 @@ namespace Horo::XR::OpenXRInternal {
         }
 
         /** @brief Resolves an official prototype without publishing a partially resolved adapter. */
-        template <typename T> [[nodiscard]] Result<T> Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance, const char *name) {
+        template <typename T, typename ResolveFunction>
+        [[nodiscard]] Result<T> Resolve(const ResolveFunction &getProc, XrInstance instance, const char *name) {
             PFN_xrVoidFunction raw{};
-            const XrResult result = getProc(instance, name, &raw);
-            if (XR_FAILED(result) || !raw)
+            if (const XrResult result = getProc(instance, name, &raw); XR_FAILED(result) || !raw)
                 return Result<T>::Failure(NativeError(name, XR_FAILED(result) ? result : XR_ERROR_FUNCTION_UNSUPPORTED));
             return Result<T>::Success(std::bit_cast<T>(raw));
         }
@@ -56,14 +56,14 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRFrameCompositor::Bind */
-    Result<void> OpenXRFrameCompositor::Bind(PFN_xrGetInstanceProcAddr getProc, const NativeFramePacingPolicy &pacing,
+    Result<void> OpenXRFrameCompositor::Bind(NativeCompositorDispatch dispatch, const NativeFramePacingPolicy &pacing,
                                              NativeCompositorColorSpace colorSpace) {
         // Snapshot before foreign loader callbacks can mutate the caller-owned policy.
         const NativeFramePacingPolicy admittedPacing = pacing;
         if (thread_ != std::this_thread::get_id() || nativeFrame_.IsValid() || frames_->Snapshot().phase != XRFramePhase::Idle ||
             owner_.IsValid() || closing_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        if (!getProc || admittedPacing.gpuBudgetNanoseconds <= 0 || admittedPacing.compositorMarginNanoseconds < 0 ||
+        if (!dispatch.getProc || admittedPacing.gpuBudgetNanoseconds <= 0 || admittedPacing.compositorMarginNanoseconds < 0 ||
             admittedPacing.gpuBudgetNanoseconds > std::numeric_limits<std::int64_t>::max() - admittedPacing.compositorMarginNanoseconds ||
             colorSpace >= NativeCompositorColorSpace::Count || admittedPacing.maximumFramesInFlight == 0)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
@@ -74,20 +74,20 @@ namespace Horo::XR::OpenXRInternal {
         const auto native = session_->Borrow(owner);
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
-        const auto wait = Resolve<PFN_xrWaitFrame>(getProc, native.Value().instance, "xrWaitFrame");
+        const auto wait = Resolve<PFN_xrWaitFrame>(dispatch.getProc, native.Value().instance, "xrWaitFrame");
         if (wait.HasError())
             return Result<void>::Failure(wait.ErrorValue());
-        const auto begin = Resolve<PFN_xrBeginFrame>(getProc, native.Value().instance, "xrBeginFrame");
+        const auto begin = Resolve<PFN_xrBeginFrame>(dispatch.getProc, native.Value().instance, "xrBeginFrame");
         if (begin.HasError())
             return Result<void>::Failure(begin.ErrorValue());
-        const auto end = Resolve<PFN_xrEndFrame>(getProc, native.Value().instance, "xrEndFrame");
+        const auto end = Resolve<PFN_xrEndFrame>(dispatch.getProc, native.Value().instance, "xrEndFrame");
         if (end.HasError())
             return Result<void>::Failure(end.ErrorValue());
         if (colorSpace != NativeCompositorColorSpace::RuntimeDefault) {
             if (!session_->HasExtension(XR_FB_COLOR_SPACE_EXTENSION_NAME))
                 return Result<void>::Failure(
                     MakeError(XRErrors::OperationUnsupported, "Requested compositor primaries require XR_FB_color_space."));
-            const auto set = Resolve<PFN_xrSetColorSpaceFB>(getProc, native.Value().instance, "xrSetColorSpaceFB");
+            const auto set = Resolve<PFN_xrSetColorSpaceFB>(dispatch.getProc, native.Value().instance, "xrSetColorSpaceFB");
             if (set.HasError())
                 return Result<void>::Failure(set.ErrorValue());
             const XrColorSpaceFB selected =
@@ -125,6 +125,7 @@ namespace Horo::XR::OpenXRInternal {
         }
         nativeFrame_ = reservation.frame;
         period_ = state.predictedDisplayPeriod;
+        nativeDisplayTime_ = state.predictedDisplayTime;
         const auto prediction = XRRenderPredictionTime::Create(state.predictedDisplayTime);
         // SYNC: a completed native wait always creates begin/end debt, even with unusable prediction evidence.
         const auto recorded =
@@ -138,6 +139,10 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(current.ErrorValue());
         if (!frame.IsValid() || frame != nativeFrame_ || frame != frames_->Snapshot().frame)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        const auto logical = frames_->ValidateCurrent(frame);
+        if (logical != XRFrameStatus::Ok)
+            return Result<void>::Failure(
+                MakeError(logical == XRFrameStatus::StalePlan ? XRErrors::CapabilityStale : XRErrors::IdentityStale));
         return Result<void>::Success();
     }
 
@@ -167,6 +172,7 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRFrameCompositor::ObservePacing */
     Result<NativeFramePacingObservation> OpenXRFrameCompositor::ObservePacing(const XRFrameId &frame, XRRenderPredictionTime now) const {
         using Outcome = Result<NativeFramePacingObservation>;
+        using enum NativeFrameDeadline;
         if (auto valid = ValidateFrame(frame); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
         const auto prediction = frames_->Snapshot().predictedDisplayTime;
@@ -175,11 +181,12 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(
                 MakeError(XRErrors::TimeDomainIncompatible, "XR prediction period or converted clock cannot satisfy admitted budgets."));
         const auto deadline = prediction.Nanoseconds() - reserve;
-        return Outcome::Success({frame, prediction, period_, deadline, deadline - now.Nanoseconds(),
-                                 now >= prediction              ? NativeFrameDeadline::DisplayMissed
-                                 : now.Nanoseconds() > deadline ? NativeFrameDeadline::CpuSubmissionMissed
-                                                                : NativeFrameDeadline::WithinBudget,
-                                 1});
+        NativeFrameDeadline status = WithinBudget;
+        if (now >= prediction)
+            status = DisplayMissed;
+        else if (now.Nanoseconds() > deadline)
+            status = CpuSubmissionMissed;
+        return Outcome::Success({frame, prediction, period_, deadline, deadline - now.Nanoseconds(), status, 1});
     }
 
     /** @copydoc OpenXRFrameCompositor::SubImage */
@@ -197,8 +204,8 @@ namespace Horo::XR::OpenXRInternal {
         const auto &allocation = borrowed.Value().allocation;
         const auto role =
             target.role == XRExternalRenderTargetRole::ProjectionDepth ? NativeSwapchainRole::Depth : NativeSwapchainRole::Color;
-        constexpr auto MaximumNative = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
-        if (allocation.target != target.target || allocation.role != role || allocation.texture.format != target.format ||
+        if (constexpr auto MaximumNative = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
+            allocation.target != target.target || allocation.role != role || allocation.texture.format != target.format ||
             allocation.texture.extent != target.allocationExtent || allocation.texture.layerCount != target.arrayLayerCount ||
             allocation.texture.sampleCount != target.sampleCount || !Render::HasTextureUsage(allocation.texture.usage, target.usage) ||
             target.arrayLayer >= target.arrayLayerCount || !target.renderRectangle.FitsWithin(target.allocationExtent) ||
@@ -231,8 +238,8 @@ namespace Horo::XR::OpenXRInternal {
             return valid;
         const auto &plan = encoding.plan;
         const auto targets = encoding.targets;
-        const auto snapshot = frames_->Snapshot();
-        if (!begun_ || frames_->ValidateEnd(frame, 1) != XRFrameStatus::Ok || plan.Configuration().id != frame.configuration ||
+        if (const auto snapshot = frames_->Snapshot();
+            !begun_ || frames_->ValidateEnd(frame, 1) != XRFrameStatus::Ok || plan.Configuration().id != frame.configuration ||
             plan.Configuration().session != frame.session || plan.PredictedDisplayTime() != snapshot.predictedDisplayTime ||
             plan.Views().size() != snapshot.locatedViews || targets.empty() || targets.size() != snapshot.acquiredImages ||
             targets.size() > XRFrameHardLimits::MaximumImages)
@@ -341,7 +348,9 @@ namespace Horo::XR::OpenXRInternal {
                                                  reference,
                                                  static_cast<std::uint32_t>(plan.Views().size()),
                                                  views.data()};
-        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer));
+        // OpenXR defines this native base-header view for projection layer dispatch.
+        static_assert(sizeof(const XrCompositionLayerBaseHeader *) == sizeof(&layer));
+        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer));
     }
 
     /** @copydoc OpenXRFrameCompositor::EndNative */
@@ -350,9 +359,8 @@ namespace Horo::XR::OpenXRInternal {
         const auto native = Current();
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
-        const auto snapshot = frames_->Snapshot();
-        const XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO,  nullptr, snapshot.predictedDisplayTime.Nanoseconds(), blend, layer ? 1U : 0U,
-                                  layer ? &layer : nullptr};
+        // SYNC: cleanup must echo the completed native wait even when its prediction could not enter Horo's time contract.
+        const XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO, nullptr, nativeDisplayTime_, blend, layer ? 1U : 0U, layer ? &layer : nullptr};
         const XrResult result = end_(native.Value().session, &info);
         if (XR_FAILED(result)) {
             faulted_ = true;
@@ -362,6 +370,7 @@ namespace Horo::XR::OpenXRInternal {
         nativeFrame_ = {};
         begun_ = false;
         period_ = 0;
+        nativeDisplayTime_ = 0;
         return ended == XRFrameStatus::Ok ? Result<void>::Success() : Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
     }
 
@@ -394,6 +403,7 @@ namespace Horo::XR::OpenXRInternal {
         begun_ = false;
         faulted_ = false;
         period_ = 0;
+        nativeDisplayTime_ = 0;
         return Result<void>::Success();
     }
 }  // namespace Horo::XR::OpenXRInternal

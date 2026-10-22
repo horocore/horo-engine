@@ -150,4 +150,36 @@ namespace Horo::Render {
         return ShaderCompilerToolchainDetail::CompileRoute(state_->configuration, *state_->processes, invocation, cancellation,
                                                            scratch.Path(), sourcePath);
     }
+
+    /** @copydoc ExternalShaderCompilerAdapter::ReflectVulkan */
+    Result<ReflectedShaderArtifact> ExternalShaderCompilerAdapter::ReflectVulkan(const ShaderManifest &manifest,
+                                                                                 const CompiledShaderArtifact &compiled,
+                                                                                 const ShaderTargetRequirement &target,
+                                                                                 const std::span<const ShaderReflectionBindingName> names,
+                                                                                 const ShaderCompilerToolIdentity &reflectionTool,
+                                                                                 const CancellationToken &cancellation) const {
+        using Outcome = Result<ReflectedShaderArtifact>;
+        if (!state_ || compiled.backend != ShaderTargetBackend::Vulkan || compiled.payloadFormat != ShaderPayloadFormat::SpirV16 ||
+            target.backend != compiled.backend || target.payloadFormat != compiled.payloadFormat)
+            return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid));
+        if (cancellation.IsCancellationRequested())
+            return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
+        const auto sequence = state_->nextInvocation.fetch_add(1, std::memory_order_relaxed);
+        if (sequence == 0)
+            return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
+        auto path = state_->configuration.scratchRoot / std::format("reflection-{}", sequence);
+        std::error_code error;
+        if (!std::filesystem::create_directory(path, error) || error)
+            return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
+        ScratchDirectory scratch(std::move(path));
+        const auto stages = ShaderCompilerToolchainDetail::ReflectVulkanRoute(state_->configuration, *state_->processes, compiled,
+                                                                              reflectionTool, cancellation, scratch.Path());
+        if (stages.HasError())
+            return Outcome::Failure(stages.ErrorValue());
+        const auto reflection = NormalizeVulkanReflection(manifest, target, stages.Value(), names);
+        if (reflection.HasError())
+            return Outcome::Failure(reflection.ErrorValue());
+        return CookReflectedShaderArtifact(compiled, reflectionTool, reflection.Value());
+    }
+
 }  // namespace Horo::Render

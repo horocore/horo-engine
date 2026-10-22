@@ -118,7 +118,8 @@ namespace Horo::Render::Detail {
     Result<VulkanMaterialMesh> VulkanMultiviewRecorder::DrawMesh(const RenderGraphExecutionRequest &request,
                                                                  const MultiviewGraphGeometry &input, const RenderMeshHandle mesh,
                                                                  const std::span<const VulkanGraphResource> resources,
-                                                                 VulkanResourceRuntime &registry, VulkanCommandRetention &retention) const {
+                                                                 const VulkanResourceRuntime &registry,
+                                                                 VulkanCommandRetention &retention) const {
         const auto mapped = std::ranges::find(request.meshes, mesh, &RenderGraphMeshInstance::mesh);
         if (mapped == request.meshes.end())
             return Invalid<VulkanMaterialMesh>("Exact multiview mesh generation mapping is missing.");

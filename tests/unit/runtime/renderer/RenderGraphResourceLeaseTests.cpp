@@ -88,6 +88,44 @@ namespace Horo::Render::Detail {
         REQUIRE(registry.DrainRetirements() == 1);
     }
 
+    TEST_CASE_METHOD(ResourceLeaseFixture, "GUI samples extend the existing frame lease without spending another lease or duplicate pin",
+                     "[renderer][gui][resource]") {
+        const auto sampler = registry.Reserve(RenderResourceClass::Sampler);
+        REQUIRE(sampler.HasValue());
+        REQUIRE(registry.Publish(RenderResourceClass::Sampler, sampler.Value().identity, 42).HasValue());
+        const auto existing = pool.Acquire(std::array{resource});
+        REQUIRE(existing.HasValue());
+        const RenderGraphResidentIdentity pin{RenderResourceClass::Sampler, sampler.Value().identity};
+        const auto extended = pool.AcquireGui(std::array{pin, pin}, existing.Value());
+        REQUIRE(extended.HasValue());
+        CHECK(extended.Value() == existing.Value());
+        REQUIRE(registry.Release(RenderResourceClass::Buffer, identity).HasValue());
+        REQUIRE(registry.Release(RenderResourceClass::Sampler, pin.identity).HasValue());
+        CHECK(registry.DrainRetirements() == 0);
+        extended.Value()->Release();
+        CHECK(registry.DrainRetirements() == 2);
+        CHECK(pool.AcquireGui({}, extended.Value()).HasError());
+    }
+
+    TEST_CASE_METHOD(ResourceLeaseFixture, "Rejected GUI extension rolls back its prefix while preserving the prior native frame pins",
+                     "[renderer][gui][resource]") {
+        const auto sampler = registry.Reserve(RenderResourceClass::Sampler);
+        REQUIRE(sampler.HasValue());
+        REQUIRE(registry.Publish(RenderResourceClass::Sampler, sampler.Value().identity, 42).HasValue());
+        const auto existing = pool.Acquire(std::array{resource});
+        REQUIRE(existing.HasValue());
+        const RenderGraphResidentIdentity pin{RenderResourceClass::Sampler, sampler.Value().identity};
+        auto stale = pin;
+        ++stale.identity.generation;
+        CHECK(pool.AcquireGui(std::array{pin, stale}, existing.Value()).HasError());
+        REQUIRE(registry.Release(RenderResourceClass::Sampler, pin.identity).HasValue());
+        CHECK(registry.DrainRetirements() == 1);
+        REQUIRE(registry.Release(RenderResourceClass::Buffer, identity).HasValue());
+        CHECK(registry.DrainRetirements() == 0);
+        existing.Value()->Release();
+        CHECK(registry.DrainRetirements() == 1);
+    }
+
     TEST_CASE("Graph binding visitor preserves typed buffer and texture identity and rejects unbound resources",
               "[renderer][render-graph][resource]") {
         const RenderBufferHandle buffer{{11}, 23, 7};

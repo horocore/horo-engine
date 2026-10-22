@@ -108,11 +108,17 @@ namespace {
 
     std::filesystem::path TemporaryProject() {
         static std::atomic<unsigned> sequence{};
-        const auto root = std::filesystem::temp_directory_path() / ("horo-assets-registry-" + std::to_string(sequence.fetch_add(1)));
-        std::filesystem::remove_all(root);
-        std::filesystem::create_directories(root / ".horo");
-        std::filesystem::create_directories(root / "assets/models");
-        return root;
+        // Claim a process-independent root atomically; never erase another live CTest project's files.
+        for (unsigned attempt = 0; attempt < 1024; ++attempt) {
+            const auto root = std::filesystem::temp_directory_path() / ("horo-assets-registry-" + std::to_string(sequence.fetch_add(1)));
+            if (!std::filesystem::create_directory(root))
+                continue;
+            std::filesystem::create_directories(root / ".horo");
+            std::filesystem::create_directories(root / "assets/models");
+            return root;
+        }
+        FAIL("Unable to claim an unused asset registry test root after 1024 attempts.");
+        return {};
     }
 
     AssetRegistryBuildReport RebuildSingleDegradedAsset(AssetRegistry &registry, const std::filesystem::path &root) {
@@ -394,6 +400,26 @@ namespace {
         REQUIRE((std::ranges::any_of(programmaticMismatch.diagnostics, [](const AssetRegistryDiagnostic &diagnostic) {
             return diagnostic.error.code.Value() == "asset.registry.type_mismatch";
         })));
+        std::filesystem::remove_all(root);
+    }
+
+    TEST_CASE("Runtime UI style source and sidecar classify as one actual registry asset", "[unit][assets][ui-style]") {
+        const auto root = TemporaryProject();
+        const auto source = root / "assets" / std::filesystem::path{u8"tema_日本 style.uistyle"};
+        Write(source, "{}");
+        Write(std::filesystem::path{source}.concat(".horo"),
+              R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.ui_style"})");
+        AssetRegistry registry;
+        const auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE(rebuilt.HasValue());
+        CHECK(rebuilt.Value().status == AssetRegistryBuildStatus::Complete);
+        CHECK(rebuilt.Value().registeredAssets == 1);
+        CHECK(rebuilt.Value().diagnostics.empty());
+        const auto snapshot = registry.Snapshot();
+        const auto *record = snapshot.Find(Id("10213243-5465-7687-98a9-bacbdcedfe0f"));
+        REQUIRE(record != nullptr);
+        CHECK(record->type.Value() == "core.ui_style");
+        CHECK(record->metadataPath.String() == record->sourcePath.String() + ".horo");
         std::filesystem::remove_all(root);
     }
 }  // namespace

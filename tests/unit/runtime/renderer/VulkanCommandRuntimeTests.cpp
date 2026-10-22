@@ -4,6 +4,29 @@
 #include <thread>
 
 namespace Horo::Render::VulkanTest {
+    TEST_CASE("Vulkan canonical submission signals WSI binary without replacing timeline completion", "[unit][renderer][vulkan]") {
+        CommandFixture fixture;
+        fixture.Initialize(1);
+        const auto ticket = fixture.Record();
+        const auto binary = NativeHandle<VkSemaphore>(9001);
+        REQUIRE(fixture.runtime.Submit(ticket, {{1}, {1}, {}, {{1}, 1}}, binary).HasValue());
+        REQUIRE(fixture.state.accepted.size() == 1);
+        const auto &submitted = fixture.state.accepted.front();
+        CHECK(submitted.signal.value == 1);
+        CHECK(submitted.signal.semaphore != binary);
+        CHECK(submitted.presentationSignal.semaphore == binary);
+        CHECK(submitted.presentationSignal.value == 0);
+        CHECK(submitted.presentationSignal.stageMask == VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        CHECK(fixture.state.waitCalls == 0);
+        fixture.runtime.Abort(ticket);
+        CHECK(fixture.runtime.Begin({1}).HasError());
+        fixture.state.Complete();
+        REQUIRE(fixture.runtime.Poll().HasValue());
+        const auto next = fixture.Record();
+        CHECK(fixture.runtime.Submit(next, {{1}, {2}, {}, {{1}, 2}}, submitted.signal.semaphore).HasError());
+        CHECK(fixture.state.accepted.size() == 1);
+    }
+
     TEST_CASE("Vulkan command initialization rejects missing dispatch and rolls back partial native queues", "[unit][renderer][vulkan]") {
         CommandFixture fixture;
         SECTION("missing entry point") {

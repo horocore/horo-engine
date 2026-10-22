@@ -49,7 +49,7 @@ namespace {
             return Result<void>::Success();
         }
 
-        Result<void> RenderDrawData() override {
+        Result<void> RenderDrawData(const Render::GuiCompositionRequest &) override {
             return Result<void>::Success();
         }
 

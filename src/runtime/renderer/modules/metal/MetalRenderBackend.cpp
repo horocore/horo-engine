@@ -410,6 +410,29 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            /** @copydoc IRenderBackend::PrepareGuiComposition */
+            Result<void> PrepareGuiComposition(const GuiCompositionRequest &request) override {
+                if (const auto frame = ValidateActiveFrame(request.frame); frame.HasError())
+                    return frame;
+                if (request.mode != GuiCompositionMode::BorrowedActiveRecording || request.submission.has_value() ||
+                    !request.buffers.empty() ||
+                    std::ranges::any_of(request.resources,
+                                        [](const GuiSampledResourceInstance &sample) {
+                    return sample.uploadSource != 0;
+                }) ||
+                    request.resources.size() > GuiCompositionPreparation::MaximumResources ||
+                    (!request.resources.empty() && request.lease == nullptr))
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                if (request.lease != nullptr) {
+                    if (request.transfer == nullptr)
+                        return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                    if (const auto retained = runtime_->RetainGraphResources(*request.lease); retained.HasError())
+                        return retained;
+                    request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
+                }
+                return Result<void>::Success();
+            }
+
             /** @copydoc IRenderBackend::ExecuteGraph */
             Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
                 if (const auto state = ValidateActiveFrame(request.frame); state.HasError()) {

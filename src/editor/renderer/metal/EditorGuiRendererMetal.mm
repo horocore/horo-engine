@@ -1,5 +1,6 @@
 #include "EditorGuiRendererMetal.h"
 
+#include "editor/renderer/EditorGuiComposition.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/metal/MetalViewportResourceBridge.h"
 
@@ -38,6 +39,8 @@ namespace Horo::Editor {
         Render::RenderFrontend *frontend{nullptr};
         __strong id<MTLDevice> device{nil};
         std::vector<TextureRecord> textures;
+        EditorGuiComposition composition;
+        std::uintptr_t nativeFontIdentity{};
         bool platformInitialized{false};
         bool rendererInitialized{false};
     };
@@ -85,17 +88,40 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeGuiRendererError("editor.gui.metal.no_active_frame", "Metal GUI frame requires an active renderer frame."));
         }
+        impl_->composition.Reset();
         ImGui_ImplMetal_NewFrame(pass);
+        if (impl_->nativeFontIdentity == 0)
+            impl_->nativeFontIdentity = static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID);
+        if (impl_->nativeFontIdentity == 0 || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != impl_->nativeFontIdentity)
+            return Result<void>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
         ImGui_ImplSDL3_NewFrame();
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorGuiRendererMetal::PrepareComposition */
+    Result<Render::GuiCompositionPreparation> EditorGuiRendererMetal::PrepareComposition(const Render::FrameToken frame) {
+        if (!impl_->rendererInitialized)
+            return Result<Render::GuiCompositionPreparation>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
+        return impl_->composition.Prepare(frame, Render::GuiCompositionMode::BorrowedActiveRecording, impl_->nativeFontIdentity,
+                                          [this](const std::uintptr_t identity) -> Result<Render::GuiSampledResource> {
+            if (const auto found = std::ranges::find(impl_->textures, identity, &Impl::TextureRecord::imageIdentity);
+                found != impl_->textures.end())
+                return Result<Render::GuiSampledResource>::Success({found->view, {}});
+            const auto &viewport = ViewportBinding();
+            if (viewport.textureId == identity && viewport.sampledView.IsValid())
+                return Result<Render::GuiSampledResource>::Success({viewport.sampledView, viewport.sampledSampler});
+            return Result<Render::GuiSampledResource>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
+        });
+    }
+
     /** @copydoc EditorGuiRendererMetal::RenderDrawData */
-    Result<void> EditorGuiRendererMetal::RenderDrawData() {
+    Result<void> EditorGuiRendererMetal::RenderDrawData(const Render::GuiCompositionRequest &request) {
         if (!impl_->rendererInitialized) {
             return Result<void>::Failure(
                 MakeGuiRendererError("editor.gui.metal.not_initialized", "Metal GUI renderer is not initialized."));
         }
+        if (!impl_->composition.Matches(request))
+            return Result<void>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
         id<MTLCommandBuffer> commandBuffer = (__bridge id<MTLCommandBuffer>)impl_->graphicsBridge->CurrentCommandBuffer();
         id<MTLRenderCommandEncoder> encoder = (__bridge id<MTLRenderCommandEncoder>)impl_->graphicsBridge->CurrentRenderEncoder();
         if (commandBuffer == nil || encoder == nil) {
@@ -171,6 +197,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererMetal::Shutdown */
     void EditorGuiRendererMetal::Shutdown() noexcept {
+        impl_->composition.Reset();
+        BindViewportTexture({});
+        impl_->nativeFontIdentity = 0;
         impl_->graphicsBridge->WaitUntilIdle();
         for (const Impl::TextureRecord &texture : impl_->textures) {
             static_cast<void>(impl_->frontend->ReleaseTextureView(texture.view));

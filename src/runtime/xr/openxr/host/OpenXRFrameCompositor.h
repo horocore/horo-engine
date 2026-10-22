@@ -11,6 +11,11 @@
 #include <thread>
 
 namespace Horo::XR::OpenXRInternal {
+    /** @brief Borrowed official loader dispatch; its session/loader owner must outlive the bound compositor. */
+    struct NativeCompositorDispatch final {
+        PFN_xrGetInstanceProcAddr getProc{}; /**< Official ABI resolver; null is rejected before binding any state. */
+    };
+
     /** @brief Host-owned exact reference-space borrow; native lifetime remains with the selected space owner. */
     class IOpenXRCompositionSpace {
     public:
@@ -86,15 +91,16 @@ namespace Horo::XR::OpenXRInternal {
         OpenXRFrameCompositor &operator=(const OpenXRFrameCompositor &) = delete;
 
         /** @brief Admits budgets/color policy and resolves official dispatch while no frame is open.
-         * @param getProc Official loader dispatch retained by session. @param pacing Finite supported queue policy.
+         * @param dispatch Official loader dispatch retained by session. @param pacing Finite supported queue policy.
          * @param colorSpace Explicit runtime compositor primaries, requiring XR_FB_color_space for non-default.
          * @return Success or typed unsupported/invalid/native failure without publishing a partial adapter. */
-        [[nodiscard]] Result<void> Bind(PFN_xrGetInstanceProcAddr getProc, const NativeFramePacingPolicy &pacing,
+        [[nodiscard]] Result<void> Bind(NativeCompositorDispatch dispatch, const NativeFramePacingPolicy &pacing,
                                         NativeCompositorColorSpace colorSpace = NativeCompositorColorSpace::RuntimeDefault);
         /** @brief Reserves before native wait and preserves every successful native wait obligation.
          * @return Frame status plus exact debt identity, or native wait failure after cancelling only its reservation. */
         [[nodiscard]] Result<XRFrameWaitOutcome> Wait();
-        /** @brief Executes native begin only for the exact waited frame, then records its completion. */
+        /** @brief Executes native begin only for the exact waited frame, then records its completion.
+         * @param frame Exact retained native-wait debt. @return Success or typed stale/order/native failure. */
         [[nodiscard]] Result<void> Begin(const XRFrameId &frame);
         /** @brief Observes finite renderer budgets using explicit prediction-domain clock conversion from the host.
          * @param frame Exact outstanding frame. @param now Current time converted into the same runtime prediction domain.
@@ -108,11 +114,15 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> EndProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
                                                  std::span<const NativeProjectionTarget> targets,
                                                  const NativeProjectionDepth *depth = nullptr);
-        /** @brief Ends runtime-disabled or explicitly aborted work with no layers after all image releases. */
+        /** @brief Ends runtime-disabled or explicitly aborted work with no layers after all image releases.
+         * @param frame Exact begun frame. @return Native end result; failure retains debt for quiescent recovery. */
         [[nodiscard]] Result<void> EndEmpty(const XRFrameId &frame);
-        /** @brief Closes new waits while retaining native frame and image release obligations; wrong-thread calls fail. */
+        /** @brief Closes new waits while retaining native frame and image release obligations.
+         * @return Success or a typed wrong-thread failure without mutation. */
         [[nodiscard]] Result<void> BeginShutdown();
-        /** @brief Drops dispatch/debt after host-proved native quiescence; wrong-thread calls fail without mutation. */
+        /** @brief Drops dispatch/debt after host-proved native quiescence; the logical gate remains host-owned.
+         * @return Success or a typed wrong-thread failure without mutation.
+         * @pre The host has proved native quiescence and retired every Renderer/image lease. */
         [[nodiscard]] Result<void> ResetAfterQuiescence();
 
     private:
@@ -148,6 +158,7 @@ namespace Horo::XR::OpenXRInternal {
         XRFrameId nativeFrame_{};
         NativeFramePacingPolicy policy_{};
         std::int64_t period_{};
+        XrTime nativeDisplayTime_{}; /**< Exact wait result echoed only to native end, including unusable Horo prediction evidence. */
         PFN_xrWaitFrame wait_{};
         PFN_xrBeginFrame begin_{};
         PFN_xrEndFrame end_{};

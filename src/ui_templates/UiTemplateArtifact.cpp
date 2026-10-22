@@ -44,6 +44,8 @@ namespace Horo::UiTemplates {
                 Take(builder.RequireAsset(asset));
             for (const auto &route : cooked.Routes())
                 Take(builder.AddRoute(route));
+            for (const auto &profiles : cooked.PresentationProfiles())
+                Take(builder.AddPresentationProfiles(profiles));
             return Take(std::move(builder).Build());
         }
 

@@ -18,7 +18,9 @@ serialized on its construction thread; there are no native callbacks into engine
    queue-depth requests fail explicitly before native work.
 2. Call adapter `Wait`. A failed native wait cancels only its reserved logical frame.
    Every successful native wait returns a retained frame identity, even when its
-   render-admission status is non-Ok. Call `Begin` for that exact frame.
+   render-admission status is non-Ok. Call `Begin` for that exact frame. The private
+   adapter retains the raw wait timestamp for exact native zero-layer cleanup even
+   when that value cannot enter Horo's positive prediction-time contract.
 3. Locate views through the selected native space owner and record the complete view
    count in the frame gate. Build the existing immutable `XRViewRenderPlan` from
    current prediction-purpose poses, asymmetric projection and acquired target facts.
@@ -66,8 +68,9 @@ primary opaque stereo; bounded storage does not imply quad/mono production admis
 
 ## Contract migration and evidence
 
-The additive `XRFrameLifecycle::ValidateEnd` separates preflight from committing a
-successful native end. `ValidateReleasedImage` proves that each encoded image belonged
+The existing `XRFrameLifecycle::ValidateCurrent` predicate is exposed for native
+preflight so replacement between wait and begin is rejected before native work.
+The additive `ValidateEnd` separates preflight from committing a successful native end. `ValidateReleasedImage` proves that each encoded image belonged
 to and was released by that exact logical transaction. Existing frame-gate callers
 remain unchanged. Native callers use preflight, native end, then logical `End` under
 the same serialized host operation. `OpenXRSwapchain::BorrowReleased` exposes only a
@@ -85,3 +88,11 @@ These scripted results are contract evidence, not hardware qualification. Physic
 OpenXR/runtime/driver timing, depth, color and visual evidence remains required for
 each supported tuple. Vulkan desktop WSI and Vulkan editor GUI composition are
 separate responsibilities and are not implemented by this XR adapter.
+
+The native-private `Bind` surface takes `NativeCompositorDispatch`, a value holding
+only the official loader resolver. Embedding callers migrate from passing the
+resolver directly to passing `{resolver}`. The same session/loader lifetime is
+required; null dispatch and failed resolution publish no adapter state. This
+keeps official ABI dispatch distinct from helper callable templates without heap
+allocation or another session/frame owner. Native binding rejection and frame
+cleanup regressions cover this migration; the new source awaits revalidation.

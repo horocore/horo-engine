@@ -1,5 +1,7 @@
 #include "RenderFrontendTestSupport.h"
 
+#include <thread>
+
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
@@ -22,6 +24,7 @@ namespace {
         Check(begun.HasValue());
         RenderFrameScope frame = std::move(begun).Value();
         Check(lifecycleState.frameActive);
+        Check(frame.Token().IsValid());
         Check(lifecycleState.executeCount == 0);
         Check(lifecycleState.presentCount == 0);
 
@@ -33,9 +36,51 @@ namespace {
         Check(lifecycleState.executeCount == 1);
         Check(lifecycleState.presentCount == 0);
         Check(frame.Present().HasValue());
+        Check(!frame.Token().IsValid());
         Check(!lifecycleState.frameActive);
         Check(lifecycleState.presentCount == 1);
         Check(lifecycleState.abortCount == 0);
+    }
+
+    TEST_CASE("Frontend submission reservation follows the exact moved frame and owner lifetime", "[renderer][submission]") {
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}});
+        REQUIRE(begun.HasValue());
+        auto original = std::move(begun).Value();
+        const auto first = original.ReserveSubmission(RenderQueueRole::Graphics);
+        REQUIRE(first.HasValue());
+        const auto token = original.Token();
+        auto moved = std::move(original);
+        CHECK_FALSE(original.Token().IsValid());
+        CHECK(moved.Token() == token);
+        CHECK(original.ReserveSubmission(RenderQueueRole::Graphics).HasError());
+        const auto second = moved.ReserveSubmission(RenderQueueRole::Transfer);
+        REQUIRE(second.HasValue());
+        CHECK(second.Value().signal.value == first.Value().signal.value + 1);
+        frontend.reset();
+        CHECK_FALSE(moved.Token().IsValid());
+        CHECK(moved.ReserveSubmission(RenderQueueRole::Graphics).HasError());
+        CHECK(lifecycleState.abortCount == 1);
+    }
+
+    TEST_CASE("Frontend foreign-thread reservation cannot consume an order or mutate frame ownership", "[renderer][submission]") {
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        bool rejected{};
+        std::thread foreign{[&] {
+            rejected = frame.ReserveSubmission(RenderQueueRole::Graphics).HasError();
+        }};
+        foreign.join();
+        CHECK(rejected);
+        const auto first = frame.ReserveSubmission(RenderQueueRole::Graphics);
+        REQUIRE(first.HasValue());
+        CHECK(first.Value().order.value == 1);
+        CHECK(first.Value().signal.value == 1);
+        CHECK(lifecycleState.frameActive);
     }
 
     TEST_CASE("Frame Scope Move Transfers Abort Ownership", "[unit][runtime][renderer]") {
@@ -289,80 +334,21 @@ namespace {
         Check(replacement.Value().generation == target.Value().generation + 1);
     }
 
-    class TrackingGuiExecutor final : public IGuiPassExecutor {
-    public:
-        Result<void> RenderDrawData() override {
-            ++calls;
-            CHECK(lifecycleState.frameActive);
-            CHECK(lifecycleState.executeCount == 1);
-            CHECK(lifecycleState.presentCount == 0);
-            if (throws)
-                throw std::runtime_error("GUI encoder failure");
-            if (fails)
-                return Result<void>::Failure(Error{.code = ErrorCode{"test.gui.encoding"},
-                                                   .domain = ErrorDomainId{"test.gui"},
-                                                   .message = "Injected GUI encoding failure"});
-            return Result<void>::Success();
-        }
-
-        int calls{0};
-        bool fails{false};
-        bool throws{false};
-    };
-
-    TEST_CASE("GUI composition is ordered once and survives frame moves", "[unit][runtime][renderer][gui]") {
-        lifecycleState = {};
-        auto frontend = CreateTrackingFrontend();
-        TrackingGuiExecutor gui;
-        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 64}});
-        REQUIRE(begun.HasValue());
-        auto frame = std::move(begun).Value();
-        CHECK(frame.ComposeGui(gui).HasError());
-        CHECK(gui.calls == 0);
-        const std::array passes{RenderPassDescriptor{.id = RenderPassId{1}, .primaryOutput = PrimaryOutputAttachment{}}};
-        REQUIRE(frame.Execute(passes).HasValue());
-        REQUIRE(frame.ComposeGui(gui).HasValue());
-        auto moved = std::move(frame);
-        CHECK(frame.ComposeGui(gui).HasError());
-        const auto duplicate = moved.ComposeGui(gui);
-        REQUIRE(duplicate.HasError());
-        CHECK(duplicate.ErrorValue().code.Value() == "render.frontend.gui_already_composed");
-        CHECK(gui.calls == 1);
-        REQUIRE(moved.Present().HasValue());
-        CHECK(moved.ComposeGui(gui).HasError());
-        CHECK(lifecycleState.presentCount == 1);
-        CHECK(lifecycleState.abortCount == 0);
-    }
-
-    TEST_CASE("GUI composition failure cancellation and exceptions abort before presentation", "[unit][runtime][renderer][gui]") {
-        lifecycleState = {};
-        auto frontend = CreateTrackingFrontend();
-        TrackingGuiExecutor gui;
-        CancellationSource cancellation;
-        SECTION("typed encoder failure") {
-            gui.fails = true;
-        }
-        SECTION("encoder exception") {
-            gui.throws = true;
-        }
-        SECTION("cancelled before encoding") {
-            cancellation.RequestCancellation();
-        }
-        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 64}});
-        REQUIRE(begun.HasValue());
-        auto frame = std::move(begun).Value();
-        const std::array passes{RenderPassDescriptor{.id = RenderPassId{1}, .primaryOutput = PrimaryOutputAttachment{}}};
-        REQUIRE(frame.Execute(passes).HasValue());
-        const auto composed = frame.ComposeGui(gui, cancellation.Token());
-        REQUIRE(composed.HasError());
-        CHECK(composed.ErrorValue().code.Value() == (gui.fails    ? "test.gui.encoding"
-                                                     : gui.throws ? "render.frontend.frame_exception"
-                                                                  : "render.frontend.gui_cancelled"));
-        CHECK(gui.calls == (cancellation.Token().IsCancellationRequested() ? 0 : 1));
-        CHECK(frame.Present().HasError());
-        CHECK(lifecycleState.abortCount == 1);
-        CHECK(lifecycleState.presentCount == 0);
-        REQUIRE(frontend->BeginFrame({.frameNumber = 2, .outputExtent = {64, 64}}).HasValue());
-    }
-
 }  // namespace
+
+TEST_CASE("Closed frame token cannot identify a replacement frame", "[renderer][submission]") {
+    lifecycleState = {};
+    auto frontend = CreateTrackingFrontend();
+    auto first = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}});
+    REQUIRE(first.HasValue());
+    auto frame = std::move(first).Value();
+    const auto previous = frame.Token();
+    REQUIRE(previous.IsValid());
+    frame.Cancel();
+    CHECK_FALSE(frame.Token().IsValid());
+    auto second = frontend->BeginFrame({.frameNumber = 2, .outputExtent = {640, 480}});
+    REQUIRE(second.HasValue());
+    auto replacement = std::move(second).Value();
+    CHECK(replacement.Token().IsValid());
+    CHECK(replacement.Token() != previous);
+}

@@ -1,6 +1,7 @@
 #include "VulkanNativeRuntime.h"
 
 #include "VulkanGraphRuntime.h"
+#include "VulkanPresentationRuntime.h"
 #include "VulkanRenderBackendErrors.h"
 #include "VulkanResourceConversions.h"
 #include "VulkanResourceRuntime.h"
@@ -10,9 +11,11 @@
 #include <bit>
 #include <exception>
 #include <format>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace Horo::Render {
@@ -74,14 +77,18 @@ namespace Horo::Render {
 
         class VulkanNativeRuntime final : public IVulkanRuntimePort,
                                           public IVulkanResourcePort,
-                                          public IVulkanCommandPort {  // NOSONAR(cpp:S1448)
+                                          public IVulkanCommandPort,
+                                          public Detail::IVulkanEditorGraphicsPort {  // NOSONAR(cpp:S1448)
         public:
-            explicit VulkanNativeRuntime(IVulkanLoaderPort &loaderPort) noexcept : loaderPort_(&loaderPort) {}
+            explicit VulkanNativeRuntime(IVulkanLoaderPort &loaderPort, Detail::VulkanEditorGraphicsBridge *bridge) noexcept
+                : loaderPort_(&loaderPort), editorBridge_(bridge) {}
 
             ~VulkanNativeRuntime() override {
                 DestroyDevice();
                 DestroyInstance();
                 ReleaseLoader();
+                if (editorBridge_)
+                    editorBridge_->Detach(*this);
             }
 
             Result<void> AcquireLoader() override {
@@ -167,7 +174,17 @@ namespace Horo::Render {
                 if (const VkResult result = dispatch_.createInstance(&createInfo, nullptr, &instance_); result != VK_SUCCESS) {
                     return Result<void>::Failure(NativeFailure("vkCreateInstance", result));
                 }
-                return LoadInstanceDispatch();
+                if (auto loaded = LoadInstanceDispatch(); loaded.HasError())
+                    return loaded;
+                if (std::ranges::find(request.enabledExtensions, VK_KHR_SURFACE_EXTENSION_NAME) != request.enabledExtensions.end()) {
+                    auto created = loaderPort_->CreatePresentationSurface(instance_);
+                    if (created.HasError())
+                        return Result<void>::Failure(created.ErrorValue());
+                    if (created.Value() == VK_NULL_HANDLE)
+                        return Result<void>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported));
+                    surface_ = created.Value();
+                }
+                return Result<void>::Success();
             }
 
             Result<VulkanAdapterEnumeration> EnumeratePhysicalDevices(const std::uint32_t maxAdapters) override {
@@ -201,13 +218,9 @@ namespace Horo::Render {
                 return Result<VulkanAdapterEnumeration>::Success(std::move(enumeration));
             }
 
-            Result<void> CreateDevice(const VulkanDeviceRequest &request) override {
-                const auto selected = std::ranges::find(nativeAdapters_, request.adapter, &NativeAdapter::id);
-                if (selected == nativeAdapters_.end()) {
-                    return Result<void>::Failure(MakeError(VulkanBackendErrors::AdapterNotFound));
-                }
-                constexpr float priority{1.0F};
-                std::array<VkDeviceQueueCreateInfo, 3> queueInfos{};
+            /** @brief Deduplicates native queue families without changing requested role assignments. */
+            static std::uint32_t PrepareDeviceQueues(const VulkanDeviceRequest &request, const float &priority,
+                                                     std::array<VkDeviceQueueCreateInfo, 3> &queueInfos) {
                 std::uint32_t queueInfoCount{0};
                 const std::array families{request.graphicsQueueFamily, request.presentationQueueFamily, request.transferQueueFamily};
                 for (const auto family : families) {
@@ -220,9 +233,24 @@ namespace Horo::Render {
                                                                            .queueCount = 1,
                                                                            .pQueuePriorities = &priority};
                 }
+                return queueInfoCount;
+            }
+
+            Result<void> CreateDevice(const VulkanDeviceRequest &request) override {
+                const auto selected = std::ranges::find(nativeAdapters_, request.adapter, &NativeAdapter::id);
+                if (selected == nativeAdapters_.end()) {
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::AdapterNotFound));
+                }
+                constexpr float priority{1.0F};
+                std::array<VkDeviceQueueCreateInfo, 3> queueInfos{};
+                const auto queueInfoCount = PrepareDeviceQueues(request, priority, queueInfos);
                 const std::vector<const char *> extensionNames = NativeNames(request.enabledExtensions);
+                VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT
+                    maintenance{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
+                                .swapchainMaintenance1 = request.enableSwapchainMaintenance};
                 VkPhysicalDeviceVulkan13Features features13{
                     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+                    .pNext = request.enableSwapchainMaintenance ? &maintenance : nullptr,
                     .synchronization2 = request.enabledFeatures.synchronization2,
                     .dynamicRendering = request.enabledFeatures.dynamicRendering,
                 };
@@ -250,8 +278,23 @@ namespace Horo::Render {
                 return InitializeResources(selected->device, request);
             }
 
+            /** @brief Binds borrowed editor device facts and validates their canonical graphics queue role. */
+            Result<void> BindEditorDevice(const VkPhysicalDevice physical, const VulkanDeviceRequest &request) {
+                editorPhysical_ = physical;
+                editorGraphicsFamily_ = request.graphicsQueueFamily;
+                editorFrames_ = request.maxFramesInFlight;
+                const auto graphicsAssignment =
+                    std::ranges::find(request.queueAssignments, RenderQueueRole::Graphics, &RenderQueueAssignment::role);
+                if (graphicsAssignment == request.queueAssignments.end())
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::GraphicsQueueUnavailable));
+                editorGraphicsIdentity_ = graphicsAssignment->queue;
+                return Result<void>::Success();
+            }
+
             /** @brief Attaches the sole resource registry and shader owner to the selected native device. */
             Result<void> InitializeResources(VkPhysicalDevice physical, const VulkanDeviceRequest &request) {
+                if (auto bound = BindEditorDevice(physical, request); bound.HasError())
+                    return bound;
                 VkPhysicalDeviceMemoryProperties memoryProperties{};
                 dispatch_.getPhysicalDeviceMemoryProperties(physical, &memoryProperties);
                 if (auto resources = resources_.Initialize(memoryProperties, device_, dispatch_.getDeviceProcAddr); resources.HasError())
@@ -291,8 +334,46 @@ namespace Horo::Render {
                                                        .vertexLayerEnabled = request.enableVertexLayerRouting});
                     prepared.HasError())
                     return prepared;
-                return PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
-                                                   incarnation.Value());
+                if (auto published = PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
+                                                                 incarnation.Value());
+                    published.HasError())
+                    return published;
+                return request.enableSwapchainMaintenance ? InitializePresentation(physical, request, incarnation.Value())
+                                                          : Result<void>::Success();
+            }
+
+            /** @brief Binds WSI retirement to the exact canonical graph completion owner after native resource admission. */
+            Result<void> InitializePresentation(VkPhysicalDevice physical, const VulkanDeviceRequest &request,
+                                                const std::uint64_t incarnation) {
+                if (!surface_)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported));
+                observePresentation_ = [this, deviceIncarnation = incarnation](const RenderTimelinePoint completion) {
+                    return graph_.ObserveSubmission({.completion = completion, .expectedDeviceIncarnation = deviceIncarnation});
+                };
+                presentation_ = std::make_unique<Detail::VulkanPresentationRuntime>();
+                return presentation_->Initialize({.instance = instance_,
+                                                  .physical = physical,
+                                                  .device = device_,
+                                                  .surface = surface_,
+                                                  .presentQueue = presentationQueue_,
+                                                  .graphicsFamily = request.graphicsQueueFamily,
+                                                  .presentFamily = request.presentationQueueFamily,
+                                                  .frames = request.maxFramesInFlight,
+                                                  .instanceResolver = dispatch_.getInstanceProcAddr,
+                                                  .deviceResolver = dispatch_.getDeviceProcAddr,
+                                                  .observeCompletion = observePresentation_});
+            }
+
+            bool SupportsWindowPresentation() const noexcept override {
+                return presentation_ != nullptr;
+            }
+
+            Result<bool> PollPresentationAvailability(const FramebufferExtent extent) override {
+                return presentation_ ? presentation_->PollAvailability(extent) : IVulkanCommandPort::PollPresentationAvailability(extent);
+            }
+
+            Result<void> ResizePresentation(const FramebufferExtent extent, const PresentMode mode) override {
+                return presentation_ ? presentation_->Resize(extent, mode) : IVulkanCommandPort::ResizePresentation(extent, mode);
             }
 
             IRenderResourceBackend *ResourceBackend() noexcept override {
@@ -309,6 +390,17 @@ namespace Horo::Render {
                 const FrameToken frame{nextFrame_};
                 if (auto begun = graph_.BeginFrame(frame); begun.HasError())
                     return Result<FrameToken>::Failure(std::move(begun).ErrorValue());
+                if (presentation_) {
+                    const auto output = presentation_->BeginFrame(frame);
+                    if (output.HasError()) {
+                        graph_.AbortFrame(frame);
+                        return Result<FrameToken>::Failure(output.ErrorValue());
+                    }
+                    presentationFrame_ = output.Value();
+                    presentationFrameToken_ = frame;
+                    presentationCompletion_ = {};
+                    primaryOutputPrepared_ = false;
+                }
                 ++nextFrame_;
                 return Result<FrameToken>::Success(frame);
             }
@@ -325,12 +417,33 @@ namespace Horo::Render {
                 return graph_.ExecuteMaterialPass(request);
             }
 
+#include "VulkanNativeEditorDelegation.inl"
+
             Result<void> SubmitFrame(const FrameToken frame) override {
-                return graph_.SubmitFrame(frame);
+                if (presentation_ && (presentationFrameToken_ != frame || !presentationCompletion_.IsValid()))
+                    return Result<void>::Failure(
+                        MakeError(VulkanBackendErrors::InvalidCommandState,
+                                  "Interactive Vulkan requires the matching GUI/viewport tail before presentation."));
+                if (const auto submitted = graph_.SubmitFrame(frame); submitted.HasError())
+                    return submitted;
+                if (!presentation_)
+                    return Result<void>::Success();
+                // SYNC: Successful tail submission publishes its exact completion before any present or recovery path.
+                if (const auto retained = presentation_->Submitted(frame, presentationCompletion_); retained.HasError())
+                    std::terminate();
+                presentationFrameToken_ = {};
+                presentationCompletion_ = {};
+                return presentation_->Present(frame);
             }
 
             void AbortFrame(const FrameToken frame) noexcept override {
                 graph_.AbortFrame(frame);
+                if (presentation_)
+                    presentation_->Abort(frame);
+                if (frame == presentationFrameToken_) {
+                    presentationFrameToken_ = {};
+                    presentationCompletion_ = {};
+                }
             }
 
             Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
@@ -338,19 +451,37 @@ namespace Horo::Render {
             }
 
             Result<void> BeginShutdownCommands() override {
+                if (presentation_)
+                    if (auto closed = presentation_->BeginShutdown(); closed.HasError())
+                        return closed;
                 return graph_.BeginShutdown();
             }
 
             Result<RenderBackendDrainProgress> PollCommandDrain() override {
+                if (presentation_)
+                    if (auto retired = presentation_->PollDrain();
+                        retired.HasError() || retired.Value() != RenderBackendDrainProgress::Drained)
+                        return retired;
                 return graph_.PollDrain();
             }
 
             void DestroyDevice() noexcept override {
+                if (presentation_) {
+                    const auto closed = presentation_->BeginShutdown();
+                    const auto drained = presentation_->PollDrain();
+                    if (closed.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                        std::terminate();
+                    presentation_.reset();
+                    observePresentation_ = {};
+                }
                 // Private rollback is legal only after explicit terminal drain or before any submission.
                 const auto closing = graph_.BeginShutdown();
                 if (const auto drained = graph_.PollDrain();
                     closing.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
                     std::terminate();
+                for (auto &child : editorChildren_)
+                    if (auto *owned = std::exchange(child, nullptr))
+                        owned->ReleaseNative();
                 resources_.ShutdownResources();
                 resourceCapabilities_ = {};
                 if (device_ != VK_NULL_HANDLE && dispatch_.destroyDevice != nullptr) {
@@ -366,6 +497,10 @@ namespace Horo::Render {
             void DestroyInstance() noexcept override {
                 DestroyDevice();
                 nativeAdapters_.clear();
+                if (surface_ != VK_NULL_HANDLE) {
+                    loaderPort_->DestroyPresentationSurface(instance_, surface_);
+                    surface_ = VK_NULL_HANDLE;
+                }
                 if (instance_ != VK_NULL_HANDLE && dispatch_.destroyInstance != nullptr) {
                     dispatch_.destroyInstance(instance_, nullptr);
                 }
@@ -528,16 +663,20 @@ namespace Horo::Render {
                 VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &identity};
                 dispatch_.getPhysicalDeviceProperties2(device, &properties);
 
-                VkPhysicalDeviceVulkan13Features features13{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+                auto extensions = EnumerateDeviceExtensions(device);
+                if (extensions.HasError())
+                    return Result<VulkanAdapterCandidate>::Failure(extensions.ErrorValue());
+                const bool hasMaintenance =
+                    std::ranges::find(extensions.Value(), VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) != extensions.Value().end();
+                VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance{
+                    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT};
+                VkPhysicalDeviceVulkan13Features features13{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+                                                            .pNext = hasMaintenance ? &maintenance : nullptr};
                 VkPhysicalDeviceVulkan12Features features12{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                                                             .pNext = &features13};
                 VkPhysicalDeviceFeatures2 features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &features12};
                 dispatch_.getPhysicalDeviceFeatures2(device, &features);
 
-                auto extensions = EnumerateDeviceExtensions(device);
-                if (extensions.HasError()) {
-                    return Result<VulkanAdapterCandidate>::Failure(std::move(extensions).ErrorValue());
-                }
                 auto queues = EnumerateQueues(device);
                 if (queues.HasError()) {
                     return Result<VulkanAdapterCandidate>::Failure(std::move(queues).ErrorValue());
@@ -564,6 +703,7 @@ namespace Horo::Render {
                     .portabilitySubset = portabilitySubset,
                     .driverAllowed = driverAllowed.Value(),
                     .vertexLayerRouting = features12.shaderOutputLayer == VK_TRUE,
+                    .swapchainMaintenance = hasMaintenance && maintenance.swapchainMaintenance1 == VK_TRUE,
                 });
             }
 
@@ -668,6 +808,18 @@ namespace Horo::Render {
 
             IVulkanLoaderPort *loaderPort_{nullptr};
             bool loaderAcquired_{false};
+            const std::thread::id editorOwner_{std::this_thread::get_id()};
+            Detail::VulkanEditorGraphicsBridge *editorBridge_{};
+            std::array<Detail::IVulkanEditorDeviceChild *, 2> editorChildren_{};
+            VkPhysicalDevice editorPhysical_{};
+            std::uint32_t editorGraphicsFamily_{};
+            std::uint32_t editorFrames_{};
+            RenderQueueId editorGraphicsIdentity_;
+            Detail::VulkanPresentationFrame presentationFrame_;
+            FrameToken presentationFrameToken_;
+            RenderTimelinePoint presentationCompletion_;
+            PrimaryOutputAttachment presentationOutput_;
+            bool primaryOutputPrepared_{};
 
             VkInstance instance_{VK_NULL_HANDLE};
 
@@ -675,18 +827,27 @@ namespace Horo::Render {
             VkDevice device_{VK_NULL_HANDLE};
             VkQueue graphicsQueue_{VK_NULL_HANDLE};
             VkQueue presentationQueue_{VK_NULL_HANDLE};
+            VkSurfaceKHR surface_{VK_NULL_HANDLE};
             VkQueue transferQueue_{VK_NULL_HANDLE};
             std::uint64_t nextFrame_{1};
 
             RenderCapabilitySnapshot resourceCapabilities_;
             Detail::VulkanResourceRuntime resources_;
             Detail::VulkanGraphRuntime graph_;
+            std::function<Result<bool>(RenderTimelinePoint)> observePresentation_;
+            std::unique_ptr<Detail::VulkanPresentationRuntime> presentation_;
         };
     }  // namespace
 
     namespace Detail {
-        std::shared_ptr<IVulkanRuntimePort> CreateVulkanNativeRuntime(IVulkanLoaderPort &loaderPort) {
-            return std::make_shared<VulkanNativeRuntime>(loaderPort);
+        std::shared_ptr<IVulkanRuntimePort> CreateVulkanNativeRuntime(IVulkanLoaderPort &loaderPort,
+                                                                      VulkanEditorGraphicsBridge *editorBridge) {
+            if (editorBridge && editorBridge->Port())
+                return {};
+            auto runtime = std::make_shared<VulkanNativeRuntime>(loaderPort, editorBridge);
+            if (editorBridge && !editorBridge->Attach(*runtime))
+                return {};
+            return runtime;
         }
     }  // namespace Detail
 }  // namespace Horo::Render

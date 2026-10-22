@@ -44,7 +44,12 @@ namespace Horo::UiStyleTest {
                                    {},
                                    UiStateLayer::Availability,
                                    {{CoreUiStylePropertyId(UiCoreStyleProperty::Fill),
-                                     UiStyleValueSource::Literal(UiStyleColor{0.5F, 0.5F, 0.5F, 1}), true}}}};
+                                     UiStyleValueSource::Literal(UiStyleColor{0.5F, 0.5F, 0.5F, 1}), true}}},
+                                  {UiVisualStateMask{UiVisualState::Disabled},
+                                   {},
+                                   UiStateLayer::Availability,
+                                   {{CoreUiStylePropertyId(UiCoreStyleProperty::Fill),
+                                     UiStyleValueSource::Literal(UiStyleColor{0.8F, 0.8F, 0.8F, 1}), false}}}};
             WriteStyle();
             Rebuild();
             factory = MakeEditorUiInspectorResourcesFactory(jobs, assets, mutations, files);

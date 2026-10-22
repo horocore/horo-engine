@@ -303,6 +303,7 @@ namespace Horo::Render::OpenGLSmokeTests {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glDrawBuffer(GL_NONE);
         ConfigureCallerOpenGLState(callerState);
+        gui.BindViewportTexture(view);
         REQUIRE(frame.ComposeGui(gui).HasValue());
         CheckCallerOpenGLState(callerState);
         RestoreDefaultOpenGLState();
@@ -322,7 +323,7 @@ namespace Horo::Render::OpenGLSmokeTests {
     /** @brief Covers initialization, invalid input and lost-current-context rejection before native drawing. */
     void InitializeGui(Editor::EditorGuiRendererOpenGL &gui, SDL_Window &window, HeadlessOpenGLPresentationPort &presentationPort) {
         CHECK(gui.BeginFrame().HasError());
-        CHECK(gui.RenderDrawData().HasError());
+        CHECK(gui.RenderDrawData({}).HasError());
         REQUIRE(gui.Initialize().HasValue());
         CHECK(gui.Initialize().HasError());
         CHECK(gui.CreateTexture({}).HasError());

@@ -177,17 +177,6 @@ namespace Horo::Editor {
         lightVisualizerOptions_ = options;
     }
 
-    /** @copydoc EditorViewportRendererOpenGL::RequestedExtent */
-    EditorViewportExtent EditorViewportRendererOpenGL::RequestedExtent() const noexcept {
-        const EditorViewportExtent allocatedExtent = resources_.AllocatedExtent();
-        return requestedExtent_.IsValid() && allocatedExtent.IsValid() ? allocatedExtent : requestedExtent_;
-    }
-
-    /** @copydoc EditorViewportRendererOpenGL::ClipDepthRange */
-    Math::ClipDepthRange EditorViewportRendererOpenGL::ClipDepthRange() const noexcept {
-        return Math::ClipDepthRange::NegativeOneToOne;
-    }
-
     /** @copydoc EditorViewportRendererOpenGL::ExecuteStaticMeshPass */
     Result<void> EditorViewportRendererOpenGL::ExecuteStaticMeshPass(const Render::StaticMeshPassDescriptor &descriptor) {
         if (!initialized_) {
@@ -371,6 +360,7 @@ namespace Horo::Editor {
             .v0 = 1.0F,
             .u1 = 1.0F,
             .v1 = 0.0F,
+            .sampledView = resources_.ColorTextureView(),
         };
     }
 

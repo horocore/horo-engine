@@ -80,7 +80,7 @@ namespace {
                 .resourcePublication = resources ? resources->publication : 0};
     }
 
-    UiInspectorResourceSnapshot Resources(const bool stateSealed = false) {
+    UiInspectorResourceSnapshot Resources(const bool conflictingAvailability = false) {
         Assets::AssetRegistry assets;
         UiInspectorResources host{assets};
         UiStyleRegistryDefinition definition;
@@ -91,12 +91,19 @@ namespace {
                                   .maximumScalar = 1},
                                  {.id = Id<UiStylePropertyId>(2), .category = UiStyleValueCategory::Color, .defaultValue = UiStyleColor{}}};
         definition.assets.push_back({.id = Id<RuntimeStyleAssetId>(1)});
-        if (stateSealed)
+        if (conflictingAvailability) {
             definition.assets.back().states.push_back(
                 {UiVisualStateMask{UiVisualState::Disabled},
                  {},
                  UiStateLayer::Availability,
                  {{Id<UiStylePropertyId>(1), UiStyleValueSource::Literal(UiStyleScalar{0.25F}), true}}});
+            // States follow inline values; rejection requires a later write to the sealed property.
+            definition.assets.back().states.push_back(
+                {UiVisualStateMask{UiVisualState::Disabled},
+                 {},
+                 UiStateLayer::Availability,
+                 {{Id<UiStylePropertyId>(1), UiStyleValueSource::Literal(UiStyleScalar{0.5F}), false}}});
+        }
         auto registry = RuntimeStyleRegistry::Create(std::move(definition), RuntimeStyleGeneration::Create(1).Value());
         REQUIRE(registry.HasValue());
         auto lease = std::make_shared<RuntimeStyleRegistry>(std::move(registry).Value());
@@ -306,6 +313,7 @@ TEST_CASE("State-only edits resolve the selected availability cascade before doc
     const auto bytes = SerializeUiDocument(owner.Document()).Value();
     auto value = Presentation(owner);
     value.state.enabled = false;
+    REQUIRE(resources.Validate(owner.Document(), value).HasError());
     const UiCanvasSetPresentation command{context.element, value};
     CHECK(ExecuteUiInspectorPresentation(owner, context, 1, command, &resources).HasError());
     CHECK(SerializeUiDocument(owner.Document()).Value() == bytes);
