@@ -141,7 +141,7 @@ budget. Free public-runner minutes do not remove concurrency limits. Standard
 Linux/Windows runners provide 4 CPUs and 16 GB RAM; ARM macOS provides 3 CPUs and
 7 GB RAM ([runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)).
 
-No new jobs or shards are introduced. Native matrix width is two, shader width
+No new PR jobs or shards are introduced. Native matrix width is two, shader width
 one and Android package width one. With Sonar and D3D12, the post-tooling fan-out is at most six concurrent
 jobs rather than nine. The independent Android storage job can additionally
 occupy one slot if it has not completed yet.
@@ -174,6 +174,21 @@ space: the local source clones held about 1 GB of Git metadata. A sustainable
 policy must bound retained main snapshots and reduce dependency-cache payloads;
 raising each cache limit or adding PR writers would amplify the problem. No
 existing cache was manually deleted during this investigation.
+
+`Compiler cache retention` performs one short, serialized maintenance job after
+main CI/Sonar runs and twice hourly, independently of PR fan-out. It retains the
+newest nonempty snapshot for each exact compiler/profile/archive-version prefix
+and retires only older main snapshots in that group. Before each deletion it
+rechecks that the replacement still exists. Other owners, dependency sources,
+scanner downloads and PR refs are excluded. Only this maintenance workflow has
+`actions: write`; it checks out the default branch and never executes the
+triggering run's code or artifacts. Manual dispatch defaults to dry-run mode.
+The workflow becomes operational only after delivery to the default branch.
+
+This bounds duplicate snapshots, not total repository usage: obsolete compiler
+versions and large source payloads still require a separately measured policy.
+Periodic maintenance also cannot prevent transient quota eviction during an
+upload. Do not count this change as proof that cold starts have been eliminated.
 
 ## Remaining work and acceptance
 

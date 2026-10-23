@@ -68,6 +68,9 @@ jobs:
       - name: Test Python tooling
         run: pytest tests/python/
 
+      - name: Test cache retention policy
+        run: node --test tests/javascript/cache-retention.test.js
+
   android-storage:
     name: Android Storage · NDK arm64 API 29
     runs-on: ubuntu-24.04
