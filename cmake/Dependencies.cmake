@@ -131,9 +131,8 @@ set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 set(JSON_Install OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG "${HORO_NLOHMANN_JSON_REVISION}"
-    GIT_SHALLOW TRUE
+    URL https://codeload.github.com/nlohmann/json/tar.gz/${HORO_NLOHMANN_JSON_REVISION}
+    URL_HASH SHA256=0dbc5e40a01ff142e7e68c03e85247a4dcede2f592d12d3677dee3664d17975a
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
@@ -457,8 +456,8 @@ if(HORO_BUILD_EDITOR_GUI)
 
     FetchContent_Declare(
         imgui
-        GIT_REPOSITORY https://github.com/ocornut/imgui.git
-        GIT_TAG "${HORO_IMGUI_REVISION}"
+        URL https://codeload.github.com/ocornut/imgui/tar.gz/${HORO_IMGUI_REVISION}
+        URL_HASH SHA256=a543367a7b45959d7ea21eeac808e26d3b2264ebc6d59b5046135791e97f4ca9
     )
     FetchContent_MakeAvailable(imgui)
     include(${CMAKE_CURRENT_LIST_DIR}/SourceEditorWidgetDependency.cmake)

@@ -1,9 +1,37 @@
 include(FetchContent)
+include(HoroDependencySdk)
 
 # Upstream's common manifest owns bidi, rule/dictionary break iteration and
 # normalization. Keep the same source list across MSVC, Clang and GCC; no system
 # ICU, host data generator, platform SDK or formatting library is selected.
 function(horo_add_unicode_dependency)
+    set(unicode_definitions
+        U_STATIC_IMPLEMENTATION U_LIB_SUFFIX_C_NAME=_horo
+        UCONFIG_NO_FILE_IO=1 U_ENABLE_DYLOAD=0
+        UCONFIG_NO_FORMATTING=1 UCONFIG_NO_COLLATION=1
+        UCONFIG_NO_TRANSLITERATION=1 UCONFIG_NO_REGULAR_EXPRESSIONS=1
+        UCONFIG_USE_ML_PHRASE_BREAKING=0)
+    horo_prepare_dependency_sdk(Unicode "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
+        sdk_root sdk_identity sdk_archive)
+    set(sdk_library "${sdk_root}/lib/unicode${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    if(sdk_root AND EXISTS "${sdk_library}" AND EXISTS "${sdk_root}/include/unicode/utypes.h"
+       AND EXISTS "${sdk_root}/share/icudt78l.dat" AND EXISTS "${sdk_root}/share/ICU.txt")
+        add_library(HoroThirdPartyUnicode STATIC IMPORTED GLOBAL)
+        add_library(HoroThirdParty::Unicode ALIAS HoroThirdPartyUnicode)
+        set_target_properties(HoroThirdPartyUnicode PROPERTIES IMPORTED_LOCATION "${sdk_library}")
+        target_include_directories(HoroThirdPartyUnicode SYSTEM INTERFACE "${sdk_root}/include")
+        target_compile_definitions(HoroThirdPartyUnicode INTERFACE ${unicode_definitions})
+        if(NOT WIN32)
+            find_package(Threads REQUIRED)
+            target_link_libraries(HoroThirdPartyUnicode INTERFACE Threads::Threads)
+        endif()
+        install(FILES "${sdk_root}/share/ICU.txt"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses")
+        install(FILES "${sdk_root}/share/icudt78l.dat"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/unicode")
+        set(HORO_UNICODE_DATA_FILE "${sdk_root}/share/icudt78l.dat" PARENT_SCOPE)
+        return()
+    endif()
     FetchContent_Declare(horo_icu
         URL "https://github.com/unicode-org/icu/releases/download/release-78.2/icu4c-78.2-sources.tgz"
         URL_HASH "SHA256=3e99687b5c435d4b209630e2d2ebb79906c984685e78635078b672e03c89df35"
@@ -31,12 +59,7 @@ function(horo_add_unicode_dependency)
     target_compile_options(HoroThirdPartyUnicode PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     set_target_properties(HoroThirdPartyUnicode PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(HoroThirdPartyUnicode SYSTEM PUBLIC "${horo_icu_SOURCE_DIR}/source/common")
-    target_compile_definitions(HoroThirdPartyUnicode PUBLIC
-        U_STATIC_IMPLEMENTATION U_LIB_SUFFIX_C_NAME=_horo
-        UCONFIG_NO_FILE_IO=1 U_ENABLE_DYLOAD=0
-        UCONFIG_NO_FORMATTING=1 UCONFIG_NO_COLLATION=1
-        UCONFIG_NO_TRANSLITERATION=1 UCONFIG_NO_REGULAR_EXPRESSIONS=1
-        UCONFIG_USE_ML_PHRASE_BREAKING=0)
+    target_compile_definitions(HoroThirdPartyUnicode PUBLIC ${unicode_definitions})
     target_compile_definitions(HoroThirdPartyUnicode PRIVATE U_COMMON_IMPLEMENTATION)
     if(WIN32)
         target_compile_definitions(HoroThirdPartyUnicode PRIVATE NOMINMAX)
@@ -49,4 +72,19 @@ function(horo_add_unicode_dependency)
     install(FILES "${horo_icu_SOURCE_DIR}/source/data/in/icudt78l.dat"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/unicode")
     set(HORO_UNICODE_DATA_FILE "${horo_icu_SOURCE_DIR}/source/data/in/icudt78l.dat" PARENT_SCOPE)
+    if(HORO_BUILD_DEPENDENCY_SDK_PACKAGES AND sdk_identity)
+        set(stage "${CMAKE_BINARY_DIR}/dependency-sdk/staging/${sdk_archive}")
+        add_custom_target(horo-package-unicode
+            COMMAND "${CMAKE_COMMAND}" -E rm -rf "${stage}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${stage}/lib" "${stage}/include" "${stage}/share"
+            COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:HoroThirdPartyUnicode>"
+                "${stage}/lib/unicode${CMAKE_STATIC_LIBRARY_SUFFIX}"
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${horo_icu_SOURCE_DIR}/source/common/unicode" "${stage}/include/unicode"
+            COMMAND "${CMAKE_COMMAND}" -E copy "${horo_icu_SOURCE_DIR}/LICENSE" "${stage}/share/ICU.txt"
+            COMMAND "${CMAKE_COMMAND}" -E copy "${horo_icu_SOURCE_DIR}/source/data/in/icudt78l.dat" "${stage}/share/icudt78l.dat"
+            COMMAND "${HORO_DEPENDENCY_SDK_PYTHON}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.github/scripts/dependency_package.py"
+                pack --root "${stage}" --identity "${sdk_identity}"
+                --output "${CMAKE_BINARY_DIR}/dependency-sdk/packages/${sdk_archive}"
+            DEPENDS HoroThirdPartyUnicode VERBATIM)
+    endif()
 endfunction()

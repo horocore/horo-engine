@@ -786,7 +786,7 @@ def dependency_fingerprint(root: Path) -> str:
     paths = {
         root / "CMakeLists.txt",
         root / "cmake" / "Dependencies.cmake",
-        *root.glob("cmake/Horo*Dependency.cmake"),
+        *root.glob("cmake/*Dependency.cmake"),
         *root.glob("cmake/Horo*DependencyPolicy.cmake"),
         root / "cmake" / "HoroGnsProtobufConfig.cmake",
     }

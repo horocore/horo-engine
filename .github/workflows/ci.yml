@@ -68,6 +68,9 @@ jobs:
       - name: Test Python tooling
         run: pytest tests/python/
 
+      - name: Test cache retention policy
+        run: node --test tests/javascript/cache-retention.test.js tests/javascript/external-cache-policy.test.js
+
   android-storage:
     name: Android Storage · NDK arm64 API 29
     runs-on: ubuntu-24.04
@@ -104,6 +107,8 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      # Share hosted capacity across concurrent PRs without adding shards.
+      max-parallel: 1
       matrix:
         include:
           - os: ubuntu-26.04
@@ -310,6 +315,7 @@ jobs:
       HORO_LOG_LEVEL: debug
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           - name: Linux / GCC
@@ -381,6 +387,19 @@ jobs:
       - name: Build Debug
         id: debug_build
         run: cmake --build --preset "${{ matrix.preset }}"
+
+      # Preserve Debug's working set before Release/Metal/provider variants
+      # compete for the bounded compiler cache. Later failures retain this
+      # completed checkpoint; only main may publish it.
+      - name: Checkpoint main Debug compiler cache
+        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/save-native-cache
+        with:
+          compiler-key: ${{ steps.cache.outputs.compiler-key }}
+          dependency-key: ${{ steps.cache.outputs.dependency-key }}
+          dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
+          dependency-ready: 'false'
 
       - name: Qualify OpenGL editor GUI composition with Mesa
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.debug_build.outcome == 'success' }}
@@ -511,7 +530,7 @@ jobs:
         if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
         run: cmake --preset ci-xr-disabled
 
-      - name: Checkpoint main build caches
+      - name: Checkpoint complete dependency sources
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         continue-on-error: true
         uses: ./.github/actions/save-native-cache
@@ -519,6 +538,7 @@ jobs:
           compiler-key: ${{ steps.cache.outputs.compiler-key }}
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
+          compiler-ready: 'false'
           dependency-ready: ${{ steps.xr_configure.outcome == 'success' && (needs.tooling.outputs.network != 'true' || steps.network_configure.outcome == 'success') }}
 
       - name: Prepare Windows mixer allocation diagnostics

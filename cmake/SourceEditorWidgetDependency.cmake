@@ -4,6 +4,8 @@ set(HORO_ZEP_REVISION "7aa7ed940d5c889dc6b27a2529a740c0bb2ad6af")
 FetchContent_Declare(zep
     GIT_REPOSITORY https://github.com/Rezonality/zep.git
     GIT_TAG "${HORO_ZEP_REVISION}"
+    # Horo owns dependency composition; Zep's optional vcpkg tree is unused.
+    GIT_SUBMODULES ""
     SOURCE_SUBDIR horo_no_upstream_project
 )
 FetchContent_MakeAvailable(zep)
