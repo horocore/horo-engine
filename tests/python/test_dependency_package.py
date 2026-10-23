@@ -243,9 +243,8 @@ add_test(NAME sdk-consumer COMMAND consumer)
     run("ctest", "--test-dir", str(consumer / "build"), "-C", "Debug", "--output-on-failure")
 
 
-def test_cached_unicode_target_exports_to_external_gameplay_consumer(tmp_path):
-    if not shutil.which("cmake"):
-        pytest.skip("CMake unavailable")
+def _build_unicode_fixture(tmp_path):
+    """Build a tiny archive with the layout expected by the Unicode recipe."""
     stage = tmp_path / "verified sdk ü"
     (stage / "include/unicode").mkdir(parents=True)
     (stage / "share").mkdir()
@@ -265,6 +264,14 @@ set_target_properties(fixture PROPERTIES PREFIX "" OUTPUT_NAME unicode
     run("cmake", "-S", str(producer), "-B", str(producer / "build"), f"-DSDK_ROOT={stage}",
         "-DCMAKE_BUILD_TYPE=Debug")
     run("cmake", "--build", str(producer / "build"), "--config", "Debug", "--parallel", "1")
+
+    return stage
+
+
+def test_cached_unicode_target_exports_to_external_gameplay_consumer(tmp_path):
+    if not shutil.which("cmake"):
+        pytest.skip("CMake unavailable")
+    stage = _build_unicode_fixture(tmp_path)
 
     host = tmp_path / "host"
     host.mkdir()
