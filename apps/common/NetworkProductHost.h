@@ -3,6 +3,7 @@
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "NetworkProductSession.h"
 
 #include <memory>
 #include <optional>
@@ -21,6 +22,7 @@ namespace Horo::Application::Internal {
         std::uint64_t hostGeneration{};
         std::span<const Network::NetworkModeWorld> worlds;
         Network::NetworkModePresentation presentation{};
+        std::shared_ptr<ClientSessionOwner> sessions; /**< Required in network modes; retained through teardown. */
     };
 
     // Application-owned bridge: target admission precedes the canonical runtime lifecycle.
@@ -41,12 +43,38 @@ namespace Horo::Application::Internal {
 
         [[nodiscard]] Result<void> Startup();
         [[nodiscard]] Result<void> RunFrame();
+        /**
+         * @brief Queue bounded replacement worlds at the canonical safe point.
+         * @param worlds Replacement world inventory copied synchronously.
+         * @param admittedClientSession Exact admitted client generation, when required by the selected mode.
+         * @return Success, or typed rejection for invalid/overlapping work or an unconsumed prior failure.
+         * @details Consume any prior travel failure before issuing another request. A fresh host starts
+         * without a result; a stopped host/session owner cannot restart as an independent session.
+         */
         [[nodiscard]] Result<void> RequestTravel(std::span<const Network::NetworkModeWorld> worlds,
                                                  std::optional<Network::NetworkOperationGeneration> admittedClientSession = std::nullopt);
+        /**
+         * @brief Consume a queued-travel failure even after automatic failure teardown or shutdown.
+         * @return Original typed failure once, or null when no failure remains. Shutdown discards
+         * unexecuted travel without manufacturing a failure and preserves already recorded errors.
+         */
         [[nodiscard]] std::optional<Error> TakeTravelFailure();
-        [[nodiscard]] Result<void> AdmitClientSession(Network::NetworkModeWorldKind world, const Network::PeerSessionLifecycle &session,
-                                                      Network::ConnectionHandle connection, Network::NetworkOperationGeneration generation,
-                                                      std::uint64_t nowTick);
+        /**
+         * @brief Retain the exact canonical lifecycle and admit it using the host-selected session clock.
+         * @param world Client world receiving the admitted generation.
+         * @param session Owned shared canonical lifecycle, already active under the host trust authority.
+         * @param connection Exact transport connection generation bound by that lifecycle.
+         * @param generation Exact session generation; replacements require a new transport handle.
+         * @return Canonical admission result or typed clock, generation, role or lifecycle error.
+         */
+        [[nodiscard]] Result<void> AdmitClientSession(Network::NetworkModeWorldKind world,
+                                                      std::shared_ptr<Network::PeerSessionLifecycle> session,
+                                                      Network::ConnectionHandle connection, Network::NetworkOperationGeneration generation);
+        /**
+         * @brief Borrow the original retained lifecycle terminal until the next admission or destruction.
+         * @return Original terminal, or null while no retained lifecycle has terminalized.
+         */
+        [[nodiscard]] const Network::PeerSessionTerminalSnapshot *ClientSessionTerminal() const noexcept;
         [[nodiscard]] Result<void> DisconnectClient(Network::NetworkModeWorldKind world, Network::NetworkOperationGeneration generation);
         [[nodiscard]] Result<Network::NetworkModeRoleView> Role(Network::NetworkModeWorldKind world, Runtime::SceneRuntimeId scene) const;
         void Shutdown() noexcept;

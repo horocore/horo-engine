@@ -26,10 +26,11 @@ namespace {
             CreateAssetFiles();
             REQUIRE((Assets::RebuildAssetRegistry(registry_, projectRoot_, Assets::AssetRegistryOpenMode::Edit).HasValue()));
             REQUIRE((runtimeScene_.Startup(cancellation_.Token()).HasValue()));
-            controller_ = std::make_unique<EditorWorkspaceController>(projectRoot_, runtimeScene_, registry_.Snapshot(),
-                                                                      EditorWorkspaceDependencies{.mutableAssetRegistry = &registry_,
-                                                                                                  .mutations = &mutations_,
-                                                                                                  .durableFiles = &files});
+            controller_ =
+                std::make_unique<EditorWorkspaceController>(projectRoot_, runtimeScene_, registry_.Snapshot(),
+                                                            EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = &registry_},
+                                                                                        .mutations = &mutations_,
+                                                                                        .durableFiles = &files});
         }
 
         ~ContentBrowserTransferFixture() {

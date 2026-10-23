@@ -540,6 +540,10 @@ Required rules:
 - Foundation does not depend on platform, scene, terrain, renderer, editor, MCP, or UI.
 - Security contracts remain backend-neutral and depend only on Foundation;
   operating-system entropy and durable credential adapters remain in Platform.
+- NetworkRuntime may publicly consume Security's backend-neutral SecureBytes and
+  SecureRandomSource contracts for bounded proof ownership and host-injected
+  entropy. Platform retains concrete entropy/provider composition; this edge
+  does not admit native TLS/backend types or default credentials into NetworkRuntime.
 - The foundation logging facade and structured record model do not depend on
   GUI, editor, transport, or a concrete sink backend.
 - Foundation metric descriptors, aggregation, and profiler instrumentation do

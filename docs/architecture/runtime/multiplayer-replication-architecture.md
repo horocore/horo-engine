@@ -805,3 +805,53 @@ exclude field payloads by default.
 - [Save Game And Persistence](./save-game-and-persistence.md)
 - [Application Security Architecture](../security/application-security.md)
 - [Observability Performance](../observability/observability-performance.md)
+
+
+### Inert editor and cook generation capture
+
+`ReplicationMetadataCapture` is the NetworkApi-owned immutable bridge from actual
+loaded gameplay generations to editor inspection and offline cook. Its builder
+reuses the canonical inventory codec and descriptor snapshot builder, copies all
+schema values into engine-owned storage, and owns sorted observed module IDs.
+It retains neither a caller snapshot control block nor serializers, native code
+leases, Lua VMs, callbacks or providers. Acquired gameplay leases stay local until
+the deep copy completes; existing module retirement remains the only unload owner.
+Its semantic fingerprint commits independently to policy absence/completeness,
+canonical requirements, registered schemas and actual observed module identities.
+
+This additive contract replaces the missing editor/cook handoff: the existing
+ProjectGameplayRegistry discovery/reload boundary publishes inspection evidence,
+and the actual workspace StartWorldBake captures that same generation. Inspection
+never grants admission; unresolved declarations remain opaque editor metadata.
+Absent authored settings remain absent. Explicit policy must be Complete for Cook,
+including complete empty; Unknown is rejected and Optional transport never implies
+disabled networking. Server/Client activation policies retain their separate
+pre-Start authority and are not reused for tooling operations.
+
+WorldBakeApplication declares a public NetworkApi dependency for this typed
+capture. Requests own immutable capture leases. A separate replication digest in
+the project publication fence rejects obsolete results, and the cell cache key
+commits to the same capture. The workspace composes each fence from stable base
+inputs rather than repeatedly hashing an already derived value. Candidate failure
+retains prior registry generations and previously published cook output. Existing
+hosts without authored network policy preserve absence; tests and callers that
+intend a complete inventory must author it explicitly, never infer it from loaded
+schemas or silently upgrade legacy Unknown.
+
+
+The editor refreshes authored policy at its existing debounced gameplay source-watch
+safe point. Unchanged timestamp/size identities retain the same capture without
+parsing or deep copies; StartWorldBake and Pump do no project file I/O. External
+file edits become authoritative only after this canonical source publication,
+consistent with existing gameplay source watchers. Invalid updates retain last-good
+metadata and opaque inspection but retain a typed rejection that blocks new cook
+and invalidates pending publication. A later valid publication clears rejection
+and replaces the fingerprint only if semantic inputs changed. This watch stamp is
+an editor input-change hint, not an independent cook or session authority.
+
+
+A capture with no installed schemas owns a null registered snapshot, matching the
+existing declaration-assessment contract. The canonical descriptor builder remains
+nonempty-only. Capture fingerprints include an explicit schema-presence marker;
+no synthetic empty registry or authored completeness is introduced to represent
+missing code or an actual successfully frozen empty gameplay generation.

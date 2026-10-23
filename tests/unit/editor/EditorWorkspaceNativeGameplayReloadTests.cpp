@@ -1,5 +1,6 @@
 #include "GameplayModuleTestSupport.h"
 #include "Horo/Gameplay/GameModule.h"
+#include "ProjectReplicationTestSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -22,6 +23,7 @@ namespace {
               artifact_(HORO_TEST_GAME_MODULE_PATH),
               descriptorRevision_(Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)) {
             std::filesystem::create_directories(root_ / "assets");
+            Tests::WriteReplicationProject(root_);
             Publish(Gameplay::CurrentGameplayBuildFingerprint());
         }
 

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <filesystem>
+#include <string>
 
 namespace Horo::Runtime {
     namespace {
@@ -10,6 +12,7 @@ namespace Horo::Runtime {
 
         struct Fixture final {
             W::CookedWorldIndexManifest manifest = W::CandidateTestSupport::Manifest();
+            const std::string sourcePath = std::filesystem::absolute("world/source.scene").string();
             std::vector<WorldBuildCell> cells;
             std::vector<std::shared_ptr<const RuntimeSceneCellPayload>> payloads;
             WorldBuildValidationLimits limits{8, 8, 32, 16, 1024, 1024 * 1024, 4 * 1024 * 1024};
@@ -20,7 +23,7 @@ namespace Horo::Runtime {
                                                             W::CandidateTestSupport::Cell(x),
                                                             {static_cast<std::uint64_t>(77 + x)},
                                                             {1}};
-                    cells.push_back({identity, DiagnosticSourceLocation{"/world/source.scene", 7, 4}});
+                    cells.push_back({identity, DiagnosticSourceLocation{sourcePath, 7, 4}});
                     const std::array entities{RuntimeEntityDefinition{.object = {1}}};
                     auto payload = CookRuntimeSceneCellPayload(manifest.Descriptor(), {identity, entities}, identity, {8, 8, 1024 * 1024});
                     REQUIRE(payload.HasValue());
@@ -61,7 +64,7 @@ namespace Horo::Runtime {
         auto output = store.SnapshotIfChanged(0);
         REQUIRE(output.has_value());
         REQUIRE(output->records[0].source.has_value());
-        CHECK(output->records[0].source->absolutePath == "/world/source.scene");
+        CHECK(output->records[0].source->absolutePath == fixture.sourcePath);
         CHECK(output->records[0].source->line == 7);
         CHECK(output->records[0].source->column == 4);
     }
@@ -119,10 +122,10 @@ namespace Horo::Runtime {
         Fixture fixture;
         std::array refs{WorldBuildReference{{fixture.cells[1].expected, {1}},
                                             {fixture.cells[2].expected, {99}},
-                                            DiagnosticSourceLocation{"/world/source.scene", 20, 1}},
+                                            DiagnosticSourceLocation{fixture.sourcePath, 20, 1}},
                         WorldBuildReference{{fixture.cells[0].expected, {1}},
                                             {fixture.cells[1].expected, {99}},
-                                            DiagnosticSourceLocation{"/world/source.scene", 10, 1}}};
+                                            DiagnosticSourceLocation{fixture.sourcePath, 10, 1}}};
         auto first = fixture.Run(refs);
         REQUIRE(first.HasValue());
         std::ranges::reverse(refs);

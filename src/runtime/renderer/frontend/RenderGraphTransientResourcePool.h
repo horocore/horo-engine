@@ -14,9 +14,10 @@ namespace Horo::Render::Detail {
     /** @brief Stable frontend-owned metadata; backing and completion pins remain registry-owned. */
     struct RenderGraphTransientResourceSet final {
         RenderGraphTransientResourcesHandle handle;
-        std::vector<RenderGraphResourceLifetime> lifetimes;
-        std::vector<RenderGraphResourceBinding> bindings;
-        std::vector<RenderGraphResidentIdentity> backing;
+        // Count constructors propagate MSVC Debug iterator-proxy allocation failures to preparation's caller.
+        std::vector<RenderGraphResourceLifetime> lifetimes = std::vector<RenderGraphResourceLifetime>(0);
+        std::vector<RenderGraphResourceBinding> bindings = std::vector<RenderGraphResourceBinding>(0);
+        std::vector<RenderGraphResidentIdentity> backing = std::vector<RenderGraphResidentIdentity>(0);
         bool inFlight{false};
         bool released{false};
     };

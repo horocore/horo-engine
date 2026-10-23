@@ -70,7 +70,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         /** @brief Capture gameplay borrows and the selected play factory at the host composition boundary. */
-        EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, GuiScreenHost &host,
+        EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, const GuiScreenHost &host,
                                                              EditorPlaySceneFactory sceneFactory) {
             const auto *environment = services.TryGet<Application::GameplayBuildEnvironment>();
             return {.builds = services.TryGet<Application::GameplayBuildService>(),
@@ -170,35 +170,34 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                                                   PCGEditorCatalog &&catalog,
                                                                                   PCGPreviewInputs &&previewInputs) const {
         const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
-        return EditorWorkspaceDependencies{
-            .mutableAssetRegistry = projectServices_.assetRegistry,
-            .uiInspectorResources = uiInspectorResources,
-            .collision = {.inventory = projectServices_.collisionInventory,
-                          .activation = projectServices_.collisionActivation,
-                          .previewReceipt = projectServices_.previewCollisionReceipt},
-            .mutations = projectServices_.mutations,
-            .durableFiles = projectServices_.durableFiles,
-            .assetRegistrySource = std::move(sources.registry),
-            .importerCatalog = projectServices_.importerCatalog,
-            .jobs = &services_.Get<JobSystem>(),
-            .worldBakeOperations = services_.TryGet<OperationStore>(),
-            .worldBakeOutput = services_.TryGet<BuildOutputStore>(),
-            .worldBakeDependencies = bakeDependencies ? std::optional{*bakeDependencies} : std::nullopt,
-            .gameplay = BindGameplayServices(services_, host_, BindPlayFactory(projectRoot)),
-            .localization = &context_.localization,
-            .engineEvents = &context_.engineEvents,
-            .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
-            .streamingPreviewPolicy = services_.TryGetConst<WorldStreamingPreviewRuntimePolicy>(),
-            .streamingPreview = services_.TryGet<WorldStreamingPreviewHost>(),
-            .worldSourceFiles = std::move(sources.world),
-            .documentSessionOwner = sources.owner,
-            .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
-            .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-            .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
-                       .stageFactory = BindPrefabStageFactory(projectRoot)},
-            .pcg = std::move(catalog),
-            .pcgPreviewInputs = std::move(previewInputs),
-        };
+        return EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = projectServices_.assetRegistry,
+                                                      .source = std::move(sources.registry),
+                                                      .importerCatalog = projectServices_.importerCatalog},
+                                           .world = {.sourceFiles = std::move(sources.world),
+                                                     .documentSessionOwner = sources.owner,
+                                                     .streamingPreviewPolicy = services_.TryGetConst<WorldStreamingPreviewRuntimePolicy>(),
+                                                     .streamingPreview = services_.TryGet<WorldStreamingPreviewHost>()},
+                                           .worldBake = {.operations = services_.TryGet<OperationStore>(),
+                                                         .output = services_.TryGet<BuildOutputStore>(),
+                                                         .dependencies =
+                                                             bakeDependencies ? std::optional{*bakeDependencies} : std::nullopt},
+                                           .uiInspectorResources = uiInspectorResources,
+                                           .collision = {.inventory = projectServices_.collisionInventory,
+                                                         .activation = projectServices_.collisionActivation,
+                                                         .previewReceipt = projectServices_.previewCollisionReceipt},
+                                           .mutations = projectServices_.mutations,
+                                           .durableFiles = projectServices_.durableFiles,
+                                           .jobs = &services_.Get<JobSystem>(),
+                                           .gameplay = BindGameplayServices(services_, host_, BindPlayFactory(projectRoot)),
+                                           .localization = &context_.localization,
+                                           .engineEvents = &context_.engineEvents,
+                                           .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
+                                           .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
+                                           .audioPreview = services_.TryGet<IAudioComponentPreview>(),
+                                           .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                                      .stageFactory = BindPrefabStageFactory(projectRoot)},
+                                           .pcg = std::move(catalog),
+                                           .pcgPreviewInputs = std::move(previewInputs)};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

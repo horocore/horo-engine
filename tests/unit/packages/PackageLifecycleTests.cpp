@@ -107,7 +107,8 @@ TEST_CASE("Package lifecycle fails closed before native loading for missing enab
     SECTION("excess selection") {
         LifecycleProgress("SECTION excess selection");
         fixture.Install();
-        fixture.enabled.assign(65U, fixture.enabled.front());
+        const auto enabled = fixture.enabled.front();
+        fixture.enabled.assign(65U, enabled);
         CHECK(fixture.Activate().HasError());
     }
     CheckRuntimeBoundaryRejection(fixture);

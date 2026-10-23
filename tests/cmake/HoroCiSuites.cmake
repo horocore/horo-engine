@@ -93,6 +93,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroGameplayPerceptionIntegrationPublicHeaderConsumer
     HoroMaterialBindingTests
     HoroMaterialBindingPublicHeaderConsumer
+    HoroMultiviewSceneExtractionPublicHeaderConsumer
     HoroD3D12InitializationTests
     HoroD3D12ResourceTests
     HoroPlayTopologyTests

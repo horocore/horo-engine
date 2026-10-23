@@ -87,6 +87,48 @@ namespace Horo::Network {
         MessageEnvelopeAdmissionState state = MessageEnvelopeAdmissionState::Accepting);
 
     /**
+     * @brief Validated envelope metadata and a synchronous borrow of its payload.
+     * @details The input frame must remain alive and unchanged until this view is discarded.
+     * All extension fields are validated, including unknown required fields, without copying
+     * their values. This view retains no credentials or ownership of the input storage.
+     */
+    struct MessageEnvelopePayloadView final {
+        ProtocolId protocol;
+        MessageTypeId message;
+        MessageSchemaId schema;
+        MessageSchemaVersion schemaVersion;
+        MessageSequenceNumber sequence;
+        MessageAcknowledgementNumber acknowledgement;
+        std::size_t fieldCount{};
+        std::span<const std::byte> payload;
+    };
+
+    /**
+     * @brief Encode an extension-free payload borrow into caller-owned bounded storage.
+     * @param envelope Typed metadata and synchronous payload borrow; fieldCount must be zero.
+     * @param registry Canonical immutable product codec inventory.
+     * @param output Caller-owned writable storage; no payload copy is retained by this function.
+     * @param limits Independent complete-frame and payload bounds.
+     * @return Encoded prefix length, or typed framing/schema/capacity error before writing.
+     * @details Intended for securely cleared control-frame storage. Input/output must not overlap.
+     */
+    [[nodiscard]] Result<std::size_t> EncodeMessageEnvelopePayloadInto(const MessageEnvelopePayloadView &envelope,
+                                                                       const MessageCodecRegistry &registry, std::span<std::byte> output,
+                                                                       const MessageEnvelopeLimits &limits = {});
+
+    /**
+     * @brief Validate the complete canonical envelope without allocating or copying payload bytes.
+     * @param frame Borrowed complete frame; backing bytes must outlive the returned view.
+     * @param registry Inert codec and field metadata.
+     * @param limits Independent frame, payload, count and extension bounds.
+     * @param state Explicit caller-owned lifecycle admission state.
+     * @return Synchronous payload borrow or the same typed framing/schema/bounds denial as DecodeMessageEnvelope.
+     */
+    [[nodiscard]] Result<MessageEnvelopePayloadView> InspectMessageEnvelope(
+        std::span<const std::byte> frame, const MessageCodecRegistry &registry, const MessageEnvelopeLimits &limits = {},
+        MessageEnvelopeAdmissionState state = MessageEnvelopeAdmissionState::Accepting);
+
+    /**
      * @brief Decodes a complete canonical frame after validating every length before allocation.
      * @param frame Borrowed complete frame valid for this call only.
      * @param registry Inert codec and field metadata.

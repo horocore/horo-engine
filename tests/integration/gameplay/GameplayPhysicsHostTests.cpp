@@ -1,15 +1,18 @@
 #include "GameplayModuleTestSupport.h"
+#include "GameplayReplicationAdmissionTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "GameplayWorldComposition.h"
 #include "GameplayWorldSelectionTestSupport.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
+#include "Horo/Network/NetworkErrors.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "PhysicsTestUtils.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <fstream>
 #include <utility>
 
 namespace {
@@ -19,6 +22,7 @@ namespace {
     using namespace Horo::Physics;
 
     using TestSupport::Native;
+    using TestSupport::ReplicatedScriptFixture;
     using TestSupport::Script;
 
     std::unique_ptr<Runtime::RuntimeScene> Scene(const bool script = false, const std::uint64_t runtime = 7) {
@@ -106,6 +110,45 @@ namespace {
 #endif
 
 }  // namespace
+
+TEST_CASE("Real Lua activation consumes canonical replication requirements for both peer roles", "[gameplay][replication][host]") {
+    ReplicatedScriptFixture fixture;
+    for (const auto use : {Network::ReplicationDeclarationUse::ServerActivation, Network::ReplicationDeclarationUse::ClientActivation}) {
+        fixture.selection.replicationAdmission->use = use;
+        auto scene = fixture.Scene();
+        auto gameplay = GameplayWorldComposition::Create(*scene, nullptr, 1, fixture.selection);
+        REQUIRE(gameplay.HasValue());
+        REQUIRE(gameplay.Value()->FixedUpdate({1.0 / 60.0}).HasValue());
+        gameplay.Value()->Shutdown();
+    }
+}
+
+TEST_CASE("Lua replication rejection precedes actual behavior callbacks and preserves the active generation",
+          "[gameplay][replication][host]") {
+    ReplicatedScriptFixture active;
+    auto scene = active.Scene();
+    auto previous = GameplayWorldComposition::Create(*scene, nullptr, 1, active.selection);
+    REQUIRE(previous.HasValue());
+    ReplicatedScriptFixture candidate{true};
+    SECTION("incompatible generation") {
+        auto &schema = candidate.selection.replicationAdmission->inventory.declarations[0].schema;
+        schema.version.major = 2;
+        schema.compatibility = {{2, 0}, {2, 0}};
+    }
+    SECTION("missing declaring module") {
+        candidate.selection.replicationAdmission->inventory.declarations[0].schema.owner.value = "game.absent";
+    }
+    SECTION("unknown complete empty inventory") {
+        candidate.selection.replicationAdmission->inventory.declarations.clear();
+        candidate.selection.replicationAdmission->inventory.completeness = Network::NetworkReplicationInventoryCompleteness::Unknown;
+    }
+    auto replacementScene = candidate.Scene();
+    auto rejected = GameplayWorldComposition::Create(*replacementScene, nullptr, 2, candidate.selection);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == Network::NetworkErrors::ReplicationDescriptorIncompatible.code.Value());
+    REQUIRE(previous.Value()->FixedUpdate({1.0 / 60.0}).HasValue());
+    previous.Value()->Shutdown();
+}
 
 TEST_CASE("Unavailable editor and disabled host compositions inject stable PhysicsUnavailable into native and script execution",
           "[gameplay-physics][host]") {

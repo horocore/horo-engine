@@ -65,6 +65,13 @@ namespace Horo::Network {
         TransportCapabilities transport{};              /**< Immutable local transport evidence. */
     };
 
+    /**
+     * @brief Validate inert local handshake policy before opening a listener or creating a peer.
+     * @param local Host-owned compatibility and immutable transport capability declaration.
+     * @return Success for a bounded, internally consistent descriptor; HandshakeInvalid otherwise.
+     */
+    [[nodiscard]] Result<void> ValidateHandshakeLocalDescriptor(const HandshakeLocalDescriptor &local);
+
     /** @brief Peer offer validated fully before any state is accepted. */
     struct HandshakeOffer final {
         HandshakeCompatibilityDescriptor compatibility; /**< Bounded peer compatibility declaration. */
