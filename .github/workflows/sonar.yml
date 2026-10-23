@@ -167,7 +167,7 @@ jobs:
         run: '[[ "$VIEWPORT_ARTIFACT_ID" =~ ^[0-9]+$ ]]'
 
       - name: Download this run's viewport data
-        uses: actions/download-artifact@d3f86a106a0bac45f2f8406bd4850e7943e2c8df
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           artifact-ids: ${{ needs.viewport-assets.outputs.artifact-id }}
           path: build/sonar/native-editor-assets

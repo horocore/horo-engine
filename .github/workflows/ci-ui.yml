@@ -315,7 +315,7 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev
 
       - name: Download binary artifact
-        uses: actions/download-artifact@d3f86a106a0bac45f2f8406bd4850e7943e2c8df
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ui-binary-linux
           path: bin
@@ -370,7 +370,7 @@ jobs:
         run: brew install ffmpeg
 
       - name: Download binary artifact
-        uses: actions/download-artifact@d3f86a106a0bac45f2f8406bd4850e7943e2c8df
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ui-binary-macos
           path: bin
@@ -426,7 +426,7 @@ jobs:
         shell: pwsh
 
       - name: Download binary artifact
-        uses: actions/download-artifact@d3f86a106a0bac45f2f8406bd4850e7943e2c8df
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ui-binary-windows
           path: bin
