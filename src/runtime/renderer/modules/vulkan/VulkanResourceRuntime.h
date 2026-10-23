@@ -146,8 +146,10 @@ namespace Horo::Render::Detail {
                                                          VulkanCommandRetention &retention) const;
         /** @brief Borrows the canonical buffer completion proof before an explicitly retired-slot host write. */
         [[nodiscard]] Result<RenderTimelinePoint> BufferCompletion(std::uint64_t instance) const;
-        /** @brief Writes an exact coherent host-visible uniform buffer after the caller proved prior completion. */
-        [[nodiscard]] Result<void> WriteHostUniform(std::uint64_t instance, std::span<const std::byte> bytes);
+        /** @brief Replaces exact host-visible uniform or vertex bytes after the selected frame owner proves prior retirement.
+         * @pre Caller admits the exact active canonical frame and verifies BufferCompletion before writing.
+         * No index/storage usage, allocation, submission or completion authority is introduced. */
+        [[nodiscard]] Result<void> WriteHostFrameBuffer(std::uint64_t instance, std::span<const std::byte> bytes);
         /** @brief Captures/pins an exact whole color sample, optional sampler and declared base-level staging source.
          * @param source Frontend-resolved identities. @param retention Existing bounded frame pins.
          * @return Validated same-device native sample, before any encoding. */

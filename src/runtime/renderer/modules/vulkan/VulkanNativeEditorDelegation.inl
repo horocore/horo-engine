@@ -51,7 +51,7 @@ Result<void> WriteFrameBuffer(const FrameToken frame, const std::uint64_t instan
         if (!retired.Value())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
     }
-    return resources_.WriteHostUniform(instance, bytes);
+    return resources_.WriteHostFrameBuffer(instance, bytes);
 }
 
 /** @copydoc IVulkanEditorGraphicsPort::AttachDeviceChild */

@@ -101,23 +101,21 @@ namespace Horo::Editor {
         if (!pass.IsValid() || !IsReady() || pass.target != resources_.Target() ||
             pass.extent != FramebufferExtent{resources_.AllocatedExtent().width, resources_.AllocatedExtent().height})
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
-        if (requestedGrid_.visible || requestedLightVisualizer_.selectedLight ||
-            std::ranges::any_of(pass.scene.lights,
-                                [](const auto &light) {
-            return light.kind != RenderLightKind::Directional;
-        }) ||
-            pass.scene.lights.size() > 1)
-            return Result<void>::Failure(
-                MakeError(RendererErrors::ViewportCapabilityUnavailable,
-                          "This unqualified Vulkan viewport profile currently admits static meshes with at most one directional light; "
-                          "grid and selected-light overlays require their cooked pipeline."));
         const auto slot = bridge_.Port()->FrameSlot(frame.Token());
         if (slot.HasError())
             return Result<void>::Failure(slot.ErrorValue());
         if (slot.Value().count != device_.frames || slot.Value().index >= device_.frames ||
             pass.scene.instances.size() > preparedDraws_.size())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-        if (pass.scene.instances.empty())
+        auto &overlaySlot = slots_[slot.Value().index].overlay;
+        const auto overlay = PrepareOverlay(frame.Token(), overlaySlot, pass);
+        if (overlay.HasError())
+            return Result<void>::Failure(overlay.ErrorValue());
+        const auto drawCount = pass.scene.instances.size() + (overlay.Value() ? 1 : 0);
+        if (drawCount > preparedDraws_.size())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene,
+                                                   "Viewport mesh and overlay draws exceed the admitted material-pass capacity."));
+        if (drawCount == 0)
             return ExecuteEmptyViewport(frame, pass.clearColor);
         for (std::size_t index = 0; index < pass.scene.instances.size(); ++index) {
             const auto &instance = pass.scene.instances[index];
@@ -129,6 +127,8 @@ namespace Horo::Editor {
                 return written;
             preparedDraws_[index] = {mesh->mesh, draw.material};
         }
+        if (overlay.Value())
+            preparedDraws_[pass.scene.instances.size()] = {overlaySlot.mesh, overlaySlot.uniforms.material};
         const auto reserved = frame.ReserveSubmission(RenderQueueRole::Graphics);
         if (reserved.HasError())
             return Result<void>::Failure(reserved.ErrorValue());
@@ -137,7 +137,7 @@ namespace Horo::Editor {
                                           pass.extent,
                                           {.clearColor = pass.clearColor},
                                           1.0F,
-                                          std::span{preparedDraws_}.first(pass.scene.instances.size()),
+                                          std::span{preparedDraws_}.first(drawCount),
                                           reserved.Value()});
     }
 }  // namespace Horo::Editor

@@ -13,6 +13,8 @@ namespace Horo::Render {
 
         struct InvalidEvidence {};
 
+        struct UnknownUniformBlock {};
+
         /** @brief Reads an exact unsigned field without narrowing negative or oversized evidence. */
         std::uint32_t Unsigned(const Json &value) {
             if (!value.is_number_unsigned() || value.get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
@@ -41,6 +43,24 @@ namespace Horo::Render {
         void NoArray(const Json &value) {
             if (value.contains("array") || value.contains("physical_pointer"))
                 throw InvalidEvidence{};
+        }
+
+        /** @brief Admits only one fixed literal array dimension; runtime/spec-constant and nested arrays fail closed. */
+        std::pair<std::uint32_t, std::uint32_t> MemberArray(const Json &member) {
+            if (member.contains("physical_pointer"))
+                throw InvalidEvidence{};
+            if (!member.contains("array"))
+                return {1, 0};
+            const auto &dimensions = member.at("array");
+            const auto &literal = member.at("array_size_is_literal");
+            if (!dimensions.is_array() || dimensions.size() != 1 || !literal.is_array() || literal.size() != 1 ||
+                !literal[0].is_boolean() || !literal[0].get<bool>())
+                throw InvalidEvidence{};
+            const auto count = Unsigned(dimensions[0]);
+            const auto stride = Unsigned(member.at("array_stride"));
+            if (count == 0 || count > 512 || stride == 0)
+                throw InvalidEvidence{};
+            return {count, stride};
         }
 
         /** @brief Preserves exact final member packing on every stage sharing a uniform block. */
@@ -140,7 +160,7 @@ namespace Horo::Render {
                 NoArray(ubo);
                 const auto name = std::ranges::find(names_, ubo.at("name").get<std::string>(), &ShaderReflectionBindingName::name);
                 if (name == names_.end())
-                    throw InvalidEvidence{};
+                    throw UnknownUniformBlock{};
                 const auto resource = std::ranges::find(candidate_.bindings, name->id, &ShaderReflectedBinding::id);
                 if (resource == candidate_.bindings.end() ||
                     std::exchange(seen[static_cast<std::size_t>(resource - candidate_.bindings.begin())], true))
@@ -173,7 +193,7 @@ namespace Horo::Render {
 
             /** @brief Requires complete named parameter evidence and exact repeated-stage layout equality. */
             void Parameter(const ShaderReflectionBindingName &binding, const Json &member, std::uint32_t blockBytes) {
-                NoArray(member);
+                const auto [arrayCount, arrayStride] = MemberArray(member);
                 const auto name =
                     std::ranges::find(binding.parameters, member.at("name").get<std::string>(), &ShaderReflectionParameterName::name);
                 if (name == binding.parameters.end())
@@ -187,10 +207,12 @@ namespace Horo::Render {
                 const bool columnMajor = !member.value("row_major", false);
                 const std::uint64_t size =
                     stride ? stride * std::uint64_t{columnMajor ? shape.columns : shape.rows} : 4U * shape.rows * shape.columns;
-                if (size == 0 || offset > blockBytes || size > blockBytes - offset)
+                const auto totalSize = std::uint64_t{arrayCount - 1} * arrayStride + size;
+                if (size == 0 || (arrayCount > 1 && arrayStride < size) || offset > blockBytes || totalSize > blockBytes - offset ||
+                    arrayCount != declared->arrayCount)
                     throw InvalidEvidence{};
-                const ShaderReflectedParameter value{name->id, binding.id, shape.type, shape.rows,  shape.columns, 1,
-                                                     offset,   0,          stride,     columnMajor, true};
+                const ShaderReflectedParameter value{name->id, binding.id,  shape.type, shape.rows,  shape.columns, arrayCount,
+                                                     offset,   arrayStride, stride,     columnMajor, true};
                 if (declared->active && !SamePacking(*declared, value))
                     throw InvalidEvidence{};
                 *declared = value;
@@ -225,6 +247,9 @@ namespace Horo::Render {
             return NormalizeShaderReflection(manifest, target, candidate);
         } catch (const Json::exception &) {
             return Result<NormalizedShaderReflection>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
+        } catch (const UnknownUniformBlock &) {
+            return Result<NormalizedShaderReflection>::Failure(
+                MakeError(ShaderReflectionErrors::InvalidReflection, "Final uniform block identity is not admitted by the target map."));
         } catch (const InvalidEvidence &) {
             return Result<NormalizedShaderReflection>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
         } catch (const std::bad_alloc &) {

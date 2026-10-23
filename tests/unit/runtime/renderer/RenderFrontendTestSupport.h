@@ -75,6 +75,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         bool supportsBufferResources{true};
         bool supportsMeshResources{true};
         bool supportsTextureResources{true};
+        std::optional<Error> textureMemoryCostFailure;
         bool supportsRenderTargetResources{true};
         int guiAdmissions{};
         bool failGuiAdmission{};

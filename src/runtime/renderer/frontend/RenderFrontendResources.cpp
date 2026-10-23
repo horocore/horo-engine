@@ -47,8 +47,9 @@ namespace Horo::Render {
             const RenderTextureDescriptor &descriptor) noexcept {
             using enum RenderTextureUsage;
             using enum ResourceDescriptorAdmission;
-            constexpr std::byte supportedUsageBits =
-                std::byte{static_cast<std::uint8_t>(Sampled)} | std::byte{static_cast<std::uint8_t>(RenderAttachment)};
+            constexpr std::byte supportedUsageBits = std::byte{static_cast<std::uint8_t>(Sampled)} |
+                                                     std::byte{static_cast<std::uint8_t>(RenderAttachment)} |
+                                                     std::byte{static_cast<std::uint8_t>(CopyDestination)};
             const auto requested = static_cast<std::byte>(descriptor.usage);
             const bool supported = descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 &&
                                    descriptor.mipCount == 1 && descriptor.layerCount == 1 && descriptor.sampleCount == 1 &&

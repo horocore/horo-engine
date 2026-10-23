@@ -249,3 +249,47 @@ checks and scripted contracts do not substitute for native smoke execution.
 Cooked install/package distribution and complete grid/light overlay parity
 remain separate activation gates; the product still does not advertise an
 interactive Vulkan renderer.
+
+## Viewport parity implementation and private migration
+
+The viewport shader revision 2 uses the canonical `MeshVertex` attributes:
+position at location 0 (`float3`), normal at 1 (`float3`), and UV at 2 (`float2`).
+The overlay material consumes UV as its batch palette coordinate, so this is a
+real input rather than a dummy expression added to survive optimization. Final
+reflection and native pipeline admission retain their strict shape checks.
+The DXC cbuffer type identity is exactly `type.ViewportParameters`; the separate
+admitted SPIRV-Cross reflection stage must report that identity. Unknown block
+names are rejected rather than normalized by prefix stripping.
+
+The same cooked program now carries the bounded canonical set of 16 directional,
+point, or spot lights, including world position, range/cone attenuation and the
+peer viewport's display mapping. Uniform arrays use final reflected array and
+matrix strides. The cook manifest revision and final artifact identity change;
+existing packaged viewport artifacts must be recooked with the approved tools.
+No compiler or reflection tool is introduced at runtime.
+
+Grid and selected-light output uses the existing shared geometry builders.
+Line batches are clipped in homogeneous space and expanded to physical-pixel
+ribbons; existing grid triangles keep their world positions. Preallocated
+per-frame-slot vertex/index meshes and immutable material leases feed one
+canonical material submission together with scene meshes. The overlay pipeline
+keeps depth testing and disables depth writes. One overlay draw consumes one of
+the existing 128 material-pass draw slots; over-capacity is rejected explicitly.
+There is no per-frame mesh/material creation or additional submit counter.
+
+The private `VulkanResourceRuntime::WriteHostUniform` operation was renamed to
+`WriteHostFrameBuffer` because the existing frame input port also writes these
+host-visible vertex buffers. Its sole production caller remains the selected
+runtime's existing `WriteFrameBuffer`: canonical frame admission and exact
+previous buffer completion are checked before writing. Only existing uniform
+usage and exact vertex usage are admitted, with exact byte extent; index and
+storage updates remain denied. No public API migration is required. The resource
+unit regression exercises admitted/rejected usages, size and stale identities;
+geometry regressions cover pixel width, clipping and failure clearing. The native
+composition regression renders mixed lights, grid and a selected-light overlay
+across presented and canceled frames before draining the same owners.
+
+These are implementation and regression paths, not a support declaration. Native
+Linux cooked-artifact, validation-layer and GPU execution remain separate gates.
+The Vulkan product module still advertises interactive presentation unavailable;
+no runtime or product availability is inferred from portable compilation.

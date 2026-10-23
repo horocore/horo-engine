@@ -46,6 +46,8 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+            if (lifecycleState.textureMemoryCostFailure)
+                return Result<RenderMemoryCostPlan>::Failure(*lifecycleState.textureMemoryCostFailure);
             const std::size_t bytes = RenderTextureBaseLevelByteSize(descriptor).value_or(0);
             return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(bytes, 2));
         }

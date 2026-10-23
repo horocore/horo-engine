@@ -3345,6 +3345,10 @@ target_link_libraries(HoroEditorViewportResourceTests
         HoroEngine::RenderNull
 )
 
+add_executable(HoroViewportOverlayTriangleTests unit/editor/ViewportOverlayTriangleTests.cpp)
+target_link_libraries(HoroViewportOverlayTriangleTests PRIVATE HoroEngine::EditorViewportScene HoroEditorTestInternals)
+horo_register_catch_test(HoroViewportOverlayTriangleTests LABELS "unit;editor;renderer;headless")
+
 # White-box editor tests opt into implementation headers explicitly. Keep this
 # non-installed test interface separate from every production usage requirement;
 # legacy editor/... include spellings require the source root until those tests
