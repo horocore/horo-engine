@@ -160,7 +160,8 @@ def main() -> int:
         identity = json.loads(args.identity.read_text(encoding="utf-8"),
                               object_pairs_hook=package.unique_object)
         package.canonical_identity(identity)
-        {"fetch": fetch, "publish": publish}[args.operation](args.archive, identity)
+        archive = package.workspace_path(args.archive)
+        {"fetch": fetch, "publish": publish}[args.operation](archive, identity)
     except (OSError, ValueError, TypeError, KeyError, AttributeError,
             TimeoutError, subprocess.SubprocessError, tarfile.TarError):
         print("Dependency SDK registry unavailable or incompatible; retain source build")

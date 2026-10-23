@@ -74,10 +74,15 @@ function(horo_prepare_dependency_sdk name recipe output_root output_identity out
         return()
     endif()
     if(HORO_FETCH_DEPENDENCY_SDK_PACKAGES AND NOT EXISTS "${HORO_DEPENDENCY_SDK_CACHE}/${archive_name}")
-        execute_process(COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.github/scripts/dependency_registry.py" fetch
-            --archive "${HORO_DEPENDENCY_SDK_CACHE}/${archive_name}" --identity "${identity_file}"
-            RESULT_VARIABLE registry_result TIMEOUT 75)
+        execute_process(COMMAND "${CMAKE_COMMAND}" -E make_directory "${HORO_DEPENDENCY_SDK_CACHE}"
+            RESULT_VARIABLE registry_result OUTPUT_QUIET ERROR_QUIET TIMEOUT 10)
+        if(registry_result STREQUAL "0")
+            execute_process(COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.github/scripts/dependency_registry.py" fetch
+                --archive "${HORO_DEPENDENCY_SDK_CACHE}/${archive_name}" --identity "${identity_file}"
+                WORKING_DIRECTORY "${HORO_DEPENDENCY_SDK_CACHE}"
+                RESULT_VARIABLE registry_result TIMEOUT 75)
+        endif()
         if(NOT registry_result STREQUAL "0")
             message(STATUS "Dependency SDK ${name}: registry miss; use source build")
         endif()
@@ -93,6 +98,7 @@ function(horo_prepare_dependency_sdk name recipe output_root output_identity out
         return()
     endif()
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${tool}" ${operation} --identity "${identity_file}"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         RESULT_VARIABLE result OUTPUT_QUIET ERROR_VARIABLE error TIMEOUT 120)
     if(NOT result STREQUAL "0")
         message(STATUS "Dependency SDK ${name}: verification failed; build from source (${result})")

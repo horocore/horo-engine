@@ -629,6 +629,23 @@ The identity has exactly these fields: `platform`, `architecture`, `compiler`,
 from missing metadata. These values must describe the actual resolved build;
 the payload tool does not discover toolchains or infer ABI compatibility.
 
+The payload CLI's working directory is its independent filesystem authority.
+CLI staging/verify roots, package outputs and restore destinations must resolve
+strictly inside that directory; read-only verification may use the directory
+itself. Leaf symlinks, absolute paths outside it, parent traversal and symlink
+parents resolving outside it are rejected before writing. Archive and identity
+inputs may be read from another directory; those inputs do not grant write
+access there. Library calls remain available for trusted callers that own their
+private temporary directories.
+
+CMake explicitly invokes payload verification/restoration from the selected build
+directory, package production from the build directory, and registry fetches
+from the selected SDK cache directory. This also supports out-of-source builds
+outside the repository. Registry cache-directory creation is bounded and
+nonfatal: an unavailable cache retains the source-build fallback. Manual CLI
+users must first select the intended build/cache working directory; do not add
+a CLI argument that authorizes an arbitrary write root.
+
 The archive starts with a bounded JSON manifest and contains regular files only.
 The producer materializes symlinks when staging, freezes staging during packing,
 and includes executable host tools as executable files. The consumer checks
@@ -668,12 +685,79 @@ archive's local producer build/pack took 58.036 seconds and consumer compile/lin
 took 0.666 seconds according to Ninja logs; these exclude configure, network and
 test time and are not hosted or full-engine timings.
 
-Other dependency recipes, Windows/Linux package qualification, the external
-transport and workflow publication are not connected yet. Existing GitHub caches
-remain authoritative until those components pass cross-platform
-package-relocation, corruption/fallback and hosted timing validation. This
-section is not a claim that external caching or the 10–15 minute target is
-already achieved.
+The current transport is public GHCR through
+`.github/scripts/dependency_registry.py`; readers use an empty credential store
+and only canonical main producers publish. The native SDK producer has completed
+on Linux, macOS and Windows, and Linux job `120596826395` verified a published
+package and configured without recompiling Unicode. Other dependency recipes,
+full platform consumers and stable hosted timing still require qualification.
+The earlier bucket capacity planner remains an offline alternative, not a
+configured R2 service. Compiler checkpoints remain in Actions storage and can
+still be evicted. The 10–15 minute target is not yet achieved.
+
+### Compiler checkpoint fallback in public GHCR
+
+The compiler exporter uses the existing public SDK package with distinct
+`compiler-v1-<namespace-sha256>` tags and the
+`application/vnd.horo.compiler-cache.v1` artifact type. It does not reuse the
+SDK compatibility schema. Its namespace is the existing native OS, architecture,
+compiler/version, profile and configuration cache prefix, or the separate
+instrumented Sonar prefix. Compiler entry hashes remain authoritative; no flags,
+header checks, quality scope or instrumentation are relaxed.
+
+`compiler-checkpoints.yml` runs only on reviewed main code, on a completed
+canonical main push, a schedule, or manual dispatch. Its four platform/profile
+exports run serially, use existing main Actions snapshots, and never compile.
+Missing snapshots skip publication. Triggering workflow conclusions do not grant
+trust: repository, branch and push event must match. A successful checkpoint
+means compilation completed, not that tests or quality gates passed.
+
+The exporter checks the public package's source checkpoint before packing and
+skips the same or newer run/attempt. Publication replaces one namespace tag only
+after its blob upload completes. Only an explicit missing manifest permits a
+first publication; outages and incompatible manifests fail without overwriting.
+A single workflow concurrency group prevents competing latest-tag writers. New
+compiler/toolchain namespaces get distinct tags; old namespace/tag cleanup is
+not automated in this first rollout. GHCR version storage must be monitored;
+Actions duplicate retention remains independent.
+
+PRs retain their existing jobs and read-only package permissions. They first
+restore Actions storage, then try the anonymous public fallback on a miss for
+native Debug or Sonar. The client uses an empty credential store and a 90-second
+network budget. A fixed digest selects the blob, capped at 3 GiB compressed and
+4 GiB expanded. A bounded manifest requires the independently selected namespace,
+source key, regular portable paths, sizes and per-file SHA-256. Every file is
+verified privately before installing any entry. Configuration, locks and counters
+are excluded; local entries/settings are preserved. Restore runs before compiler
+activity, with the Windows cache server stopped. A failed fetch retains normal
+compilation. The CLI chooses only the two fixed workspace cache paths, rather
+than accepting an arbitrary destination.
+
+This is independent storage against Actions quota eviction, not a latency
+measurement or a replacement for dependency packages. Hosted publication and
+anonymous cross-platform restores still require qualification before claiming
+the 10–15 minute target. Large transfers and warm linking/analysis remain part
+of each job's measured duration.
+
+### Auxiliary native compiler working set
+
+Native qualification switches to a separate `native-variants-v1-Mixed` compiler
+store after the primary Debug checkpoint. Its fixed path is
+`.ci-cache/compiler-variants`, independently bounded at 2G. Release audio, Metal,
+navigation, GNS and XR use this store. Their real flags and compiler entry hashes
+remain authoritative; Mixed describes the collection, not binary compatibility
+between build configurations. The main checkpoint before tests preserves entries
+from successful auxiliary compilation even if a later test fails.
+
+The existing serial native exporter publishes both primary and auxiliary
+namespaces in one job per platform. PRs restore each store only at its owning
+phase, without uploading. The temporary runner may hold up to 4G of native
+compiler entries across these two stores; the Debug working set cannot be
+evicted by later Release/provider compilation. This does not prove all variants
+fit the auxiliary budget. Per-phase hit rates and pressure still require hosted
+measurement. Actions storage remains a best-effort staging layer: it may evict a
+new checkpoint before the periodic exporter reads it. GHCR preserves previously
+published checkpoints independently; a missing publication builds normally.
 
 ### Symptoms of a stale build
 
