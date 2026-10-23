@@ -13,6 +13,9 @@ inputs:
   dependency-ready:
     description: Whether every selected dependency was configured successfully
     default: 'true'
+  compiler-ready:
+    description: Save the primary compiler snapshot only at its owning build phase
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -39,7 +42,7 @@ runs:
         key: ${{ inputs.dependency-key }}
 
     - name: Save compiler snapshot
-      if: github.ref == 'refs/heads/main'
+      if: github.ref == 'refs/heads/main' && inputs.compiler-ready == 'true'
       uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
       with:
         path: ${{ github.workspace }}/.ci-cache/compiler

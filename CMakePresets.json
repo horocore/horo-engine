@@ -40,7 +40,8 @@
         "HORO_BUILD_EDITOR_GUI": "ON",
         "HORO_BUILD_RENDER_OPENGL": "ON",
         "HORO_ENABLE_TELEMETRY": "ON",
-        "HORO_ENABLE_OPENTELEMETRY": "ON"
+        "HORO_ENABLE_OPENTELEMETRY": "ON",
+        "HORO_CI_ISOLATE_TEST_EXECUTABLES": "ON"
       }
     },
     {
@@ -266,7 +267,7 @@
       "targets": [
         "HoroCiAudioRealtimeChecks"
       ],
-      "jobs": 1
+      "jobs": 2
     },
     {
       "name": "ci-navigation-null",
@@ -368,6 +369,9 @@
         "exclude": {
           "label": "gui|tooling"
         }
+      },
+      "execution": {
+        "jobs": 2
       }
     },
     {
@@ -381,6 +385,9 @@
         "exclude": {
           "label": "gui|tooling"
         }
+      },
+      "execution": {
+        "jobs": 2
       }
     },
     {
@@ -508,6 +515,9 @@
         "include": {
           "label": "^sonar-coverage$"
         }
+      },
+      "execution": {
+        "jobs": 2
       }
     }
   ]
