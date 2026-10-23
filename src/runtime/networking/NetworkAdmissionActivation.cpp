@@ -1,33 +1,36 @@
 #include "NetworkAdmissionState.h"
+#include "NetworkProviderBoundary.h"
 
 #include <algorithm>
 
 namespace Horo::Network {
     Result<void> NetworkAdmissionController::Impl::AcceptProof(Peer &peer, const std::span<const std::byte> payload,
                                                                const std::uint64_t nowTick) {
+        using enum NetworkFailureKind;
         if (peer.lifecycle->State() != PeerSessionState::Authenticating || !peer.authentication || !peer.peerChallenge || !peer.proofIssued)
-            return Fail(peer, NetworkFailureKind::ProtocolMalformed, nowTick);
+            return Fail(peer, ProtocolMalformed, nowTick);
         AdmissionWire::Proof proof;
         if (!AdmissionWire::ReadProof(payload, proof, policy.trust.maximumProofBytes) || proof.clientNonce != peer.challenge.clientNonce ||
             proof.serverNonce != peer.challenge.serverNonce)
-            return Fail(peer, NetworkFailureKind::ProtocolMalformed, nowTick);
-        try {
+            return Fail(peer, ProtocolMalformed, nowTick);
+        auto attempted = Detail::InvokeAdmissionProvider([this, &peer, &proof, nowTick]() {
             auto evidence = providers.channel->Inspect(peer.connection, peer.generation, nowTick);
             if (evidence.HasError())
-                return Fail(peer, NetworkFailureKind::SessionAuthenticationRejected, nowTick, true);
+                return Fail(peer, SessionAuthenticationRejected, nowTick, true);
             const auto authenticated =
                 peer.authentication->Authenticate(peer.connection, peer.generation, proof.response, evidence.Value(), nowTick);
             if (authenticated.HasError() || peer.lifecycle->AcceptAuthentication(authenticated.Value(), nowTick).HasError())
-                return Fail(peer, NetworkFailureKind::SessionAuthenticationRejected, nowTick, true);
-            const AdmissionWire::Acknowledgement proposal{false, peer.challenge.transcriptDigest,
-                                                          authenticated.Value().secureChannel.bindingDigest, peer.challenge.clientNonce,
-                                                          peer.challenge.serverNonce};
-            if (Respond(peer, proposal).HasError())
-                return Fail(peer, NetworkFailureKind::TransportUnavailable, nowTick);
+                return Fail(peer, SessionAuthenticationRejected, nowTick, true);
+            if (const AdmissionWire::Acknowledgement proposal{false, peer.challenge.transcriptDigest,
+                                                              authenticated.Value().secureChannel.bindingDigest, peer.challenge.clientNonce,
+                                                              peer.challenge.serverNonce};
+                Respond(peer, proposal).HasError())
+                return Fail(peer, TransportUnavailable, nowTick);
             return Result<void>::Success();
-        } catch (...) {
-            return Fail(peer, NetworkFailureKind::SessionAuthenticationRejected, nowTick, true);
-        }
+        });
+        if (!attempted)
+            return Fail(peer, SessionAuthenticationRejected, nowTick, true);
+        return std::move(*attempted);
     }
 
     Result<void> NetworkAdmissionController::Impl::Publish(Peer &peer, const PeerSessionActivation &activation,
@@ -44,12 +47,11 @@ namespace Horo::Network {
             return Fail(peer, NetworkFailureKind::ProtocolIncompatible, nowTick);
         if (dispatcher.RegisterSession(peer.lifecycle, peer.connection, peer.generation, std::move(gate).Value(), nowTick).HasError())
             return Fail(peer, NetworkFailureKind::ProtocolIncompatible, nowTick);
-        try {
-            if (projection && projection->OnSessionActivated(peer.endpoint, peer.lifecycle, peer.generation, nowTick).HasError())
-                return AbortProjection(peer, nowTick);
-        } catch (...) {
+        const auto projected = Detail::InvokeAdmissionProvider([&peer, &projection, nowTick] {
+            return !projection || projection->OnSessionActivated(peer.endpoint, peer.lifecycle, peer.generation, nowTick).HasValue();
+        });
+        if (!projected.has_value() || !*projected)
             return AbortProjection(peer, nowTick);
-        }
         (void)protection.End(peer.connection, peer.generation);
         peer.ledgerReserved = false;
         return Result<void>::Success();
@@ -78,7 +80,7 @@ namespace Horo::Network {
         if (!peer.proposalReceived || peer.proposalAcknowledged || ack.transcript != peer.challenge.transcriptDigest ||
             ack.binding != authentication->secureChannel.bindingDigest)
             return Fail(peer, NetworkFailureKind::ProtocolMalformed, nowTick);
-        try {
+        auto attempted = Detail::InvokeAdmissionProvider([this, &peer, &ack, authentication, nowTick]() {
             const auto evidence = providers.channel->Inspect(peer.connection, peer.generation, nowTick);
             const auto &channel = authentication->secureChannel;
             if (evidence.HasError() || !peer.issuance || !peer.issuance->MatchesEvidence(evidence.Value(), nowTick) ||
@@ -86,8 +88,9 @@ namespace Horo::Network {
                 return Fail(peer, NetworkFailureKind::SessionAuthenticationRejected, nowTick, true);
             peer.proposalAcknowledged = true;
             return Publish(peer, {peer.connection, peer.generation, channel.channel, channel.channelGeneration, ack.binding}, nowTick);
-        } catch (...) {
+        });
+        if (!attempted)
             return Fail(peer, NetworkFailureKind::SessionAuthenticationRejected, nowTick, true);
-        }
+        return std::move(*attempted);
     }
 }  // namespace Horo::Network

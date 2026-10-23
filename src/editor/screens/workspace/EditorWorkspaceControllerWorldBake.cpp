@@ -73,10 +73,10 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::StartWorldBake */
     Result<OperationId> EditorWorkspaceController::StartWorldBake(const Application::WorldBakeMode mode,
-                                                                  const WorldDocumentFence expected) {
+                                                                  const WorldDocumentFence &expected) {
         if (!m_worldBake)
             return Result<OperationId>::Failure(MakeError(Application::WorldBakeErrors::Closed));
-        auto &owner = m_partitionedWorld ? *m_partitionedWorld : WorldDocuments();
+        const auto &owner = m_partitionedWorld ? *m_partitionedWorld : WorldDocuments();
         const auto current = owner.Snapshot();
         if (current.HasError())
             return Result<OperationId>::Failure(current.ErrorValue());
@@ -132,7 +132,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::RequestWorldBakeCancellation */
     Result<void> EditorWorkspaceController::RequestWorldBakeCancellation(const std::optional<OperationId> expected) {
-        if (!m_worldBakeOperations || !expected || expected != m_viewModel.worldBakeOperation)
+        if (!m_worldBakeOperations || !expected.has_value() || expected != m_viewModel.worldBakeOperation)
             return Result<void>::Failure(MakeError(Application::WorldBakeErrors::Stale));
         if (!m_worldBakeOperations->RequestCancel(*expected))
             return Result<void>::Failure(MakeError(Application::WorldBakeErrors::Stale));
@@ -149,11 +149,12 @@ namespace Horo::Editor {
         }
         if (command.command != BakeWorldCells && command.command != ValidateWorldCells)
             return false;
-        const auto accepted = command.worldDocumentFence
-                                  ? StartWorldBake(command.command == BakeWorldCells ? Application::WorldBakeMode::Bake
-                                                                                     : Application::WorldBakeMode::Validate,
-                                                   *command.worldDocumentFence)
-                                  : Result<OperationId>::Failure(MakeError(WorldDocumentErrors::Invalid));
+        if (!command.worldDocumentFence) {
+            m_viewModel.worldDocumentError = MakeError(WorldDocumentErrors::Invalid);
+            return true;
+        }
+        const auto mode = command.command == BakeWorldCells ? Application::WorldBakeMode::Bake : Application::WorldBakeMode::Validate;
+        const auto accepted = StartWorldBake(mode, *command.worldDocumentFence);
         m_viewModel.worldDocumentError = accepted.HasError() ? std::optional{accepted.ErrorValue()} : std::nullopt;
         return true;
     }

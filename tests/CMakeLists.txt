@@ -483,6 +483,7 @@ add_executable(HoroNetworkModeHostIntegrationTests
         integration/network/NetworkModeHostIntegrationTests.cpp
         integration/network/NetworkProductSessionTests.cpp
         integration/network/NetworkProductAdmissionTests.cpp
+        integration/network/NetworkAdmissionBoundaryTests.cpp
     integration/network/NetworkAdmissionObserverTests.cpp
 )
 target_compile_features(HoroNetworkModeHostIntegrationTests PRIVATE cxx_std_20)

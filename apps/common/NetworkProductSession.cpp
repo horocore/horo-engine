@@ -14,7 +14,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc NetworkProductSessionClock::NetworkProductSessionClock */
     NetworkProductSessionClock::NetworkProductSessionClock(std::shared_ptr<Clock> source, const Duration tickDuration, const Duration epoch)
-        : source_(std::move(source)), tickDuration_(tickDuration), epoch_(epoch), owner_(std::this_thread::get_id()) {}
+        : source_(std::move(source)), tickDuration_(tickDuration), epoch_(epoch) {}
 
     /** @copydoc NetworkProductSessionClock::Validate */
     Result<void> NetworkProductSessionClock::Validate() const {
@@ -84,7 +84,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc ClientSessionOwner::DetachTransport */
-    void ClientSessionOwner::DetachTransport(Network::INetworkTransport &transport) noexcept {
+    void ClientSessionOwner::DetachTransport(const Network::INetworkTransport &transport) noexcept {
         if (transport_ != &transport)
             return;
         TransportEnded();
@@ -115,7 +115,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc ClientSessionOwner::OnTransportEvent */
-    void ClientSessionOwner::OnTransportEvent(Network::NetworkTransportEvent event) noexcept {
+    void ClientSessionOwner::OnTransportEvent(const Network::NetworkTransportEvent &event) noexcept {
         if (stopped_ || !transport_)
             return;
         using enum Network::NetworkTransportEventKind;
@@ -190,13 +190,12 @@ namespace Horo::Application::Internal {
         if (peer_ && ((generation == generation_ && (peer != peer_ || connection != connection_)) ||
                       (generation != generation_ && connection == connection_)))
             return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkLifecycleOperationStale));
-        auto now = publishedTick ? clock_->PollTick() : Sample(false);
-        if (publishedTick && now.HasValue() && now.Value() != *publishedTick)
+        auto now = publishedTick.has_value() ? clock_->PollTick() : Sample(false);
+        if (publishedTick.has_value() && now.HasValue() && now.Value() != *publishedTick)
             return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
         if (now.HasError())
             return Result<void>::Failure(now.ErrorValue());
-        auto admitted = mode_->AdmitClientSession(world, *peer, connection, generation, now.Value());
-        if (admitted.HasError())
+        if (auto admitted = mode_->AdmitClientSession(world, *peer, connection, generation, now.Value()); admitted.HasError())
             return admitted;
         if (peer_ && peer_ != peer && !peer_->Terminal())
             (void)peer_->Cancel(connection_, generation_, now.Value());

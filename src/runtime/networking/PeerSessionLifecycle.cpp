@@ -297,13 +297,13 @@ namespace Horo::Network {
     /** @copydoc PeerSessionLifecycle::RejectProtocol */
     Result<void> PeerSessionLifecycle::RejectProtocol(const ConnectionHandle connection, const NetworkOperationGeneration sessionGeneration,
                                                       const NetworkFailureKind failure, const std::uint64_t nowTick) {
+        using enum PeerSessionState;
         if (auto valid = MutableOperation(connection, sessionGeneration); valid.HasError())
             return valid;
-        if (state_ != PeerSessionState::Closing) {
+        if (state_ != Closing) {
             if (failure != NetworkFailureKind::ProtocolMalformed && failure != NetworkFailureKind::ProtocolIncompatible)
                 return Result<void>::Failure(MakeError(NetworkErrors::NetworkLifecycleInvalid));
-            if (state_ != PeerSessionState::Created && state_ != PeerSessionState::Negotiating &&
-                state_ != PeerSessionState::Authenticating && state_ != PeerSessionState::Activating)
+            if (state_ != Created && state_ != Negotiating && state_ != Authenticating && state_ != Activating)
                 return Result<void>::Failure(MakeError(NetworkErrors::NetworkLifecycleTransitionInvalid));
         }
         return PublishFailureOrClose(failure, PeerSessionTerminalKind::ProtocolRejected, nowTick);

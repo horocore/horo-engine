@@ -58,7 +58,8 @@ namespace Horo::Network {
     public:
         virtual ~IInboundSessionHost() = default;
         /** @brief Handles a non-packet transport event; connectivity alone must not grant gameplay admission. */
-        virtual void OnTransportEvent(NetworkTransportEvent event) noexcept = 0;
+        /** @param event Borrowed through this synchronous call only; copy any retained data before returning. */
+        virtual void OnTransportEvent(const NetworkTransportEvent &event) noexcept = 0;
     };
 
     /** @brief Exact binding of one accepted message class to one owner and phase. */

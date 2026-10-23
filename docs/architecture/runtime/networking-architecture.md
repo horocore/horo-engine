@@ -1311,3 +1311,32 @@ The modal/store run on the editor owner thread. The host retains its durable
 filesystem and shared GUI context until modal shutdown; the modal owns the store
 and draft and copies committed projections. Cancellation discards only the draft.
 Existing single-session Play behavior remains its own lifecycle authority.
+
+
+### Admission provider containment and synchronous event observation
+
+The runtime admission provider boundary catches both standard and non-standard
+foreign exceptions. Its private synchronous invocation helper is genuinely
+`noexcept`: it returns an empty optional after a throw, including a result
+construction failure. The boundary adds no allocation; a provider and its typed
+result may allocate. The owning authentication/controller method constructs the
+original sanitized typed failure or cancellation **after** the boundary returns.
+Marking that allocating owner method `noexcept` would incorrectly turn a typed
+failure construction problem into process termination and is not the contract.
+Retirement instead records an allocation-free private cleanup outcome while
+preserving the first canonical terminal reason and once-only close attempt.
+
+`IInboundSessionHost::OnTransportEvent` now borrows `const NetworkTransportEvent&`
+only for the synchronous call. The dispatcher owns the event through return;
+observers copy anything they retain. The actual client observer retains only its
+existing canonical generation-qualified lifecycle, never the borrowed packet.
+This replaces the former by-value callback to avoid unnecessary large event
+moves/copies; the dispatcher, application observer and external consumers must
+rebuild for this deliberate signature migration.
+
+Factory-only `NetworkAdmissionController` and inert `ReplicationMetadataCapture`
+construction use standard shared ownership with a private nonaggregate admission
+key. The key's constructor is inaccessible to callers, including braced
+`X{{}}` expressions. Public consumers compile negative construction probes;
+only the existing validated factory creates the key. This is a construction
+migration, not a second registration or admission authority.

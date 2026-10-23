@@ -37,6 +37,11 @@ namespace {
     static_assert(!std::is_default_constructible_v<Horo::Network::ProofIssuanceAuthorization>);
     static_assert(!std::is_copy_constructible_v<Horo::Network::NetworkAdmissionController>);
     static_assert(!std::is_default_constructible_v<Horo::Network::NetworkAdmissionController>);
+    template <typename Controller>
+    concept BypassesAdmissionFactory = requires { Controller{{}, {}}; };
+    static_assert(!BypassesAdmissionFactory<Horo::Network::NetworkAdmissionController>);
+    static_assert(std::is_same_v<decltype(&Horo::Network::IInboundSessionHost::OnTransportEvent),
+                                 void (Horo::Network::IInboundSessionHost::*)(const Horo::Network::NetworkTransportEvent &) noexcept>);
     static_assert(!BypassesRpcFactory<Horo::Network::RpcGameplayDispatch>);
     static_assert(!BypassesInboundFactory<Horo::Network::InboundMessageDispatcher>);
     static_assert(!BypassesCaptureFactory<Horo::Network::ReplicationStateCapture>);

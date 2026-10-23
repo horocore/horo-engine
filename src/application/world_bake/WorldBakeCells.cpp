@@ -9,6 +9,14 @@ namespace Horo::Application {
     namespace S = Runtime;
 
     namespace {
+        /** @brief Require all dependencies from one actual source page before cell publication. */
+        Result<void> RequirePageAssets(S::SceneDefinitionBuilder &builder, const S::RuntimeSceneDefinition &scene) {
+            for (const auto &dependency : scene.AssetDependencies())
+                if (auto added = builder.RequireAsset(dependency); added.HasError())
+                    return added;
+            return Result<void>::Success();
+        }
+
         /** @brief Builds one complete owned cell scene, retaining local references for canonical Scene validation. */
         Result<S::RuntimeSceneDefinition> CellScene(const WorldBakeDetail::PreparedWorld &prepared, const W::StreamingCellId cell,
                                                     const S::SceneCellPayloadIdentity &identity) {
@@ -18,10 +26,10 @@ namespace Horo::Application {
                 if (std::ranges::find(object.cells, cell) == object.cells.end())
                     continue;
                 builder.Add(object.entity);
-                if (includedPages.insert(object.sceneIndex).second)
-                    for (const auto &dependency : prepared.output.sourceScenes[object.sceneIndex].AssetDependencies())
-                        if (auto added = builder.RequireAsset(dependency); added.HasError())
-                            return Result<S::RuntimeSceneDefinition>::Failure(added.ErrorValue());
+                if (includedPages.insert(object.sceneIndex).second) {
+                    if (auto added = RequirePageAssets(builder, prepared.output.sourceScenes[object.sceneIndex]); added.HasError())
+                        return Result<S::RuntimeSceneDefinition>::Failure(added.ErrorValue());
+                }
                 for (const auto &trigger : object.triggers)
                     if (auto added = builder.RequireTriggerVolume(trigger); added.HasError())
                         return Result<S::RuntimeSceneDefinition>::Failure(added.ErrorValue());
@@ -63,7 +71,7 @@ namespace Horo::Application {
                                               identity};
             std::vector<S::SceneCellCookDependency> dependencies;
             for (const auto &dependency : request.project.dependencies)
-                dependencies.push_back({dependency.asset.id, dependency.digest, dependency.revision, dependency.dependencies});
+                dependencies.emplace_back(dependency.asset.id, dependency.digest, dependency.revision, dependency.dependencies);
             const std::array<std::span<const std::byte>, 2> settings{std::as_bytes(std::span{request.project.settings.bytes}),
                                                                      std::as_bytes(std::span{request.project.fence.replication.bytes})};
             auto cooked = cache.Cook(partition, std::span{&input, 1}, dependencies, ComputeSha256Fragments(settings), cache.Revision(),
@@ -103,7 +111,7 @@ namespace Horo::Application {
             const auto placed = std::ranges::find_if(prepared.objects, [&](const auto &object) {
                 return std::ranges::find(object.cells, cell.id) != object.cells.end();
             });
-            output.expected.push_back({identity, placed == prepared.objects.end() ? std::nullopt : prepared.sources[placed->sceneIndex]});
+            output.expected.emplace_back(identity, placed == prepared.objects.end() ? std::nullopt : prepared.sources[placed->sceneIndex]);
             output.payloads.push_back(payload);
         }
         return Result<CookedCells>::Success(std::move(output));

@@ -23,7 +23,17 @@ namespace Horo::Application::Internal {
      * Feature/channel views point into this immovable shared owner and never into caller storage.
      */
     class NetworkProductAdmission final {
+        class ConstructionKey final {
+            friend class NetworkProductAdmission;
+
+            ConstructionKey() noexcept {}
+        };
+
     public:
+        /** @brief Factory-only stable shared capture; only Capture can create the nonaggregate construction key. */
+        NetworkProductAdmission(ConstructionKey, const Network::NetworkAdmissionPolicy &policy,
+                                Network::NetworkAdmissionProviders providers, std::shared_ptr<const Network::MessageCodecRegistry> codecs,
+                                std::span<const NetworkProductInboundHandler> handlers);
         /**
          * @brief Deep-capture spans and retain the exact canonical codec/provider owners.
          * @param policy Host-selected inert admission policy, borrowed only during this call.
@@ -59,9 +69,6 @@ namespace Horo::Application::Internal {
         }
 
     private:
-        NetworkProductAdmission(const Network::NetworkAdmissionPolicy &policy, Network::NetworkAdmissionProviders providers,
-                                std::shared_ptr<const Network::MessageCodecRegistry> codecs,
-                                std::span<const NetworkProductInboundHandler> handlers);
         std::array<Network::ProtocolFeatureId, Network::MaximumHandshakeFeatures> supported_{};
         std::array<Network::ProtocolFeatureId, Network::MaximumHandshakeFeatures> required_{};
         std::vector<Network::MessageDeliveryChannel> channels_;

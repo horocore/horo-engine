@@ -1,6 +1,7 @@
 #include "Horo/Network/AuthenticationSessionAdapter.h"
 
 #include "Horo/Network/AdmissionProtection.h"
+#include "NetworkProviderBoundary.h"
 #include "NetworkValidationInternal.h"
 
 namespace Horo::Network {
@@ -145,7 +146,7 @@ namespace Horo::Network {
         };
         if (!AvailableAuthorities(authorities_))
             return reject(NetworkErrors::AuthenticationTrustUnavailable, AuthenticationFailureClass::TrustUnavailable);
-        try {
+        auto attempted = Detail::InvokeAdmissionProvider([this, &evidence, &reject, &charge]() {
             if (!charge())
                 return reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
             const auto certificate = authorities_.certificates->Verify({challenge_, evidence.certificate});
@@ -161,9 +162,10 @@ namespace Horo::Network {
             if (!ValidStamp(peer.Value().stamp, challenge_) || !ExposureAllowsTrust(policy_.exposure, peer.Value().trustLevel))
                 return reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
             return Result<VerifiedPeerAuthorities>::Success({certificate.Value(), peer.Value()});
-        } catch (...) {
+        });
+        if (!attempted)
             return reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
-        }
+        return std::move(*attempted);
     }
 
     /** @copydoc AuthenticationSessionAdapter::AuthorizeProofIssuance */
@@ -196,7 +198,7 @@ namespace Horo::Network {
     Result<AuthenticationResult> AuthenticationSessionAdapter::VerifyWithAuthorities(const AuthenticationResponseView &response,
                                                                                      const PeerAuthenticationEvidence &evidence,
                                                                                      const std::uint64_t nowTick) {
-        try {
+        auto attempted = Detail::InvokeAdmissionProvider([this, &response, &evidence, nowTick]() {
             const auto peer = VerifyPeerAuthorities(evidence, nowTick);
             if (peer.HasError())
                 return Result<AuthenticationResult>::Failure(peer.ErrorValue());
@@ -237,9 +239,10 @@ namespace Horo::Network {
             state_ = AuthenticationState::Accepted;
             failure_ = AuthenticationFailureClass::None;
             return Result<AuthenticationResult>::Success(accepted_);
-        } catch (...) {
+        });
+        if (!attempted)
             return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
-        }
+        return std::move(*attempted);
     }
 
     /** @copydoc AuthenticationSessionAdapter::Authenticate */

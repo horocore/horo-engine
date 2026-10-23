@@ -15,9 +15,9 @@ namespace Horo::Network {
     }  // namespace
 
     NetworkAdmissionController::Impl::Impl(INetworkTransport &transportInput, InboundMessageDispatcher &dispatcherInput,
-                                           std::shared_ptr<const MessageCodecRegistry> codecsInput, NetworkAdmissionPolicy policyInput,
-                                           NetworkAdmissionProviders providersInput, AdmissionProtection protectionInput,
-                                           std::weak_ptr<INetworkAdmissionObserver> observerInput)
+                                           std::shared_ptr<const MessageCodecRegistry> codecsInput,
+                                           const NetworkAdmissionPolicy &policyInput, NetworkAdmissionProviders providersInput,
+                                           AdmissionProtection protectionInput, std::weak_ptr<INetworkAdmissionObserver> observerInput)
         : transport(transportInput), dispatcher(dispatcherInput), codecs(std::move(codecsInput)), policy(policyInput),
           providers(std::move(providersInput)), protection(std::move(protectionInput)), observer(std::move(observerInput)) {}
 
@@ -67,8 +67,8 @@ namespace Horo::Network {
     Result<void> NetworkAdmissionController::Impl::ValidateControls() const {
         for (std::size_t i = 0; i < policy.controls.size(); ++i) {
             const auto &control = policy.controls[i];
-            const auto codec = codecs->FindCodec(control.protocol, control.id);
-            if (control.optional || control.protocol != policy.local.compatibility.protocol || !codec || codec->schema != control.schema ||
+            if (const auto codec = codecs->FindCodec(control.protocol, control.id);
+                control.optional || control.protocol != policy.local.compatibility.protocol || !codec || codec->schema != control.schema ||
                 !codec->supportedVersions.Contains(control.version) || control.version != MessageSchemaVersion{1, 0})
                 return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
             for (std::size_t j = 0; j < i; ++j)
@@ -91,13 +91,13 @@ namespace Horo::Network {
             if (auto valid = impl->ValidatePolicy(); valid.HasError())
                 return Result<std::shared_ptr<NetworkAdmissionController>>::Failure(valid.ErrorValue());
             return Result<std::shared_ptr<NetworkAdmissionController>>::Success(
-                std::shared_ptr<NetworkAdmissionController>{new NetworkAdmissionController{std::move(impl)}});
+                std::make_shared<NetworkAdmissionController>(ConstructionKey{}, std::move(impl)));
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<NetworkAdmissionController>>::Failure(MakeError(NetworkErrors::AdmissionLimitExceeded));
         }
     }
 
-    NetworkAdmissionController::NetworkAdmissionController(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    NetworkAdmissionController::NetworkAdmissionController(ConstructionKey, std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     NetworkAdmissionController::~NetworkAdmissionController() {
         Shutdown(impl_->lastTick);
@@ -149,24 +149,24 @@ namespace Horo::Network {
     /** @copydoc NetworkAdmissionController::OnTransportEvent */
     Result<AdmissionEventDisposition> NetworkAdmissionController::OnTransportEvent(const NetworkTransportEvent &event,
                                                                                    const std::uint64_t nowTick) {
+        using enum AdmissionEventDisposition;
         if (auto tick = impl_->CheckTick(nowTick); tick.HasError())
             return Result<AdmissionEventDisposition>::Failure(tick.ErrorValue());
         using enum NetworkTransportEventKind;
         if (event.kind == Accepted || event.kind == Connected) {
             const auto connected = impl_->Connect(event, nowTick);
             if (connected.HasValue())
-                return Result<AdmissionEventDisposition>::Success(AdmissionEventDisposition::PendingCreated);
+                return Result<AdmissionEventDisposition>::Success(PendingCreated);
             const auto &error = connected.ErrorValue();
             const bool cancelled = error.domain.Value() == NetworkErrors::SessionCancelled.domain.Value() &&
                                    error.code.Value() == NetworkErrors::SessionCancelled.code.Value();
-            return Result<AdmissionEventDisposition>::Success(cancelled ? AdmissionEventDisposition::CandidateCancelled
-                                                                        : AdmissionEventDisposition::PeerRejected);
+            return Result<AdmissionEventDisposition>::Success(cancelled ? CandidateCancelled : PeerRejected);
         }
         if (event.kind != Closed && event.kind != Failed)
-            return Result<AdmissionEventDisposition>::Success(AdmissionEventDisposition::Ignored);
+            return Result<AdmissionEventDisposition>::Success(Ignored);
         auto *peer = impl_->Find(event.connection);
         if (!peer)
-            return Result<AdmissionEventDisposition>::Success(AdmissionEventDisposition::Ignored);
+            return Result<AdmissionEventDisposition>::Success(Ignored);
         if (!peer->lifecycle->Terminal()) {
             if (peer->lifecycle->State() == PeerSessionState::Closing)
                 (void)peer->lifecycle->CompleteClose(peer->connection, peer->generation, nowTick);
@@ -174,7 +174,7 @@ namespace Horo::Network {
                 (void)peer->lifecycle->FailTransport(peer->connection, peer->generation, NetworkFailureKind::TransportUnavailable, nowTick);
         }
         impl_->Retire(*peer);
-        return Result<AdmissionEventDisposition>::Success(AdmissionEventDisposition::Terminalized);
+        return Result<AdmissionEventDisposition>::Success(Terminalized);
     }
 
     /** @copydoc NetworkAdmissionController::ConsumeControl */
@@ -210,9 +210,8 @@ namespace Horo::Network {
     Result<void> NetworkAdmissionController::Impl::DispatchControl(Peer &peer, const MessageEnvelopePayloadView &frame,
                                                                    const std::uint64_t nowTick) {
         for (std::size_t i = 0; i < policy.controls.size(); ++i) {
-            const auto &control = policy.controls[i];
-            if (frame.protocol != control.protocol || frame.message != control.id || frame.schema != control.schema ||
-                frame.schemaVersion != control.version)
+            if (const auto &control = policy.controls[i]; frame.protocol != control.protocol || frame.message != control.id ||
+                                                          frame.schema != control.schema || frame.schemaVersion != control.version)
                 continue;
             switch (static_cast<AdmissionControlKind>(i)) {
                 case AdmissionControlKind::Offer:

@@ -7,7 +7,7 @@
 
 namespace Horo::Application::Internal {
     /** @copydoc NetworkProductAdmission::NetworkProductAdmission */
-    NetworkProductAdmission::NetworkProductAdmission(const Network::NetworkAdmissionPolicy &policy,
+    NetworkProductAdmission::NetworkProductAdmission(ConstructionKey, const Network::NetworkAdmissionPolicy &policy,
                                                      Network::NetworkAdmissionProviders providers,
                                                      std::shared_ptr<const Network::MessageCodecRegistry> codecs,
                                                      const std::span<const NetworkProductInboundHandler> handlers)
@@ -31,8 +31,8 @@ namespace Horo::Application::Internal {
             return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
                 MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
         try {
-            return Result<std::shared_ptr<const NetworkProductAdmission>>::Success(std::shared_ptr<const NetworkProductAdmission>{
-                new NetworkProductAdmission{policy, std::move(providers), std::move(codecs), handlers}});
+            return Result<std::shared_ptr<const NetworkProductAdmission>>::Success(
+                std::make_shared<NetworkProductAdmission>(ConstructionKey{}, policy, std::move(providers), std::move(codecs), handlers));
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
                 MakeError(Network::NetworkErrors::AdmissionLimitExceeded));
@@ -153,9 +153,9 @@ namespace Horo::Application::Internal {
             Result<void> ConfigureCodecs() {
                 if (capture_) {
                     const bool outgoing = role_ == Net::NetworkProjectRole::Client || role_ == Net::NetworkProjectRole::ListenServer;
-                    const bool incoming =
-                        role_ == Net::NetworkProjectRole::DedicatedServer || role_ == Net::NetworkProjectRole::ListenServer;
-                    if (capture_->Policy().endpoints[static_cast<std::size_t>(Net::AdmissionEndpoint::Client)] != outgoing ||
+                    if (const bool incoming =
+                            role_ == Net::NetworkProjectRole::DedicatedServer || role_ == Net::NetworkProjectRole::ListenServer;
+                        capture_->Policy().endpoints[static_cast<std::size_t>(Net::AdmissionEndpoint::Client)] != outgoing ||
                         capture_->Policy().endpoints[static_cast<std::size_t>(Net::AdmissionEndpoint::Server)] != incoming)
                         return Result<void>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
                     codecs_ = capture_->Codecs();
@@ -175,23 +175,24 @@ namespace Horo::Application::Internal {
 
             /** @brief Reserve exact control IDs and install bounded existing handler bindings. */
             Result<void> ConfigureAdmission() {
-                if (capture_) {
-                    auto controller = Net::NetworkAdmissionController::Create(*transport_, *router_, codecs_, capture_->Policy(),
-                                                                              capture_->Providers(), sessions_);
-                    if (controller.HasError())
-                        return Result<void>::Failure(controller.ErrorValue());
-                    admission_ = std::move(controller).Value();
-                    router_->SetAdmissionController(admission_);
-                    for (const auto &binding : capture_->Handlers()) {
-                        for (const auto &control : capture_->Policy().controls)
-                            if (binding.binding.protocol == control.protocol && binding.binding.message == control.id)
-                                return Result<void>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
-                        auto owner = binding.owner.lock();
-                        if (!owner)
-                            return Result<void>::Failure(MakeError(Net::NetworkErrors::GameplayDispatchRejected));
-                        if (auto installed = router_->RegisterHandler(binding.binding, owner); installed.HasError())
-                            return installed;
-                    }
+                if (!capture_)
+                    return Result<void>::Success();
+                auto controller = Net::NetworkAdmissionController::Create(*transport_, *router_, codecs_, capture_->Policy(),
+                                                                          capture_->Providers(), sessions_);
+                if (controller.HasError())
+                    return Result<void>::Failure(controller.ErrorValue());
+                admission_ = std::move(controller).Value();
+                router_->SetAdmissionController(admission_);
+                for (const auto &binding : capture_->Handlers()) {
+                    if (std::ranges::any_of(capture_->Policy().controls, [&binding](const auto &control) {
+                        return binding.binding.protocol == control.protocol && binding.binding.message == control.id;
+                    }))
+                        return Result<void>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
+                    auto owner = binding.owner.lock();
+                    if (!owner)
+                        return Result<void>::Failure(MakeError(Net::NetworkErrors::GameplayDispatchRejected));
+                    if (auto installed = router_->RegisterHandler(binding.binding, owner); installed.HasError())
+                        return installed;
                 }
                 return Result<void>::Success();
             }

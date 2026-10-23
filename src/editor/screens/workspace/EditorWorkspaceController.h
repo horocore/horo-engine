@@ -274,7 +274,7 @@ namespace Horo::Editor {
         /** @brief Queues actual bake/validation from the canonical world owner, never a filtered browser subset.
          * @param mode Bake or validate. @param expected Exact current source publication.
          * @return New operation identity or typed rejection preserving the current bake and document. */
-        [[nodiscard]] Result<OperationId> StartWorldBake(Application::WorldBakeMode mode, WorldDocumentFence expected);
+        [[nodiscard]] Result<OperationId> StartWorldBake(Application::WorldBakeMode mode, const WorldDocumentFence &expected);
         /** @brief Polls application-owned work and refreshes immutable presentation without blocking. */
         void UpdateWorldBake();
         /** @brief Installs explicit complete project/schema/dependency capture from the host.

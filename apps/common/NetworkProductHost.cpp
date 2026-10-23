@@ -155,11 +155,9 @@ namespace Horo::Application::Internal {
                 if (auto valid = sessions->Validate(); valid.HasError())
                     return Result<std::shared_ptr<ClientSessionOwner>>::Failure(valid.ErrorValue());
             }
-            auto &sessionFactory = factories.services[static_cast<std::size_t>(Network::NetworkModeServiceKind::Session)];
-            if (sessionFactory) {
-                sessionFactory =
-                    [original = std::move(sessionFactory),
-                     sessions](const Network::NetworkModeServiceRequest &request) -> Result<std::unique_ptr<Network::INetworkModeService>> {
+            if (auto &sessionFactory = factories.services[static_cast<std::size_t>(Network::NetworkModeServiceKind::Session)];
+                sessionFactory) {
+                sessionFactory = [original = std::move(sessionFactory), sessions](const Network::NetworkModeServiceRequest &request) {
                     auto service = original(request);
                     if (service.HasError())
                         return service;

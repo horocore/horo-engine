@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <mbedtls/md.h>
+#include <stdexcept>
 
 namespace Horo::Network::AdmissionTests {
     using TestSupport::Bytes;
@@ -44,6 +45,17 @@ namespace Horo::Network::AdmissionTests {
         return Security::SecureBytes{std::as_bytes(std::span{mac.bytes})};
     }
 
+    enum class ProviderThrowSite : std::uint8_t {
+        None,
+        Entropy,
+        Channel,
+        Certificate,
+        Peer,
+        Credential,
+        Key,
+        Proof
+    };
+
     /** @brief Fixture-injected capabilities only; no production credential, secret or trust default is installed. */
     class Authority final : public ICertificateAuthority,
                             public IPeerVerificationAuthority,
@@ -62,6 +74,7 @@ namespace Horo::Network::AdmissionTests {
 
         Result<void> Fill(const std::span<std::byte> output) override {
             ++randomCalls;
+            ThrowAt(ProviderThrowSite::Entropy);
             for (auto &byte : output)
                 byte = static_cast<std::byte>(++entropy_);
             return Result<void>::Success();
@@ -69,6 +82,7 @@ namespace Horo::Network::AdmissionTests {
 
         Result<PeerAuthenticationEvidence> Inspect(const ConnectionHandle connection, const NetworkOperationGeneration generation,
                                                    std::uint64_t) override {
+            ThrowAt(ProviderThrowSite::Channel);
             if (connection != link_->ends[side_].connection || !link_->ends[side_].open)
                 return Result<PeerAuthenticationEvidence>::Failure(MakeError(NetworkErrors::AuthenticationTrustUnavailable));
             return Result<PeerAuthenticationEvidence>::Success(
@@ -78,6 +92,7 @@ namespace Horo::Network::AdmissionTests {
 
         Result<CertificateVerificationResult> Verify(const CertificateVerificationRequest &request) override {
             ++certificateCalls;
+            ThrowAt(ProviderThrowSite::Certificate);
             if (rejectCertificate ||
                 request.evidence.certificateDigest != Bytes<AuthenticationDigestBytes>(static_cast<std::uint8_t>(0x40 + 1 - side_)))
                 return PrivateFailure<CertificateVerificationResult>();
@@ -86,6 +101,7 @@ namespace Horo::Network::AdmissionTests {
 
         Result<PeerVerificationResult> Verify(const PeerVerificationRequest &request) override {
             ++peerCalls;
+            ThrowAt(ProviderThrowSite::Peer);
             if (rejectPeer)
                 return PrivateFailure<PeerVerificationResult>();
             return Result<PeerVerificationResult>::Success(
@@ -94,6 +110,7 @@ namespace Horo::Network::AdmissionTests {
 
         Result<CredentialVerificationResult> Verify(const CredentialVerificationRequest &request) override {
             ++credentialCalls;
+            ThrowAt(ProviderThrowSite::Credential);
             const auto expected = Mac(*key_, request.challenge);
             std::uint8_t different{};
             if (request.proof.size() != expected.View().size() || rejectCredential)
@@ -117,6 +134,7 @@ namespace Horo::Network::AdmissionTests {
 
         Result<SecureChannelHandoff> Bind(const SecureChannelBindingRequest &request) override {
             ++keyCalls;
+            ThrowAt(ProviderThrowSite::Key);
             const auto digest = ComputeSha256(request.challenge.transcriptDigest);
             AuthenticationDigest binding{};
             for (std::size_t i = 0; i < binding.size(); ++i)
@@ -127,6 +145,7 @@ namespace Horo::Network::AdmissionTests {
 
         Result<Security::SecureBytes> Issue(const AdmissionProofRequest &request) override {
             ++issuerCalls;
+            ThrowAt(ProviderThrowSite::Proof);
             const auto &challenge = request.authorization.Challenge();
             REQUIRE(challenge.connection == link_->ends[side_].connection);
             REQUIRE(request.authorization.Peer().trustLevel == NetworkTrustLevel::ProductAnchor);
@@ -144,6 +163,8 @@ namespace Horo::Network::AdmissionTests {
             return {self, self, self, self, self, self, self};
         }
 
+        ProviderThrowSite throwSite{ProviderThrowSite::None};
+        bool throwNonStandard{};
         bool available{true};
         bool rejectCertificate{};
         bool rejectPeer{};
@@ -162,6 +183,14 @@ namespace Horo::Network::AdmissionTests {
         AuthenticationDigest issuedTranscript{};
 
     private:
+        void ThrowAt(const ProviderThrowSite site) const {
+            if (throwSite != site)
+                return;
+            if (throwNonStandard)
+                throw 17;
+            throw std::runtime_error{"PRIVATE_ADMISSION_SECRET_SENTINEL"};
+        }
+
         [[nodiscard]] AuthenticationAuthorityStamp Stamp(const AuthenticationChallenge &challenge, const std::uint64_t generation) const {
             return {challenge.connection, challenge.sessionGeneration, generation};
         }

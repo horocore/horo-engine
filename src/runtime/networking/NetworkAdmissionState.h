@@ -9,6 +9,14 @@
 namespace Horo::Network {
     struct NetworkAdmissionController::Impl final {
         struct Peer final {
+            /** @brief Exact once-only transport cleanup outcome; independent from the first canonical terminal reason. */
+            enum class Retirement : std::uint8_t {
+                Live,
+                Closing,
+                Closed,
+                Rejected,
+                CallbackFailed
+            };
             ConnectionHandle connection;
             NetworkOperationGeneration generation;
             AdmissionEndpoint endpoint{AdmissionEndpoint::Count};
@@ -25,14 +33,14 @@ namespace Horo::Network {
             std::uint32_t nextSequence{1};
             std::uint32_t lastSequence{};
             bool ledgerReserved{};
-            bool retired{};
+            Retirement retirement{Retirement::Live};
             bool proofIssued{};
             bool proposalAcknowledged{};
             bool proposalReceived{};
         };
 
         Impl(INetworkTransport &transport, InboundMessageDispatcher &dispatcher, std::shared_ptr<const MessageCodecRegistry> codecs,
-             NetworkAdmissionPolicy policy, NetworkAdmissionProviders providers, AdmissionProtection protection,
+             const NetworkAdmissionPolicy &policy, NetworkAdmissionProviders providers, AdmissionProtection protection,
              std::weak_ptr<INetworkAdmissionObserver> observer);
         [[nodiscard]] Result<void> CheckTick(std::uint64_t nowTick) const;
         [[nodiscard]] Result<void> ValidatePolicy();

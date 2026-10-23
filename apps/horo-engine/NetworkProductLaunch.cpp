@@ -314,11 +314,16 @@ namespace Horo::Application::Internal {
             return std::make_shared<ClientSessionOwner>(std::move(domain));
         }
 
+        /** @brief Explicit optional runtime owners supplied by the executable composition root. */
+        struct ProductRuntimeCapabilities final {
+            HeadlessProjectSceneResources *resources{};
+            std::shared_ptr<const NetworkProductAdmission> admission;
+        };
+
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
             std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
-            Net::NetworkTargetDiagnostic &diagnostic, HeadlessProjectSceneResources *resources = nullptr,
-            std::shared_ptr<const NetworkProductAdmission> admission = nullptr) {
+            Net::NetworkTargetDiagnostic &diagnostic, ProductRuntimeCapabilities capabilities) {
             const auto product = BuiltProduct(project);
             const auto inventory = LinkedPackageInventory(project);
             const auto hostFacts = HeadlessHostFacts(project);
@@ -343,8 +348,8 @@ namespace Horo::Application::Internal {
             auto sessions = CreateProductSessions(clock, launch.role);
             auto configured = ComposeProductWorldServices(std::move(scene), launch, project,
                                                           ProductFactories(launch.role, launch.bind, launch.connect, debugger, sessions,
-                                                                           std::move(admission)),
-                                                          resources);
+                                                                           std::move(capabilities.admission)),
+                                                          capabilities.resources);
             if (configured.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
             return NetworkProductHost::Create(*clock,
@@ -401,8 +406,8 @@ namespace Horo::Application::Internal {
         const auto worlds = WorldsFor(launch.Value().role);
         auto clock = std::make_shared<SteadyClock>();
         Net::NetworkTargetDiagnostic diagnostic;
-        auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic, resources.get(),
-                                      std::move(admission));
+        auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic,
+                                      {resources.get(), std::move(admission)});
         if (runtime.HasError()) {
             std::cerr << "horo-engine: network product admission failed (capability " << static_cast<int>(diagnostic.capability)
                       << ", reason " << static_cast<int>(diagnostic.reason) << ")\n";

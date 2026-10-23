@@ -52,7 +52,7 @@ namespace Horo::Application::Internal {
         std::optional<Duration> lastSample_;
         std::uint64_t pollTick_{};
         std::optional<Error> failure_;
-        std::thread::id owner_;
+        std::thread::id owner_{std::this_thread::get_id()};
     };
 
     /**
@@ -86,7 +86,7 @@ namespace Horo::Application::Internal {
          * @brief Terminalize and detach the exact binding before transport destruction.
          * @param transport Exact borrowed transport; other or already detached bindings are ignored.
          */
-        void DetachTransport(Network::INetworkTransport &transport) noexcept;
+        void DetachTransport(const Network::INetworkTransport &transport) noexcept;
         /**
          * @brief Borrow the one clock tick published before the current transport poll.
          * @return Published tick or typed shutdown, clock or wrong-thread error.
@@ -98,7 +98,7 @@ namespace Horo::Application::Internal {
          * @details Unknown connectivity is closed. Stale handles cannot revoke a replacement peer.
          * Existing canonical remote-close reasons survive later transport failure and shutdown.
          */
-        void OnTransportEvent(Network::NetworkTransportEvent event) noexcept override;
+        void OnTransportEvent(const Network::NetworkTransportEvent &event) noexcept override;
         /** @brief Retain one exact pre-active runtime owner for terminal observation without granting client gameplay authority. */
         [[nodiscard]] Result<void> OnSessionPrepared(Network::AdmissionEndpoint endpoint,
                                                      const std::shared_ptr<Network::PeerSessionLifecycle> &lifecycle,

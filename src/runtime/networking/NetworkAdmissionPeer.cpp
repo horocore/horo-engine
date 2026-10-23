@@ -1,4 +1,5 @@
 #include "NetworkAdmissionState.h"
+#include "NetworkProviderBoundary.h"
 
 #include <algorithm>
 #include <limits>
@@ -8,6 +9,11 @@ namespace Horo::Network {
     namespace {
         /** @brief Frame scratch owns no persistent proof and clears every byte after a synchronous send. */
         struct FrameScratch final {
+            FrameScratch() = default;
+            FrameScratch(const FrameScratch &) = delete;
+            FrameScratch &operator=(const FrameScratch &) = delete;
+            FrameScratch(FrameScratch &&) = delete;
+            FrameScratch &operator=(FrameScratch &&) = delete;
             std::array<std::byte, AdmissionWire::MaximumFrameBytes> bytes{};
 
             ~FrameScratch() {
@@ -51,14 +57,13 @@ namespace Horo::Network {
         if (auto initialized = InitializePeer(*slot, event, endpoint, *deadlines); initialized.HasError())
             return initialized;
         auto &peer = **slot;
-        try {
-            if (providers.random->Fill(peer.localNonce).HasError() || std::ranges::all_of(peer.localNonce, [](const auto byte) {
-                return byte == std::byte{};
-            }))
-                return Fail(peer, NetworkFailureKind::SessionAuthenticationRejected, nowTick, true);
-        } catch (...) {
+        const auto generated = Detail::InvokeAdmissionProvider([this, &peer] {
+            return providers.random->Fill(peer.localNonce);
+        });
+        if (!generated || generated->HasError() || std::ranges::all_of(peer.localNonce, [](const auto byte) {
+            return byte == std::byte{};
+        }))
             return Fail(peer, NetworkFailureKind::SessionAuthenticationRejected, nowTick, true);
-        }
         if (peer.lifecycle->BeginNegotiation(peer.connection, peer.generation, nowTick).HasError())
             return Fail(peer, NetworkFailureKind::ProtocolMalformed, nowTick);
         if (auto projected = ProjectPrepared(peer, nowTick); projected.HasError())
@@ -94,9 +99,9 @@ namespace Horo::Network {
     }
 
     void NetworkAdmissionController::Impl::Retire(Peer &peer) noexcept {
-        if (peer.retired)
+        if (peer.retirement != Peer::Retirement::Live)
             return;
-        peer.retired = true;
+        peer.retirement = Peer::Retirement::Closing;
         dispatcher.RevokeSession(peer.connection);
         if (peer.negotiation)
             (void)peer.negotiation->Shutdown();
@@ -106,10 +111,16 @@ namespace Horo::Network {
             (void)protection.End(peer.connection, peer.generation);
             peer.ledgerReserved = false;
         }
-        try {
-            (void)transport.Close(peer.connection);
-        } catch (...) { /* Original canonical terminal remains authoritative. */
-        }
+        const auto closed = Detail::InvokeAdmissionProvider([this, &peer] {
+            return transport.Close(peer.connection);
+        });
+        // Cleanup status is allocation-free and never replaces the original canonical terminal reason.
+        if (!closed)
+            peer.retirement = Peer::Retirement::CallbackFailed;
+        else if (closed->HasError())
+            peer.retirement = Peer::Retirement::Rejected;
+        else
+            peer.retirement = Peer::Retirement::Closed;
     }
 
     /** @brief Local owner retirement cancels without blaming peer authentication. */
@@ -125,12 +136,11 @@ namespace Horo::Network {
         auto projection = observer.lock();
         if (!projection && peer.endpoint == AdmissionEndpoint::Client)
             return AbortProjection(peer, nowTick);
-        try {
-            if (projection && projection->OnSessionPrepared(peer.endpoint, peer.lifecycle, peer.generation, nowTick).HasError())
-                return AbortProjection(peer, nowTick);
-        } catch (...) {
+        const auto projected = Detail::InvokeAdmissionProvider([&peer, &projection, nowTick] {
+            return !projection || projection->OnSessionPrepared(peer.endpoint, peer.lifecycle, peer.generation, nowTick).HasValue();
+        });
+        if (!projected.has_value() || !*projected)
             return AbortProjection(peer, nowTick);
-        }
         return Result<void>::Success();
     }
 

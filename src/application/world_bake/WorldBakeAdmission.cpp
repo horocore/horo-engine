@@ -1,6 +1,7 @@
 #include "WorldBakeInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <set>
 
@@ -18,30 +19,30 @@ namespace Horo::Application::WorldBakeDetail {
         /** @brief Bounds every independently allocating stage, including empty-world admission. */
         bool ValidLimits(const WorldBakeLimits &value) {
             constexpr WorldBakeLimits hard;
-            const std::pair<std::size_t, std::size_t>
-                ceilings[]{{value.maximumObjects, hard.maximumObjects},
-                           {value.maximumCells, hard.maximumCells},
-                           {value.maximumAssignments, hard.maximumAssignments},
-                           {value.maximumCellsPerObject, hard.maximumCellsPerObject},
-                           {value.maximumOutputBytes, hard.maximumOutputBytes},
-                           {value.maximumSourceBytes, hard.maximumSourceBytes},
-                           {value.cache.maximumCells, hard.cache.maximumCells},
-                           {value.cache.maximumDependencies, hard.cache.maximumDependencies},
-                           {value.cache.maximumDependencyEdges, hard.cache.maximumDependencyEdges},
-                           {value.cache.maximumSchemas, hard.cache.maximumSchemas},
-                           {value.cache.maximumKeyBytes, hard.cache.maximumKeyBytes},
-                           {value.cache.maximumRetainedBytes, hard.cache.maximumRetainedBytes},
-                           {value.codec.maximumEncodedBytes, hard.codec.maximumEncodedBytes},
-                           {value.codec.maximumDecodeAllocationBytes, hard.codec.maximumDecodeAllocationBytes},
-                           {value.codec.semantic.maximumEntities, hard.codec.semantic.maximumEntities},
-                           {value.codec.semantic.maximumDependencies, hard.codec.semantic.maximumDependencies},
-                           {value.codec.semantic.maximumRetainedBytes, hard.codec.semantic.maximumRetainedBytes},
-                           {value.validation.maximumCells, hard.validation.maximumCells},
-                           {value.validation.maximumObjects, hard.validation.maximumObjects},
-                           {value.validation.maximumDiagnostics, hard.validation.maximumDiagnostics},
-                           {value.validation.maximumSourceBytes, hard.validation.maximumSourceBytes},
-                           {value.validation.maximumCellBytes, hard.validation.maximumCellBytes},
-                           {value.validation.maximumWorldBytes, hard.validation.maximumWorldBytes}};
+            const auto ceilings = std::to_array<std::pair<std::size_t, std::size_t>>(
+                {{value.maximumObjects, hard.maximumObjects},
+                 {value.maximumCells, hard.maximumCells},
+                 {value.maximumAssignments, hard.maximumAssignments},
+                 {value.maximumCellsPerObject, hard.maximumCellsPerObject},
+                 {value.maximumOutputBytes, hard.maximumOutputBytes},
+                 {value.maximumSourceBytes, hard.maximumSourceBytes},
+                 {value.cache.maximumCells, hard.cache.maximumCells},
+                 {value.cache.maximumDependencies, hard.cache.maximumDependencies},
+                 {value.cache.maximumDependencyEdges, hard.cache.maximumDependencyEdges},
+                 {value.cache.maximumSchemas, hard.cache.maximumSchemas},
+                 {value.cache.maximumKeyBytes, hard.cache.maximumKeyBytes},
+                 {value.cache.maximumRetainedBytes, hard.cache.maximumRetainedBytes},
+                 {value.codec.maximumEncodedBytes, hard.codec.maximumEncodedBytes},
+                 {value.codec.maximumDecodeAllocationBytes, hard.codec.maximumDecodeAllocationBytes},
+                 {value.codec.semantic.maximumEntities, hard.codec.semantic.maximumEntities},
+                 {value.codec.semantic.maximumDependencies, hard.codec.semantic.maximumDependencies},
+                 {value.codec.semantic.maximumRetainedBytes, hard.codec.semantic.maximumRetainedBytes},
+                 {value.validation.maximumCells, hard.validation.maximumCells},
+                 {value.validation.maximumObjects, hard.validation.maximumObjects},
+                 {value.validation.maximumDiagnostics, hard.validation.maximumDiagnostics},
+                 {value.validation.maximumSourceBytes, hard.validation.maximumSourceBytes},
+                 {value.validation.maximumCellBytes, hard.validation.maximumCellBytes},
+                 {value.validation.maximumWorldBytes, hard.validation.maximumWorldBytes}});
             return value.validation.maximumReferences <= hard.validation.maximumReferences &&
                    std::ranges::all_of(ceilings, [](const auto &ceiling) {
                 return ceiling.first != 0 && ceiling.first <= ceiling.second;

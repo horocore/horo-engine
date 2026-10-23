@@ -28,11 +28,12 @@ namespace Horo::Editor {
         }
 
         /** @brief Copies actual native metadata under its exact acquired code lease, preserving all non-empty errors. */
-        Result<void> AppendNative(Gameplay::LoadedGameModule &module, std::vector<Network::ReplicationSchemaDescriptor> &schemas) {
-            auto acquired = module.Replication().Acquire();
+        Result<void> AppendNative(const Gameplay::LoadedGameModule &loadedModule,
+                                  std::vector<Network::ReplicationSchemaDescriptor> &schemas) {
+            auto acquired = loadedModule.Replication().Acquire();
             if (acquired.HasValue())
                 return AppendSchemas(schemas, acquired.Value());
-            if (module.Replication().IsFrozen() &&
+            if (loadedModule.Replication().IsFrozen() &&
                 acquired.ErrorValue().domain.Value() == Gameplay::GameplayErrors::InvalidReplicationRegistration.domain.Value() &&
                 acquired.ErrorValue().code.Value() == Gameplay::GameplayErrors::InvalidReplicationRegistration.code.Value())
                 return Result<void>::Success();
@@ -56,7 +57,7 @@ namespace Horo::Editor {
         std::vector<Network::ReplicationSchemaDescriptor> schemas;
         std::vector<ModuleId> modules;
         if (nativeModule_) {
-            modules.push_back(ModuleId{nativeModuleId_});
+            modules.emplace_back(nativeModuleId_);
             if (auto copied = AppendNative(*nativeModule_, schemas); copied.HasError())
                 return Result<Network::ReplicationMetadataCapturePtr>::Failure(copied.ErrorValue());
         }
@@ -82,13 +83,13 @@ namespace Horo::Editor {
         auto capture = BuildReplicationMetadata(projectRoot);
         if (capture.HasError()) {
             replicationError_ = capture.ErrorValue();
-            diagnostics_.push_back({projectRoot / ".horo/project.json", capture.ErrorValue()});
+            diagnostics_.emplace_back(projectRoot / ".horo/project.json", capture.ErrorValue());
             return;
         }
         auto inspection = capture.Value()->Assess(Network::ReplicationDeclarationUse::EditorInspection);
         if (inspection.HasError()) {
             replicationError_ = inspection.ErrorValue();
-            diagnostics_.push_back({projectRoot / ".horo/project.json", inspection.ErrorValue()});
+            diagnostics_.emplace_back(projectRoot / ".horo/project.json", inspection.ErrorValue());
             return;
         }
         replicationMetadata_ = std::move(capture).Value();
@@ -96,7 +97,7 @@ namespace Horo::Editor {
         if (replicationInspection_->DiagnosticsOverflowed() ||
             std::ranges::any_of(replicationInspection_->Diagnostics(), &Network::ReplicationDeclarationDiagnostic::blocking)) {
             replicationError_ = MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible);
-            diagnostics_.push_back({projectRoot / ".horo/project.json", *replicationError_});
+            diagnostics_.emplace_back(projectRoot / ".horo/project.json", *replicationError_);
         }
     }
 
@@ -141,7 +142,7 @@ namespace Horo::Editor {
             replicationInspection_ = std::move(inspection).Value();
         }
         replicationError_.reset();
-        std::erase_if(diagnostics_, [&](const auto &diagnostic) {
+        std::erase_if(diagnostics_, [this](const auto &diagnostic) {
             return diagnostic.source == projectRoot_ / ".horo/project.json";
         });
         return Result<void>::Success();

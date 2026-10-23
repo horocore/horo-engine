@@ -154,7 +154,18 @@ namespace Horo::Network {
      * a weak controller lease. Fixed peer slots and finite frame/byte work limits bound pre-active work.
      */
     class NetworkAdmissionController final {
+        struct Impl;
+
+        class ConstructionKey final {
+            friend class NetworkAdmissionController;
+
+            ConstructionKey() noexcept {}
+        };
+
     public:
+        /** @brief Factory-only standard shared construction after validation.
+         * @param key Nonaggregate private factory authority. @param impl Fully validated owned state. */
+        explicit NetworkAdmissionController(ConstructionKey key, std::unique_ptr<Impl> impl) noexcept;
         /**
          * @brief Validate/copy host policy and retain providers before opening any native listener.
          * @param transport Borrowed exact transport owned by the composition root.
@@ -188,8 +199,6 @@ namespace Horo::Network {
         void Shutdown(std::uint64_t nowTick) noexcept;
 
     private:
-        struct Impl;
-        explicit NetworkAdmissionController(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;
     };
 }  // namespace Horo::Network

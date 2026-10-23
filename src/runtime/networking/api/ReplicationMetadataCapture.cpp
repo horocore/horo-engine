@@ -22,10 +22,10 @@ namespace Horo::Network {
             (void)hash.Update(schemaPresence);
             if (registered)
                 (void)hash.Update(std::as_bytes(std::span{registered->Fingerprint().bytes}));
-            for (const auto &module : modules) {
-                const std::array length{static_cast<std::uint8_t>(module.value.size())};
+            for (const auto &moduleId : modules) {
+                const std::array length{static_cast<std::uint8_t>(moduleId.value.size())};
                 (void)hash.Update(std::as_bytes(std::span{length}));
-                (void)hash.Update(std::as_bytes(std::span{module.value.data(), module.value.size()}));
+                (void)hash.Update(std::as_bytes(std::span{moduleId.value.data(), moduleId.value.size()}));
             }
             return hash.Finalize();
         }
@@ -37,8 +37,8 @@ namespace Horo::Network {
                                                                             const std::span<const ModuleId> modules) {
         if (modules.size() > CaptureLimits.maximumModules)
             return Result<ReplicationMetadataCapturePtr>::Failure(MakeError(NetworkErrors::ReplicationCapacityExceeded));
-        if (std::ranges::any_of(modules, [](const auto &module) {
-            return module.value.empty() || module.value.size() > CaptureLimits.descriptors.maximumOwnerIdentityBytes;
+        if (std::ranges::any_of(modules, [](const auto &moduleId) {
+            return moduleId.value.empty() || moduleId.value.size() > CaptureLimits.descriptors.maximumOwnerIdentityBytes;
         }))
             return Result<ReplicationMetadataCapturePtr>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
         ReplicationDescriptorSnapshotPtr registered;
@@ -49,7 +49,7 @@ namespace Horo::Network {
             registered = std::move(snapshot).Value();
         }
         try {
-            std::shared_ptr<ReplicationMetadataCapture> capture{new ReplicationMetadataCapture};
+            auto capture = std::make_shared<ReplicationMetadataCapture>(ConstructionKey{});
             if (inventory) {
                 auto canonical = Detail::CanonicalizeReplicationInventory(*inventory);
                 if (canonical.HasError())
@@ -89,10 +89,10 @@ namespace Horo::Network {
 
     /** @copydoc ReplicationMetadataCapture::Assess */
     Result<ReplicationDeclarationAssessment> ReplicationMetadataCapture::Assess(const ReplicationDeclarationUse use) const {
-        if (use != ReplicationDeclarationUse::Cook && use != ReplicationDeclarationUse::EditorInspection)
+        using enum ReplicationDeclarationUse;
+        if (use != Cook && use != EditorInspection)
             return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
-        if (use == ReplicationDeclarationUse::Cook && inventory_ &&
-            inventory_->completeness != NetworkReplicationInventoryCompleteness::Complete)
+        if (use == Cook && inventory_ && inventory_->completeness != NetworkReplicationInventoryCompleteness::Complete)
             return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
         const std::span<const ReplicationDeclaration> declarations =
             inventory_ ? std::span<const ReplicationDeclaration>{inventory_->declarations} : std::span<const ReplicationDeclaration>{};

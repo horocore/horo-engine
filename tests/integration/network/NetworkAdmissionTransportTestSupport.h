@@ -5,6 +5,8 @@
 
 #include <array>
 #include <memory>
+#include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Network::AdmissionTests {
@@ -18,6 +20,8 @@ namespace Horo::Network::AdmissionTests {
         bool initialized{};
         bool listening{};
         bool open{};
+        bool throwClose{};
+        bool throwCloseNonStandard{};
         bool failPoll{};
         bool failInitialize{};
         std::size_t closes{};
@@ -104,16 +108,16 @@ namespace Horo::Network::AdmissionTests {
         Result<void> Close(const ConnectionHandle connection) override {
             auto &self = link_->ends[side_];
             ++self.closes;
+            if (self.throwClose) {
+                if (self.throwCloseNonStandard)
+                    throw 23;
+                throw std::runtime_error{"PRIVATE_TRANSPORT_CLOSE_SENTINEL"};
+            }
             if (connection != self.connection) {
                 self.lastOtherClosed = connection;
                 return Result<void>::Success();
             }
-            if (self.open) {
-                self.open = false;
-                link_->ends[1 - side_].open = false;
-                (void)link_->Queue(side_, {.kind = NetworkTransportEventKind::Closed, .connection = connection});
-                (void)link_->Queue(1 - side_, {.kind = NetworkTransportEventKind::Closed, .connection = link_->ends[1 - side_].connection});
-            }
+            DisconnectEndpoint();
             return Result<void>::Success();
         }
 
@@ -162,13 +166,36 @@ namespace Horo::Network::AdmissionTests {
             if (!self.initialized)
                 return;
             ++self.shutdowns;
-            (void)Close(self.connection);
+            // Shutdown is a distinct noexcept primitive; it must not invoke the deliberately throwing connection Close API.
+            DisconnectEndpoint();
             self.initialized = false;
             self.listening = false;
             self.queued = 0;
         }
 
     private:
+        /** @brief Publish an empty terminal into existing bounded storage without allocating inside Shutdown. */
+        static void QueueClosed(Endpoint &endpoint) noexcept {
+            static_assert(std::is_nothrow_move_assignable_v<NetworkTransportEvent>);
+            if (endpoint.queued == endpoint.events.size()) {
+                endpoint.failPoll = true;
+                return;
+            }
+            endpoint.events[endpoint.queued++] = {.kind = NetworkTransportEventKind::Closed, .connection = endpoint.connection};
+        }
+
+        /** @brief The shared backend state primitive has no foreign callbacks and never uses the Close fault-injection path. */
+        void DisconnectEndpoint() noexcept {
+            auto &self = link_->ends[side_];
+            if (!self.open)
+                return;
+            self.open = false;
+            auto &remote = link_->ends[1 - side_];
+            remote.open = false;
+            QueueClosed(self);
+            QueueClosed(remote);
+        }
+
         std::shared_ptr<Link> link_;
         std::size_t side_{};
     };

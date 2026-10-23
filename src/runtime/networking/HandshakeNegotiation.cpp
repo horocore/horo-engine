@@ -86,8 +86,8 @@ namespace Horo::Network {
 
     /** @copydoc ValidateHandshakeLocalDescriptor */
     Result<void> ValidateHandshakeLocalDescriptor(const HandshakeLocalDescriptor &local) {
-        const auto &compatibility = local.compatibility;
-        if (compatibility.contractVersion != HandshakeContractVersion || !compatibility.protocol.IsValid() ||
+        if (const auto &compatibility = local.compatibility;
+            compatibility.contractVersion != HandshakeContractVersion || !compatibility.protocol.IsValid() ||
             !compatibility.versions.IsValid() || compatibility.schemaFingerprint == 0 ||
             !ValidFeatureSet(compatibility.protocol, compatibility.features) || !HasCompression(compatibility.compression) ||
             !ValidRequiredCompression(compatibility.compression, compatibility.requiredCompression) ||

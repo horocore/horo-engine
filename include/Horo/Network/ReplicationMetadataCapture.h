@@ -8,7 +8,16 @@
 namespace Horo::Network {
     /** @brief Immutable engine-owned metadata; contains no executable adapters or foreign generation leases. */
     class ReplicationMetadataCapture final {
+        class ConstructionKey final {
+            friend class ReplicationMetadataCapture;
+
+            ConstructionKey() noexcept {}
+        };
+
     public:
+        /** @brief Factory-only constructor for standard shared ownership; the nonaggregate key cannot be supplied by callers. */
+        explicit ReplicationMetadataCapture(ConstructionKey) noexcept {}
+
         /** @brief Builds a bounded canonical capture without registration or activation.
          * @param inventory Exact authored policy, preserving absence and Unknown completeness.
          * @param schemas Actual loaded schema metadata, copied through the canonical snapshot builder.
@@ -34,7 +43,6 @@ namespace Horo::Network {
         [[nodiscard]] Result<ReplicationDeclarationAssessment> Assess(ReplicationDeclarationUse use) const;
 
     private:
-        ReplicationMetadataCapture() = default;
         std::optional<NetworkReplicationInventory> inventory_;
         ReplicationDescriptorSnapshotPtr registered_;
         std::vector<ModuleId> modules_;

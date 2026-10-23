@@ -192,14 +192,13 @@ namespace Horo::Network {
         if (event.kind == Closed || event.kind == Failed)
             RevokeSession(event.connection);
         if (auto admission = admission_.lock()) {
-            const auto observed = admission->OnTransportEvent(event, nowTick);
-            if (observed.HasError())
+            if (const auto observed = admission->OnTransportEvent(event, nowTick); observed.HasError())
                 return Result<void>::Failure(observed.ErrorValue());
             if (event.kind == Accepted || event.kind == Connected)
                 return Result<void>::Success();
         }
         if (auto host = sessionHost_.lock())
-            host->OnTransportEvent(std::move(event));
+            host->OnTransportEvent(event);
         else if (event.kind == Accepted || event.kind == Connected)
             return transport_.Close(event.connection);  // No host trust authority; fail closed.
         return Result<void>::Success();
@@ -239,10 +238,11 @@ namespace Horo::Network {
 
     /** @copydoc InboundMessageDispatcher::DispatchPacket */
     Result<void> InboundMessageDispatcher::DispatchPacket(NetworkTransportEvent &event, const std::uint64_t nowTick) {
-        const bool registered = std::ranges::any_of(sessions_, [&](const auto &entry) {
+        if (const bool registered = std::ranges::any_of(sessions_,
+                                                        [&event](const auto &entry) {
             return entry->connection == event.connection;
         });
-        if (!registered) {
+            !registered) {
             if (auto admission = admission_.lock())
                 return admission->ConsumeControl(event, nowTick);
         }
