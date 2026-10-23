@@ -1,6 +1,8 @@
 #pragma once
 
 #include "GnsAddressResolution.h"
+#include "GnsNativeCall.h"
+#include "GnsSecurityInternal.h"
 #include "GnsTransportFactory.h"
 
 #include <chrono>
@@ -31,14 +33,19 @@ namespace Horo::Network {
         std::chrono::steady_clock::time_point deadline{};
         std::optional<NetworkAddress> pendingEndpoint;
         std::unique_ptr<GnsDetail::Resolution> resolution;
-        bool inbound{};
+        ListenerHandle listener{};  // Exact accepting listener generation; invalid for outbound connections.
+        NetworkOperationGeneration admissionGeneration{};
     };
 
     [[nodiscard]] bool ValidNativeMessage(const SteamNetworkingMessage_t *message, std::uint32_t maximumBytes) noexcept;
+    [[nodiscard]] bool ValidGnsTransportConfig(const NetworkTransportConfig &config) noexcept;
 
     class GnsTransport final : public INetworkTransport {
     public:
         explicit GnsTransport(std::string resolverServer = {}) : resolverServer_(std::move(resolverServer)) {}
+
+        GnsTransport(std::shared_ptr<GnsSecurity> security, const NetworkTransportConfig &config)
+            : config_(config), security_(std::move(security)) {}
 
         ~GnsTransport() override {
             Shutdown();
@@ -58,12 +65,27 @@ namespace Horo::Network {
         void Shutdown() noexcept override;
 
         static void OnStatus(SteamNetConnectionStatusChangedCallback_t *status);
+        /** @brief Borrow exact native evidence on the owning thread, binding the one admission generation. */
+        [[nodiscard]] Result<SteamNetworkingSocketsLib::HoroNativeChannel> ReadSecurePeer(ConnectionHandle connection,
+                                                                                          NetworkOperationGeneration generation);
+        /** @brief Revalidate and attest the same locked native owner using bounded public context. */
+        [[nodiscard]] Result<AuthenticationDigest> BindSecurePeer(ConnectionHandle connection, NetworkOperationGeneration generation,
+                                                                  const SteamNetworkingSocketsLib::HoroNativeChannel &expected,
+                                                                  std::span<const std::byte> context);
 
     private:
+        /** @brief Reserve/start the one process owner under transport lock; no host issuer callback. */
+        [[nodiscard]] Result<void> StartNativeOwner(const NetworkTransportConfig &config);
+        /** @brief Provision before initialization publication, releasing the supplied transport lock across the issuer only. */
+        [[nodiscard]] Result<void> ProvisionNative(std::unique_lock<std::mutex> &lock);
+        /** @brief Close bounded connections/callback state under transport lock before native Kill fallback. */
+        void CloseNativeConnections() noexcept;
         [[nodiscard]] Result<ConnectionHandle> ReserveConnection();
         [[nodiscard]] Result<void> StartNative(ConnectionSlot &slot, const SteamNetworkingIPAddr &address);
         [[nodiscard]] ConnectionSlot *Find(ConnectionHandle handle) noexcept;
         [[nodiscard]] ConnectionSlot *Find(HSteamNetConnection native) noexcept;
+        /** @brief Reserve the bounded original-listener pending slot and accept native ownership without publishing readiness. */
+        void AcceptPendingInbound(const SteamNetConnectionStatusChangedCallback_t &status);
         void OnStatusOwned(const SteamNetConnectionStatusChangedCallback_t &status);
         void DrainNativeCallbacks();
         void End(ConnectionSlot &slot, NetworkTransportEventKind kind, const ErrorCodeDescriptor *failure = nullptr);
@@ -98,5 +120,7 @@ namespace Horo::Network {
         bool callbackOverflow_{};
         bool initialized_{};
         bool shutdown_{};
+        std::shared_ptr<GnsSecurity> security_;
+        std::uint64_t rootGeneration_{};
     };
 }  // namespace Horo::Network

@@ -77,8 +77,12 @@ horo_allow_target_dependencies(TARGET HoroPlayTopologyApplication DEPENDENCIES H
 horo_allow_target_dependencies(TARGET HoroNetworkRuntime DEPENDENCIES HoroNetworkApi HoroRuntimeScene HoroRuntime HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroNetworkTransportNull DEPENDENCIES HoroNetworkApi)
 if(HORO_BUILD_NETWORK_GNS)
-    horo_allow_target_dependencies(TARGET HoroNetworkTransportGNSFactoryInternal DEPENDENCIES HoroNetworkApi)
+    horo_allow_target_dependencies(TARGET HoroNetworkTransportGNSFactoryInternal DEPENDENCIES HoroNetworkApi HoroNetworkRuntime)
     horo_allow_target_dependencies(TARGET HoroNetworkTransportGNS DEPENDENCIES HoroNetworkTransportGNSFactoryInternal)
+    if(BUILD_TESTING)
+        horo_allow_target_dependencies(TARGET HoroGnsNativeQualificationSupport
+            DEPENDENCIES HoroNetworkTransportGNSFactoryInternal HoroPlatform)
+    endif()
 endif()
 horo_allow_target_dependencies(TARGET HoroAudioApi DEPENDENCIES HoroFoundation HoroAssets)
 horo_allow_target_dependencies(TARGET HoroAudioImport DEPENDENCIES HoroAudioApi)

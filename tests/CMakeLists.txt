@@ -392,9 +392,12 @@ if(HORO_BUILD_NETWORK_GNS)
             support/AllocationProbe.cpp
             unit/runtime/networking/GnsTransportTests.cpp
             unit/runtime/networking/GnsTransportQualificationTests.cpp
+            unit/runtime/networking/GnsPendingCloseTests.cpp
+            unit/runtime/networking/GnsNativeSecurityTests.cpp
     )
     target_compile_features(HoroNetworkTransportGnsTests PRIVATE cxx_std_20)
     target_include_directories(HoroNetworkTransportGnsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/networking/gns ${PROJECT_SOURCE_DIR}/tests/support)
+    target_include_directories(HoroNetworkTransportGnsTests PRIVATE "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets")
     target_compile_definitions(HoroNetworkTransportGnsTests PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE GameNetworkingSockets::static c-ares::cares)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
@@ -482,6 +485,7 @@ set_tests_properties(HoroNetworkModePublicHeaderConsumer PROPERTIES LABELS "unit
 add_executable(HoroNetworkModeHostIntegrationTests
         integration/network/NetworkModeHostIntegrationTests.cpp
         integration/network/NetworkProductSessionTests.cpp
+        integration/network/NetworkPendingConnectionTests.cpp
         integration/network/NetworkProductAdmissionTests.cpp
         integration/network/NetworkAdmissionBoundaryTests.cpp
     integration/network/NetworkAdmissionObserverTests.cpp
@@ -491,6 +495,34 @@ target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_TEST
 target_include_directories(HoroNetworkModeHostIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
 target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroNetworkProductHost HoroEngine::NetworkTransportNull
     HoroEngine::Platform MbedTLS::mbedcrypto)
+if(HORO_BUILD_NETWORK_GNS)
+    target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/NetworkGnsProductProvisioningTests.cpp)
+    target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroEngine::NetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
+    # Private qualification-only PKI: no native header or secret provisioning API is installed or exported by Horo.
+    add_library(HoroGnsNativeQualificationSupport STATIC integration/network/gns/GnsQualificationIssuer.cpp)
+    target_compile_features(HoroGnsNativeQualificationSupport PUBLIC cxx_std_20)
+    target_include_directories(HoroGnsNativeQualificationSupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/integration/network/gns)
+    target_include_directories(HoroGnsNativeQualificationSupport PRIVATE
+        "${HORO_GNS_SELECTED_SOURCE_DIR}/src/common" "${HORO_GNS_SELECTED_SOURCE_DIR}/src/public"
+        "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets" "${horo_gns_BINARY_DIR}/src")
+    target_compile_definitions(HoroGnsNativeQualificationSupport PRIVATE VALVE_CRYPTO_ENABLE_25519 VALVE_CRYPTO_OPENSSL VALVE_CRYPTO_25519_OPENSSLEVP)
+    target_link_libraries(HoroGnsNativeQualificationSupport PUBLIC HoroNetworkTransportGNSFactoryInternal
+        PRIVATE HoroEngine::Platform GameNetworkingSockets::static protobuf::libprotobuf MbedTLS::mbedcrypto)
+    add_executable(HoroGnsSecureProductChild integration/network/gns/GnsSecureProductChild.cpp)
+    target_compile_features(HoroGnsSecureProductChild PRIVATE cxx_std_20)
+    target_compile_definitions(HoroGnsSecureProductChild PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+    target_include_directories(HoroGnsSecureProductChild PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
+    target_link_libraries(HoroGnsSecureProductChild PRIVATE HoroGnsNativeQualificationSupport HoroNetworkProductHost
+        HoroEngine::NetworkTransportGNS HoroEngine::NetworkTransportNull HoroEngine::Platform MbedTLS::mbedcrypto Catch2::Catch2)
+    if(UNIX AND HORO_BUILD_PHYSICS_NATIVE)
+        target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/gns/GnsNativeProductPairTests.cpp)
+        target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroGnsNativeQualificationSupport)
+        target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_GNS_PRODUCT_CHILD="$<TARGET_FILE:HoroGnsSecureProductChild>")
+        add_dependencies(HoroNetworkModeHostIntegrationTests HoroGnsSecureProductChild)
+    else()
+        message(STATUS "Native secure pair runtime qualification requires native Physics and provable owner-only POSIX fixture files")
+    endif()
+endif()
 horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
 add_test(NAME HoroNetworkStandaloneProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product standalone 2)
 set_tests_properties(HoroNetworkStandaloneProductLaunch PROPERTIES LABELS "integration;network;headless;product")

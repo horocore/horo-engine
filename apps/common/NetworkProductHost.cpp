@@ -252,6 +252,11 @@ namespace Horo::Application::Internal {
         return mode_->Sessions().Admit(world, std::move(session), connection, generation);
     }
 
+    /** @copydoc NetworkProductHost::ClientConnectionTerminal */
+    const ClientConnectionAttemptTerminal *NetworkProductHost::ClientConnectionTerminal() const noexcept {
+        return mode_->Sessions().ConnectionAttemptTerminal();
+    }
+
     Result<void> NetworkProductHost::DisconnectClient(const Network::NetworkModeWorldKind world,
                                                       const Network::NetworkOperationGeneration generation) {
         return mode_->Sessions().Disconnect(world, generation);

@@ -75,8 +75,21 @@ if(HORO_BUILD_NETWORK_GNS)
     FetchContent_Declare(horo_gns
         GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
         GIT_TAG "${HORO_GNS_REVISION}"
-        GIT_SHALLOW FALSE)
+        GIT_SHALLOW FALSE
+        SOURCE_SUBDIR .horo-pristine-source-only)
     FetchContent_MakeAvailable(horo_gns)
+    include(HoroGnsSelectedRoot)
+    horo_prepare_gns_selected_root("${horo_gns_SOURCE_DIR}" HORO_GNS_SELECTED_SOURCE_DIR)
+    add_subdirectory("${HORO_GNS_SELECTED_SOURCE_DIR}" "${horo_gns_BINARY_DIR}")
+    # Upstream disables exceptions. Only the three reviewed bridge-owning native
+    # TUs need unwinding for private barriers and temporary trust-map rollback.
+    # Source options follow target options; preserve the effective upstream standard and unrelated TUs.
+    foreach(native_tu steamnetworkingsockets_certstore.cpp clientlib/steamnetworkingsockets_connections.cpp clientlib/csteamnetworkingsockets.cpp)
+        set_property(SOURCE "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets/${native_tu}"
+            DIRECTORY "${HORO_GNS_SELECTED_SOURCE_DIR}/src" APPEND PROPERTY COMPILE_OPTIONS
+            $<$<CXX_COMPILER_ID:MSVC>:/EHsc>
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fexceptions>)
+    endforeach()
     # GNS installs an export even when embedded as a source-only private
     # dependency. Its export must not claim our non-installed protobuf target;
     # the in-tree link still receives protobuf through BUILD_INTERFACE.

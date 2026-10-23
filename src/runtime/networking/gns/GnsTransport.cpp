@@ -1,3 +1,4 @@
+#include "GnsNativeHost.h"
 #include "GnsTransportInternal.h"
 #include "Horo/Network/NetworkErrors.h"
 
@@ -26,23 +27,16 @@ namespace Horo::Network {
         constexpr std::uint32_t MaximumConfiguredMessageBytes = 1200;
         constexpr std::size_t MaximumConcurrentResolvers = 8;
 
-        // GNS owns a process-global default interface. This function-local
-        // state serializes the single active adapter with native callbacks.
-        struct NativeHostState final {
-            std::mutex mutex;
-            GnsTransport *active{};
-            bool shuttingDown{};
-        };
-
-        NativeHostState &NativeHost() {
-            static NativeHostState state;
-            return state;
-        }
-
         [[nodiscard]] Result<void> Fail(const ErrorCodeDescriptor &code) {
             return Result<void>::Failure(MakeError(code));
         }
     }  // namespace
+
+    bool ValidGnsTransportConfig(const NetworkTransportConfig &config) noexcept {
+        return config.maximumConnections > 0 && config.maximumConnections <= MaximumConfiguredConnections &&
+               config.maximumEventsPerPoll > 0 && config.maximumEventsPerPoll <= MaximumConfiguredEvents &&
+               config.maximumMessageBytes > 0 && config.maximumMessageBytes <= MaximumConfiguredMessageBytes;
+    }
 
     // GNS fixes the mutable callback parameter type.
     void GnsTransport::OnStatus(SteamNetConnectionStatusChangedCallback_t *status) {  // NOSONAR(cpp:S995)
@@ -66,46 +60,6 @@ namespace Horo::Network {
             // Nothing may unwind across GNS's C callback boundary.
             transport->callbackOverflow_ = true;
         }
-    }
-
-    Result<void> GnsTransport::Initialize(const NetworkTransportConfig &config) {
-        std::lock_guard lock(mutex_);
-        if (shutdown_)
-            return Fail(NetworkErrors::TransportShuttingDown);
-        if (initialized_ || config.maximumConnections == 0 || config.maximumConnections > MaximumConfiguredConnections ||
-            config.maximumEventsPerPoll == 0 || config.maximumEventsPerPoll > MaximumConfiguredEvents || config.maximumMessageBytes == 0 ||
-            config.maximumMessageBytes > MaximumConfiguredMessageBytes)
-            return Fail(NetworkErrors::TransportLimitExceeded);
-        try {
-            connections_.reserve(config.maximumConnections);
-        } catch (const std::bad_alloc &) {
-            return Fail(NetworkErrors::TransportCapabilityUnavailable);
-        }
-        auto &host = NativeHost();
-        std::lock_guard nativeLock(host.mutex);
-        if (host.active || host.shuttingDown)
-            return Fail(NetworkErrors::TransportCapabilityUnavailable);
-        if (ares_library_init(ARES_LIB_INIT_ALL) != ARES_SUCCESS)
-            return Fail(NetworkErrors::TransportNativeUnavailable);
-        caresInitialized_ = true;
-        if (SteamNetworkingErrMsg error{}; !GameNetworkingSockets_Init(nullptr, error)) {
-            ares_library_cleanup();
-            caresInitialized_ = false;
-            return Fail(NetworkErrors::TransportNativeUnavailable);
-        }
-        native_ = SteamNetworkingSockets();
-        if (!native_) {
-            GameNetworkingSockets_Kill();
-            ares_library_cleanup();
-            caresInitialized_ = false;
-            return Fail(NetworkErrors::TransportNativeUnavailable);
-        }
-        config_ = config;
-        ownerThread_ = std::this_thread::get_id();
-        host.active = this;
-        initialized_ = true;
-        ++capabilityRevision_;
-        return Result<void>::Success();
     }
 
     Result<ConnectionHandle> GnsTransport::ReserveConnection() {
@@ -163,12 +117,16 @@ namespace Horo::Network {
         SteamNetworkingConfigValue_t option{};
         option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
                       reinterpret_cast<void *>(&OnStatus));  // NOSONAR: GNS stores its C callback as void*.
-        const auto native = native_->CreateListenSocketIP(address.Value(), 1, &option);
+        const auto native = GnsDetail::NativeCall([&] {
+            return native_->CreateListenSocketIP(address.Value(), 1, &option);
+        }).value_or(k_HSteamListenSocket_Invalid);
         if (native == k_HSteamListenSocket_Invalid)
             return Result<ListenerHandle>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
         auto handle = listener_.IsValid() ? listener_.NextGeneration() : ListenerHandle::Create(0, 1);
         if (handle.HasError()) {
-            native_->CloseListenSocket(native);
+            (void)GnsDetail::NativeCall([&] {
+                return native_->CloseListenSocket(native);
+            });
             return handle;
         }
         listener_ = handle.Value();
@@ -244,7 +202,9 @@ namespace Horo::Network {
         SteamNetworkingConfigValue_t option{};
         option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
                       reinterpret_cast<void *>(&OnStatus));  // NOSONAR: GNS stores its C callback as void*.
-        const auto native = native_->ConnectByIPAddress(address, 1, &option);
+        const auto native = GnsDetail::NativeCall([&] {
+            return native_->ConnectByIPAddress(address, 1, &option);
+        }).value_or(k_HSteamNetConnection_Invalid);
         if (native == k_HSteamNetConnection_Invalid)
             return Fail(NetworkErrors::TransportNativeUnavailable);
         slot.native = native;
@@ -277,8 +237,44 @@ namespace Horo::Network {
         slot.pendingEndpoint.reset();
         slot.resolution.reset();
         if (native != k_HSteamNetConnection_Invalid)
-            native_->CloseConnection(native, 0, nullptr, false);
+            if (!GnsDetail::NativeCall([&] {
+                return native_->CloseConnection(native, 0, nullptr, false);
+            }))
+                overflow_ = true;
         Enqueue({.kind = kind, .connection = slot.handle, .failure = failure});
+    }
+
+    /** @copydoc GnsTransport::AcceptPendingInbound */
+    void GnsTransport::AcceptPendingInbound(const SteamNetConnectionStatusChangedCallback_t &status) {
+        if (const auto inboundCount = std::ranges::count_if(connections_,
+                                                            [](const ConnectionSlot &slot) {
+            return slot.listener.IsValid() && slot.phase != ConnectionPhase::Terminal;
+        });
+            static_cast<std::size_t>(inboundCount) >= listenerMaximumConnections_) {
+            if (!GnsDetail::NativeCall([&] {
+                return native_->CloseConnection(status.m_hConn, 0, nullptr, false);
+            }))
+                overflow_ = true;
+            return;
+        }
+        auto admitted = ReserveConnection();
+        if (admitted.HasError()) {
+            if (!GnsDetail::NativeCall([&] {
+                return native_->CloseConnection(status.m_hConn, 0, nullptr, false);
+            }))
+                overflow_ = true;
+            return;
+        }
+        auto &slot = connections_[admitted.Value().Slot()];
+        slot.native = status.m_hConn;
+        slot.listener = listener_;
+        slot.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        if (GnsDetail::NativeCall([&] {
+            return native_->AcceptConnection(status.m_hConn);
+        }).value_or(k_EResultFail) != k_EResultOK) {
+            End(slot, NetworkTransportEventKind::Failed, &NetworkErrors::TransportConnectionFailed);
+            return;
+        }
     }
 
     void GnsTransport::OnStatusOwned(const SteamNetConnectionStatusChangedCallback_t &status) {
@@ -286,28 +282,7 @@ namespace Horo::Network {
             return;
         if (status.m_info.m_eState == k_ESteamNetworkingConnectionState_Connecting && status.m_info.m_hListenSocket == nativeListener_ &&
             nativeListener_ != k_HSteamListenSocket_Invalid) {
-            if (const auto inboundCount = std::ranges::count_if(connections_,
-                                                                [](const ConnectionSlot &slot) {
-                return slot.inbound && slot.phase != ConnectionPhase::Terminal;
-            });
-                static_cast<std::size_t>(inboundCount) >= listenerMaximumConnections_) {
-                native_->CloseConnection(status.m_hConn, 0, nullptr, false);
-                return;
-            }
-            auto admitted = ReserveConnection();
-            if (admitted.HasError()) {
-                native_->CloseConnection(status.m_hConn, 0, nullptr, false);
-                return;
-            }
-            auto &slot = connections_[admitted.Value().Slot()];
-            slot.native = status.m_hConn;
-            slot.inbound = true;
-            slot.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-            if (native_->AcceptConnection(status.m_hConn) != k_EResultOK) {
-                End(slot, NetworkTransportEventKind::Failed, &NetworkErrors::TransportConnectionFailed);
-                return;
-            }
-            Enqueue({.kind = NetworkTransportEventKind::Accepted, .listener = listener_, .connection = slot.handle});
+            AcceptPendingInbound(status);
             return;
         }
         auto *slot = Find(status.m_hConn);
@@ -316,9 +291,16 @@ namespace Horo::Network {
         if (status.m_info.m_eState == k_ESteamNetworkingConnectionState_Connected && slot->phase == ConnectionPhase::Pending) {
             slot->phase = ConnectionPhase::Connected;
             ++stats_.activeConnections;
-            Enqueue({.kind = NetworkTransportEventKind::Connected, .connection = slot->handle});
+            Enqueue({.kind = slot->listener.IsValid() ? NetworkTransportEventKind::Accepted : NetworkTransportEventKind::Connected,
+                     .listener = slot->listener,
+                     .connection = slot->handle});
         } else if (status.m_info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer) {
-            End(*slot, NetworkTransportEventKind::Closed);
+            // A peer that closes before directional readiness never established this attempt.
+            // This is transport failure, not an authentication-specific interpretation of native text/reason.
+            if (slot->phase == ConnectionPhase::Pending)
+                End(*slot, NetworkTransportEventKind::Failed, &NetworkErrors::TransportConnectionFailed);
+            else
+                End(*slot, NetworkTransportEventKind::Closed);
         } else if (status.m_info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
             End(*slot, NetworkTransportEventKind::Failed, &NetworkErrors::TransportConnectionFailed);
         }
@@ -343,7 +325,7 @@ namespace Horo::Network {
         if (!slot)
             return Fail(NetworkErrors::TransportHandleInvalid);
         End(*slot, NetworkTransportEventKind::Closed);
-        return Result<void>::Success();
+        return overflow_ ? Fail(NetworkErrors::TransportNativeUnavailable) : Result<void>::Success();
     }
 
     Result<void> GnsTransport::CloseListener(const ListenerHandle listener) {
@@ -353,8 +335,12 @@ namespace Horo::Network {
         if (!listener.IsValid() || listener != listener_)
             return Fail(NetworkErrors::TransportHandleInvalid);
         if (nativeListener_ != k_HSteamListenSocket_Invalid) {
-            native_->CloseListenSocket(nativeListener_);
+            const auto closed = GnsDetail::NativeCall([&] {
+                return native_->CloseListenSocket(nativeListener_);
+            });
             nativeListener_ = k_HSteamListenSocket_Invalid;
+            if (!closed || !*closed)
+                return Fail(NetworkErrors::TransportNativeUnavailable);
         }
         return Result<void>::Success();
     }
@@ -371,7 +357,10 @@ namespace Horo::Network {
             if (std::this_thread::get_id() != ownerThread_)
                 return Result<std::size_t>::Failure(MakeError(NetworkErrors::NetworkIoWrongThread));
             AdvancePending(std::chrono::steady_clock::now());
-            native_->RunCallbacks();
+            if (!GnsDetail::NativeVoid([&] {
+                native_->RunCallbacks();
+            }))
+                overflow_ = true;
             DrainNativeCallbacks();
             PollMessages();
             fatal = overflow_;
@@ -434,51 +423,6 @@ namespace Horo::Network {
             End(slot, Failed, &NetworkErrors::NameResolutionFailed);
         else if (StartNative(slot, *address).HasError())
             End(slot, Failed, &NetworkErrors::TransportNativeUnavailable);
-    }
-
-    void GnsTransport::Shutdown() noexcept {
-        std::lock_guard lock(mutex_);
-        if (shutdown_)
-            return;
-        shutdown_ = true;
-        ++capabilityRevision_;
-        events_.clear();
-        if (!initialized_)
-            return;
-        for (auto &slot : connections_) {
-            if (slot.native != k_HSteamNetConnection_Invalid)
-                native_->CloseConnection(slot.native, 0, nullptr, false);
-            slot.native = k_HSteamNetConnection_Invalid;
-            slot.phase = ConnectionPhase::Terminal;
-            slot.pendingEndpoint.reset();
-            slot.resolution.reset();
-        }
-        if (nativeListener_ != k_HSteamListenSocket_Invalid)
-            native_->CloseListenSocket(nativeListener_);
-        nativeListener_ = k_HSteamListenSocket_Invalid;
-        stats_.activeConnections = 0;
-        auto &host = NativeHost();
-        {
-            std::lock_guard nativeLock(host.mutex);
-            host.active = nullptr;
-            host.shuttingDown = true;
-        }
-        {
-            std::lock_guard queueLock(callbackMutex_);
-            callbacks_.clear();
-            callbackOverflow_ = false;
-        }
-        GameNetworkingSockets_Kill();
-        if (caresInitialized_) {
-            ares_library_cleanup();
-            caresInitialized_ = false;
-        }
-        native_ = nullptr;
-        initialized_ = false;
-        {
-            std::lock_guard nativeLock(host.mutex);
-            host.shuttingDown = false;
-        }
     }
 
     Result<std::unique_ptr<INetworkTransport>> CreateGnsTransport() {

@@ -39,11 +39,11 @@ namespace Horo::Network {
         CancellationToken cancellation{};        /**< Checked before admission and while pending. */
     };
 
-    /** @brief Closed transport-owned event vocabulary. */
+    /** @brief Closed transport-owned event vocabulary; readiness never authenticates gameplay. */
     enum class NetworkTransportEventKind : std::uint8_t {
         ListenerReady,
-        Accepted,
-        Connected,
+        Accepted,  /**< Inbound backend handshake completed; the exact listener and connection are ready for Send. */
+        Connected, /**< Outbound backend handshake completed; the connection is ready for Send. */
         PacketReceived,
         Closed,
         Failed
@@ -97,8 +97,11 @@ namespace Horo::Network {
         /** @brief Starts an asynchronous connection. @param request Bounded endpoint and cancellation. @return Pending handle or failure.
          */
         [[nodiscard]] virtual Result<ConnectionHandle> Connect(const NetworkConnectRequest &request) = 0;
-        /** @brief Copies and sends exact admitted bytes; no policy fallback. @param connection Live handle. @param channel Channel zero.
-         * @param payload Borrowed bytes copied before return. @param delivery Exact mode. @return Typed status. */
+        /** @brief Copies and sends exact admitted bytes; no policy fallback. @param connection Ready live handle. @param channel Channel
+         * zero.
+         * @param payload Borrowed bytes copied before return. @param delivery Exact mode. @return Typed status.
+         * @pre One Accepted (inbound) or Connected (outbound) event was observed for this generation; no session authentication is implied.
+         */
         [[nodiscard]] virtual Result<void> Send(ConnectionHandle connection, ChannelId channel, std::span<const std::byte> payload,
                                                 DeliveryPolicy delivery) = 0;
         /** @brief Closes a connection once; repeated close of the same generation succeeds. @param connection Issued handle. @return Typed

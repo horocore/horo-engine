@@ -54,6 +54,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Net::TransportCapabilities GnsCapabilities() {
             Net::TransportCapabilities capabilities;
             capabilities.revision = 1;
+            capabilities.delivery.fill(Net::TransportSupport::Unsupported);
             capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::UnreliableUnordered)] = Net::TransportSupport::Available;
             capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::ReliableOrdered)] = Net::TransportSupport::Available;
             capabilities.maximumChannels = 1;
@@ -213,11 +214,47 @@ namespace Horo::Application::Internal {
             Net::NetworkModeServiceRequest request_;
         };
 
+#if HORO_PRODUCT_HAS_GNS
+        /** @brief Bind explicitly selected native authorities into the same immutable product capture before service configuration. */
+        Result<std::unique_ptr<Net::INetworkModeService>> CreateSecureProductService(
+            const Net::NetworkProjectRole role, const Net::NetworkAddress &bind, const Net::NetworkAddress &connect,
+            std::shared_ptr<NetworkDebuggerService> debugger, std::shared_ptr<ClientSessionOwner> sessions,
+            const std::shared_ptr<const NetworkProductAdmission> &admission, const Net::GnsNativeSecurityOptions &options) {
+            if (!admission)
+                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
+            auto providers = admission->Providers();
+            const auto &trust = admission->Policy().trust;
+            if (providers.certificates || providers.peers || providers.privateKeys || providers.channel || trust.id != options.trust.id ||
+                trust.revision != options.trust.revision || trust.exposure != options.trust.exposure ||
+                trust.credential != options.trust.credential || trust.certificate != options.trust.certificate ||
+                trust.privateKey != options.trust.privateKey || trust.maximumProofBytes != options.trust.maximumProofBytes ||
+                trust.allowUnprotectedInMemoryLoopback != options.trust.allowUnprotectedInMemoryLoopback ||
+                options.transport.maximumConnections != admission->Policy().maximumPeers || options.transport.maximumEventsPerPoll != 64 ||
+                options.transport.maximumMessageBytes != admission->Policy().local.transport.maximumMessageBytes ||
+                options.transport.maximumMessageBytes != admission->Policy().envelope.maximumFrameBytes)
+                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
+            auto selected = Net::CreateSecureGnsTransport(options);
+            if (selected.HasError())
+                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(selected.ErrorValue());
+            providers.certificates = selected.Value().native.certificates;
+            providers.peers = selected.Value().native.peers;
+            providers.privateKeys = selected.Value().native.privateKeys;
+            providers.channel = selected.Value().native.channel;
+            auto captured =
+                NetworkProductAdmission::Capture(admission->Policy(), std::move(providers), admission->Codecs(), admission->Handlers());
+            if (captured.HasError())
+                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(captured.ErrorValue());
+            return CreateNetworkProductTransport(std::move(selected).Value().transport, role, bind, connect, std::move(debugger),
+                                                 std::move(sessions), std::move(captured).Value());
+        }
+#endif
+
         [[nodiscard]] Net::NetworkModeFactories ProductFactories(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind,
                                                                  const Net::NetworkAddress &connect,
                                                                  std::shared_ptr<NetworkDebuggerService> debugger,
                                                                  std::shared_ptr<ClientSessionOwner> sessions,
-                                                                 std::shared_ptr<const NetworkProductAdmission> admission) {
+                                                                 std::shared_ptr<const NetworkProductAdmission> admission,
+                                                                 std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity) {
             Net::NetworkModeFactories factories;
             for (const auto kind : {Net::NetworkModeServiceKind::Session, Net::NetworkModeServiceKind::LocalPlayer}) {
                 factories.services[static_cast<std::size_t>(kind)] = [](const Net::NetworkModeServiceRequest &request) {
@@ -227,7 +264,9 @@ namespace Horo::Application::Internal {
             }
 #if HORO_PRODUCT_HAS_GNS
             factories.services[static_cast<std::size_t>(Net::NetworkModeServiceKind::Transport)] =
-                [role, bind, connect, debugger, sessions, admission](const Net::NetworkModeServiceRequest &) {
+                [role, bind, connect, debugger, sessions, admission, nativeSecurity](const Net::NetworkModeServiceRequest &) {
+                if (nativeSecurity)
+                    return CreateSecureProductService(role, bind, connect, debugger, sessions, admission, *nativeSecurity);
                 auto transport = Net::CreateGnsTransport();
                 if (transport.HasError())
                     return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(transport.ErrorValue());
@@ -237,6 +276,7 @@ namespace Horo::Application::Internal {
             static_cast<void>(debugger);
             static_cast<void>(sessions);
             static_cast<void>(admission);
+            static_cast<void>(nativeSecurity);
             static_cast<void>(role);
             static_cast<void>(bind);
             static_cast<void>(connect);
@@ -318,6 +358,7 @@ namespace Horo::Application::Internal {
         struct ProductRuntimeCapabilities final {
             HeadlessProjectSceneResources *resources{};
             std::shared_ptr<const NetworkProductAdmission> admission;
+            std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity;
         };
 
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
@@ -346,10 +387,11 @@ namespace Horo::Application::Internal {
             (void)debugger->Begin(worlds.values[0].scene.value, 1, launch.role != Net::NetworkProjectRole::Standalone,
                                   Net::NetworkDiagnosticProvider::Native);
             auto sessions = CreateProductSessions(clock, launch.role);
-            auto configured = ComposeProductWorldServices(std::move(scene), launch, project,
-                                                          ProductFactories(launch.role, launch.bind, launch.connect, debugger, sessions,
-                                                                           std::move(capabilities.admission)),
-                                                          capabilities.resources);
+            auto configured =
+                ComposeProductWorldServices(std::move(scene), launch, project,
+                                            ProductFactories(launch.role, launch.bind, launch.connect, debugger, sessions,
+                                                             std::move(capabilities.admission), std::move(capabilities.nativeSecurity)),
+                                            capabilities.resources);
             if (configured.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
             return NetworkProductHost::Create(*clock,
@@ -389,10 +431,15 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
-    int RunNetworkProduct(const std::span<char *> arguments, std::shared_ptr<const NetworkProductAdmission> admission) {
+    int RunNetworkProduct(const std::span<char *> arguments, std::shared_ptr<const NetworkProductAdmission> admission,
+                          std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity) {
         auto launch = ParseNetworkProductLaunch(arguments);
         if (launch.HasError()) {
             std::cerr << "horo-engine: " << launch.ErrorValue().message << '\n';
+            return 2;
+        }
+        if (nativeSecurity && launch.Value().role == Net::NetworkProjectRole::Standalone) {
+            std::cerr << "horo-engine: native security requires an explicit network role\n";
             return 2;
         }
         auto project = ProjectSettings();
@@ -407,7 +454,7 @@ namespace Horo::Application::Internal {
         auto clock = std::make_shared<SteadyClock>();
         Net::NetworkTargetDiagnostic diagnostic;
         auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic,
-                                      {resources.get(), std::move(admission)});
+                                      {resources.get(), std::move(admission), std::move(nativeSecurity)});
         if (runtime.HasError()) {
             std::cerr << "horo-engine: network product admission failed (capability " << static_cast<int>(diagnostic.capability)
                       << ", reason " << static_cast<int>(diagnostic.reason) << ")\n";
