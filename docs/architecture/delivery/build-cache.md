@@ -759,6 +759,21 @@ measurement. Actions storage remains a best-effort staging layer: it may evict a
 new checkpoint before the periodic exporter reads it. GHCR preserves previously
 published checkpoints independently; a missing publication builds normally.
 
+### Sonar analysis after completed main tests
+
+A failing C++ coverage suite on main keeps its failing step and job conclusion,
+but may still refresh the branch analysis cache. Before collection, the workflow
+compares CTest's JUnit report with an independent `--show-only=json-v1` discovery
+using the same preset and filters. Every selected test must have exactly one
+terminal record, including explicitly disabled or skipped cases. Missing,
+truncated or inconsistent reports stop publication. Python coverage tests and
+coverage collection must succeed before analysis; build failures and cancelled
+runs cannot analyze. The scanner still waits for the complete Quality Gate.
+
+This continuation is main-only. Failed PR suites retain early termination,
+avoiding extra scanner work across concurrent failing PRs. No new jobs, test
+selection changes, tolerated test failures or quality exclusions are introduced.
+
 ### Symptoms of a stale build
 
 - Build succeeds but runtime behavior is wrong (old object files
