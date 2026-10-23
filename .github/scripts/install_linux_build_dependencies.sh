@@ -26,10 +26,15 @@ apt_root="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/horo-ci-apt.XXXXXX")"
 trap 'sudo -n rm -rf -- "$apt_root"' EXIT
 chmod 755 "$apt_root"
 mkdir -p "$apt_root/archives/partial" "$apt_root/lists/partial"
+# The scoped official sources must not inherit unrelated image package pins.
+: > "$apt_root/preferences"
 
 apt_options=(
   -o "Dir::Etc::sourcelist=$apt_root/ubuntu.sources"
   -o 'Dir::Etc::sourceparts=-'
+  -o "Dir::Etc::preferences=$apt_root/preferences"
+  -o 'Dir::Etc::preferencesparts=-'
+  -o 'APT::Get::allow-downgrades=false'
   -o "Dir::State::lists=$apt_root/lists"
   -o "Dir::Cache::archives=$apt_root/archives"
   -o 'APT::Update::Error-Mode=any'
@@ -60,6 +65,13 @@ acquire() {
   return "$result"
 }
 
+diagnose_packages() {
+  # Only requested packages and the isolated signed indexes are inspected. These
+  # bounded diagnostics must never authorize a downgrade or start installation.
+  sudo -n timeout --signal=TERM --kill-after=2s 10s apt-cache "${apt_options[@]}" policy "${packages[@]}" || true
+  timeout --signal=TERM --kill-after=2s 5s dpkg-query -W -f="\${binary:Package}\t\${Version}\n" "${packages[@]}" || true
+}
+
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   printf '\n### Linux dependency setup\n\n| Phase | Exit status | Duration |\n| --- | --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
 fi
@@ -87,7 +99,8 @@ EOF
 done
 
 if [[ "$downloaded" != true ]]; then
-  echo '::error::Neither Ubuntu mirror supplied all required dependencies within the network budget.'
+  echo '::error::Neither Ubuntu mirror supplied all required dependencies within the acquisition policy and budget.'
+  diagnose_packages
   exit 1
 fi
 
@@ -98,4 +111,10 @@ result=0
 sudo -n env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" \
   install --no-download --yes --no-install-recommends "${packages[@]}" || result=$?
 report_phase installation "$result" "$((SECONDS - started))"
+if [[ "$result" == 130 || "$result" == 143 ]]; then
+  exit "$result"
+fi
+if [[ "$result" != 0 ]]; then
+  diagnose_packages
+fi
 exit "$result"
