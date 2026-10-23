@@ -41,19 +41,25 @@ add_test(NAME excluded COMMAND "${CMAKE_COMMAND}" -E false)
 set_tests_properties(passed failed disabled skipped PROPERTIES LABELS coverage)
 ''', encoding="utf-8")
     build = tmp_path / "build"
-    # Resolved CMake executes only the repository-owned constant fixture.
-    subprocess.run(  # nosec B603
-        [cmake, "-S", str(tmp_path), "-B", str(build)], check=True, capture_output=True,
+    # executable selects the resolved absolute binary; argv[0] is only its name.
+    # No shell, user command, or PATH search occurs in these subprocess calls.
+    subprocess.run(  # nosec B607
+        ["cmake", "-S", str(tmp_path), "-B", str(build)],
+        executable=str(Path(cmake).resolve(strict=True)),
+        shell=False, check=True, capture_output=True,  # nosec B603
     )
-    command = [ctest, "--test-dir", str(build), "-L", "^coverage$"]
-    discovered = subprocess.run(  # nosec B603
-        [*command, "--show-only=json-v1"], check=True, capture_output=True,
+    discovered = subprocess.run(  # nosec B607
+        ["ctest", "--test-dir", str(build), "-L", "^coverage$", "--show-only=json-v1"],
+        executable=str(Path(ctest).resolve(strict=True)),
+        shell=False, check=True, capture_output=True,  # nosec B603
     )
     discovery = tmp_path / "discovery.json"
     discovery.write_bytes(discovered.stdout)
     junit = tmp_path / "ctest.xml"
-    result = subprocess.run(  # nosec B603
-        [*command, "--output-junit", str(junit)], capture_output=True,
+    result = subprocess.run(  # nosec B607
+        ["ctest", "--test-dir", str(build), "-L", "^coverage$", "--output-junit", str(junit)],
+        executable=str(Path(ctest).resolve(strict=True)),
+        shell=False, capture_output=True,  # nosec B603
     )
     assert result.returncode == 8, result.stdout
     return discovery, junit
