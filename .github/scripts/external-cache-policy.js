@@ -1,7 +1,7 @@
 'use strict';
 
 const OWNED_PREFIX = 'horo-ci/v1/';
-const DEFAULT_BUDGET_BYTES = 9000000000;
+const DEFAULT_BUDGET_BYTES = 9 * 1000 * 1000 * 1000; // Decimal GB, matching storage billing units.
 
 function byteCount(value, name) {
   if (!Number.isSafeInteger(value) || value < 0) {
