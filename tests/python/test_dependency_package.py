@@ -6,10 +6,11 @@ import io
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import tarfile
 
 import pytest
+
+from test_ci_test_isolation import run
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -120,6 +121,16 @@ def test_duplicate_manifest_properties_are_rejected(package, identity, tmp_path)
         sdk.restore(broken, identity, tmp_path / "rejected")
 
 
+@pytest.mark.parametrize("field,value", [("size", True), ("size", False), ("size", 1.0),
+                                         ("size", -1), ("executable", 1)])
+def test_manifest_metadata_rejects_boolean_sizes_and_numeric_modes(package, identity, field, value):
+    with tarfile.open(package, "r:gz") as archive:
+        manifest = json.load(archive.extractfile(sdk.MANIFEST))
+    next(iter(manifest["files"].values()))[field] = value
+    with pytest.raises(ValueError, match="metadata"):
+        sdk.validate_manifest(manifest, identity)
+
+
 def test_restored_receipt_records_verified_identity_and_payload(package, identity, tmp_path):
     destination = tmp_path / "receipt"
     sdk.restore(package, identity, destination)
@@ -159,9 +170,8 @@ file(WRITE "${{CMAKE_BINARY_DIR}}/identity-path.txt" "${{identity}}")
 ''', encoding="utf-8")
     def configure(name, *flags):
         build = tmp_path / name
-        subprocess.run([shutil.which("cmake"), "-S", str(source), "-B", str(build),
-                        "-DHORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON", *flags],
-                       check=True, capture_output=True, text=True, timeout=120)
+        run("cmake", "-S", str(source), "-B", str(build),
+            "-DHORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON", *flags)
         path = (build / "identity-path.txt").read_text(encoding="utf-8")
         return json.loads(Path(path).read_text(encoding="utf-8")) if path else None
     first = configure("first", "-DCMAKE_BUILD_TYPE=Debug")
@@ -206,12 +216,6 @@ install(TARGETS probe ARCHIVE DESTINATION lib)
 install(FILES probe.h DESTINATION include)
 ''', encoding="utf-8")
     staged = tmp_path / "staged"
-
-    def run(*arguments):
-        if arguments[0] not in {"cmake", "ctest"}:
-            raise ValueError("Only native qualification tools may run")
-        command = [str(Path(shutil.which(arguments[0])).resolve(strict=True)), *arguments[1:]]
-        subprocess.run(command, check=True, capture_output=True, text=True, shell=False, timeout=120)
 
     run("cmake", "-S", str(producer), "-B", str(producer / "build"))
     run("cmake", "--build", str(producer / "build"), "--config", "Debug", "--parallel", "1")

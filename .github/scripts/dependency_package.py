@@ -138,7 +138,8 @@ def validate_manifest(manifest: dict, identity: dict) -> dict:
         if not isinstance(record, dict) or set(record) != {"size", "sha256", "executable"}:
             raise ValueError("Invalid SDK file record")
         size = record["size"]
-        if type(size) is not int or size < 0 or type(record["executable"]) is not bool:
+        if (not isinstance(size, int) or isinstance(size, bool) or size < 0
+                or not isinstance(record["executable"], bool)):
             raise ValueError("Invalid SDK file metadata")
         if not isinstance(record["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]):
             raise ValueError("Invalid SDK file digest")
