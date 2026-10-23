@@ -5,7 +5,8 @@ import json
 import re
 from pathlib import Path
 import shutil
-import subprocess  # nosec B404 - fixed tool probes and locally compiled test fixtures.
+# Only fixed tool probes and locally compiled fixtures are executed below.
+import subprocess  # nosec B404
 import sys
 
 import pytest
@@ -73,10 +74,13 @@ def prepare_isolation_project(tmp_path: Path, isolate: bool, workers: int = 2) -
         names = ("one",) if group == "Gpu" else ("one", "two")
         registry.append(f'set({group}_TESTS {" ".join(f"{group}::{name}" for name in names)})')
         for name in names:
-            registry.append(f'add_test({group}::{name} "{Path(sys.executable).as_posix()}" "{probe.as_posix()}" {group} {group}-{name} "{evidence.as_posix()}" {workers})')
+            registry.append(
+                f'add_test({group}::{name} "{Path(sys.executable).as_posix()}" '
+                f'"{probe.as_posix()}" {group} {group}-{name} "{evidence.as_posix()}" {workers})')
         lines.extend([
             f'set(ARG_LABELS {"gpu" if group == "Gpu" else "native"})',
-            f'set(ARG_PROPERTIES TIMEOUT 10 ENVIRONMENT "PRESERVED_SETTING=present" RESOURCE_LOCK {group}-existing ENVIRONMENT_MODIFICATION "EXISTING=set:retained")',
+            f'set(ARG_PROPERTIES TIMEOUT 10 ENVIRONMENT "PRESERVED_SETTING=present" '
+            f'RESOURCE_LOCK {group}-existing ENVIRONMENT_MODIFICATION "EXISTING=set:retained")',
             f'horo_ci_catch_properties({group})',
         ])
     registry_path.write_text("\n".join(registry), encoding="utf-8")
@@ -146,6 +150,30 @@ add_test(NAME assertions COMMAND probe)
         assert name in run(inspector, option, str(obj)).stdout
 
 
+def _assert_suite_properties(test: dict, isolate: bool) -> None:
+    properties = {item["name"]: item["value"] for item in test["properties"]}
+    assert properties["TIMEOUT"] == 10
+    assert properties["ENVIRONMENT"] == ["PRESERVED_SETTING=present"]
+    group = test["name"].split("::")[0]
+    if isolate:
+        assert properties["RESOURCE_LOCK"] == sorted([f"{group}-existing", f"horo-suite-{group}"])
+        assert Path(properties["WORKING_DIRECTORY"]).name == "work"
+        assert len(properties["ENVIRONMENT_MODIFICATION"]) == 6
+        assert properties.get("RUN_SERIAL", False) == (group == "Gpu")
+    else:
+        assert properties["RESOURCE_LOCK"] == [f"{group}-existing"]
+        assert properties["ENVIRONMENT_MODIFICATION"] == ["EXISTING=set:retained"]
+
+
+def _assert_suite_overlap(events: dict, groups: tuple) -> None:
+    for group in groups:
+        intervals = sorted((event["start"], event["end"]) for event in events.values() if event["group"] == group)
+        assert intervals[0][1] <= intervals[1][0]
+    first_cases = [min((event for event in events.values() if event["group"] == group),
+                       key=lambda event: event["start"]) for group in groups]
+    assert max(event["start"] for event in first_cases) < min(event["end"] for event in first_cases)
+
+
 @pytest.mark.parametrize(("isolate", "workers"), [(True, 2), (True, 4), (False, 2)])
 def test_generated_suite_properties_preserve_contracts_and_control_concurrency(tmp_path: Path, isolate: bool, workers: int) -> None:
     build, evidence = prepare_isolation_project(tmp_path, isolate, workers)
@@ -154,29 +182,33 @@ def test_generated_suite_properties_preserve_contracts_and_control_concurrency(t
     expected = {f"{group}::{name}" for group in groups for name in ("one", "two")} | {"Gpu::one"}
     assert {test["name"] for test in manifest["tests"]} == expected
     for test in manifest["tests"]:
-        properties = {item["name"]: item["value"] for item in test["properties"]}
-        assert properties["TIMEOUT"] == 10
-        assert properties["ENVIRONMENT"] == ["PRESERVED_SETTING=present"]
-        if isolate:
-            group = test["name"].split("::")[0]
-            assert properties["RESOURCE_LOCK"] == sorted([f"{group}-existing", f"horo-suite-{group}"])
-            assert Path(properties["WORKING_DIRECTORY"]).name == "work"
-            assert len(properties["ENVIRONMENT_MODIFICATION"]) == 6
-            assert properties.get("RUN_SERIAL", False) == (group == "Gpu")
-        else:
-            group = test["name"].split("::")[0]
-            assert properties["RESOURCE_LOCK"] == [f"{group}-existing"]
-            assert properties["ENVIRONMENT_MODIFICATION"] == ["EXISTING=set:retained"]
+        _assert_suite_properties(test, isolate)
     if isolate:
         run("ctest", "--test-dir", str(build), "--parallel", str(workers), "--output-on-failure", "-R", "^Suite")
         events = {path.stem: json.loads(path.read_text()) for path in evidence.glob("*.json")}
         assert len(events) == 2 * workers
-        for group in groups:
-            intervals = sorted((event["start"], event["end"]) for event in events.values() if event["group"] == group)
-            assert intervals[0][1] <= intervals[1][0]
-        first_cases = [min((event for event in events.values() if event["group"] == group),
-                           key=lambda event: event["start"]) for group in groups]
-        assert max(event["start"] for event in first_cases) < min(event["end"] for event in first_cases)
+        _assert_suite_overlap(events, groups)
+
+
+def _run_coverage_executables(executables: list[Path]) -> None:
+    for _ in range(4):
+        children = []
+        try:
+            for executable in executables:
+                # Only absolute executable paths compiled from the literal fixture.
+                command = [str(executable)]
+                # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)  # nosec B603
+                children.append(process)
+            for child in children:
+                _, stderr = child.communicate(timeout=10)
+                assert child.returncode == 0, stderr.decode(errors="replace")
+                assert not stderr, stderr.decode(errors="replace")
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
 
 
 @pytest.mark.parametrize("linker", ["bfd", "lld"])
@@ -198,20 +230,7 @@ def test_gcc_parallel_executables_merge_shared_library_coverage(tmp_path: Path, 
     executables = [tmp_path / f"suite-{index}" for index in range(workers)]
     for executable in executables:
         run("gcc", f"-fuse-ld={linker}", "--coverage", str(main), str(obj), "-o", str(executable))
-    for _ in range(4):
-        # Only absolute executable paths just compiled from the literal C fixture.
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-        children = [subprocess.Popen([str(executable)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)  # nosec B603
-                    for executable in executables]
-        try:
-            for child in children:
-                _, stderr = child.communicate(timeout=10)
-                assert child.returncode == 0 and not stderr, stderr.decode(errors="replace")
-        finally:
-            for child in children:
-                if child.poll() is None:
-                    child.kill()
-                    child.wait()
+    _run_coverage_executables(executables)
     run("gcov", "--json-format", str(tmp_path / "counter.gcda"), cwd=tmp_path)
     report = json.loads(gzip.decompress((tmp_path / "counter.gcov.json.gz").read_bytes()))
     observed = [function for file in report["files"] for function in file["functions"]
