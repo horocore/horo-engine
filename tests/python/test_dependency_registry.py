@@ -162,3 +162,20 @@ def test_registry_outage_cannot_replace_a_published_key(remote, monkeypatch, ide
     with pytest.raises(ValueError, match="unavailable"):
         registry.publish(archive, identity)
     assert all(call[0] != "push" for call in calls)
+
+
+@pytest.mark.parametrize("operation", ["fetch", "publish"])
+def test_registry_cli_rejects_archive_output_outside_workspace(tmp_path, monkeypatch, identity, operation):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    identity_file = workspace / "identity.json"
+    identity_file.write_text(json.dumps(identity), encoding="utf-8")
+    archive = tmp_path / ("Unicode-" + "a" * 64 + ".tar.gz")
+    archive.write_bytes(b"preserve")
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(sys, "argv", ["dependency_registry.py", operation, "--identity", str(identity_file),
+                                     "--archive", str(archive)])
+    monkeypatch.setattr(registry, operation, lambda *_: pytest.fail("Escaping path reached the transport"))
+    assert registry.main() == 1
+    assert archive.read_bytes() == b"preserve"
+    assert list(workspace.iterdir()) == [identity_file]
