@@ -131,7 +131,7 @@ namespace Horo::Tests::VulkanEditor {
                       << ",\"format\":" << static_cast<unsigned>(device.outputFormat) << "}\n";
         }
 
-        void CreateViewport() {
+        void CreateViewport(const RenderSceneView &scene = {}) {
             const char *root = std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT");
             REQUIRE(root);
             auto cooked = LoadPackagedVulkanViewportShader(std::filesystem::path{root});
@@ -141,7 +141,7 @@ namespace Horo::Tests::VulkanEditor {
             viewport->RequestExtent({320, 240});
             viewport->RequestGrid({.visible = false});
             for (std::size_t attempt = 0; attempt < 8; ++attempt) {
-                const auto prepared = viewport->PrepareResources(*frontend, RenderSceneView{});
+                const auto prepared = viewport->PrepareResources(*frontend, scene);
                 Check(prepared);
                 Check(frontend->ProcessResourceRequests());
                 if (prepared.Value().has_value()) {
@@ -169,14 +169,14 @@ namespace Horo::Tests::VulkanEditor {
             std::terminate();
         }
 
-        void ExecuteEmptyAndGui(RenderFrameScope &frame) {
+        void ExecuteSceneAndGui(RenderFrameScope &frame, const RenderSceneView &scene = {}) {
             const auto view = viewport->TextureView();
             REQUIRE(view.IsValid());
             const auto size = viewport->RequestedExtent();
             const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics,
                                                          .staticMesh = StaticMeshPassDescriptor{.target = target,
                                                                                                 .extent = {size.width, size.height},
-                                                                                                .scene = {}}},
+                                                                                                .scene = scene}},
                                     RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
             Check(viewport->ExecutePreparedFrame(frame, passes));
             Check(gui->BeginFrame());
@@ -207,12 +207,12 @@ namespace Horo::Tests::VulkanEditor {
         host.CreateViewport();
         {
             auto frame = host.Frame(1);
-            host.ExecuteEmptyAndGui(frame);
+            host.ExecuteSceneAndGui(frame);
             Check(frame.Present());
         }
         {
             auto frame = host.Frame(2);
-            host.ExecuteEmptyAndGui(frame);
+            host.ExecuteSceneAndGui(frame);
             frame.Cancel();
         }
         REQUIRE(host.Drain());
@@ -223,5 +223,37 @@ namespace Horo::Tests::VulkanEditor {
         host.gui.reset();
         CHECK(ImGui::GetIO().BackendPlatformUserData == nullptr);
         CHECK(SDL_GetWindowID(host.window.get()) != 0);
+    }
+
+    TEST_CASE("Native Vulkan grid selected light and mixed lighting retire together across presented and cancelled frames",
+              "[native-smoke][vulkan][gui][viewport]") {
+        const std::array vertices{MeshVertex{{-1, -1, 0}, {0, 0, 1}, {0, 0}}, MeshVertex{{1, -1, 0}, {0, 0, 1}, {1, 0}},
+                                  MeshVertex{{0, 1, 0}, {0, 0, 1}, {0.5F, 1}}};
+        const std::array<std::uint32_t, 3> indices{0, 1, 2};
+        const RenderMeshSourceHandle source{{1}, 1};
+        const std::array meshes{RenderMeshResourceView{source, vertices, indices, {{-1, -1, 0}, {1, 1, 0}}}};
+        const std::array instances{RenderStaticMeshInstance{.mesh = source}};
+        const std::array lights{RenderLight{}, RenderLight{.kind = RenderLightKind::Point, .position = {2, 3, 4}},
+                                RenderLight{.kind = RenderLightKind::Spot, .position = {0, 0, 3}}};
+        const RenderSceneView scene{.camera = {.position = {0, 2, 5}, .target = {0, 0, 0}},
+                                    .meshResources = meshes,
+                                    .instances = instances,
+                                    .lights = lights};
+        REQUIRE(scene.IsValid());
+        Host host;
+        host.CreateViewport(scene);
+        host.viewport->RequestGrid({.visible = true});
+        host.viewport->RequestLightVisualizer({lights[1]});
+        for (std::uint64_t number = 1; number <= 6; ++number) {
+            auto frame = host.Frame(number);
+            host.ExecuteSceneAndGui(frame, scene);
+            if (number % 2 == 0)
+                frame.Cancel();
+            else
+                Check(frame.Present());
+        }
+        REQUIRE(host.Drain());
+        CHECK_FALSE(host.viewport->IsReady());
+        CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
     }
 }  // namespace Horo::Tests::VulkanEditor

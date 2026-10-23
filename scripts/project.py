@@ -2398,7 +2398,39 @@ def imgui_vulkan_slots_main(argv=None) -> None:
     output.write_text(generated, encoding="utf-8", newline="")
 
 
-TOOL_COMMANDS = {'imgui-vulkan-slots': imgui_vulkan_slots_main, 'android': apk_main, 'extension-bootstrap': bootstrap_main, 'extension-ci': author_main, 'extension': scaffold_main, 'gameplay': gameplay_main, 'migrations': migration_main, 'compatibility': compatibility_main}
+def verify_shader_tool_executable(root: Path, relative_path: str, digest: str) -> Path:
+    """Verify the catalog-selected executable without escaping its extracted artifact root."""
+    if (not relative_path or "\\" in relative_path or ":" in relative_path or
+            any(part in ("", ".", "..") for part in relative_path.split("/"))):
+        raise ValueError("Shader tool path must be a confined relative POSIX path")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+        raise ValueError("Shader tool digest must be a canonical SHA-256")
+    root = root.resolve(strict=True)
+    executable = (root / relative_path).resolve(strict=True)
+    if not root.is_dir() or not executable.is_relative_to(root) or not executable.is_file():
+        raise ValueError("Shader tool executable escapes the extracted artifact root")
+    if not os.access(executable, os.X_OK) or executable.stat().st_size > MAXIMUM_FILE:
+        raise ValueError("Shader tool executable is not executable or exceeds the size bound")
+    actual = hashlib.sha256()
+    with executable.open("rb") as source:
+        while block := source.read(1024 * 1024):
+            actual.update(block)
+    if actual.hexdigest() != digest.removeprefix("sha256:"):
+        raise ValueError("Shader tool executable does not match its reviewed digest")
+    return executable
+
+
+def verify_shader_tool_main(argv=None) -> None:
+    """Print only the verified catalog-selected executable for the qualification host."""
+    parser = argparse.ArgumentParser(description="Verify a locked extracted shader tool")
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--relative-path", required=True)
+    parser.add_argument("--sha256", required=True)
+    args = parser.parse_args(argv)
+    print(verify_shader_tool_executable(args.root, args.relative_path, args.sha256))
+
+
+TOOL_COMMANDS = {'verify-shader-tool': verify_shader_tool_main, 'imgui-vulkan-slots': imgui_vulkan_slots_main, 'android': apk_main, 'extension-bootstrap': bootstrap_main, 'extension-ci': author_main, 'extension': scaffold_main, 'gameplay': gameplay_main, 'migrations': migration_main, 'compatibility': compatibility_main}
 
 
 def main(argv=None) -> int:

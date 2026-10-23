@@ -177,7 +177,7 @@ namespace {
         const auto initializedLifecycle = state.lifecycle;
         Test::RequireErrorCode(backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {1280, 720}}),
                                "render.vulkan.presentation_unsupported", "horo.render.vulkan");
-        Test::RequireErrorCode(backend->Execute(RenderExecutionPlan{}), "render.vulkan.presentation_unsupported", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Execute(RenderExecutionPlan{}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
         Test::RequireErrorCode(backend->Present(FrameToken{1}), "render.vulkan.presentation_unsupported", "horo.render.vulkan");
         Test::RequireErrorCode(backend->Resize(FramebufferExtent{1280, 720}), "render.vulkan.presentation_unsupported",
                                "horo.render.vulkan");

@@ -52,6 +52,10 @@ namespace Horo::Editor {
             Shutdown();
             return slots;
         }
+        if (const auto overlay = CreateOverlaySlots(); overlay.HasError()) {
+            Shutdown();
+            return overlay;
+        }
         initialized_ = true;
         return Result<void>::Success();
     }
@@ -62,9 +66,11 @@ namespace Horo::Editor {
             std::terminate();
         for (auto &draw : preparedDraws_)
             draw = {};
-        for (auto &slot : slots_)
+        for (auto &slot : slots_) {
             for (auto &draw : slot.draws)
                 draw.material.reset();
+            slot.overlay.uniforms.material.reset();
+        }
         if (shader_.materials)
             static_cast<void>(shader_.materials->Shutdown());
         shader_.materials.reset();
@@ -83,12 +89,16 @@ namespace Horo::Editor {
         emptyGraph_.reset();
         emptyGraphTexture_ = {};
         resources_.Shutdown();
+        ReleaseOverlaySlots();
         for (auto &slot : slots_)
             for (auto &draw : slot.draws) {
                 if (draw.buffer.IsValid())
                     static_cast<void>(frontend_.ReleaseBuffer(draw.buffer));
                 draw = {};
             }
+        if (shader_.overlayPipeline.IsValid())
+            static_cast<void>(frontend_.ReleaseGraphicsPipeline(shader_.overlayPipeline));
+        shader_.overlayPipeline = {};
         if (shader_.pipeline.IsValid())
             static_cast<void>(frontend_.ReleaseGraphicsPipeline(shader_.pipeline));
         if (shader_.vertex.IsValid())

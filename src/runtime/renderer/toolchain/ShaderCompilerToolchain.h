@@ -65,6 +65,7 @@ namespace Horo::Render {
         std::string_view archiveSha256;                   /**< Canonical SHA-256 of downloaded archive/package. */
         std::string_view executableSha256;                /**< Canonical SHA-256 of executable bytes. */
         std::string_view license;                         /**< Reviewed SPDX-like license summary. */
+        std::string_view executableRelativePath;          /**< Confined POSIX path within the verified extracted artifact root. */
     };
 
     /**

@@ -182,7 +182,8 @@ jobs:
           mkdir -p "$tool_root" "$asset_root/shaders/editor"
           build/ci/apps/HoroEditorVulkanShaderCook --describe-tools > "$tool_root/catalog.tsv"
           count=0
-          while IFS=$'\t' read -r role source archive_digest executable_digest; do
+          declare -a executables
+          while IFS=$'\t' read -r role source archive_digest executable_digest executable_relative_path; do
             [[ "$source" == https://* ]]
             archive="$tool_root/$role.archive"
             destination="$tool_root/$role"
@@ -190,19 +191,21 @@ jobs:
             curl --fail --location --retry 3 --output "$archive" "$source"
             printf '%s  %s\n' "${archive_digest#sha256:}" "$archive" | sha256sum --check
             case "$role" in
-              0) tar -xzf "$archive" -C "$destination"; executable="$destination/bin/dxc" ;;
-              1) dpkg-deb --extract "$archive" "$destination"; executable="$destination/usr/bin/spirv-val" ;;
-              2) dpkg-deb --extract "$archive" "$destination"; executable="$destination/usr/bin/spirv-cross" ;;
+              0) tar -xzf "$archive" -C "$destination" ;;
+              1) dpkg-deb --extract "$archive" "$destination" ;;
+              2) dpkg-deb --extract "$archive" "$destination" ;;
               *) exit 1 ;;
             esac
-            printf '%s  %s\n' "${executable_digest#sha256:}" "$executable" | sha256sum --check
+            executable="$(python3 scripts/project.py verify-shader-tool --root "$destination" \
+              --relative-path "$executable_relative_path" --sha256 "$executable_digest")"
+            executables[$role]="$executable"
             count=$((count + 1))
           done < "$tool_root/catalog.tsv"
           [[ "$count" == 3 ]]
-          export LD_LIBRARY_PATH="$tool_root/0/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="$(dirname "${executables[0]}")/../lib:${LD_LIBRARY_PATH:-}"
           build/ci/apps/HoroEditorVulkanShaderCook assets/shaders/editor/viewport.hlsl \
             "$asset_root/shaders/editor/viewport-vulkan" "$RUNNER_TEMP/viewport-cook-scratch" \
-            "$tool_root/0/bin/dxc" "$tool_root/1/usr/bin/spirv-val" "$tool_root/2/usr/bin/spirv-cross"
+            "${executables[0]}" "${executables[1]}" "${executables[2]}"
           editor_asset_root="$(cat build/ci/apps/HoroEditorAssetRoot-Debug.txt)"
           cmake -E copy_directory "$asset_root" "$editor_asset_root"
           printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$editor_asset_root" >> "$GITHUB_ENV"

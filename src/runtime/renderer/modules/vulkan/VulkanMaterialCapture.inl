@@ -136,11 +136,12 @@ Result<RenderTimelinePoint> VulkanResourceRuntime::BufferCompletion(const std::u
     return Result<RenderTimelinePoint>::Success(buffer->graphState.completion);
 }
 
-/** @copydoc VulkanResourceRuntime::WriteHostUniform */
-Result<void> VulkanResourceRuntime::WriteHostUniform(const std::uint64_t instance, const std::span<const std::byte> bytes) {
+/** @copydoc VulkanResourceRuntime::WriteHostFrameBuffer */
+Result<void> VulkanResourceRuntime::WriteHostFrameBuffer(const std::uint64_t instance, const std::span<const std::byte> bytes) {
     auto *buffer = Impl::Find(impl_->buffers, instance);
     if (!buffer || buffer->descriptor.access != RenderBufferAccess::HostVisible ||
-        !HasBufferUsage(buffer->descriptor.usage, RenderBufferUsage::Uniform) || bytes.size() != buffer->descriptor.byteSize)
+        (!HasBufferUsage(buffer->descriptor.usage, RenderBufferUsage::Uniform) && buffer->descriptor.usage != RenderBufferUsage::Vertex) ||
+        bytes.size() != buffer->descriptor.byteSize)
         return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
     if (!impl_->Upload(*buffer, bytes))
         return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));

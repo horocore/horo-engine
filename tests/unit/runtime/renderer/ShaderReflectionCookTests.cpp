@@ -13,24 +13,38 @@ namespace {
     constexpr std::string_view Members = R"("types":{"_1":{"members":[
         {"name":"Mvp","type":"mat4","offset":0,"matrix_stride":16},
         {"name":"NormalToWorld","type":"mat4","offset":64,"matrix_stride":16},
-        {"name":"Tint","type":"vec4","offset":128},
-        {"name":"LightDirection","type":"vec4","offset":144},
-        {"name":"LightColor","type":"vec4","offset":160}]}},
-        "ubos":[{"type":"_1","name":"ViewportParameters","block_size":176,"set":0,"binding":0}])";
+        {"name":"ModelToWorld","type":"mat4","offset":128,"matrix_stride":16},
+        {"name":"Tint","type":"vec4","offset":192},
+        {"name":"CameraAndLightCount","type":"vec4","offset":208},
+        {"name":"LightPositionKind","type":"vec4","offset":224,"array":[16],"array_size_is_literal":[true],"array_stride":16},
+        {"name":"LightDirectionRange","type":"vec4","offset":480,"array":[16],"array_size_is_literal":[true],"array_stride":16},
+        {"name":"LightColorIntensity","type":"vec4","offset":736,"array":[16],"array_size_is_literal":[true],"array_stride":16},
+        {"name":"LightCone","type":"vec4","offset":992,"array":[16],"array_size_is_literal":[true],"array_stride":16},
+        {"name":"OverlayColors","type":"vec4","offset":1248,"array":[3],"array_size_is_literal":[true],"array_stride":16}]}},
+        "ubos":[{"type":"_1","name":"type.ViewportParameters","block_size":1296,"set":0,"binding":0}])";
 
     std::array<SpirvReflectionStage, 2> Evidence() {
-        return {
-            {{ShaderStage::Vertex, "VSMain", "{\"entryPoints\":[{\"name\":\"VSMain\",\"mode\":\"vert\"}]," + std::string{Members} + "}"},
-             {ShaderStage::Fragment, "PSMain",
-              "{\"entryPoints\":[{\"name\":\"PSMain\",\"mode\":\"frag\"}]," + std::string{Members} + "}"}}};
+        return {{{ShaderStage::Vertex, "VSMain",
+                  "{\"entryPoints\":[{\"name\":\"VSMain\",\"mode\":\"vert\"}],"
+                  "\"inputs\":[{\"name\":\"position\",\"type\":\"vec3\",\"location\":0},"
+                  "{\"name\":\"normal\",\"type\":\"vec3\",\"location\":1},"
+                  "{\"name\":\"uv\",\"type\":\"vec2\",\"location\":2}]," +
+                      std::string{Members} + "}"},
+                 {ShaderStage::Fragment, "PSMain",
+                  "{\"entryPoints\":[{\"name\":\"PSMain\",\"mode\":\"frag\"}]," + std::string{Members} + "}"}}};
+    }
+
+    void ReplaceEvidence(std::string &json, const std::string_view before, const std::string_view after) {
+        const auto position = json.find(before);
+        REQUIRE(position != std::string::npos);
+        json.replace(position, before.size(), after);
     }
 
     struct CookFixture {
         CompiledShaderArtifact compiled;
         ReflectedShaderArtifact reflected;
 
-        CookFixture() {
-            const auto stages = Evidence();
+        explicit CookFixture(const std::array<SpirvReflectionStage, 2> &stages = Evidence()) {
             const auto normalized = NormalizeVulkanReflection(EditorVulkanViewportShaderManifest(), EditorVulkanViewportShaderTarget(),
                                                               stages, EditorVulkanViewportReflectionNames());
             REQUIRE(normalized.HasValue());
@@ -126,4 +140,43 @@ TEST_CASE("Cook metadata rejects noncanonical duplicate oversized and truncated 
         metadata.resize(1024U * 1024U + 1);
     }
     CHECK(LoadEditorVulkanViewportCook(fixture.compiled.payload, metadata).HasError());
+}
+
+TEST_CASE("Viewport cooked attributes require canonical MeshVertex position normal and UV shapes", "[renderer][shader-cook]") {
+    auto stages = Evidence();
+    SECTION("Foreign UV width") {
+        ReplaceEvidence(stages[0].json, "\"type\":\"vec2\"", "\"type\":\"vec3\"");
+    }
+    SECTION("Missing normal") {
+        ReplaceEvidence(stages[0].json, "\"location\":1", "\"location\":3");
+    }
+    CookFixture fixture{stages};
+    const auto encoded = EncodeReflectedShaderArtifact(fixture.reflected);
+    REQUIRE(encoded.HasValue());
+    CHECK(LoadEditorVulkanViewportCook(fixture.compiled.payload, encoded.Value()).HasError());
+}
+
+TEST_CASE("Viewport light reflection preserves fixed array bounds and rejects unprovable packing", "[renderer][shader-cook]") {
+    auto stages = Evidence();
+    SECTION("Nonliteral array") {
+        ReplaceEvidence(stages[1].json, "\"array_size_is_literal\":[true]", "\"array_size_is_literal\":[false]");
+    }
+    SECTION("Wrong admitted light count") {
+        ReplaceEvidence(stages[1].json, "\"array\":[16]", "\"array\":[17]");
+    }
+    SECTION("Overlapping elements") {
+        ReplaceEvidence(stages[1].json, "\"array_stride\":16", "\"array_stride\":4");
+    }
+    CHECK(NormalizeVulkanReflection(EditorVulkanViewportShaderManifest(), EditorVulkanViewportShaderTarget(), stages,
+                                    EditorVulkanViewportReflectionNames())
+              .HasError());
+}
+
+TEST_CASE("Viewport reflection requires the exact admitted DXC block type identity", "[renderer][shader-cook]") {
+    auto stages = Evidence();
+    ReplaceEvidence(stages[0].json, "type.ViewportParameters", "ViewportParameters");
+    const auto normalized = NormalizeVulkanReflection(EditorVulkanViewportShaderManifest(), EditorVulkanViewportShaderTarget(), stages,
+                                                      EditorVulkanViewportReflectionNames());
+    REQUIRE(normalized.HasError());
+    CHECK(normalized.ErrorValue().message.find("uniform block identity") != std::string::npos);
 }

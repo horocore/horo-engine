@@ -3073,6 +3073,7 @@ target_link_libraries(HoroWorldBakeApplication PUBLIC
 add_library(HoroEditorViewportScene STATIC
         editor/renderer/EditorViewportScene.cpp
         editor/renderer/grid/EditorViewportGridGeometry.cpp
+        editor/renderer/grid/ViewportOverlayTriangles.cpp
         editor/screens/workspace/panels/viewport/visualizers/light/LightVisualizerGeometry.cpp
 )
 add_library(HoroEngine::EditorViewportScene ALIAS HoroEditorViewportScene)
@@ -3366,7 +3367,9 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
         editor/renderer/vulkan/EditorViewportRendererVulkan.cpp
         editor/renderer/vulkan/EditorViewportVulkanExecution.cpp
         editor/renderer/vulkan/EditorViewportVulkanPipeline.cpp
-        editor/renderer/vulkan/EditorViewportVulkanUniforms.cpp)
+        editor/renderer/vulkan/EditorViewportVulkanUniforms.cpp
+        editor/renderer/vulkan/EditorViewportVulkanOverlayResources.cpp
+        editor/renderer/vulkan/EditorViewportVulkanOverlays.cpp)
     target_compile_features(HoroEditorVulkanGuiInternal PRIVATE cxx_std_20)
     target_include_directories(HoroEditorVulkanGuiInternal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(HoroEditorVulkanGuiInternal
