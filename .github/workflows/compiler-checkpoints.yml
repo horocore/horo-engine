@@ -100,3 +100,30 @@ jobs:
           else
             python3 .github/scripts/compiler_registry.py publish --key "$SOURCE_KEY"
           fi
+
+      # Publish primary before switching environments/directories. This second
+      # restore stays in the same serial exporter job, not another PR job.
+      - name: Restore auxiliary checkpoint without compiling
+        if: matrix.profile == 'native'
+        id: variants
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-variants-v1
+          mode: Mixed
+          max-size: 2G
+          compiler-only: 'true'
+          external-cache: 'false'
+      - name: Stop auxiliary cache server before snapshot
+        if: matrix.profile == 'native' && runner.os == 'Windows'
+        run: sccache --stop-server
+      - name: Publish existing auxiliary checkpoint
+        if: matrix.profile == 'native'
+        env:
+          SOURCE_KEY: ${{ steps.variants.outputs.compiler-matched-key }}
+          HORO_PACKAGE_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -z "$SOURCE_KEY" ]]; then
+            echo 'No auxiliary checkpoint; skip export without starting a build'
+          else
+            python3 .github/scripts/compiler_registry.py publish --key "$SOURCE_KEY"
+          fi

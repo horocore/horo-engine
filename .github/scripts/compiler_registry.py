@@ -26,7 +26,7 @@ MAX_ARCHIVE_BYTES = 3 * 1024 ** 3
 MAX_EXPANDED_BYTES = 4 * 1024 ** 3
 KEY_PATTERN = re.compile(
     r"(native-v1-(?:Linux|Windows|macOS)-(?:X64|ARM64)-"
-    r"[a-z0-9.-]+-[a-z0-9.-]+-native-tests-v1-Debug-main-|"
+    r"[a-z0-9.-]+-[a-z0-9.-]+-(?:native-tests-v1-Debug|native-variants-v1-Mixed)-main-|"
     r"sonar-v2-gcc-Linux-X64-main-)([1-9][0-9]*)-([1-9][0-9]*)")
 # Never import remote configuration, operational locks, or per-run counters.
 LOCAL_FILES = {"ccache.conf", "stats", "stats.log", "cachedir.tag", MANIFEST}
@@ -51,6 +51,8 @@ def reference(namespace: str) -> str:
 def cache_root(namespace: str) -> Path:
     """Use fixed workspace-owned cache directories, never an arbitrary CLI path."""
     relative = ".sonar/ccache" if namespace.startswith("sonar-") else ".ci-cache/compiler"
+    if "-native-variants-v1-Mixed-main-" in namespace:
+        relative = ".ci-cache/compiler-variants"
     return package.workspace_path(Path(relative))
 
 

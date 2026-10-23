@@ -371,6 +371,18 @@ jobs:
           build/ci/tests/HoroEditorViewportOpenGLSmoke
           --reporter junit --out build/ci/opengl-editor-composition.xml
 
+      # Switch after Debug's checkpoint so auxiliary configurations never evict
+      # its primary working set. This uses the existing platform job and tools.
+      - name: Restore auxiliary compiler variants
+        id: variants_cache
+        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-variants-v1
+          mode: Mixed
+          max-size: 2G
+          compiler-only: 'true'
+
       - name: Configure Metal shader and presentation tests
         if: runner.os == 'macOS'
         run: >-
@@ -488,6 +500,19 @@ jobs:
       - name: Verify OpenXR omitted target graph
         if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
         run: cmake --preset ci-xr-disabled
+
+      # Compiler entries remain individually content checked even if a later
+      # test fails. Preserve successful auxiliary compilation before testing.
+      - name: Checkpoint auxiliary compiler variants
+        if: ${{ !cancelled() && steps.variants_cache.outcome == 'success' && (steps.release_build.outcome == 'success' || steps.network_build.outcome == 'success' || steps.xr_build.outcome == 'success') }}
+        continue-on-error: true
+        uses: ./.github/actions/save-native-cache
+        with:
+          compiler-profile: native-variants-v1
+          compiler-key: ${{ steps.variants_cache.outputs.compiler-key }}
+          dependency-key: ''
+          dependency-hit: 'true'
+          dependency-ready: 'false'
 
       - name: Checkpoint complete dependency sources
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}

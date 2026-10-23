@@ -74,3 +74,12 @@ test('API failures propagate; an already evicted entry is harmless', async () =>
     else await assert.rejects(request, { status: 403 });
   }
 });
+
+
+test('auxiliary generations retire only their own superseded checkpoints', () => {
+  const key = 'native-v1-Linux-X64-gcc-13-gcc-13-native-variants-v1-Mixed-main-';
+  const primary = 'native-v1-Linux-X64-gcc-13-gcc-13-native-tests-v1-Debug-main-';
+  const caches = [snapshot(1, { key: `${key}1-1` }), snapshot(2, { key: `${key}2-1` }),
+    snapshot(3, { key: `${primary}3-1` })];
+  assert.deepEqual(supersededSnapshots(caches).map(item => [item.cache.id, item.replacement.id]), [[1, 2]]);
+});

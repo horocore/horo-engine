@@ -739,6 +739,26 @@ anonymous cross-platform restores still require qualification before claiming
 the 10–15 minute target. Large transfers and warm linking/analysis remain part
 of each job's measured duration.
 
+### Auxiliary native compiler working set
+
+Native qualification switches to a separate `native-variants-v1-Mixed` compiler
+store after the primary Debug checkpoint. Its fixed path is
+`.ci-cache/compiler-variants`, independently bounded at 2G. Release audio, Metal,
+navigation, GNS and XR use this store. Their real flags and compiler entry hashes
+remain authoritative; Mixed describes the collection, not binary compatibility
+between build configurations. The main checkpoint before tests preserves entries
+from successful auxiliary compilation even if a later test fails.
+
+The existing serial native exporter publishes both primary and auxiliary
+namespaces in one job per platform. PRs restore each store only at its owning
+phase, without uploading. The temporary runner may hold up to 4G of native
+compiler entries across these two stores; the Debug working set cannot be
+evicted by later Release/provider compilation. This does not prove all variants
+fit the auxiliary budget. Per-phase hit rates and pressure still require hosted
+measurement. Actions storage remains a best-effort staging layer: it may evict a
+new checkpoint before the periodic exporter reads it. GHCR preserves previously
+published checkpoints independently; a missing publication builds normally.
+
 ### Symptoms of a stale build
 
 - Build succeeds but runtime behavior is wrong (old object files

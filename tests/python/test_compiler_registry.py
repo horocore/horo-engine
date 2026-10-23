@@ -284,3 +284,44 @@ def test_composite_step_schema_excludes_workflow_only_properties():
                "working-directory", "continue-on-error"}
     assert properties <= allowed
     assert "timeout-minutes" not in properties
+
+
+def test_primary_and_auxiliary_entries_remain_independent(snapshot, tmp_path):
+    primary = compiler.cache_root(NAMESPACE)
+    namespace = "native-v1-Linux-X64-gcc-13.3.0-gcc-13.3.0-native-variants-v1-Mixed-main-"
+    variants = compiler.cache_root(namespace)
+    assert primary != variants
+    staged = tmp_path / "primary-stage"
+    staged.mkdir()
+    compiler.unpack(snapshot, NAMESPACE, staged)
+    compiler.merge_entries(staged, primary)
+    source = tmp_path / "auxiliary-source"
+    (source / "a/b").mkdir(parents=True)
+    (source / "a/b/entryR").write_bytes(b"release variant object")
+    archive = tmp_path / "variants.tar.gz"
+    compiler.pack(source, namespace + "400-1", archive)
+    restored = tmp_path / "auxiliary-stage"
+    restored.mkdir()
+    compiler.unpack(archive, namespace, restored)
+    compiler.merge_entries(restored, variants)
+    assert (primary / "a/b/entryR").read_bytes() == b"compiler object"
+    assert (variants / "a/b/entryR").read_bytes() == b"release variant object"
+    assert compiler.reference(NAMESPACE) != compiler.reference(namespace)
+    with pytest.raises(ValueError, match="Incompatible"):
+        compiler.unpack(archive, NAMESPACE, tmp_path / "mismatched")
+
+
+def test_variant_restore_happens_after_debug_checkpoint_before_auxiliary_builds():
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    checkpoint = workflow.index("- name: Checkpoint main Debug compiler cache")
+    restore = workflow.index("- name: Restore auxiliary compiler variants")
+    metal = workflow.index("- name: Configure Metal shader and presentation tests")
+    release = workflow.index("- name: Configure Release audio checks")
+    save = workflow.index("- name: Checkpoint auxiliary compiler variants")
+    tests = workflow.index("- name: Test Debug")
+    assert checkpoint < restore < metal < release < save < tests
+    restore_step = workflow[restore:metal]
+    assert "profile: native-variants-v1" in restore_step
+    assert "mode: Mixed" in restore_step
+    assert "compiler-only: 'true'" in restore_step

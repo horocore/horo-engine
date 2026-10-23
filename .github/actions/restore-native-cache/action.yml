@@ -84,15 +84,16 @@ runs:
     - name: Export compiler cache settings
       shell: bash
       env:
+        COMPILER_DIRECTORY: ${{ inputs.profile == 'native-variants-v1' && 'compiler-variants' || 'compiler' }}
         COMPILER_MAX_SIZE: ${{ inputs.max-size }}
       run: |
         {
           echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ci-cache/compiler"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ci-cache/$COMPILER_DIRECTORY"
           echo "CCACHE_COMPILERCHECK=content"
           echo "CCACHE_COMPRESS=true"
           echo "CCACHE_MAXSIZE=$COMPILER_MAX_SIZE"
-          echo "SCCACHE_DIR=$GITHUB_WORKSPACE/.ci-cache/compiler"
+          echo "SCCACHE_DIR=$GITHUB_WORKSPACE/.ci-cache/$COMPILER_DIRECTORY"
           echo "SCCACHE_CACHE_SIZE=$COMPILER_MAX_SIZE"
           echo "SCCACHE_GHA_ENABLED=false"
           echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
@@ -117,20 +118,20 @@ runs:
       id: compiler
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
       with:
-        path: ${{ github.workspace }}/.ci-cache/compiler
+        path: ${{ github.workspace }}/.ci-cache/${{ inputs.profile == 'native-variants-v1' && 'compiler-variants' || 'compiler' }}
         key: native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-
 
     - name: Install optional compiler registry client
-      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug'
+      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && ((inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug') || (inputs.profile == 'native-variants-v1' && inputs.mode == 'Mixed'))
       continue-on-error: true
       uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
       with:
         version: 1.3.0
 
     - name: Restore optional public compiler checkpoint
-      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug'
+      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && ((inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug') || (inputs.profile == 'native-variants-v1' && inputs.mode == 'Mixed'))
       continue-on-error: true
       shell: bash
       env:
