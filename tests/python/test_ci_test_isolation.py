@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(not shutil.which("cmake") or not shutil.which("ctest"), reason="CMake/CTest required")
 
 PROBE = '''import json, os, pathlib, sys, time
-group, name, output = sys.argv[1:]
+group, name, output, peers = sys.argv[1:]
 output = pathlib.Path(output)
 work = pathlib.Path.cwd()
 temporary = pathlib.Path(os.environ["TMPDIR"])
@@ -31,7 +31,7 @@ marker.write_text(name)
 started = time.monotonic()
 (output / (group + ".ready")).touch()
 deadline = time.monotonic() + 5
-while len(list(output.glob("*.ready"))) < 2:
+while len(list(output.glob("*.ready"))) < int(peers):
     assert time.monotonic() < deadline, "independent executables did not overlap"
     time.sleep(0.01)
 time.sleep(0.1)
@@ -53,7 +53,7 @@ def run(tool: str, *args: str, cwd: Path | None = None) -> subprocess.CompletedP
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=True, shell=False, timeout=30)  # nosec B603
 
 
-def prepare_isolation_project(tmp_path: Path, isolate: bool) -> tuple[Path, Path]:
+def prepare_isolation_project(tmp_path: Path, isolate: bool, workers: int = 2) -> tuple[Path, Path]:
     source = tmp_path / "source ü"
     source.mkdir()
     build = tmp_path / "build ü"
@@ -69,11 +69,11 @@ def prepare_isolation_project(tmp_path: Path, isolate: bool) -> tuple[Path, Path
         f'set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "{registry_path.as_posix()}")',
     ]
     registry = []
-    for group in ("SuiteA", "SuiteB", "Gpu"):
+    for group in (*("SuiteA", "SuiteB", "SuiteC", "SuiteD")[:workers], "Gpu"):
         names = ("one",) if group == "Gpu" else ("one", "two")
         registry.append(f'set({group}_TESTS {" ".join(f"{group}::{name}" for name in names)})')
         for name in names:
-            registry.append(f'add_test({group}::{name} "{Path(sys.executable).as_posix()}" "{probe.as_posix()}" {group} {group}-{name} "{evidence.as_posix()}")')
+            registry.append(f'add_test({group}::{name} "{Path(sys.executable).as_posix()}" "{probe.as_posix()}" {group} {group}-{name} "{evidence.as_posix()}" {workers})')
         lines.extend([
             f'set(ARG_LABELS {"gpu" if group == "Gpu" else "native"})',
             f'set(ARG_PROPERTIES TIMEOUT 10 ENVIRONMENT "PRESERVED_SETTING=present" RESOURCE_LOCK {group}-existing ENVIRONMENT_MODIFICATION "EXISTING=set:retained")',
@@ -146,11 +146,13 @@ add_test(NAME assertions COMMAND probe)
         assert name in run(inspector, option, str(obj)).stdout
 
 
-@pytest.mark.parametrize("isolate", [True, False])
-def test_generated_suite_properties_preserve_contracts_and_control_concurrency(tmp_path: Path, isolate: bool) -> None:
-    build, evidence = prepare_isolation_project(tmp_path, isolate)
+@pytest.mark.parametrize(("isolate", "workers"), [(True, 2), (True, 4), (False, 2)])
+def test_generated_suite_properties_preserve_contracts_and_control_concurrency(tmp_path: Path, isolate: bool, workers: int) -> None:
+    build, evidence = prepare_isolation_project(tmp_path, isolate, workers)
     manifest = json.loads(run("ctest", "--test-dir", str(build), "--show-only=json-v1").stdout)
-    assert {test["name"] for test in manifest["tests"]} == {"SuiteA::one", "SuiteA::two", "SuiteB::one", "SuiteB::two", "Gpu::one"}
+    groups = ("SuiteA", "SuiteB", "SuiteC", "SuiteD")[:workers]
+    expected = {f"{group}::{name}" for group in groups for name in ("one", "two")} | {"Gpu::one"}
+    assert {test["name"] for test in manifest["tests"]} == expected
     for test in manifest["tests"]:
         properties = {item["name"]: item["value"] for item in test["properties"]}
         assert properties["TIMEOUT"] == 10
@@ -166,18 +168,20 @@ def test_generated_suite_properties_preserve_contracts_and_control_concurrency(t
             assert properties["RESOURCE_LOCK"] == [f"{group}-existing"]
             assert properties["ENVIRONMENT_MODIFICATION"] == ["EXISTING=set:retained"]
     if isolate:
-        run("ctest", "--test-dir", str(build), "--parallel", "2", "--output-on-failure", "-R", "^Suite")
+        run("ctest", "--test-dir", str(build), "--parallel", str(workers), "--output-on-failure", "-R", "^Suite")
         events = {path.stem: json.loads(path.read_text()) for path in evidence.glob("*.json")}
-        assert len(events) == 4
-        for group in ("SuiteA", "SuiteB"):
+        assert len(events) == 2 * workers
+        for group in groups:
             intervals = sorted((event["start"], event["end"]) for event in events.values() if event["group"] == group)
             assert intervals[0][1] <= intervals[1][0]
-        assert any(max(a["start"], b["start"]) < min(a["end"], b["end"])
-                   for a in events.values() for b in events.values() if a["group"] != b["group"])
+        first_cases = [min((event for event in events.values() if event["group"] == group),
+                           key=lambda event: event["start"]) for group in groups]
+        assert max(event["start"] for event in first_cases) < min(event["end"] for event in first_cases)
 
 
 @pytest.mark.parametrize("linker", ["bfd", "lld"])
-def test_gcc_parallel_executables_merge_shared_library_coverage(tmp_path: Path, linker: str) -> None:
+@pytest.mark.parametrize("workers", [2, 4])
+def test_gcc_parallel_executables_merge_shared_library_coverage(tmp_path: Path, linker: str, workers: int) -> None:
     """Protect Sonar counters shared by independently linked test executables."""
     import gzip
 
@@ -191,7 +195,7 @@ def test_gcc_parallel_executables_merge_shared_library_coverage(tmp_path: Path, 
     main.write_text("int observed(void); int main(void) { for (int i = 0; i < 10000; ++i) if (observed() != 1) return 1; return 0; }\n", encoding="utf-8")
     obj = tmp_path / "counter.o"
     run("gcc", "--coverage", "-fprofile-abs-path", "-c", str(source), "-o", str(obj))
-    executables = [tmp_path / "suite-a", tmp_path / "suite-b"]
+    executables = [tmp_path / f"suite-{index}" for index in range(workers)]
     for executable in executables:
         run("gcc", f"-fuse-ld={linker}", "--coverage", str(main), str(obj), "-o", str(executable))
     for _ in range(4):
@@ -213,7 +217,7 @@ def test_gcc_parallel_executables_merge_shared_library_coverage(tmp_path: Path, 
     observed = [function for file in report["files"] for function in file["functions"]
                 if function["name"] == "observed"]
     assert len(observed) == 1
-    assert observed[0]["execution_count"] == 80000
+    assert observed[0]["execution_count"] == 4 * workers * 10000
 
 
 def test_cmake_lld_links_coverage_executable_shared_and_module_targets(tmp_path: Path) -> None:
