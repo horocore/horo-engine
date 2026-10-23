@@ -26,7 +26,7 @@ namespace Horo::Render::Detail {
         class PendingClaims final {
         public:
             PendingClaims(RenderResourceRegistry &registry, RenderMemoryBudget &budget, bool &rollbackIncomplete)
-                : slots_(0), registry_(registry), budget_(budget), rollbackIncomplete_(rollbackIncomplete) {}
+                : registry_(registry), budget_(budget), rollbackIncomplete_(rollbackIncomplete) {}
 
             PendingClaims(const PendingClaims &) = delete;
             PendingClaims &operator=(const PendingClaims &) = delete;
@@ -65,7 +65,8 @@ namespace Horo::Render::Detail {
                 }
             }
 
-            std::vector<SlotClaim> slots_;
+            // Keep MSVC Debug proxy allocation in a throwing count constructor before admission.
+            std::vector<SlotClaim> slots_ = std::vector<SlotClaim>(std::size_t{0});
             RenderResourceRegistry &registry_;
             RenderMemoryBudget &budget_;
             bool &rollbackIncomplete_;

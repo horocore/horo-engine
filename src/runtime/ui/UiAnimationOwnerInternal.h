@@ -95,11 +95,16 @@ namespace Horo::Runtime::Ui {
             bool active{true};
         };
 
-        struct Candidate final {
-            UiReloadLease source;
-            UiLayoutPresentationRevision presentation;
+        /** @brief Unpublished viewport evidence and the profile selection qualified by its presentation revision. */
+        struct PresentationCandidate final {
+            UiLayoutPresentationRevision revision;
             std::optional<UiPresentationProfileSelection> selection;
             std::optional<UiAnimationViewport> viewport;
+        };
+
+        struct Candidate final {
+            UiReloadLease source;
+            PresentationCandidate presentation;
             std::optional<UiStyleResolver::PreparedUpdate> styles;
             std::optional<UiLayoutEngine::PreparedUpdate> layout;
             std::optional<UiLayoutClipEngine::PreparedUpdate> clipping;
@@ -150,15 +155,20 @@ namespace Horo::Runtime::Ui {
         std::vector<Timeline> timelines;
         std::vector<std::shared_ptr<UiAnimationFrameLease::Storage>> frames;
 
-        std::optional<UiPresentationProfileTable> profiles;
-        UiPresentationAttachmentId primaryAttachment;
-        std::array<std::unique_ptr<Attachment>, MaximumUiAnimationAttachments - 1> attachments;
-        std::array<std::uint32_t, MaximumUiAnimationAttachments - 1> attachmentGenerations{};
-        UiLayoutPresentationRevision presentation;
-        std::optional<UiAnimationViewport> publishedViewport;
-        bool attachmentDirty{};
-        std::optional<UiLayoutInspector> inspector;
-        UiPresentationAttachmentId inspectedAttachment;
+        /** @brief Presentation attachments, admitted viewport evidence and attachment-scoped inspection share owner lifetime. */
+        struct PresentationState final {
+            std::optional<UiPresentationProfileTable> profiles;
+            UiPresentationAttachmentId primaryAttachment;
+            std::array<std::unique_ptr<Attachment>, MaximumUiAnimationAttachments - 1> attachments;
+            std::array<std::uint32_t, MaximumUiAnimationAttachments - 1> attachmentGenerations{};
+            UiLayoutPresentationRevision revision;
+            std::optional<UiAnimationViewport> publishedViewport;
+            bool attachmentDirty{};
+            std::optional<UiLayoutInspector> inspector;
+            UiPresentationAttachmentId inspectedAttachment;
+        };
+
+        PresentationState presentation;
 
         struct WorkBuffers final {
             std::vector<UiStyleElementInput> elementInputs;

@@ -44,10 +44,10 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::AttachmentInputEligible */
     bool UiAnimationOwner::AttachmentInputEligible(const Storage &storage, const UiRenderViewId view) noexcept {
-        for (const auto &entry : storage.attachments) {
+        for (const auto &entry : storage.presentation.attachments) {
             if (!entry || !entry->active || entry->view != view)
                 continue;
-            if (!storage.currentFrame)
+            if (!storage.currentFrame.has_value())
                 return false;
             return std::ranges::any_of(storage.frames[*storage.currentFrame]->attachments, [&](const auto &frame) {
                 return frame.attachment == entry->id;
@@ -58,7 +58,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::PrimaryAttachment */
     UiPresentationAttachmentId UiAnimationOwner::PrimaryAttachment() const noexcept {
-        return storage_ && !storage_->lifecycle.stopped ? storage_->primaryAttachment : UiPresentationAttachmentId{};
+        return storage_ && !storage_->lifecycle.stopped ? storage_->presentation.primaryAttachment : UiPresentationAttachmentId{};
     }
 
     /** @copydoc UiAnimationOwner::Attach */
@@ -71,25 +71,25 @@ namespace Horo::Runtime::Ui {
         auto *canvas = owner.publisher.Current()->Canvas(owner.definition.canvas);
         if (!view.IsValid() || (!canvas->presentations.empty() && canvas->presentations.front().View() == view))
             return Result<UiPresentationAttachmentId>::Failure(MakeError(UiErrors::PresentationProfileForeignIdentity));
-        for (const auto &item : owner.attachments)
+        for (const auto &item : owner.presentation.attachments)
             if (item && item->active && item->view == view)
                 return Result<UiPresentationAttachmentId>::Failure(MakeError(UiErrors::DocumentDuplicateIdentity));
-        for (auto &frame : owner.frames)
-            if (frame.use_count() == 1 && (!owner.currentFrame || frame != owner.frames[*owner.currentFrame]))
+        for (const auto &frame : owner.frames)
+            if (frame.use_count() == 1 && (!owner.currentFrame.has_value() || frame != owner.frames[*owner.currentFrame]))
                 frame->attachments.clear();
-        const auto free = std::ranges::find_if(owner.attachments, [](const auto &item) {
+        const auto free = std::ranges::find_if(owner.presentation.attachments, [](const auto &item) {
             return !item || (!item->active && item->layout.IsDrained() && (!item->clipping || item->clipping->IsDrained()));
         });
-        if (free == owner.attachments.end())
+        if (free == owner.presentation.attachments.end())
             return Result<UiPresentationAttachmentId>::Failure(MakeError(UiErrors::CapacityExceeded));
-        const auto index = static_cast<std::size_t>(free - owner.attachments.begin());
-        if (owner.attachmentGenerations[index] == std::numeric_limits<std::uint32_t>::max())
+        const auto index = static_cast<std::size_t>(free - owner.presentation.attachments.begin());
+        if (owner.presentation.attachmentGenerations[index] == std::numeric_limits<std::uint32_t>::max())
             return Result<UiPresentationAttachmentId>::Failure(MakeError(UiErrors::GenerationExhausted));
-        const UiPresentationAttachmentId id{owner.primaryAttachment.ownership,
-                                            owner.primaryAttachment.slot + 1 + static_cast<std::uint32_t>(index),
-                                            owner.attachmentGenerations[index] + 1};
-        const auto evidence = Evidence(canvas->tree, owner.definition.canvas, id, viewport, owner.presentation);
-        if (!viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
+        const UiPresentationAttachmentId id{owner.presentation.primaryAttachment.ownership,
+                                            owner.presentation.primaryAttachment.slot + 1 + static_cast<std::uint32_t>(index),
+                                            owner.presentation.attachmentGenerations[index] + 1};
+        if (const auto evidence = Evidence(canvas->tree, owner.definition.canvas, id, viewport, owner.presentation.revision);
+            !viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
             !viewport.intrinsic.IsValid() || !viewport.canvas.IsValid() || !viewport.policy.IsValid() || !evidence.IsValid())
             return Result<UiPresentationAttachmentId>::Failure(MakeError(UiErrors::PresentationProfileMalformed));
         return AdoptAttachment(owner, index, id, view, std::move(viewport));
@@ -120,9 +120,9 @@ namespace Horo::Runtime::Ui {
                     return Result<UiPresentationAttachmentId>::Failure(tracker.ErrorValue());
                 canvas->presentations.push_back(std::move(tracker).Value());
             }
-            owner.attachments[index] = std::move(attachment);
-            owner.attachmentGenerations[index] = id.generation;
-            owner.attachmentDirty = true;
+            owner.presentation.attachments[index] = std::move(attachment);
+            owner.presentation.attachmentGenerations[index] = id.generation;
+            owner.presentation.attachmentDirty = true;
             ++owner.commandRevision;
             ++owner.pendingCommands;
             return Result<UiPresentationAttachmentId>::Success(id);
@@ -138,22 +138,22 @@ namespace Horo::Runtime::Ui {
         if (auto admitted = AdmitCommand(*storage_); admitted.HasError())
             return admitted;
         auto &owner = *storage_;
-        const auto found = std::ranges::find_if(owner.attachments, [&](const auto &item) {
+        const auto found = std::ranges::find_if(owner.presentation.attachments, [&](const auto &item) {
             return item && item->active && item->id == attachment;
         });
-        if (found == owner.attachments.end())
+        if (found == owner.presentation.attachments.end())
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileForeignIdentity));
         if (!NewEvidence((*found)->viewport, viewport))
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileSourceStale));
-        const auto *canvas = owner.publisher.Current()->Canvas(owner.definition.canvas);
-        if (!viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
+        if (const auto *canvas = owner.publisher.Current()->Canvas(owner.definition.canvas);
+            !viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
             !viewport.intrinsic.IsValid() || !viewport.canvas.IsValid() || !viewport.policy.IsValid() ||
-            !Evidence(canvas->tree, owner.definition.canvas, attachment, viewport, owner.presentation).IsValid())
+            !Evidence(canvas->tree, owner.definition.canvas, attachment, viewport, owner.presentation.revision).IsValid())
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileMalformed));
         if ((*found)->viewport == viewport)
             return Result<void>::Success();
         (*found)->viewport = std::move(viewport);
-        owner.attachmentDirty = true;
+        owner.presentation.attachmentDirty = true;
         ++owner.commandRevision;
         ++owner.pendingCommands;
         return Result<void>::Success();
@@ -166,18 +166,18 @@ namespace Horo::Runtime::Ui {
         if (auto admitted = AdmitCommand(*storage_); admitted.HasError())
             return admitted;
         auto &owner = *storage_;
-        const auto found = std::ranges::find_if(owner.attachments, [&](const auto &item) {
+        const auto found = std::ranges::find_if(owner.presentation.attachments, [&](const auto &item) {
             return item && item->active && item->id == attachment;
         });
-        if (found == owner.attachments.end())
+        if (found == owner.presentation.attachments.end())
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileForeignIdentity));
         const auto view = (*found)->view;
         auto *canvas = owner.publisher.Current()->Canvas(owner.definition.canvas);
-        std::erase_if(canvas->presentations, [&](const auto &tracker) {
+        std::erase_if(canvas->presentations, [view](const auto &tracker) {
             return tracker.View() == view;
         });
         (*found)->active = false;
-        owner.attachmentDirty = true;
+        owner.presentation.attachmentDirty = true;
         ++owner.commandRevision;
         ++owner.pendingCommands;
         return Result<void>::Success();
@@ -185,48 +185,54 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::PrepareProfiles */
     Result<void> UiAnimationOwner::PrepareProfiles(Storage &storage, const UiAnimationViewport &viewport) {
-        const bool responsive = !storage.profiles->Rows().empty() || viewport.presentation || storage.attachmentDirty ||
-                                std::ranges::any_of(storage.attachments, [](const auto &item) {
+        const bool responsive = !storage.presentation.profiles->Rows().empty() || viewport.presentation ||
+                                storage.presentation.attachmentDirty ||
+                                std::ranges::any_of(storage.presentation.attachments, [](const auto &item) {
             return item && item->active;
         });
-        storage.candidate.viewport = viewport;
-        storage.candidate.selection.reset();
-        storage.candidate.presentation = {};
+        storage.candidate.presentation.viewport = viewport;
+        storage.candidate.presentation.selection.reset();
+        storage.candidate.presentation.revision = {};
         if (!responsive)
             return Result<void>::Success();
-        if (storage.publishedViewport && !NewEvidence(*storage.publishedViewport, viewport))
+        if (storage.presentation.publishedViewport && !NewEvidence(*storage.presentation.publishedViewport, viewport))
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileSourceStale));
-        auto revision = storage.presentation;
-        if (storage.attachmentDirty || (storage.publishedViewport && *storage.publishedViewport != viewport)) {
+        auto revision = storage.presentation.revision;
+        if (storage.presentation.attachmentDirty ||
+            (storage.presentation.publishedViewport && *storage.presentation.publishedViewport != viewport)) {
             auto next = revision.Next();
             if (next.HasError())
                 return Result<void>::Failure(next.ErrorValue());
             revision = next.Value();
         }
-        auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
-        auto selected = storage.profiles->Select(canvas->tree, Evidence(canvas->tree, storage.definition.canvas, storage.primaryAttachment,
-                                                                        viewport, revision));
+        const auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
+        auto selected =
+            storage.presentation.profiles->Select(canvas->tree, Evidence(canvas->tree, storage.definition.canvas,
+                                                                         storage.presentation.primaryAttachment, viewport, revision));
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
-        storage.candidate.presentation = revision;
-        storage.candidate.selection = selected.Value();
+        storage.candidate.presentation.revision = revision;
+        storage.candidate.presentation.selection = selected.Value();
         std::ranges::sort(storage.work.layoutDescriptors, {}, &UiLayoutElementDescriptor::element);
-        return storage.profiles->ApplyLayouts(canvas->tree, selected.Value(), storage.work.layoutDescriptors);
+        return storage.presentation.profiles->ApplyLayouts(canvas->tree, selected.Value(), storage.work.layoutDescriptors);
     }
 
     /** @copydoc UiAnimationOwner::PrepareAttachmentStyles */
     Result<UiPresentationProfileSelection> UiAnimationOwner::PrepareAttachmentStyles(Storage &storage, const std::size_t index) {
         const auto &tree = storage.publisher.Current()->Canvas(storage.definition.canvas)->tree;
-        const auto &attachment = *storage.attachments[index];
-        for (std::size_t index = 0; index < storage.work.layoutDescriptors.size(); ++index)
-            storage.work.layoutDescriptors[index] = {storage.work.elementInputs[index].element, storage.definition.elements[index].layout,
-                                                     storage.definition.elements[index].intrinsic};
+        const auto &attachment = *storage.presentation.attachments[index];
+        for (std::size_t elementIndex = 0; elementIndex < storage.work.layoutDescriptors.size(); ++elementIndex)
+            storage.work.layoutDescriptors[elementIndex] = {storage.work.elementInputs[elementIndex].element,
+                                                            storage.definition.elements[elementIndex].layout,
+                                                            storage.definition.elements[elementIndex].intrinsic};
         std::ranges::sort(storage.work.layoutDescriptors, {}, &UiLayoutElementDescriptor::element);
-        auto selection = storage.profiles->Select(tree, Evidence(tree, storage.definition.canvas, attachment.id, attachment.viewport,
-                                                                 storage.candidate.presentation));
+        auto selection =
+            storage.presentation.profiles->Select(tree, Evidence(tree, storage.definition.canvas, attachment.id, attachment.viewport,
+                                                                 storage.candidate.presentation.revision));
         if (selection.HasError())
             return Result<UiPresentationProfileSelection>::Failure(selection.ErrorValue());
-        if (auto applied = storage.profiles->ApplyLayouts(tree, selection.Value(), storage.work.layoutDescriptors); applied.HasError())
+        if (auto applied = storage.presentation.profiles->ApplyLayouts(tree, selection.Value(), storage.work.layoutDescriptors);
+            applied.HasError())
             return Result<UiPresentationProfileSelection>::Failure(applied.ErrorValue());
         if (auto projected = AnimationInternal::ProjectLayout(storage.candidate.styles->Candidate(), storage.work.layoutBindings,
                                                               storage.work.layoutDescriptors);
@@ -239,8 +245,8 @@ namespace Horo::Runtime::Ui {
     Result<void> UiAnimationOwner::PrepareAttachments(Storage &storage) {
         auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
         const auto &tree = canvas->tree;
-        for (std::size_t index = 0; index < storage.attachments.size(); ++index) {
-            auto &entry = storage.attachments[index];
+        for (std::size_t index = 0; index < storage.presentation.attachments.size(); ++index) {
+            const auto &entry = storage.presentation.attachments[index];
             if (!entry || !entry->active)
                 continue;
             auto &attachment = *entry;
@@ -285,7 +291,8 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (auto admitted = AdmitCommand(*storage_); admitted.HasError())
             return admitted;
-        if (attachment != storage_->primaryAttachment && !std::ranges::any_of(storage_->attachments, [&](const auto &item) {
+        if (attachment != storage_->presentation.primaryAttachment &&
+            !std::ranges::any_of(storage_->presentation.attachments, [&](const auto &item) {
             return item && item->active && item->id == attachment;
         }))
             return Result<void>::Failure(MakeError(UiErrors::PresentationProfileForeignIdentity));
@@ -294,29 +301,31 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Failure(inspector.ErrorValue());
         auto ownedInspector = std::move(inspector).Value();
         ownedInspector.Enable(enabled);
-        storage_->inspector.emplace(std::move(ownedInspector));
-        storage_->inspectedAttachment = attachment;
+        storage_->presentation.inspector.emplace(std::move(ownedInspector));
+        storage_->presentation.inspectedAttachment = attachment;
         return Result<void>::Success();
     }
 
     /** @copydoc UiAnimationOwner::Inspect */
     std::optional<UiLayoutInspectionSnapshot> UiAnimationOwner::Inspect() const noexcept {
-        return storage_ && storage_->inspector ? storage_->inspector->Latest() : std::nullopt;
+        return storage_ && storage_->presentation.inspector ? storage_->presentation.inspector->Latest() : std::nullopt;
     }
 
     /** @copydoc UiAnimationOwner::CaptureInspection */
     void UiAnimationOwner::CaptureInspection(Storage &storage) noexcept {
-        if (!storage.inspector || !storage.currentFrame)
+        if (!storage.presentation.inspector || !storage.currentFrame.has_value())
             return;
         const auto &frame = *storage.frames[*storage.currentFrame];
         const auto &tree = storage.publisher.Current()->Canvas(storage.definition.canvas)->tree;
-        if (storage.inspectedAttachment == storage.primaryAttachment) {
-            (void)storage.inspector->Capture(tree, *frame.layout, frame.clipped ? &*frame.clipped : nullptr,
-                                             frame.selection ? &*frame.selection : nullptr);
+        if (storage.presentation.inspectedAttachment == storage.presentation.primaryAttachment) {
+            (void)storage.presentation.inspector->Capture(tree, *frame.layout, frame.clipped ? &*frame.clipped : nullptr,
+                                                          frame.selection ? &*frame.selection : nullptr);
             return;
         }
-        const auto found = std::ranges::find(frame.attachments, storage.inspectedAttachment, &UiAnimationAttachmentFrame::attachment);
+        const auto found =
+            std::ranges::find(frame.attachments, storage.presentation.inspectedAttachment, &UiAnimationAttachmentFrame::attachment);
         if (found != frame.attachments.end())
-            (void)storage.inspector->Capture(tree, *found->layout, found->clipping ? &*found->clipping : nullptr, &found->selection);
+            (void)storage.presentation.inspector->Capture(tree, *found->layout, found->clipping ? &*found->clipping : nullptr,
+                                                          &found->selection);
     }
 }  // namespace Horo::Runtime::Ui

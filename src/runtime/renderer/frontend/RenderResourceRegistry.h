@@ -184,12 +184,34 @@ namespace Horo::Render::Detail {
             bool retirementQueued{false};
         };
 
+        /** @brief Final-storage diagnostic; only its owning pointer moves across admission and completion. */
+        struct OperationDiagnostic final {
+            /** @brief Constructs members directly with throwing copies/count construction, including MSVC Debug proxies. */
+            OperationDiagnostic(const ErrorCodeDescriptor &descriptor, const char *message)
+                : value{.code = descriptor.code,
+                        .domain = descriptor.domain,
+                        .severity = descriptor.defaultSeverity,
+                        .message = message,
+                        .diagnostics = std::vector<Diagnostic>(std::size_t{0})} {}
+
+            /** @brief Copies one supplied failure before the registry mutates its pending generation. */
+            explicit OperationDiagnostic(const Error &error) : value(error) {}
+
+            OperationDiagnostic(const OperationDiagnostic &) = delete;
+            OperationDiagnostic &operator=(const OperationDiagnostic &) = delete;
+            OperationDiagnostic(OperationDiagnostic &&) = delete;
+            OperationDiagnostic &operator=(OperationDiagnostic &&) = delete;
+
+            Error value;
+        };
+
         struct OperationRecord {
             ResourceOperationId id;
             bool complete{false};
             /** While pending, owns the shutdown failure prepared before admission; completion replaces or publishes it. */
-            std::unique_ptr<Error> error;
-            std::unique_ptr<Error> rollbackError; /**< Pre-owned cancellation identity for non-allocating admission rollback. */
+            std::unique_ptr<OperationDiagnostic> error;
+            /** Pre-owned cancellation identity for non-allocating admission rollback. */
+            std::unique_ptr<OperationDiagnostic> rollbackError;
         };
 
         /** @brief Sole bounded operation history and non-reused identity authority; never owns resource retirement. */
@@ -214,7 +236,7 @@ namespace Horo::Render::Detail {
             [[nodiscard]] ResourceOperationId AppendPending(OperationRecord record);
             /** @brief Looks up a retained record without copying its diagnostic. */
             [[nodiscard]] Result<const OperationRecord *> Lookup(ResourceOperationId operation) const;
-            void Complete(ResourceOperationId operation, std::unique_ptr<Error> error) noexcept;
+            void Complete(ResourceOperationId operation, std::unique_ptr<OperationDiagnostic> error) noexcept;
             /** @brief Moves the pre-owned rollback error into its exact record without allocating. */
             void CompleteRollback(ResourceOperationId operation) noexcept;
             /** @brief Retains the pre-owned shutdown error while closing the pending record. */

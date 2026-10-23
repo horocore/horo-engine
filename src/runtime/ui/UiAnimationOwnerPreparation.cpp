@@ -79,7 +79,7 @@ namespace Horo::Runtime::Ui {
                                               viewport.intrinsic,
                                               viewport.canvas,
                                               viewport.policy,
-                                              storage.candidate.presentation};
+                                              storage.candidate.presentation.revision};
         auto layout =
             canvas->layoutEngine->Prepare(tree, {sources, viewport.constraints, viewport.content, &evaluator.Value(), viewport.fontScale});
         if (layout.HasError())
@@ -119,7 +119,7 @@ namespace Horo::Runtime::Ui {
             if (auto clipping = candidate.clipping->CanPublish(canvas->tree); clipping.HasError())
                 return clipping;
         }
-        for (const auto &attachment : storage.attachments) {
+        for (const auto &attachment : storage.presentation.attachments) {
             if (!attachment || !attachment->active)
                 continue;
             if (!attachment->preparedLayout)

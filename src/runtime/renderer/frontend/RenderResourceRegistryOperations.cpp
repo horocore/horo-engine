@@ -53,7 +53,7 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(
                 ObservationError(FrontendErrors::ResourceOperationPending, "The renderer resource operation has not completed."));
         if (record.error)
-            return Result<void>::Failure(*record.error);
+            return Result<void>::Failure(record.error->value);
         return Result<void>::Success();
     }
 
