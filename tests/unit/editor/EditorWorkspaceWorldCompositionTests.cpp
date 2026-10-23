@@ -34,11 +34,11 @@ namespace Horo::Editor::WorldCompositionTests {
                 auto captured = CaptureWorkspaceReadSources(&factory, directory.Path());
                 REQUIRE(captured.HasValue());
                 const auto &sources = captured.Value();
-                controller =
-                    std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
-                                                                EditorWorkspaceDependencies{.assetRegistrySource = sources.registry,
-                                                                                            .worldSourceFiles = sources.world,
-                                                                                            .documentSessionOwner = sources.owner});
+                controller = std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
+                                                                         EditorWorkspaceDependencies{.assets = {.source = sources.registry},
+                                                                                                     .world = {.sourceFiles = sources.world,
+                                                                                                               .documentSessionOwner =
+                                                                                                                   sources.owner}});
                 REQUIRE(controller->OpenWorldCompositionSource("world ü space.horoworld").HasValue());
             }
 
@@ -269,10 +269,9 @@ namespace Horo::Editor {
         EditorWorkspaceController controller{project.Path(),
                                              runtime,
                                              {},
-                                             EditorWorkspaceDependencies{.jobs = &jobs,
-                                                                         .worldBakeOperations = &operations,
-                                                                         .worldBakeOutput = &diagnostics,
-                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+                                             EditorWorkspaceDependencies{.world = {.documentSessionOwner = WorldResidencyTests::Asset(9)},
+                                                                         .worldBake = {.operations = &operations, .output = &diagnostics},
+                                                                         .jobs = &jobs}};
         auto &world = controller.WorldDocuments();
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)
@@ -324,11 +323,11 @@ namespace Horo::Editor {
         EditorWorkspaceController controller{project.Path(),
                                              runtime,
                                              {},
-                                             EditorWorkspaceDependencies{.jobs = &jobs,
-                                                                         .worldBakeOperations = &operations,
-                                                                         .worldBakeOutput = &output,
-                                                                         .worldBakeProject = capture,
-                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+                                             EditorWorkspaceDependencies{.world = {.documentSessionOwner = WorldResidencyTests::Asset(9)},
+                                                                         .worldBake = {.operations = &operations,
+                                                                                       .output = &output,
+                                                                                       .project = capture},
+                                                                         .jobs = &jobs}};
         auto &world = controller.WorldDocuments();
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)
@@ -361,11 +360,10 @@ namespace Horo::Editor {
         Assets::AssetRegistry registry;
         Runtime::RuntimeSceneService runtime;
         EditorWorkspaceController controller{project.Path(), runtime, registry.Snapshot(),
-                                             EditorWorkspaceDependencies{.mutableAssetRegistry = &registry,
-                                                                         .jobs = &jobs,
-                                                                         .worldBakeOperations = &operations,
-                                                                         .worldBakeOutput = &output,
-                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+                                             EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = &registry},
+                                                                         .world = {.documentSessionOwner = WorldResidencyTests::Asset(9)},
+                                                                         .worldBake = {.operations = &operations, .output = &output},
+                                                                         .jobs = &jobs}};
         auto &world = controller.WorldDocuments();
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)

@@ -99,36 +99,43 @@ namespace Horo::Network {
         challenge.selection.sessionGeneration = peer.generation;
         peer.peerChallenge = challenge;
         auto attempted = Detail::InvokeAdmissionProvider([this, &peer, &challenge, nowTick]() {
-            auto evidence = providers.channel->Inspect(peer.connection, peer.generation, nowTick);
-            if (evidence.HasError())
-                return Fail(peer, SessionAuthenticationRejected, nowTick, true);
-            // Canonical peer authorization is performed here before issuing any outbound proof.
-            auto authorized = peer.authentication->AuthorizeProofIssuance(peer.connection, peer.generation, challenge.challenge,
-                                                                          evidence.Value(), nowTick);
-            if (authorized.HasError())
-                return Fail(peer, SessionAuthenticationRejected, nowTick, true);
-            peer.issuance = authorized.Value();
-            auto proof = providers.proofs->Issue({authorized.Value(), *peer.lifecycle->Negotiation(), nowTick});
-            if (proof.HasError() || proof.Value().Empty() || proof.Value().View().size() > policy.trust.maximumProofBytes)
-                return Fail(peer, SessionAuthenticationRejected, nowTick, true);
-            if (auto refreshed = providers.channel->Inspect(peer.connection, peer.generation, nowTick);
-                refreshed.HasError() || !authorized.Value().MatchesEvidence(refreshed.Value(), nowTick))
-                return Fail(peer, SessionAuthenticationRejected, nowTick, true);
-            Scratch bytes;
-            AdmissionWire::Writer writer{bytes.bytes};
-            if (const AdmissionWire::Proof response{{.policy = challenge.challenge.policy,
-                                                     .policyRevision = challenge.challenge.policyRevision,
-                                                     .transcriptDigest = challenge.challenge.transcriptDigest,
-                                                     .proof = proof.Value().View()},
-                                                    challenge.challenge.clientNonce,
-                                                    challenge.challenge.serverNonce};
-                !AdmissionWire::WriteProof(writer, response) || Send(peer, AdmissionControlKind::Proof, writer.Written()).HasError())
-                return Fail(peer, TransportUnavailable, nowTick);
-            peer.proofIssued = true;
-            return Result<void>::Success();
+            return IssueAuthorizedProof(peer, challenge, nowTick);
         });
         if (!attempted)
             return Fail(peer, SessionAuthenticationRejected, nowTick, true);
         return std::move(*attempted);
+    }
+
+    /** @copydoc NetworkAdmissionController::Impl::IssueAuthorizedProof */
+    Result<void> NetworkAdmissionController::Impl::IssueAuthorizedProof(Peer &peer, const AdmissionWire::Challenge &challenge,
+                                                                        const std::uint64_t nowTick) {
+        using enum NetworkFailureKind;
+        auto evidence = providers.channel->Inspect(peer.connection, peer.generation, nowTick);
+        if (evidence.HasError())
+            return Fail(peer, SessionAuthenticationRejected, nowTick, true);
+        // Canonical peer authorization is performed here before issuing any outbound proof.
+        auto authorized =
+            peer.authentication->AuthorizeProofIssuance(peer.connection, peer.generation, challenge.challenge, evidence.Value(), nowTick);
+        if (authorized.HasError())
+            return Fail(peer, SessionAuthenticationRejected, nowTick, true);
+        peer.issuance = authorized.Value();
+        auto proof = providers.proofs->Issue({authorized.Value(), *peer.lifecycle->Negotiation(), nowTick});
+        if (proof.HasError() || proof.Value().Empty() || proof.Value().View().size() > policy.trust.maximumProofBytes)
+            return Fail(peer, SessionAuthenticationRejected, nowTick, true);
+        if (auto refreshed = providers.channel->Inspect(peer.connection, peer.generation, nowTick);
+            refreshed.HasError() || !authorized.Value().MatchesEvidence(refreshed.Value(), nowTick))
+            return Fail(peer, SessionAuthenticationRejected, nowTick, true);
+        Scratch bytes;
+        AdmissionWire::Writer writer{bytes.bytes};
+        if (const AdmissionWire::Proof response{{.policy = challenge.challenge.policy,
+                                                 .policyRevision = challenge.challenge.policyRevision,
+                                                 .transcriptDigest = challenge.challenge.transcriptDigest,
+                                                 .proof = proof.Value().View()},
+                                                challenge.challenge.clientNonce,
+                                                challenge.challenge.serverNonce};
+            !AdmissionWire::WriteProof(writer, response) || Send(peer, AdmissionControlKind::Proof, writer.Written()).HasError())
+            return Fail(peer, TransportUnavailable, nowTick);
+        peer.proofIssued = true;
+        return Result<void>::Success();
     }
 }  // namespace Horo::Network

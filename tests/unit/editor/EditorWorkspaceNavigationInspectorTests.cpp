@@ -24,10 +24,10 @@ namespace {
             std::ofstream(project.root / ".horo/project.json") << R"({"settings":{"defaultScene":"assets/a.horo"}})";
             if (prefab)
                 AddPrefab();
-            EditorWorkspaceDependencies dependencies{.mutableAssetRegistry = &project.registry,
+            EditorWorkspaceDependencies dependencies{.assets = {.mutableAssetRegistry = &project.registry},
+                                                     .world = {.documentSessionOwner = Asset(9)},
                                                      .mutations = &project.mutations,
-                                                     .durableFiles = &project.files,
-                                                     .documentSessionOwner = Asset(9)};
+                                                     .durableFiles = &project.files};
             dependencies.prefab.sources = [this](const auto &registry, const auto roots, const auto &limits, const auto &cancellation) {
                 ++captures;
                 auto lease = project.mutations.TryAcquire({project.root, ProjectMutationOwner::Asset, "navigation.inspector.test"});

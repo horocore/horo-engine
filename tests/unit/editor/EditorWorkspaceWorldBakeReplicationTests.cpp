@@ -20,10 +20,9 @@ namespace Horo::Editor {
         EditorWorkspaceController controller{project.Path(),
                                              runtime,
                                              {},
-                                             EditorWorkspaceDependencies{.jobs = &jobs,
-                                                                         .worldBakeOperations = &operations,
-                                                                         .worldBakeOutput = &output,
-                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+                                             EditorWorkspaceDependencies{.world = {.documentSessionOwner = WorldResidencyTests::Asset(9)},
+                                                                         .worldBake = {.operations = &operations, .output = &output},
+                                                                         .jobs = &jobs}};
         auto &world = controller.WorldDocuments();
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)

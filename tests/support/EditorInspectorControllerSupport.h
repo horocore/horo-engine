@@ -71,10 +71,11 @@ namespace Horo::Editor::Tests::InspectorControllerSupport {
             }
             ValidateAuthoredBehavior(source);
             REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
-            controller = std::make_unique<EditorWorkspaceController>(project.Path(), runtime, Assets::AssetRegistrySnapshot{},
-                                                                     EditorWorkspaceDependencies{.documentSessionOwner =
-                                                                                                     Assets::AssetId::FromBytes({1}),
-                                                                                                 .inspectorHost = &provider.host});
+            controller =
+                std::make_unique<EditorWorkspaceController>(project.Path(), runtime, Assets::AssetRegistrySnapshot{},
+                                                            EditorWorkspaceDependencies{.world = {.documentSessionOwner =
+                                                                                                      Assets::AssetId::FromBytes({1})},
+                                                                                        .inspectorHost = &provider.host});
             EditorWorkspaceViewCommandData create;
             create.command = EditorWorkspaceViewCommand::CreatePrimitive;
             create.primitivePayload = Runtime::PrimitiveId{"primitive.mesh.box"};

@@ -60,6 +60,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Offer(Peer &peer);
         [[nodiscard]] Result<void> AcceptOffer(Peer &peer, std::span<const std::byte> payload, std::uint64_t nowTick);
         [[nodiscard]] Result<void> AcceptChallenge(Peer &peer, std::span<const std::byte> payload, std::uint64_t nowTick);
+        /** @brief Authorize and issue a bounded proof within the caller-owned foreign-provider exception boundary. */
+        [[nodiscard]] Result<void> IssueAuthorizedProof(Peer &peer, const AdmissionWire::Challenge &challenge, std::uint64_t nowTick);
         [[nodiscard]] Result<void> AcceptProof(Peer &peer, std::span<const std::byte> payload, std::uint64_t nowTick);
         [[nodiscard]] Result<void> AcceptAcknowledgement(Peer &peer, std::span<const std::byte> payload, std::uint64_t nowTick);
         [[nodiscard]] Result<void> Publish(Peer &peer, const PeerSessionActivation &activation, std::uint64_t nowTick);

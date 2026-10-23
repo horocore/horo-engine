@@ -507,6 +507,10 @@ namespace Horo::Network {
         [[nodiscard]] Result<AuthenticationResult> VerifyWithAuthorities(const AuthenticationResponseView &response,
                                                                          const PeerAuthenticationEvidence &evidence, std::uint64_t nowTick);
 
+        /** @brief Invoke the ordered credential and channel authorities inside the caller-owned foreign exception boundary. */
+        [[nodiscard]] Result<AuthenticationResult> VerifyAuthorityChain(const AuthenticationResponseView &response,
+                                                                        const PeerAuthenticationEvidence &evidence, std::uint64_t nowTick);
+
         NetworkTrustPolicySnapshot policy_{};
         AuthenticationChallenge challenge_{};
         AuthenticationAuthorities authorities_{};

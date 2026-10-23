@@ -47,10 +47,10 @@ namespace Horo::Network {
             return Fail(peer, NetworkFailureKind::ProtocolIncompatible, nowTick);
         if (dispatcher.RegisterSession(peer.lifecycle, peer.connection, peer.generation, std::move(gate).Value(), nowTick).HasError())
             return Fail(peer, NetworkFailureKind::ProtocolIncompatible, nowTick);
-        const auto projected = Detail::InvokeAdmissionProvider([&peer, &projection, nowTick] {
+        if (const auto projected = Detail::InvokeAdmissionProvider([&peer, &projection, nowTick] {
             return !projection || projection->OnSessionActivated(peer.endpoint, peer.lifecycle, peer.generation, nowTick).HasValue();
         });
-        if (!projected.has_value() || !*projected)
+            !projected.has_value() || !*projected)
             return AbortProjection(peer, nowTick);
         (void)protection.End(peer.connection, peer.generation);
         peer.ledgerReserved = false;

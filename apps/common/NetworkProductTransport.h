@@ -26,7 +26,7 @@ namespace Horo::Application::Internal {
         class ConstructionKey final {
             friend class NetworkProductAdmission;
 
-            ConstructionKey() noexcept {}
+            ConstructionKey() noexcept = default;
         };
 
     public:

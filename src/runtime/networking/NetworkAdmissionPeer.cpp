@@ -57,10 +57,10 @@ namespace Horo::Network {
         if (auto initialized = InitializePeer(*slot, event, endpoint, *deadlines); initialized.HasError())
             return initialized;
         auto &peer = **slot;
-        const auto generated = Detail::InvokeAdmissionProvider([this, &peer] {
+        if (const auto generated = Detail::InvokeAdmissionProvider([this, &peer] {
             return providers.random->Fill(peer.localNonce);
         });
-        if (!generated || generated->HasError() || std::ranges::all_of(peer.localNonce, [](const auto byte) {
+            !generated || generated->HasError() || std::ranges::all_of(peer.localNonce, [](const auto byte) {
             return byte == std::byte{};
         }))
             return Fail(peer, NetworkFailureKind::SessionAuthenticationRejected, nowTick, true);
@@ -136,10 +136,10 @@ namespace Horo::Network {
         auto projection = observer.lock();
         if (!projection && peer.endpoint == AdmissionEndpoint::Client)
             return AbortProjection(peer, nowTick);
-        const auto projected = Detail::InvokeAdmissionProvider([&peer, &projection, nowTick] {
+        if (const auto projected = Detail::InvokeAdmissionProvider([&peer, &projection, nowTick] {
             return !projection || projection->OnSessionPrepared(peer.endpoint, peer.lifecycle, peer.generation, nowTick).HasValue();
         });
-        if (!projected.has_value() || !*projected)
+            !projected.has_value() || !*projected)
             return AbortProjection(peer, nowTick);
         return Result<void>::Success();
     }

@@ -176,9 +176,9 @@ namespace Horo::Editor {
         EditorWorkspaceController owner{project.directory.path,
                                         runtime,
                                         project.registry.Snapshot(),
-                                        {.mutations = &project.mutations,
+                                        {.world = {.documentSessionOwner = PrefabAsset(9).Asset()},
+                                         .mutations = &project.mutations,
                                          .durableFiles = &project.files,
-                                         .documentSessionOwner = PrefabAsset(9).Asset(),
                                          .prefab = {.sources = project.Loader()}}};
         REQUIRE_FALSE(owner.InitializationError().has_value());
         const auto source = project.source.generic_u8string();

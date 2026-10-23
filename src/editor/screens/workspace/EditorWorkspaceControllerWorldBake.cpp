@@ -25,19 +25,19 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::InitializeWorldBake */
     void EditorWorkspaceController::InitializeWorldBake(const EditorWorkspaceDependencies &dependencies) {
-        m_worldBakeOperations = dependencies.worldBakeOperations;
-        if (dependencies.jobs && dependencies.worldBakeOperations && dependencies.worldBakeOutput)
-            m_worldBake = std::make_unique<Application::WorldBakeApplication>(*dependencies.jobs, *dependencies.worldBakeOperations,
-                                                                              *dependencies.worldBakeOutput);
-        if (dependencies.worldBakeProject)
-            m_worldBakeProject = *dependencies.worldBakeProject;
+        m_worldBakeOperations = dependencies.worldBake.operations;
+        if (dependencies.jobs && dependencies.worldBake.operations && dependencies.worldBake.output)
+            m_worldBake = std::make_unique<Application::WorldBakeApplication>(*dependencies.jobs, *dependencies.worldBake.operations,
+                                                                              *dependencies.worldBake.output);
+        if (dependencies.worldBake.project)
+            m_worldBakeProject = *dependencies.worldBake.project;
         else {
             constexpr std::string_view core = "Horo.Editor.WorldBake.Core.v1";
             const auto digest = ComputeSha256(std::as_bytes(std::span{core.data(), core.size()}));
-            m_worldBakeProject.fence = {dependencies.documentSessionOwner, 1, digest};
+            m_worldBakeProject.fence = {dependencies.world.documentSessionOwner, 1, digest};
             m_worldBakeProject.settings = digest;
             m_worldBakeProject.triggers = dependencies.triggerBinding;
-            m_worldBakeProject.dependencySource = dependencies.worldBakeDependencies;
+            m_worldBakeProject.dependencySource = dependencies.worldBake.dependencies;
         }
         m_viewModel.worldBakeAvailable = m_worldBake != nullptr;
     }
