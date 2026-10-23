@@ -86,5 +86,6 @@ function(horo_add_unicode_dependency)
                 pack --root "${stage}" --identity "${sdk_identity}"
                 --output "${CMAKE_BINARY_DIR}/dependency-sdk/packages/${sdk_archive}"
             DEPENDS HoroThirdPartyUnicode VERBATIM)
+        add_dependencies(horo-package-dependencies horo-package-unicode)
     endif()
 endfunction()

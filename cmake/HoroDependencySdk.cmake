@@ -2,6 +2,10 @@ include_guard(GLOBAL)
 
 set(HORO_DEPENDENCY_SDK_CACHE "" CACHE PATH "Directory of trusted dependency SDK archives")
 option(HORO_BUILD_DEPENDENCY_SDK_PACKAGES "Expose dependency SDK packaging targets" OFF)
+option(HORO_FETCH_DEPENDENCY_SDK_PACKAGES "Read public verified dependency SDKs from GHCR" OFF)
+if(HORO_BUILD_DEPENDENCY_SDK_PACKAGES AND NOT TARGET horo-package-dependencies)
+    add_custom_target(horo-package-dependencies)
+endif()
 
 function(horo_sdk_json_field document key value)
     string(REPLACE "\\" "\\\\" escaped "${value}")
@@ -68,6 +72,15 @@ function(horo_prepare_dependency_sdk name recipe output_root output_identity out
     set(HORO_DEPENDENCY_SDK_PYTHON "${Python3_EXECUTABLE}" PARENT_SCOPE)
     if(NOT HORO_DEPENDENCY_SDK_CACHE)
         return()
+    endif()
+    if(HORO_FETCH_DEPENDENCY_SDK_PACKAGES AND NOT EXISTS "${HORO_DEPENDENCY_SDK_CACHE}/${archive_name}")
+        execute_process(COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.github/scripts/dependency_registry.py" fetch
+            --archive "${HORO_DEPENDENCY_SDK_CACHE}/${archive_name}" --identity "${identity_file}"
+            RESULT_VARIABLE registry_result TIMEOUT 75)
+        if(NOT registry_result STREQUAL "0")
+            message(STATUS "Dependency SDK ${name}: registry miss; use source build")
+        endif()
     endif()
     set(restored "${CMAKE_BINARY_DIR}/dependency-sdk/restored/${name}-${identity_hash}")
     set(tool "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.github/scripts/dependency_package.py")

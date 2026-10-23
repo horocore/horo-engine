@@ -1,0 +1,82 @@
+name: Dependency SDK packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - '.github/scripts/dependency_package.py'
+      - '.github/scripts/dependency_registry.py'
+      - '.github/actions/setup-build-tools/**'
+      - '.github/workflows/dependency-sdk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-sdk-main
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      # This workflow never runs on PRs. Cold producers use one hosted slot.
+      max-parallel: 1
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            preset: ci-linux-debug
+            cc: gcc
+            cxx: g++
+          - runner: macos-latest
+            preset: ci-macos-debug
+            cc: clang
+            cxx: clang++
+          - runner: windows-2022
+            preset: ci-windows-debug
+            cc: cl
+            cxx: cl
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build-tools
+      - uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
+        with:
+          version: 1.3.0
+      - name: Configure exact native Debug SDK identity
+        run: >-
+          cmake --preset "${{ matrix.preset }}"
+          -DHORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON
+          -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk"
+          -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON
+      - name: Build qualified dependency packages only
+        run: cmake --build build/ci --target horo-package-dependencies --parallel 2
+      - name: Publish verified packages without replacing existing keys
+        timeout-minutes: 3
+        env:
+          HORO_PACKAGE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for archive in build/ci/dependency-sdk/packages/*.tar.gz; do
+            test -f "$archive" || continue
+            name="${archive##*/}"
+            python .github/scripts/dependency_registry.py publish --archive "$archive" \
+              --identity "build/ci/dependency-sdk/${name%.tar.gz}.json"
+          done
