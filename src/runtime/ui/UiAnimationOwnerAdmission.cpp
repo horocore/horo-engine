@@ -62,12 +62,12 @@ namespace Horo::Runtime::Ui {
         auto profiles = UiPresentationProfileTable::Create(generation, storage.definition.canvas, tableRevision, rows);
         if (profiles.HasError())
             return Result<void>::Failure(profiles.ErrorValue());
-        storage.profiles.emplace(std::move(profiles).Value());
-        storage.primaryAttachment = {tree.Instance().ownership,
-                                     storage.range.FirstSlot() + 1 + static_cast<std::uint32_t>(UiTimeDomainCount) +
-                                         storage.limits.timelines,
-                                     1};
-        storage.presentation = UiLayoutPresentationRevision::Create(1).Value();
+        storage.presentation.profiles.emplace(std::move(profiles).Value());
+        storage.presentation.primaryAttachment = {tree.Instance().ownership,
+                                                  storage.range.FirstSlot() + 1 + static_cast<std::uint32_t>(UiTimeDomainCount) +
+                                                      storage.limits.timelines,
+                                                  1};
+        storage.presentation.revision = UiLayoutPresentationRevision::Create(1).Value();
         return Result<void>::Success();
     }
 

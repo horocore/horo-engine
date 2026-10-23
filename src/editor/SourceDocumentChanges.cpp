@@ -68,7 +68,8 @@ namespace Horo::Editor {
         if (const auto admitted = AdmitBytes(size.Value()); admitted.HasError())
             return Result<std::shared_ptr<const Detail::SourceText>>::Failure(admitted.ErrorValue());
         const auto &before = record.root->text->bytes;
-        std::string bytes;
+        // The throwing constructor keeps Debug iterator-proxy allocation inside the edit failure boundary.
+        std::string bytes{"", 0};
         bytes.reserve(size.Value());
         bytes.append(before, 0, edit.offset);
         bytes.append(edit.insert);

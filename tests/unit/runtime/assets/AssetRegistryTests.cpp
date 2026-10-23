@@ -108,8 +108,12 @@ namespace {
 
     std::filesystem::path TemporaryProject() {
         static std::atomic<unsigned> sequence{};
-        const auto root = std::filesystem::temp_directory_path() / ("horo-assets-registry-" + std::to_string(sequence.fetch_add(1)));
-        std::filesystem::remove_all(root);
+        std::filesystem::path root;
+        // CTest runs cases in separate processes: claim a free root atomically,
+        // without deleting another live test's project when its sequence matches.
+        do {
+            root = std::filesystem::temp_directory_path() / ("horo-assets-registry-" + std::to_string(sequence.fetch_add(1)));
+        } while (!std::filesystem::create_directory(root));
         std::filesystem::create_directories(root / ".horo");
         std::filesystem::create_directories(root / "assets/models");
         return root;
@@ -394,6 +398,26 @@ namespace {
         REQUIRE((std::ranges::any_of(programmaticMismatch.diagnostics, [](const AssetRegistryDiagnostic &diagnostic) {
             return diagnostic.error.code.Value() == "asset.registry.type_mismatch";
         })));
+        std::filesystem::remove_all(root);
+    }
+
+    TEST_CASE("Runtime UI style source and sidecar classify as one actual registry asset", "[unit][assets][ui-style]") {
+        const auto root = TemporaryProject();
+        const auto source = root / "assets" / std::filesystem::path{u8"tema_日本 style.uistyle"};
+        Write(source, "{}");
+        Write(std::filesystem::path{source}.concat(".horo"),
+              R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.ui_style"})");
+        AssetRegistry registry;
+        const auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE(rebuilt.HasValue());
+        CHECK(rebuilt.Value().status == AssetRegistryBuildStatus::Complete);
+        CHECK(rebuilt.Value().registeredAssets == 1);
+        CHECK(rebuilt.Value().diagnostics.empty());
+        const auto snapshot = registry.Snapshot();
+        const auto *record = snapshot.Find(Id("10213243-5465-7687-98a9-bacbdcedfe0f"));
+        REQUIRE(record != nullptr);
+        CHECK(record->type.Value() == "core.ui_style");
+        CHECK(record->metadataPath.String() == record->sourcePath.String() + ".horo");
         std::filesystem::remove_all(root);
     }
 }  // namespace

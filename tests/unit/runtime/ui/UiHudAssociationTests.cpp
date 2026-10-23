@@ -42,7 +42,11 @@ namespace Horo::Runtime::Ui::ReloadTests {
             REQUIRE(builder.AddCanvas(Authored()).HasValue());
             const auto cooked = Take(CookedUiDocument::Cook(Take(std::move(builder).Build())));
             const std::vector<std::uint8_t> original{cooked.Payload().begin(), cooked.Payload().end()};
-            REQUIRE(original.size() == 116);
+            // Format 4 retains the 116-byte header/canvas policy and appends U32(2) plus the neutral profile array.
+            const std::array<std::uint8_t, 6> profileTail{2, 0, 0, 0, '[', ']'};
+            REQUIRE(original[8] == 4);
+            REQUIRE(original.size() == 116 + profileTail.size());
+            REQUIRE(std::equal(profileTail.begin(), profileTail.end(), original.end() - profileTail.size()));
             for (const std::size_t offset : {98, 99, 103, 107, 111, 115}) {
                 auto malformed = original;
                 malformed[offset] = offset == 98 || offset == 115 ? 0xFF : 0;
@@ -59,7 +63,7 @@ namespace Horo::Runtime::Ui::ReloadTests {
                 REQUIRE(rejected.HasError());
                 CHECK(rejected.ErrorValue().code.Value() == UiErrors::CookedPayloadMalformed.code.Value());
             }
-            for (const std::uint8_t version : {0, 4}) {
+            for (const std::uint8_t version : {0, 5}) {
                 auto unsupported = original;
                 unsupported[8] = version;
                 const auto rejected = CookedUiDocument::Decode(unsupported);

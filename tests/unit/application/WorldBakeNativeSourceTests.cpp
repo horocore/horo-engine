@@ -26,8 +26,10 @@ namespace Horo::Application {
                 for (std::size_t index = 0; index < request.sources.size(); ++index) {
                     const auto path = "page ü " + std::to_string(index) + ".scene";
                     request.sources[index].relativePath = path;
-                    request.sources[index].source.absolutePath = (directory.Path() / path).string();
-                    std::ofstream stream{directory.Path() / path};
+                    const auto nativePath = directory.Path() / std::filesystem::u8path(path);
+                    const auto absolutePath = nativePath.generic_u8string();
+                    request.sources[index].source.absolutePath.assign(absolutePath.begin(), absolutePath.end());
+                    std::ofstream stream{nativePath, std::ios::binary};
                     stream << T::Source();
                     REQUIRE(stream.good());
                     REQUIRE(workspace.UnloadPage(request.sources[index].page.sourceAsset, T::Current(workspace)->fence).HasValue());
@@ -58,7 +60,7 @@ namespace Horo::Application {
                                                          Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1});
             REQUIRE(expected.HasError());
             {
-                std::ofstream stream{request.sources.front().source.absolutePath, std::ios::binary};
+                std::ofstream stream{std::filesystem::u8path(request.sources.front().source.absolutePath), std::ios::binary};
                 stream << bytes;
                 REQUIRE(stream.good());
             }
@@ -87,7 +89,7 @@ namespace Horo::Application {
         SECTION("source bytes changed after capture never escape as publishable output") {
             const auto result = CookWorldPages(request, {}, [&](const float value) {
                 if (value == 0.25F) {
-                    std::ofstream stream{request.sources.front().source.absolutePath};
+                    std::ofstream stream{std::filesystem::u8path(request.sources.front().source.absolutePath), std::ios::binary};
                     stream << T::Source("Externally changed");
                     REQUIRE(stream.good());
                 }
@@ -101,7 +103,7 @@ namespace Horo::Application {
             auto document = std::move(source).Value();
             document.objects.front().meshAsset = T::Asset(24);
             {
-                std::ofstream stream{request.sources.front().source.absolutePath, std::ios::binary};
+                std::ofstream stream{std::filesystem::u8path(request.sources.front().source.absolutePath), std::ios::binary};
                 stream << SceneSource::EncodeSceneSource({document.objects, document.prefabInstances});
                 REQUIRE(stream.good());
             }
