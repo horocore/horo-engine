@@ -68,11 +68,19 @@ def unique_object(pairs: list) -> dict:
     return result
 
 
-def pack(root: Path, identity: dict, output: Path) -> None:
-    canonical_identity(identity)
-    root = root.resolve(strict=True)
-    if output.resolve().is_relative_to(root):
-        raise ValueError("SDK output must be outside the staging directory")
+def workspace_path(path: Path, *, allow_root: bool = False) -> Path:
+    """Confine CLI paths to the independently selected working directory."""
+    workspace = Path.cwd().resolve(strict=True)
+    resolved = path.resolve()
+    if not resolved.is_relative_to(workspace) or (resolved == workspace and not allow_root):
+        raise ValueError("SDK CLI paths must remain inside the working directory")
+    if path.is_symlink():
+        raise ValueError("SDK CLI paths must not be symlinks")
+    return resolved
+
+
+def staged_files(root: Path) -> dict:
+    """Inventory regular staged payloads without following symlinks."""
     records = {}
     folded = set()
     total = 0
@@ -93,6 +101,15 @@ def pack(root: Path, identity: dict, output: Path) -> None:
             raise ValueError("SDK exceeds expanded size limit")
         records[name] = {"size": size, "sha256": digest_file(path),
                          "executable": bool(path.stat().st_mode & 0o111)}
+    return records
+
+
+def pack(root: Path, identity: dict, output: Path) -> None:
+    canonical_identity(identity)
+    root = root.resolve(strict=True)
+    if output.resolve().is_relative_to(root):
+        raise ValueError("SDK output must be outside the staging directory")
+    records = staged_files(root)
     manifest = json.dumps({"schema": 1, "identity": identity, "files": records},
                           sort_keys=True, allow_nan=False).encode("utf-8")
     if not records or len(manifest) > MAX_MANIFEST_BYTES:
@@ -120,12 +137,21 @@ def read_manifest(archive: tarfile.TarFile, identity: dict) -> dict:
     return validate_manifest(manifest, identity)
 
 
-def validate_manifest(manifest: dict, identity: dict) -> dict:
-    if not isinstance(manifest, dict) or manifest.get("schema") != 1:
-        raise ValueError("Unsupported SDK schema")
-    if canonical_identity(manifest.get("identity")) != canonical_identity(identity):
-        raise ValueError("SDK compatibility identity mismatch")
-    files = manifest.get("files")
+def validate_file_record(record: dict) -> int:
+    """Validate one manifest record and return its expanded size."""
+    if not isinstance(record, dict) or set(record) != {"size", "sha256", "executable"}:
+        raise ValueError("Invalid SDK file record")
+    size = record["size"]
+    if (not isinstance(size, int) or isinstance(size, bool) or size < 0
+            or not isinstance(record["executable"], bool)):
+        raise ValueError("Invalid SDK file metadata")
+    if not isinstance(record["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]):
+        raise ValueError("Invalid SDK file digest")
+    return size
+
+
+def validate_file_records(files: dict) -> dict:
+    """Validate the bounded portable file table independently of its identity."""
     if not isinstance(files, dict) or not files:
         raise ValueError("SDK manifest has no payload")
     folded = {MANIFEST.casefold()}
@@ -135,18 +161,26 @@ def validate_manifest(manifest: dict, identity: dict) -> dict:
         if name.casefold() in folded:
             raise ValueError("SDK manifest contains colliding paths")
         folded.add(name.casefold())
-        if not isinstance(record, dict) or set(record) != {"size", "sha256", "executable"}:
-            raise ValueError("Invalid SDK file record")
-        size = record["size"]
-        if (not isinstance(size, int) or isinstance(size, bool) or size < 0
-                or not isinstance(record["executable"], bool)):
-            raise ValueError("Invalid SDK file metadata")
-        if not isinstance(record["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"]):
-            raise ValueError("Invalid SDK file digest")
-        total += size
+        total += validate_file_record(record)
     if total > MAX_EXPANDED_BYTES:
         raise ValueError("SDK exceeds expanded size limit")
     return files
+
+
+def validate_manifest(manifest: dict, identity: dict) -> dict:
+    if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+        raise ValueError("Unsupported SDK schema")
+    if canonical_identity(manifest.get("identity")) != canonical_identity(identity):
+        raise ValueError("SDK compatibility identity mismatch")
+    return validate_file_records(manifest.get("files"))
+
+
+def verify_payload_file(path: Path, name: str, files: dict) -> None:
+    """Require one restored file to match the verified manifest exactly."""
+    if not path.is_file() or name not in files:
+        raise ValueError("Restored SDK contains an unexpected file")
+    if path.stat().st_size != files[name]["size"] or digest_file(path) != files[name]["sha256"]:
+        raise ValueError("Restored SDK file mismatch")
 
 
 def verify(root: Path, identity: dict) -> None:
@@ -165,10 +199,7 @@ def verify(root: Path, identity: dict) -> None:
         name = path.relative_to(root).as_posix()
         if name == MANIFEST:
             continue
-        if not path.is_file() or name not in files:
-            raise ValueError("Restored SDK contains an unexpected file")
-        if path.stat().st_size != files[name]["size"] or digest_file(path) != files[name]["sha256"]:
-            raise ValueError("Restored SDK file mismatch")
+        verify_payload_file(path, name, files)
         seen.add(name)
     if seen != set(files):
         raise ValueError("Restored SDK is missing files")
@@ -226,11 +257,11 @@ def main() -> None:
     args = parser.parse_args()
     identity = json.loads(args.identity.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
     if args.command == "pack":
-        pack(args.root, identity, args.output)
+        pack(workspace_path(args.root), identity, workspace_path(args.output))
     elif args.command == "restore":
-        restore(args.archive, identity, args.destination)
+        restore(args.archive, identity, workspace_path(args.destination))
     else:
-        verify(args.root, identity)
+        verify(workspace_path(args.root, allow_root=True), identity)
 
 
 if __name__ == "__main__":

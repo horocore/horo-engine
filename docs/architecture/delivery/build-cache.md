@@ -629,6 +629,23 @@ The identity has exactly these fields: `platform`, `architecture`, `compiler`,
 from missing metadata. These values must describe the actual resolved build;
 the payload tool does not discover toolchains or infer ABI compatibility.
 
+The payload CLI's working directory is its independent filesystem authority.
+CLI staging/verify roots, package outputs and restore destinations must resolve
+strictly inside that directory; read-only verification may use the directory
+itself. Leaf symlinks, absolute paths outside it, parent traversal and symlink
+parents resolving outside it are rejected before writing. Archive and identity
+inputs may be read from another directory; those inputs do not grant write
+access there. Library calls remain available for trusted callers that own their
+private temporary directories.
+
+CMake explicitly invokes payload verification/restoration from the selected build
+directory, package production from the build directory, and registry fetches
+from the selected SDK cache directory. This also supports out-of-source builds
+outside the repository. Registry cache-directory creation is bounded and
+nonfatal: an unavailable cache retains the source-build fallback. Manual CLI
+users must first select the intended build/cache working directory; do not add
+a CLI argument that authorizes an arbitrary write root.
+
 The archive starts with a bounded JSON manifest and contains regular files only.
 The producer materializes symlinks when staging, freezes staging during packing,
 and includes executable host tools as executable files. The consumer checks
@@ -668,12 +685,15 @@ archive's local producer build/pack took 58.036 seconds and consumer compile/lin
 took 0.666 seconds according to Ninja logs; these exclude configure, network and
 test time and are not hosted or full-engine timings.
 
-Other dependency recipes, Windows/Linux package qualification, the external
-transport and workflow publication are not connected yet. Existing GitHub caches
-remain authoritative until those components pass cross-platform
-package-relocation, corruption/fallback and hosted timing validation. This
-section is not a claim that external caching or the 10–15 minute target is
-already achieved.
+The current transport is public GHCR through
+`.github/scripts/dependency_registry.py`; readers use an empty credential store
+and only canonical main producers publish. The native SDK producer has completed
+on Linux, macOS and Windows, and Linux job `120596826395` verified a published
+package and configured without recompiling Unicode. Other dependency recipes,
+full platform consumers and stable hosted timing still require qualification.
+The earlier bucket capacity planner remains an offline alternative, not a
+configured R2 service. Compiler checkpoints remain in Actions storage and can
+still be evicted. The 10–15 minute target is not yet achieved.
 
 ### Symptoms of a stale build
 
