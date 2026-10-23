@@ -69,7 +69,7 @@ jobs:
         run: pytest tests/python/
 
       - name: Test cache retention policy
-        run: node --test tests/javascript/cache-retention.test.js
+        run: node --test tests/javascript/cache-retention.test.js tests/javascript/external-cache-policy.test.js
 
   android-storage:
     name: Android Storage · NDK arm64 API 29
