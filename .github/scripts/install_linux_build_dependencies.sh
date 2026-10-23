@@ -39,6 +39,10 @@ apt_options=(
   -o 'Acquire::Languages=none'
 )
 
+# Probe-only capture, before the original EXIT cleanup removes private indexes.
+python3 .github/scripts/apt_hosted_probe.py early "${apt_options[@]}" --packages "${packages[@]}"
+probe_captured=false
+
 report_phase() {
   local phase="$1" result="$2" elapsed="$3"
   echo "Linux dependencies: $phase: $result (${elapsed}s)"
@@ -56,6 +60,11 @@ acquire() {
   report_phase "$phase" "$result" "$((SECONDS - started))"
   if [[ "$result" == 130 || "$result" == 143 ]]; then
     exit "$result"
+  fi
+  if [[ "$result" != 0 && "$phase" == *archives && "$probe_captured" == false ]]; then
+    probe_captured=true
+    printf '%s\n' "$result" > "$RUNNER_TEMP/apt-hosted-evidence/original-archive-exit.txt"
+    python3 .github/scripts/apt_hosted_probe.py failure "${apt_options[@]}" --packages "${packages[@]}" || true
   fi
   return "$result"
 }
@@ -90,6 +99,10 @@ if [[ "$downloaded" != true ]]; then
   echo '::error::Neither Ubuntu mirror supplied all required dependencies within the network budget.'
   exit 1
 fi
+
+# Probe-only guard: this workflow must never execute dpkg or install packages.
+printf '%s\n' 'archives acquired; no installation attempted in diagnostic probe' > "$RUNNER_TEMP/apt-hosted-evidence/acquisition-success.txt"
+exit 0
 
 # Do not retry a partially completed installation or silently fetch again. All
 # required archives must already be present and verified by APT.
