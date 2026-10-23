@@ -432,8 +432,10 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     assert "-DHORO_BUILD_XR_OPENXR=ON" in native_job
     assert "--no-tests=error" in native_job
     setup = (ROOT / ".github/actions/setup-build-tools/action.yml").read_text(encoding="utf-8")
+    assert "bash .github/scripts/install_linux_build_dependencies.sh" in setup
+    installer = (ROOT / ".github/scripts/install_linux_build_dependencies.sh").read_text(encoding="utf-8")
     for dependency in ("vulkan-validationlayers", "mesa-vulkan-drivers", "glslang-tools"):
-        assert dependency in setup
+        assert dependency in installer
     assert "scripts/dev.py select-lavapipe-icd" in native_job
     assert "VK_DRIVER_FILES=%s" in native_job
     assert "lvp_icd.x86_64.json" not in native_job
