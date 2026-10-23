@@ -78,6 +78,8 @@ fi
 
 # Both mirrors serve Ubuntu-signed indexes and packages. APT retains its normal
 # signature/hash checks, including when completed archives survive a retry.
+# Inherit APT's runner architecture/variant selection: forcing baseline amd64
+# indexes would replace installed amd64v3 packages even at equal versions.
 mirrors=(https://archive.ubuntu.com/ubuntu http://azure.archive.ubuntu.com/ubuntu)
 downloaded=false
 for mirror in "${mirrors[@]}"; do
@@ -86,7 +88,6 @@ Types: deb
 URIs: $mirror
 Suites: $codename $codename-updates $codename-backports $codename-security
 Components: main restricted universe multiverse
-Architectures: amd64
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 EOF
   echo "Acquiring Linux dependencies from $mirror"

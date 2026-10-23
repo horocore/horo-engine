@@ -57,6 +57,9 @@ phase = "policy" if name == "apt-cache" else "update" if "update" in args else "
 preferences = next((arg.split("=", 1)[1] for arg in options if "::preferences=" in arg), None)
 isolated = (preferences is not None and Path(preferences).read_text() == ""
             and "Dir::Etc::preferencesparts=-" in args)
+if scenario == "variant_image" and phase == "download" and "Architectures: amd64" in sources:
+    print("E: Packages were downgraded and -y was used without --allow-downgrades.")
+    sys.exit(100)
 if scenario == "inherited_pin" and phase == "download" and not isolated:
     print("E: Packages were downgraded and -y was used without --allow-downgrades.")
     sys.exit(100)
@@ -169,6 +172,17 @@ def test_unsupported_runner_fails_before_acquisition(tmp_path: Path) -> None:
     result, calls = run_installer(tmp_path, "unsupported")
     assert result.returncode != 0
     assert not calls
+
+
+def test_runner_architecture_variants_are_not_replaced_by_baseline_indexes(tmp_path: Path) -> None:
+    """Guard the source seam; real APT/hosted evidence remains separate."""
+    result, calls = run_installer(tmp_path, "variant_image")
+    assert result.returncode == 0, result.stdout + result.stderr
+    apt = [call for call in calls if call["name"] == "apt-get"]
+    assert [call["phase"] for call in apt] == ["update", "download", "install"]
+    assert all("Architectures:" not in call["sources"] for call in apt)
+    assert all("APT::Get::allow-downgrades=false" in call["args"] for call in apt)
+    assert all(not arg.startswith("APT::Architecture-Variants=") for call in apt for arg in call["args"])
 
 
 def test_image_pins_do_not_override_isolated_official_package_policy(tmp_path: Path) -> None:
