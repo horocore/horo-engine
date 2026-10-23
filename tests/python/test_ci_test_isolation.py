@@ -42,7 +42,7 @@ marker.unlink()
 
 
 def run(tool: str, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
-    if tool not in {"cmake", "ctest", "gcc", "gcov", "readelf"}:
+    if tool not in {"cmake", "ctest", "gcc", "gcov", "readelf", "dwarfdump"}:
         raise ValueError("Only fixed qualification tools may be executed")
     executable = shutil.which(tool)
     if executable is None:
@@ -108,6 +108,42 @@ add_test(NAME probe COMMAND probe)
     assert ("cmake_pch" in commands) != use_ci_policy
     run("cmake", "--build", str(build), "--parallel", "1")
     run("ctest", "--test-dir", str(build), "--output-on-failure")
+
+
+@pytest.mark.skipif(sys.platform not in {"linux", "darwin"}, reason="GNU/Clang native CI policy")
+def test_compact_ci_debug_preserves_assertions_and_source_lines(tmp_path: Path) -> None:
+    inspector = "dwarfdump" if sys.platform == "darwin" else "readelf"
+    if not shutil.which(inspector):
+        pytest.skip(f"{inspector} required to verify line tables")
+    presets = json.loads((ROOT / "CMakePresets.json").read_text())
+    native = next(item for item in presets["configurePresets"] if item["name"] == "ci-native-debug")
+    flags = native["cacheVariables"]
+    source = tmp_path / "source"
+    build = tmp_path / "build"
+    source.mkdir()
+    (source / "value.c").write_text("int value(void) { return 42; }\n")
+    (source / "main.cpp").write_text('''#include <cassert>
+#ifdef NDEBUG
+#error CI Debug must retain assertions
+#endif
+extern "C" int value(void);
+int main() { int checks = 0; assert(++checks == 1); return checks == 1 && value() == 42 ? 0 : 1; }
+''')
+    (source / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.25)
+project(CompactDebugContract LANGUAGES C CXX)
+enable_testing()
+add_executable(probe main.cpp value.c)
+add_test(NAME assertions COMMAND probe)
+''')
+    run("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug",
+        f'-DCMAKE_C_FLAGS_DEBUG={flags["CMAKE_C_FLAGS_DEBUG"]}',
+        f'-DCMAKE_CXX_FLAGS_DEBUG={flags["CMAKE_CXX_FLAGS_DEBUG"]}')
+    run("cmake", "--build", str(build), "--parallel", "1")
+    run("ctest", "--test-dir", str(build), "--output-on-failure")
+    for name in ("main.cpp", "value.c"):
+        obj = build / "CMakeFiles/probe.dir" / f"{name}.o"
+        option = "--debug-line" if sys.platform == "darwin" else "--debug-dump=decodedline"
+        assert name in run(inspector, option, str(obj)).stdout
 
 
 @pytest.mark.parametrize("isolate", [True, False])

@@ -236,6 +236,43 @@ remain unchanged until their submodules/version-generation needs are checked.
 
 ## Remaining work and acceptance
 
+### Compact native CI debug information
+
+The cancelled `b6cff2229` run provided direct evidence of cache churn: Linux
+reported 248/3,496 cacheable hits (7.09%), 920 cleanups and a full 2-GB cache;
+macOS reported 476/3,874 hits (12.29%), 710 cleanups and a full 2-GB cache.
+These are partial-build counters, not complete-run performance results.
+The Sonar retry restored neither compiler nor scanner/source caches.
+
+Linux/macOS native CI Debug now uses `-g1` for C and C++. Debug assertions,
+optimization level and test selection remain unchanged. Function/source-line
+information remains available; detailed local-variable/type inspection is
+reduced. Windows uses its existing Embedded debug information; Sonar explicitly
+overrides both Debug flags with its coverage flags. Ordinary local CMake Debug
+builds keep their default full symbols. For a targeted native CI-preset
+reproduction requiring full debugger data, configure with
+`-DCMAKE_C_FLAGS_DEBUG=-g -DCMAKE_CXX_FLAGS_DEBUG=-g`.
+
+A small AppleClang 21 C++20 JSON/ImGui consumer at `-O0` produced 1,796,280 bytes
+with `-g` versus 889,712 with `-g1`; zstd level-1 sizes were 340,537 and 157,872
+bytes. Both retained source-line tables. This single-file probe establishes a
+size-reduction mechanism, not an engine-wide speedup or a cache-fit guarantee.
+An executable C/C++ regression probe checks retained line tables and active
+assertions. See [GCC debugging options](https://gcc.gnu.org/onlinedocs/gcc/Debugging-Options.html)
+for the symbol-detail tradeoff.
+
+Main Sonar run `39965417381` completed analysis at revision `61fc4ea6a` in
+42m39s and failed its quality gate. CFamily took 2,279,317 ms with 1,036/1,946
+analysis-cache hits and 85.83% symbolic-execution cache hits. The log confirms
+the sensor cache was published successfully before the gate failed. It also
+reports two early taint-analysis stops due to low memory and a roughly 3.8-GB
+JVM heap. The scan step now sets `SONAR_SCANNER_JAVA_OPTS=-Xmx6g`, following the
+[CLI 6+ memory setting](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-cli).
+This bounds heap growth while reserving the rest of the 16-GB runner for native
+workers and other processes. Absence of the warning and actual memory use need
+hosted confirmation; neither complete taint analysis nor a faster scan is yet
+claimed. No analysis rules, exclusions or gate thresholds were relaxed.
+
 The current configure/build/test path still exceeds the target. Sonar server-side
 analysis cache remains enabled, and an active main scan can finish to refresh it.
 Do not add multi-gigabyte per-PR analysis caches while native caches already

@@ -38,6 +38,8 @@
       "binaryDir": "${sourceDir}/build/ci",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS_DEBUG": "-g1",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g1",
         "HORO_BUILD_EDITOR_GUI": "ON",
         "HORO_BUILD_RENDER_OPENGL": "ON",
         "HORO_ENABLE_TELEMETRY": "ON",
