@@ -219,6 +219,16 @@ Windows hosted timings and remaining non-cacheable reasons must be remeasured.
 This does not make MSVC preprocessing free: sccache 0.17's documented direct
 mode supports GCC/Clang, so its global `yes` setting is not MSVC direct-hit proof.
 
+JSON and ImGui now use SHA-256-verified source archives at their unchanged commit
+pins, following the existing Jolt/Recast archive pattern. The downloaded JSON
+archive's 1,090 regular files and ImGui archive's 226 regular files matched the
+respective local `git archive` contents byte-for-byte. Neither dependency has
+submodules at these pins. A fresh FetchContent configure and a consumer using
+both headers validate acquisition and target usage. The corresponding local
+Git metadata alone occupied 308,948 KiB; this is an uncompressed local footprint,
+not a measured reduction in the hosted cache archive. Other Git dependencies
+remain unchanged until their submodules/version-generation needs are checked.
+
 ## Remaining work and acceptance
 
 The current configure/build/test path still exceeds the target. Sonar server-side
