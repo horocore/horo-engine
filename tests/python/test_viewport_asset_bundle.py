@@ -3,6 +3,7 @@ from pathlib import Path
 import importlib.util
 import json
 import os
+import re
 import sys
 import pytest
 
@@ -34,7 +35,77 @@ def test_sonar_cooks_and_verifies_locally_after_build_before_coverage():
     assert "python-version: '3.12'" in consumer[python:venv]
     assert 'coverage==7.6.10 fastcov==1.17 pytest==8.3.4 defusedxml==0.7.1' in consumer
     assert '-DPython3_EXECUTABLE=/tmp/horo-coverage/bin/python' in consumer
-    assert 'continue-on-error' not in consumer.split('name: Run C++ coverage tests', 1)[0]
+    require_provisioning_failure_policy(consumer)
+
+
+def require_provisioning_failure_policy(consumer):
+    # Only the two optional cache accelerators may fail before coverage starts.
+    prefix = consumer.split('      - name: Run Python coverage tests', 1)[0]
+    header, *steps = re.split(r'^      - ', prefix, flags=re.MULTILINE)
+    assert 'continue-on-error' not in header
+    optional = {
+        'name: Install optional compiler registry client': '        uses: oras-project/setup-oras@',
+        'name: Restore optional public compiler checkpoint':
+            '        run: python3 .github/scripts/compiler_registry.py fetch --key ',
+    }
+    for step in steps:
+        name = step.partition('\n')[0]
+        if name in optional:
+            assert any(line.startswith(optional[name]) for line in step.splitlines())
+        else:
+            assert 'continue-on-error' not in step
+
+
+def test_provisioning_failure_policy_accepts_optional_compiler_checkpoints():
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+
+
+@pytest.mark.parametrize('name', [
+    'Check Sonar authentication', 'Setup build tools', 'Install coverage tools',
+    'Configure instrumented Debug build', 'Build instrumented targets',
+    'Cook canonical viewport assets for coverage',
+    'Verify and select viewport data for coverage', 'Run C++ coverage tests',
+])
+def test_provisioning_failure_policy_rejects_ignored_required_step(name):
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+    marker = f'      - name: {name}\n'
+    mutated = consumer.replace(marker, marker + '        continue-on-error: true\n', 1)
+    assert mutated != consumer
+    with pytest.raises(AssertionError):
+        require_provisioning_failure_policy(mutated)
+
+
+def test_provisioning_failure_policy_rejects_ignored_job():
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+    mutated = consumer.replace('    name: SonarCloud\n',
+                               '    name: SonarCloud\n    continue-on-error: true\n', 1)
+    assert mutated != consumer
+    with pytest.raises(AssertionError):
+        require_provisioning_failure_policy(mutated)
+
+
+def test_provisioning_failure_policy_rejects_unrelated_optional_step():
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+    marker = '      - name: Build instrumented targets\n'
+    extra = ('      - name: Unrelated optional setup\n'
+             '        continue-on-error: true\n        run: echo fixture\n\n')
+    mutated = consumer.replace(marker, extra + marker, 1)
+    assert mutated != consumer
+    with pytest.raises(AssertionError):
+        require_provisioning_failure_policy(mutated)
+
+
+def test_provisioning_failure_policy_rejects_repurposed_optional_step():
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+    mutated = consumer.replace('uses: oras-project/setup-oras@', 'uses: different/action@', 1)
+    assert mutated != consumer
+    with pytest.raises(AssertionError):
+        require_provisioning_failure_policy(mutated)
 
 
 def require_provisioning_order(consumer):
