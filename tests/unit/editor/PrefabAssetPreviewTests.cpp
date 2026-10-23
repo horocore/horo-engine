@@ -126,7 +126,7 @@ namespace Horo::Editor {
         auto document = ScenePrefabDocument(project.asset, {{.localId = {}, .name = "Box", .components = {BoxPayload()}}});
         auto source = document.SerializeCanonical();
         REQUIRE(source.HasValue());
-        std::ofstream(project.source, std::ios::trunc) << source.Value();
+        std::ofstream(project.source, std::ios::binary | std::ios::trunc) << source.Value();
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
         Assets::AssetPreviewService service(jobs);
         auto provider = CreatePrefabAssetPreviewProvider(project.registry.Snapshot(), project.asset, project.Loader());
@@ -180,7 +180,7 @@ namespace Horo::Editor {
         auto document = ScenePrefabDocument(project.asset, {{.localId = {}, .name = "Box", .components = {BoxPayload()}}});
         auto source = document.SerializeCanonical();
         REQUIRE(source.HasValue());
-        std::ofstream(project.source, std::ios::trunc) << source.Value();
+        std::ofstream(project.source, std::ios::binary | std::ios::trunc) << source.Value();
         int captures{};
         auto provider =
             CreatePrefabAssetPreviewProvider(project.registry.Snapshot(), project.asset,

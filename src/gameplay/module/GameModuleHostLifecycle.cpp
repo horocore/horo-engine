@@ -6,6 +6,7 @@
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
 #include <algorithm>
+#include <array>
 #include <system_error>
 
 namespace Horo::Gameplay {
@@ -112,7 +113,8 @@ namespace Horo::Gameplay {
         return Result<void>::Success();
     }
 
-    Result<void> LoadedGameModule::Impl::RegisterAndStart(const std::span<const GameplayCapabilityId> hostCapabilities) {
+    Result<void> LoadedGameModule::Impl::RegisterAndStart(const std::span<const GameplayCapabilityId> hostCapabilities,
+                                                          const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission) {
         registries.components = std::make_unique<ComponentRegistry>();
         registries.assetTypes = std::make_unique<GameAssetTypeRegistry>(moduleId);
         registries.services = std::make_unique<GameServiceRegistry>(moduleId);
@@ -134,6 +136,11 @@ namespace Horo::Gameplay {
         if (auto frozen = FreezeRegistries(hostCapabilities); frozen.HasError())
             return frozen;
 
+        if (replicationAdmission) {
+            if (auto admitted = AdmitReplication(*replicationAdmission); admitted.HasError())
+                return admitted;
+        }
+
         auto activated = GameplayServiceRuntime::Create(*registries.services, GameplayServiceScope::Project, {{}, hostCapabilities});
         if (activated.HasError())
             return Result<void>::Failure(activated.ErrorValue());
@@ -141,6 +148,20 @@ namespace Horo::Gameplay {
         PublishRuntimeContext();
         startAttempted = true;
         return InvokeStart(*gameplayModule, runtimeContext);
+    }
+
+    /** @copydoc LoadedGameModule::Impl::AdmitReplication */
+    Result<void> LoadedGameModule::Impl::AdmitReplication(const GameplayReplicationAdmissionPolicy &policy) const {
+        // Only successful freeze makes this exact InvalidRegistration error mean an empty generation.
+        auto acquired = registries.replication->Acquire();
+        if (acquired.HasError() && (!registries.replication->IsFrozen() ||
+                                    acquired.ErrorValue().domain.Value() != GameplayErrors::InvalidReplicationRegistration.domain.Value() ||
+                                    acquired.ErrorValue().code.Value() != GameplayErrors::InvalidReplicationRegistration.code.Value()))
+            return Result<void>::Failure(acquired.ErrorValue());
+        const std::array modules{Horo::ModuleId{moduleId}};
+        const auto descriptors = acquired.HasValue() ? acquired.Value().Descriptors() : Network::ReplicationDescriptorSnapshotPtr{};
+        // The temporary lease ends here; retaining it in Impl would create an ownership cycle.
+        return policy.RequireAdmission(descriptors, modules);
     }
 
     /** @copydoc LoadedGameModule::Impl::PublishRuntimeContext */

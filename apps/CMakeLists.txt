@@ -43,6 +43,8 @@ target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySceneHostI
 
 add_library(HoroNetworkProductHost STATIC
     common/NetworkProductHost.cpp
+    common/NetworkProductSession.cpp
+    common/NetworkProductTransport.cpp
     common/HeadlessNetworkServices.cpp
     common/HeadlessSceneLoadBoundary.cpp
     common/HeadlessProjectScene.cpp

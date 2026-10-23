@@ -109,7 +109,8 @@ namespace {
             publishedCatalog = std::move(published).Value();
             REQUIRE(runtimeScene.Startup(cancellation.Token()).HasValue());
             controller = std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene, Assets::AssetRegistrySnapshot{},
-                                                                     EditorWorkspaceDependencies{.importerCatalog = publishedCatalog.get(),
+                                                                     EditorWorkspaceDependencies{.assets = {.importerCatalog =
+                                                                                                                publishedCatalog.get()},
                                                                                                  .jobs = &jobs});
         }
 

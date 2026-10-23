@@ -143,6 +143,7 @@ namespace Horo::Editor {
         auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->DiscoverNativeModule(projectRoot);
         result->DiscoverLuaPrograms(projectRoot);
+        result->CaptureReplicationMetadata(projectRoot);
         return result;
     }
 
@@ -159,6 +160,7 @@ namespace Horo::Editor {
         }
         result->LoadNativeModule(projectRoot, artifact.path, artifact.moduleId, artifact.descriptorRevision);
         result->InstallLuaGeneration(luaGeneration);
+        result->CaptureReplicationMetadata(projectRoot);
         return result;
     }
 
@@ -169,6 +171,7 @@ namespace Horo::Editor {
         auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->DiscoverNativeModule(projectRoot);
         result->InstallLuaGeneration(luaGeneration);
+        result->CaptureReplicationMetadata(projectRoot);
         return result;
     }
 
@@ -346,12 +349,14 @@ namespace Horo::Editor {
 
     /** @copydoc ProjectGameplayRegistry::HasBlockingDiagnostics */
     bool ProjectGameplayRegistry::HasBlockingDiagnostics() const noexcept {
-        return !diagnostics_.empty();
+        return !diagnostics_.empty() || replicationError_.has_value();
     }
 
     /** @copydoc ProjectGameplayRegistry::ReloadChangedLuaSources */
     std::vector<ProjectGameplayDiagnostic> ProjectGameplayRegistry::ReloadChangedLuaSources() {
         std::vector<ProjectGameplayDiagnostic> diagnostics;
+        if (auto refreshed = RefreshReplicationSource(); refreshed.HasError())
+            diagnostics.emplace_back(projectRoot_ / ".horo/project.json", refreshed.ErrorValue());
         for (const std::size_t index : std::views::iota(std::size_t{0}, luaPrograms_.size())) {
             std::error_code error;
             const LuaSourceStat sourceStat = ReadLuaSourceStat(luaSources_[index], error);
@@ -368,7 +373,7 @@ namespace Horo::Editor {
                 diagnostics.emplace_back(luaSources_[index], candidate.ErrorValue());
                 continue;
             }
-            Result<void> replaced = luaPrograms_[index]->ReplaceCompatible(std::move(candidate).Value());
+            Result<void> replaced = ReplaceLuaGeneration(index, std::move(candidate).Value());
             if (replaced.HasError())
                 diagnostics.emplace_back(luaSources_[index], replaced.ErrorValue());
         }

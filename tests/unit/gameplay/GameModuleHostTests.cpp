@@ -1,9 +1,88 @@
 #include "GameModuleHostTestHelpers.h"
+#include "GameplayRetirementTestSupport.h"
 
 using namespace Horo;
 using namespace Horo::Gameplay;
 using namespace Horo::Runtime;
 using namespace Horo::Gameplay::HostTest;
+
+namespace {
+    /** @brief Copies canonical requirements from a real successfully frozen fixture generation. */
+    GameplayReplicationAdmissionPolicy NativeAdmission() {
+        auto loaded = GameModuleHost{}.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+        REQUIRE(loaded.HasValue());
+        REQUIRE_FALSE(loaded.Value().diagnostic);
+        auto acquired = loaded.Value().owner->Replication().Acquire();
+        REQUIRE(acquired.HasValue());
+        GameplayReplicationAdmissionPolicy policy;
+        policy.inventory.completeness = Network::NetworkReplicationInventoryCompleteness::Complete;
+        policy.inventory.declarations.push_back({acquired.Value().Descriptors()->Schemas().front()});
+        policy.use = Network::ReplicationDeclarationUse::ServerActivation;
+        return policy;
+    }
+}  // namespace
+
+TEST_CASE("Native replication admission denies activation before service factories and module Start", "[gameplay][replication][host]") {
+    auto policy = NativeAdmission();
+    SECTION("incompatible schema") {
+        policy.inventory.declarations[0].schema.version.major = 2;
+        policy.inventory.declarations[0].schema.compatibility = {{2, 0}, {2, 0}};
+    }
+    SECTION("missing module") {
+        policy.inventory.declarations[0].schema.owner.value = "game.absent";
+    }
+    SECTION("unknown inventory") {
+        policy.inventory.completeness = Network::NetworkReplicationInventoryCompleteness::Unknown;
+    }
+    SECTION("editor inspection is not activation") {
+        policy.use = Network::ReplicationDeclarationUse::EditorInspection;
+    }
+    Tests::NativeGameplayFailureControl control{0};
+    GameModuleHostOptions options{{}, {}};
+    options.replicationAdmission = std::move(policy);
+    auto candidate = GameModuleHost{std::move(options)}.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(candidate.HasValue());
+    REQUIRE(candidate.Value().diagnostic);
+    CHECK(control.control.registered == 1);
+    CHECK(control.control.serviceCreated == 0);
+    CHECK(control.control.serviceStarted == 0);
+    CHECK(control.control.started == 0);
+    CHECK(candidate.Value().owner->ActiveServices().empty());
+    auto owner = std::move(candidate).Value().owner;
+    REQUIRE(owner->TryRetire().HasValue());
+    owner.reset();
+    CHECK(control.control.destroyed == 1);
+}
+
+TEST_CASE("Native admitted descriptors permit actual services and Start with optional unavailable declarations",
+          "[gameplay][replication][host]") {
+    auto policy = NativeAdmission();
+    auto optional = policy.inventory.declarations.front();
+    optional.schema.id = Network::ReplicationSchemaId::Create(1002).Value();
+    optional.schema.owner.value = "game.absent";
+    optional.requirement = Network::ReplicationDeclarationRequirement::Optional;
+    policy.inventory.declarations.push_back(std::move(optional));
+    policy.use = Network::ReplicationDeclarationUse::ClientActivation;
+    Tests::NativeGameplayFailureControl control{0};
+    GameModuleHostOptions options{{}, {}};
+    options.replicationAdmission = std::move(policy);
+    auto candidate = GameModuleHost{std::move(options)}.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(candidate.HasValue());
+    REQUIRE_FALSE(candidate.Value().diagnostic);
+    CHECK(control.control.serviceCreated == 1);
+    CHECK(control.control.serviceStarted == 1);
+    CHECK(control.control.started == 1);
+    auto owner = std::move(candidate).Value().owner;
+    {
+        auto lease = owner->Replication().Acquire();
+        REQUIRE(lease.HasValue());
+        CHECK(owner->TryRetire().HasError());
+        CHECK(lease.Value().Descriptors()->Schemas().size() == 1);
+        CHECK(control.control.destroyed == 0);
+    }
+    REQUIRE(owner->TryRetire().HasValue());
+    CHECK(control.control.destroyed == 1);
+}
 
 TEST_CASE("loaded gameplay declarations participate in durable capture and aggregate restore", "[unit][gameplay][save]") {
     using namespace Horo::Runtime;

@@ -644,6 +644,7 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/PacketQueue.cpp
         runtime/networking/api/ProtocolIdentityRegistry.cpp
         runtime/networking/api/ReplicationDescriptor.cpp
+        runtime/networking/api/ReplicationMetadataCapture.cpp
         runtime/networking/api/ReplicationDeclarationPolicy.cpp
         runtime/networking/api/NetworkReplicationInventoryCodec.cpp
         runtime/networking/api/ReplicationDescriptorRegistry.cpp
@@ -664,6 +665,7 @@ target_include_directories(HoroNetworkApi PRIVATE $<TARGET_PROPERTY:nlohmann_jso
 
 add_library(HoroNetworkTransportNull STATIC
         runtime/networking/null/DeterministicTransport.cpp
+        runtime/networking/null/NetworkChaosScenario.cpp
         runtime/networking/null/NullTransportBackend.cpp
 )
 add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
@@ -1008,6 +1010,11 @@ target_include_directories(HoroRuntimeScene PUBLIC ${PROJECT_SOURCE_DIR}/include
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine::Runtime HoroEngine::GameplayApi HoroEngine::RuntimeUi)
 
 add_library(HoroNetworkRuntime STATIC
+        runtime/networking/NetworkAdmissionController.cpp
+        runtime/networking/NetworkAdmissionPeer.cpp
+        runtime/networking/NetworkAdmissionNegotiation.cpp
+        runtime/networking/NetworkAdmissionActivation.cpp
+        runtime/networking/NetworkAdmissionWire.cpp
         runtime/networking/AdmissionProtection.cpp
         runtime/networking/InboundMessageDispatcher.cpp
         runtime/networking/NetworkModeComposition.cpp
@@ -1037,7 +1044,7 @@ add_library(HoroNetworkRuntime STATIC
 )
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
-target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime)
+target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime HoroEngine::Security)
 
 add_library(HoroPlayTopologyApplication STATIC
         application/network/PlayTopology.cpp
@@ -2994,7 +3001,7 @@ add_library(HoroWorldBakeApplication STATIC
 add_library(HoroEngine::WorldBakeApplication ALIAS HoroWorldBakeApplication)
 target_compile_features(HoroWorldBakeApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroWorldBakeApplication PUBLIC
-        HoroEngine::EditorModel HoroEngine::SceneCellPayload HoroEngine::WorldStreaming
+        HoroEngine::EditorModel HoroEngine::SceneCellPayload HoroEngine::WorldStreaming HoroEngine::NetworkApi
         HoroEngine::SceneRuntimeConversion HoroEngine::Foundation HoroEngine::Assets HoroEngine::ProjectReadFilesApi HoroEngine::ProjectMutationGuard)
 
 add_library(HoroEditorViewportScene STATIC
@@ -3151,6 +3158,7 @@ add_library(HoroEditorServices STATIC
         editor/document/SceneFileWatchService.cpp
         editor/screens/welcome/WelcomeController.cpp
         editor/screens/project_creation/ProjectCreationController.cpp
+        editor/gameplay/ProjectGameplayRegistryReplication.cpp
         editor/gameplay/ProjectGameplayRegistry.cpp
         editor/gameplay/EditorPlaySessionController.cpp
         editor/screens/workspace/ContentBrowserModel.cpp

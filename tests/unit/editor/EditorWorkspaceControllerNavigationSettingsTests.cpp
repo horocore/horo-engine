@@ -32,7 +32,7 @@ TEST_CASE("Workspace scene copies and rejected Save As preserve the exact naviga
     EditorWorkspaceController controller{root,
                                          runtime,
                                          registry.Snapshot(),
-                                         {.mutableAssetRegistry = &registry, .mutations = &mutations, .durableFiles = &files}};
+                                         {.assets = {.mutableAssetRegistry = &registry}, .mutations = &mutations, .durableFiles = &files}};
     const auto opened = controller.NavigationSettings();
     REQUIRE(opened.HasValue());
     REQUIRE(opened.Value() != nullptr);

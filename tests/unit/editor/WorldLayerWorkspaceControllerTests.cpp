@@ -8,7 +8,10 @@ namespace Horo::Editor::WorldResidencyTests {
               "[editor][layers][controller]") {
         Horo::Tests::OwnedTestDirectory project{"layer authoring ü space"};
         Runtime::RuntimeSceneService runtime;
-        EditorWorkspaceController controller{project.Path(), runtime, {}, EditorWorkspaceDependencies{.documentSessionOwner = Asset(9)}};
+        EditorWorkspaceController controller{project.Path(),
+                                             runtime,
+                                             {},
+                                             EditorWorkspaceDependencies{.world = {.documentSessionOwner = Asset(9)}}};
         auto &world = controller.WorldDocuments();
         const auto document = Document();
         REQUIRE(world.Open(document).HasValue());

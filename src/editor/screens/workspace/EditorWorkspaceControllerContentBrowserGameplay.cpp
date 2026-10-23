@@ -117,6 +117,12 @@ namespace Horo::Editor {
             m_pendingGameplayRegistry = std::move(candidate);
             return;
         }
+        if (m_gameplayRegistry && candidate->HasBlockingDiagnostics()) {
+            for (const auto &diagnostic : candidate->Diagnostics())
+                LOG_ERROR("editor.gameplay", "Gameplay discovery retained the last working generation for %s: %s",
+                          diagnostic.source.string().c_str(), diagnostic.error.message.c_str());
+            return;
+        }
         m_gameplayRegistry = std::move(candidate);
         RefreshAvailableBehaviorProjection();
     }

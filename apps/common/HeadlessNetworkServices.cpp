@@ -31,8 +31,9 @@ namespace Horo::Application::Internal {
 
         struct WorldOwners final {
             WorldOwners(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
-                        const std::optional<GameplayWorldSelection> &gameplay)
-                : definition(std::move(definition)), gameplay(gameplay) {}
+                        const std::optional<GameplayWorldSelection> &gameplay,
+                        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &admission)
+                : definition(std::move(definition)), gameplay(gameplay), replicationAdmission(admission) {}
 
             ~WorldOwners() {
                 if (physics != nullptr)
@@ -42,6 +43,7 @@ namespace Horo::Application::Internal {
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
             std::unique_ptr<Physics::PhysicsRuntime> physics;
             std::optional<GameplayWorldSelection> gameplay;
+            std::optional<Gameplay::GameplayReplicationAdmissionPolicy> replicationAdmission;
             // Factory calls are serialized on the host owner thread. Scene is immediately followed
             // by its Physics factory in NetworkModeComposition, including travel candidates.
             std::array<std::weak_ptr<WorldRecord>, 4> unpaired;
@@ -113,6 +115,8 @@ namespace Horo::Application::Internal {
                     return lane;
                 if (request_.service != Network::NetworkModeServiceKind::Physics)
                     return Result<void>::Success();
+                if (auto admitted = PrepareGameplaySelection(); admitted.HasError())
+                    return admitted;
                 if (owners_->configured) {
                     if (configuredActivated_)
                         return Result<void>::Failure(
@@ -126,9 +130,9 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(identity.ErrorValue());
                 if (auto activated = physicsWorld_->Activate(identity.Value()); activated.HasError())
                     return activated;
-                if (owners_->gameplay) {
+                if (selectedGameplay_) {
                     auto gameplay =
-                        GameplayWorldComposition::Create(*record_->scene, physicsWorld_.get(), record_->generation, *owners_->gameplay);
+                        GameplayWorldComposition::Create(*record_->scene, physicsWorld_.get(), record_->generation, *selectedGameplay_);
                     if (gameplay.HasError())
                         return Result<void>::Failure(gameplay.ErrorValue());
                     gameplay_ = std::move(gameplay).Value();
@@ -210,6 +214,36 @@ namespace Horo::Application::Internal {
             }
 
         private:
+            /** @brief Resolves admission only from the actual world role, retaining the complete owned project inventory. */
+            Result<void> PrepareGameplaySelection() {
+                selectedGameplay_ = owners_->gameplay;
+                if ((request_.mode == Network::NetworkProjectRole::Standalone) !=
+                    (request_.world == Network::NetworkModeWorldKind::Standalone))
+                    return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+                if (request_.world == Network::NetworkModeWorldKind::Standalone) {
+                    if (selectedGameplay_)
+                        selectedGameplay_->replicationAdmission.reset();
+                    return Result<void>::Success();
+                }
+                if (!owners_->replicationAdmission ||
+                    owners_->replicationAdmission->inventory.completeness != Network::NetworkReplicationInventoryCompleteness::Complete)
+                    return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
+                const auto use = request_.world == Network::NetworkModeWorldKind::AuthorityServer
+                                     ? Network::ReplicationDeclarationUse::ServerActivation
+                                     : Network::ReplicationDeclarationUse::ClientActivation;
+                if (request_.world != Network::NetworkModeWorldKind::AuthorityServer &&
+                    request_.world != Network::NetworkModeWorldKind::Client)
+                    return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+                auto policy = *owners_->replicationAdmission;
+                if (policy.use != Network::ReplicationDeclarationUse::Count && policy.use != use)
+                    return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
+                policy.use = use;
+                if (!selectedGameplay_)
+                    return policy.RequireAdmission({}, {});
+                selectedGameplay_->replicationAdmission = std::move(policy);
+                return Result<void>::Success();
+            }
+
             /** @brief Rejects foreign configured-host access before reading mutable record/native state. */
             Result<void> CheckOwnerLane() const {
                 if (owners_->configured && std::this_thread::get_id() != owners_->owner)
@@ -270,14 +304,14 @@ namespace Horo::Application::Internal {
                 auto scope = record_->native.Borrow();
                 if (scope.HasError())
                     return Result<void>::Failure(scope.ErrorValue());
-                if (!owners_->gameplay)
+                if (!selectedGameplay_)
                     return Result<void>::Success();
                 auto gameplay =
                     record_->templates
                         ? GameplayWorldComposition::Create(*record_->scenes, *record_->templates, &scope.Value().physics,
-                                                           request_.scene.value, *owners_->gameplay, nullptr, &scope.Value().character)
+                                                           request_.scene.value, *selectedGameplay_, nullptr, &scope.Value().character)
                         : GameplayWorldComposition::Create(*record_->scenes, &scope.Value().physics, request_.scene.value,
-                                                           *owners_->gameplay, &scope.Value().character);
+                                                           *selectedGameplay_, &scope.Value().character);
                 if (gameplay.HasError())
                     return Result<void>::Failure(gameplay.ErrorValue());
                 gameplay_ = std::move(gameplay).Value();
@@ -327,6 +361,7 @@ namespace Horo::Application::Internal {
             }
 
             std::shared_ptr<WorldOwners> owners_;
+            std::optional<GameplayWorldSelection> selectedGameplay_;
             Network::NetworkModeServiceRequest request_;
             std::shared_ptr<WorldRecord> record_;
             std::unique_ptr<Physics::PhysicsWorld> physicsWorld_;
@@ -427,17 +462,19 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
-    Network::NetworkModeFactories ComposeHeadlessNetworkServices(std::shared_ptr<const Runtime::RuntimeSceneDefinition> sceneDefinition,
-                                                                 Network::NetworkModeFactories selectedFactories,
-                                                                 const std::optional<GameplayWorldSelection> &gameplay) {
-        const auto owners = std::make_shared<WorldOwners>(std::move(sceneDefinition), gameplay);
+    Network::NetworkModeFactories ComposeHeadlessNetworkServices(
+        std::shared_ptr<const Runtime::RuntimeSceneDefinition> sceneDefinition, Network::NetworkModeFactories selectedFactories,
+        const std::optional<GameplayWorldSelection> &gameplay,
+        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission) {
+        const auto owners = std::make_shared<WorldOwners>(std::move(sceneDefinition), gameplay, replicationAdmission);
         return InstallWorldFactories(owners, std::move(selectedFactories));
     }
 
     /** @copydoc ComposeHeadlessSceneNetworkServices */
     Result<Network::NetworkModeFactories> ComposeHeadlessSceneNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition, HeadlessSceneActivationInput input,
-        Network::NetworkModeFactories selectedFactories, const std::optional<GameplayWorldSelection> &gameplay) {
+        Network::NetworkModeFactories selectedFactories, const std::optional<GameplayWorldSelection> &gameplay,
+        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission) {
         if (!definition || input.load.deadline == std::chrono::steady_clock::time_point{} ||
             input.load.deadline == std::chrono::steady_clock::time_point::max())
             return Result<Network::NetworkModeFactories>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
@@ -447,7 +484,7 @@ namespace Horo::Application::Internal {
         auto runtime = Physics::PhysicsRuntime::Create(input.mode);
         if (runtime.HasError())
             return Result<Network::NetworkModeFactories>::Failure(runtime.ErrorValue());
-        auto owners = std::make_shared<WorldOwners>(std::move(definition), gameplay);
+        auto owners = std::make_shared<WorldOwners>(std::move(definition), gameplay, replicationAdmission);
         owners->physics = std::move(runtime).Value();
         owners->configured.emplace(std::move(input));
         return Result<Network::NetworkModeFactories>::Success(InstallWorldFactories(owners, std::move(selectedFactories)));

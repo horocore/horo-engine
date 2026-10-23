@@ -198,8 +198,8 @@ namespace Horo::Runtime::Ui {
                 !WriteElements(writer, document, limits.maximumTextBytes) ||
                 !WriteDependencies(writer, document, limits.maximumTextBytes) || !WriteRoutes(writer, document))
                 return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-            const auto profiles = ProfileCodec::Encode(document.PresentationProfiles()).dump();
-            if (!writer.Text(profiles, UiDocumentSerializationLimits::MaximumSourceBytes))
+            if (const auto profiles = ProfileCodec::Encode(document.PresentationProfiles()).dump();
+                !writer.Text(profiles, UiDocumentSerializationLimits::MaximumSourceBytes))
                 return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
             return Result<std::vector<std::uint8_t>>::Success(std::move(writer).Take());
         }
@@ -512,6 +512,40 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
+        /** @brief Checks canonical canvas, priority and override ordering without changing authored data. */
+        [[nodiscard]] bool HasCanonicalProfileOrder(const std::span<const UiDocumentPresentationProfiles> profiles) {
+            if (!std::ranges::is_sorted(profiles, {}, &UiDocumentPresentationProfiles::canvas))
+                return false;
+            for (const auto &table : profiles) {
+                if (!std::ranges::is_sorted(table.rows, {}, &UiPresentationProfile::priority))
+                    return false;
+                for (const auto &row : table.rows)
+                    if (!std::ranges::is_sorted(row.overrides, {}, &UiPresentationLayoutOverride::element))
+                        return false;
+            }
+            return true;
+        }
+
+        /** @brief Decodes canonical cooked profile tables before typed builder admission. */
+        [[nodiscard]] Result<void> DecodePresentationProfiles(CookedReader &reader, UiDocumentBuilder &builder) {
+            auto text = reader.Text(UiDocumentSerializationLimits::MaximumSourceBytes);
+            if (text.HasError())
+                return Failure(UiErrors::CookedPayloadMalformed);
+            auto json = SerializationInternal::ParseJsonArray(text.Value(), {});
+            if (json.HasError())
+                return Failure(UiErrors::CookedPayloadMalformed);
+            auto profiles = ProfileCodec::Decode(json.Value());
+            if (profiles.HasError())
+                return Result<void>::Failure(std::move(profiles).ErrorValue());
+            if (ProfileCodec::Encode(profiles.Value()).dump() != text.Value() || !HasCanonicalProfileOrder(profiles.Value()))
+                return Failure(UiErrors::CookedPayloadMalformed);
+            auto tables = std::move(profiles).Value();
+            for (auto &table : tables)
+                if (auto added = builder.AddPresentationProfiles(std::move(table)); added.HasError())
+                    return added;
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<UiDocument> DecodeDocument(const std::span<const std::uint8_t> payload, const UiDocumentCookLimits &limits) {
             CookedReader reader{payload};
             const auto header = ReadDocumentHeader(reader, payload, limits);
@@ -528,28 +562,8 @@ namespace Horo::Runtime::Ui {
             if (const auto routes = DecodeRoutes(reader, headerValue, builder); routes.HasError())
                 return Result<UiDocument>::Failure(routes.ErrorValue());
             if (headerValue.formatVersion >= 4) {
-                auto text = reader.Text(UiDocumentSerializationLimits::MaximumSourceBytes);
-                if (text.HasError())
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                auto json = SerializationInternal::ParseJson(text.Value(), {});
-                if (json.HasError())
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                auto profiles = ProfileCodec::Decode(json.Value());
-                if (profiles.HasError())
-                    return Result<UiDocument>::Failure(profiles.ErrorValue());
-                if (ProfileCodec::Encode(profiles.Value()).dump() != text.Value() ||
-                    !std::ranges::is_sorted(profiles.Value(), {}, &UiDocumentPresentationProfiles::canvas))
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                for (const auto &table : profiles.Value()) {
-                    if (!std::ranges::is_sorted(table.rows, {}, &UiPresentationProfile::priority))
-                        return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                    for (const auto &row : table.rows)
-                        if (!std::ranges::is_sorted(row.overrides, {}, &UiPresentationLayoutOverride::element))
-                            return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                }
-                for (auto &table : profiles.Value())
-                    if (auto added = builder.AddPresentationProfiles(std::move(table)); added.HasError())
-                        return Result<UiDocument>::Failure(added.ErrorValue());
+                if (auto profiles = DecodePresentationProfiles(reader, builder); profiles.HasError())
+                    return Result<UiDocument>::Failure(std::move(profiles).ErrorValue());
             }
             if (!reader.AtEnd())
                 return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);

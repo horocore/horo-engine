@@ -1,9 +1,11 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRetirementTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
+#include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "ProjectReplicationTestSupport.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -11,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <string_view>
 
@@ -24,6 +27,7 @@ namespace {
 
         TemporaryProject() {
             std::filesystem::create_directories(root / "assets" / "scripts");
+            Tests::WriteReplicationProject(root);
         }
 
         ~TemporaryProject() {
@@ -66,6 +70,37 @@ namespace {
         WriteNativeManifest(project);
         return source;
     }
+
+    void RequireValidRegistry(const Editor::ProjectGameplayRegistry &registry) {
+        for (const auto &diagnostic : registry.Diagnostics())
+            UNSCOPED_INFO(diagnostic.source.string() << ": " << diagnostic.error.domain.Value() << ":" << diagnostic.error.code.Value()
+                                                     << ": " << diagnostic.error.message);
+        REQUIRE_FALSE(registry.HasBlockingDiagnostics());
+    }
+
+    Network::ReplicationSchemaDescriptor ScriptSchema() {
+        using namespace Network;
+        return {.id = ReplicationSchemaId::Create(42).Value(),
+                .version = {1, 0},
+                .compatibility = {{1, 0}, {1, 0}},
+                .owner = ModuleId{"game.script"},
+                .fields = {{.id = FieldId::Create(7).Value(),
+                            .valueType = ReplicationValueTypeId::Create(1).Value(),
+                            .codec = ReplicationCodecId::Create(2).Value(),
+                            .introducedVersion = {1, 0},
+                            .limits = {8, 1}}}};
+    }
+
+    std::filesystem::path WriteReplicatedScript(const TemporaryProject &project) {
+        const auto source = project.root / "assets/scripts/Replicated.horo_script";
+        Write(source, R"(return horo.behavior { display_name="Replicated", replication={major=1, minor=0,
+            minimum_minor=0, maximum_minor=0, capture_phase="gameplay", apply_phase="pre_physics",
+            fields={{id=7, value_type=1, codec=2, kind="number", introduced_major=1, introduced_minor=0,
+                     condition="always", requirement="required", maximum_bytes=8, maximum_elements=1}}, tombstones={}} })");
+        Write(source.string() + ".meta", R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":"game.script.replicated",
+            "replicationSchemaId":42,"replicationModuleId":"game.script"})");
+        return source;
+    }
 }  // namespace
 
 TEST_CASE("project gameplay registry discovers and safely reloads compatible Lua source") {
@@ -75,7 +110,7 @@ TEST_CASE("project gameplay registry discovers and safely reloads compatible Lua
     Write(source.string() + ".meta", R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":"game.tests.watched"})");
 
     auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
-    REQUIRE_FALSE(registry->HasBlockingDiagnostics());
+    RequireValidRegistry(*registry);
     Tests::ActiveBehaviorRuntime active = Tests::ActivateBehaviorRuntime(Definition(Runtime::SceneDefinitionId{1}, "game.tests.watched"),
                                                                          Runtime::SceneRuntimeId{1}, registry->Registry());
     REQUIRE(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{1}).x == 1.0F);
@@ -95,7 +130,7 @@ TEST_CASE("project gameplay registry merges a fingerprinted native module with L
     PrepareNativeLuaProject(project);
 
     auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
-    REQUIRE_FALSE(registry->HasBlockingDiagnostics());
+    RequireValidRegistry(*registry);
     REQUIRE(registry->Registry().Find(Gameplay::BehaviorTypeId::Parse("game.tests.dynamic_mover").Value()) != nullptr);
     REQUIRE(registry->Registry().Find(Gameplay::BehaviorTypeId::Parse("game.tests.watched").Value()) != nullptr);
     REQUIRE(registry->Components().Find(Gameplay::ComponentTypeId::Parse("game.tests.movement_settings").Value()) != nullptr);
@@ -140,7 +175,7 @@ TEST_CASE("project gameplay registry preserves and restores an unloaded native g
     const std::filesystem::path source = PrepareNativeLuaProject(project);
 
     auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
-    REQUIRE_FALSE(registry->HasBlockingDiagnostics());
+    RequireValidRegistry(*registry);
     auto preserved = registry->PreserveNativeArtifactForRollback(project.root / ".horo" / "local" / "rollback");
     REQUIRE(preserved.HasValue());
     REQUIRE(std::filesystem::is_regular_file(preserved.Value().path));
@@ -164,7 +199,7 @@ TEST_CASE("native gameplay rollback artifact cleanup ownership follows moves") {
     TemporaryProject project;
     WriteNativeManifest(project);
     auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
-    REQUIRE_FALSE(registry->HasBlockingDiagnostics());
+    RequireValidRegistry(*registry);
 
     std::filesystem::path artifactPath;
     {
@@ -210,4 +245,136 @@ TEST_CASE("Editor discovery reserves application rollback ownership before nativ
     REQUIRE(healthy->HasNativeModule());
     healthy.reset();
     REQUIRE(queue->Close().HasValue());
+}
+
+TEST_CASE("actual native and Lua discovery publishes deep inert replication metadata", "[editor][replication]") {
+    TemporaryProject project;
+    WriteNativeManifest(project);
+    WriteReplicatedScript(project);
+    Network::NetworkReplicationInventory inventory{Network::NetworkReplicationInventoryCompleteness::Complete, {{ScriptSchema()}}};
+    Tests::WriteReplicationProject(project.root, inventory);
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto metadata = registry->ReplicationMetadata();
+    REQUIRE(metadata);
+    REQUIRE(metadata->Registered()->Schemas().size() == 2);
+    CHECK(metadata->Registered()->Find(Network::ReplicationSchemaId::Create(1001).Value()).HasValue());
+    CHECK(metadata->Registered()->Find(Network::ReplicationSchemaId::Create(42).Value()).HasValue());
+    REQUIRE(metadata->Modules().size() == 2);
+    CHECK(metadata->Modules()[0].value == "game.script");
+    CHECK(metadata->Modules()[1].value == "game.tests");
+    REQUIRE(registry->ReplicationInspection());
+    CHECK_FALSE(registry->ReplicationInspection()->Admitted());
+    CHECK(registry->ReplicationInspection()->Diagnostics().empty());
+    CHECK(metadata->Assess(Network::ReplicationDeclarationUse::Cook).Value().Admitted());
+    registry.reset();
+    CHECK(metadata->Registered()->Schemas().size() == 2);
+    CHECK(metadata->Inventory()->declarations.front().schema == ScriptSchema());
+}
+
+TEST_CASE("editor inspection retains opaque missing code without inventing loaded module identities", "[editor][replication]") {
+    TemporaryProject project;
+    Network::NetworkReplicationInventory inventory{Network::NetworkReplicationInventoryCompleteness::Complete, {{ScriptSchema()}}};
+    Tests::WriteReplicationProject(project.root, inventory);
+    auto required = Editor::ProjectGameplayRegistry::Discover(project.root);
+    REQUIRE(required->HasBlockingDiagnostics());
+    REQUIRE(required->ReplicationInspection());
+    REQUIRE(required->ReplicationInspection()->OpaqueDeclarations().size() == 1);
+    CHECK(required->ReplicationMetadata()->Modules().empty());
+    CHECK(required->ReplicationInspection()->Diagnostics().front().problem == Network::ReplicationDeclarationProblem::MissingModule);
+    inventory.declarations.front().requirement = Network::ReplicationDeclarationRequirement::Optional;
+    Tests::WriteReplicationProject(project.root, inventory);
+    auto optional = Editor::ProjectGameplayRegistry::Discover(project.root);
+    REQUIRE_FALSE(optional->HasBlockingDiagnostics());
+    CHECK_FALSE(optional->ReplicationInspection()->Admitted());
+    CHECK(optional->ReplicationMetadata()->Assess(Network::ReplicationDeclarationUse::Cook).Value().Admitted());
+}
+
+TEST_CASE("editor source watch retains last good replication metadata on invalid policy and recovers once", "[editor][replication]") {
+    TemporaryProject project;
+    WriteReplicatedScript(project);
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto previous = registry->ReplicationMetadata();
+    REQUIRE(previous);
+    Write(project.root / ".horo/project.json", "{invalid}");
+    REQUIRE_FALSE(registry->ReloadChangedLuaSources().empty());
+    REQUIRE(registry->ReplicationMetadataError());
+    CHECK(registry->HasBlockingDiagnostics());
+    CHECK(registry->ReplicationMetadata() == previous);
+    REQUIRE(registry->ReplicationInspection());
+    Network::NetworkReplicationInventory complete{Network::NetworkReplicationInventoryCompleteness::Complete, {{ScriptSchema()}}};
+    Tests::WriteReplicationProject(project.root, complete);
+    REQUIRE(registry->ReloadChangedLuaSources().empty());
+    CHECK_FALSE(registry->HasBlockingDiagnostics());
+    CHECK_FALSE(registry->ReplicationMetadataError());
+    const auto recovered = registry->ReplicationMetadata();
+    CHECK(recovered->Fingerprint() != previous->Fingerprint());
+    REQUIRE(registry->ReloadChangedLuaSources().empty());
+    CHECK(registry->ReplicationMetadata() == recovered);
+}
+
+TEST_CASE("actual duplicate native Lua schema generation is rejected without partial metadata", "[editor][replication]") {
+    TemporaryProject project;
+    WriteNativeManifest(project);
+    const auto source = WriteReplicatedScript(project);
+    Write(source.string() + ".meta", R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":"game.script.replicated",
+        "replicationSchemaId":1001,"replicationModuleId":"game.script"})");
+    auto rejected = Editor::ProjectGameplayRegistry::Discover(project.root);
+    REQUIRE(rejected->HasBlockingDiagnostics());
+    CHECK_FALSE(rejected->ReplicationMetadata());
+    REQUIRE(rejected->ReplicationMetadataError());
+    CHECK(rejected->ReplicationMetadataError()->code.Value() == Network::NetworkErrors::ReplicationDescriptorConflict.code.Value());
+}
+
+TEST_CASE("Lua replication replacement validates authored inventory before replacing live generation", "[editor][replication]") {
+    TemporaryProject project;
+    const auto source = WriteReplicatedScript(project);
+    Tests::WriteReplicationProject(project.root,
+                                   Network::NetworkReplicationInventory{Network::NetworkReplicationInventoryCompleteness::Complete,
+                                                                        {{ScriptSchema()}}});
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto previous = registry->ReplicationMetadata();
+    std::ifstream input{source};
+    const std::string original{std::istreambuf_iterator<char>{input}, {}};
+    auto changed = original;
+    changed.replace(changed.find("maximum_bytes=8"), std::string_view{"maximum_bytes=8"}.size(), "maximum_bytes=16");
+    Write(source, changed);
+    REQUIRE_FALSE(registry->ReloadChangedLuaSources().empty());
+    CHECK(registry->ReplicationMetadata() == previous);
+    CHECK(registry->Registry().Find(Gameplay::BehaviorTypeId::Parse("game.script.replicated").Value()) != nullptr);
+    Write(source, original + " ");
+    REQUIRE(registry->ReloadChangedLuaSources().empty());
+    CHECK(registry->ReplicationMetadata()->Fingerprint() == previous->Fingerprint());
+}
+
+TEST_CASE("actual Lua declaration rejects a foreign module namespace with the original typed failure", "[editor][replication]") {
+    TemporaryProject project;
+    const auto source = WriteReplicatedScript(project);
+    Write(source.string() + ".meta", R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":"game.tests.replicated",
+        "replicationSchemaId":42,"replicationModuleId":"game.script"})");
+    const auto loaded = Gameplay::LuaBehaviorProgram::LoadFiles(source, source.string() + ".meta");
+    REQUIRE(loaded.HasError());
+    UNSCOPED_INFO(loaded.ErrorValue().domain.Value() << ":" << loaded.ErrorValue().code.Value() << ": " << loaded.ErrorValue().message);
+    CHECK(loaded.ErrorValue().domain.Value() == Gameplay::GameplayErrors::InvalidReplicationRegistration.domain.Value());
+    CHECK(loaded.ErrorValue().code.Value() == Gameplay::GameplayErrors::InvalidReplicationRegistration.code.Value());
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    REQUIRE(registry->HasBlockingDiagnostics());
+    REQUIRE_FALSE(registry->Diagnostics().empty());
+    CHECK(registry->Diagnostics().front().error.domain.Value() == loaded.ErrorValue().domain.Value());
+    CHECK(registry->Diagnostics().front().error.code.Value() == loaded.ErrorValue().code.Value());
+}
+
+TEST_CASE("editor replication capture preserves missing canonical project source failure", "[editor][replication]") {
+    TemporaryProject project;
+    REQUIRE(std::filesystem::remove(project.root / ".horo/project.json"));
+    const auto expected = Application::LoadProjectSourceDocument(project.root);
+    REQUIRE(expected.HasError());
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    REQUIRE(registry->HasBlockingDiagnostics());
+    REQUIRE(registry->ReplicationMetadataError());
+    CHECK(registry->ReplicationMetadataError()->domain.Value() == expected.ErrorValue().domain.Value());
+    CHECK(registry->ReplicationMetadataError()->code.Value() == expected.ErrorValue().code.Value());
+    CHECK_FALSE(registry->ReplicationMetadata());
 }

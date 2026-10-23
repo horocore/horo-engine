@@ -129,6 +129,14 @@ namespace Horo::Network {
          * @return Discarded pending delivery count or typed stale/shutdown failure. */
         [[nodiscard]] Result<std::size_t> Close(ConnectionHandle connection);
 
+        /**
+         * @brief Replaces impairment for future sends without changing queued work, storage or random-stream identity.
+         * @param expectedRevision Exact current scenario revision.
+         * @param scenario Complete higher-revision scenario with the same seed and fragment storage bound.
+         * @return Success or typed invalid, stale or shutdown failure; rejection preserves all state.
+         */
+        [[nodiscard]] Result<void> ReplaceScenario(std::uint64_t expectedRevision, const TransportImpairmentScenarioV1 &scenario);
+
         /** @brief Discards prepared work and closes admission once. @return Number of discarded deliveries. */
         [[nodiscard]] std::size_t Shutdown() noexcept;
 

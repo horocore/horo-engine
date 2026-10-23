@@ -21,6 +21,29 @@ namespace Horo::UiTemplates {
             return std::move(cooked).Value();
         }
 
+        /** @brief Adds a nonneutral responsive alternative to ordinary authored authority. */
+        UiTemplateAuthoredDocument ProfiledDocument(const float width = 640) {
+            auto source = RichDocument();
+            UiDocumentBuilder builder{source.ordinary.Id(), source.ordinary.Revision(), source.ordinary.SchemaVersion()};
+            for (const auto &canvas : source.ordinary.Canvases())
+                REQUIRE(builder.AddCanvas(canvas).HasValue());
+            for (const auto &element : source.ordinary.Elements())
+                REQUIRE(builder.AddElement(element).HasValue());
+            UiLayoutStyle layout;
+            layout.width = UiLength::Dip(width);
+            layout.container.orientation = UiLayoutOrientation::Horizontal;
+            UiPresentationProfile row{Identity<UiPresentationProfileId>(30), 1};
+            row.selector.width.maximum = 800;
+            row.selector.aspect.minimum = UiPresentationAspectRatio{1, 2};
+            row.overrides.push_back({Identity<UiElementId>(99), layout});
+            REQUIRE(builder.AddPresentationProfiles({Identity<UiCanvasId>(1), UiPresentationProfileRevision::Create(7).Value(), {row}})
+                        .HasValue());
+            auto ordinary = std::move(builder).Build();
+            REQUIRE(ordinary.HasValue());
+            source.ordinary = std::move(ordinary).Value();
+            return source;
+        }
+
         /** @brief Mutates an external little-endian protocol field; this fixture never calls decoder internals. */
         void Integer(std::vector<std::uint8_t> &bytes, const std::size_t offset, const std::uint64_t value, const std::size_t width) {
             for (std::size_t i = 0; i < width; ++i)
@@ -52,6 +75,60 @@ namespace Horo::UiTemplates {
             return bytes;
         }
     }  // namespace
+
+    TEST_CASE("Template reconstruction retains responsive profiles through flatten detach undo and rich artifacts",
+              "[runtime_ui][template][headless][responsive]") {
+        const auto source = ProfiledDocument();
+        const auto profiles = source.ordinary.PresentationProfiles().front();
+        auto roundtrip = RoundTrip(source, ValueCatalog(Message()));
+        auto &owner = *roundtrip.reopened;
+        const auto flattened = owner.Capture().Flatten();
+        REQUIRE(flattened.HasValue());
+        REQUIRE(flattened.Value().ordinary.PresentationProfiles().size() == 1);
+        CHECK(flattened.Value().ordinary.PresentationProfiles().front() == profiles);
+        Sha256Digest manifest;
+        manifest.bytes.front() = 7;
+        const auto cooked = owner.Capture().Cook({manifest});
+        REQUIRE(cooked.HasValue());
+        REQUIRE(cooked.Value().ordinary.PresentationProfiles().size() == 1);
+        CHECK(cooked.Value().ordinary.PresentationProfiles().front() == profiles);
+        const auto encoded = EncodeTemplateArtifact(cooked.Value(), {});
+        REQUIRE(encoded.HasValue());
+        const auto decoded = DecodeTemplateArtifact(encoded.Value(), manifest, {});
+        REQUIRE(decoded.HasValue());
+        REQUIRE(decoded.Value().ordinary.PresentationProfiles().size() == 1);
+        CHECK(decoded.Value().ordinary.PresentationProfiles().front() == profiles);
+        CHECK(decoded.Value().cacheIdentity == cooked.Value().cacheIdentity);
+        const std::array allocation{UiTemplateDetachIdentity{owner.Capture().Expansions().front().root, Identity<UiElementId>(50)}};
+        const auto detached = owner.PrepareDetach(Identity<UiTemplateInstanceId>(1), allocation);
+        REQUIRE(detached.HasValue());
+        REQUIRE(owner.Commit(detached.Value()).HasValue());
+        REQUIRE(owner.Capture().Source().ordinary.PresentationProfiles().size() == 1);
+        CHECK(owner.Capture().Source().ordinary.PresentationProfiles().front() == profiles);
+        REQUIRE(owner.Undo().HasValue());
+        REQUIRE(owner.Capture().Source().ordinary.PresentationProfiles().size() == 1);
+        CHECK(owner.Capture().Source().ordinary.PresentationProfiles().front() == profiles);
+    }
+
+    TEST_CASE("Changed responsive template layouts invalidate ordinary payload and cache commitments",
+              "[runtime_ui][template][headless][responsive]") {
+        const auto catalog = ValueCatalog(Message());
+        auto first = UiTemplateDocumentOwner::Create(ProfiledDocument(640), catalog);
+        auto second = UiTemplateDocumentOwner::Create(ProfiledDocument(480), catalog);
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        Sha256Digest manifest;
+        manifest.bytes.front() = 7;
+        const auto firstCook = first.Value()->Capture().Cook({manifest});
+        const auto secondCook = second.Value()->Capture().Cook({manifest});
+        REQUIRE(firstCook.HasValue());
+        REQUIRE(secondCook.HasValue());
+        CHECK_FALSE(std::ranges::equal(firstCook.Value().ordinary.Payload(), secondCook.Value().ordinary.Payload()));
+        CHECK(firstCook.Value().cacheIdentity != secondCook.Value().cacheIdentity);
+        CHECK(firstCook.Value().sourceIdentity != secondCook.Value().sourceIdentity);
+        CHECK(firstCook.Value().schemaIdentity == secondCook.Value().schemaIdentity);
+        CHECK(firstCook.Value().dependencyManifest == secondCook.Value().dependencyManifest);
+    }
 
     TEST_CASE("Runtime rich artifact roundtrip retains localization target properties and exact cache commitments",
               "[runtime_ui][template][headless]") {

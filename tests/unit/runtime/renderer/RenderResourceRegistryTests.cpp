@@ -443,10 +443,36 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
         REQUIRE(released.modes[0] == BackendResourceReleaseMode::NativeUnavailable);
     }
 
+    /** @brief Measures the complete library-specific admission envelope outside the injected-failure sweep. */
+    [[nodiscard]] Tests::AllocationProbe::Measurement MeasureDependentAdmissionAllocations() {
+        const auto owner = AcquireRenderResourceOwnerId();
+        REQUIRE(owner.HasValue());
+        ReleasedBackendResources released;
+        auto registry = MakeRegistry(owner.Value(), released, {.maximumSlots = 2});
+        const auto parent = registry.Reserve(RenderResourceClass::Buffer);
+        REQUIRE(parent.HasValue());
+        REQUIRE(registry.Publish(RenderResourceClass::Buffer, parent.Value().identity, 71).HasValue());
+        const std::array dependencies{parent.Value().identity};
+        std::optional<ResourceReservation> admitted;
+        Tests::AllocationProbe::Measurement allocations;
+        {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            const auto child = registry.Reserve(RenderResourceClass::Texture, dependencies);
+            if (child.HasValue())
+                admitted = child.Value();
+            allocations = measurement.Snapshot();
+        }
+        REQUIRE(admitted.has_value());
+        registry.Shutdown(BackendResourceReleaseMode::DestroyNative);
+        return allocations;
+    }
+
     TEST_CASE("Allocation failures before resource admission preserve slots operation identity and dependency pins",
               "[unit][runtime][renderer][resource][rollback]") {
+        // Include MSVC Debug proxy metadata and one successful control, without a fixed STL allocation count.
+        const auto admissionAllocations = MeasureDependentAdmissionAllocations();
         bool successfulAdmissionObserved = false;
-        for (std::size_t successfulAllocations = 0; successfulAllocations < 16; ++successfulAllocations) {
+        for (std::size_t successfulAllocations = 0; successfulAllocations <= admissionAllocations.requests; ++successfulAllocations) {
             const auto owner = AcquireRenderResourceOwnerId();
             REQUIRE(owner.HasValue());
             ReleasedBackendResources released;

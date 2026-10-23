@@ -42,9 +42,9 @@ namespace Horo::Editor {
         CancellationSource cancellation;
         REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
         EditorWorkspaceController controller(project.root, runtime, registry.Snapshot(),
-                                             {.mutations = &project.mutations,
+                                             {.world = {.documentSessionOwner = Asset(9)},
+                                              .mutations = &project.mutations,
                                               .durableFiles = &project.files,
-                                              .documentSessionOwner = Asset(9),
                                               .pcg = {.document = Catalog()}});
         EditorWorkspaceViewCommandData open;
         open.command = EditorWorkspaceViewCommand::OpenSourceFile;

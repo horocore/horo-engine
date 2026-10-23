@@ -1,5 +1,6 @@
 # CI builds capabilities; the test registry owns their executable membership.
 option(HORO_CI_SONAR_COVERAGE "Register the filtered Sonar UI coverage run" OFF)
+option(HORO_CI_ISOLATE_TEST_EXECUTABLES "Isolate discovered executable suites for bounded CTest parallelism" OFF)
 
 set(HORO_CI_AUDIO_TARGETS
     HoroAudioRealtimeSafetyHarnessTests
@@ -92,6 +93,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroGameplayPerceptionIntegrationPublicHeaderConsumer
     HoroMaterialBindingTests
     HoroMaterialBindingPublicHeaderConsumer
+    HoroMultiviewSceneExtractionPublicHeaderConsumer
     HoroD3D12InitializationTests
     HoroD3D12ResourceTests
     HoroPlayTopologyTests
@@ -324,9 +326,27 @@ function(horo_ci_catch_properties target)
     foreach(property IN LISTS ARG_PROPERTIES)
         string(APPEND properties " [==[${property}]==]")
     endforeach()
+    set(isolation "")
+    if(HORO_CI_ISOLATE_TEST_EXECUTABLES)
+        # Cases in one executable may share fixture names. Serialize those
+        # cases, while independent executables use private working/temp/home
+        # directories. Keep explicit suite properties and environment intact.
+        set(runtime_root "${CMAKE_CURRENT_BINARY_DIR}/ci-runtime/${target}")
+        file(MAKE_DIRECTORY "${runtime_root}/work" "${runtime_root}/tmp" "${runtime_root}/home")
+        file(REAL_PATH "${runtime_root}" runtime_root)
+        set(suite_locks "horo-suite-${target}")
+        set(suite_environment "TMPDIR=set:${runtime_root}/tmp;TMP=set:${runtime_root}/tmp;TEMP=set:${runtime_root}/tmp;HOME=set:${runtime_root}/home;USERPROFILE=set:${runtime_root}/home")
+        string(APPEND isolation
+            "    set_tests_properties(\${${target}_TESTS} PROPERTIES WORKING_DIRECTORY [==[${runtime_root}/work]==])\n"
+            "    set_tests_properties(\${${target}_TESTS} PROPERTIES RESOURCE_LOCK [==[${suite_locks}]==])\n"
+            "    set_tests_properties(\${${target}_TESTS} PROPERTIES ENVIRONMENT_MODIFICATION [==[${suite_environment}]==])\n")
+        if("${ARG_LABELS}" MATCHES "(^|;)(gpu|display|realtime-safety)(;|$)")
+            string(APPEND isolation "    set_tests_properties(\${${target}_TESTS} PROPERTIES RUN_SERIAL TRUE)\n")
+        endif()
+    endif()
     set(properties_file "${CMAKE_CURRENT_BINARY_DIR}/${target}_properties.cmake")
     file(GENERATE OUTPUT "${properties_file}" CONTENT
-        "if(${target}_TESTS)\n    set_tests_properties(\${${target}_TESTS} PROPERTIES ${properties})\nendif()\n")
+        "if(${target}_TESTS)\n    set_tests_properties(\${${target}_TESTS} PROPERTIES ${properties})\n${isolation}endif()\n")
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${properties_file}")
 endfunction()
 
@@ -371,6 +391,11 @@ function(horo_finalize_ci_suites)
     # once under coverage.py, rather than again inside the C++ coverage pass.
     get_property(direct_tests DIRECTORY PROPERTY TESTS)
     foreach(test IN LISTS direct_tests)
+        if(HORO_CI_ISOLATE_TEST_EXECUTABLES)
+            # Direct integration commands can compile SDKs or launch hosts.
+            # Keep their existing process/filesystem assumptions serialized.
+            set_property(TEST ${test} PROPERTY RUN_SERIAL TRUE)
+        endif()
         get_test_property(${test} LABELS labels)
         if(NOT "${labels}" MATCHES "(^|;)(gui|editor)(;|$)" AND NOT test STREQUAL "HoroPythonToolingTests")
             set_property(TEST ${test} APPEND PROPERTY LABELS sonar-coverage)
@@ -383,6 +408,6 @@ function(horo_finalize_ci_suites)
         add_test(NAME HoroSonarEditorUiAutomationCoverage
             COMMAND HoroEditorUiAutomationTests "~[native]")
         set_tests_properties(HoroSonarEditorUiAutomationCoverage PROPERTIES
-            LABELS "gui;editor;sonar-coverage" TIMEOUT 120)
+            LABELS "gui;editor;sonar-coverage" TIMEOUT 120 RUN_SERIAL TRUE)
     endif()
 endfunction()

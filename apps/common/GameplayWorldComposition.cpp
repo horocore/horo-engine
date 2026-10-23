@@ -6,6 +6,7 @@
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
 
+#include <array>
 #include <new>
 
 namespace Horo::Application::Internal {
@@ -133,28 +134,8 @@ namespace Horo::Application::Internal {
             runtimeUi_ = std::move(child).Value();
         }
         if (!selection.nativeArtifact.empty()) {
-            if (!selection.moduleRetirements)
-                return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired,
-                                                       "Native gameplay requires an explicit application retirement owner."));
-            moduleRetirements_ = selection.moduleRetirements;
-            auto admission = moduleRetirements_->Reserve();
-            if (admission.HasError())
-                return Result<void>::Failure(admission.ErrorValue());
-            retirementAdmission_.emplace(std::move(admission).Value());
-            GameModuleHost loader{GameModuleHostOptions{{}, {.physics = physics_, .character = character_, .runtimeUi = runtimeUi_}}};
-            auto loaded = loader.Load(selection.nativeArtifact,
-                                      {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
-            if (loaded.HasError())
-                return Result<void>::Failure(loaded.ErrorValue());
-            auto candidate = std::move(loaded).Value();
-            native_ = std::move(candidate.owner);
-            if (candidate.diagnostic) {
-                retirementAdmission_->Retain(std::move(native_));
-                retirementAdmission_.reset();
-                return Result<void>::Failure(*candidate.diagnostic);
-            }
-            if (auto contributed = native_->ContributeBehaviorsTo(registry_); contributed.HasError())
-                return contributed;
+            if (auto registered = RegisterNativeModule(selection); registered.HasError())
+                return registered;
         } else {
             auto loaded = LuaBehaviorProgram::LoadFiles(selection.scriptSource, selection.scriptSidecar);
             if (loaded.HasError())
@@ -167,7 +148,59 @@ namespace Horo::Application::Internal {
         }
         if (auto frozen = registry_.Freeze(); frozen.HasError())
             return frozen;
-        return Result<void>::Success();
+        return AdmitReplication(selection);
+    }
+
+    /** @copydoc GameplayWorldComposition::RegisterNativeModule */
+    Result<void> GameplayWorldComposition::RegisterNativeModule(const GameplayWorldSelection &selection) {
+        using namespace Gameplay;
+        if (!selection.moduleRetirements)
+            return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired,
+                                                   "Native gameplay requires an explicit application retirement owner."));
+        moduleRetirements_ = selection.moduleRetirements;
+        auto admission = moduleRetirements_->Reserve();
+        if (admission.HasError())
+            return Result<void>::Failure(admission.ErrorValue());
+        retirementAdmission_.emplace(std::move(admission).Value());
+        GameModuleHostOptions options{{}, {.physics = physics_, .character = character_, .runtimeUi = runtimeUi_}};
+        options.replicationAdmission = selection.replicationAdmission;
+        GameModuleHost loader{std::move(options)};
+        auto loaded =
+            loader.Load(selection.nativeArtifact, {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
+        if (loaded.HasError())
+            return Result<void>::Failure(loaded.ErrorValue());
+        auto candidate = std::move(loaded).Value();
+        native_ = std::move(candidate.owner);
+        if (candidate.diagnostic) {
+            retirementAdmission_->Retain(std::move(native_));
+            retirementAdmission_.reset();
+            return Result<void>::Failure(*candidate.diagnostic);
+        }
+        return native_->ContributeBehaviorsTo(registry_);
+    }
+
+    /** @copydoc GameplayWorldComposition::AdmitReplication */
+    Result<void> GameplayWorldComposition::AdmitReplication(const GameplayWorldSelection &selection) {
+        if (!selection.replicationAdmission)
+            return Result<void>::Success();
+        if (native_) {
+            auto acquired = native_->Replication().Acquire();
+            if (acquired.HasValue())
+                replicationLease_.emplace(std::move(acquired).Value());
+            else if (!native_->Replication().IsFrozen() ||
+                     acquired.ErrorValue().domain.Value() != Gameplay::GameplayErrors::InvalidReplicationRegistration.domain.Value() ||
+                     acquired.ErrorValue().code.Value() != Gameplay::GameplayErrors::InvalidReplicationRegistration.code.Value())
+                return Result<void>::Failure(acquired.ErrorValue());
+        } else if (script_->ReplicationDeclaration()) {
+            auto acquired = script_->AcquireReplication();
+            if (acquired.HasError())
+                return Result<void>::Failure(acquired.ErrorValue());
+            replicationLease_.emplace(std::move(acquired).Value());
+        }
+        const std::array modules{ModuleId{selection.moduleId}};
+        return selection.replicationAdmission->RequireAdmission(replicationLease_ ? replicationLease_->Descriptors()
+                                                                                  : Network::ReplicationDescriptorSnapshotPtr{},
+                                                                modules);
     }
 
     /** @copydoc GameplayWorldComposition::Create */
@@ -340,6 +373,7 @@ namespace Horo::Application::Internal {
         ownedTemplates_.reset();
         scenes_ = nullptr;
         registry_ = Gameplay::BehaviorRegistry{};
+        replicationLease_.reset();
         if (native_ && retirementAdmission_)
             retirementAdmission_->Retain(std::move(native_));
         retirementAdmission_.reset();
