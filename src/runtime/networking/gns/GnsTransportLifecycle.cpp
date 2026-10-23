@@ -20,8 +20,9 @@ namespace Horo::Network {
 
         // No allocating error projection in cleanup. Failed native retirement stays
         // owned by process state, even after the unique adapter is destroyed.
+        template <typename Kill = decltype(&GameNetworkingSockets_Kill)>
         CleanupResult CleanupNative(const bool killNative, const std::uint64_t root,
-                                    void (*const kill)() = &GameNetworkingSockets_Kill) noexcept {
+                                    const Kill kill = &GameNetworkingSockets_Kill) noexcept {
             using enum SteamNetworkingSocketsLib::HoroBridgeStatus;
             if (killNative && !GnsDetail::NativeVoid([kill] {
                 kill();

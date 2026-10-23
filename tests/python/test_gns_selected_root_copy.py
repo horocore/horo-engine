@@ -6,8 +6,6 @@ import shutil
 
 import pytest
 
-pytest_plugins = ["pytester"]
-
 
 @pytest.mark.parametrize("inside_repository", [True, False])
 def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool,
@@ -16,9 +14,9 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool,
     project.mkdir()
     git = shutil.which("git")
     cmake = shutil.which("cmake")
-    assert git is not None and cmake is not None
-    git = str(Path(git).resolve(strict=True))
-    cmake = str(Path(cmake).resolve(strict=True))
+    assert git is not None
+    assert cmake is not None
+    git, cmake = [str(Path(tool).resolve(strict=True)) for tool in (git, cmake)]
     monkeypatch.chdir(project)
     initialized = pytester.run(git, "init", "-q", str(project), timeout=15)
     assert initialized.ret == 0, initialized.stdout.str() + initialized.stderr.str()

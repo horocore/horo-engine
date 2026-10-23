@@ -102,7 +102,7 @@ namespace Horo::Network {
         void Enqueue(NetworkTransportEvent event);
         void PollMessages();
         [[nodiscard]] bool PollMessage(ConnectionSlot &slot);
-        [[nodiscard]] const ErrorCodeDescriptor *StartResolution(ConnectionSlot &slot) const;
+
         void AdvancePending(std::chrono::steady_clock::time_point now);
         void AdvancePendingSlot(ConnectionSlot &slot, std::chrono::steady_clock::time_point now);
 

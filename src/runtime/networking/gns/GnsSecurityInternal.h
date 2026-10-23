@@ -27,7 +27,7 @@ namespace Horo::Network {
         [[nodiscard]] Result<PeerVerificationResult> Verify(const PeerVerificationRequest &request) override;
         [[nodiscard]] Result<SecureChannelHandoff> Bind(const SecureChannelBindingRequest &request) override;
         /** @brief Native-only preparation under transport lock; no issuer callback. @return Bounded public CSR. */
-        [[nodiscard]] Result<std::vector<std::byte>> Prepare(ISteamNetworkingSockets &native, std::uint64_t &rootGeneration);
+        [[nodiscard]] Result<std::vector<std::byte>> Prepare(ISteamNetworkingSockets &native, std::uint64_t &rootGeneration) const;
         /** @brief Invoke retained issuer outside every transport/native lock. @return Owned certificate or original failure. */
         [[nodiscard]] Result<Security::SecureBytes> Issue(std::span<const std::byte> request) const;
         /** @brief Attach only after selected-root certificate readiness. */

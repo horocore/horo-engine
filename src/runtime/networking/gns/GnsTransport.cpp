@@ -30,6 +30,21 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Fail(const ErrorCodeDescriptor &code) {
             return Result<void>::Failure(MakeError(code));
         }
+
+        /** @brief Start one slot's deferred DNS request, publishing resolution ownership only on success. */
+        const ErrorCodeDescriptor *StartPendingResolution(ConnectionSlot &slot, const std::string &resolverServer) {
+            try {
+                auto resolution = std::make_unique<GnsDetail::Resolution>();
+                if (const std::string hostname(slot.pendingEndpoint->Hostname());
+                    !GnsDetail::StartResolution(*resolution, hostname, slot.pendingEndpoint->Port(), resolverServer))
+                    return &NetworkErrors::NameResolutionFailed;
+                slot.resolution = std::move(resolution);
+                slot.pendingEndpoint.reset();
+            } catch (const std::bad_alloc &) {
+                return &NetworkErrors::TransportCapabilityUnavailable;
+            }
+            return nullptr;
+        }
     }  // namespace
 
     bool ValidGnsTransportConfig(const NetworkTransportConfig &config) noexcept {
@@ -182,20 +197,6 @@ namespace Horo::Network {
             }
         }
         return handle;
-    }
-
-    const ErrorCodeDescriptor *GnsTransport::StartResolution(ConnectionSlot &slot) const {
-        try {
-            auto resolution = std::make_unique<GnsDetail::Resolution>();
-            if (const std::string hostname(slot.pendingEndpoint->Hostname());
-                !GnsDetail::StartResolution(*resolution, hostname, slot.pendingEndpoint->Port(), resolverServer_))
-                return &NetworkErrors::NameResolutionFailed;
-            slot.resolution = std::move(resolution);
-            slot.pendingEndpoint.reset();
-        } catch (const std::bad_alloc &) {
-            return &NetworkErrors::TransportCapabilityUnavailable;
-        }
-        return nullptr;
     }
 
     Result<void> GnsTransport::StartNative(ConnectionSlot &slot, const SteamNetworkingIPAddr &address) {
@@ -403,7 +404,7 @@ namespace Horo::Network {
             return;
         }
         if (slot.pendingEndpoint) {
-            if (const auto *failure = StartResolution(slot)) {
+            if (const auto *failure = StartPendingResolution(slot, resolverServer_)) {
                 End(slot, Failed, failure);
                 return;
             }

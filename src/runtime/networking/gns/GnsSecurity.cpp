@@ -193,7 +193,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc GnsSecurity::Prepare */
-    Result<std::vector<std::byte>> GnsSecurity::Prepare(ISteamNetworkingSockets &native, std::uint64_t &rootGeneration) {
+    Result<std::vector<std::byte>> GnsSecurity::Prepare(ISteamNetworkingSockets &native, std::uint64_t &rootGeneration) const {
         const auto root = std::bit_cast<std::array<std::uint8_t, 32>>(options_.trustedRoot);
         if (const auto installed = Native::HoroInstallSelectedRoot(root.data(), options_.appId, &rootGeneration);
             installed != Native::HoroBridgeStatus::Ok)
