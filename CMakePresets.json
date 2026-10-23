@@ -264,7 +264,7 @@
       "targets": [
         "HoroCiWindowsChecks"
       ],
-      "jobs": 2
+      "jobs": 4
     },
     {
       "name": "ci-audio-release",

@@ -209,6 +209,11 @@ reported 6,528 hits/85 misses (98.71%), but also 533 non-cacheable calls:
 525 `/Fp`, four `/Yc` and four multiple-input invocations. The reported hit rate
 excludes those uncached calls and must not be interpreted as 98.71% of all work.
 
+Windows Debug now uses four build workers on the standard four-CPU/16-GB public
+runner, instead of two. This adds no jobs and leaves test concurrency unchanged.
+Check memory failures and completed Debug duration on the next hosted run;
+doubling workers is not evidence of a twofold speedup.
+
 The shared CI preset now sets `CMAKE_DISABLE_PRECOMPILE_HEADERS=ON`, matching
 the existing local cache configuration policy in `scripts/dev.py`. Jolt/SDL PCH
 generation had bypassed sccache on MSVC. A CMake execution probe verifies both
