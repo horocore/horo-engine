@@ -28,6 +28,7 @@ namespace Horo::Network {
             bool available{true};
             bool reject{};
             bool stale{};
+            std::uint64_t authorityGeneration{101};
             std::size_t calls{};
 
             [[nodiscard]] bool Available() const noexcept override {
@@ -40,7 +41,7 @@ namespace Horo::Network {
                 if (reject)
                     return Result<CertificateVerificationResult>::Failure(
                         MakeError(NetworkErrors::AuthenticationRejected, "private certificate detail AUTH_SECRET_SENTINEL"));
-                auto stamp = Stamp(101);
+                auto stamp = Stamp(authorityGeneration);
                 if (stale)
                     stamp.sessionGeneration = Session(8);
                 return Result<CertificateVerificationResult>::Success({stamp, Id<CertificateBindingId>(12)});
@@ -51,6 +52,7 @@ namespace Horo::Network {
             bool available{true};
             bool reject{};
             NetworkTrustLevel trust{NetworkTrustLevel::ProductAnchor};
+            std::uint64_t authorityGeneration{102};
             std::size_t calls{};
 
             [[nodiscard]] bool Available() const noexcept override {
@@ -63,7 +65,7 @@ namespace Horo::Network {
                 if (reject)
                     return Result<PeerVerificationResult>::Failure(
                         MakeError(NetworkErrors::AuthenticationRejected, "private peer detail AUTH_SECRET_SENTINEL"));
-                return Result<PeerVerificationResult>::Success({Stamp(102), trust});
+                return Result<PeerVerificationResult>::Success({Stamp(authorityGeneration), trust});
             }
         };
 
@@ -185,6 +187,62 @@ namespace Horo::Network {
             return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end()) != haystack.end();
         }
     }  // namespace
+
+    TEST_CASE("Canonical proof issuance authorizes the peer before issuance and revalidates before accepting credentials",
+              "[unit][network][authentication]") {
+        Fixture fixture;
+        auto adapter = fixture.Adapter();
+        auto peerChallenge = fixture.Challenge();
+        peerChallenge.transcriptDigest[0] ^= std::byte{0x42};
+        const auto grant = adapter.AuthorizeProofIssuance(Connection(), Session(), peerChallenge, fixture.Evidence(), 10);
+        REQUIRE(grant.HasValue());
+        CHECK(grant.Value().Challenge().transcriptDigest == peerChallenge.transcriptDigest);
+        CHECK(grant.Value().Peer().trustLevel == NetworkTrustLevel::ProductAnchor);
+        CHECK(grant.Value().DeadlineTick() == 100);
+        CHECK(adapter.State() == AuthenticationState::AwaitingProof);
+        CHECK(fixture.credentials.calls == 0);
+        CHECK(fixture.privateKeys.calls == 0);
+        REQUIRE(adapter.Authenticate(Connection(), Session(), fixture.Response(), fixture.Evidence(), 20).HasValue());
+        CHECK(fixture.certificates.calls == 2);
+        CHECK(fixture.peers.calls == 2);
+        CHECK(fixture.credentials.calls == 1);
+    }
+
+    TEST_CASE("Invalid peer trust stale generation and expiry never issue a proof authorization", "[unit][network][authentication]") {
+        Fixture fixture;
+        auto adapter = fixture.Adapter();
+        RequireError(adapter.AuthorizeProofIssuance(Connection(), Session(9), fixture.Challenge(), fixture.Evidence(), 10),
+                     NetworkErrors::NetworkLifecycleOperationStale);
+        CHECK(fixture.certificates.calls == 0);
+        fixture.certificates.reject = true;
+        REQUIRE(adapter.AuthorizeProofIssuance(Connection(), Session(), fixture.Challenge(), fixture.Evidence(), 10).HasError());
+        CHECK(fixture.peers.calls == 0);
+        CHECK(fixture.credentials.calls == 0);
+        auto expired = fixture.Adapter();
+        RequireError(expired.AuthorizeProofIssuance(Connection(), Session(), fixture.Challenge(), fixture.Evidence(), 100),
+                     NetworkErrors::SessionTimedOut);
+        CHECK(fixture.certificates.calls == 1);
+    }
+
+    TEST_CASE("Issuance cannot pin replaced peer authority or channel evidence across credential acceptance",
+              "[unit][network][authentication]") {
+        for (const int replacement : {0, 1, 2}) {
+            Fixture fixture;
+            auto adapter = fixture.Adapter();
+            REQUIRE(adapter.AuthorizeProofIssuance(Connection(), Session(), fixture.Challenge(), fixture.Evidence(), 10).HasValue());
+            auto evidence = fixture.Evidence();
+            if (replacement == 1)
+                ++fixture.peers.authorityGeneration;
+            else if (replacement == 2)
+                ++fixture.certificates.authorityGeneration;
+            else
+                ++evidence.transport.channelGeneration;
+            RequireError(adapter.Authenticate(Connection(), Session(), fixture.Response(), evidence, 20),
+                         NetworkErrors::AuthenticationIncompatible);
+            CHECK(fixture.credentials.calls == 0);
+            CHECK(fixture.privateKeys.calls == 0);
+        }
+    }
 
     TEST_CASE("Authentication publishes one immutable generation-bound principal and secure-channel handoff",
               "[unit][network][authentication]") {

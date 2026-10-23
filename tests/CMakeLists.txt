@@ -359,6 +359,7 @@ add_executable(HoroNetworkApiTests
         unit/runtime/networking/PacketQueueTests.cpp
         unit/runtime/networking/ProtocolIdentityTests.cpp
         unit/runtime/networking/ReplicationDescriptorTests.cpp
+        unit/runtime/networking/ReplicationMetadataCaptureTests.cpp
         unit/runtime/networking/ReplicationDeclarationPolicyTests.cpp
         unit/runtime/networking/NetworkReplicationInventoryTests.cpp
         unit/runtime/networking/ReplicationDescriptorRegistryTests.cpp
@@ -480,12 +481,16 @@ add_test(NAME HoroNetworkModePublicHeaderConsumer COMMAND HoroNetworkModePublicH
 set_tests_properties(HoroNetworkModePublicHeaderConsumer PROPERTIES LABELS "unit;network;headless")
 add_executable(HoroNetworkModeHostIntegrationTests
         integration/network/NetworkModeHostIntegrationTests.cpp
+        integration/network/NetworkProductSessionTests.cpp
+        integration/network/NetworkProductAdmissionTests.cpp
+        integration/network/NetworkAdmissionBoundaryTests.cpp
+    integration/network/NetworkAdmissionObserverTests.cpp
 )
 target_compile_features(HoroNetworkModeHostIntegrationTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
 target_include_directories(HoroNetworkModeHostIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
 target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroNetworkProductHost HoroEngine::NetworkTransportNull
-    HoroEngine::Platform)
+    HoroEngine::Platform MbedTLS::mbedcrypto)
 horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
 add_test(NAME HoroNetworkStandaloneProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product standalone 2)
 set_tests_properties(HoroNetworkStandaloneProductLaunch PROPERTIES LABELS "integration;network;headless;product")
@@ -2714,6 +2719,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabCreationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
+            unit/editor/EditorWorkspaceWorldBakeReplicationTests.cpp
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp
             unit/editor/EditorWorkspaceStreamingMountTests.cpp
             unit/editor/WorkspaceReadSourcesTests.cpp
@@ -3251,6 +3257,7 @@ add_executable(HoroEditorViewportSceneTests
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroWorldBakeApplicationTests
+        unit/application/WorldBakeReplicationTests.cpp
         unit/application/WorldBakeApplicationTests.cpp
         unit/application/WorldBakeNativeSourceTests.cpp
 )

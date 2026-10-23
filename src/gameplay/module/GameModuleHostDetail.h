@@ -78,7 +78,10 @@ namespace Horo::Gameplay {
 
         /** @brief Freezes contributed metadata and binds exact-generation leases before any runtime activation. */
         [[nodiscard]] Result<void> FreezeRegistries(std::span<const GameplayCapabilityId> hostCapabilities);
-        [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities);
+        [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities,
+                                                    const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission);
+        /** @brief Checks the actual frozen generation without self-pinning its owner or invoking runtime callbacks. */
+        [[nodiscard]] Result<void> AdmitReplication(const GameplayReplicationAdmissionPolicy &policy) const;
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
         [[nodiscard]] Result<void> RestoreReload(const GameModuleReloadSnapshot &snapshot);
         /** @brief Expose the already admitted scoped holders only after project service activation succeeds. */

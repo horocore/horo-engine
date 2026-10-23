@@ -280,6 +280,8 @@ namespace {
     class TestProjectService final : public IGameplayService {
     public:
         Result<void> Start(const GameplayServiceContext &context) override {
+            if (retirementFixture)
+                ++retirementFixture->serviceStarted;
             return context.cancellation.IsCancellationRequested() ? Result<void>::Failure(MakeError(GameplayErrors::GameplayCancelled))
                                                                   : Result<void>::Success();
         }
@@ -306,6 +308,8 @@ namespace {
     };
 
     IGameplayService *CreateTestProjectService(void *) {
+        if (retirementFixture)
+            ++retirementFixture->serviceCreated;
         return std::make_unique<TestProjectService>().release();
     }
 

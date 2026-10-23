@@ -24,7 +24,7 @@ namespace {
     class InspectorHost final {
     public:
         Runtime::RuntimeSceneService runtime;
-        EditorWorkspaceController controller{"test-project", runtime, {}, {.documentSessionOwner = Owner()}};
+        EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.documentSessionOwner = Owner()}}};
         LocalizationService localization{LocaleTag{"en-US"}};
         EngineDataBus engine;
         EditorSettingsSnapshot settings;

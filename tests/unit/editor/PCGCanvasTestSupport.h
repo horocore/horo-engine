@@ -48,10 +48,10 @@ namespace Horo::Editor::PCGCanvasTestSupport {
             }
             controller =
                 std::make_unique<EditorWorkspaceController>(project.root, runtime, registry.Snapshot(),
-                                                            EditorWorkspaceDependencies{.mutations = &project.mutations,
+                                                            EditorWorkspaceDependencies{.world = {.documentSessionOwner = Asset(9)},
+                                                                                        .mutations = &project.mutations,
                                                                                         .durableFiles = &project.files,
                                                                                         .jobs = jobs.get(),
-                                                                                        .documentSessionOwner = Asset(9),
                                                                                         .pcg = std::move(catalog),
                                                                                         .pcgPreviewInputs =
                                                                                             preview
