@@ -20,6 +20,11 @@
 
 namespace Horo::Network::NativeQualification {
     namespace {
+        Error FixtureError() {
+            return MakeError(NetworkErrors::AuthenticationTrustUnavailable, "Explicit native qualification fixture is unavailable");
+        }
+
+#if !defined(_WIN32)
         template <std::size_t Size> struct SecretScratch final {
             std::array<std::byte, Size> bytes{};
 
@@ -28,51 +33,24 @@ namespace Horo::Network::NativeQualification {
             }
         };
 
-        struct FileCloser final {
-            void operator()(std::FILE *file) const noexcept {
-                if (file)
-                    std::fclose(file);
-            }
-        };
-
-        using File = std::unique_ptr<std::FILE, FileCloser>;
-
-        Error FixtureError() {
-            return MakeError(NetworkErrors::AuthenticationTrustUnavailable, "Explicit native qualification fixture is unavailable");
-        }
+        using File = std::unique_ptr<std::FILE, decltype(&std::fclose)>;
 
         bool PrivateDirectory(const std::filesystem::path &path) {
-#if defined(_WIN32)
-            // std::filesystem permission bits cannot attest an owner-only Windows DACL.
-            return false;
-#else
             struct stat status{};
             return lstat(path.c_str(), &status) == 0 && S_ISDIR(status.st_mode) && status.st_uid == geteuid() &&
                    (status.st_mode & 0777) == 0700;
-#endif
         }
 
         bool PrivateFile(std::FILE *file) {
-#if defined(_WIN32)
-            return false;
-#else
             struct stat status{};
             return fstat(fileno(file), &status) == 0 && S_ISREG(status.st_mode) && status.st_uid == geteuid() &&
                    (status.st_mode & 0777) == 0600;
-#endif
         }
 
         File Open(const std::filesystem::path &path, const char *mode) {
-#if defined(_WIN32)
-            std::FILE *file{};
-            if (fopen_s(&file, path.string().c_str(), mode) != 0)
-                return {};
-#else
-            auto *file = std::fopen(path.c_str(), mode);
-#endif
-            File owner(file);
+            File owner(std::fopen(path.c_str(), mode), &std::fclose);
             if (owner && std::setvbuf(owner.get(), nullptr, _IONBF, 0) != 0)
-                return {};
+                return {nullptr, &std::fclose};
             return owner;
         }
 
@@ -229,10 +207,16 @@ namespace Horo::Network::NativeQualification {
             CECSigningPrivateKey key_;
             unsigned side_{};
         };
+#endif
     }  // namespace
 
     /** @copydoc CreateEphemeralFixture */
     Result<void> CreateEphemeralFixture(const std::filesystem::path &directory) {
+#if defined(_WIN32)
+        // The qualification fixture cannot attest restrictive Windows DACLs.
+        static_cast<void>(directory);
+        return Result<void>::Failure(FixtureError());
+#else
         if (!PrivateDirectory(directory))
             return Result<void>::Failure(FixtureError());
         CECSigningPublicKey publicKey;
@@ -257,11 +241,19 @@ namespace Horo::Network::NativeQualification {
         if (!random || random->Fill(credential.bytes).HasError())
             return Result<void>::Failure(FixtureError());
         return WriteExclusive(directory / "credential.bin", credential.bytes);
+#endif
     }
 
     /** @copydoc LoadNativeSelection */
     Result<GnsNativeSecurityOptions> LoadNativeSelection(const std::filesystem::path &directory, const unsigned side,
                                                          NetworkTrustPolicySnapshot trust) {
+#if defined(_WIN32)
+        // The qualification fixture cannot attest restrictive Windows DACLs.
+        static_cast<void>(directory);
+        static_cast<void>(side);
+        static_cast<void>(trust);
+        return Result<GnsNativeSecurityOptions>::Failure(FixtureError());
+#else
         if (side > 1)
             return Result<GnsNativeSecurityOptions>::Failure(FixtureError());
         SecretScratch<32> root;
@@ -282,12 +274,19 @@ namespace Horo::Network::NativeQualification {
         options.provisioningBudget = std::chrono::seconds(5);
         options.issuer = std::move(issuer);
         return Result<GnsNativeSecurityOptions>::Success(std::move(options));
+#endif
     }
 }  // namespace Horo::Network::NativeQualification
 
 namespace Horo::Network::NativeQualification {
     /** @copydoc LoadCredentialProviders */
     Result<NetworkAdmissionProviders> LoadCredentialProviders(const std::filesystem::path &directory, const unsigned side) {
+#if defined(_WIN32)
+        // The qualification fixture cannot attest restrictive Windows DACLs.
+        static_cast<void>(directory);
+        static_cast<void>(side);
+        return Result<NetworkAdmissionProviders>::Failure(FixtureError());
+#else
         if (side > 1)
             return Result<NetworkAdmissionProviders>::Failure(FixtureError());
         SecretScratch<32> secret;
@@ -299,5 +298,6 @@ namespace Horo::Network::NativeQualification {
             return Result<NetworkAdmissionProviders>::Failure(FixtureError());
         auto credential = std::make_shared<FixtureCredential>(Security::SecureBytes(secret.bytes), random, side);
         return Result<NetworkAdmissionProviders>::Success({{}, {}, credential, {}, std::move(random), credential, {}});
+#endif
     }
 }  // namespace Horo::Network::NativeQualification

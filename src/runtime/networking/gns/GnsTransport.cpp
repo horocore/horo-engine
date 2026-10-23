@@ -117,15 +117,15 @@ namespace Horo::Network {
         SteamNetworkingConfigValue_t option{};
         option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
                       reinterpret_cast<void *>(&OnStatus));  // NOSONAR: GNS stores its C callback as void*.
-        const auto native = GnsDetail::NativeCall([&] {
-            return native_->CreateListenSocketIP(address.Value(), 1, &option);
+        const auto native = GnsDetail::NativeCall([this, &address, &option] {
+            return nativeOwner_.sockets->CreateListenSocketIP(address.Value(), 1, &option);
         }).value_or(k_HSteamListenSocket_Invalid);
         if (native == k_HSteamListenSocket_Invalid)
             return Result<ListenerHandle>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
         auto handle = listener_.IsValid() ? listener_.NextGeneration() : ListenerHandle::Create(0, 1);
         if (handle.HasError()) {
-            (void)GnsDetail::NativeCall([&] {
-                return native_->CloseListenSocket(native);
+            (void)GnsDetail::NativeCall([this, native] {
+                return nativeOwner_.sockets->CloseListenSocket(native);
             });
             return handle;
         }
@@ -202,8 +202,8 @@ namespace Horo::Network {
         SteamNetworkingConfigValue_t option{};
         option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
                       reinterpret_cast<void *>(&OnStatus));  // NOSONAR: GNS stores its C callback as void*.
-        const auto native = GnsDetail::NativeCall([&] {
-            return native_->ConnectByIPAddress(address, 1, &option);
+        const auto native = GnsDetail::NativeCall([this, &address, &option] {
+            return nativeOwner_.sockets->ConnectByIPAddress(address, 1, &option);
         }).value_or(k_HSteamNetConnection_Invalid);
         if (native == k_HSteamNetConnection_Invalid)
             return Fail(NetworkErrors::TransportNativeUnavailable);
@@ -236,11 +236,10 @@ namespace Horo::Network {
         slot.phase = Terminal;
         slot.pendingEndpoint.reset();
         slot.resolution.reset();
-        if (native != k_HSteamNetConnection_Invalid)
-            if (!GnsDetail::NativeCall([&] {
-                return native_->CloseConnection(native, 0, nullptr, false);
-            }))
-                overflow_ = true;
+        if (native != k_HSteamNetConnection_Invalid && !GnsDetail::NativeCall([this, native] {
+            return nativeOwner_.sockets->CloseConnection(native, 0, nullptr, false);
+        }).has_value())
+            overflow_ = true;
         Enqueue({.kind = kind, .connection = slot.handle, .failure = failure});
     }
 
@@ -251,17 +250,17 @@ namespace Horo::Network {
             return slot.listener.IsValid() && slot.phase != ConnectionPhase::Terminal;
         });
             static_cast<std::size_t>(inboundCount) >= listenerMaximumConnections_) {
-            if (!GnsDetail::NativeCall([&] {
-                return native_->CloseConnection(status.m_hConn, 0, nullptr, false);
-            }))
+            if (!GnsDetail::NativeCall([this, &status] {
+                return nativeOwner_.sockets->CloseConnection(status.m_hConn, 0, nullptr, false);
+            }).has_value())
                 overflow_ = true;
             return;
         }
         auto admitted = ReserveConnection();
         if (admitted.HasError()) {
-            if (!GnsDetail::NativeCall([&] {
-                return native_->CloseConnection(status.m_hConn, 0, nullptr, false);
-            }))
+            if (!GnsDetail::NativeCall([this, &status] {
+                return nativeOwner_.sockets->CloseConnection(status.m_hConn, 0, nullptr, false);
+            }).has_value())
                 overflow_ = true;
             return;
         }
@@ -269,8 +268,8 @@ namespace Horo::Network {
         slot.native = status.m_hConn;
         slot.listener = listener_;
         slot.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-        if (GnsDetail::NativeCall([&] {
-            return native_->AcceptConnection(status.m_hConn);
+        if (GnsDetail::NativeCall([this, &status] {
+            return nativeOwner_.sockets->AcceptConnection(status.m_hConn);
         }).value_or(k_EResultFail) != k_EResultOK) {
             End(slot, NetworkTransportEventKind::Failed, &NetworkErrors::TransportConnectionFailed);
             return;
@@ -335,11 +334,11 @@ namespace Horo::Network {
         if (!listener.IsValid() || listener != listener_)
             return Fail(NetworkErrors::TransportHandleInvalid);
         if (nativeListener_ != k_HSteamListenSocket_Invalid) {
-            const auto closed = GnsDetail::NativeCall([&] {
-                return native_->CloseListenSocket(nativeListener_);
+            const auto closed = GnsDetail::NativeCall([this] {
+                return nativeOwner_.sockets->CloseListenSocket(nativeListener_);
             });
             nativeListener_ = k_HSteamListenSocket_Invalid;
-            if (!closed || !*closed)
+            if (!closed.has_value() || !closed.value())
                 return Fail(NetworkErrors::TransportNativeUnavailable);
         }
         return Result<void>::Success();
@@ -357,8 +356,8 @@ namespace Horo::Network {
             if (std::this_thread::get_id() != ownerThread_)
                 return Result<std::size_t>::Failure(MakeError(NetworkErrors::NetworkIoWrongThread));
             AdvancePending(std::chrono::steady_clock::now());
-            if (!GnsDetail::NativeVoid([&] {
-                native_->RunCallbacks();
+            if (!GnsDetail::NativeVoid([this] {
+                nativeOwner_.sockets->RunCallbacks();
             }))
                 overflow_ = true;
             DrainNativeCallbacks();

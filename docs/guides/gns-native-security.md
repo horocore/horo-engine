@@ -167,3 +167,15 @@ work describes that earlier checkpoint. Subsequent implementation or quality edi
 require their own current-input evidence and do not inherit a new binary identity
 from this paragraph. Windows secure-file and runtime qualification, hosted quality
 gates and the external HORO-1177 workflow dependency remain distinct limitations.
+
+### Private composition and provisioning migration
+
+`SelectNetworkProductGns` is the one non-installed, GNS-conditional product selection operation used by both the executable composition root and native paired-product qualification. It validates the explicit trust/configuration and absence of competing native providers, creates the inert concrete candidate, then captures its exact delivery declaration and retained authority owners through the canonical `NetworkProductAdmission` builder. Protocol, trust, limits, handlers and clock ownership remain explicit host inputs. The paired child applies only passive observation after this production selection; it no longer reproduces provider binding in test code. GNS-disabled products neither compile this source nor receive its private native dependency.
+
+The private native lifetime value groups sockets, selected-root generation and resolver initialization under the existing transport mutex and owner-thread I/O rule. Shutdown and partial initialization retire them together; an unsuccessful native retirement still belongs to the process cleanup owner. This is a private field/operation migration, with no public native type or second authority.
+
+Provisioning now uses lexical lock scopes: prepare the bounded native request under the transport lock, invoke the issuer outside both Horo and native locks, then reacquire and check shutdown before examining an issuer failure or publishing initialization. Reentrant shutdown keeps priority over a later issuer result. Native exceptions remain contained by the genuine noexcept invocation barrier; error construction stays outside that barrier. An exception from an individual native close is handled by the existing whole-native Kill fallback, whose failed retirement is retained for retry.
+
+The private binding operation accepts the existing fixed192-byte context. Bounded `std::array`/`std::bit_cast` conversions preserve every root/context/digest byte when crossing the native POD interface; they introduce no exporter, derived key, secret retention or public API. Native trust, certificate proof and exact protected-channel generation checks are unchanged.
+
+New issuer/selection/detached-authority regressions require fresh native and targeted coverage qualification for each delivery freeze. Historical73-case and hosted9319-case receipts retain their original source/head identities; they do not qualify this later batch.

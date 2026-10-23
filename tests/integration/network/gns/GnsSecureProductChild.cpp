@@ -1,7 +1,9 @@
 #include "../NetworkAdmissionProductTestSupport.h"
+#include "GnsEvidenceAssertions.h"
 #include "GnsObservedTransport.h"
 #include "GnsQualificationSupport.h"
 #include "Horo/Foundation/Platform.h"
+#include "NetworkProductGnsSelection.h"
 
 #include <algorithm>
 #include <catch2/catch_session.hpp>
@@ -38,12 +40,20 @@ namespace Horo::Network::NativeQualification {
                     context.session->AdmitGameplay(context.connection, context.generation, context.ownerTick).HasError() ||
                     message.payload != std::vector<std::byte>{expected} || !observation || !observation->transport)
                     return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+                if (calls == 0) {
+                    REQUIRE(admission != nullptr);
+                    REQUIRE(credentials != nullptr);
+                    REQUIRE(credentials->grant.has_value());
+                    VerifyNativeEvidence(context, *admission, *credentials->grant);
+                }
                 ++calls;
                 if (reply.empty())
                     return Result<void>::Success();
                 return observation->transport->Send(context.connection, {}, reply, DeliveryPolicy::ReliableOrdered);
             }
 
+            std::shared_ptr<const Application::Internal::NetworkProductAdmission> admission;
+            std::shared_ptr<CredentialObservation> credentials;
             std::shared_ptr<TransportObservation> observation;  // Revoked by the exact adapter before shutdown/destruction.
             std::byte expected{};
             std::vector<std::byte> reply;
@@ -66,6 +76,7 @@ namespace Horo::Network::NativeQualification {
             std::shared_ptr<SteadyClock> clock = std::make_shared<SteadyClock>();
             std::shared_ptr<NativeHandler> handler = std::make_shared<NativeHandler>();
             std::shared_ptr<TransportObservation> observation = std::make_shared<TransportObservation>();
+            std::shared_ptr<CredentialObservation> credentials = std::make_shared<CredentialObservation>();
             std::unique_ptr<INetworkTransport> native;
             std::vector<std::byte> command;
             std::unique_ptr<Application::Internal::NetworkProductHost> host;
@@ -107,18 +118,12 @@ namespace Horo::Network::NativeQualification {
             REQUIRE_FALSE(providers.peers);
             REQUIRE_FALSE(providers.privateKeys);
             REQUIRE_FALSE(providers.channel);
+            REQUIRE(providers.credentials != nullptr);
+            providers.credentials = std::make_shared<ObservedCredential>(providers.credentials, owners.credentials);
+            owners.handler->credentials = owners.credentials;
             auto options =
                 LoadNativeSelection(input.nativeDirectory.empty() ? input.directory : input.nativeDirectory, input.side, policy.trust);
             REQUIRE(options.HasValue());
-            auto created = CreateSecureGnsTransport(std::move(options).Value());
-            REQUIRE(created.HasValue());
-            auto selected = std::move(created).Value();
-            policy.local.transport = selected.transport->Capabilities();
-            providers.certificates = selected.native.certificates;
-            providers.peers = selected.native.peers;
-            providers.privateKeys = selected.native.privateKeys;
-            providers.channel = selected.native.channel;
-            auto observed = std::make_unique<ObservedTransport>(std::move(selected.transport), owners.observation);
             owners.handler->observation = owners.observation;
             owners.handler->expected = input.side == 0 ? std::byte{0x41} : std::byte{0x42};
             if (input.side == 0)
@@ -128,12 +133,15 @@ namespace Horo::Network::NativeQualification {
                 Application::Internal::NetworkProductInboundHandler{{owners.fixtures.protocols[0].id, owners.fixtures.messages[4].id,
                                                                      MessageTrafficClass::Command, Runtime::RuntimePhase::NetworkPoll, 64},
                                                                     owners.handler}};
-            auto captured =
-                Application::Internal::NetworkProductAdmission::Capture(policy, std::move(providers), owners.fixtures.codecs, bindings);
-            REQUIRE(captured.HasValue());
-            // Retain the unique adapter in the same one-shot factory ownership slot until Startup constructs its real service.
-            owners.native = std::move(observed);
-            return std::move(captured).Value();
+            auto selected = Application::Internal::SelectNetworkProductGns(policy, std::move(providers), owners.fixtures.codecs, bindings,
+                                                                           options.Value());
+            REQUIRE(selected.HasValue());
+            auto composition = std::move(selected).Value();
+            owners.handler->admission = composition.admission;
+            policy = composition.admission->Policy();
+            // Passive observation wraps the same selected production candidate; it grants no authority.
+            owners.native = std::make_unique<ObservedTransport>(std::move(composition.transport), owners.observation);
+            return std::move(composition.admission);
         }
 
         void CreateHost(ChildOwners &owners) {

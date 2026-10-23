@@ -3,16 +3,25 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-import subprocess
 
 import pytest
 
+pytest_plugins = ["pytester"]
+
 
 @pytest.mark.parametrize("inside_repository", [True, False])
-def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool):
+def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool,
+                                      pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch):
     project = tmp_path / "project with space ü"
     project.mkdir()
-    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    git = shutil.which("git")
+    cmake = shutil.which("cmake")
+    assert git is not None and cmake is not None
+    git = str(Path(git).resolve(strict=True))
+    cmake = str(Path(cmake).resolve(strict=True))
+    monkeypatch.chdir(project)
+    initialized = pytester.run(git, "init", "-q", str(project), timeout=15)
+    assert initialized.ret == 0, initialized.stdout.str() + initialized.stderr.str()
     parent_source = project / "src/sentinel.cpp"
     parent_source.parent.mkdir()
     parent_source.write_text("original\n", encoding="utf-8")
@@ -39,15 +48,15 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool):
                       f"horo_prepare_gns_selected_root([==[{pristine}]==] patched)\n"
                       f"file(WRITE [==[{result_path}]==] \"${{patched}}\")\n", encoding="utf-8")
     for _ in range(2):
-        result = subprocess.run(["cmake", "-P", str(script)], cwd=project, capture_output=True, text=True, timeout=15)
-        assert result.returncode == 0, result.stdout + result.stderr
+        result = pytester.run(cmake, "-P", str(script), timeout=15)
+        assert result.ret == 0, result.stdout.str() + result.stderr.str()
         owned = Path(result_path.read_text())
         assert (owned / "src/sentinel.cpp").read_text() == "patched\n"
         assert parent_source.read_text() == "original\n"
         assert (pristine / "src/sentinel.cpp").read_text() == "original\n"
     (owned / "src/sentinel.cpp").write_text("corrupted\n", encoding="utf-8")
-    rejected = subprocess.run(["cmake", "-P", str(script)], cwd=project, capture_output=True, text=True, timeout=15)
-    assert rejected.returncode != 0
-    assert "source changed" in rejected.stderr
+    rejected = pytester.run(cmake, "-P", str(script), timeout=15)
+    assert rejected.ret != 0
+    assert "source changed" in rejected.stderr.str()
     assert parent_source.read_text() == "original\n"
     assert (pristine / "src/sentinel.cpp").read_text() == "original\n"

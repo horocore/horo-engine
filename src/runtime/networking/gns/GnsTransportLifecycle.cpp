@@ -20,15 +20,13 @@ namespace Horo::Network {
 
         // No allocating error projection in cleanup. Failed native retirement stays
         // owned by process state, even after the unique adapter is destroyed.
-        CleanupResult CleanupNative(const bool killNative, const std::uint64_t root) noexcept {
+        CleanupResult CleanupNative(const bool killNative, const std::uint64_t root,
+                                    void (*const kill)() = &GameNetworkingSockets_Kill) noexcept {
             using enum SteamNetworkingSocketsLib::HoroBridgeStatus;
-            if (killNative) {
-                try {
-                    GameNetworkingSockets_Kill();
-                } catch (...) {
-                    return {true, root, Unavailable};
-                }
-            }
+            if (killNative && !GnsDetail::NativeVoid([kill] {
+                kill();
+            }))
+                return {true, root, Unavailable};
             if (!root)
                 return {};
             const auto status = SteamNetworkingSocketsLib::HoroRetireSelectedRoot(root);
@@ -45,17 +43,18 @@ namespace Horo::Network {
         }
 
         SteamNetworkingSocketsLib::HoroBridgeStatus RetryCleanup() noexcept {
+            using enum SteamNetworkingSocketsLib::HoroBridgeStatus;
             auto &host = NativeHost();
             bool nativePending{};
             std::uint64_t root{};
             {
                 std::lock_guard lock(host.mutex);
                 if (host.active)
-                    return SteamNetworkingSocketsLib::HoroBridgeStatus::Ok;  // Existing adapter-conflict path retains its error.
+                    return Ok;  // Existing adapter-conflict path retains its error.
                 if (host.cleanupRunning)
-                    return SteamNetworkingSocketsLib::HoroBridgeStatus::Unavailable;
+                    return Unavailable;
                 if (!host.shuttingDown)
-                    return SteamNetworkingSocketsLib::HoroBridgeStatus::Ok;
+                    return Ok;
                 host.cleanupRunning = true;
                 nativePending = host.nativeCleanupPending;
                 root = host.cleanupRoot;
@@ -71,109 +70,115 @@ namespace Horo::Network {
     }  // namespace
 
     Result<void> GnsTransport::Initialize(const NetworkTransportConfig &config) {
-        std::unique_lock lock(mutex_);
-        if (shutdown_)
+        {
+            std::lock_guard lock(mutex_);
+            if (shutdown_)
+                return Fail(NetworkErrors::TransportShuttingDown);
+            if (initialized_ || !ValidGnsTransportConfig(config))
+                return Fail(NetworkErrors::TransportLimitExceeded);
+            if (security_ &&
+                (config.maximumConnections != config_.maximumConnections || config.maximumEventsPerPoll != config_.maximumEventsPerPoll ||
+                 config.maximumMessageBytes != config_.maximumMessageBytes))
+                return Fail(NetworkErrors::TransportBackendConflict);
+            try {
+                connections_.reserve(config.maximumConnections);
+            } catch (const std::bad_alloc &) {
+                return Fail(NetworkErrors::TransportCapabilityUnavailable);
+            }
+            if (auto started = StartNativeOwner(config); started.HasError())
+                return started;
+            if (!security_) {
+                initialized_ = true;
+                ++capabilityRevision_;
+                return Result<void>::Success();
+            }
+        }
+        // The provisioning callback runs between lexical lock scopes. Reentrant
+        // Shutdown is legitimate and is checked before either native use/publication.
+        if (auto provisioned = ProvisionNative(); provisioned.HasError()) {
+            Shutdown();
+            return provisioned;
+        }
+        std::lock_guard lock(mutex_);
+        if (shutdown_ || !nativeOwner_.sockets)
             return Fail(NetworkErrors::TransportShuttingDown);
-        if (initialized_ || !ValidGnsTransportConfig(config))
-            return Fail(NetworkErrors::TransportLimitExceeded);
-        if (security_ &&
-            (config.maximumConnections != config_.maximumConnections || config.maximumEventsPerPoll != config_.maximumEventsPerPoll ||
-             config.maximumMessageBytes != config_.maximumMessageBytes))
-            return Fail(NetworkErrors::TransportBackendConflict);
-        try {
-            connections_.reserve(config.maximumConnections);
-        } catch (const std::bad_alloc &) {
-            return Fail(NetworkErrors::TransportCapabilityUnavailable);
-        }
-        if (auto started = StartNativeOwner(config); started.HasError())
-            return started;
-        if (security_) {
-            if (auto provisioned = ProvisionNative(lock); provisioned.HasError())
-                return provisioned;
-        }
         initialized_ = true;
-        if (security_)
-            security_->Attach(*this);
-        if (!security_)
-            ++capabilityRevision_;
+        security_->Attach(*this);
         return Result<void>::Success();
     }
 
     Result<void> GnsTransport::StartNativeOwner(const NetworkTransportConfig &config) {
-        const auto cleanup = RetryCleanup();
-        if (cleanup != SteamNetworkingSocketsLib::HoroBridgeStatus::Ok)
+        if (const auto cleanup = RetryCleanup(); cleanup != SteamNetworkingSocketsLib::HoroBridgeStatus::Ok)
             return Result<void>::Failure(GnsSecurityFailure(cleanup));
         auto &host = NativeHost();
-        std::unique_lock nativeLock(host.mutex);
-        if (host.active || host.shuttingDown)
-            return Fail(NetworkErrors::TransportCapabilityUnavailable);
-        if (ares_library_init(ARES_LIB_INIT_ALL) != ARES_SUCCESS)
-            return Fail(NetworkErrors::TransportNativeUnavailable);
-        caresInitialized_ = true;
-        if (SteamNetworkingErrMsg error{}; !GnsDetail::NativeCall([&] {
-            return GameNetworkingSockets_Init(nullptr, error);
-        }).value_or(false)) {
-            ares_library_cleanup();
-            caresInitialized_ = false;
-            return Fail(NetworkErrors::TransportNativeUnavailable);
-        }
-        native_ = GnsDetail::NativeCall([] {
-            return SteamNetworkingSockets();
-        }).value_or(nullptr);
-        if (!native_) {
-            // Initialization published a native owner. Transfer its retirement
-            // before releasing the process lock, including failed Kill retries.
+        {
+            std::lock_guard nativeLock(host.mutex);
+            if (host.active || host.shuttingDown)
+                return Fail(NetworkErrors::TransportCapabilityUnavailable);
+            if (ares_library_init(ARES_LIB_INIT_ALL) != ARES_SUCCESS)
+                return Fail(NetworkErrors::TransportNativeUnavailable);
+            nativeOwner_.resolverInitialized = true;
+            if (SteamNetworkingErrMsg error{}; !GnsDetail::NativeCall([&error] {
+                return GameNetworkingSockets_Init(nullptr, error);
+            }).value_or(false)) {
+                ares_library_cleanup();
+                nativeOwner_.resolverInitialized = false;
+                return Fail(NetworkErrors::TransportNativeUnavailable);
+            }
+            nativeOwner_.sockets = GnsDetail::NativeCall([] {
+                return SteamNetworkingSockets();
+            }).value_or(nullptr);
+            if (nativeOwner_.sockets) {
+                config_ = config;
+                ownerThread_ = std::this_thread::get_id();
+                host.active = this;
+                return Result<void>::Success();
+            }
+            // Transfer retirement before releasing the process lock. Cleanup
+            // outside this scope can reacquire it without manual unlock paths.
             host.shuttingDown = true;
             host.cleanupRunning = true;
             host.nativeCleanupPending = true;
-            nativeLock.unlock();
-            PublishCleanup(CleanupNative(true, 0));
-            ares_library_cleanup();
-            caresInitialized_ = false;
-            return Fail(NetworkErrors::TransportNativeUnavailable);
         }
-        config_ = config;
-        ownerThread_ = std::this_thread::get_id();
-        host.active = this;
-        return Result<void>::Success();
+        PublishCleanup(CleanupNative(true, 0));
+        ares_library_cleanup();
+        nativeOwner_.resolverInitialized = false;
+        return Fail(NetworkErrors::TransportNativeUnavailable);
     }
 
-    Result<void> GnsTransport::ProvisionNative(std::unique_lock<std::mutex> &lock) {
-        Result<std::vector<std::byte>> request =
-            Result<std::vector<std::byte>>::Failure(MakeError(NetworkErrors::AuthenticationTrustUnavailable));
-        try {
-            request = security_->Prepare(*native_, rootGeneration_);
-        } catch (...) {
-            request = Result<std::vector<std::byte>>::Failure(MakeError(NetworkErrors::TransportCapabilityUnavailable));
-        }
-        if (request.HasError()) {
-            auto error = request.ErrorValue();
-            lock.unlock();
-            Shutdown();
-            return Result<void>::Failure(std::move(error));
-        }
-        // No native or Horo lock may be held across a host issuer callback.
-        lock.unlock();
+    Result<std::vector<std::byte>> GnsTransport::PrepareCertificateRequest() {
+        std::lock_guard lock(mutex_);
+        if (shutdown_ || !nativeOwner_.sockets)
+            return Result<std::vector<std::byte>>::Failure(MakeError(NetworkErrors::TransportShuttingDown));
+        // Native allocation/result construction remains inside the existing
+        // genuine foreign-code barrier; typed Error projection is outside it.
+        auto request = GnsDetail::NativeCall([this] {
+            return security_->Prepare(*nativeOwner_.sockets, nativeOwner_.rootGeneration);
+        });
+        if (!request.has_value())
+            return Result<std::vector<std::byte>>::Failure(MakeError(NetworkErrors::TransportCapabilityUnavailable));
+        return std::move(request.value());
+    }
+
+    Result<void> GnsTransport::ProvisionNative() {
+        auto request = PrepareCertificateRequest();
+        if (request.HasError())
+            return Result<void>::Failure(request.ErrorValue());
+        // Neither native nor Horo locks are held across the host issuer.
         auto certificate = security_->Issue(request.Value());
-        lock.lock();
-        if (shutdown_ || !native_)
+        std::lock_guard lock(mutex_);
+        if (shutdown_ || !nativeOwner_.sockets)
             return Fail(NetworkErrors::TransportShuttingDown);
-        if (certificate.HasError()) {
-            auto error = certificate.ErrorValue();
-            lock.unlock();
-            Shutdown();
-            return Result<void>::Failure(std::move(error));
-        }
+        if (certificate.HasError())
+            return Result<void>::Failure(certificate.ErrorValue());
         auto ownedCertificate = std::move(certificate).Value();
         SteamNetworkingErrMsg error{};
-        const auto accepted = GnsDetail::NativeCall([&] {
-            return native_->SetCertificate(ownedCertificate.View().data(), static_cast<int>(ownedCertificate.View().size()), error);
+        if (const auto accepted = GnsDetail::NativeCall([this, &ownedCertificate, &error] {
+            return nativeOwner_.sockets->SetCertificate(ownedCertificate.View().data(), static_cast<int>(ownedCertificate.View().size()),
+                                                        error);
         });
-        if (!accepted || !*accepted) {
-            lock.unlock();
-            Shutdown();
-            return Fail(accepted ? NetworkErrors::AuthenticationRejected : NetworkErrors::TransportNativeUnavailable);
-        }
+            !accepted.has_value() || !accepted.value())
+            return Fail(accepted.has_value() ? NetworkErrors::AuthenticationRejected : NetworkErrors::TransportNativeUnavailable);
         ownedCertificate.Clear();
         return Result<void>::Success();
     }
@@ -189,7 +194,7 @@ namespace Horo::Network {
         shutdown_ = true;
         ++capabilityRevision_;
         events_.clear();
-        if (!native_ && !rootGeneration_)
+        if (!nativeOwner_.sockets && !nativeOwner_.rootGeneration)
             return;
         auto &host = NativeHost();
         {
@@ -197,33 +202,35 @@ namespace Horo::Network {
             host.active = nullptr;
             host.shuttingDown = true;
             host.cleanupRunning = true;
-            host.nativeCleanupPending = native_ != nullptr;
-            host.cleanupRoot = rootGeneration_;
+            host.nativeCleanupPending = nativeOwner_.sockets != nullptr;
+            host.cleanupRoot = nativeOwner_.rootGeneration;
         }
-        CloseNativeConnections();
-        const auto retired = CleanupNative(native_ != nullptr, rootGeneration_);
+        const bool connectionsClosed = CloseNativeConnections();
+        // A foreign close exception is handled by the same native Kill fallback,
+        // whose failed retirement remains owned for retry; no error is swallowed.
+        const auto retired =
+            CleanupNative(nativeOwner_.sockets != nullptr || !connectionsClosed, nativeOwner_.rootGeneration, nativeOwner_.kill);
         PublishCleanup(retired);
-        rootGeneration_ = 0;  // Retry ownership transferred to NativeHost before release.
-        if (caresInitialized_) {
+        nativeOwner_.rootGeneration = 0;  // Retry ownership transferred to NativeHost before release.
+        if (nativeOwner_.resolverInitialized) {
             ares_library_cleanup();
-            caresInitialized_ = false;
+            nativeOwner_.resolverInitialized = false;
         }
-        native_ = nullptr;
+        nativeOwner_.sockets = nullptr;
         initialized_ = false;
     }
 
-    void GnsTransport::CloseNativeConnections() noexcept {
+    bool GnsTransport::CloseNativeConnections() noexcept {
         // Kill remains the fallback owner if an individual close unexpectedly
         // throws. Never allocate an Error while retiring native state.
-        try {
-            for (auto &slot : connections_) {
+        const bool closed = GnsDetail::NativeVoid([this] {
+            for (const auto &slot : connections_) {
                 if (slot.native != k_HSteamNetConnection_Invalid)
-                    native_->CloseConnection(slot.native, 0, nullptr, false);
+                    nativeOwner_.sockets->CloseConnection(slot.native, 0, nullptr, false);
             }
             if (nativeListener_ != k_HSteamListenSocket_Invalid)
-                native_->CloseListenSocket(nativeListener_);
-        } catch (...) {
-        }
+                nativeOwner_.sockets->CloseListenSocket(nativeListener_);
+        });
         for (auto &slot : connections_) {
             slot.native = k_HSteamNetConnection_Invalid;
             slot.phase = ConnectionPhase::Terminal;
@@ -237,6 +244,7 @@ namespace Horo::Network {
             callbacks_.clear();
             callbackOverflow_ = false;
         }
+        return closed;
     }
 
 }  // namespace Horo::Network

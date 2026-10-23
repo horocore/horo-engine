@@ -1,6 +1,8 @@
 #include "GnsTransportInternal.h"
 #include "Horo/Network/NetworkErrors.h"
 
+#include <bit>
+
 namespace Horo::Network {
     /** @copydoc GnsTransport::ReadSecurePeer */
     Result<SteamNetworkingSocketsLib::HoroNativeChannel> GnsTransport::ReadSecurePeer(ConnectionHandle connection,
@@ -14,10 +16,10 @@ namespace Horo::Network {
             (slot->admissionGeneration.IsValid() && slot->admissionGeneration != generation))
             return Result<Native>::Failure(MakeError(NetworkErrors::TransportHandleInvalid));
         Native evidence{};
-        const auto status = SteamNetworkingSocketsLib::HoroInspectNativeChannel(slot->native, &evidence);
-        if (status != SteamNetworkingSocketsLib::HoroBridgeStatus::Ok)
+        if (const auto status = SteamNetworkingSocketsLib::HoroInspectNativeChannel(slot->native, &evidence);
+            status != SteamNetworkingSocketsLib::HoroBridgeStatus::Ok)
             return Result<Native>::Failure(GnsSecurityFailure(status));
-        if (evidence.rootGeneration != rootGeneration_)
+        if (evidence.rootGeneration != nativeOwner_.rootGeneration)
             return Result<Native>::Failure(MakeError(NetworkErrors::TerminalGenerationStale));
         slot->admissionGeneration = generation;
         return Result<Native>::Success(evidence);
@@ -26,20 +28,19 @@ namespace Horo::Network {
     /** @copydoc GnsTransport::BindSecurePeer */
     Result<AuthenticationDigest> GnsTransport::BindSecurePeer(ConnectionHandle connection, NetworkOperationGeneration generation,
                                                               const SteamNetworkingSocketsLib::HoroNativeChannel &expected,
-                                                              std::span<const std::byte> context) {
+                                                              const std::array<std::byte, 192> &context) {
         std::lock_guard lock(mutex_);
-        auto *slot = Find(connection);
+        const auto *slot = Find(connection);
         if (!security_ || shutdown_ || !initialized_ || std::this_thread::get_id() != ownerThread_ || !slot ||
             slot->phase != ConnectionPhase::Connected || slot->admissionGeneration != generation ||
-            expected.rootGeneration != rootGeneration_)
+            expected.rootGeneration != nativeOwner_.rootGeneration)
             return Result<AuthenticationDigest>::Failure(MakeError(NetworkErrors::TerminalGenerationStale));
-        AuthenticationDigest digest{};
-        const auto status =
-            SteamNetworkingSocketsLib::HoroAttestNativeKeyOwner(slot->native, &expected,
-                                                                reinterpret_cast<const std::uint8_t *>(context.data()), context.size(),
-                                                                reinterpret_cast<std::uint8_t *>(digest.data()));
-        if (status != SteamNetworkingSocketsLib::HoroBridgeStatus::Ok)
+        const auto nativeContext = std::bit_cast<std::array<std::uint8_t, 192>>(context);
+        std::array<std::uint8_t, 32> digest{};
+        if (const auto status = SteamNetworkingSocketsLib::HoroAttestNativeKeyOwner(slot->native, &expected, nativeContext.data(),
+                                                                                    nativeContext.size(), digest.data());
+            status != SteamNetworkingSocketsLib::HoroBridgeStatus::Ok)
             return Result<AuthenticationDigest>::Failure(GnsSecurityFailure(status));
-        return Result<AuthenticationDigest>::Success(digest);
+        return Result<AuthenticationDigest>::Success(std::bit_cast<AuthenticationDigest>(digest));
     }
 }  // namespace Horo::Network

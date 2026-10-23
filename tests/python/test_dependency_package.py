@@ -241,3 +241,72 @@ add_test(NAME sdk-consumer COMMAND consumer)
     run("cmake", "-S", str(consumer), "-B", str(consumer / "build"), f"-DSDK_ROOT={restored}")
     run("cmake", "--build", str(consumer / "build"), "--config", "Debug", "--parallel", "1")
     run("ctest", "--test-dir", str(consumer / "build"), "-C", "Debug", "--output-on-failure")
+
+
+def _build_unicode_fixture(tmp_path):
+    """Build a tiny archive with the layout expected by the Unicode recipe."""
+    stage = tmp_path / "verified sdk ü"
+    (stage / "include/unicode").mkdir(parents=True)
+    (stage / "share").mkdir()
+    (stage / "include/unicode/utypes.h").write_text("int unicode_probe(void);\n", encoding="utf-8")
+    (stage / "share/ICU.txt").write_text("Fixture notice\n", encoding="utf-8")
+    (stage / "share/icudt78l.dat").write_bytes(b"fixture")
+    producer = tmp_path / "producer"
+    producer.mkdir()
+    (producer / "probe.c").write_text("int unicode_probe(void) { return 42; }\n", encoding="utf-8")
+    (producer / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.20)
+project(UnicodeFixture C)
+add_library(fixture STATIC probe.c)
+set_target_properties(fixture PROPERTIES PREFIX "" OUTPUT_NAME unicode
+    ARCHIVE_OUTPUT_DIRECTORY "${SDK_ROOT}/lib"
+    ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${SDK_ROOT}/lib")
+''', encoding="utf-8")
+    run("cmake", "-S", str(producer), "-B", str(producer / "build"), f"-DSDK_ROOT={stage}",
+        "-DCMAKE_BUILD_TYPE=Debug")
+    run("cmake", "--build", str(producer / "build"), "--config", "Debug", "--parallel", "1")
+
+    return stage
+
+
+def test_cached_unicode_target_exports_to_external_gameplay_consumer(tmp_path):
+    if not shutil.which("cmake"):
+        pytest.skip("CMake unavailable")
+    stage = _build_unicode_fixture(tmp_path)
+
+    host = tmp_path / "host"
+    host.mkdir()
+    # Only the independently tested archive verifier is replaced. The real
+    # Unicode recipe and the engine's export operation execute unchanged.
+    (host / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.20)
+project(UnicodeExportHost C)
+include(GNUInstallDirs)
+list(APPEND CMAKE_MODULE_PATH "@MODULE_DIR@")
+include(HoroUnicodeDependency)
+function(horo_prepare_dependency_sdk name recipe output_root output_identity output_archive)
+    set(${output_root} "${SDK_ROOT}" PARENT_SCOPE)
+endfunction()
+horo_add_unicode_dependency()
+set_target_properties(HoroThirdPartyUnicode PROPERTIES EXPORT_NAME ThirdPartyUnicode)
+export(TARGETS HoroThirdPartyUnicode NAMESPACE HoroEngine::
+    FILE "${CMAKE_BINARY_DIR}/HoroEngineGameplayRuntimeUiTargets.cmake")
+'''.replace("@MODULE_DIR@", (ROOT / "cmake").as_posix()), encoding="utf-8")
+    host_build = host / "build"
+    run("cmake", "-S", str(host), "-B", str(host_build), f"-DSDK_ROOT={stage}")
+
+    consumer = tmp_path / "external gameplay"
+    consumer.mkdir()
+    (consumer / "main.c").write_text(
+        '#include <unicode/utypes.h>\nint main(void) { return unicode_probe() != 42; }\n', encoding="utf-8")
+    (consumer / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.20)
+project(ExternalGameplayConsumer C)
+enable_testing()
+find_package(Threads REQUIRED)
+include("${SDK_EXPORT}")
+add_executable(consumer main.c)
+target_link_libraries(consumer PRIVATE HoroEngine::ThirdPartyUnicode)
+add_test(NAME external-gameplay-unicode COMMAND consumer)
+''', encoding="utf-8")
+    run("cmake", "-S", str(consumer), "-B", str(consumer / "build"),
+        f"-DSDK_EXPORT={host_build / 'HoroEngineGameplayRuntimeUiTargets.cmake'}")
+    run("cmake", "--build", str(consumer / "build"), "--config", "Debug", "--parallel", "1")
+    run("ctest", "--test-dir", str(consumer / "build"), "-C", "Debug", "--output-on-failure")

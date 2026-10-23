@@ -13,6 +13,7 @@
 #include <exception>
 #if HORO_PRODUCT_HAS_GNS
 #include "GnsTransportFactory.h"
+#include "NetworkProductGnsSelection.h"
 #endif
 
 #include <array>
@@ -52,11 +53,12 @@ namespace Horo::Application::Internal {
         }
 
         [[nodiscard]] Net::TransportCapabilities GnsCapabilities() {
+            using enum Net::TransportSupport;
             Net::TransportCapabilities capabilities;
             capabilities.revision = 1;
-            capabilities.delivery.fill(Net::TransportSupport::Unsupported);
-            capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::UnreliableUnordered)] = Net::TransportSupport::Available;
-            capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::ReliableOrdered)] = Net::TransportSupport::Available;
+            capabilities.delivery.fill(Unsupported);
+            capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::UnreliableUnordered)] = Available;
+            capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::ReliableOrdered)] = Available;
             capabilities.maximumChannels = 1;
             capabilities.maximumMessageBytes = 1200;
             return capabilities;
@@ -222,30 +224,13 @@ namespace Horo::Application::Internal {
             const std::shared_ptr<const NetworkProductAdmission> &admission, const Net::GnsNativeSecurityOptions &options) {
             if (!admission)
                 return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
-            auto providers = admission->Providers();
-            const auto &trust = admission->Policy().trust;
-            if (providers.certificates || providers.peers || providers.privateKeys || providers.channel || trust.id != options.trust.id ||
-                trust.revision != options.trust.revision || trust.exposure != options.trust.exposure ||
-                trust.credential != options.trust.credential || trust.certificate != options.trust.certificate ||
-                trust.privateKey != options.trust.privateKey || trust.maximumProofBytes != options.trust.maximumProofBytes ||
-                trust.allowUnprotectedInMemoryLoopback != options.trust.allowUnprotectedInMemoryLoopback ||
-                options.transport.maximumConnections != admission->Policy().maximumPeers || options.transport.maximumEventsPerPoll != 64 ||
-                options.transport.maximumMessageBytes != admission->Policy().local.transport.maximumMessageBytes ||
-                options.transport.maximumMessageBytes != admission->Policy().envelope.maximumFrameBytes)
-                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
-            auto selected = Net::CreateSecureGnsTransport(options);
+            auto selected =
+                SelectNetworkProductGns(admission->Policy(), admission->Providers(), admission->Codecs(), admission->Handlers(), options);
             if (selected.HasError())
                 return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(selected.ErrorValue());
-            providers.certificates = selected.Value().native.certificates;
-            providers.peers = selected.Value().native.peers;
-            providers.privateKeys = selected.Value().native.privateKeys;
-            providers.channel = selected.Value().native.channel;
-            auto captured =
-                NetworkProductAdmission::Capture(admission->Policy(), std::move(providers), admission->Codecs(), admission->Handlers());
-            if (captured.HasError())
-                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(captured.ErrorValue());
-            return CreateNetworkProductTransport(std::move(selected).Value().transport, role, bind, connect, std::move(debugger),
-                                                 std::move(sessions), std::move(captured).Value());
+            auto composition = std::move(selected).Value();
+            return CreateNetworkProductTransport(std::move(composition.transport), role, bind, connect, std::move(debugger),
+                                                 std::move(sessions), std::move(composition.admission));
         }
 #endif
 

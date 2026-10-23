@@ -19,8 +19,8 @@ namespace Horo::Network {
         if (slot.phase != ConnectionPhase::Connected)
             return Result<NetworkConnectionStats>::Failure(MakeError(NetworkErrors::TransportConnectionFailed));
         SteamNetConnectionRealTimeStatus_t nativeStatus{};
-        if (GnsDetail::NativeCall([&] {
-            return native_->GetConnectionRealTimeStatus(slot.native, &nativeStatus, 0, nullptr);
+        if (GnsDetail::NativeCall([this, &slot, &nativeStatus] {
+            return nativeOwner_.sockets->GetConnectionRealTimeStatus(slot.native, &nativeStatus, 0, nullptr);
         }).value_or(k_EResultFail) != k_EResultOK)
             return Result<NetworkConnectionStats>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
         NetworkConnectionStats result{};

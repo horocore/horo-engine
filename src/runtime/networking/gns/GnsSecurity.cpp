@@ -3,6 +3,7 @@
 #include "Horo/Network/NetworkErrors.h"
 
 #include <algorithm>
+#include <bit>
 #include <new>
 
 namespace Horo::Network {
@@ -50,9 +51,9 @@ namespace Horo::Network {
         std::array<std::byte, 192> BindingContext(const SecureChannelBindingRequest &request) noexcept {
             std::array<std::byte, 192> bytes{};
             std::size_t cursor{};
-            const std::uint64_t fields[]{request.challenge.contractVersion, request.challenge.policy.Value(),
-                                         request.challenge.policyRevision, request.binding.Value(),
-                                         request.credentialStamp.authorityGeneration};
+            const std::array<std::uint64_t, 5> fields{request.challenge.contractVersion, request.challenge.policy.Value(),
+                                                      request.challenge.policyRevision, request.binding.Value(),
+                                                      request.credentialStamp.authorityGeneration};
             for (const auto value : fields)
                 for (unsigned shift = 0; shift < 64; shift += 8)
                     bytes[cursor++] = static_cast<std::byte>(value >> shift);
@@ -193,20 +194,20 @@ namespace Horo::Network {
 
     /** @copydoc GnsSecurity::Prepare */
     Result<std::vector<std::byte>> GnsSecurity::Prepare(ISteamNetworkingSockets &native, std::uint64_t &rootGeneration) {
-        const auto installed = Native::HoroInstallSelectedRoot(reinterpret_cast<const std::uint8_t *>(options_.trustedRoot.data()),
-                                                               options_.appId, &rootGeneration);
-        if (installed != Native::HoroBridgeStatus::Ok)
+        const auto root = std::bit_cast<std::array<std::uint8_t, 32>>(options_.trustedRoot);
+        if (const auto installed = Native::HoroInstallSelectedRoot(root.data(), options_.appId, &rootGeneration);
+            installed != Native::HoroBridgeStatus::Ok)
             return Result<std::vector<std::byte>>::Failure(GnsSecurityFailure(installed));
         SteamNetworkingErrMsg error{};
         int bytes{};
-        if (!GnsDetail::NativeCall([&] {
+        if (!GnsDetail::NativeCall([&native, &bytes, &error] {
             return native.GetCertificateRequest(&bytes, nullptr, error);
         }).value_or(false) ||
             bytes <= 0 || bytes > 16384)
             return Result<std::vector<std::byte>>::Failure(
                 MakeError(NetworkErrors::TransportNativeUnavailable, "Native certificate request is unavailable"));
         std::vector<std::byte> request(static_cast<std::size_t>(bytes));
-        if (!GnsDetail::NativeCall([&] {
+        if (!GnsDetail::NativeCall([&native, &bytes, &error, &request] {
             return native.GetCertificateRequest(&bytes, request.data(), error);
         }).value_or(false) ||
             bytes <= 0 || static_cast<std::size_t>(bytes) > request.size())
