@@ -362,3 +362,26 @@ macOS validation host, `scripts/analyze.py check` stops with
 `Managed quality processes require Linux with pidfd support or Windows` before
 producing a report. Sonar IDE, CLI secrets and Codacy are consequently unvalidated;
 this is not a clean preflight or a hosted quality-gate result.
+
+### Bounded source archive transport
+
+SDL, HarfBuzz and curl can use SHA-256-verified codeload archives at their
+existing pinned revisions instead of cloning Git history. A local inventory
+on 2026-10-23 measured 157,629,513, 66,337,692 and 54,386,924 bytes of Git
+metadata respectively (278,354,129 bytes total). These are local source-tree
+measurements, not a measured reduction in compressed Actions cache size or
+hosted job duration. The downloaded archives total 54,838,887 bytes.
+
+All 2,194 SDL and 3,464 HarfBuzz tracked blobs matched the pinned Git objects.
+All 4,284 curl files matched as well after accounting for the four Windows
+files exported with CRLF according to upstream's `.gitattributes`. None of
+these three revisions has a `.gitmodules` file. Mbed TLS remains a Git fetch
+because its framework submodule is required; a plain codeload replacement
+would omit that source. SDL's diagnostic revision is explicitly set to its
+pinned commit because an archive has no Git metadata to describe.
+
+This reduces repeated source acquisition and history stored in dependency
+caches; it does not move the compiler caches out of the shared 10-GB Actions
+budget. Native and instrumented builds, test coverage, analysis scope and
+quality gates remain unchanged. Cross-platform hosted timings are still
+required before claiming a speedup.
