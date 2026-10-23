@@ -676,21 +676,28 @@ if(HORO_BUILD_NETWORK_GNS)
     add_library(HoroNetworkTransportGNSFactoryInternal INTERFACE)
     target_include_directories(HoroNetworkTransportGNSFactoryInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/networking/gns/factory>)
-    target_link_libraries(HoroNetworkTransportGNSFactoryInternal INTERFACE HoroEngine::NetworkApi)
+    target_link_libraries(HoroNetworkTransportGNSFactoryInternal INTERFACE HoroEngine::NetworkApi HoroEngine::NetworkRuntime)
     add_library(HoroNetworkTransportGNS STATIC
         runtime/networking/gns/GnsAddressResolution.h
         runtime/networking/gns/GnsAddressResolution.cpp
         runtime/networking/gns/factory/GnsTransportFactory.h
         runtime/networking/gns/GnsTransportInternal.h
         runtime/networking/gns/GnsTransport.cpp
+        runtime/networking/gns/GnsTransportLifecycle.cpp
+        runtime/networking/gns/GnsNativeHost.h
+        runtime/networking/gns/GnsNativeCall.h
         runtime/networking/gns/GnsTransportPackets.cpp
         runtime/networking/gns/GnsTransportDiagnostics.cpp
+        runtime/networking/gns/GnsSecurityInternal.h
+        runtime/networking/gns/GnsSecurity.cpp
+        runtime/networking/gns/GnsSecurityTransport.cpp
     )
     add_library(HoroEngine::NetworkTransportGNS ALIAS HoroNetworkTransportGNS)
     target_compile_features(HoroNetworkTransportGNS PUBLIC cxx_std_20)
     target_compile_definitions(HoroNetworkTransportGNS PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
     target_link_libraries(HoroNetworkTransportGNS PUBLIC HoroNetworkTransportGNSFactoryInternal
         PRIVATE GameNetworkingSockets::static c-ares::cares)
+    target_include_directories(HoroNetworkTransportGNS PRIVATE "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets")
 endif()
 
 add_library(HoroRuntimeUi STATIC

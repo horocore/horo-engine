@@ -57,6 +57,10 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime H
     HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
+if(HORO_BUILD_NETWORK_GNS)
+    target_sources(HoroNetworkProductHost PRIVATE common/NetworkProductGnsSelection.cpp)
+    target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::NetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
+endif()
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine

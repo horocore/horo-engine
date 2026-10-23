@@ -75,6 +75,8 @@ namespace Horo::Application::Internal {
          * @return Original terminal, or null while no retained lifecycle has terminalized.
          */
         [[nodiscard]] const Network::PeerSessionTerminalSnapshot *ClientSessionTerminal() const noexcept;
+        /** @brief Borrow the original outbound transport-attempt terminal through teardown; never implies a peer/session existed. */
+        [[nodiscard]] const ClientConnectionAttemptTerminal *ClientConnectionTerminal() const noexcept;
         [[nodiscard]] Result<void> DisconnectClient(Network::NetworkModeWorldKind world, Network::NetworkOperationGeneration generation);
         [[nodiscard]] Result<Network::NetworkModeRoleView> Role(Network::NetworkModeWorldKind world, Runtime::SceneRuntimeId scene) const;
         void Shutdown() noexcept;

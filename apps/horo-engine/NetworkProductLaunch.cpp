@@ -13,6 +13,7 @@
 #include <exception>
 #if HORO_PRODUCT_HAS_GNS
 #include "GnsTransportFactory.h"
+#include "NetworkProductGnsSelection.h"
 #endif
 
 #include <array>
@@ -52,10 +53,12 @@ namespace Horo::Application::Internal {
         }
 
         [[nodiscard]] Net::TransportCapabilities GnsCapabilities() {
+            using enum Net::TransportSupport;
             Net::TransportCapabilities capabilities;
             capabilities.revision = 1;
-            capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::UnreliableUnordered)] = Net::TransportSupport::Available;
-            capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::ReliableOrdered)] = Net::TransportSupport::Available;
+            capabilities.delivery.fill(Unsupported);
+            capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::UnreliableUnordered)] = Available;
+            capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::ReliableOrdered)] = Available;
             capabilities.maximumChannels = 1;
             capabilities.maximumMessageBytes = 1200;
             return capabilities;
@@ -213,11 +216,30 @@ namespace Horo::Application::Internal {
             Net::NetworkModeServiceRequest request_;
         };
 
+#if HORO_PRODUCT_HAS_GNS
+        /** @brief Bind explicitly selected native authorities into the same immutable product capture before service configuration. */
+        Result<std::unique_ptr<Net::INetworkModeService>> CreateSecureProductService(
+            const Net::NetworkProjectRole role, const Net::NetworkAddress &bind, const Net::NetworkAddress &connect,
+            std::shared_ptr<NetworkDebuggerService> debugger, std::shared_ptr<ClientSessionOwner> sessions,
+            const std::shared_ptr<const NetworkProductAdmission> &admission, const Net::GnsNativeSecurityOptions &options) {
+            if (!admission)
+                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
+            auto selected =
+                SelectNetworkProductGns(admission->Policy(), admission->Providers(), admission->Codecs(), admission->Handlers(), options);
+            if (selected.HasError())
+                return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(selected.ErrorValue());
+            auto composition = std::move(selected).Value();
+            return CreateNetworkProductTransport(std::move(composition.transport), role, bind, connect, std::move(debugger),
+                                                 std::move(sessions), std::move(composition.admission));
+        }
+#endif
+
         [[nodiscard]] Net::NetworkModeFactories ProductFactories(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind,
                                                                  const Net::NetworkAddress &connect,
                                                                  std::shared_ptr<NetworkDebuggerService> debugger,
                                                                  std::shared_ptr<ClientSessionOwner> sessions,
-                                                                 std::shared_ptr<const NetworkProductAdmission> admission) {
+                                                                 std::shared_ptr<const NetworkProductAdmission> admission,
+                                                                 std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity) {
             Net::NetworkModeFactories factories;
             for (const auto kind : {Net::NetworkModeServiceKind::Session, Net::NetworkModeServiceKind::LocalPlayer}) {
                 factories.services[static_cast<std::size_t>(kind)] = [](const Net::NetworkModeServiceRequest &request) {
@@ -227,7 +249,9 @@ namespace Horo::Application::Internal {
             }
 #if HORO_PRODUCT_HAS_GNS
             factories.services[static_cast<std::size_t>(Net::NetworkModeServiceKind::Transport)] =
-                [role, bind, connect, debugger, sessions, admission](const Net::NetworkModeServiceRequest &) {
+                [role, bind, connect, debugger, sessions, admission, nativeSecurity](const Net::NetworkModeServiceRequest &) {
+                if (nativeSecurity)
+                    return CreateSecureProductService(role, bind, connect, debugger, sessions, admission, *nativeSecurity);
                 auto transport = Net::CreateGnsTransport();
                 if (transport.HasError())
                     return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(transport.ErrorValue());
@@ -237,6 +261,7 @@ namespace Horo::Application::Internal {
             static_cast<void>(debugger);
             static_cast<void>(sessions);
             static_cast<void>(admission);
+            static_cast<void>(nativeSecurity);
             static_cast<void>(role);
             static_cast<void>(bind);
             static_cast<void>(connect);
@@ -318,6 +343,7 @@ namespace Horo::Application::Internal {
         struct ProductRuntimeCapabilities final {
             HeadlessProjectSceneResources *resources{};
             std::shared_ptr<const NetworkProductAdmission> admission;
+            std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity;
         };
 
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
@@ -346,10 +372,11 @@ namespace Horo::Application::Internal {
             (void)debugger->Begin(worlds.values[0].scene.value, 1, launch.role != Net::NetworkProjectRole::Standalone,
                                   Net::NetworkDiagnosticProvider::Native);
             auto sessions = CreateProductSessions(clock, launch.role);
-            auto configured = ComposeProductWorldServices(std::move(scene), launch, project,
-                                                          ProductFactories(launch.role, launch.bind, launch.connect, debugger, sessions,
-                                                                           std::move(capabilities.admission)),
-                                                          capabilities.resources);
+            auto configured =
+                ComposeProductWorldServices(std::move(scene), launch, project,
+                                            ProductFactories(launch.role, launch.bind, launch.connect, debugger, sessions,
+                                                             std::move(capabilities.admission), std::move(capabilities.nativeSecurity)),
+                                            capabilities.resources);
             if (configured.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
             return NetworkProductHost::Create(*clock,
@@ -389,10 +416,15 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
-    int RunNetworkProduct(const std::span<char *> arguments, std::shared_ptr<const NetworkProductAdmission> admission) {
+    int RunNetworkProduct(const std::span<char *> arguments, std::shared_ptr<const NetworkProductAdmission> admission,
+                          std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity) {
         auto launch = ParseNetworkProductLaunch(arguments);
         if (launch.HasError()) {
             std::cerr << "horo-engine: " << launch.ErrorValue().message << '\n';
+            return 2;
+        }
+        if (nativeSecurity && launch.Value().role == Net::NetworkProjectRole::Standalone) {
+            std::cerr << "horo-engine: native security requires an explicit network role\n";
             return 2;
         }
         auto project = ProjectSettings();
@@ -407,7 +439,7 @@ namespace Horo::Application::Internal {
         auto clock = std::make_shared<SteadyClock>();
         Net::NetworkTargetDiagnostic diagnostic;
         auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic,
-                                      {resources.get(), std::move(admission)});
+                                      {resources.get(), std::move(admission), std::move(nativeSecurity)});
         if (runtime.HasError()) {
             std::cerr << "horo-engine: network product admission failed (capability " << static_cast<int>(diagnostic.capability)
                       << ", reason " << static_cast<int>(diagnostic.reason) << ")\n";
