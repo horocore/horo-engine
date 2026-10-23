@@ -65,7 +65,8 @@ namespace Horo::Render::Detail {
                 }
             }
 
-            std::vector<SlotClaim> slots_;
+            // Keep MSVC Debug proxy allocation in a throwing count constructor before admission.
+            std::vector<SlotClaim> slots_ = std::vector<SlotClaim>(std::size_t{0});
             RenderResourceRegistry &registry_;
             RenderMemoryBudget &budget_;
             bool &rollbackIncomplete_;

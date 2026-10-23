@@ -17,8 +17,52 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  viewport-assets:
+    name: Canonical Vulkan viewport assets
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    outputs:
+      artifact-id: ${{ steps.assets.outputs.artifact-id }}
+    env:
+      CC: gcc
+      CXX: g++
+      HORO_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build-tools
+      - uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-tests-v1
+          mode: Debug
+          max-size: 2G
+      - name: Configure the qualified offline cook
+        run: >-
+          cmake --preset ci-linux-debug
+          -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON
+          -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=ON
+          -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
+          -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
+          -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
+      - name: Build only the owning canonical cook
+        run: cmake --build build/ci --target HoroEditorVulkanShaderCook --parallel 2
+      - uses: ./.github/actions/cook-vulkan-viewport
+        with:
+          asset-root: ${{ github.workspace }}/build/ci/native-editor-assets
+      - name: Upload data-only same-run viewport assets
+        id: assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sonar-viewport-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: build/ci/native-editor-assets/
+
   sonar:
     name: SonarCloud
+    needs: viewport-assets
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -116,6 +160,27 @@ jobs:
           path: |
             ${{ github.workspace }}/.sonar/ccache
           key: ${{ steps.compiler.outputs.cache-primary-key }}
+
+      - name: Require the producer artifact identity
+        env:
+          VIEWPORT_ARTIFACT_ID: ${{ needs.viewport-assets.outputs.artifact-id }}
+        run: '[[ "$VIEWPORT_ARTIFACT_ID" =~ ^[0-9]+$ ]]'
+
+      - name: Download this run's viewport data
+        uses: actions/download-artifact@d3f86a106a0bac45f2f8406bd4850e7943e2c8df
+        with:
+          artifact-ids: ${{ needs.viewport-assets.outputs.artifact-id }}
+          path: build/sonar/native-editor-assets
+          merge-multiple: true
+
+      - name: Verify viewport source run catalog and data digests
+        run: |
+          set -euo pipefail
+          asset_root="$GITHUB_WORKSPACE/build/sonar/native-editor-assets"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          HORO_VIEWPORT_SOURCE_TREE="$(git rev-parse 'HEAD^{tree}')" \
+            python3 .github/scripts/viewport_asset_bundle.py verify --root "$asset_root"
+          printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$asset_root" >> "$GITHUB_ENV"
 
       - name: Run C++ coverage tests
         run: xvfb-run -a ctest --preset sonar

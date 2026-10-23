@@ -175,37 +175,13 @@ jobs:
           PYCODE
       - name: Cook the viewport with the canonical locked tools
         if: runner.os == 'Linux'
+        uses: ./.github/actions/cook-vulkan-viewport
+        with:
+          asset-root: ${{ github.workspace }}/build/ci/native-editor-assets
+      - name: Stage the canonical viewport assets for the editor
+        if: runner.os == 'Linux'
         run: |
-          set -euo pipefail
-          tool_root="$RUNNER_TEMP/viewport-cook-tools"
           asset_root="$GITHUB_WORKSPACE/build/ci/native-editor-assets"
-          mkdir -p "$tool_root" "$asset_root/shaders/editor"
-          build/ci/apps/HoroEditorVulkanShaderCook --describe-tools > "$tool_root/catalog.tsv"
-          count=0
-          declare -a executables
-          while IFS=$'\t' read -r role source archive_digest executable_digest executable_relative_path; do
-            [[ "$source" == https://* ]]
-            archive="$tool_root/$role.archive"
-            destination="$tool_root/$role"
-            mkdir -p "$destination"
-            curl --fail --location --retry 3 --output "$archive" "$source"
-            printf '%s  %s\n' "${archive_digest#sha256:}" "$archive" | sha256sum --check
-            case "$role" in
-              0) tar -xzf "$archive" -C "$destination" ;;
-              1) dpkg-deb --extract "$archive" "$destination" ;;
-              2) dpkg-deb --extract "$archive" "$destination" ;;
-              *) exit 1 ;;
-            esac
-            executable="$(python3 scripts/project.py verify-shader-tool --root "$destination" \
-              --relative-path "$executable_relative_path" --sha256 "$executable_digest")"
-            executables[$role]="$executable"
-            count=$((count + 1))
-          done < "$tool_root/catalog.tsv"
-          [[ "$count" == 3 ]]
-          export LD_LIBRARY_PATH="$(dirname "${executables[0]}")/../lib:${LD_LIBRARY_PATH:-}"
-          build/ci/apps/HoroEditorVulkanShaderCook assets/shaders/editor/viewport.hlsl \
-            "$asset_root/shaders/editor/viewport-vulkan" "$RUNNER_TEMP/viewport-cook-scratch" \
-            "${executables[0]}" "${executables[1]}" "${executables[2]}"
           editor_asset_root="$(cat build/ci/apps/HoroEditorAssetRoot-Debug.txt)"
           cmake -E copy_directory "$asset_root" "$editor_asset_root"
           printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$editor_asset_root" >> "$GITHUB_ENV"
