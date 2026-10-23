@@ -40,7 +40,10 @@ namespace Horo::Editor {
 
     /** @brief Builds one exact bounded transaction without copying or mutating the entire document.
      * @param document Sole canonical owner, borrowed only during this call.
-     * @param settings Frozen gesture semantics.
+     * @param settings Frozen gesture semantics. Carve requires an existing authored per-vertex hole mask and finite strength in [0,1].
+     * Carve uses physical radial linear falloff: clamp(strength * falloff, 0, 1) >= 0.5 sets a hole byte to one;
+     * lower influence preserves the existing bit. This categorical threshold is the planner's bounded policy, not a format rule.
+     * Dabs retain caller order; no other channel is initialized or written. Restore remains unsupported.
      * @param dabs Ordered source-space dabs; UI event timing never changes an already captured command.
      * @param operation Host-issued operation identity.
      * @param limits Explicit finite planner ceilings, additional to document/history admission.

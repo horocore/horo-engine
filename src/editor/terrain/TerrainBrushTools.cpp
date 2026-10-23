@@ -15,13 +15,17 @@ namespace Horo::Editor {
             return Result<TerrainEditOperation>::Failure(MakeError(error));
         }
 
+        /** @brief Keeps supported planner modes separate from scalar request admission. */
+        bool SupportedBrushMode(TerrainBrushMode mode) {
+            return mode == TerrainBrushMode::Raise || mode == TerrainBrushMode::Lower || mode == TerrainBrushMode::Paint ||
+                   mode == TerrainBrushMode::Carve;
+        }
+
         /** @brief Validates gesture identity and settings in their original evaluation order. */
         bool InvalidBrushRequest(const TerrainBrushSettings &settings, std::span<const TerrainBrushDab> dabs,
                                  TerrainEditOperationId operation) {
             return !operation.IsValid() || dabs.empty() || !std::isfinite(settings.radiusMeters) || settings.radiusMeters <= 0 ||
-                   !std::isfinite(settings.strength) || settings.strength < 0 ||
-                   (settings.mode != TerrainBrushMode::Raise && settings.mode != TerrainBrushMode::Lower &&
-                    settings.mode != TerrainBrushMode::Paint);
+                   !std::isfinite(settings.strength) || settings.strength < 0 || !SupportedBrushMode(settings.mode);
         }
 
         /** @brief Admits the request before borrowing canonical source data. */
@@ -50,8 +54,10 @@ namespace Horo::Editor {
                    dab.z > source.height - 1.0;
         }
 
-        /** @brief Requires an existing authored weight channel and legal blend settings without initializing layers. */
-        bool InvalidPaintSource(const Terrain::TerrainCanonicalSource &source, const TerrainBrushSettings &settings) {
+        /** @brief Requires existing authored channels and legal categorical/blend strength without initialization. */
+        bool InvalidBrushSource(const Terrain::TerrainCanonicalSource &source, const TerrainBrushSettings &settings) {
+            if (settings.mode == TerrainBrushMode::Carve)
+                return settings.strength > 1.0F || !source.HasHoles();
             return settings.mode == TerrainBrushMode::Paint &&
                    (settings.strength > 1.0F || source.layerCount == 0 || settings.layer >= source.layerCount);
         }
@@ -59,6 +65,10 @@ namespace Horo::Editor {
         /** @brief Charges all interleaved weight reads and owned bytes before detached allocation. */
         bool CanOwnBrushPatch(const Terrain::TerrainCanonicalSource &source, const TerrainBrushSettings &settings, std::uint64_t count,
                               std::size_t dabs, const TerrainBrushLimits &limits) {
+            if (settings.mode == TerrainBrushMode::Carve)
+                return limits.maximumOwnedBytes >= sizeof(TerrainRasterPatch) &&
+                       count <= (limits.maximumOwnedBytes - sizeof(TerrainRasterPatch)) / sizeof(std::uint8_t) &&
+                       dabs < limits.maximumReadVisits && count <= limits.maximumReadVisits / (dabs + 1);
             if (settings.mode != TerrainBrushMode::Paint)
                 return Detail::CanOwnTerrainHeightPatch(count, limits.maximumOwnedBytes);
             const std::size_t stride = source.layerCount * sizeof(std::uint16_t);
@@ -184,6 +194,67 @@ namespace Horo::Editor {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Applies the categorical half-influence threshold to detached per-vertex hole bytes only. */
+        Result<void> ApplyCarveDab(const Terrain::TerrainCanonicalSource &source, const TerrainBrushSettings &settings,
+                                   const TerrainBrushDab &dab, const CancellationToken &cancellation, TerrainRasterPatch &patch) {
+            const auto &rect = patch.rect;
+            for (std::uint32_t z = 0; z < rect.height; ++z) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(TerrainEditErrors::Cancelled));
+                for (std::uint32_t x = 0; x < rect.width; ++x) {
+                    const double dx = (rect.x + x - dab.x) * source.coordinates.spacingX;
+                    const double dz = (rect.z + z - dab.z) * source.coordinates.spacingZ;
+                    const double falloff = std::max(0.0, 1.0 - std::hypot(dx, dz) / settings.radiusMeters);
+                    const double influence = static_cast<double>(settings.strength) * falloff;
+                    if (!std::isfinite(influence))
+                        return Result<void>::Failure(MakeError(TerrainEditErrors::Invalid));
+                    if (std::clamp(influence, 0.0, 1.0) >= 0.5)
+                        patch.holes[static_cast<std::size_t>(z) * rect.width + x] = 1;
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Snapshots the bounded authored mask and applies dabs in caller order without touching the owner. */
+        Result<void> PrepareCarvePatch(const Terrain::TerrainCanonicalSource &source, const TerrainBrushSettings &settings,
+                                       std::span<const TerrainBrushDab> dabs, const CancellationToken &cancellation, std::uint64_t count,
+                                       TerrainRasterPatch &patch) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(TerrainEditErrors::Cancelled));
+            const auto &rect = patch.rect;
+            patch.holes.reserve(static_cast<std::size_t>(count));
+            for (std::uint32_t z = rect.z; z < rect.z + rect.height; ++z) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(TerrainEditErrors::Cancelled));
+                for (std::uint32_t x = rect.x; x < rect.x + rect.width; ++x)
+                    patch.holes.push_back(source.holes[static_cast<std::size_t>(z) * source.width + x]);
+            }
+            for (const auto &dab : dabs) {
+                auto applied = ApplyCarveDab(source, settings, dab, cancellation, patch);
+                if (applied.HasError())
+                    return Result<void>::Failure(std::move(applied).ErrorValue());
+            }
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(TerrainEditErrors::Cancelled));
+            return Result<void>::Success();
+        }
+
+        /** @brief Routes admitted channel work and preserves typed cancellation before operation assembly. */
+        Result<void> PrepareBrushPatch(const Terrain::TerrainCanonicalSource &source, const TerrainBrushSettings &settings,
+                                       std::span<const TerrainBrushDab> dabs, const CancellationToken &cancellation, std::uint64_t count,
+                                       TerrainRasterPatch &patch) {
+            if (settings.mode == TerrainBrushMode::Paint)
+                return PreparePaintPatch(source, settings, dabs, cancellation, count, patch);
+            if (settings.mode == TerrainBrushMode::Carve)
+                return PrepareCarvePatch(source, settings, dabs, cancellation, count, patch);
+            const auto status = PrepareHeightPatch(source, settings, dabs, cancellation, count, patch);
+            if (status == HeightPatchStatus::Cancelled)
+                return Result<void>::Failure(MakeError(TerrainEditErrors::Cancelled));
+            if (status == HeightPatchStatus::Invalid)
+                return Result<void>::Failure(MakeError(TerrainEditErrors::Invalid));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc PlanTerrainBrush */
@@ -193,7 +264,7 @@ namespace Horo::Editor {
         if (const auto *failure = AdmitBrushRequest(document, settings, dabs, operation, limits, cancellation))
             return Failed(*failure);
         const auto &source = document.Source();
-        if (InvalidPaintSource(source, settings))
+        if (InvalidBrushSource(source, settings))
             return Failed(TerrainEditErrors::Invalid);
         BrushGeometry geometry;
         if (const auto *failure = AdmitBrushGeometry(source, settings, dabs, limits, geometry))
@@ -202,17 +273,9 @@ namespace Horo::Editor {
         const auto count = geometry.count;
         try {
             TerrainRasterPatch patch{.rect = rect};
-            if (settings.mode == TerrainBrushMode::Paint) {
-                auto prepared = PreparePaintPatch(source, settings, dabs, cancellation, count, patch);
-                if (prepared.HasError())
-                    return Result<TerrainEditOperation>::Failure(std::move(prepared).ErrorValue());
-            } else {
-                const auto status = PrepareHeightPatch(source, settings, dabs, cancellation, count, patch);
-                if (status == HeightPatchStatus::Cancelled)
-                    return Failed(TerrainEditErrors::Cancelled);
-                if (status == HeightPatchStatus::Invalid)
-                    return Failed(TerrainEditErrors::Invalid);
-            }
+            auto prepared = PrepareBrushPatch(source, settings, dabs, cancellation, count, patch);
+            if (prepared.HasError())
+                return Result<TerrainEditOperation>::Failure(std::move(prepared).ErrorValue());
             TerrainEditOperation result{.fence = document.Fence(), .operation = operation};
             result.patches.push_back(std::move(patch));
             return Result<TerrainEditOperation>::Success(std::move(result));
