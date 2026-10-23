@@ -306,6 +306,56 @@ analysis when that warning is present.
 
 ## Delivery validation
 
+Main CI run `39986816534`, Windows job `120532857540` (before the merged CI
+latency changes), completed in 51 minutes. Debug build took 20m30s and its log
+contained 4,028 compile commands and 368 link commands. Across the Debug and
+auxiliary configurations, sccache reported 6,497 hits and 131 misses (98.02%),
+plus 533 non-cacheable calls: 525 `/Fp`, four `/Yc` and four multiple-input
+invocations. Direct/preprocessor mode was already enabled. Therefore enabling
+direct mode or increasing the object-cache capacity alone is not an evidenced
+fix. The merged CI presets disable precompiled headers; the new main run must
+measure whether that removes these bypasses and reduces build time. Do not use
+this earlier run to qualify the new preset or the GHCR reader.
+
+### Public GHCR dependency packages
+
+`Dependency SDK packages` publishes the qualified Unicode/ICU SDK to
+`ghcr.io/horocore/horo-engine-dependency-sdk`. It runs only for dependency recipe
+changes on main, or a manual dispatch on main. Its three platform configurations
+run sequentially (`max-parallel: 1`); PRs create no producer jobs. The publisher
+builds only dependency packaging targets, never the engine/test suite. The
+15-minute publisher timeout bounds capacity use; it is not a measured speedup.
+
+Native Debug jobs opt into anonymous package reads during configure. They use
+the independently computed compiler, platform, SDK, ABI, flags and recipe identity.
+The consumer checks the OCI layer size/digest and the existing SDK manifest before
+an atomic install. Missing ORAS, registry failure, absent package or incompatible
+payload retains the source build. Reads have a shared 60-second network budget;
+publication has a 120-second budget. Compiler caches retain their existing policy.
+Sonar's instrumented objects continue to build from source.
+
+Only the main publisher job has `packages: write`; PR jobs have no package write
+permission or registry credentials. A private temporary ORAS configuration keeps
+publication credentials out of subsequent anonymous checks. Existing compatibility
+tags are never overwritten; an outage must not be treated as an absent tag.
+
+GHCR creates new packages as **private**, even for a public repository. After the
+first trusted publication, set this package's visibility to public in its GitHub
+package settings. The publisher verifies anonymous manifest access and reports
+failure until this one-time setup is complete. Fork PRs always fall back to source
+while the package is private. No additional PAT or Cloudflare account is required.
+Do not report activation until a hosted main publication and anonymous PR restore
+have both been observed. Manually dispatch on main after a runner/toolchain image
+change if its new identity misses; PRs never start a producer themselves.
+
+This first recipe moves only the Unicode SDK. It does not migrate all FetchContent
+source trees, eliminate the current Actions cache pressure, or establish the
+15-minute goal. Additional dependencies need relocatable library/header/data and
+license qualification before adding packaging targets to the shared producer.
+
+See [GitHub's container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+for package visibility and `GITHUB_TOKEN` permissions.
+
 Run the installer regressions together with CI grouping/cache and coverage
 contracts. Run the repository quality preflight on the final worktree. On the
 macOS validation host, `scripts/analyze.py check` stops with
