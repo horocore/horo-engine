@@ -37,6 +37,13 @@ function(horo_add_canonical_physics_dependency)
     endforeach()
     set(OBJECT_LAYER_BITS 16)
     set(GENERATE_DEBUG_SYMBOLS ON)
+    if(MSVC AND CMAKE_CXX_COMPILER_LAUNCHER MATCHES "sccache"
+            AND CMAKE_MSVC_DEBUG_INFORMATION_FORMAT STREQUAL "Embedded")
+        # CMake already emits /Z7 for every configuration. Upstream's extra
+        # /Zi makes sccache expect a PDB that /Z7 intentionally does not emit.
+        # Suppress only that upstream injection; embedded symbols stay enabled.
+        set(GENERATE_DEBUG_SYMBOLS OFF)
+    endif()
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
     FetchContent_Declare(horo_jolt
