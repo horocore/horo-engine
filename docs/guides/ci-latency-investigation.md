@@ -190,6 +190,35 @@ versions and large source payloads still require a separately measured policy.
 Periodic maintenance also cannot prevent transient quota eviction during an
 upload. Do not count this change as proof that cold starts have been eliminated.
 
+Main Linux job `120454374716` in run `39965417298` restored the 1,966,664,537-byte
+compiler snapshot from run `39782945403`, but its Debug build ran from
+14:00:37 to 15:01:37 UTC on 2026-10-23 before runner shutdown. The log records
+5,695 object-compilation completions through 14:59:35 and 519 link completions
+before termination at 6,270/6,525 Ninja operations. These are task completions,
+not measured cache misses; the shutdown prevented final cache statistics.
+The runner explicitly reported a shutdown signal and exit 143, with no compiler
+diagnostic. This is incomplete infrastructure-interrupted evidence, not a passed
+build or proof that a restored compiler archive is useful. Compilation spans
+almost the entire elapsed build interval, so faster linking alone cannot meet
+the target on this workload. Preserve this distinction when evaluating LLD.
+
+Main Windows job `120454374858` completed successfully in 47m03s. Debug build
+took 18m14s, Release audio build 10m33s, additional Release allocation build
+2m26s and Debug tests 6m59s. Aggregate sccache statistics across these builds
+reported 6,528 hits/85 misses (98.71%), but also 533 non-cacheable calls:
+525 `/Fp`, four `/Yc` and four multiple-input invocations. The reported hit rate
+excludes those uncached calls and must not be interpreted as 98.71% of all work.
+
+The shared CI preset now sets `CMAKE_DISABLE_PRECOMPILE_HEADERS=ON`, matching
+the existing local cache configuration policy in `scripts/dev.py`. Jolt/SDL PCH
+generation had bypassed sccache on MSVC. A CMake execution probe verifies both
+PCH-enabled control and the actual CI policy compile and run the same program,
+and only the control produces PCH commands. No test or assertion is removed.
+The first run changes dependency object keys and may be slower while warming;
+Windows hosted timings and remaining non-cacheable reasons must be remeasured.
+This does not make MSVC preprocessing free: sccache 0.17's documented direct
+mode supports GCC/Clang, so its global `yes` setting is not MSVC direct-hit proof.
+
 ## Remaining work and acceptance
 
 The current configure/build/test path still exceeds the target. Sonar server-side

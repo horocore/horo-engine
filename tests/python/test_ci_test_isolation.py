@@ -85,6 +85,31 @@ def prepare_isolation_project(tmp_path: Path, isolate: bool) -> tuple[Path, Path
     return build, evidence
 
 
+@pytest.mark.parametrize("use_ci_policy", [True, False])
+def test_ci_cache_policy_disables_dependency_pch_without_changing_program(tmp_path: Path, use_ci_policy: bool) -> None:
+    presets = json.loads((ROOT / "CMakePresets.json").read_text())
+    base = next(item for item in presets["configurePresets"] if item["name"] == "ci-base")
+    policy = base["cacheVariables"]["CMAKE_DISABLE_PRECOMPILE_HEADERS"] if use_ci_policy else "OFF"
+    source = tmp_path / "source"
+    build = tmp_path / "build"
+    source.mkdir()
+    (source / "value.hpp").write_text("#pragma once\ninline int value() { return 42; }\n")
+    (source / "main.cpp").write_text('#include "value.hpp"\nint main() { return value() == 42 ? 0 : 1; }\n')
+    (source / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.25)
+project(CachePchContract LANGUAGES CXX)
+enable_testing()
+add_executable(probe main.cpp)
+target_precompile_headers(probe PRIVATE value.hpp)
+add_test(NAME probe COMMAND probe)
+''')
+    run("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", f"-DCMAKE_DISABLE_PRECOMPILE_HEADERS={policy}")
+    commands = (build / "compile_commands.json").read_text()
+    assert ("cmake_pch" in commands) != use_ci_policy
+    run("cmake", "--build", str(build), "--parallel", "1")
+    run("ctest", "--test-dir", str(build), "--output-on-failure")
+
+
 @pytest.mark.parametrize("isolate", [True, False])
 def test_generated_suite_properties_preserve_contracts_and_control_concurrency(tmp_path: Path, isolate: bool) -> None:
     build, evidence = prepare_isolation_project(tmp_path, isolate)
