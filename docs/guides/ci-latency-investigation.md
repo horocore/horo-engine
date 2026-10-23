@@ -131,6 +131,19 @@ a broad old-revision fallback is incompatible with disconnected FetchContent's
 ability to fetch newly pinned commits. These changes protect pin validity; they
 do not solve the cache capacity problem by themselves.
 
+## Avoid fetching Zep's unused package manager
+
+The private Zep declaration explicitly sets `GIT_SUBMODULES ""`. Its only
+submodule is vcpkg, which Horo does not use: the upstream top-level project is
+disabled and Horo composes the library directly from its pinned source files.
+The commit pin and viewport patch remain unchanged. A local existing checkout
+contained 127,780 KiB of vcpkg Git metadata and 44,012 KiB of vcpkg files.
+These are local disk measurements, not hosted transfer or compressed-cache sizes.
+Fresh FetchContent configuration and repeated configuration both succeeded with
+the real Horo declaration and patch, and vcpkg remained uninitialized.
+The declaration change participates in both native and Sonar dependency keys,
+so old source caches containing vcpkg are not reused under the new key.
+
 ## OSS capacity and concurrent PRs
 
 The design uses standard public-repository runners. As checked on 2026-10-23,
