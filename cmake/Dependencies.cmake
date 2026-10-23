@@ -48,6 +48,7 @@ if(HORO_BUILD_NETWORK_GNS)
     # Upstream protobuf's CMake target names are fixed to `protobuf`; adding it
     # directly avoids requiring a system protoc or a preinstalled package.
     add_subdirectory("${horo_protobuf_SOURCE_DIR}" "${horo_protobuf_BINARY_DIR}")
+    include(HoroProtobufCoverage)
 
     # GNS calls find_package(Protobuf CONFIG) to obtain protobuf_generate_cpp.
     # Give it only the already-created in-tree target and an in-tree protoc rule.
