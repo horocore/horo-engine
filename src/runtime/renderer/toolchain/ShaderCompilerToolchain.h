@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Render/ShaderCompilerPipeline.h"
+#include "ShaderReflectionCook.h"
 
 #include <chrono>
 #include <cstddef>
@@ -103,6 +104,17 @@ namespace Horo::Render {
         /** @copydoc IShaderCompilerAdapter::Compile */
         [[nodiscard]] Result<ShaderCompilerAdapterOutput> Compile(const ShaderCompilerInvocation &invocation,
                                                                   const CancellationToken &cancellation) const override;
+
+        /** @brief Runs the separately admitted SPIRV-Cross stage on exact compiled Vulkan modules, then binds normalized layout identity.
+         * @param manifest Exact logical interface. @param compiled Immutable canonical compilation result.
+         * @param target Exact target requirement. @param names Explicit authored resource/member IDs.
+         * @param reflectionTool Separate exact admitted Cross identity; it is not added to Vulkan compilation RequiredTools.
+         * @param cancellation Host-owned cook cancellation. @return Complete reflected identity or original typed stage failure. */
+        [[nodiscard]] Result<ReflectedShaderArtifact> ReflectVulkan(const ShaderManifest &manifest, const CompiledShaderArtifact &compiled,
+                                                                    const ShaderTargetRequirement &target,
+                                                                    std::span<const ShaderReflectionBindingName> names,
+                                                                    const ShaderCompilerToolIdentity &reflectionTool,
+                                                                    const CancellationToken &cancellation) const;
 
     private:
         explicit ExternalShaderCompilerAdapter(std::shared_ptr<ExternalShaderCompilerAdapterState> state) noexcept;

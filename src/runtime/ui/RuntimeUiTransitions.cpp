@@ -1,7 +1,26 @@
 #include "RuntimeUiAccessState.h"
+#include "UiAnimationPublisher.h"
+#include "UiSceneReconciliationInternal.h"
 
 namespace Horo::Runtime::Ui {
     namespace {
+        /** @brief A source-affecting Scene change must first retire its exact derived owner and native users. */
+        Result<void> AdmitAnimatedSceneTransition(const Detail::RuntimeUiServiceState &state, const UiSceneTransitionRequest &request) {
+            for (const auto &entry : state.animationSources) {
+                const auto source = entry.lock();
+                if (!source)
+                    continue;
+                const auto descriptor = state.registry.Describe(source->instance);
+                if (descriptor.HasError())
+                    continue;
+                if (descriptor.Value().owner.scene == request.previous || descriptor.Value().providerScene == request.previous)
+                    return Result<void>::Failure(
+                        MakeError(UiErrors::CapabilityBusy,
+                                  "Detach and drain the affected animation source before Scene replacement or unload."));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Removes stale routing metadata after canonical aggregate publication; no owner or callback is duplicated. */
         void DiscardExpiredRoutes(Detail::RuntimeUiServiceState &state) {
             for (auto &entry : state.dispatchers) {
@@ -34,6 +53,8 @@ namespace Horo::Runtime::Ui {
         const CancellationToken &cancellation) {
         if (auto valid = Detail::CheckOwner(state_); valid.HasError())
             return Result<UiSceneReconciliation::Prepared>::Failure(valid.ErrorValue());
+        if (const auto source = AdmitAnimatedSceneTransition(*state_, request); source.HasError())
+            return Result<UiSceneReconciliation::Prepared>::Failure(source.ErrorValue());
         return state_->registry.Prepare(request, std::move(bindings), std::move(incoming), cancellation);
     }
 
@@ -42,6 +63,9 @@ namespace Horo::Runtime::Ui {
                                                        const UiStructuralCommitPoint point) const {
         if (auto valid = Detail::CheckOwner(state_); valid.HasError())
             return valid;
+        if (prepared.storage_)
+            if (const auto source = AdmitAnimatedSceneTransition(*state_, prepared.storage_->request); source.HasError())
+                return source;
         return state_->registry.CanCommit(prepared, point);
     }
 
@@ -51,6 +75,8 @@ namespace Horo::Runtime::Ui {
         UiSceneReconciliation::Prepared &prepared, const UiStructuralCommitPoint point) {
         if (auto valid = Detail::CheckOwner(state_); valid.HasError())
             return Result<UiSceneReconciliationResult>::Failure(valid.ErrorValue());
+        if (const auto admitted = CanCommitTransition(prepared, point); admitted.HasError())
+            return Result<UiSceneReconciliationResult>::Failure(admitted.ErrorValue());
         auto committed = state_->registry.Commit(prepared, point);
         if (committed.HasValue())
             DiscardExpiredRoutes(*state_);

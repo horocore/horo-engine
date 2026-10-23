@@ -123,6 +123,20 @@ namespace Horo::Render {
                 return runtime_->RealizeLightCullingKernel(kernel);
             }
 
+            /** @copydoc IRenderBackend::RealizeUiPaintKernel */
+            Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel) override {
+                if (!initialized_ || shutdownBegun_)
+                    return Result<std::shared_ptr<IResidentUiPaintKernel>>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->RealizeUiPaintKernel(kernel);
+            }
+
+            /** @copydoc IRenderBackend::UpdateUiPaintFrame */
+            Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
+                if (!initialized_ || shutdownBegun_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->UpdateUiPaintFrame(update);
+            }
+
             /** @copydoc IRenderBackend::UpdateLightFrame */
             Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update) override {
                 if (!capabilities_.support.features.Supports(RenderCapability::LightCulling))
@@ -406,6 +420,29 @@ namespace Horo::Render {
                         AbortActiveFrame();
                         return Result<void>::Failure(encoded.ErrorValue());
                     }
+                }
+                return Result<void>::Success();
+            }
+
+            /** @copydoc IRenderBackend::PrepareGuiComposition */
+            Result<void> PrepareGuiComposition(const GuiCompositionRequest &request) override {
+                if (const auto frame = ValidateActiveFrame(request.frame); frame.HasError())
+                    return frame;
+                if (request.mode != GuiCompositionMode::BorrowedActiveRecording || request.submission.has_value() ||
+                    !request.buffers.empty() ||
+                    std::ranges::any_of(request.resources,
+                                        [](const GuiSampledResourceInstance &sample) {
+                    return sample.uploadSource != 0;
+                }) ||
+                    request.resources.size() > GuiCompositionPreparation::MaximumResources ||
+                    (!request.resources.empty() && request.lease == nullptr))
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                if (request.lease != nullptr) {
+                    if (request.transfer == nullptr)
+                        return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                    if (const auto retained = runtime_->RetainGraphResources(*request.lease); retained.HasError())
+                        return retained;
+                    request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
                 }
                 return Result<void>::Success();
             }

@@ -124,7 +124,8 @@ namespace Horo::Runtime::Ui {
             UiRenderGeometryBatchKey key{.resource = NoUiRenderIndex,
                                          .transform = command.transform,
                                          .clip = command.clip,
-                                         .mask = command.mask};
+                                         .mask = command.mask,
+                                         .group = command.group};
             const auto result = std::visit([&key, &snapshot](const auto &draw) {
                 return AssignBatchKey(key, snapshot, draw);
             }, command.payload);

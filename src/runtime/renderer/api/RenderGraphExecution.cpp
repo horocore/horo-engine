@@ -34,6 +34,14 @@ namespace Horo::Render {
         return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
     }
 
+    /** @copydoc IRenderBackend::PrepareGuiComposition */
+    Result<void> IRenderBackend::PrepareGuiComposition(const GuiCompositionRequest &request) {
+        if (!request.frame.IsValid() || request.mode != GuiCompositionMode::BorrowedActiveRecording || request.submission.has_value() ||
+            !request.resources.empty() || !request.buffers.empty() || request.lease != nullptr)
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        return Result<void>::Success();
+    }
+
     namespace {
         using RangeMember = RenderGraphExecutionRange RenderGraphExecutionPass::*;
 

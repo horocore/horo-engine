@@ -42,7 +42,14 @@ using ReloadSignature = Horo::Result<UiAnimationRuntimeReload> (UiAnimationRunti
     Horo::Runtime::Ui::UiReloadGeneration, Horo::Runtime::Ui::UiElementSlotAllocator &, Horo::Runtime::Ui::RuntimeStyleRegistry,
     Horo::Runtime::Ui::UiStyleResolver, Horo::Runtime::Ui::UiAnimationCanvasDefinition,
     const Horo::Runtime::Ui::UiAnimationReloadAdmission &, const Horo::CancellationToken &);
-static_assert(std::is_same_v<decltype(&UiAnimationRuntimeParticipant::Reload), ReloadSignature>);
+static_assert(std::is_same_v<decltype(static_cast<ReloadSignature>(&UiAnimationRuntimeParticipant::Reload)), ReloadSignature>);
+using CoordinatedReloadSignature = Horo::Result<UiAnimationRuntimeReload> (UiAnimationRuntimeParticipant::*)(
+    Horo::Runtime::Ui::RuntimeUiService &, Horo::Runtime::Ui::RuntimeUiInstanceId, Horo::Runtime::Ui::UiAnimationReloadPreparation,
+    const Horo::CancellationToken &);
+static_assert(
+    std::is_same_v<decltype(static_cast<CoordinatedReloadSignature>(&UiAnimationRuntimeParticipant::Reload)), CoordinatedReloadSignature>);
+static_assert(!std::is_copy_constructible_v<Horo::Runtime::Ui::UiAnimationReloadPreparation>);
+static_assert(std::is_move_constructible_v<Horo::Runtime::Ui::UiAnimationReloadPreparation>);
 
 using NavigateSignature = Horo::Result<Horo::Runtime::Ui::UiRouteOperationId> (UiAnimationRuntimeParticipant::*)(
     const Horo::Runtime::Ui::UiRouteOperationRequest &);

@@ -696,6 +696,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/RuntimeUiAccessState.h
         runtime/ui/RuntimeUiClient.cpp
         runtime/ui/RuntimeUiService.cpp
+        runtime/ui/RuntimeUiAnimatedSource.cpp
     runtime/ui/RuntimeUiTransitions.cpp
         runtime/ui/RuntimeUiCommands.cpp
         runtime/ui/RuntimeUiEvents.cpp
@@ -813,6 +814,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAnimationOwnerInput.cpp
         runtime/ui/UiAnimationOwnerLifecycle.cpp
         runtime/ui/UiAnimationOwnerAdmission.cpp
+        runtime/ui/UiAnimationPublisher.cpp
         runtime/ui/UiAnimationOwnerReload.cpp
         runtime/ui/UiAnimationOwnerControlSources.cpp
         runtime/ui/UiAnimationOwnerRoutes.cpp
@@ -840,6 +842,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiStyleValidation.cpp
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
+        runtime/ui/UiRenderPaintValidation.cpp
         runtime/ui/UiRenderGeometry.cpp
         runtime/ui/UiRenderGeometryInternal.cpp
         runtime/ui/UiPresentationReceipt.cpp
@@ -2081,7 +2084,7 @@ if(HORO_BUILD_XR_OPENXR)
     target_compile_features(HoroXROpenXRHostInterface INTERFACE cxx_std_20)
 
     add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRActionBindings.cpp
-        runtime/xr/openxr/OpenXRSwapchain.cpp)
+        runtime/xr/openxr/OpenXRSwapchain.cpp runtime/xr/openxr/OpenXRFrameCompositor.cpp)
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)
@@ -2475,6 +2478,9 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
         runtime/renderer/api/RenderGraphLifetime.cpp
         runtime/renderer/api/RenderGraphWorkload.cpp
+        runtime/renderer/api/UiPaintWorkload.cpp
+        runtime/renderer/api/UiPaintKernel.cpp
+        runtime/renderer/api/UiPaintFrameUpload.cpp
         runtime/renderer/api/RenderDeviceIncarnation.cpp
         runtime/renderer/api/LightCulling.cpp
         runtime/renderer/api/LightCullingKernel.cpp
@@ -2512,10 +2518,28 @@ target_include_directories(HoroRenderApi
 )
 target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation)
 
+# Portable cooked value contract only; runtime consumers never depend on compiler/process execution.
+add_library(HoroShaderReflectionCookInternal STATIC
+    runtime/renderer/shader_cook/ShaderReflectionCook.cpp
+    runtime/renderer/shader_cook/ShaderReflectionCookValues.cpp
+    runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp)
+target_compile_features(HoroShaderReflectionCookInternal PUBLIC cxx_std_20)
+target_include_directories(HoroShaderReflectionCookInternal PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shader_cook/include>")
+target_link_libraries(HoroShaderReflectionCookInternal PUBLIC HoroEngine::RenderApi PRIVATE HoroFoundationJsonInternal)
+
+add_library(HoroEditorVulkanShaderInternal STATIC
+    editor/renderer/vulkan/shader/EditorVulkanViewportShader.cpp)
+target_compile_features(HoroEditorVulkanShaderInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorVulkanShaderInternal PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/vulkan/shader/include>")
+target_link_libraries(HoroEditorVulkanShaderInternal PUBLIC HoroShaderReflectionCookInternal)
+
 add_library(HoroShaderCompilerToolchain STATIC
         runtime/renderer/toolchain/ShaderCompilerToolchainCatalog.cpp
         runtime/renderer/toolchain/ShaderCompilerToolchain.cpp
         runtime/renderer/toolchain/ShaderCompilerRoute.cpp
+        runtime/renderer/toolchain/ShaderReflectionRoute.cpp
         runtime/renderer/toolchain/ShaderCompilerToolchainSupport.cpp
 )
 add_library(HoroEngine::ShaderCompilerToolchain ALIAS HoroShaderCompilerToolchain)
@@ -2525,7 +2549,7 @@ target_include_directories(HoroShaderCompilerToolchain
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/toolchain>
 )
 target_link_libraries(HoroShaderCompilerToolchain
-        PUBLIC HoroEngine::RenderApi
+        PUBLIC HoroEngine::RenderApi HoroShaderReflectionCookInternal
         PRIVATE HoroEngine::Platform
 )
 
@@ -2558,18 +2582,31 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/BoundedRenderQueueCore.h
         runtime/renderer/frontend/RenderTransferErrorDescriptor.h
         runtime/renderer/frontend/RenderGraphResourceLeasePool.cpp
+    runtime/renderer/frontend/RenderGraphUiLease.cpp
         runtime/renderer/frontend/RenderFrameInputInternal.cpp
         runtime/renderer/frontend/RenderFrameParallelExecution.cpp
         runtime/renderer/frontend/RenderFrameGraphResources.cpp
         runtime/renderer/frontend/RenderFrameMaterialExecution.cpp
+        runtime/renderer/frontend/RenderFrameGuiComposition.cpp
         runtime/renderer/frontend/RenderMultiviewResources.cpp
         runtime/renderer/frontend/RenderGraphTransientResourcePool.cpp
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
         runtime/renderer/frontend/RenderFrontend.cpp
+        runtime/renderer/frontend/RenderFrameGraphExecution.cpp
+        runtime/renderer/frontend/RenderSubmissionAllocator.cpp
         runtime/renderer/frontend/RenderFrontendVfx.cpp
         runtime/renderer/frontend/LightCullingPreparation.cpp
         runtime/renderer/frontend/LightFrameBufferPool.cpp
+        runtime/renderer/frontend/UiPaintFrameBufferPool.cpp
+        runtime/renderer/frontend/UiPaintProgram.cpp
+        runtime/renderer/frontend/UiPaintProgramEvidence.cpp
+        runtime/renderer/frontend/UiPaintProgramFrames.cpp
+        runtime/renderer/frontend/UiPaintProgramGeometry.cpp
+        runtime/renderer/frontend/UiPaintProgramGraph.cpp
+        runtime/renderer/frontend/UiPaintProgramMasks.cpp
+        runtime/renderer/frontend/UiPaintProgramPaint.cpp
+        runtime/renderer/frontend/UiPaintProgramRoles.cpp
         runtime/renderer/frontend/RenderFrontendInspection.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendExternalTextures.cpp
@@ -2592,11 +2629,22 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderResourceReservationGuard.cpp
         runtime/renderer/frontend/RenderResourceSubmissionPins.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
+        runtime/renderer/frontend/UiPaintComposition.cpp
+    runtime/renderer/frontend/UiPaintPreparation.cpp
         runtime/renderer/frontend/UiRenderSubmission.cpp
         runtime/renderer/frontend/UiRenderSubmissionRetention.cpp
         runtime/renderer/frontend/UiRenderTextureRealization.cpp
 )
 add_library(HoroEngine::RenderFrontend ALIAS HoroRenderFrontend)
+
+# Non-installed matching-backend adapter; expose only the existing typed resource access declaration.
+set(_horo_frontend_access_root "${CMAKE_CURRENT_BINARY_DIR}/internal/render-frontend-access")
+file(MAKE_DIRECTORY "${_horo_frontend_access_root}")
+configure_file(runtime/renderer/frontend/RenderFrontendResourceAccess.h
+    "${_horo_frontend_access_root}/RenderFrontendResourceAccess.h" COPYONLY)
+add_library(HoroRenderFrontendResourceAccessInternal INTERFACE)
+target_include_directories(HoroRenderFrontendResourceAccessInternal INTERFACE "${_horo_frontend_access_root}")
+target_link_libraries(HoroRenderFrontendResourceAccessInternal INTERFACE HoroEngine::RenderFrontend)
 target_link_libraries(HoroRenderFrontend PRIVATE HoroRenderExternalImagesInterface)
 
 target_compile_features(HoroRenderFrontend PUBLIC cxx_std_20)
@@ -2730,6 +2778,9 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
             runtime/renderer/modules/metal/MetalResourceGraphRuntime.mm
             runtime/renderer/modules/metal/MetalLightCullingKernel.mm
+            runtime/renderer/modules/metal/MetalUiPaintKernel.mm
+            runtime/renderer/modules/metal/MetalUiPaintUpload.mm
+            runtime/renderer/modules/metal/MetalUiPaintCommands.mm
             runtime/renderer/modules/metal/MetalLightFrameUpload.mm
             runtime/renderer/modules/metal/MetalRuntime.mm
     )
@@ -2784,6 +2835,25 @@ if (BUILD_TESTING)
 endif ()
 
 if (HORO_BUILD_RENDER_VULKAN)
+    # Concrete hosts receive only deliberate native seams, never repository-wide src visibility.
+    add_library(HoroRenderVulkanHostInterface INTERFACE)
+    set(_horo_vulkan_host_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/vulkan-host")
+    file(MAKE_DIRECTORY "${_horo_vulkan_host_headers}")
+    foreach(_horo_vulkan_host_header IN ITEMS VulkanBackendModule.h VulkanRenderBackendErrors.h VulkanEditorGraphicsBridge.h)
+        configure_file("runtime/renderer/modules/vulkan/${_horo_vulkan_host_header}"
+            "${_horo_vulkan_host_headers}/${_horo_vulkan_host_header}" COPYONLY)
+    endforeach()
+    target_include_directories(HoroRenderVulkanHostInterface INTERFACE "${_horo_vulkan_host_headers}")
+    target_link_libraries(HoroRenderVulkanHostInterface INTERFACE HoroEngine::RenderApi Vulkan::Headers)
+    if(HORO_BUILD_EDITOR_GUI)
+        add_library(HoroSdlVulkanPresentationInternal STATIC
+            editor/renderer/vulkan/SdlVulkanPresentationPort.cpp)
+        target_compile_features(HoroSdlVulkanPresentationInternal PRIVATE cxx_std_20)
+        target_include_directories(HoroSdlVulkanPresentationInternal INTERFACE
+            "${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/vulkan")
+        target_link_libraries(HoroSdlVulkanPresentationInternal PUBLIC HoroRenderVulkanHostInterface
+            PRIVATE HoroEngine::RenderVulkan ${HORO_SDL3_TARGET})
+    endif()
     add_library(HoroRenderVulkanExternalImagesInterface INTERFACE)
     target_include_directories(HoroRenderVulkanExternalImagesInterface INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/vulkan_external/include>")
@@ -2792,6 +2862,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanAdapterDiscovery.cpp
             runtime/renderer/modules/vulkan/VulkanBackendModule.cpp
             runtime/renderer/modules/vulkan/VulkanNativeIdentity.cpp
+            runtime/renderer/modules/vulkan/VulkanPresentationRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanNativeRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanResourceConversions.cpp
             runtime/renderer/modules/vulkan/VulkanResourceRuntime.cpp
@@ -2801,6 +2872,8 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanCommandRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanCommandSubmission.cpp
             runtime/renderer/modules/vulkan/VulkanGraphRuntime.cpp
+        runtime/renderer/modules/vulkan/VulkanGuiPreparation.cpp
+        runtime/renderer/modules/vulkan/VulkanGuiCommands.cpp
             runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
             runtime/renderer/modules/vulkan/VulkanMaterialCommands.cpp
@@ -3283,12 +3356,31 @@ if (HORO_BUILD_RENDER_OPENGL AND (HORO_BUILD_EDITOR_GUI OR HORO_ENABLE_GPU_SMOKE
             PRIVATE HoroThirdParty::Glad HoroOpenGLHostAdmissionInternal)
 endif ()
 
+if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdPartyImGuiVulkan)
+    add_library(HoroEditorVulkanGuiInternal STATIC
+        editor/renderer/vulkan/EditorGuiRendererVulkan.cpp
+        editor/renderer/vulkan/EditorGuiRendererVulkanRecording.cpp
+        editor/renderer/vulkan/EditorGuiRendererVulkanResources.cpp)
+    target_sources(HoroEditorVulkanGuiInternal PRIVATE
+        editor/renderer/vulkan/SdlVulkanPresentationPort.cpp
+        editor/renderer/vulkan/EditorViewportRendererVulkan.cpp
+        editor/renderer/vulkan/EditorViewportVulkanExecution.cpp
+        editor/renderer/vulkan/EditorViewportVulkanPipeline.cpp
+        editor/renderer/vulkan/EditorViewportVulkanUniforms.cpp)
+    target_compile_features(HoroEditorVulkanGuiInternal PRIVATE cxx_std_20)
+    target_include_directories(HoroEditorVulkanGuiInternal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(HoroEditorVulkanGuiInternal
+        PUBLIC HoroRenderVulkanHostInterface HoroEngine::RenderFrontend HoroEditorVulkanShaderInternal HoroEngine::EditorViewportResources
+        PRIVATE HoroRenderFrontendResourceAccessInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+endif ()
+
 if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
     add_library(HoroEditorViewportOpenGL STATIC
             editor/renderer/opengl/EditorGuiRendererOpenGL.cpp
             editor/renderer/opengl/OpenGLViewportResourceBridge.cpp
             editor/renderer/opengl/OpenGLStateSnapshot.cpp
             editor/renderer/opengl/EditorViewportRendererOpenGL.cpp
+            editor/renderer/opengl/EditorViewportPreparedFrameOpenGL.cpp
     )
     add_library(HoroEngine::EditorViewportOpenGL ALIAS HoroEditorViewportOpenGL)
 

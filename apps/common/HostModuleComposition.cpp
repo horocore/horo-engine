@@ -14,11 +14,19 @@ namespace Horo::Application::Internal {
     namespace {
         constexpr ModuleContractVersion kContractVersion{1, 0, 0};
 
-        /** @brief Explicit backend identities supported by host module composition. */
-        constexpr std::array<std::pair<std::string_view, HostRenderer>, 2> kHostRenderers{{
-            {"opengl", HostRenderer::OpenGL},
-            {"metal", HostRenderer::Metal},
-        }};
+        /** @brief Inert backend and module identities; host activation remains an explicit separate operation. */
+        struct HostRendererDescription {
+            std::string_view backendId;
+            HostRenderer kind;
+            std::string_view renderer;
+            std::string_view viewport;
+        };
+
+        constexpr std::array kHostRenderers{
+            HostRendererDescription{"opengl", HostRenderer::OpenGL, "horo.render.opengl", "horo.editor.viewport.opengl"},
+            HostRendererDescription{"metal", HostRenderer::Metal, "horo.render.metal", "horo.editor.viewport.metal"},
+            HostRendererDescription{"vulkan", HostRenderer::Vulkan, "horo.render.vulkan", "horo.editor.viewport.vulkan"},
+        };
 
         /**
          * @brief Builds inert metadata for one module and its required dependencies.
@@ -94,10 +102,10 @@ namespace Horo::Application::Internal {
 
     /** @copydoc HostRendererFromBackendId */
     Result<HostRenderer> HostRendererFromBackendId(const std::string_view backendId) {
-        const auto selected = std::ranges::find(kHostRenderers, backendId, &std::pair<std::string_view, HostRenderer>::first);
+        const auto selected = std::ranges::find(kHostRenderers, backendId, &HostRendererDescription::backendId);
         if (selected == kHostRenderers.end())
             return InvalidSelection<HostRenderer>("Unsupported interactive renderer backend identity: " + std::string{backendId});
-        return Result<HostRenderer>::Success(selected->second);
+        return Result<HostRenderer>::Success(selected->kind);
     }
 
     /** @copydoc DescribeHostModules */
@@ -128,15 +136,10 @@ namespace Horo::Application::Internal {
 
         std::vector<ModuleDescriptor> modules = DescribeEditorCoreModules();
 
-        /** @brief Canonical module identities selected for one interactive renderer. */
-        struct RendererModules {
-            std::string_view renderer;
-            std::string_view viewport;
-        };
-
-        const RendererModules selectedModules = selection.renderer == HostRenderer::OpenGL
-                                                    ? RendererModules{"horo.render.opengl", "horo.editor.viewport.opengl"}
-                                                    : RendererModules{"horo.render.metal", "horo.editor.viewport.metal"};
+        const auto selected = std::ranges::find(kHostRenderers, selection.renderer, &HostRendererDescription::kind);
+        if (selected == kHostRenderers.end())
+            return InvalidSelection<std::vector<ModuleDescriptor>>("Unsupported editor renderer selection.");
+        const auto &selectedModules = *selected;
         modules.push_back(Describe(std::string{selectedModules.renderer}, {"horo.render.backend_registry"}));
         modules.push_back(Describe(std::string{selectedModules.viewport}, {"horo.editor.viewport_scene", selectedModules.renderer}));
         if (selection.includeOpenTelemetry)

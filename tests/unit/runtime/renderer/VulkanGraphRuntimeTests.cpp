@@ -87,4 +87,45 @@ namespace {
         fixture.graph.AbortFrame({1});
     }
 
+    TEST_CASE("Vulkan canonical frame slot survives skipped recordings and never reuses pending native work",
+              "[renderer][vulkan][graph][retirement]") {
+        NativeGraphFixture fixture;
+        const auto instances = fixture.CreateBuffers();
+        auto packet = SubmissionTest::CopyGraph();
+        fixture.Bind(packet, instances);
+        const auto records = packet.Submissions();
+        RenderGraphLeaseTransfer transfer;
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        const auto first = fixture.graph.FrameSlot({1});
+        REQUIRE(first.HasValue());
+        CHECK(first.Value().count == 2);
+        CHECK(fixture.graph.CanWriteFrameInputs({1}));
+        CHECK(fixture.graph.FrameSlot({2}).HasError());
+        REQUIRE(
+            fixture.graph.ExecuteGraph({{1}, packet.graph, packet.workloads, packet.instances, &fixture.lease, false, &transfer, records})
+                .HasValue());
+        CHECK_FALSE(fixture.graph.CanWriteFrameInputs({1}));
+        REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+        REQUIRE(fixture.graph.BeginFrame({2}).HasValue());
+        const auto second = fixture.graph.FrameSlot({2});
+        REQUIRE(second.HasValue());
+        CHECK(second.Value().index != first.Value().index);
+        fixture.graph.AbortFrame({2});
+        REQUIRE(fixture.graph.BeginFrame({3}).HasValue());
+        const auto skipped = fixture.graph.FrameSlot({3});
+        REQUIRE(skipped.HasValue());
+        CHECK(skipped.Value().index == second.Value().index);
+        CHECK(fixture.graph.CanWriteFrameInputs({3}));
+        fixture.graph.AbortFrame({3});
+        CHECK(fixture.lease.releases == 0);
+        fixture.commandState.state.Complete();
+        REQUIRE(fixture.graph.BeginFrame({4}).HasValue());
+        const auto retired = fixture.graph.FrameSlot({4});
+        REQUIRE(retired.HasValue());
+        CHECK(retired.Value().index == first.Value().index);
+        CHECK(fixture.lease.releases == 1);
+        CHECK(fixture.commandState.state.waitCalls == 0);
+        fixture.graph.AbortFrame({4});
+    }
+
 }  // namespace

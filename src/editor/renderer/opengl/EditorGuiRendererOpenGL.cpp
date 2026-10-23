@@ -95,19 +95,41 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeGuiRendererError(RendererErrors::GuiNotInitialized, "OpenGL GUI renderer is not initialized."));
         }
+        composition_.Reset();
         ImGui_ImplOpenGL3_NewFrame();
+        if (nativeFontIdentity_ == 0)
+            nativeFontIdentity_ = static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID);
+        if (nativeFontIdentity_ == 0 || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != nativeFontIdentity_)
+            return Result<void>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
         ImGui_ImplSDL3_NewFrame();
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorGuiRendererOpenGL::PrepareComposition */
+    Result<Render::GuiCompositionPreparation> EditorGuiRendererOpenGL::PrepareComposition(const Render::FrameToken frame) {
+        if (const auto current = ValidateContext(); current.HasError())
+            return Result<Render::GuiCompositionPreparation>::Failure(current.ErrorValue());
+        return composition_.Prepare(frame, Render::GuiCompositionMode::BorrowedActiveRecording, nativeFontIdentity_,
+                                    [this](const std::uintptr_t identity) -> Result<Render::GuiSampledResource> {
+            if (const auto found = std::ranges::find(textures_, identity, &TextureRecord::imageIdentity); found != textures_.end())
+                return Result<Render::GuiSampledResource>::Success({found->view, {}});
+            const auto &viewport = ViewportBinding();
+            if (viewport.textureId == identity && viewport.sampledView.IsValid())
+                return Result<Render::GuiSampledResource>::Success({viewport.sampledView, viewport.sampledSampler});
+            return Result<Render::GuiSampledResource>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
+        });
+    }
+
     /** @copydoc EditorGuiRendererOpenGL::RenderDrawData */
-    Result<void> EditorGuiRendererOpenGL::RenderDrawData() {
+    Result<void> EditorGuiRendererOpenGL::RenderDrawData(const Render::GuiCompositionRequest &request) {
         if (const auto current = ValidateContext(); current.HasError())
             return current;
         if (!rendererInitialized_) {
             return Result<void>::Failure(
                 MakeGuiRendererError(RendererErrors::GuiNotInitialized, "OpenGL GUI renderer is not initialized."));
         }
+        if (!composition_.Matches(request))
+            return Result<void>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
         // Backend execution restores caller bindings; GUI output belongs to the primary
         // backbuffer even when the caller retained an offscreen framebuffer binding.
         const GuiOutputScope output;
@@ -184,6 +206,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererOpenGL::Shutdown */
     void EditorGuiRendererOpenGL::Shutdown() noexcept {
+        composition_.Reset();
+        BindViewportTexture({});
+        nativeFontIdentity_ = 0;
         for (const TextureRecord &texture : textures_) {
             ReleaseTextureResources(texture.texture, texture.view);
         }

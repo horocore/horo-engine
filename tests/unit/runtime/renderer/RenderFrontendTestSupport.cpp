@@ -1,5 +1,8 @@
 #include "RenderFrontendTestSupport.h"
 
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/UiPaintKernel.h"
+
 namespace Horo::Tests::RenderFrontendTesting {
     void Check(const bool condition) {
         REQUIRE((condition));
@@ -12,6 +15,9 @@ namespace Horo::Tests::RenderFrontendTesting {
         using std::runtime_error::runtime_error;
     };
 
+    /** @brief Metadata test resident only; this deliberately does not execute shader code. */
+    class TrackingUiPaintKernel final : public IResidentUiPaintKernel {};
+
     class TrackingBackend final : public IRenderBackend {
     public:
         TrackingBackend()
@@ -21,13 +27,17 @@ namespace Horo::Tests::RenderFrontendTesting {
                             .supportsTextureResources = lifecycleState.supportsTextureResources,
                             .supportsRenderTargetResources = lifecycleState.supportsRenderTargetResources} {}
 
-        Result<void> Initialize(const RenderBackendConfig &) override {
+        Result<void> Initialize(const RenderBackendConfig &config) override {
             ++lifecycleState.initializeCount;
             initialized_ = true;
             const auto incarnation = AcquireRenderDeviceIncarnation();
             if (incarnation.HasError())
                 return Result<void>::Failure(incarnation.ErrorValue());
             capabilities_.support.deviceIncarnation = incarnation.Value();
+            if (lifecycleState.uiPaint.enabled) {
+                capabilities_.support.features.Enable(RenderCapability::UiPaint);
+                capabilities_.support.limits.maxFramesInFlight = config.maxFramesInFlight;
+            }
             capabilities_.supportsSubmissionObservation = lifecycleState.supportsSubmissionObservation;
             if (lifecycleState.throwDuringInitialize) {
                 throw InjectedBackendException{"Injected initialization failure."};
@@ -44,6 +54,8 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+            if (lifecycleState.textureMemoryCostFailure)
+                return Result<RenderMemoryCostPlan>::Failure(*lifecycleState.textureMemoryCostFailure);
             const std::size_t bytes = RenderTextureBaseLevelByteSize(descriptor).value_or(0);
             return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(bytes, 2));
         }
@@ -100,6 +112,25 @@ namespace Horo::Tests::RenderFrontendTesting {
             ++lifecycleState.destroyRenderTargetCount;
         }
 
+        Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel) override {
+            if (!lifecycleState.uiPaint.enabled)
+                return IRenderBackend::RealizeUiPaintKernel(kernel);
+            ++lifecycleState.uiPaint.kernels;
+            return Result<std::shared_ptr<IResidentUiPaintKernel>>::Success(std::make_shared<TrackingUiPaintKernel>());
+        }
+
+        Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &native) override {
+            if (native.update.cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(UiPaintFrameErrors::Cancelled));
+            auto &audit = lifecycleState.uiPaint;
+            if (audit.pending)
+                return Result<void>::Failure(MakeError(UiPaintFrameErrors::Pending));
+            ++audit.updates;
+            audit.revision = native.update.revision;
+            audit.instances = native.instances;
+            return Result<void>::Success();
+        }
+
         Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
             Check(!lifecycleState.frameActive);
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Begin) {
@@ -136,9 +167,36 @@ namespace Horo::Tests::RenderFrontendTesting {
             return Result<void>::Success();
         }
 
+        Result<void> PrepareGuiComposition(const GuiCompositionRequest &request) override {
+            ++lifecycleState.guiAdmissions;
+            if (!lifecycleState.frameActive || request.frame != lifecycleState.activeFrame || lifecycleState.failGuiAdmission)
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+            if (request.lease != nullptr) {
+                if (request.transfer == nullptr || (lifecycleState.graphLease != nullptr && lifecycleState.graphLease != request.lease))
+                    return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+                lifecycleState.graphLease = request.lease;
+                request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
+            }
+            if (request.submission.has_value()) {
+                lifecycleState.guiOrder = request.submission->order;
+                lifecycleState.guiSignal = request.submission->signal;
+            }
+            return Result<void>::Success();
+        }
+
         Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
             if (!request.submissions.empty())
                 return IRenderBackend::ExecuteGraph(request);
+            if (request.role == RenderGraphExecutionRole::UiComposition) {
+                auto &passes = lifecycleState.uiPaint.passes;
+                passes.clear();
+                for (const auto &binding : request.workloads) {
+                    if (const auto *paint = std::get_if<RenderGraphUiPaint>(&binding.workload))
+                        passes.push_back({paint->color,
+                                          {paint->sampledResources.begin(), paint->sampledResources.end()},
+                                          {paint->draws.begin(), paint->draws.end()}});
+                }
+            }
             lifecycleState.graphResources.assign(request.resources.begin(), request.resources.end());
             lifecycleState.graphLease = request.lease;
             return Execute({request.frame, {}});

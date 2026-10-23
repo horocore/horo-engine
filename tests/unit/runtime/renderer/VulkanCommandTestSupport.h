@@ -27,6 +27,7 @@ namespace Horo::Render::VulkanTest {
         VkCommandBuffer command{};
         std::vector<VkSemaphoreSubmitInfo> waits;
         VkSemaphoreSubmitInfo signal{};
+        VkSemaphoreSubmitInfo presentationSignal{};
     };
 
     struct NativeState {
@@ -112,6 +113,8 @@ namespace Horo::Render::VulkanTest {
             Submission captured{.queue = queue,
                                 .command = value.pCommandBufferInfos[0].commandBuffer,
                                 .signal = value.pSignalSemaphoreInfos[0]};
+            if (value.signalSemaphoreInfoCount > 1)
+                captured.presentationSignal = value.pSignalSemaphoreInfos[1];
             if (value.waitSemaphoreInfoCount != 0)
                 captured.waits.assign(value.pWaitSemaphoreInfos, value.pWaitSemaphoreInfos + value.waitSemaphoreInfoCount);
             native->accepted.push_back(std::move(captured));

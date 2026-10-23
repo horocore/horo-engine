@@ -36,7 +36,9 @@ namespace Horo::Render::Detail {
                    VulkanSupportsVersion(candidate.apiVersion) && candidate.requiredFeatures.AreAvailable() &&
                    HasGraphicsQueue(candidate) &&
                    (!requirePresentation ||
-                    (VulkanContains(candidate.deviceExtensions, SwapchainExtension) && HasPresentationQueue(candidate)));
+                    (VulkanContains(candidate.deviceExtensions, SwapchainExtension) && candidate.swapchainMaintenance &&
+                     VulkanContains(candidate.deviceExtensions, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) &&
+                     HasPresentationQueue(candidate)));
         }
 
         [[nodiscard]] const ErrorCodeDescriptor &RejectionDescriptor(const VulkanAdapterCandidate &candidate,

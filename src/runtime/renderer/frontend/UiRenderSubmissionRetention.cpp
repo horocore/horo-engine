@@ -22,8 +22,9 @@ namespace Horo::Render::Detail {
 
         /** @brief Compares one owned image page with immutable extraction evidence. */
         [[nodiscard]] bool MatchesImage(const UiRenderResourceReference &reference, const UiImageResourceSnapshot &image,
-                                        const std::uint32_t page) {
-            if (reference.role != UiRenderResourceRole::Image || !image.IsDrawable())
+                                        const std::uint32_t page, const UiRenderResourceRole role) {
+            if ((role != UiRenderResourceRole::Image && role != UiRenderResourceRole::Mask) || reference.role != role ||
+                !image.IsDrawable())
                 return false;
             const auto &source = image.Resource()->Pages()[page];
             return reference.asset == source.dependency.asset && reference.revision.Value() == image.Revision().Value() &&
@@ -78,14 +79,15 @@ namespace Horo::Render::Detail {
         if (!image.IsDrawable() || binding.page >= image.Resource()->Pages().size())
             return InvalidSource();
         if (!image.SharesGeneration(binding.realization->SourceOwnership()) ||
-            !MatchesImage(binding.realization->Source(), image, binding.page))
+            !MatchesImage(binding.realization->Source(), image, binding.page, binding.realization->Source().role))
             return InvalidSource();
         if (!std::ranges::any_of(snapshot.Resources(), [&](const UiRenderResourceReference &reference) {
-            return MatchesImage(reference, image, binding.page);
+            return MatchesImage(reference, image, binding.page, binding.realization->Source().role);
         }))
             return InvalidSource();
         images_[index] = std::move(acquired).Value();
         pages_[index] = binding.page;
+        roles_[index] = binding.realization->Source().role;
         return Result<void>::Success();
     }
 
@@ -110,7 +112,7 @@ namespace Horo::Render::Detail {
     std::size_t UiRenderSubmissionRetention::CountSourceMatches(const UiRenderResourceReference &reference) const {
         std::size_t matches{};
         for (std::size_t index = 0; index < images_.size(); ++index)
-            if (images_[index] && MatchesImage(reference, *images_[index], pages_[index]))
+            if (images_[index] && MatchesImage(reference, *images_[index], pages_[index], roles_[index]))
                 ++matches;
         for (const auto &font : fonts_)
             if (font && MatchesFont(reference, *font))
@@ -169,6 +171,17 @@ namespace Horo::Render::Detail {
         if (const auto covered = ValidateCoverage(snapshot); covered.HasError())
             return covered;
         return ValidateGlyphCoverage(snapshot, submission.atlas);
+    }
+
+    /** @copydoc UiRenderSubmissionRetention::Validate */
+    Result<void> UiRenderSubmissionRetention::Validate(const UiRenderSubmission &submission,
+                                                       const std::span<const RenderGraphResource> resources) {
+        Release();
+        if (const auto bounded = ValidateSubmissionBounds(submission); bounded.HasError())
+            return bounded;
+        const auto result = CaptureSources(submission, resources);
+        Release();
+        return result;
     }
 
     /** @copydoc UiRenderSubmissionRetention::Capture */

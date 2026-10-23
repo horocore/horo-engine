@@ -10,5 +10,6 @@ namespace Horo::Render::Detail {
     /** @brief Fingerprints canonical device and driver facts for stale-selection checks. */
     [[nodiscard]] std::uint64_t VulkanAdapterRevision(const std::vector<VulkanAdapterCandidate> &candidates);
     /** @brief Creates the backend-owned Vulkan native runtime over a borrowed platform loader port. */
-    [[nodiscard]] std::shared_ptr<IVulkanRuntimePort> CreateVulkanNativeRuntime(IVulkanLoaderPort &loaderPort);
+    [[nodiscard]] std::shared_ptr<IVulkanRuntimePort> CreateVulkanNativeRuntime(IVulkanLoaderPort &loaderPort,
+                                                                                VulkanEditorGraphicsBridge *editorBridge = nullptr);
 }  // namespace Horo::Render::Detail

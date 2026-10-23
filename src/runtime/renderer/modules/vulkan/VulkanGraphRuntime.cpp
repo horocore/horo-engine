@@ -88,6 +88,7 @@ namespace Horo::Render::Detail {
                                                           request.timelineDifference, request.deviceIncarnation, request.resolver);
             initialized.HasError())
             return initialized;
+        dispatch.copyImage = std::bit_cast<PFN_vkCmdCopyBufferToImage2>(request.resolver(request.device, "vkCmdCopyBufferToImage2"));
         impl_->native = dispatch;
         impl_->LoadMaterialDispatch(request.device, request.resolver);
         impl_->multiview.Initialize(request.device, request.deviceIncarnation, request.vertexLayerEnabled, request.resolver);
@@ -107,9 +108,35 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         if (auto polled = impl_->commands.Poll(); polled.HasError())
             return polled;
+        const auto slot = std::ranges::find_if(impl_->retention, [](const VulkanCommandRetention &pins) {
+            return pins.references == 0 && pins.lease == nullptr;
+        });
+        if (slot == impl_->retention.end())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
+        slot->resources.clear();
+        impl_->lifecycle.pins = std::addressof(*slot);
         impl_->lifecycle.frame = frame;
         impl_->multiview.Reset();
+        impl_->guiPrepared = false;
+        impl_->guiRecorded = false;
         return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanGraphRuntime::FrameSlot */
+    Result<VulkanFrameRetentionSlot> VulkanGraphRuntime::FrameSlot(const FrameToken frame) const {
+        if (const auto access = impl_->Access(); access.HasError())
+            return Result<VulkanFrameRetentionSlot>::Failure(access.ErrorValue());
+        if (!frame.IsValid() || frame != impl_->lifecycle.frame || impl_->lifecycle.pins == nullptr)
+            return Result<VulkanFrameRetentionSlot>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+        return Result<VulkanFrameRetentionSlot>::Success({static_cast<std::uint32_t>(impl_->lifecycle.pins - impl_->retention.data()),
+                                                          static_cast<std::uint32_t>(impl_->retention.size())});
+    }
+
+    /** @copydoc VulkanGraphRuntime::CanWriteFrameInputs */
+    bool VulkanGraphRuntime::CanWriteFrameInputs(const FrameToken frame) const noexcept {
+        return impl_->owner == std::this_thread::get_id() && !impl_->lifecycle.closing && !impl_->lifecycle.failedSubmission &&
+               frame.IsValid() && frame == impl_->lifecycle.frame && impl_->lifecycle.pins != nullptr && !impl_->lifecycle.recorded &&
+               impl_->lifecycle.pins->references == 0;
     }
 
     /** @copydoc VulkanGraphRuntime::ExecuteGraph */
@@ -127,11 +154,9 @@ namespace Horo::Render::Detail {
                 Impl::Invalid("Resident native graph work requires the frontend completion lease and synchronous transfer receipt."));
         if (auto timelines = impl_->commands.ValidateBatch(request.submissions); timelines.HasError())
             return timelines;
-        auto free = std::ranges::find_if(impl_->retention, [](const VulkanCommandRetention &pins) {
-            return pins.references == 0;
-        });
-        if (free == impl_->retention.end())
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
+        auto *free = impl_->lifecycle.pins;
+        if (free == nullptr || free->references != 0 || free->lease != nullptr)
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         if (auto captured = impl_->resources->CaptureGraphResources(request, impl_->bindings, *free); captured.HasError()) {
             free->resources.clear();
             return captured;
@@ -156,7 +181,8 @@ namespace Horo::Render::Detail {
         if (!frame.IsValid() || frame != impl_->lifecycle.frame)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         for (const auto &submission : impl_->submissions) {
-            if (auto accepted = impl_->commands.Submit(submission.ticket, submission.value); accepted.HasError()) {
+            if (auto accepted = impl_->commands.Submit(submission.ticket, submission.value, submission.presentationSignal);
+                accepted.HasError()) {
                 impl_->lifecycle.failedSubmission = true;
                 impl_->Abort();
                 return accepted;
@@ -165,7 +191,10 @@ namespace Horo::Render::Detail {
                 *update.target = update.value;
         }
         impl_->submissions.clear();
+        impl_->updates.clear();
+        impl_->barriers.clear();
         impl_->lifecycle.frame = {};
+        impl_->lifecycle.pins = nullptr;
         impl_->lifecycle.recorded = false;
         return Result<void>::Success();
     }
@@ -175,6 +204,16 @@ namespace Horo::Render::Detail {
         for (const auto &submission : submissions)
             commands.Abort(submission.ticket);
         submissions.clear();
+        updates.clear();
+        barriers.clear();
+        if (lifecycle.pins != nullptr && lifecycle.pins->references == 0) {
+            lifecycle.pins->resources.clear();
+            if (lifecycle.pins->lease != nullptr)
+                std::exchange(lifecycle.pins->lease, nullptr)->Release();
+        }
+        guiPrepared = false;
+        guiRecorded = false;
+        lifecycle.pins = nullptr;
         lifecycle.recorded = false;
         lifecycle.frame = {};
     }

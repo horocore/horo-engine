@@ -108,11 +108,17 @@ namespace {
 
     std::filesystem::path TemporaryProject() {
         static std::atomic<unsigned> sequence{};
-        const auto root = std::filesystem::temp_directory_path() / ("horo-assets-registry-" + std::to_string(sequence.fetch_add(1)));
-        std::filesystem::remove_all(root);
-        std::filesystem::create_directories(root / ".horo");
-        std::filesystem::create_directories(root / "assets/models");
-        return root;
+        // Claim a process-independent root atomically; never erase another live CTest project's files.
+        for (unsigned attempt = 0; attempt < 1024; ++attempt) {
+            const auto root = std::filesystem::temp_directory_path() / ("horo-assets-registry-" + std::to_string(sequence.fetch_add(1)));
+            if (!std::filesystem::create_directory(root))
+                continue;
+            std::filesystem::create_directories(root / ".horo");
+            std::filesystem::create_directories(root / "assets/models");
+            return root;
+        }
+        FAIL("Unable to claim an unused asset registry test root after 1024 attempts.");
+        return {};
     }
 
     AssetRegistryBuildReport RebuildSingleDegradedAsset(AssetRegistry &registry, const std::filesystem::path &root) {

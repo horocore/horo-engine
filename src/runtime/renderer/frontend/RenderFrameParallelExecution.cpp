@@ -126,7 +126,7 @@ namespace Horo::Render {
         std::unique_ptr<IRenderGraphResourceLease, decltype(releaseLease)> lease{leased.Value(), releaseLease};
         auto prepared = backend_->PrepareParallelGraph({frame_, graph, workloads, resolved.Value().View(), lease.get()});
         if (prepared.HasValue())
-            static_cast<void>(lease.release());
+            completionLease_ = lease.release();
         return prepared;
     }
 

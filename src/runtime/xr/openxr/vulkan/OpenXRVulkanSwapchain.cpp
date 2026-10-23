@@ -151,7 +151,7 @@ namespace Horo::XR::OpenXRInternal {
         if (auto valid = Validate(request); valid.HasError())
             return Result<std::int64_t>::Failure(valid.ErrorValue());
         const auto native = NativeFormat(request.texture.format);
-        if (!native)
+        if (!native.has_value())
             return Result<std::int64_t>::Failure(MakeError(XRErrors::OperationUnsupported));
         return std::ranges::find(formats, *native) != formats.end()
                    ? Result<std::int64_t>::Success(*native)

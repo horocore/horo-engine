@@ -90,7 +90,9 @@ namespace Horo::Runtime::Ui {
         }
         if (storage_->inspector)
             storage_->inspector->Shutdown();
-        CancelRouteValidated(*storage_, UiAnimationCancellation::Shutdown);
+        // Service shutdown can already have retired the sole source; that path has cancelled its semantic routes.
+        if (storage_->publisher.Current())
+            CancelRouteValidated(*storage_, UiAnimationCancellation::Shutdown);
         storage_->publisher.Shutdown();
         if (storage_->resolver.State() == UiStyleResolverState::Active)
             (void)storage_->resolver.BeginRetirement();

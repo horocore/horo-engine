@@ -3,16 +3,15 @@
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
-#include "RenderFrameGraphResources.h"
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
 #include "RenderGraphTransientResourcePool.h"
-#include "RenderMultiviewResources.h"
 #include "RenderParallelWorkErrors.h"
 #include "RenderParallelWorkInternal.h"
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
+#include "RenderSubmissionAllocator.h"
 
 #include <algorithm>
 #include <array>
@@ -48,13 +47,6 @@ namespace Horo::Render {
 
         [[nodiscard]] Error MakeFrontendError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
-        }
-
-        /** @brief Detects VFX workloads whose physical encoder has not been admitted. */
-        [[nodiscard]] bool RequiresVfxEncoding(const std::span<const RenderGraphPassWorkload> workloads) noexcept {
-            return std::ranges::any_of(workloads, [](const auto &workload) {
-                return std::holds_alternative<RenderGraphVfx>(workload.workload);
-            });
         }
 
         [[nodiscard]] Result<void> ValidateFrontendConfiguration(const RenderResourceUploadLimits &uploadLimits,
@@ -139,6 +131,7 @@ namespace Horo::Render {
         : owner_(std::exchange(other.owner_, nullptr)), backend_(std::exchange(other.backend_, nullptr)),
           frame_(std::exchange(other.frame_, {})), hostFrame_(std::exchange(other.hostFrame_, 0)),
           executed_(std::exchange(other.executed_, false)), guiComposed_(std::exchange(other.guiComposed_, false)),
+          completionLease_(std::exchange(other.completionLease_, nullptr)), uiComposed_(std::exchange(other.uiComposed_, false)),
           parallelWork_(std::move(other.parallelWork_)), parallelGraphWork_(std::move(other.parallelGraphWork_)) {
         if (owner_ != nullptr) {
             owner_->activeFrameScope_ = this;
@@ -155,6 +148,8 @@ namespace Horo::Render {
             hostFrame_ = std::exchange(other.hostFrame_, 0);
             executed_ = std::exchange(other.executed_, false);
             guiComposed_ = std::exchange(other.guiComposed_, false);
+            completionLease_ = std::exchange(other.completionLease_, nullptr);
+            uiComposed_ = std::exchange(other.uiComposed_, false);
             parallelWork_ = std::move(other.parallelWork_);
             parallelGraphWork_ = std::move(other.parallelGraphWork_);
             if (owner_ != nullptr) {
@@ -196,122 +191,6 @@ namespace Horo::Render {
         }
     }
 
-    /** @copydoc RenderFrameScope::ExecuteGraph */
-    Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
-                                                const std::span<const RenderGraphPassWorkload> workloads) {
-        return ExecuteGraphInternal(graph, workloads, nullptr);
-    }
-
-    /** @copydoc RenderFrameScope::ExecuteSubmittedGraph */
-    Result<void> RenderFrameScope::ExecuteSubmittedGraph(const CompiledRenderGraphExecution &graph,
-                                                         const std::span<const RenderGraphPassWorkload> workloads,
-                                                         const std::span<const RenderGraphQueueSubmission> submissions,
-                                                         const RenderGraphTransientResourcesHandle transientResources) {
-        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
-            return admitted;
-        if (submissions.empty()) {
-            Abort();
-            return Result<void>::Failure(
-                MakeError(RenderGraphExecutionErrors::InvalidGraph, "Explicit graph execution requires frontend submission records."));
-        }
-        return ExecuteGraphInternal(graph, workloads, nullptr, transientResources, submissions);
-    }
-
-    /** @copydoc RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &, std::span<const RenderGraphPassWorkload>,
-     * UiRenderSubmission) */
-    Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
-                                                const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission ui) {
-        return ExecuteGraphInternal(graph, workloads, &ui);
-    }
-
-    /** @copydoc RenderFrameScope::ExecuteGraphInternal */
-    Result<void> RenderFrameScope::ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
-                                                        const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
-                                                        const RenderGraphTransientResourcesHandle transientResources,
-                                                        const std::span<const RenderGraphQueueSubmission> submissions) {
-        if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
-            return admitted;
-        if (!submissions.empty() && !backend_->Capabilities().supportsExplicitGraphSubmissions) {
-            Abort();
-            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
-                                                   "The selected backend does not implement explicit graph submissions."));
-        }
-        if (RequiresVfxEncoding(workloads)) {
-            Abort();
-            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
-        }
-        try {
-            Detail::RenderGraphTransientResourceSet *transient = nullptr;
-            if (transientResources.IsValid()) {
-                const auto found = owner_->graphTransientResources_->Resolve(transientResources, graph);
-                if (found.HasError()) {
-                    Abort();
-                    return Result<void>::Failure(found.ErrorValue());
-                }
-                transient = found.Value();
-            }
-            const auto resolved = Detail::ResolveFrameGraphResources(graph, *owner_->resourceRegistry_, transient);
-            if (resolved.HasError()) {
-                Abort();
-                return Result<void>::Failure(resolved.ErrorValue());
-            }
-            const auto multiview = Detail::ResolveMultiviewResources(workloads, *owner_->resourceRegistry_);
-            if (multiview.HasError()) {
-                Abort();
-                return Result<void>::Failure(multiview.ErrorValue());
-            }
-            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads);
-            if (leased.HasError()) {
-                Abort();
-                return Result<void>::Failure(leased.ErrorValue());
-            }
-            RenderGraphLeaseTransfer transfer;
-            const auto releaseLease = [&transfer](IRenderGraphResourceLease *lease) {
-                if (transfer.authority == RenderGraphLeaseAuthority::Frontend)
-                    lease->Release();
-            };
-            std::unique_ptr<IRenderGraphResourceLease, decltype(releaseLease)> lease{leased.Value(), releaseLease};
-            if (const auto result =
-                    backend_->ExecuteGraph({frame_, graph, workloads, resolved.Value().View(), lease.get(), transient != nullptr, &transfer,
-                                            submissions, std::span{multiview.Value().meshes}.first(multiview.Value().meshCount),
-                                            std::span{multiview.Value().views}.first(multiview.Value().viewCount)});
-                result.HasError()) {
-                Abort();
-                return result;
-            }
-            static_cast<void>(lease.release());
-            executed_ = true;
-            return Result<void>::Success();
-        } catch (...) {  // NOSONAR(cpp:S2738) Frame ownership must recover across an arbitrary backend exception.
-            Abort();
-            return Result<void>::Failure(MakeError(FrontendErrors::FrameException));
-        }
-    }
-
-    /** @copydoc RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &, std::span<const RenderGraphPassWorkload>,
-     * RenderGraphTransientResourcesHandle) */
-    Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
-                                                const std::span<const RenderGraphPassWorkload> workloads,
-                                                const RenderGraphTransientResourcesHandle transientResources) {
-        if (!transientResources.IsValid()) {
-            Abort();
-            return Result<void>::Failure(MakeError(FrontendErrors::ResourceHandleMalformed));
-        }
-        return ExecuteGraphInternal(graph, workloads, nullptr, transientResources);
-    }
-
-    /** @copydoc RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &, std::span<const RenderGraphPassWorkload>,
-     * RenderGraphTransientResourcesHandle, UiRenderSubmission) */
-    Result<void> RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &graph,
-                                                const std::span<const RenderGraphPassWorkload> workloads,
-                                                const RenderGraphTransientResourcesHandle transientResources, UiRenderSubmission ui) {
-        if (!transientResources.IsValid()) {
-            Abort();
-            return Result<void>::Failure(MakeError(FrontendErrors::ResourceHandleMalformed));
-        }
-        return ExecuteGraphInternal(graph, workloads, &ui, transientResources);
-    }
-
     /** @copydoc RenderFrontend::PollNativePresentTiming */
     Result<std::optional<NativePresentTiming>> RenderFrontend::PollNativePresentTiming() {
         try {
@@ -321,29 +200,14 @@ namespace Horo::Render {
         }
     }
 
-    /** @copydoc RenderFrameScope::ComposeGui */
-    Result<void> RenderFrameScope::ComposeGui(IGuiPassExecutor &executor, const CancellationToken &cancellation) {
-        if (backend_ == nullptr)
-            return Result<void>::Failure(MakeError(FrontendErrors::FrameNotActive));
-        if (!executed_)
-            return Result<void>::Failure(MakeError(FrontendErrors::FrameNotExecuted));
-        if (guiComposed_)
-            return Result<void>::Failure(MakeError(FrontendErrors::GuiAlreadyComposed));
-        if (cancellation.IsCancellationRequested()) {
-            Abort();
-            return Result<void>::Failure(MakeError(FrontendErrors::GuiCancelled));
-        }
-        try {
-            if (const auto encoded = executor.RenderDrawData(); encoded.HasError()) {
-                Abort();
-                return encoded;
-            }
-            guiComposed_ = true;
-            return Result<void>::Success();
-        } catch (...) {  // NOSONAR(cpp:S2738)
-            Abort();
-            return Result<void>::Failure(MakeFrontendError(FrontendErrors::FrameException, "GUI frame encoding threw."));
-        }
+    /** @copydoc RenderFrameScope::ReserveSubmission */
+    Result<RenderQueueSubmission> RenderFrameScope::ReserveSubmission(const RenderQueueRole role,
+                                                                      const std::span<const RenderTimelinePoint> waits) {
+        if (owner_ == nullptr || backend_ == nullptr)
+            return Result<RenderQueueSubmission>::Failure(MakeError(FrontendErrors::FrameNotActive));
+        if (auto owner = owner_->RequireOpenOwner(); owner.HasError())
+            return Result<RenderQueueSubmission>::Failure(owner.ErrorValue());
+        return owner_->submissionAllocator_->Reserve(role, waits);
     }
 
     /** @copydoc RenderFrameScope::Present */
@@ -401,6 +265,8 @@ namespace Horo::Render {
         frame_ = {};
         executed_ = false;
         guiComposed_ = false;
+        completionLease_ = nullptr;
+        uiComposed_ = false;
     }
 
     /** @copydoc RenderFrontend::Create */
@@ -429,9 +295,12 @@ namespace Horo::Render {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(memoryBudget.ErrorValue());
         }
         try {
-            return Result<std::unique_ptr<RenderFrontend>>::Success(
+            auto frontend =
                 std::make_unique<RenderFrontend>(std::move(backend), resourceOwner.Value(), uploadLimits, std::move(memoryBudget).Value(),
-                                                 memoryConfig, retirementLimits, ConstructionKey{}));
+                                                 memoryConfig, retirementLimits, ConstructionKey{});
+            if (auto configured = frontend->submissionAllocator_->Configure(config.queueAssignments); configured.HasError())
+                return Result<std::unique_ptr<RenderFrontend>>::Failure(configured.ErrorValue());
+            return Result<std::unique_ptr<RenderFrontend>>::Success(std::move(frontend));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceCapacityExhausted, "Renderer frontend bounded queue storage allocation failed."));
@@ -446,7 +315,8 @@ namespace Horo::Render {
                                    const RenderResourceUploadLimits &uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
                                    const RenderFrontendMemoryConfig &memoryConfig, const RenderResourceRetirementLimits &retirementLimits,
                                    ConstructionKey)
-        : backend_(std::move(backend)), memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
+        : backend_(std::move(backend)), submissionAllocator_(std::make_unique<Detail::RenderSubmissionAllocator>()),
+          memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
           resourceRegistry_(
               std::make_unique<
                   Detail::RenderResourceRegistry>(resourceOwner,
@@ -473,6 +343,7 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::~RenderFrontend */
     RenderFrontend::~RenderFrontend() {
+        uiPaintFrontendState_.reset();
         try {
             const auto begun = BeginShutdown();
             const auto drained = PollDrain();
@@ -655,6 +526,7 @@ namespace Horo::Render {
                 return Result<RenderFrameScope>::Failure(
                     MakeFrontendError(FrontendErrors::InvalidFrameToken, "Renderer backend returned an invalid frame token."));
             }
+            submissionAllocator_->BeginFrame();
             return Result<RenderFrameScope>::Success(RenderFrameScope{*this, *backend_, frame, descriptor.frameNumber});
         } catch (...) {  // NOSONAR(cpp:S2738)
             backend_->AbortActiveFrame();

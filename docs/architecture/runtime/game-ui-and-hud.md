@@ -987,6 +987,61 @@ components. Viewport attachments and snapshots contain only Horo view/extent/DPI
 safe-area/resource identities; native surfaces, swapchains, command buffers and
 editor GUI texture IDs remain private to Platform/Renderer adapters.
 
+### Nested paint effects and native execution ownership
+
+`UiRenderSnapshot` is the sole immutable authority for ordered paint, ancestor
+clip/mask chains and isolated opacity groups. These are derived render values,
+not a second authored document or style cascade. A mask names a closed rectangle,
+rounded rectangle or alpha-texture shape, its transform and earlier parent. An
+opacity group names an exact nonempty contiguous draw interval and earlier parent;
+its source element, bounds and optional clip/mask remain generation-fenced.
+Commands name their deepest group. Groups form a properly nested paint-order
+interval tree; crossing intervals and omitted group membership are invalid.
+
+Extraction reserves mask/group storage and validates complete topology before
+publishing a slot. No invalid generation replaces the last admitted snapshot.
+Mask and group nesting have explicit finite ceilings. Existing ungrouped commands
+and alpha-texture masks retain their meaning through additive absent-parent and
+absent-group defaults. No authored/cooked document format changes are required.
+
+An opacity group is isolated: its children paint into renderer-owned transient
+storage, then the complete group composites once with the group opacity. Applying
+that opacity to each child is not equivalent: overlapping opaque children inside
+an opacity-0.5 group must retain alpha 0.5, not accumulate to 0.75. Leaf command
+opacity remains independent. Mask coverage on a group is applied to its composite,
+not silently redistributed among its children.
+
+`RenderFrontend` translates the exact leased UI projection into one bounded
+renderer-owned `UiPaint` workload. `RenderApi` remains Foundation-only: native
+workloads contain renderer geometry/resource/pipeline identities, not Runtime UI
+headers, source owners or callbacks. Native encoders consume prepared data and
+retain GPU resources through terminal completion. Runtime UI does not select a
+renderer, create graph resources, compile shaders or own native handles.
+
+UI stencil state belongs to an explicit prepared UI pipeline contract. The generic
+`MeshVertex` pipeline contract does not silently acquire stencil or a different
+vertex layout. Backend preparation admits exact cooked shaders, output formats,
+sample count and finite mask/group policy before frame-hot execution. Rectangular
+clips become checked intersections; transformed rounded and alpha masks preserve
+their complete lineage. Unsupported target policy or exhausted prepared storage
+fails before encoding. Alternative mask realization is explicitly admitted policy,
+never an ignored effect or a switch to another concrete backend.
+
+A host registers the actual UI source/animation owner before its paint participant.
+RenderExtraction acquires that owner's committed immutable publication and builds
+bounded derived paint. RenderExecution submits its graph after scene work and
+before editor `ComposeGui`; `RenderGui` is not the game-UI renderer. Successful
+native presentation, not merely graph admission, emits the exact
+`UiPresentationReceipt`. Source reload, view replacement and shutdown retire
+preparations only after in-flight source/resource leases close. General frame
+execution remains single-admission; a named UI composition operation owns any
+explicit scene-to-UI handoff.
+
+These contracts describe the integrated implementation boundary. DTO validation,
+retained geometry, Null execution and editor outline preview alone do not establish
+native paint capability. Each interactive backend needs actual pixel/readback and
+lifecycle evidence before that capability is qualified.
+
 ### Render-graph composition admission
 
 `Horo/Runtime/Render/UiRenderComposition.h` is the single typed bridge from an

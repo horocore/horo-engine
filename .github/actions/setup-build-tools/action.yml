@@ -17,7 +17,7 @@ runs:
           libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
           libxext-dev libxss-dev libxtst-dev libxxf86vm-dev \
           libgl1-mesa-dev libglu1-mesa-dev \
-          libvulkan1 mesa-vulkan-drivers vulkan-validationlayers glslang-tools
+          libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools glslang-tools
 
     - name: Install macOS build tools
       if: runner.os == 'macOS'

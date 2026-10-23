@@ -19,6 +19,12 @@
 #include <vector>
 
 namespace Horo::Editor {
+    /** @copydoc IEditorViewportRenderer::ExecutePreparedFrame */
+    Result<void> EditorViewportRendererMetal::ExecutePreparedFrame(Render::RenderFrameScope &frame,
+                                                                   const std::span<const Render::RenderPassDescriptor> passes) {
+        return frame.Execute(passes);
+    }
+
     namespace {
         constexpr std::uint32_t maxViewportDimension = 8192;
 
@@ -574,6 +580,7 @@ namespace Horo::Editor {
             .v0 = 0.0F,
             .u1 = 1.0F,
             .v1 = 1.0F,
+            .sampledView = impl_->resources.ColorTextureView(),
         };
     }
 

@@ -415,11 +415,11 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
 
 def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     native_job = workflow_job("shaders")
-    assert "os: ubuntu-24.04" in native_job
+    assert "os: ubuntu-26.04" in native_job
     assert "os: windows-2022" in native_job
     assert "timeout-minutes: 90" in native_job
     assert "-DHORO_BUILD_RENDER_VULKAN=ON" in native_job
-    assert "-DHORO_BUILD_EDITOR_GUI=OFF" in native_job
+    assert "-DHORO_BUILD_EDITOR_GUI=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}" in native_job
     assert "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON" in native_job
     assert "cmake --build build/ci" in native_job
     assert "ctest --test-dir build/ci" in native_job
@@ -432,7 +432,7 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     assert "-DHORO_BUILD_XR_OPENXR=ON" in native_job
     assert "--no-tests=error" in native_job
     setup = (ROOT / ".github/actions/setup-build-tools/action.yml").read_text(encoding="utf-8")
-    for dependency in ("vulkan-validationlayers", "mesa-vulkan-drivers", "glslang-tools"):
+    for dependency in ("vulkan-validationlayers", "mesa-vulkan-drivers", "vulkan-tools", "glslang-tools"):
         assert dependency in setup
     assert "scripts/dev.py select-lavapipe-icd" in native_job
     assert "VK_DRIVER_FILES=%s" in native_job
@@ -627,7 +627,7 @@ def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> Non
 def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform_draws() -> None:
     shader_workflow = workflow_job("shaders")
     assert not (ROOT / ".github/workflows/vulkan-shader.yml").exists()
-    assert "ubuntu-24.04" in shader_workflow
+    assert "ubuntu-26.04" in shader_workflow
     assert "windows-2022" in shader_workflow
     flat_targets = {"HoroMaterialBindingPublicHeaderConsumer", "HoroMultiviewSceneExtractionPublicHeaderConsumer"}
     expected_targets = {"HoroRenderVulkanTests", "HoroMaterialBindingTests", "HoroPipelineCacheTests",
@@ -653,3 +653,21 @@ def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform
     assert "HORO_VULKAN_TRANSFORM_VERTEX" in shader_workflow
     assert "'[native-smoke]'" in shader_workflow
     assert "continue-on-error" not in shader_workflow
+
+
+def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composition() -> None:
+    job = workflow_job("shaders")
+    assert "HoroEditorVulkanShaderCook --describe-tools" in job
+    assert "${archive_digest#sha256:}" in job
+    assert "${executable_digest#sha256:}" in job
+    assert "sha256sum --check" in job
+    assert "HORO_EDITOR_VULKAN_ASSET_ROOT" in job
+    assert "assets/shaders/editor/viewport.hlsl" in job
+    assert "HoroEditorVulkanPresentationSmoke::" in job
+    assert "xvfb-run -a ctest" in job
+    assert "Vulkan translation units missing from the actual compile database" in job
+    assert "Validation (Error|Warning)|VUID-" in job
+    assert "catalog.tsv" in job
+    assert "HoroEditorAssetRoot-Debug.txt" in job
+    apps = (ROOT / "apps/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "HoroEditorAssetRoot-$<CONFIG>.txt" in apps

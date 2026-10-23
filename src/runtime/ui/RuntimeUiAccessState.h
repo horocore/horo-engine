@@ -13,6 +13,7 @@ namespace Horo::Runtime::Ui::Detail {
     inline constexpr std::size_t EventLimit = 64;
     inline constexpr std::size_t ActionLimit = 128;
     struct RuntimeUiServiceState;
+    struct UiAnimationSourceReservation;
     struct RuntimeUiScope;
     using ClientResult = Result<std::shared_ptr<const RuntimeUiClient>>;
     using ScopeIssuer = std::function<ClientResult(const std::shared_ptr<RuntimeUiServiceState> &, const RuntimeUiGrant &,
@@ -79,6 +80,7 @@ namespace Horo::Runtime::Ui::Detail {
         bool shutdownRequested{};
         std::array<std::weak_ptr<RuntimeUiScope>, ScopeLimit> scopes;
         std::array<Dispatcher, 64> dispatchers;
+        std::array<std::weak_ptr<UiAnimationSourceReservation>, 64> animationSources;
         std::array<PendingAction, ActionLimit> actions;
     };
 

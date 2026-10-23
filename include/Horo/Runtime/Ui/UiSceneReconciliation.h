@@ -102,6 +102,7 @@ namespace Horo::Runtime::Ui {
         private:
             struct Storage;
             friend class UiSceneReconciliation;
+            friend class RuntimeUiService;
             explicit Prepared(std::unique_ptr<Storage> storage) noexcept;
             std::unique_ptr<Storage> storage_;
         };

@@ -25,16 +25,15 @@ namespace Horo::Render {
             return MakeError(descriptor, std::move(message));
         }
 
+#if defined(_WIN32) || defined(__linux__)
         [[nodiscard]] bool IsQualifiedPresentationExtension(const std::string_view extension) noexcept {
 #if defined(_WIN32)
             return extension == "VK_KHR_win32_surface";
 #elif defined(__linux__)
             return extension == "VK_KHR_xlib_surface" || extension == "VK_KHR_xcb_surface" || extension == "VK_KHR_wayland_surface";
-#else
-            static_cast<void>(extension);
-            return false;
 #endif
         }
+#endif
 
         struct VulkanRuntimeLease {
             bool claimed{false};
@@ -75,7 +74,7 @@ namespace Horo::Render {
                 if (Result<void> device = InitializeDevice(config); device.HasError()) {
                     return FailAndRollback(std::move(device).ErrorValue());
                 }
-                CommitInitialization(config.requirePresentation);
+                CommitInitialization(config);
                 return Result<void>::Success();
             }
 
@@ -202,6 +201,15 @@ namespace Horo::Render {
                 return submitted;
             }
 
+            /** @copydoc IRenderBackend::PrepareGuiComposition */
+            Result<void> PrepareGuiComposition(const GuiCompositionRequest &request) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (request.frame != activeFrame_ || !activeFrame_.IsValid())
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                return commandPort_->PrepareGuiComposition(request);
+            }
+
             void AbortFrame(const FrameToken frame) noexcept override {
                 if (ownerThread_ == std::this_thread::get_id() && commandPort_ != nullptr && frame == activeFrame_) {
                     commandPort_->AbortFrame(frame);
@@ -213,8 +221,20 @@ namespace Horo::Render {
                 AbortFrame(activeFrame_);
             }
 
-            Result<void> Resize(FramebufferExtent) override {
-                return UnsupportedVoid();
+            Result<void> Resize(const FramebufferExtent extent) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (activeFrame_.IsValid())
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                return requirePresentation_ ? commandPort_->ResizePresentation(extent, presentMode_) : UnsupportedVoid();
+            }
+
+            Result<bool> PollPresentationAvailability(const FramebufferExtent extent) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return Result<bool>::Failure(access.ErrorValue());
+                if (activeFrame_.IsValid())
+                    return Result<bool>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                return requirePresentation_ ? commandPort_->PollPresentationAvailability(extent) : Result<bool>::Success(true);
             }
 
             Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
@@ -258,10 +278,9 @@ namespace Horo::Render {
             }
 
         private:
-            void CommitInitialization(const bool presentsToWindow) noexcept {
+            void CommitInitialization(const RenderBackendConfig &config) noexcept {
                 using enum RenderCapability;
-                // Surface/adapter admission does not implement WSI acquisition or presentation.
-                capabilities_.presentsToWindow = false;
+                capabilities_.presentsToWindow = config.requirePresentation && commandPort_ && commandPort_->SupportsWindowPresentation();
                 resourceBackend_ = resourcePort_ != nullptr ? resourcePort_->ResourceBackend() : nullptr;
                 initialized_ = true;
                 capabilities_.supportsExplicitGraphSubmissions = commandPort_ != nullptr;
@@ -273,7 +292,8 @@ namespace Horo::Render {
                 capabilities_.supportsTextureResources = capabilities_.support.features.Supports(TextureResources);
                 capabilities_.supportsRenderTargetResources = capabilities_.support.features.Supports(RenderTargetResources);
                 capabilities_.supportsOffscreenTargets = capabilities_.support.features.Supports(OffscreenTargets);
-                requirePresentation_ = presentsToWindow;
+                requirePresentation_ = config.requirePresentation;
+                presentMode_ = config.presentMode;
             }
 
             [[nodiscard]] Result<void> CommandAccess() const {
@@ -283,10 +303,8 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeVulkanError(VulkanBackendErrors::WrongThread, {}));
                 if (!initialized_)
                     return Result<void>::Failure(MakeVulkanError(VulkanBackendErrors::NotInitialized, {}));
-                if (requirePresentation_)
-                    return Result<void>::Failure(
-                        MakeVulkanError(VulkanBackendErrors::PresentationUnsupported,
-                                        "Swapchain acquisition/presentation belongs to RND-006.5; this command path is offscreen."));
+                if (requirePresentation_ && !capabilities_.presentsToWindow)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported));
                 return commandPort_ != nullptr ? Result<void>::Success() : UnsupportedVoid();
             }
 
@@ -355,6 +373,7 @@ namespace Horo::Render {
                 std::vector<std::string> deviceExtensions;
                 if (config.requirePresentation) {
                     deviceExtensions.emplace_back(SwapchainExtension);
+                    deviceExtensions.emplace_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
                 }
                 deviceCreated_ = true;
                 return runtimePort_->CreateDevice(VulkanDeviceRequest{
@@ -367,6 +386,7 @@ namespace Horo::Render {
                     .queueAssignments = config.queueAssignments,
                     .maxFramesInFlight = config.maxFramesInFlight,
                     .enableVertexLayerRouting = candidate->vertexLayerRouting,
+                    .enableSwapchainMaintenance = config.requirePresentation,
                 });
             }
 
@@ -375,18 +395,29 @@ namespace Horo::Render {
                 std::vector<std::string> required;
                 if (config.requirePresentation) {
                     required.emplace_back(SurfaceExtension);
+                    required.emplace_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+                    required.emplace_back(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
                     auto platform = runtimePort_->RequiredPresentationExtensions();
                     if (platform.HasError()) {
                         return Result<std::vector<std::string>>::Failure(std::move(platform).ErrorValue());
                     }
-                    if (platform.Value().empty() || !std::ranges::all_of(platform.Value(), [](const std::string &extension) {
-                        return IsQualifiedPresentationExtension(extension);
+#if defined(_WIN32) || defined(__linux__)
+                    if (!std::ranges::any_of(platform.Value(), IsQualifiedPresentationExtension) ||
+                        !std::ranges::all_of(platform.Value(), [](const std::string &extension) {
+                        return IsQualifiedPresentationExtension(extension) || extension == SurfaceExtension ||
+                               extension == VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME ||
+                               extension == VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
                     })) {
                         return Result<std::vector<std::string>>::Failure(
                             MakeVulkanError(VulkanBackendErrors::PresentationExtensionUnsupported,
                                             "The platform did not provide one qualified Vulkan WSI extension."));
                     }
                     required.insert(required.end(), platform.Value().begin(), platform.Value().end());
+#else
+                    return Result<std::vector<std::string>>::Failure(
+                        MakeVulkanError(VulkanBackendErrors::PresentationExtensionUnsupported,
+                                        "The platform did not provide one qualified Vulkan WSI extension."));
+#endif
                 }
                 if (config.enableValidation) {
                     required.emplace_back(DebugUtilsExtension);
@@ -474,6 +505,7 @@ namespace Horo::Render {
             bool ownsLease_{false};
             bool closing_{false};
             bool requirePresentation_{false};
+            PresentMode presentMode_{PresentMode::Fifo};
             std::thread::id ownerThread_;
             FrameToken activeFrame_;
         };

@@ -53,6 +53,20 @@ namespace Horo::Render::Detail {
         RenderTextureViewDescriptor descriptor;
     };
 
+    /** @brief Captured exact GUI sample and staging source, retained by the canonical frame slot. */
+    struct VulkanGuiSample {
+        VulkanGraphResource texture;
+        VulkanGraphResource staging;
+        VkImageView view{};
+        VkSampler sampler{};
+    };
+
+    /** @brief Borrowed coherent encoder buffer; frontend/native retention remains the sole owner. */
+    struct VulkanGuiBuffer {
+        VulkanGraphResource resource;
+        VkDeviceMemory memory{};
+    };
+
     class VulkanMaterialCapture;
 
     /** @brief Device-owned Vulkan resource allocator and identity registry. */
@@ -130,6 +144,17 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> CaptureGraphResources(const RenderGraphExecutionRequest &request,
                                                          std::span<VulkanGraphResource> destination,
                                                          VulkanCommandRetention &retention) const;
+        /** @brief Borrows the canonical buffer completion proof before an explicitly retired-slot host write. */
+        [[nodiscard]] Result<RenderTimelinePoint> BufferCompletion(std::uint64_t instance) const;
+        /** @brief Writes an exact coherent host-visible uniform buffer after the caller proved prior completion. */
+        [[nodiscard]] Result<void> WriteHostUniform(std::uint64_t instance, std::span<const std::byte> bytes);
+        /** @brief Captures/pins an exact whole color sample, optional sampler and declared base-level staging source.
+         * @param source Frontend-resolved identities. @param retention Existing bounded frame pins.
+         * @return Validated same-device native sample, before any encoding. */
+        [[nodiscard]] Result<VulkanGuiSample> CaptureGuiSample(const GuiSampledResourceInstance &source,
+                                                               VulkanCommandRetention &retention) const;
+        /** @brief Captures/pins a host-coherent GUI input buffer without acquiring a second ownership authority. */
+        [[nodiscard]] Result<VulkanGuiBuffer> CaptureGuiBuffer(std::uint64_t instance, VulkanCommandRetention &retention) const;
         /** @brief Borrows synchronous material/mesh/view capture; the runtime must outlive the returned view.
          * @return Allocation-free view; captured backing remains owned by command retention, not by this view. */
         [[nodiscard]] VulkanMaterialCapture MaterialCapture() const & noexcept;

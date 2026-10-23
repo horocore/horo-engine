@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/UiPaintProgram.h"
 
 #include <type_traits>
 
@@ -17,3 +18,10 @@ using ComposeGui = Horo::Result<void> (Horo::Render::RenderFrameScope::*)(Horo::
                                                                           const Horo::CancellationToken &);
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrameScope::ComposeGui), ComposeGui>);
 static_assert(std::has_virtual_destructor_v<Horo::Render::IGuiPassExecutor>);
+
+using EncodeGui = Horo::Result<void> (Horo::Render::IGuiPassExecutor::*)(const Horo::Render::GuiCompositionRequest &);
+using PrepareGui = Horo::Result<Horo::Render::GuiCompositionPreparation> (Horo::Render::IGuiPassExecutor::*)(Horo::Render::FrameToken);
+static_assert(std::is_same_v<decltype(&Horo::Render::IGuiPassExecutor::RenderDrawData), EncodeGui>);
+static_assert(std::is_same_v<decltype(&Horo::Render::IGuiPassExecutor::PrepareComposition), PrepareGui>);
+
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::RenderFrameScope &>().Token()), Horo::Render::FrameToken>);

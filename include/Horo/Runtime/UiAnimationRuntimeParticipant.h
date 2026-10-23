@@ -151,6 +151,13 @@ namespace Horo::Runtime {
                                                               Ui::UiAnimationCanvasDefinition definition,
                                                               const Ui::UiAnimationReloadAdmission &admission,
                                                               const CancellationToken &cancellation = {});
+        /** @brief Reloads a service-attached source through the same canonical service and derives fresh clock capabilities.
+         * @param service Exact source service; never retained by wrapper address. @param instance Exact admitted instance.
+         * @param preparation Complete trusted source and derived replacement resources. @param cancellation Preparation fence.
+         * @return Source/derived outcomes and fresh controller, or original failure retaining previous source/controller/frame. */
+        [[nodiscard]] Result<UiAnimationRuntimeReload> Reload(Ui::RuntimeUiService &service, Ui::RuntimeUiInstanceId instance,
+                                                              Ui::UiAnimationReloadPreparation preparation,
+                                                              const CancellationToken &cancellation = {});
         /** @brief Starts one nonblocking authored animation through the actual retained canvas owner.
          * @param animation Stable admitted definition.
          * @return Fresh timeline or typed admission failure.
@@ -215,6 +222,10 @@ namespace Horo::Runtime {
     private:
         friend std::unique_ptr<UiAnimationRuntimeParticipant> std::make_unique<UiAnimationRuntimeParticipant>(std::unique_ptr<Storage> &&);
         explicit UiAnimationRuntimeParticipant(std::unique_ptr<Storage> storage) noexcept;
+        /** @brief Shares controller reservation and replacement after either standalone or coordinated canonical reload. */
+        [[nodiscard]] Result<UiAnimationRuntimeReload> ReloadSource(Ui::RuntimeUiService *service, Ui::RuntimeUiInstanceId instance,
+                                                                    Ui::UiAnimationReloadPreparation preparation,
+                                                                    const CancellationToken &cancellation);
         [[nodiscard]] Result<void> PrepareFrame(const RuntimeDispatchFacts &facts);
         [[nodiscard]] Result<void> PublishFrame(const RuntimeDispatchFacts &facts);
         std::unique_ptr<Storage> storage_;

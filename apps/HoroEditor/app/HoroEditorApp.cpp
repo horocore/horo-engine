@@ -104,6 +104,15 @@
 #include "editor/renderer/metal/SdlMetalPresentationPort.h"
 #endif
 
+#if defined(HORO_HAS_RENDER_VULKAN)
+#include "EditorVulkanShaderAssets.h"
+#include "VulkanBackendModule.h"
+#include "VulkanEditorGraphicsBridge.h"
+#include "editor/renderer/vulkan/EditorGuiRendererVulkan.h"
+#include "editor/renderer/vulkan/EditorViewportRendererVulkan.h"
+#include "editor/renderer/vulkan/SdlVulkanPresentationPort.h"
+#endif
+
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -719,6 +728,10 @@ namespace Horo::Editor {
             if (requestedBackend.empty() || requestedBackend == "metal")
                 return &Render::GetMetalRenderBackendModuleInfo();
 #endif
+#if defined(HORO_HAS_RENDER_VULKAN)
+            if (requestedBackend == "vulkan")
+                return &Render::GetVulkanRenderBackendModuleInfo();
+#endif
             return nullptr;
         }
 
@@ -745,8 +758,13 @@ namespace Horo::Editor {
             entries.emplace_back("metal", "Metal", RendererAvailabilityState::NotInstalled,
                                  "Metal renderer component is not installed in this editor build.");
 #endif
+#if defined(HORO_HAS_RENDER_VULKAN)
+            entries.emplace_back("vulkan", "Vulkan", RendererAvailabilityState::InstalledUnchecked,
+                                 "Vulkan interactive presentation qualification is pending.");
+#else
             entries.emplace_back("vulkan", "Vulkan", RendererAvailabilityState::NotInstalled,
                                  "Vulkan renderer component is not installed in this editor build.");
+#endif
             return RendererAvailabilitySnapshot{std::move(entries), std::string{activeBackendId}};
         }
 
@@ -789,6 +807,9 @@ namespace Horo::Editor {
                     break;
                 case Render::RenderPresentationKind::Metal:
                     rendererWindowFlag = SDL_WINDOW_METAL;
+                    break;
+                case Render::RenderPresentationKind::Vulkan:
+                    rendererWindowFlag = SDL_WINDOW_VULKAN;
                     break;
                 default:
                     LOG_CRITICAL("editor.renderer", "Selected renderer does not describe an interactive host window.");
@@ -861,6 +882,10 @@ namespace Horo::Editor {
             std::unique_ptr<Render::IMetalPresentationPort> metalPresentationPort;
             std::unique_ptr<Render::MetalEditorGraphicsBridge> metalGraphicsBridge;
 #endif
+#if defined(HORO_HAS_RENDER_VULKAN)
+            std::unique_ptr<SdlVulkanPresentationPort> vulkanPresentationPort;
+            std::unique_ptr<Render::Detail::VulkanEditorGraphicsBridge> vulkanGraphicsBridge;
+#endif
             std::unique_ptr<Render::RenderFrontend> frontend;
             std::unique_ptr<IEditorGuiRenderer> guiRenderer;
             std::unique_ptr<IEditorViewportRenderer> viewportRenderer;
@@ -926,6 +951,18 @@ namespace Horo::Editor {
                 return Result<void>::Failure(
                     MakeEditorRendererError("editor.renderer.component_missing", "Metal renderer component is not present in this build."));
 #endif
+            } else if (options.rendererBackend == "vulkan") {
+#if defined(HORO_HAS_RENDER_VULKAN)
+                auto port = std::make_unique<SdlVulkanPresentationPort>(window);
+                auto bridge = std::make_unique<Render::Detail::VulkanEditorGraphicsBridge>();
+                if (const auto registered = Render::RegisterVulkanRenderBackend(registry, *port, bridge.get()); registered.HasError())
+                    return registered;
+                composition.vulkanPresentationPort = std::move(port);
+                composition.vulkanGraphicsBridge = std::move(bridge);
+#else
+                return Result<void>::Failure(MakeEditorRendererError("editor.renderer.component_missing",
+                                                                     "Vulkan renderer component is not present in this build."));
+#endif
             } else {
                 return Result<void>::Failure(
                     MakeEditorRendererError("editor.renderer.unsupported_backend", "Requested renderer backend is unsupported."));
@@ -947,7 +984,7 @@ namespace Horo::Editor {
                     return Result<void>::Failure(initialized.ErrorValue());
                 }
 #endif
-            } else {
+            } else if (options.rendererBackend == "metal") {
 #if defined(HORO_HAS_RENDER_METAL)
                 auto &graphicsBridge = *composition.metalGraphicsBridge;
                 auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
@@ -957,6 +994,16 @@ namespace Horo::Editor {
                     initialized.HasError()) {
                     return Result<void>::Failure(initialized.ErrorValue());
                 }
+#endif
+            } else if (options.rendererBackend == "vulkan") {
+#if defined(HORO_HAS_RENDER_VULKAN)
+                auto cooked = LoadPackagedVulkanViewportShader(EditorAssetRoot());
+                if (cooked.HasError())
+                    return Result<void>::Failure(cooked.ErrorValue());
+                auto &bridge = *composition.vulkanGraphicsBridge;
+                return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
+                                              std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge,
+                                                                                             std::move(cooked).Value()));
 #endif
             }
             return Result<void>::Success();
@@ -969,8 +1016,10 @@ namespace Horo::Editor {
             if (!SDL_GetWindowSizeInPixels(&window, &initialWidth, &initialHeight))
                 return Result<void>::Failure(MakeEditorRendererError("editor.renderer.extent_unavailable", SDL_GetError()));
             if (initialWidth > 0 && initialHeight > 0) {
-                const auto prepared = frontend.PollPresentationAvailability(
-                    {static_cast<std::uint32_t>(initialWidth), static_cast<std::uint32_t>(initialHeight)});
+                const Render::FramebufferExtent extent{static_cast<std::uint32_t>(initialWidth), static_cast<std::uint32_t>(initialHeight)};
+                if (const auto resized = frontend.Resize(extent); resized.HasError())
+                    return resized;
+                const auto prepared = frontend.PollPresentationAvailability(extent);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
             }
@@ -1174,6 +1223,7 @@ namespace Horo::Editor {
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                         qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiRender);
 #endif
+                        p_->presentation.guiRenderer.BindViewportTexture(p_->presentation.viewportRenderer.TextureView());
                         return frame_->ComposeGui(p_->presentation.guiRenderer, pacing_.hostCancellation.value_or(CancellationToken{}));
                     case Runtime::RuntimePhase::Presentation:
                         return PresentFrame();
@@ -1524,21 +1574,6 @@ namespace Horo::Editor {
                 if (extent.HasError())
                     return Result<void>::Failure(extent.ErrorValue());
                 nativePresentationPending_ = false;
-                if (extent.Value() && SurfaceAdmission() == EditorSurfaceAdmission::Idle) {
-                    if (const auto available = p_->presentation.renderFrontend.PollPresentationAvailability(*extent.Value());
-                        available.HasError()) {
-                        if (available.ErrorValue().code.Value() != Render::RenderPresentationErrors::DrawableUnavailable.code.Value())
-                            return Result<void>::Failure(available.ErrorValue());
-                        nativePresentationPending_ = true;
-                    } else {
-                        nativePresentationPending_ = !available.Value();
-                    }
-                    if (nativePresentationPending_) {
-                        const auto current = pacing_.surface->Snapshot();
-                        return current.HasError() ? Result<void>::Failure(current.ErrorValue())
-                                                  : pacing_.pacer.Configure({p_->options.frameRateLimit}, current.Value());
-                    }
-                }
                 const auto mode = SurfacePresentMode();
                 auto observed = pacing_.surface->Observe(extent.Value(), {mode, mode, Render::PresentModeResolution::Exact, 0},
                                                          SurfaceAdmission(), std::exchange(surfaceRecovery_, EditorSurfaceRecovery::Defer));
@@ -1550,6 +1585,22 @@ namespace Horo::Editor {
                 }
                 if (observed.Value().snapshot.active)
                     pacing_.committedOutputExtent = observed.Value().snapshot.active->extent;
+                // Realize the surface's frozen generation before borrowing a native drawable.
+                // Pending resize retirement must never acquire from the superseded chain.
+                if (observed.Value().snapshot.state == Render::RenderSurfaceState::Ready && observed.Value().snapshot.active &&
+                    SurfaceAdmission() == EditorSurfaceAdmission::Idle) {
+                    const auto available =
+                        p_->presentation.renderFrontend.PollPresentationAvailability(observed.Value().snapshot.active->extent);
+                    if (available.HasError()) {
+                        const auto &error = available.ErrorValue();
+                        if (error.domain.Value() != Render::RenderPresentationErrors::DrawableUnavailable.domain.Value() ||
+                            error.code.Value() != Render::RenderPresentationErrors::DrawableUnavailable.code.Value())
+                            return Result<void>::Failure(error);
+                        nativePresentationPending_ = true;
+                    } else {
+                        nativePresentationPending_ = !available.Value();
+                    }
+                }
                 return pacing_.pacer.Configure({p_->options.frameRateLimit}, observed.Value().snapshot);
             }
 
@@ -1615,8 +1666,9 @@ namespace Horo::Editor {
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Execution);
 #endif
-                return frame_->Execute(
-                    std::span<const Render::RenderPassDescriptor>{preparedPasses_.descriptors.data(), preparedPasses_.count});
+                return p_->presentation.viewportRenderer
+                    .ExecutePreparedFrame(*frame_, std::span<const Render::RenderPassDescriptor>{preparedPasses_.descriptors.data(),
+                                                                                                 preparedPasses_.count});
             }
 
             /** @brief Observes the actual native present at its owner boundary, before host timing is committed. */
@@ -1950,7 +2002,7 @@ namespace Horo::Editor {
                                                     .rendererAvailability = p.rendererAvailability,
                                                     .screenRegistry = std::move(screenRegistry),
                                                     .workspacePanelRegistry = std::move(workspacePanelRegistry),
-                                                    .logoTexture = (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
+                                                    .logoTexture = p.textures.logo,
                                                     .extensionInventory =
                                                         extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
                                                     .extensionMarketplace =
@@ -2327,6 +2379,12 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_RENDER_METAL)
         composition.metalPresentationPort.reset();
         composition.metalGraphicsBridge.reset();
+#endif
+#if defined(HORO_HAS_RENDER_VULKAN)
+        // Terminal frontend drain already invoked native device children, destroyed
+        // the same-instance surface and released its loader; retire borrowed SDL parents last.
+        composition.vulkanGraphicsBridge.reset();
+        composition.vulkanPresentationPort.reset();
 #endif
         SDL_DestroyWindow(window);
         SDL_Quit();

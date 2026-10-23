@@ -92,6 +92,11 @@ namespace Horo::Runtime::Ui {
         return prepared.storage_->replacement.get();
     }
 
+    /** @copydoc UiHotReload::AnimationReplacementLease */
+    UiReloadLease UiHotReload::AnimationReplacementLease(const Prepared &prepared) noexcept {
+        return AnimationReplacement(prepared) ? UiReloadLease{prepared.storage_->replacement} : UiReloadLease{};
+    }
+
     /** @copydoc UiHotReload::OverlayReplacement */
     UiReloadGeneration *UiHotReload::OverlayReplacement(const Prepared &prepared) noexcept {
         return AnimationReplacement(prepared);

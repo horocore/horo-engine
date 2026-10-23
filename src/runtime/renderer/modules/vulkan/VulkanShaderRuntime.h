@@ -29,6 +29,12 @@ namespace Horo::Render::Detail {
         std::shared_ptr<const void> backing;
     };
 
+    /** @brief Exact native sampler plus its existing retained backing. */
+    struct VulkanSamplerSnapshot {
+        VkSampler handle{};
+        std::shared_ptr<const void> backing;
+    };
+
     /** @brief Native descriptor lease; frontend pins and the submission lease protect all referenced generations.
      * @details Host destroys leases before draining/destroying the device. No destructor waits for the GPU. */
     class VulkanPreparedMaterialBinding final : public IResidentMaterialBinding {
@@ -89,6 +95,8 @@ namespace Horo::Render::Detail {
         void DestroyShaderModule(std::uint64_t) noexcept;
         void DestroyGraphicsPipeline(std::uint64_t) noexcept;
         void DestroySampler(std::uint64_t) noexcept;
+        /** @brief Captures a registered non-comparison sampler for the same canonical command retention. */
+        [[nodiscard]] Result<VulkanSamplerSnapshot> CaptureGuiSampler(std::uint64_t identity) const;
         [[nodiscard]] Result<std::size_t> QueryMaterialParameterBufferSize(std::uint64_t, const MaterialBindingDescriptor &,
                                                                            ShaderBindingId) const;
         [[nodiscard]] Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const MaterialBindingDescriptor &, std::uint64_t,

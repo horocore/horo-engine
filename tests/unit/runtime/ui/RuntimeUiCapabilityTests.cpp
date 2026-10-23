@@ -27,10 +27,13 @@ namespace Horo::Tests::UiAccess {
         std::is_invocable_v<decltype(&RuntimeUiService::Issue), RuntimeUiService &, const RuntimeUiGrant &, const CancellationToken &>);
     static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::Issue), const RuntimeUiService &, const RuntimeUiGrant &,
                                        const CancellationToken &>);
-    static_assert(std::is_invocable_v<decltype(&RuntimeUiService::Reload), RuntimeUiService &, RuntimeUiInstanceId, UiReloadGeneration,
+    using ReloadSignature = Result<UiReloadReconciliation> (RuntimeUiService::*)(RuntimeUiInstanceId, UiReloadGeneration,
+                                                                                 UiStructuralCommitPoint, const CancellationToken &);
+    constexpr auto Reload = static_cast<ReloadSignature>(&RuntimeUiService::Reload);
+    static_assert(std::is_invocable_v<decltype(Reload), RuntimeUiService &, RuntimeUiInstanceId, UiReloadGeneration,
                                       UiStructuralCommitPoint, const CancellationToken &>);
-    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::Reload), const RuntimeUiService &, RuntimeUiInstanceId,
-                                       UiReloadGeneration, UiStructuralCommitPoint, const CancellationToken &>);
+    static_assert(!std::is_invocable_v<decltype(Reload), const RuntimeUiService &, RuntimeUiInstanceId, UiReloadGeneration,
+                                       UiStructuralCommitPoint, const CancellationToken &>);
     static_assert(std::is_invocable_v<decltype(&RuntimeUiService::CollectRetired), RuntimeUiService &>);
     static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::CollectRetired), const RuntimeUiService &>);
     static_assert(std::is_invocable_v<decltype(&RuntimeUiService::Shutdown), RuntimeUiService &>);

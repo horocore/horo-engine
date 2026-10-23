@@ -78,6 +78,7 @@ namespace Horo::Tests {
         if (!frameExecuted_)
             ExecutePasses({}, false);
 
+        guiRenderer_->BindViewportTexture(viewportRenderer_->TextureView());
         const Result<void> rendered = frame_->ComposeGui(*guiRenderer_);
         if (rendered.HasError()) {
             frame_->Cancel();
@@ -178,7 +179,8 @@ namespace Horo::Tests {
                                                                              .clearColor =
                                                                                  Render::ClearColor{0.035F, 0.045F, 0.065F, 1.0F}}};
 
-        const Result<void> executed = frame_->Execute(std::span<const Render::RenderPassDescriptor>{passes.data(), passCount});
+        const Result<void> executed =
+            viewportRenderer_->ExecutePreparedFrame(*frame_, std::span<const Render::RenderPassDescriptor>{passes.data(), passCount});
         if (executed.HasError()) {
             frame_.reset();
             ThrowRendererError(executed.ErrorValue());

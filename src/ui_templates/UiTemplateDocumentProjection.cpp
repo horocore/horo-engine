@@ -77,6 +77,14 @@ namespace Horo::UiTemplates {
             return Result<void>::Success();
         }
 
+        /** @brief Copies complete responsive profile tables through typed builder admission. */
+        Result<void> CopyPresentationProfiles(UiDocumentBuilder &builder, const UiDocument &source) {
+            for (const auto &profiles : source.PresentationProfiles())
+                if (auto result = builder.AddPresentationProfiles(profiles); result.HasError())
+                    return result;
+            return Result<void>::Success();
+        }
+
         /** @brief Publishes typed asset requirements carried by ordinary expanded references into the candidate builder. */
         Result<void> RequireReference(UiDocumentBuilder &builder, const UiReference &reference) {
             if (reference.kind != UiReferenceKind::Asset)
@@ -189,6 +197,8 @@ namespace Horo::UiTemplates {
         for (const auto &dependency : dependencies)
             if (const auto result = builder.RequireAsset(dependency); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
+        if (auto copied = CopyPresentationProfiles(builder, source); copied.HasError())
+            return Result<UiDocument>::Failure(std::move(copied).ErrorValue());
         return std::move(builder).Build();
     }
 

@@ -13,6 +13,15 @@ static_assert(std::is_nothrow_move_constructible_v<RuntimeUiService>);
 static_assert(std::is_copy_constructible_v<RuntimeUiProviderUpdate>);
 static_assert(std::is_copy_constructible_v<RuntimeUiCommandResult>);
 
+using CoordinatedServiceReload = Horo::Result<UiAnimationReloadResult> (RuntimeUiService::*)(RuntimeUiInstanceId, UiAnimationOwner &,
+                                                                                             UiAnimationReloadPreparation,
+                                                                                             const Horo::CancellationToken &);
+static_assert(std::is_same_v<decltype(static_cast<CoordinatedServiceReload>(&RuntimeUiService::Reload)), CoordinatedServiceReload>);
+using ServiceAnimationCreate = Horo::Result<UiAnimationOwner> (*)(RuntimeUiService &, RuntimeUiInstanceId, UiElementSlotAllocator &,
+                                                                  RuntimeStyleRegistry, UiStyleResolver, UiAnimationCanvasDefinition,
+                                                                  UiAnimationLimits);
+static_assert(std::is_same_v<decltype(static_cast<ServiceAnimationCreate>(&UiAnimationOwner::Create)), ServiceAnimationCreate>);
+
 /** @brief Checks the complete gameplay facade through the owning staged public boundary. */
 void VerifyRuntimeUiCapabilityPublicContract(const RuntimeUiClient &client, RuntimeUiService &service) {
     (void)client.Validate();

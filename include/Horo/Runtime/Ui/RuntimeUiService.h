@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
+#include "Horo/Runtime/Ui/UiAnimationOwner.h"
 #include "Horo/Runtime/Ui/UiSceneReconciliation.h"
 
 namespace Horo::Runtime::Ui {
@@ -69,9 +70,21 @@ namespace Horo::Runtime::Ui {
         /** @brief Atomically replaces actual owners; old exact-generation clients and queues expire only on successful publication.
          * @param instance Exact publisher. @param replacement Private validated generation. @param point Lifecycle cutoff.
          * @param cancellation Preparation/commit fence. @return Original reconciliation result; failure preserves prior admission.
+         * @note An attached animation source requires the coordinated overload and complete trusted derived preparation;
+         * this overload returns an explicit policy failure rather than replacing source ahead of its derived owner.
          */
         [[nodiscard]] Result<UiReloadReconciliation> Reload(RuntimeUiInstanceId instance, UiReloadGeneration replacement,
                                                             UiStructuralCommitPoint point, const CancellationToken &cancellation = {});
+        /** @brief Atomically reloads the same service publisher and its exclusively attached derived animation owner.
+         * @param instance Exact service-admitted instance. @param animation Actual host-owned attached animation owner.
+         * @param preparation Complete private generation, source issuer, style resources and trusted replacement policy.
+         * @param cancellation Preparation cancellation. @return Source reconciliation and timeline outcomes or original failure.
+         * @details Host-only synchronous borrowing; native modules keep existing scoped client grants. All source/derived
+         * preparation precedes canonical commit and one attribution invalidation. Failure retains old grants/actions/frame.
+         * Foreign service, stale instance/reservation and retired animation owners reject before preparation. */
+        [[nodiscard]] Result<UiAnimationReloadResult> Reload(RuntimeUiInstanceId instance, UiAnimationOwner &animation,
+                                                             UiAnimationReloadPreparation preparation,
+                                                             const CancellationToken &cancellation = {});
         /** @brief Pins presentation data from the sole publisher without granting gameplay mutable owner access.
          * @param instance Exact host-admitted incarnation. @return Immutable generation lease or canonical failure.
          */
@@ -115,6 +128,7 @@ namespace Horo::Runtime::Ui {
         void Shutdown() noexcept;
 
     private:
+        friend class UiAnimationOwner;
         explicit RuntimeUiService(std::shared_ptr<Detail::RuntimeUiServiceState> state) noexcept;
         std::shared_ptr<Detail::RuntimeUiServiceState> state_;
     };

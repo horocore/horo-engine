@@ -61,6 +61,13 @@ namespace Horo::Render::Detail {
             materials[index].reset();
         materialCount = 0;
         ui.Release();
+        uiCaptured = false;
+        for (auto &kernel : uiKernels)
+            kernel.reset();
+        if (uiTransient != nullptr) {
+            uiTransient->inFlight = false;
+            uiTransient = nullptr;
+        }
         if (transient != nullptr) {
             transient->inFlight = false;
             transient = nullptr;
@@ -69,16 +76,17 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc RenderGraphResourceLeasePool::Lease::PinResource */
-    Result<void> RenderGraphResourceLeasePool::Lease::PinResource(const RenderGraphResource &resource) {
+    Result<void> RenderGraphResourceLeasePool::Lease::PinResource(const RenderGraphResource &resource,
+                                                                  RenderGraphTransientResourceSet *resourceTransient) {
         const auto *binding = &resource.binding;
         if (resource.resourceClass == RenderGraphResourceClass::Transient) {
-            if (transient == nullptr || resource.id.value == 0 || resource.id.value > transient->bindings.size()) {
+            if (resourceTransient == nullptr || resource.id.value == 0 || resource.id.value > resourceTransient->bindings.size()) {
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
             }
             const auto index = resource.id.value - 1U;
-            if (transient->lifetimes[index].disposition == RenderGraphLifetimeDisposition::Unused)
+            if (resourceTransient->lifetimes[index].disposition == RenderGraphLifetimeDisposition::Unused)
                 return Result<void>::Success();
-            binding = &transient->bindings[index];
+            binding = &resourceTransient->bindings[index];
         }
         const auto resolved = ResolveGraphResidentIdentity(*binding);
         if (resolved.HasError()) {
@@ -103,6 +111,38 @@ namespace Horo::Render::Detail {
         pins.push_back(pin);
         ++pool->activePins_;
         return Result<void>::Success();
+    }
+
+    /** @copydoc RenderGraphResourceLeasePool::AcquireGui */
+    Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::AcquireGui(const std::span<const RenderGraphResidentIdentity> pins,
+                                                                                 IRenderGraphResourceLease *existing) {
+        using Outcome = Result<IRenderGraphResourceLease *>;
+        if (pins.size() > RenderGraphLimits::HardMaxResources)
+            return Outcome::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        const auto selected = std::ranges::find_if(leases_, [existing](const Lease &candidate) {
+            return existing ? static_cast<const IRenderGraphResourceLease *>(&candidate) == existing && candidate.active
+                            : !candidate.active;
+        });
+        if (selected == leases_.end())
+            return Outcome::Failure(MakeError(FrontendErrors::ResourceNotReady));
+        auto &lease = *selected;
+        const std::size_t initialPins = lease.pins.size();
+        lease.active = true;
+        const auto rollbackPins = [this, initialPins, existing](Lease *pending) {
+            while (pending->pins.size() > initialPins) {
+                const auto pin = pending->pins.back();
+                static_cast<void>(registry_->ReleaseSubmissionPin(pin.resourceClass, pin.identity));
+                pending->pins.pop_back();
+                --activePins_;
+            }
+            if (existing == nullptr)
+                pending->active = false;
+        };
+        std::unique_ptr<Lease, decltype(rollbackPins)> rollback{&lease, rollbackPins};
+        for (const auto &pin : pins)
+            if (auto retained = lease.PinIdentity(pin); retained.HasError())
+                return Outcome::Failure(retained.ErrorValue());
+        return Outcome::Success(rollback.release());
     }
 
     /** @copydoc RenderGraphResourceLeasePool::AcquireMaterial */
@@ -183,7 +223,7 @@ namespace Horo::Render::Detail {
             if (transient != nullptr)
                 transient->inFlight = true;
             for (const auto &resource : resources) {
-                if (const auto pinned = lease.PinResource(resource); pinned.HasError()) {
+                if (const auto pinned = lease.PinResource(resource, transient); pinned.HasError()) {
                     return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
                 }
             }
@@ -191,6 +231,7 @@ namespace Horo::Render::Detail {
                 if (const auto captured = lease.ui.Capture(*ui, resources); captured.HasError()) {
                     return Result<IRenderGraphResourceLease *>::Failure(captured.ErrorValue());
                 }
+                lease.uiCaptured = true;
             }
             if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
                 return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());

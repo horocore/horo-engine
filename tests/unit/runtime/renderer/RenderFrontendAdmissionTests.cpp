@@ -180,3 +180,76 @@ namespace {
     }
 
 }  // namespace
+
+namespace Horo::Tests::RenderFrontendTesting {
+    TEST_CASE("Frontend admits atlas CopyDestination through queued texture readiness", "[renderer][resource][descriptor][atlas]") {
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        const RenderTextureDescriptor descriptor{.extent = {512, 128},
+                                                 .format = RenderTextureFormat::Rgba8Unorm,
+                                                 .usage = RenderTextureUsage::Sampled | RenderTextureUsage::CopyDestination};
+        const std::vector<std::byte> pixels(512 * 128 * 4, std::byte{0x7f});
+        const auto created = frontend->CreateTexture(descriptor, pixels);
+        REQUIRE(created.HasValue());
+        CHECK(lifecycleState.createTextureCount == 0);
+        CHECK(frontend->ResourceOperationResult(created.Value().operation).HasError());
+        CHECK(frontend->UploadSnapshot().pendingRequests == 1);
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend->ResourceOperationResult(created.Value().operation).HasValue());
+        CHECK(lifecycleState.createTextureCount == 1);
+        CHECK(lifecycleState.lastTextureInitialData == pixels);
+        REQUIRE(frontend->ReleaseTexture(created.Value().handle).HasValue());
+        CHECK(lifecycleState.destroyTextureCount == 1);
+    }
+
+    TEST_CASE("Frontend copy destination admission retains closed descriptor and backend gates",
+              "[renderer][resource][descriptor][atlas]") {
+        lifecycleState = {};
+        RenderTextureDescriptor descriptor{.extent = {512, 128},
+                                           .format = RenderTextureFormat::Rgba8Unorm,
+                                           .usage = RenderTextureUsage::Sampled | RenderTextureUsage::CopyDestination};
+        SECTION("Storage is not implemented by this frontend path") {
+            descriptor.usage = descriptor.usage | RenderTextureUsage::Storage;
+        }
+        SECTION("CopySource is not opened by destination upload support") {
+            descriptor.usage = descriptor.usage | RenderTextureUsage::CopySource;
+        }
+        SECTION("Unknown usage bit remains invalid") {
+            descriptor.usage = static_cast<RenderTextureUsage>(0x80);
+        }
+        SECTION("Multisample remains outside the current texture path") {
+            descriptor.sampleCount = 4;
+        }
+        SECTION("Unsupported format remains outside the current texture path") {
+            descriptor.format = RenderTextureFormat::Depth32FloatStencil8;
+        }
+        SECTION("Backend generic texture capability remains required") {
+            lifecycleState.supportsTextureResources = false;
+        }
+        auto frontend = CreateTrackingFrontend();
+        REQUIRE(frontend->CreateTexture(descriptor).HasError());
+        CHECK(lifecycleState.createTextureCount == 0);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+    }
+}  // namespace Horo::Tests::RenderFrontendTesting
+
+namespace Horo::Tests::RenderFrontendTesting {
+    TEST_CASE("Frontend atlas memory query preserves native typed failure before reservation", "[renderer][resource][descriptor][atlas]") {
+        lifecycleState = {};
+        const auto expected = MakeError(RenderMemoryBudgetErrors::UnsupportedAllocation, "Native sampled-transfer format is unavailable.");
+        lifecycleState.textureMemoryCostFailure = expected;
+        auto frontend = CreateTrackingFrontend();
+        const auto rejected = frontend->CreateTexture({.extent = {512, 128},
+                                                       .format = RenderTextureFormat::Rgba8Unorm,
+                                                       .usage = RenderTextureUsage::Sampled | RenderTextureUsage::CopyDestination});
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().domain.Value() == expected.domain.Value());
+        CHECK(rejected.ErrorValue().code.Value() == expected.code.Value());
+        CHECK(rejected.ErrorValue().message == expected.message);
+        CHECK(lifecycleState.createTextureCount == 0);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
+    }
+}  // namespace Horo::Tests::RenderFrontendTesting

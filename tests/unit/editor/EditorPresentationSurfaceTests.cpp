@@ -1,4 +1,5 @@
 #include "EditorPresentationSurface.h"
+#include "Horo/Runtime/Render/RenderPresentationOutput.h"
 #include "Horo/Runtime/Render/RenderSurfaceLifecycleErrors.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -13,6 +14,8 @@ namespace Horo::Editor {
             EditorPresentationSurface *host{};
             unsigned calls{};
             bool fail{};
+            bool pending{};
+            bool foreignPending{};
             bool frozenBeforeNative{};
             bool nativeAlive{true};
             Render::FramebufferExtent last{};
@@ -25,6 +28,12 @@ namespace Horo::Editor {
                 self.frozenBeforeNative = publication.HasValue() &&
                                           publication.Value().state == Render::RenderSurfaceState::Reconfiguring &&
                                           publication.Value().inFlightSequence.has_value();
+                if (self.pending || self.foreignPending) {
+                    auto error = MakeError(Render::RenderPresentationErrors::DrawableUnavailable);
+                    if (self.foreignPending)
+                        error.domain = ErrorDomainId{"test.foreign"};
+                    return Result<void>::Failure(std::move(error));
+                }
                 if (self.fail)
                     return Result<void>::Failure(
                         WithCause(MakeError(Render::RenderSurfaceLifecycleErrors::InvalidOutcome, "Injected native activation failure."),
@@ -52,6 +61,92 @@ namespace Horo::Editor {
         CHECK(native.calls == 1);
         CHECK(host.Update(Render::FramebufferExtent{640, 480}, Mode).Value() == ready.Value());
         CHECK(native.calls == 1);
+    }
+
+    TEST_CASE("Production surface retries exactly one frozen temporary realization", "[editor][surface]") {
+        NativeSurface native;
+        auto host = Surface(native);
+        native.host = &host;
+        native.pending = true;
+        const auto first = host.Observe(Render::FramebufferExtent{640, 480}, Mode, EditorSurfaceAdmission::Idle);
+        REQUIRE(first.HasValue());
+        CHECK_FALSE(first.Value().nativeFailure);
+        CHECK(first.Value().snapshot.state == Render::RenderSurfaceState::Reconfiguring);
+        const auto sequence = first.Value().snapshot.inFlightSequence;
+        const auto second = host.Observe(Render::FramebufferExtent{640, 480}, Mode, EditorSurfaceAdmission::Idle);
+        REQUIRE(second.HasValue());
+        CHECK(second.Value().snapshot.inFlightSequence == sequence);
+        CHECK(native.calls == 2);
+        native.pending = false;
+        const auto ready = host.Observe(Render::FramebufferExtent{640, 480}, Mode, EditorSurfaceAdmission::Idle);
+        REQUIRE(ready.HasValue());
+        CHECK(ready.Value().snapshot.state == Render::RenderSurfaceState::Ready);
+        CHECK_FALSE(ready.Value().snapshot.inFlightSequence);
+        CHECK(ready.Value().snapshot.surface.generation == 1);
+    }
+
+    TEST_CASE("Production surface cancels frozen resize before coalescing a newer extent", "[editor][surface]") {
+        NativeSurface native;
+        auto host = Surface(native);
+        native.host = &host;
+        native.pending = true;
+        const auto first = host.Observe(Render::FramebufferExtent{640, 480}, Mode, EditorSurfaceAdmission::Idle);
+        REQUIRE(first.HasValue());
+        const auto second = host.Observe(Render::FramebufferExtent{800, 600}, Mode, EditorSurfaceAdmission::Idle);
+        REQUIRE(second.HasValue());
+        CHECK_FALSE(second.Value().nativeFailure);
+        CHECK(second.Value().snapshot.inFlightSequence != first.Value().snapshot.inFlightSequence);
+        CHECK(native.last == Render::FramebufferExtent{800, 600});
+        native.pending = false;
+        const auto ready = host.Observe(Render::FramebufferExtent{800, 600}, Mode, EditorSurfaceAdmission::Idle);
+        REQUIRE(ready.HasValue());
+        CHECK(ready.Value().snapshot.active->extent == Render::FramebufferExtent{800, 600});
+        CHECK(ready.Value().snapshot.surface.generation == 1);
+    }
+
+    TEST_CASE("Production surface minimize and close cancel pending logical work without deleting native debt", "[editor][surface]") {
+        NativeSurface native;
+        auto host = Surface(native);
+        native.host = &host;
+        native.pending = true;
+        REQUIRE(host.Observe(Render::FramebufferExtent{640, 480}, Mode, EditorSurfaceAdmission::Idle).HasValue());
+        const auto minimized = host.Observe(std::nullopt, Mode, EditorSurfaceAdmission::Idle);
+        REQUIRE(minimized.HasValue());
+        CHECK_FALSE(minimized.Value().snapshot.inFlightSequence);
+        CHECK(native.calls == 1);
+        CHECK(native.nativeAlive);
+        REQUIRE(host.Close(EditorSurfaceAdmission::Cancelled).HasValue());
+        CHECK(host.Snapshot().Value().state == Render::RenderSurfaceState::Unattached);
+        CHECK(native.nativeAlive);
+    }
+
+    TEST_CASE("Production surface rejects a temporary code from a different domain as native loss", "[editor][surface]") {
+        NativeSurface native;
+        auto host = Surface(native);
+        native.host = &host;
+        native.foreignPending = true;
+        const auto observed = host.Observe(Render::FramebufferExtent{640, 480}, Mode, EditorSurfaceAdmission::Idle);
+        REQUIRE(observed.HasValue());
+        REQUIRE(observed.Value().nativeFailure);
+        CHECK(observed.Value().nativeFailure->domain.Value() == "test.foreign");
+        CHECK(observed.Value().snapshot.state == Render::RenderSurfaceState::Lost);
+        CHECK_FALSE(observed.Value().snapshot.inFlightSequence);
+    }
+
+    TEST_CASE("Production surface close cancels a pending native transition exactly once", "[editor][surface]") {
+        NativeSurface native;
+        auto host = Surface(native);
+        native.host = &host;
+        native.pending = true;
+        REQUIRE(host.Update(Render::FramebufferExtent{640, 480}, Mode).HasValue());
+        REQUIRE(host.Snapshot().Value().inFlightSequence);
+        const auto closed = host.Close(EditorSurfaceAdmission::Cancelled);
+        REQUIRE(closed.HasValue());
+        CHECK(closed.Value().state == Render::RenderSurfaceState::Unattached);
+        CHECK_FALSE(closed.Value().inFlightSequence);
+        CHECK(native.calls == 1);
+        CHECK(native.nativeAlive);
+        CHECK(host.Close(EditorSurfaceAdmission::Cancelled).HasValue());
     }
 
     TEST_CASE("Production host surface admits initial zero size and suspend resume without native work while suspended",

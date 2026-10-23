@@ -98,7 +98,7 @@ namespace Horo::Render {
         Runtime::Ui::UiGlyphAtlas::PageLease source_;
     };
 
-    /** @brief Current image generation and exact resident graph texture resolved by the host's resource adapter. */
+    /** @brief Current image or alpha-mask generation and exact resident graph texture resolved by the host's resource adapter. */
     struct UiRenderImageBinding final {
         const Runtime::Ui::UiImageResourceRegistry *registry{}; /**< Borrowed only during synchronous admission. */
         Runtime::Ui::UiImageResourceHandle image;  /**< Exact currently published generation, never a retained stale snapshot. */
@@ -128,8 +128,9 @@ namespace Horo::Render {
      */
     struct UiRenderSubmission final {
         const Runtime::Ui::UiRenderGeometryPlan *geometry{}; /**< Exact immutable plan, including its source snapshot lease. */
-        std::span<const UiRenderImageBinding> images;        /**< At most MaximumUiSubmissionImages bindings. */
-        std::span<const UiRenderFontBinding> fonts;          /**< At most MaximumUiSubmissionFonts bindings. */
-        Runtime::Ui::UiGlyphAtlas::FrameLease atlas;         /**< Sealed exact pin set required whenever font bindings are present. */
+        std::span<const UiRenderImageBinding>
+            images; /**< At most MaximumUiSubmissionImages image/mask bindings; realization fixes each exact role. */
+        std::span<const UiRenderFontBinding> fonts;  /**< At most MaximumUiSubmissionFonts bindings. */
+        Runtime::Ui::UiGlyphAtlas::FrameLease atlas; /**< Sealed exact pin set required whenever font bindings are present. */
     };
 }  // namespace Horo::Render

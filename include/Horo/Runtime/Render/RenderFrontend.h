@@ -21,10 +21,16 @@
 
 namespace Horo::Render {
     class RenderFrontend;
+    class IRenderGraphResourceLease;
+    struct UiPaintFrameBuffers;
+    struct UiPaintFrameUpdate;
+    enum class RenderGraphExecutionRole : std::uint8_t;
     struct RenderMaterialPass;
     struct RenderGraphQueueSubmission;
     class CompiledRenderGraphExecution;
     class RenderGraphLifetimePlan;
+    class UiPaintFrameBufferPool;
+    class UiPaintProgram;
     struct RenderGraphPassWorkload;
     struct UiRenderSubmission;
     class UiRenderImageTexture;
@@ -43,6 +49,7 @@ namespace Horo::Runtime::Ui {
 namespace Horo::Render {
 
     namespace Detail {
+        struct UiPaintFrontendState;
         struct VfxSchedulingStorage;
         class RenderResourceRegistry;
         class RenderResourceUploadQueue;
@@ -52,6 +59,7 @@ namespace Horo::Render {
         class RenderGraphTransientResourcePool;
         class RenderParallelWorkState;
         class RenderParallelGraphWorkState;
+        class RenderSubmissionAllocator;
     }  // namespace Detail
 
     /** @brief Finite frontend admission and per-drain limits for initial resource uploads. */
@@ -150,6 +158,13 @@ namespace Horo::Render {
         /** @brief Aborts any currently owned frame, then transfers ownership. */
         RenderFrameScope &operator=(RenderFrameScope &&other) noexcept;
 
+        /** @brief Borrows this scope's existing active backend frame identity without issuing or submitting work.
+         * @return Exact active token, or invalid after ownership was moved, presented or cancelled.
+         * @details Read on the frame owner. Native private bridges still validate thread/current-frame admission. */
+        [[nodiscard]] FrameToken Token() const noexcept {
+            return backend_ != nullptr ? frame_ : FrameToken{};
+        }
+
         /**
          * @brief Executes the ordered pass sequence for this frame exactly once.
          * @param orderedPasses Non-owning pass sequence valid for this call.
@@ -157,6 +172,17 @@ namespace Horo::Render {
          * or a translated backend exception.
          */
         [[nodiscard]] Result<void> Execute(std::span<const RenderPassDescriptor> orderedPasses);
+
+        /** @brief Reserves one ordered submission from this frontend's admitted queue topology.
+         * @param role Admitted queue role; aliased roles share the same timeline.
+         * @param waits Exact admitted points or earlier reservations in this frame, copied into bounded storage.
+         * @return A record valid until this frame ends, or a typed owner, capacity or history failure.
+         * @details Owner-thread only. Abandonment burns identities; later frames never recycle them.
+         * Pass the result to explicit graph/material execution; reservation alone submits no work.
+         * Reserved dependencies must be admitted earlier in the same batch or an earlier call.
+         */
+        [[nodiscard]] Result<RenderQueueSubmission> ReserveSubmission(RenderQueueRole role,
+                                                                      std::span<const RenderTimelinePoint> waits = {});
 
         /**
          * @brief Composes GUI output once after successful execution and before presentation.
@@ -175,6 +201,18 @@ namespace Horo::Render {
          * @throws std::bad_alloc If owned error construction cannot allocate, after exception cleanup has completed.
          * @throws std::length_error If owned error construction exceeds its representation limits. */
         [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialPass &pass);
+
+        /** @brief Records the explicit lawful no-source UI contribution after scene execution and before GUI.
+         * @return Success or typed inactive/order/repeated-composition failure; issues no native work. */
+        [[nodiscard]] Result<void> ComposeUi();
+        /** @brief Encodes one exact prepared UI graph after scene execution and before GUI composition.
+         * @param graph Exact immutable UI-only compiled graph. @param workloads Bounded paint-only retained operations.
+         * @param ui Exact canonical geometry/resource leases transferred to native completion.
+         * @param transientResources Prepared isolation surfaces matching graph lifetimes.
+         * @return Success or original admission/encoding failure; failure aborts presentation of the whole frame.
+         * @details This named stage does not reopen general Execute/ExecuteGraph admission or allow repeated scene execution. */
+        [[nodiscard]] Result<void> ComposeUi(const CompiledRenderGraphExecution &graph, std::span<const RenderGraphPassWorkload> workloads,
+                                             UiRenderSubmission ui, RenderGraphTransientResourcesHandle transientResources = {});
 
         /**
          * @brief Resolves resident resources and executes one compiled graph exactly once.
@@ -299,10 +337,25 @@ namespace Horo::Render {
                                                         std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
                                                         RenderGraphTransientResourcesHandle transientResources = {},
                                                         std::span<const RenderGraphQueueSubmission> submissions = {});
+        /** @brief Guards one acquired graph lease and commits queue history only after backend acceptance. */
+        [[nodiscard]] Result<void> ExecuteLeasedGraph(RenderGraphExecutionRequest request,
+                                                      const Detail::RenderSubmissionAllocator &submissionHistory);
+        /** @brief Encodes a graph only after its named scene or UI stage has independently admitted it. */
+        [[nodiscard]] Result<void> EncodeAdmittedGraph(const CompiledRenderGraphExecution &graph,
+                                                       std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
+                                                       RenderGraphTransientResourcesHandle transientResources,
+                                                       std::span<const RenderGraphQueueSubmission> submissions,
+                                                       RenderGraphExecutionRole role);
+        /** @brief Requires the unique UI stage between successful scene execution and GUI encoding. */
+        [[nodiscard]] Result<void> ValidateUiCompositionAdmission() const;
         /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
         [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
         struct MaterialExecutionOutcome;
         struct MaterialExecutionInstances;
+        struct GuiCompositionState;
+        /** @brief Validates GUI declaration, resolves sampled generations and acquires the existing completion lease. */
+        [[nodiscard]] Result<void> PrepareGuiComposition(IGuiPassExecutor &executor, GuiCompositionState &state);
+
         /** @brief Resolves bounded draw identities without acquiring or transferring completion ownership. */
         [[nodiscard]] Result<void> ResolveMaterialDraws(const RenderMaterialPass &pass, MaterialExecutionInstances &instances) const;
         /** @brief Contains admission/execution exceptions and completes rollback before allocation-free outcome transport. */
@@ -329,6 +382,8 @@ namespace Horo::Render {
         std::uint64_t hostFrame_{};
         bool executed_{false};
         bool guiComposed_{false};
+        IRenderGraphResourceLease *completionLease_{nullptr}; /**< Borrowed exact active frame lease; backend owns retirement. */
+        bool uiComposed_{false};
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
     };
@@ -526,6 +581,25 @@ namespace Horo::Render {
          * Unsupported source formats/color spaces fail through normal texture admission without conversion or fallback.
          */
         [[nodiscard]] Result<UiRenderImageTexture> CreateUiImageTexture(
+            const Runtime::Ui::UiImageResourceRegistry &registry, Runtime::Ui::UiRuntimeHandle<Runtime::Ui::UiImageResourceHandleTag> image,
+            std::uint32_t page, std::span<const std::byte> pixels);
+        /** @brief Realizes the exact cooked UI raster interface before frame acquisition.
+         * @param kernel Immutable explicit target/cook/attachment evidence.
+         * @return Selected-backend native lease or original typed failure; no source compilation/fallback. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel);
+        /** @brief Updates an already allocated free UI frame slot before opening a native frame.
+         * @param buffers Exact resident ring handles. @param update Complete synchronous finite CPU payload.
+         * @return Success or typed owner/ready/busy/capacity failure without advancing accepted UI state. */
+        [[nodiscard]] Result<void> UpdateUiPaintFrame(const UiPaintFrameBuffers &buffers, const UiPaintFrameUpdate &update);
+
+        /**
+         * @brief Realizes a current image page explicitly for alpha-mask sampling.
+         * @param registry Borrowed image authority. @param image Exact current image generation.
+         * @param page Source page index. @param pixels Complete tightly packed RGBA8 page; alpha supplies coverage.
+         * @return Exact Mask-role provenance and readiness, or the original typed image/upload failure.
+         * @details Uses the same owned upload path as images. A paint-image realization cannot impersonate this role.
+         */
+        [[nodiscard]] Result<UiRenderImageTexture> CreateUiMaskTexture(
             const Runtime::Ui::UiImageResourceRegistry &registry, Runtime::Ui::UiRuntimeHandle<Runtime::Ui::UiImageResourceHandleTag> image,
             std::uint32_t page, std::span<const std::byte> pixels);
         /**
@@ -764,6 +838,7 @@ namespace Horo::Render {
         };
 
         std::unique_ptr<IRenderBackend> backend_;
+        std::unique_ptr<Detail::RenderSubmissionAllocator> submissionAllocator_;
         /** @brief Checks owner affinity before closing state; no mutable native work is admitted after close. */
         [[nodiscard]] Result<void> RequireOpenOwner() const;
 
@@ -774,6 +849,9 @@ namespace Horo::Render {
         std::shared_ptr<Detail::VfxSchedulingStorage> vfxScheduling_;
         std::thread::id vfxSchedulingOwner_{std::this_thread::get_id()};
         RenderFrontendMemoryConfig memoryConfig_;
+        friend class UiPaintFrameBufferPool;
+        friend class UiPaintProgram;
+        std::shared_ptr<Detail::UiPaintFrontendState> uiPaintFrontendState_;
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;
         std::unique_ptr<Detail::RenderResourceUploadQueue> resourceUploadQueue_;
         std::unique_ptr<Detail::RenderGraphResourceLeasePool> graphResourceLeases_;

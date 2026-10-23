@@ -1,4 +1,5 @@
 #include "EditorUiTestHarness.h"
+#include "Horo/Runtime/Render/RenderFrontend.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -70,6 +71,11 @@ namespace {
 
             [[nodiscard]] Horo::Math::ClipDepthRange ClipDepthRange() const noexcept override {
                 return Horo::Math::ClipDepthRange::NegativeOneToOne;
+            }
+
+            [[nodiscard]] Horo::Result<void> ExecutePreparedFrame(Horo::Render::RenderFrameScope &frame,
+                                                                  std::span<const Horo::Render::RenderPassDescriptor> passes) override {
+                return frame.Execute(passes);
             }
 
             [[nodiscard]] Horo::Result<void> ExecuteStaticMeshPass(const Horo::Render::StaticMeshPassDescriptor &) override {

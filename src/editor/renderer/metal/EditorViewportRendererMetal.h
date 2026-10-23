@@ -22,6 +22,8 @@ namespace Horo::Editor {
         /** @brief Releases all Metal objects; repeated calls are safe. */
         void Shutdown() noexcept;
 
+        [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
+                                                        std::span<const Render::RenderPassDescriptor> passes) override;
         void RequestExtent(EditorViewportExtent extent) noexcept override;
         void RequestGrid(const EditorViewportGridOptions &options) noexcept override;
         void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &options) noexcept override;

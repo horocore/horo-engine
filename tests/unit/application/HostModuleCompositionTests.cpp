@@ -21,6 +21,10 @@ TEST_CASE("Renderer backend identities map explicitly to host renderer types", "
     REQUIRE(metal.HasValue());
     CHECK(metal.Value() == HostRenderer::Metal);
 
+    const auto vulkan = HostRendererFromBackendId("vulkan");
+    REQUIRE(vulkan.HasValue());
+    CHECK(vulkan.Value() == HostRenderer::Vulkan);
+
     const auto unsupported = HostRendererFromBackendId("future-renderer");
     REQUIRE(unsupported.HasError());
     CHECK(unsupported.ErrorValue().code.Value() == "application.host.invalid_module_selection");
@@ -113,4 +117,19 @@ TEST_CASE("Impossible host module selections fail before activation", "[unit][ap
     REQUIRE(DescribeHostModules({.host = HostKind::Headless, .renderer = HostRenderer::OpenGL}).HasError());
     REQUIRE(DescribeHostModules({.host = HostKind::Headless, .includeOpenTelemetry = true}).HasError());
     REQUIRE(DescribeHostModules({.host = HostKind::Editor, .renderer = HostRenderer::None}).HasError());
+}
+
+TEST_CASE("Vulkan host descriptor is inert and selects exactly its own peer modules", "[unit][application][modules]") {
+    const auto described = DescribeHostModules({.host = HostKind::Editor, .renderer = HostRenderer::Vulkan});
+    REQUIRE(described.HasValue());
+    const auto has = [&](std::string_view id) {
+        return std::ranges::any_of(described.Value(), [&](const ModuleDescriptor &descriptor) {
+            return descriptor.id.value == id;
+        });
+    };
+    CHECK(has("horo.render.vulkan"));
+    CHECK(has("horo.editor.viewport.vulkan"));
+    CHECK_FALSE(has("horo.render.opengl"));
+    CHECK_FALSE(has("horo.render.metal"));
+    CHECK(DescribeHostModules({.host = HostKind::Editor, .renderer = static_cast<HostRenderer>(255)}).HasError());
 }

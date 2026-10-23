@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/RuntimeUiService.h"
 
 #include "RuntimeUiAccessState.h"
+#include "UiAnimationPublisher.h"
 
 #include <algorithm>
 #include <new>
@@ -157,6 +158,9 @@ namespace Horo::Runtime::Ui {
         auto *publisher = state_->registry.Publisher(instance);
         if (!publisher)
             return Result<UiReloadReconciliation>::Failure(MakeError(UiErrors::CapabilityUnavailable));
+        if (Detail::HasAnimationSource(*state_, instance))
+            return Result<UiReloadReconciliation>::Failure(
+                MakeError(UiErrors::AnimationPolicyInvalid, "An attached animation source requires coordinated reload preparation."));
         auto candidate = publisher->Prepare(std::move(replacement), cancellation);
         if (candidate.HasError())
             return Result<UiReloadReconciliation>::Failure(candidate.ErrorValue());
@@ -164,12 +168,7 @@ namespace Horo::Runtime::Ui {
         auto committed = publisher->Commit(prepared, point);
         if (committed.HasError())
             return committed;
-        for (auto &entry : state_->dispatchers)
-            if (entry.instance == instance)
-                entry = {};
-        for (auto &entry : state_->actions)
-            if (entry.instance == instance)
-                entry = {};
+        Detail::InvalidateRuntimeUiAttribution(*state_, instance);
         return committed;
     }
 

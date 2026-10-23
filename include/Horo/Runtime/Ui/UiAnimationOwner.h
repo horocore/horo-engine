@@ -9,6 +9,12 @@
 #include "Horo/Runtime/Ui/UiPointerInteraction.h"
 
 namespace Horo::Runtime::Ui {
+    class RuntimeUiService;
+
+    namespace Detail {
+        class UiAnimationPublisher;
+    }
+
     /** @brief Inert authored style/layout input adopted only after exact retained-tree and registry admission. */
     struct UiAnimationElementDefinition final {
         UiElementId element;
@@ -230,6 +236,18 @@ namespace Horo::Runtime::Ui {
         UiStructuralCommitPoint point;
     };
 
+    /** @brief Complete trusted load-time preparation shared by service and actual host animation composition.
+     * @details Move-only owned replacement resources; allocator is borrowed only for the synchronous reload call.
+     * Construct with the real source issuer. No native module receives this privileged host preparation. */
+    struct UiAnimationReloadPreparation final {
+        UiReloadGeneration generation;
+        UiElementSlotAllocator &allocator;
+        RuntimeStyleRegistry registry;
+        UiStyleResolver styles;
+        UiAnimationCanvasDefinition definition;
+        UiAnimationReloadAdmission admission;
+    };
+
     /** @brief Copied reconciliation and terminal counts from one successful real asset publication. */
     struct UiAnimationReloadResult final {
         UiReloadReconciliation state;
@@ -288,6 +306,18 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<UiAnimationOwner> Create(UiReloadGeneration initial, UiElementSlotAllocator &allocator,
                                                              RuntimeStyleRegistry registry, UiStyleResolver styles,
                                                              UiAnimationCanvasDefinition definition, UiAnimationLimits limits = {});
+        /** @brief Attaches derived animation to the exact sole service-owned authored publisher.
+         * @param service Explicit host-owned service; shared state is pinned, never the wrapper address.
+         * @param instance Exact admitted semantic source. @param allocator Actual source tree issuer.
+         * @param registry Owned style schema. @param styles Owned canonical style resolver.
+         * @param definition Complete trusted animation policy. @param limits Finite derived inventories.
+         * @return Unique derived owner or typed source/thread/identity/capacity failure preserving service admission.
+         * @details One exclusive source reservation is retained through reload and retirement. Detach never shuts down
+         * or collects the service publisher. The trusted host uses the coordinated service reload overload. */
+        [[nodiscard]] static Result<UiAnimationOwner> Create(RuntimeUiService &service, RuntimeUiInstanceId instance,
+                                                             UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
+                                                             UiStyleResolver styles, UiAnimationCanvasDefinition definition,
+                                                             UiAnimationLimits limits = {});
         /** @brief Reconciles a complete replacement through the existing sole asset publisher at a structural safe point.
          * @param replacement Detached verified new cooked closure and actual owners. @param allocator Its actual tree issuer.
          * @param registry New owned style registry. @param styles New unique style resolver. @param definition Inert authored bindings.
@@ -551,6 +581,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> InitializeBindings(Storage &storage, UiReloadGeneration &generation);
         /** @brief Preallocates all actual control and action replacement owners before frame work. */
         [[nodiscard]] static Result<void> ReserveInteractionSources(UiReloadCanvas &canvas);
+        friend class RuntimeUiService;
+        /** @brief Shares complete admission while preserving the standalone issuer range already burned before publisher creation. */
+        [[nodiscard]] static Result<UiAnimationOwner> CreateFromPublisher(Detail::UiAnimationPublisher publisher,
+                                                                          UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
+                                                                          UiStyleResolver styles, UiAnimationCanvasDefinition definition,
+                                                                          UiAnimationLimits limits,
+                                                                          std::optional<UiElementSlotRange> reserved = {});
         explicit UiAnimationOwner(std::shared_ptr<Storage> storage) noexcept;
 
         /** @brief Const-propagating sole owner; only mutable commands may retain a candidate publisher pin. */

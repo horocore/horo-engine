@@ -1462,7 +1462,7 @@ horo_register_catch_test(HoroXRActionBindingTests LABELS "unit;xr;input;headless
 
 if(HORO_BUILD_XR_OPENXR)
     add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRActionBindingsTests.cpp
-        unit/runtime/xr/OpenXRSwapchainTests.cpp)
+        unit/runtime/xr/OpenXRSwapchainTests.cpp unit/runtime/xr/OpenXRFrameCompositorTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
@@ -2233,6 +2233,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/AssetImportSourcePreviewTests.cpp
             unit/editor/ScreenViewPresentationTests.cpp
             unit/editor/EditorThemeBehaviorTests.cpp
+            unit/editor/EditorGuiCompositionTests.cpp
     )
     target_compile_features(HoroEditorPresentationTests PRIVATE cxx_std_20)
     target_include_directories(HoroEditorPresentationTests PRIVATE
@@ -2899,7 +2900,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroGlobalDockPanelRenderTests PRIVATE cxx_std_20)
     target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp
         ../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)
-    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::RenderApi)
+    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::RenderApi HoroEngine::RenderFrontend)
     target_include_directories(HoroGlobalDockPanelRenderTests PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
@@ -2967,6 +2968,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     target_link_libraries(HoroViewportPanelRenderTests
             PRIVATE
+            HoroEngine::RenderFrontend
             HoroEngine::Gui
             HoroThirdParty::ImGui
     )
@@ -3408,6 +3410,9 @@ add_executable(HoroRenderGraphTests
         unit/runtime/renderer/PostProcessGraphTests.cpp
         unit/runtime/renderer/PostProcessVolumeTests.cpp
         unit/runtime/renderer/RenderGraphExecutionTests.cpp
+        unit/runtime/renderer/UiPaintKernelTests.cpp
+        unit/runtime/renderer/UiPaintFrameUploadTests.cpp
+        unit/runtime/renderer/UiPaintGraphTests.cpp
         unit/runtime/renderer/RenderGraphSubmissionTests.cpp
         unit/runtime/renderer/RenderGraphTests.cpp
         unit/runtime/renderer/RenderGraphValidationTests.cpp
@@ -3565,6 +3570,11 @@ add_executable(HoroShaderCompilerPipelineTests
 target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform)
+add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp)
+target_compile_features(HoroShaderReflectionCookTests PRIVATE cxx_std_20)
+target_link_libraries(HoroShaderReflectionCookTests PRIVATE HoroEditorVulkanShaderInternal)
+horo_register_catch_test(HoroShaderReflectionCookTests LABELS "unit;renderer;shader;headless")
+
 add_executable(HoroRenderFrontendTests
         support/AllocationProbe.cpp
         unit/runtime/renderer/RenderParallelWorkTests.cpp
@@ -3573,9 +3583,11 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderGraphTransientResourceTests.cpp
         unit/runtime/renderer/RenderGraphTransientReservationTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
+        unit/runtime/renderer/RenderSubmissionAllocatorTests.cpp
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
         unit/runtime/renderer/RenderFrontendLifecycleTests.cpp
+            unit/runtime/renderer/RenderFrontendGuiCompositionTests.cpp
         unit/runtime/renderer/RenderFrontendPresentationTests.cpp
         unit/runtime/renderer/RenderFrontendRecoveryTests.cpp
         unit/runtime/renderer/RenderFrontendTerrainGraphTests.cpp
@@ -3590,6 +3602,10 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderFrontendClosingTests.cpp
         unit/runtime/renderer/UiRenderCompositionTests.cpp
         unit/runtime/renderer/UiRenderSubmissionTests.cpp
+        unit/runtime/renderer/UiPaintLeaseTests.cpp
+        unit/runtime/renderer/UiPaintFrameBufferPoolTests.cpp
+        unit/runtime/renderer/UiPaintProgramTests.cpp
+        unit/runtime/renderer/UiPaintProgramBindingTests.cpp
 )
 
 target_compile_features(HoroRenderFrontendTests PRIVATE cxx_std_20)
@@ -3914,6 +3930,7 @@ target_compile_features(HoroRuntimeUiElementTreeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiElementTreeTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiRenderSnapshotTests
         unit/runtime/ui/UiRenderSnapshotTests.cpp
+        unit/runtime/ui/UiRenderPaintEffectsTests.cpp
 )
 target_compile_features(HoroRuntimeUiRenderSnapshotTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiRenderSnapshotTests PRIVATE HoroEngine::RuntimeUi)
@@ -3968,6 +3985,7 @@ target_include_directories(HoroRuntimeUiAnimationTests PRIVATE ${PROJECT_SOURCE_
 target_link_libraries(HoroRuntimeUiAnimationTests PRIVATE HoroEngine::RuntimeUi HoroRationalDurationInternal)
 add_executable(HoroRuntimeUiAnimationIntegrationTests
         unit/runtime/ui/UiAnimationOwnerIntegrationTests.cpp
+        unit/runtime/ui/UiAnimationServiceSourceTests.cpp
         unit/runtime/ui/UiAnimationOwnerAsyncIntegrationTests.cpp
         unit/runtime/ui/UiPresentationProfilesTests.cpp
         unit/runtime/ui/UiPresentationProfileDocumentTests.cpp
@@ -5178,11 +5196,14 @@ horo_register_catch_test(HoroD3D12InitializationTests LABELS "native;renderer;d3
 
 if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests
+        unit/runtime/renderer/VulkanPresentationRuntimeTests.cpp
+        unit/runtime/renderer/VulkanPresentationBackendTests.cpp
             unit/runtime/renderer/VulkanRenderBackendTests.cpp
             unit/runtime/renderer/VulkanResourceRuntimeTests.cpp
             unit/runtime/renderer/VulkanShaderRuntimeTests.cpp
             unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
             unit/runtime/renderer/VulkanGraphRuntimeTests.cpp
+            unit/runtime/renderer/VulkanGuiCommandTests.cpp
             unit/runtime/renderer/VulkanExternalImageTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
@@ -5222,6 +5243,19 @@ if (HORO_BUILD_RENDER_VULKAN)
                 LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE
                 FAIL_REGULAR_EXPRESSION "Validation Error;VUID-")
     endif ()
+endif ()
+
+# Native editor qualification consumes the same host-owned Vulkan GUI/viewport pair.
+# Platform admission remains intact; macOS cannot qualify this backend via a guard bypass.
+if (HORO_ENABLE_GPU_SMOKE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET HoroEditorVulkanGuiInternal)
+    add_executable(HoroEditorVulkanPresentationSmoke
+        integration/renderer/EditorVulkanPresentationSmoke.cpp
+        ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorVulkanShaderAssets.cpp)
+    target_include_directories(HoroEditorVulkanPresentationSmoke PRIVATE
+        ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app)
+    target_link_libraries(HoroEditorVulkanPresentationSmoke PRIVATE
+        HoroEditorVulkanGuiInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+    horo_register_catch_test(HoroEditorVulkanPresentationSmoke LABELS "native;renderer;vulkan;gui;qualification")
 endif ()
 
 set(HORO_CATCH_TEST_TARGETS

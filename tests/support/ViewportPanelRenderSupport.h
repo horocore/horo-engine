@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Runtime/Render/RenderFrontend.h"
 
 /** @file ViewportPanelRenderSupport.h
  * @brief Private render-surface and localization fixtures shared by one viewport test target.
@@ -50,6 +51,11 @@ namespace Horo::Editor::Tests::ViewportRenderSupport {
 
         [[nodiscard]] Horo::Math::ClipDepthRange ClipDepthRange() const noexcept override {
             return depthRange;
+        }
+
+        [[nodiscard]] Horo::Result<void> ExecutePreparedFrame(Horo::Render::RenderFrameScope &frame,
+                                                              std::span<const Horo::Render::RenderPassDescriptor> passes) override {
+            return frame.Execute(passes);
         }
 
         [[nodiscard]] Horo::Result<void> ExecuteStaticMeshPass(const Horo::Render::StaticMeshPassDescriptor &) override {

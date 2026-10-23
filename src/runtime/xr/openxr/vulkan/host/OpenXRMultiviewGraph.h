@@ -74,6 +74,13 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<void> Execute(Render::RenderFrameScope &frame, const XRMultiviewOwnerState &active,
                                            const Render::RenderQueueSubmission &submission);
+        /** @brief Reserves this pass from the active frontend's single submission history.
+         * @param frame Existing selected renderer frame. @param active Current XR ownership facts.
+         * @param waits Exact previously admitted producer points.
+         * @return Canonical admission/encoding result; no additional frame or completion authority is created.
+         */
+        [[nodiscard]] Result<void> ExecuteReserved(Render::RenderFrameScope &frame, const XRMultiviewOwnerState &active,
+                                                   std::span<const Render::RenderTimelinePoint> waits = {});
         /** @brief Returns immutable compiled evidence for inspection. @return Exact prepared plan. */
         [[nodiscard]] const Render::CompiledRenderGraphExecution &Graph() const noexcept;
 

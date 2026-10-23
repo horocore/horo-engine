@@ -33,11 +33,33 @@ namespace Horo::Render::Detail {
                                                                   UiRenderSubmission *ui = nullptr,
                                                                   RenderGraphTransientResourceSet *transient = nullptr,
                                                                   std::span<const RenderGraphPassWorkload> workloads = {});
+        /** @brief Captures the unique canonical UI contribution on this frame's existing completion lease.
+         * @param resources Exact UI graph bindings. @param ui Canonical source leases to transfer on success.
+         * @param transient Prepared UI isolation surfaces, distinct from any scene transient set.
+         * @param existing Exact active frame lease or null before the frame's first native contribution.
+         * @return Same completion lease with bounded added pins, or a typed failure preserving existing ownership.
+         * @details Only the frame owner calls this before presentation. Partial added pins roll back; no old source,
+         * scene transient set or completion authority is replaced. One lease accepts one canonical UI capture.
+         */
+        [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireUi(std::span<const RenderGraphResource> resources, UiRenderSubmission &ui,
+                                                                    RenderGraphTransientResourceSet *transient,
+                                                                    IRenderGraphResourceLease *existing,
+                                                                    std::span<const RenderGraphPassWorkload> workloads = {});
         /** @brief Retains material consumers and exact target/mesh pins using the same preallocated frame-completion pool.
          * @param pins Resolved target and mesh generations. @param draws Immutable materials to retain through completion.
          * @return Existing frame lease or typed capacity/residency failure with complete rollback. */
         [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireMaterial(std::span<const RenderGraphResidentIdentity> pins,
                                                                           std::span<const RenderMaterialDraw> draws);
+
+        /** @brief Extends this exact active frame lease, or acquires its first lease, with GUI sampled generations.
+         * @param pins Bounded resolved view/sampler generations; duplicate identities are pinned once.
+         * @param existing Exact lease already transferred by this frame, or null for its first completion lease.
+         * @return Same active lease, or a typed identity/capacity error with every newly added pin rolled back.
+         * @details Only the render owner may extend an active, not-yet-presented frame. Existing pins and
+         * completion ownership remain unchanged on failure; this operation never submits or releases the old lease.
+         */
+        [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireGui(std::span<const RenderGraphResidentIdentity> pins,
+                                                                     IRenderGraphResourceLease *existing);
 
     private:
         using Pin = RenderGraphResidentIdentity;
@@ -51,16 +73,21 @@ namespace Horo::Render::Detail {
              * @return Success, including an unused declaration or existing pin, or typed binding/capacity failure.
              * @details The outer acquisition transaction owns rollback of an already retained prefix.
              */
-            [[nodiscard]] Result<void> PinResource(const RenderGraphResource &resource);
+            [[nodiscard]] Result<void> PinResource(const RenderGraphResource &resource, RenderGraphTransientResourceSet *resourceTransient);
             /** @brief Adds one exact distinct registry pin without allocating storage. */
             [[nodiscard]] Result<void> PinIdentity(const Pin &pin);
+            /** @brief Releases only a newly captured pin prefix, preserving prior native frame ownership. */
+            void RollbackPins(std::size_t initialPins) noexcept;
             /** @brief Retains exact multiview mesh/material/view generations using this existing completion lease. */
             [[nodiscard]] Result<void> PinMultiview(const RenderGraphMultiview &workload);
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;
             UiRenderSubmissionRetention ui;
+            bool uiCaptured{};
+            std::array<std::shared_ptr<IResidentUiPaintKernel>, 8> uiKernels; /**< Distinct selected-native pipelines survive completion. */
             RenderGraphTransientResourceSet *transient{nullptr};
+            RenderGraphTransientResourceSet *uiTransient{nullptr};
             std::array<std::shared_ptr<const ResidentMaterialBinding>, RenderMaterialPass::MaximumDraws> materials;
             std::size_t materialCount{0};
         };
