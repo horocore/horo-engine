@@ -16,9 +16,11 @@ function(horo_add_unicode_dependency)
     set(sdk_library "${sdk_root}/lib/unicode${CMAKE_STATIC_LIBRARY_SUFFIX}")
     if(sdk_root AND EXISTS "${sdk_library}" AND EXISTS "${sdk_root}/include/unicode/utypes.h"
        AND EXISTS "${sdk_root}/share/icudt78l.dat" AND EXISTS "${sdk_root}/share/ICU.txt")
-        add_library(HoroThirdPartyUnicode STATIC IMPORTED GLOBAL)
+        # Keep an exportable Horo target: the gameplay build-tree SDK exports
+        # this name and its usage requirements for external module consumers.
+        add_library(HoroThirdPartyUnicode INTERFACE)
         add_library(HoroThirdParty::Unicode ALIAS HoroThirdPartyUnicode)
-        set_target_properties(HoroThirdPartyUnicode PROPERTIES IMPORTED_LOCATION "${sdk_library}")
+        target_link_libraries(HoroThirdPartyUnicode INTERFACE "${sdk_library}")
         target_include_directories(HoroThirdPartyUnicode SYSTEM INTERFACE "${sdk_root}/include")
         target_compile_definitions(HoroThirdPartyUnicode INTERFACE ${unicode_definitions})
         if(NOT WIN32)
@@ -85,6 +87,8 @@ function(horo_add_unicode_dependency)
             COMMAND "${HORO_DEPENDENCY_SDK_PYTHON}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.github/scripts/dependency_package.py"
                 pack --root "${stage}" --identity "${sdk_identity}"
                 --output "${CMAKE_BINARY_DIR}/dependency-sdk/packages/${sdk_archive}"
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
             DEPENDS HoroThirdPartyUnicode VERBATIM)
+        add_dependencies(horo-package-dependencies horo-package-unicode)
     endif()
 endfunction()

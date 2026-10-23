@@ -306,9 +306,106 @@ analysis when that warning is present.
 
 ## Delivery validation
 
+Main CI run `39986816534`, Windows job `120532857540` (before the merged CI
+latency changes), completed in 51 minutes. Debug build took 20m30s and its log
+contained 4,028 compile commands and 368 link commands. Across the Debug and
+auxiliary configurations, sccache reported 6,497 hits and 131 misses (98.02%),
+plus 533 non-cacheable calls: 525 `/Fp`, four `/Yc` and four multiple-input
+invocations. Direct/preprocessor mode was already enabled. Therefore enabling
+direct mode or increasing the object-cache capacity alone is not an evidenced
+fix. The merged CI presets disable precompiled headers; the new main run must
+measure whether that removes these bypasses and reduces build time. Do not use
+this earlier run to qualify the new preset or the GHCR reader.
+
+### Public GHCR dependency packages
+
+`Dependency SDK packages` publishes the qualified Unicode/ICU SDK to
+`ghcr.io/horocore/horo-engine-dependency-sdk`. It runs only for dependency recipe
+changes on main, or a manual dispatch on main. Its three platform configurations
+run sequentially (`max-parallel: 1`); PRs create no producer jobs. The publisher
+builds only dependency packaging targets, never the engine/test suite. The
+15-minute publisher timeout bounds capacity use; it is not a measured speedup.
+
+Native Debug jobs opt into anonymous package reads during configure. They use
+the independently computed compiler, platform, SDK, ABI, flags and recipe identity.
+The consumer checks the OCI layer size/digest and the existing SDK manifest before
+an atomic install. Missing ORAS, registry failure, absent package or incompatible
+payload retains the source build. Reads have a shared 60-second network budget;
+publication has a 120-second budget. Compiler caches retain their existing policy.
+Sonar's instrumented objects continue to build from source.
+
+Only the main publisher job has `packages: write`; PR jobs have no package write
+permission or registry credentials. A private temporary ORAS configuration keeps
+publication credentials out of subsequent anonymous checks. Existing compatibility
+tags are never overwritten; an outage must not be treated as an absent tag.
+
+GHCR creates new packages as **private**, even for a public repository. After the
+first trusted publication, set this package's visibility to public in its GitHub
+package settings. The publisher verifies anonymous manifest access and reports
+failure until this one-time setup is complete. Fork PRs always fall back to source
+while the package is private. No additional PAT or Cloudflare account is required.
+Do not report activation until a hosted main publication and anonymous PR restore
+have both been observed. Manually dispatch on main after a runner/toolchain image
+change if its new identity misses; PRs never start a producer themselves.
+
+This first recipe moves only the Unicode SDK. It does not migrate all FetchContent
+source trees, eliminate the current Actions cache pressure, or establish the
+15-minute goal. Additional dependencies need relocatable library/header/data and
+license qualification before adding packaging targets to the shared producer.
+
+See [GitHub's container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+for package visibility and `GITHUB_TOKEN` permissions.
+
 Run the installer regressions together with CI grouping/cache and coverage
 contracts. Run the repository quality preflight on the final worktree. On the
 macOS validation host, `scripts/analyze.py check` stops with
 `Managed quality processes require Linux with pidfd support or Windows` before
 producing a report. Sonar IDE, CLI secrets and Codacy are consequently unvalidated;
 this is not a clean preflight or a hosted quality-gate result.
+
+### Bounded source archive transport
+
+SDL, HarfBuzz and curl can use SHA-256-verified codeload archives at their
+existing pinned revisions instead of cloning Git history. A local inventory
+on 2026-10-23 measured 157,629,513, 66,337,692 and 54,386,924 bytes of Git
+metadata respectively (278,354,129 bytes total). These are local source-tree
+measurements, not a measured reduction in compressed Actions cache size or
+hosted job duration. The downloaded archives total 54,838,887 bytes.
+
+All 2,194 SDL and 3,464 HarfBuzz tracked blobs matched the pinned Git objects.
+All 4,284 curl files matched as well after accounting for the four Windows
+files exported with CRLF according to upstream's `.gitattributes`. None of
+these three revisions has a `.gitmodules` file. Mbed TLS remains a Git fetch
+because its framework submodule is required; a plain codeload replacement
+would omit that source. SDL's diagnostic revision is explicitly set to its
+pinned commit because an archive has no Git metadata to describe.
+
+This reduces repeated source acquisition and history stored in dependency
+caches; it does not move the compiler caches out of the shared 10-GB Actions
+budget. Native and instrumented builds, test coverage, analysis scope and
+quality gates remain unchanged. Cross-platform hosted timings are still
+required before claiming a speedup.
+
+### Four-worker Sonar test candidate
+
+Main Sonar job `120569320947` completed the selected C++ coverage tests in
+6m35s with two CTest workers; Python coverage took 23s. Its cold instrumented
+build took 53m28s and saved a main compiler checkpoint. PR #3531 job
+`120599140454` subsequently restored that checkpoint and completed the
+instrumented build in 4m30s. The PR was merged and its test step cancelled
+before completion, so this is build-stage evidence, not a successful full
+Sonar run or a 15-minute qualification.
+
+The next candidate uses four CTest workers only for the Sonar preset on the
+standard four-CPU Linux runner. Native Linux/macOS presets retain two workers
+and Windows retains its existing serial selection. Filters, coverage labels
+and timeouts are unchanged. Cases within one executable still share a suite
+lock and private working/temp/home directories; GPU, display and realtime
+safety suites retain their existing serial properties. No hosted job is added.
+
+The isolation fixture now requires all four independent suites to overlap
+while proving cases within each suite remain serialized. GCC coverage probes
+exercise both two and four processes against a shared instrumented object
+with BFD and LLD, checking the exact accumulated execution count. Actual
+hosted test duration, peak memory and the full quality gate still require
+qualification before adopting the four-worker result as a measured speedup.

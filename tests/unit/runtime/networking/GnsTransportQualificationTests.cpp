@@ -12,7 +12,9 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <span>
+#include <steam/isteamnetworkingutils.h>
 #include <string>
 #include <thread>
 #include <utility>
@@ -31,9 +33,99 @@ namespace Horo::Network::Qualification {
             std::vector<NetworkTransportEvent> events;
         };
 
+        /** @brief Probe immediate inbound readiness without allocating or asserting in the noexcept callback. */
+        class ReadySendCollector final : public INetworkTransportEventConsumer {
+        public:
+            explicit ReadySendCollector(INetworkTransport &transport) : transport_(transport) {}
+
+            void Consume(NetworkTransportEvent event) noexcept override {
+                if (event.kind == NetworkTransportEventKind::Accepted) {
+                    ++accepted;
+                    listener = event.listener;
+                    incoming = event.connection;
+                    const std::array payload{std::byte{0x5a}};
+                    try {
+                        sent = transport_.Send(incoming, {}, payload, DeliveryPolicy::ReliableOrdered).HasValue();
+                    } catch (...) {
+                        threw = true;
+                    }
+                } else if (event.kind == NetworkTransportEventKind::Connected) {
+                    ++connected;
+                    outgoing = event.connection;
+                } else if (event.kind == NetworkTransportEventKind::PacketReceived) {
+                    ++received;
+                    exactPacket = event.connection == outgoing && event.payload.size() == 1 && event.payload[0] == std::byte{0x5a};
+                }
+            }
+
+            ListenerHandle listener{};
+            ConnectionHandle incoming{};
+            ConnectionHandle outgoing{};
+            std::size_t accepted{};
+            std::size_t connected{};
+            std::size_t received{};
+            bool sent{};
+            bool threw{};
+            bool exactPacket{};
+
+        private:
+            INetworkTransport &transport_;
+        };
+
+        /** @brief Restore the exact process-global native MTU before the sole adapter retires, even after a failed assertion. */
+        class ScopedNativeMtu final {
+        public:
+            ScopedNativeMtu() {
+                ESteamNetworkingConfigDataType type{};
+                std::size_t bytes = sizeof(previous_);
+                REQUIRE(SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_MTU_PacketSize, k_ESteamNetworkingConfig_Global, 0,
+                                                               &type, &previous_, &bytes) > 0);
+                REQUIRE(type == k_ESteamNetworkingConfig_Int32);
+                REQUIRE(bytes == sizeof(previous_));
+            }
+
+            ScopedNativeMtu(const ScopedNativeMtu &) = delete;
+            ScopedNativeMtu &operator=(const ScopedNativeMtu &) = delete;
+
+            void Apply() {
+                REQUIRE(SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_MTU_PacketSize, 576));
+                REQUIRE(Read(k_ESteamNetworkingConfig_MTU_PacketSize) == 576);
+                const auto noFragmentBytes = Read(k_ESteamNetworkingConfig_MTU_DataSize);
+                REQUIRE(noFragmentBytes > 0);
+                REQUIRE(noFragmentBytes < 576);
+            }
+
+            ~ScopedNativeMtu() {
+                if (!restored_)
+                    (void)SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_MTU_PacketSize, previous_);
+            }
+
+            void Restore() {
+                restored_ = SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_MTU_PacketSize, previous_);
+                REQUIRE(restored_);
+                REQUIRE(Read(k_ESteamNetworkingConfig_MTU_PacketSize) == previous_);
+            }
+
+        private:
+            static std::int32_t Read(const ESteamNetworkingConfigValue option) {
+                std::int32_t value{};
+                ESteamNetworkingConfigDataType type{};
+                std::size_t bytes = sizeof(value);
+                REQUIRE(SteamNetworkingUtils()->GetConfigValue(option, k_ESteamNetworkingConfig_Global, 0, &type, &value, &bytes) > 0);
+                // Pinned GNS's derived MTU_DataSize branch returns int32 bytes but leaves pOutDataType untouched.
+                if (option != k_ESteamNetworkingConfig_MTU_DataSize)
+                    REQUIRE(type == k_ESteamNetworkingConfig_Int32);
+                REQUIRE(bytes == sizeof(value));
+                return value;
+            }
+
+            std::int32_t previous_{};
+            bool restored_{};
+        };
+
         class GnsDriver final : public Driver {
         public:
-            explicit GnsDriver(const std::uint32_t maximumEventsPerPoll = 16)
+            explicit GnsDriver(const std::uint32_t maximumEventsPerPoll = 16, const bool fragmentNativePackets = false)
                 : transport_([&] {
                       auto created = CreateGnsTransport();
                       REQUIRE(created.HasValue());
@@ -43,34 +135,11 @@ namespace Horo::Network::Qualification {
                     transport_
                         ->Initialize({.maximumConnections = 4, .maximumEventsPerPoll = maximumEventsPerPoll, .maximumMessageBytes = 1200})
                         .HasValue());
-                for (int port = 42300; port < 42400; ++port) {
-                    const auto candidate = NetworkAddress::Parse("127.0.0.1:" + std::to_string(port));
-                    REQUIRE(candidate.HasValue());
-                    const auto listening = transport_->Listen({.bindAddress = candidate.Value(), .maximumConnections = 2});
-                    if (listening.HasValue()) {
-                        address_ = candidate.Value();
-                        break;
-                    }
+                if (fragmentNativePackets) {
+                    mtu_.emplace();
+                    mtu_->Apply();  // Before Listen/Connect: both native connections inherit the verified 576-byte packet bound.
                 }
-                REQUIRE(address_.IsValid());
-                const auto connected = transport_->Connect({.endpoint = address_, .timeout = 5s});
-                REQUIRE(connected.HasValue());
-                outgoing_ = connected.Value();
-                const auto deadline = std::chrono::steady_clock::now() + 5s;
-                bool outgoingReady{};
-                while (std::chrono::steady_clock::now() < deadline && (!incoming_.IsValid() || !outgoingReady)) {
-                    REQUIRE(transport_->PollEvents(collector_).HasValue());
-                    for (const auto &event : collector_.events) {
-                        if (event.kind == NetworkTransportEventKind::Accepted)
-                            incoming_ = event.connection;
-                        if (event.kind == NetworkTransportEventKind::Connected && event.connection == outgoing_)
-                            outgoingReady = true;
-                    }
-                    collector_.events.clear();
-                    std::this_thread::sleep_for(5ms);
-                }
-                REQUIRE(incoming_.IsValid());
-                REQUIRE(outgoingReady);
+                ConnectLoopback();
             }
 
             [[nodiscard]] std::size_t MaximumMessageBytes() const override {
@@ -115,6 +184,8 @@ namespace Horo::Network::Qualification {
             }
 
             void Shutdown() override {
+                if (mtu_)
+                    mtu_->Restore();
                 transport_->Shutdown();
                 stopped_ = true;
             }
@@ -152,7 +223,39 @@ namespace Horo::Network::Qualification {
             }
 
         private:
+            void ConnectLoopback() {
+                for (int port = 42300; port < 42400; ++port) {
+                    const auto candidate = NetworkAddress::Parse("127.0.0.1:" + std::to_string(port));
+                    REQUIRE(candidate.HasValue());
+                    const auto listening = transport_->Listen({.bindAddress = candidate.Value(), .maximumConnections = 2});
+                    if (listening.HasValue()) {
+                        address_ = candidate.Value();
+                        break;
+                    }
+                }
+                REQUIRE(address_.IsValid());
+                const auto connected = transport_->Connect({.endpoint = address_, .timeout = 5s});
+                REQUIRE(connected.HasValue());
+                outgoing_ = connected.Value();
+                const auto deadline = std::chrono::steady_clock::now() + 5s;
+                bool outgoingReady{};
+                while (std::chrono::steady_clock::now() < deadline && (!incoming_.IsValid() || !outgoingReady)) {
+                    REQUIRE(transport_->PollEvents(collector_).HasValue());
+                    for (const auto &event : collector_.events) {
+                        if (event.kind == NetworkTransportEventKind::Accepted)
+                            incoming_ = event.connection;
+                        if (event.kind == NetworkTransportEventKind::Connected && event.connection == outgoing_)
+                            outgoingReady = true;
+                    }
+                    collector_.events.clear();
+                    std::this_thread::sleep_for(5ms);
+                }
+                REQUIRE(incoming_.IsValid());
+                REQUIRE(outgoingReady);
+            }
+
             std::unique_ptr<INetworkTransport> transport_;
+            std::optional<ScopedNativeMtu> mtu_;  // Destroyed before the native transport, including assertion unwinding.
             NetworkAddress address_;
             ConnectionHandle outgoing_;
             ConnectionHandle incoming_;
@@ -164,6 +267,22 @@ namespace Horo::Network::Qualification {
     TEST_CASE("Production GNS transport meets the unchanged qualification delivery contract", "[network][qualification][gns]") {
         GnsDriver driver;
         VerifyDeliveryAndBounds(driver);
+    }
+
+    TEST_CASE("Production GNS reassembles an admitted 1200-byte reliable message across native 576-byte UDP packets",
+              "[network][qualification][gns][fragmentation]") {
+        // Real ConnectByIPAddress/Listen loopback UDP, not CreateSocketPair or Null segmentation.
+        // Native MTU_DataSize is verified smaller than this admitted payload before either connection exists.
+        GnsDriver driver(16, true);
+        std::vector<std::byte> payload(driver.MaximumMessageBytes());
+        for (std::size_t index = 0; index < payload.size(); ++index)
+            payload[index] = static_cast<std::byte>((index * 73 + 19) & 255);
+        REQUIRE(payload.size() == 1200);
+        REQUIRE(driver.Send(0, payload));
+        const auto received = driver.Receive(1);
+        REQUIRE(received.front().bytes == payload);
+        REQUIRE(driver.Receive(0).empty());
+        driver.Shutdown();  // Explicit restoration is asserted; RAII remains the failure-path restoration owner.
     }
 
     TEST_CASE("Production GNS peer loss terminates admission and shutdown emits no late callback", "[network][qualification][gns]") {
@@ -220,3 +339,45 @@ namespace Horo::Network::Qualification {
                   << "; delivered_messages_per_second=" << (elapsedUs > 0 ? messages * 1'000'000 / elapsedUs : 0) << '\n';
     }
 }  // namespace Horo::Network::Qualification
+
+TEST_CASE("GNS publishes one directional ready event and accepts Send inside inbound readiness", "[network][gns][readiness]") {
+    using namespace Horo::Network;
+    using namespace Horo::Network::Qualification;
+    using namespace std::chrono_literals;
+    auto created = CreateGnsTransport();
+    REQUIRE(created.HasValue());
+    auto transport = std::move(created).Value();
+    REQUIRE(transport->Initialize({4, 16, 1200}).HasValue());
+    ListenerHandle listener{};
+    NetworkAddress endpoint;
+    for (int port = 42400; port < 42500 && !listener.IsValid(); ++port) {
+        auto address = NetworkAddress::Parse("127.0.0.1:" + std::to_string(port));
+        REQUIRE(address.HasValue());
+        auto listening = transport->Listen({address.Value(), 2});
+        if (listening.HasValue()) {
+            listener = listening.Value();
+            endpoint = address.Value();
+        }
+    }
+    REQUIRE(listener.IsValid());
+    auto outgoing = transport->Connect({endpoint, 5s});
+    REQUIRE(outgoing.HasValue());
+    ReadySendCollector collector(*transport);
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (collector.received == 0 && std::chrono::steady_clock::now() < deadline) {
+        REQUIRE(transport->PollEvents(collector).HasValue());
+        std::this_thread::sleep_for(2ms);
+    }
+    for (int i = 0; i < 5; ++i)
+        REQUIRE(transport->PollEvents(collector).HasValue());
+    REQUIRE(collector.accepted == 1);
+    REQUIRE(collector.connected == 1);
+    REQUIRE(collector.listener == listener);
+    REQUIRE(collector.incoming != outgoing.Value());
+    REQUIRE(collector.outgoing == outgoing.Value());
+    REQUIRE_FALSE(collector.threw);
+    REQUIRE(collector.sent);
+    REQUIRE(collector.received == 1);
+    REQUIRE(collector.exactPacket);
+    transport->Shutdown();
+}

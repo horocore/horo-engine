@@ -39,12 +39,16 @@ namespace Horo::Network {
         const int flags = delivery == DeliveryPolicy::ReliableOrdered ? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable;
         const std::byte empty{};
         const void *bytes = payload.empty() ? static_cast<const void *>(&empty) : payload.data();
-        const auto result =
-            native_->SendMessageToConnection(slot->native, bytes, static_cast<std::uint32_t>(payload.size()), flags, nullptr);
-        if (result == k_EResultLimitExceeded)
+        const auto result = GnsDetail::NativeCall([this, slot, bytes, payload, flags] {
+            return nativeOwner_.sockets->SendMessageToConnection(slot->native, bytes, static_cast<std::uint32_t>(payload.size()), flags,
+                                                                 nullptr);
+        });
+        if (!result)
+            return Fail(NetworkErrors::TransportNativeUnavailable);
+        if (*result == k_EResultLimitExceeded)
             return Fail(delivery == DeliveryPolicy::ReliableOrdered ? NetworkErrors::TransportReliableBackpressure
                                                                     : NetworkErrors::TransportLimitExceeded);
-        if (result != k_EResultOK)
+        if (*result != k_EResultOK)
             return Fail(NetworkErrors::TransportConnectionFailed);
         ++stats_.sentMessages;
         stats_.sentBytes += payload.size();
@@ -65,7 +69,9 @@ namespace Horo::Network {
 
     bool GnsTransport::PollMessage(ConnectionSlot &slot) {
         SteamNetworkingMessage_t *message{};
-        const int count = native_->ReceiveMessagesOnConnection(slot.native, &message, 1);
+        const int count = GnsDetail::NativeCall([this, &slot, &message] {
+            return nativeOwner_.sockets->ReceiveMessagesOnConnection(slot.native, &message, 1);
+        }).value_or(-1);
         if (count < 0) {
             End(slot, NetworkTransportEventKind::Failed, &NetworkErrors::TransportConnectionFailed);
             return false;
@@ -74,7 +80,9 @@ namespace Horo::Network {
             return false;
         const auto release = [](SteamNetworkingMessage_t *received) {
             if (received)
-                received->Release();
+                (void)GnsDetail::NativeVoid([received] {
+                    received->Release();
+                });
         };
         const std::unique_ptr<SteamNetworkingMessage_t, decltype(release)> owned(message, release);
         if (!ValidNativeMessage(message, config_.maximumMessageBytes)) {

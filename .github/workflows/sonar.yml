@@ -68,6 +68,21 @@ jobs:
           restore-keys: |
             sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
 
+      - name: Install optional compiler registry client
+        if: steps.compiler.outputs.cache-matched-key == ''
+        continue-on-error: true
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
+        with:
+          version: 1.3.0
+
+      - name: Restore optional public compiler checkpoint
+        if: steps.compiler.outputs.cache-matched-key == ''
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          COMPILER_NAMESPACE: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
+        run: python3 .github/scripts/compiler_registry.py fetch --key "$COMPILER_NAMESPACE"
+
       - name: Restore Sonar scanner downloads
         id: scanner_cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25

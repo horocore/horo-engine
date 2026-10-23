@@ -706,8 +706,9 @@ def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -
 
 def test_parallel_ctest_preserves_suite_selection_and_bounds_runner_work() -> None:
     assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
-    for name in ("ci-linux-debug", "ci-macos-debug", "sonar"):
+    for name in ("ci-linux-debug", "ci-macos-debug"):
         assert preset("testPresets", name)["execution"]["jobs"] == 2
+    assert preset("testPresets", "sonar")["execution"]["jobs"] == 4
     assert preset("testPresets", "ci-linux-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
     assert preset("testPresets", "ci-macos-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
     assert preset("testPresets", "sonar")["filter"] == {"include": {"label": "^sonar-coverage$"}}
