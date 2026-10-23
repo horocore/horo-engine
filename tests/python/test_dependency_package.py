@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import shutil
+import sys
 import tarfile
 
 import pytest
@@ -310,3 +311,165 @@ add_test(NAME external-gameplay-unicode COMMAND consumer)
         f"-DSDK_EXPORT={host_build / 'HoroEngineGameplayRuntimeUiTargets.cmake'}")
     run("cmake", "--build", str(consumer / "build"), "--config", "Debug", "--parallel", "1")
     run("ctest", "--test-dir", str(consumer / "build"), "-C", "Debug", "--output-on-failure")
+
+
+@pytest.fixture
+def sdk_cli(tmp_path, monkeypatch, identity):
+    workspace = tmp_path / "working directory ü"
+    workspace.mkdir()
+    source = workspace / "staged"
+    source.mkdir()
+    (source / "probe.h").write_text("int probe(void);", encoding="utf-8")
+    identity_file = workspace / "identity.json"
+    identity_file.write_text(json.dumps(identity), encoding="utf-8")
+    monkeypatch.chdir(workspace)
+
+    def invoke(operation, *arguments):
+        monkeypatch.setattr(sys, "argv", ["dependency_package.py", operation,
+                                         "--identity", str(identity_file), *map(str, arguments)])
+        sdk.main()
+
+    return workspace, source, invoke
+
+
+def escaped_directory(workspace, outside, spelling):
+    if spelling == "absolute":
+        return outside
+    if spelling == "parent":
+        return Path("..") / outside.name
+    link = workspace / "alias"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Host cannot create directory symlinks")
+    return link
+
+
+@pytest.mark.parametrize("spelling", ["absolute", "parent", "symlink"])
+@pytest.mark.parametrize("target", ["pack-root", "pack-output", "restore", "verify"])
+def test_cli_rejects_paths_outside_its_working_directory(sdk_cli, package, tmp_path, spelling, target):
+    workspace, source, invoke = sdk_cli
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"preserve")
+    escaped = escaped_directory(workspace, outside, spelling)
+    commands = {
+        "pack-root": ("pack", "--root", escaped, "--output", workspace / "sdk.tar.gz"),
+        "pack-output": ("pack", "--root", source, "--output", escaped / "sdk.tar.gz"),
+        "restore": ("restore", "--archive", package, "--destination", escaped / "restored"),
+        "verify": ("verify", "--root", escaped),
+    }
+    with pytest.raises(ValueError, match="inside the working directory"):
+        invoke(*commands[target])
+    assert sentinel.read_bytes() == b"preserve"
+    assert list(outside.iterdir()) == [sentinel]
+    assert not (workspace / "sdk.tar.gz").exists()
+
+
+def test_cli_round_trip_and_external_archive_input(sdk_cli, package, monkeypatch):
+    workspace, source, invoke = sdk_cli
+    archive = workspace / "packages/sdk.tar.gz"
+    invoke("pack", "--root", source, "--output", archive)
+    invoke("restore", "--archive", archive, "--destination", workspace / "restored")
+    invoke("verify", "--root", workspace / "restored")
+    assert (workspace / "restored/probe.h").read_text() == "int probe(void);"
+    invoke("restore", "--archive", package, "--destination", workspace / "external input")
+    assert (workspace / "external input/NOTICE").is_file()
+    monkeypatch.chdir(workspace / "restored")
+    invoke("verify", "--root", Path("."))
+
+
+@pytest.fixture
+def external_sdk_project(tmp_path):
+    if not shutil.which("cmake"):
+        pytest.skip("CMake unavailable")
+    modules = tmp_path / "modules"
+    (modules / "cmake").mkdir(parents=True)
+    (modules / ".github/scripts").mkdir(parents=True)
+    shutil.copyfile(ROOT / "cmake/HoroDependencySdk.cmake", modules / "cmake/HoroDependencySdk.cmake")
+    shutil.copyfile(ROOT / ".github/scripts/dependency_package.py", modules / ".github/scripts/dependency_package.py")
+    (modules / ".github/scripts/dependency_registry.py").write_text(
+        'from pathlib import Path\nPath("fetch-cwd.txt").write_text(str(Path.cwd()), encoding="utf-8")\nraise SystemExit(1)\n',
+        encoding="utf-8")
+    source = tmp_path / "source ü"
+    source.mkdir()
+    recipe = source / "recipe.txt"
+    recipe.write_text("fixture recipe v1", encoding="utf-8")
+    (source / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.20)
+project(SdkWorkspaceContract NONE)
+set(CMAKE_CXX_COMPILER "@PYTHON@")
+set(CMAKE_CXX_COMPILER_ID Fixture)
+set(CMAKE_CXX_COMPILER_VERSION 1)
+set(CMAKE_SIZEOF_VOID_P 8)
+set(CMAKE_CXX_BYTE_ORDER LITTLE_ENDIAN)
+set(CMAKE_CXX_STANDARD 20)
+include("@MODULE@")
+horo_prepare_dependency_sdk(Fixture "@RECIPE@" SDK_ROOT SDK_IDENTITY SDK_ARCHIVE)
+file(WRITE "${CMAKE_BINARY_DIR}/sdk-root.txt" "${SDK_ROOT}")
+'''.replace("@PYTHON@", Path(sys.executable).as_posix())
+        .replace("@MODULE@", (modules / "cmake/HoroDependencySdk.cmake").as_posix())
+        .replace("@RECIPE@", recipe.as_posix()), encoding="utf-8")
+    caller = tmp_path / "caller workspace ü"
+    caller.mkdir()
+    return source, caller
+
+
+def configure_external_sdk(source, build, caller, cache):
+    run("cmake", "-S", str(source), "-B", str(build), "-DCMAKE_BUILD_TYPE=Debug",
+        "-DHORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON", "-DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON",
+        f"-DHORO_DEPENDENCY_SDK_CACHE={cache}", f"-DPython3_EXECUTABLE={sys.executable}", cwd=caller)
+
+
+def test_cmake_selects_independent_roots_for_external_build_and_cache(external_sdk_project, tmp_path):
+    source, caller = external_sdk_project
+    build = tmp_path / "external build ü"
+    cache = tmp_path / "external cache ü"
+    configure_external_sdk(source, build, caller, cache)
+    assert (cache / "fetch-cwd.txt").read_text(encoding="utf-8") == str(cache.resolve())
+    assert (build / "sdk-root.txt").read_text() == ""
+    identity_file = next((build / "dependency-sdk").glob("Fixture-*.json"))
+    identity = json.loads(identity_file.read_text())
+    staging = build / "staging"
+    staging.mkdir()
+    (staging / "probe.h").write_text("int probe(void);", encoding="utf-8")
+    sdk.pack(staging, identity, cache / (identity_file.stem + ".tar.gz"))
+    configure_external_sdk(source, build, caller, cache)
+    restored = Path((build / "sdk-root.txt").read_text())
+    assert restored.is_relative_to(build)
+    assert (restored / "probe.h").read_text() == "int probe(void);"
+    configure_external_sdk(source, build, caller, cache)
+    assert (build / "sdk-root.txt").read_text() == str(restored)
+    assert list(caller.iterdir()) == []
+
+
+def test_uncreatable_registry_cache_retains_source_fallback(external_sdk_project, tmp_path):
+    source, caller = external_sdk_project
+    blocked = tmp_path / "cache is a file"
+    blocked.write_text("preserve", encoding="utf-8")
+    build = tmp_path / "fallback build"
+    configure_external_sdk(source, build, caller, blocked)
+    assert (build / "sdk-root.txt").read_text() == ""
+    assert blocked.read_text() == "preserve"
+    assert list(caller.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["file", "directory"])
+def test_cli_rejects_leaf_symlinks_inside_the_workspace(sdk_cli, kind):
+    workspace, source, _ = sdk_cli
+    target = source if kind == "directory" else source / "probe.h"
+    link = workspace / "leaf alias"
+    try:
+        link.symlink_to(target, target_is_directory=kind == "directory")
+    except OSError:
+        pytest.skip("Host cannot create symlinks")
+    with pytest.raises(ValueError, match="must not be symlinks"):
+        sdk.workspace_path(link)
+    assert (source / "probe.h").read_text() == "int probe(void);"
+
+
+def test_cli_rejects_the_workspace_directory_as_a_package_output(sdk_cli):
+    workspace, source, invoke = sdk_cli
+    with pytest.raises(ValueError, match="inside the working directory"):
+        invoke("pack", "--root", source, "--output", workspace)
+    assert sorted(path.name for path in workspace.iterdir()) == ["identity.json", "staged"]

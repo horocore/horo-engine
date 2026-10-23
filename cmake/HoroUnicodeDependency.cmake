@@ -87,6 +87,7 @@ function(horo_add_unicode_dependency)
             COMMAND "${HORO_DEPENDENCY_SDK_PYTHON}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.github/scripts/dependency_package.py"
                 pack --root "${stage}" --identity "${sdk_identity}"
                 --output "${CMAKE_BINARY_DIR}/dependency-sdk/packages/${sdk_archive}"
+            WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
             DEPENDS HoroThirdPartyUnicode VERBATIM)
         add_dependencies(horo-package-dependencies horo-package-unicode)
     endif()
