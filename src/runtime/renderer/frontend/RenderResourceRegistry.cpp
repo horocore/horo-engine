@@ -71,11 +71,12 @@ namespace Horo::Render::Detail {
 
     /** @copydoc RenderResourceRegistry::OperationJournal::PreparePending */
     RenderResourceRegistry::OperationRecord RenderResourceRegistry::OperationJournal::PreparePending() const {
-        return {.id = ResourceOperationId{nextIdentity_},
-                .error = RegistryError(FrontendErrors::ResourceRegistryStopped,
-                                       "The pending resource operation was cancelled by frontend shutdown."),
-                .rollbackError = RegistryError(FrontendErrors::ResourceOperationCancelled,
-                                               "The pending resource operation was cancelled before realization.")};
+        OperationRecord record{.id = ResourceOperationId{nextIdentity_}};
+        record.error = std::make_unique<OperationDiagnostic>(FrontendErrors::ResourceRegistryStopped,
+                                                             "The pending resource operation was cancelled by frontend shutdown.");
+        record.rollbackError = std::make_unique<OperationDiagnostic>(FrontendErrors::ResourceOperationCancelled,
+                                                                     "The pending resource operation was cancelled before realization.");
+        return record;
     }
 
     /** @copydoc RenderResourceRegistry::OperationJournal::AppendPending */
@@ -88,14 +89,14 @@ namespace Horo::Render::Detail {
     /** @copydoc RenderResourceRegistry::OperationJournal::CompleteRollback */
     void RenderResourceRegistry::OperationJournal::CompleteRollback(const ResourceOperationId id) noexcept {
         const auto record = std::ranges::find(records_, id, &OperationRecord::id);
-        assert(record != records_.end() && record->rollbackError.has_value());
+        assert(record != records_.end() && record->rollbackError);
         Complete(id, std::move(record->rollbackError));
     }
 
     /** @copydoc RenderResourceRegistry::OperationJournal::CompleteShutdown */
     void RenderResourceRegistry::OperationJournal::CompleteShutdown(const ResourceOperationId id) noexcept {
         const auto record = std::ranges::find(records_, id, &OperationRecord::id);
-        assert(record != records_.end() && record->error.has_value());
+        assert(record != records_.end() && record->error);
         record->complete = true;
         record->rollbackError.reset();
     }
@@ -293,7 +294,7 @@ namespace Horo::Render::Detail {
             entry.memoryReservation = {};
         entry.state = RenderResourceState::Ready;
         --pendingRequests_;
-        journal_.Complete(entry.operation, std::nullopt);
+        journal_.Complete(entry.operation, {});
         return Result<void>::Success();
     }
 
@@ -309,10 +310,11 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceNotPending, "Only a pending resource generation can fail creation."));
         }
+        auto ownedError = std::make_unique<OperationDiagnostic>(error);
         entry.state = Failed;
         QueueRetirementIfEligible(identity.slot);
         --pendingRequests_;
-        journal_.Complete(entry.operation, std::move(error));
+        journal_.Complete(entry.operation, std::move(ownedError));
         return Result<void>::Success();
     }
 
@@ -345,8 +347,8 @@ namespace Horo::Render::Detail {
         if (entry.state != RenderResourceState::Pending)
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceNotPending, "Only a pending resource operation can be cancelled."));
-        Error cancelled =
-            RegistryError(FrontendErrors::ResourceOperationCancelled, "The pending resource operation was cancelled before realization.");
+        auto cancelled = std::make_unique<OperationDiagnostic>(FrontendErrors::ResourceOperationCancelled,
+                                                               "The pending resource operation was cancelled before realization.");
         --pendingRequests_;
         journal_.Complete(entry.operation, std::move(cancelled));
         entry.state = RenderResourceState::Retiring;
@@ -576,7 +578,8 @@ namespace Horo::Render::Detail {
         return &entry;
     }
 
-    void RenderResourceRegistry::OperationJournal::Complete(const ResourceOperationId operationId, std::optional<Error> error) noexcept {
+    void RenderResourceRegistry::OperationJournal::Complete(const ResourceOperationId operationId,
+                                                            std::unique_ptr<OperationDiagnostic> error) noexcept {
         const auto operation = std::ranges::find(records_, operationId, &OperationRecord::id);
         assert(operation != records_.end());
         operation->complete = true;

@@ -70,7 +70,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         /** @brief Capture gameplay borrows and the selected play factory at the host composition boundary. */
-        EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, GuiScreenHost &host,
+        EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, const GuiScreenHost &host,
                                                              EditorPlaySceneFactory sceneFactory) {
             const auto *environment = services.TryGet<Application::GameplayBuildEnvironment>();
             return {.builds = services.TryGet<Application::GameplayBuildService>(),
