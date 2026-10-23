@@ -71,10 +71,11 @@ namespace Horo::Editor {
                     std::ofstream(root / "assets/main.horo") << SceneSource::EncodeSceneSource({objects, {}});
                 controller =
                     std::make_unique<EditorWorkspaceController>(root, runtime, registry.Snapshot(),
-                                                                EditorWorkspaceDependencies{.mutableAssetRegistry = &registry,
+                                                                EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = &registry},
+                                                                                            .world = {.documentSessionOwner =
+                                                                                                          PrefabAsset(9).Asset()},
                                                                                             .mutations = &mutations,
                                                                                             .durableFiles = &files,
-                                                                                            .documentSessionOwner = PrefabAsset(9).Asset(),
                                                                                             .prefab = {.sources =
                                                                                                            SourceCapture(release.value)}});
                 REQUIRE_FALSE(controller->InitializationError());

@@ -1,3 +1,4 @@
+#include "../../helpers/ProjectReplicationTestSupport.h"
 #include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
@@ -17,6 +18,7 @@ namespace Horo::Editor::WorldCompositionTests {
             std::unique_ptr<EditorWorkspaceController> controller;
 
             WorldProject() {
+                Tests::WriteReplicationProject(directory.Path());
                 {
                     std::ofstream file{Path()};
                     file << WorldSource();
@@ -32,11 +34,11 @@ namespace Horo::Editor::WorldCompositionTests {
                 auto captured = CaptureWorkspaceReadSources(&factory, directory.Path());
                 REQUIRE(captured.HasValue());
                 const auto &sources = captured.Value();
-                controller =
-                    std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
-                                                                EditorWorkspaceDependencies{.world = {.files = sources.world},
-                                                                                            .assetRegistrySource = sources.registry,
-                                                                                            .documentSessionOwner = sources.owner});
+                controller = std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
+                                                                         EditorWorkspaceDependencies{.assets = {.source = sources.registry},
+                                                                                                     .world = {.sourceFiles = sources.world,
+                                                                                                               .documentSessionOwner =
+                                                                                                                   sources.owner}});
                 REQUIRE(controller->OpenWorldCompositionSource("world ü space.horoworld").HasValue());
             }
 
@@ -259,6 +261,7 @@ namespace Horo::Editor {
     TEST_CASE("World Composition bake command uses the application-owned real cell producer and shared diagnostic stores",
               "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake controller"};
+        Tests::WriteReplicationProject(project.Path());
         JobSystem jobs{{.workerCount = 1}};
         OperationStore operations{8, 16};
         BuildOutputStore diagnostics{32};
@@ -266,9 +269,9 @@ namespace Horo::Editor {
         EditorWorkspaceController controller{project.Path(),
                                              runtime,
                                              {},
-                                             EditorWorkspaceDependencies{.jobs = &jobs,
+                                             EditorWorkspaceDependencies{.world = {.documentSessionOwner = WorldResidencyTests::Asset(9)},
                                                                          .worldBake = {.operations = &operations, .output = &diagnostics},
-                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+                                                                         .jobs = &jobs}};
         auto &world = controller.WorldDocuments();
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)
@@ -308,6 +311,7 @@ namespace Horo::Editor {
 namespace Horo::Editor {
     TEST_CASE("World bake project replacement cannot reuse a source publication fence", "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake project fence"};
+        Tests::WriteReplicationProject(project.Path());
         JobSystem jobs{{.workerCount = 0}};
         OperationStore operations{8, 16};
         BuildOutputStore output{32};
@@ -319,11 +323,11 @@ namespace Horo::Editor {
         EditorWorkspaceController controller{project.Path(),
                                              runtime,
                                              {},
-                                             EditorWorkspaceDependencies{.jobs = &jobs,
+                                             EditorWorkspaceDependencies{.world = {.documentSessionOwner = WorldResidencyTests::Asset(9)},
                                                                          .worldBake = {.operations = &operations,
                                                                                        .output = &output,
                                                                                        .project = capture},
-                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+                                                                         .jobs = &jobs}};
         auto &world = controller.WorldDocuments();
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)
@@ -349,16 +353,17 @@ namespace Horo::Editor {
     TEST_CASE("World bake publication fences the registry owner before a presentation snapshot refresh",
               "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake registry fence"};
+        Tests::WriteReplicationProject(project.Path());
         JobSystem jobs{{.workerCount = 1}};
         OperationStore operations{8, 16};
         BuildOutputStore output{32};
         Assets::AssetRegistry registry;
         Runtime::RuntimeSceneService runtime;
         EditorWorkspaceController controller{project.Path(), runtime, registry.Snapshot(),
-                                             EditorWorkspaceDependencies{.mutableAssetRegistry = &registry,
-                                                                         .jobs = &jobs,
+                                             EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = &registry},
+                                                                         .world = {.documentSessionOwner = WorldResidencyTests::Asset(9)},
                                                                          .worldBake = {.operations = &operations, .output = &output},
-                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+                                                                         .jobs = &jobs}};
         auto &world = controller.WorldDocuments();
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)

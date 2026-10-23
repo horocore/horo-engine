@@ -7,6 +7,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Network/ReplicationMetadataCapture.h"
 #include "Horo/Platform/ProjectReadFiles.h"
 #include "Horo/Runtime/Scene/IncrementalSceneCellCook.h"
 #include "Horo/Runtime/Scene/SceneCellPayloadCodec.h"
@@ -43,6 +44,7 @@ namespace Horo::Application {
         std::uint64_t revision{};
         Sha256Digest schemas;
         std::uint64_t registryRevision{}; /**< Exact asset catalog publication captured independently from project/schema state. */
+        Sha256Digest replication;         /**< Independent actual inert replication capture; zero only when absent. */
         [[nodiscard]] auto operator<=>(const WorldBakeProjectFence &) const noexcept = default;
     };
 
@@ -74,6 +76,7 @@ namespace Horo::Application {
         std::shared_ptr<const Prefab::PrefabSourceResolverSnapshot> prefabs;
         std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> prefabSchemas;
         std::optional<Prefab::PrefabLimitProfile> prefabLimits;
+        Network::ReplicationMetadataCapturePtr replication; /**< Deep engine-owned inert metadata; no gameplay code leases. */
     };
 
     /** @brief Captures actual verified cooked generation envelopes, rather than trusting caller-provided digest strings.

@@ -79,7 +79,7 @@ namespace Horo::Runtime::Ui {
         storage_->candidate.layout.reset();
         storage_->candidate.clipping.reset();
         storage_->candidate.source = {};
-        for (auto &entry : storage_->attachments) {
+        for (auto &entry : storage_->presentation.attachments) {
             if (!entry)
                 continue;
             entry->preparedLayout.reset();
@@ -88,9 +88,9 @@ namespace Horo::Runtime::Ui {
             if (entry->clipping)
                 entry->clipping->Shutdown();
         }
-        if (storage_->inspector)
-            storage_->inspector->Shutdown();
-        // Service shutdown can already have retired the sole source; that path has cancelled its semantic routes.
+        if (storage_->presentation.inspector)
+            storage_->presentation.inspector->Shutdown();
+        // Service shutdown may already have retired the sole publisher and cancelled its semantic routes.
         if (storage_->publisher.Current())
             CancelRouteValidated(*storage_, UiAnimationCancellation::Shutdown);
         storage_->publisher.Shutdown();
@@ -187,7 +187,7 @@ namespace Horo::Runtime::Ui {
             owner_->candidate.admitted = false;
             UiAnimationOwner::AbandonControlSources(*owner_);
             owner_->candidate.styles.reset();
-            for (auto &entry : owner_->attachments) {
+            for (auto &entry : owner_->presentation.attachments) {
                 if (!entry)
                     continue;
                 entry->preparedClipping.reset();

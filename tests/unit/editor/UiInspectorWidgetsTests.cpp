@@ -337,12 +337,12 @@ TEST_CASE("Real project style preparation reaches workspace controller and visib
     EditorWorkspaceController controller{project.root,
                                          runtime,
                                          project.assets.Snapshot(),
-                                         {.mutableAssetRegistry = &project.assets,
+                                         {.assets = {.mutableAssetRegistry = &project.assets},
+                                          .world = {.documentSessionOwner = project.workspace},
                                           .uiInspectorResources = project.resources.get(),
                                           .mutations = &project.mutations,
                                           .durableFiles = &project.files,
-                                          .jobs = &project.jobs,
-                                          .documentSessionOwner = project.workspace}};
+                                          .jobs = &project.jobs}};
     const Horo::Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellation.Token()};
     REQUIRE(runtime.OnPhase(Horo::Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
     controller.SynchronizeRuntimeScenePreview();

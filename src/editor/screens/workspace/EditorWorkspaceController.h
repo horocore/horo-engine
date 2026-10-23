@@ -1,5 +1,6 @@
 #pragma once
 
+#include "EditorWorkspaceHostServices.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Assets/AssetPreviewService.h"
@@ -84,24 +85,6 @@ namespace Horo::Editor {
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
     };
 
-    /** @brief Borrowed canonical world authoring/capture capabilities; each absent member stays explicitly unavailable. */
-    struct EditorWorkspaceWorldSourceServices {
-        EditorWorkspaceCollisionEvidence collision{};
-        const WorldStreamingPreviewRuntimePolicy *streamingPolicy{};
-        WorldStreamingPreviewHost *streamingPreview{};
-        PartitionedWorldWorkspace *document{};
-        std::shared_ptr<const Platform::IProjectReadFiles> files;
-        std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding;
-    };
-
-    /** @brief Existing bake operation/output owners and immutable project/dependency captures, with unchanged individual readiness. */
-    struct EditorWorkspaceWorldBakeServices {
-        OperationStore *operations{};
-        BuildOutputStore *output{};
-        std::optional<Application::WorldBakeProjectCapture> project;
-        std::optional<Application::WorldBakeDependencySource> dependencies;
-    };
-
     /** @brief Explicit procedural source catalog, optional migrator and detached preview inputs. */
     struct EditorWorkspaceProceduralServices {
         const PCG::IPCGGraphSourceMigrator *migrator{};
@@ -109,27 +92,32 @@ namespace Horo::Editor {
         std::optional<PCGPreviewInputs> previewInputs;
     };
 
-    /** @brief Optional services used by the workspace without transferring their ownership. */
+    /**
+     * @brief Optional host-composed services; value groups preserve borrowed/shared lifetimes and defaults.
+     * @details Private caller migration: asset registry/source/importer inputs belong to assets; canonical
+     * world/source/session/streaming inputs belong to world; bake stores and captures belong to worldBake.
+     * Hosts pass the same values through these groups. No lookup, registration or activation occurs here.
+     * The shared jobs capability remains outside all three groups for PCG, previews, watching and bake.
+     */
     struct EditorWorkspaceDependencies {
-        Assets::AssetRegistry *mutableAssetRegistry{};
-        UiInspectorResources *uiInspectorResources{}; /**< Host publisher outlives this workspace. */
-        EditorWorkspaceWorldSourceServices world;
+        EditorWorkspaceAssetServices assets{};
+        EditorWorkspaceWorldServices world{};
+        EditorWorkspaceWorldBakeServices worldBake{};
+        UiInspectorResources *uiInspectorResources{}; /**< Actual host resource publisher, outliving the workspace. */
+        EditorWorkspaceCollisionEvidence collision{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
-        std::shared_ptr<const Assets::IAssetRegistrySource> assetRegistrySource;
-        const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
-        JobSystem *jobs{};
-        EditorWorkspaceWorldBakeServices worldBake;
+        JobSystem *jobs{}; /**< Shared by PCG, asset previews, source watching and world bake. */
         EditorWorkspaceSourceNavigation sourceNavigation{};
         EditorWorkspaceGameplayServices gameplay{};
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
-        Assets::AssetId documentSessionOwner; /**< Never-reused host-issued workspace incarnation. */
-        Extensions::EditorInspectorHost *inspectorHost{};
-        IAudioComponentPreview *audioPreview{};
-        EditorWorkspacePrefabServices prefab;
+        Extensions::EditorInspectorHost *inspectorHost{}; /**< Borrowed host, outliving this workspace. */
+        IAudioComponentPreview *audioPreview{};           /**< Explicit output capability; absent means unavailable. */
+        EditorWorkspacePrefabServices prefab;             /**< Explicit authoring composition; never discovered by panels. */
         EditorWorkspaceProceduralServices procedural;
+        std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Immutable project capture; omitted in Null. */
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -287,7 +275,7 @@ namespace Horo::Editor {
         /** @brief Queues actual bake/validation from the canonical world owner, never a filtered browser subset.
          * @param mode Bake or validate. @param expected Exact current source publication.
          * @return New operation identity or typed rejection preserving the current bake and document. */
-        [[nodiscard]] Result<OperationId> StartWorldBake(Application::WorldBakeMode mode, WorldDocumentFence expected);
+        [[nodiscard]] Result<OperationId> StartWorldBake(Application::WorldBakeMode mode, const WorldDocumentFence &expected);
         /** @brief Polls application-owned work and refreshes immutable presentation without blocking. */
         void UpdateWorldBake();
         /** @brief Installs explicit complete project/schema/dependency capture from the host.

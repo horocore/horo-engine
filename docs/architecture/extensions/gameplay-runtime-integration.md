@@ -412,6 +412,28 @@ Gameplay modules include only the backend-neutral replication declarations from
 headers. Behavior code does not infer network authority from local process state
 or mutate replicated state outside declared simulation phases.
 
+The optional host-owned `GameplayReplicationAdmissionPolicy` retains the complete
+canonical `NetworkReplicationInventory`, finite bounds and a resolved server/client
+operation. Unknown or invalid completeness and editor/cook operations cannot admit
+runtime activation. `GameModuleHostOptions` applies this policy after registration
+freeze and before project service factories or module Start. A rejected attempt
+still returns its partial native owner and original diagnostic for ordered
+retirement. The loader's assessment lease is temporary, so its Impl never pins
+itself. Frozen empty registries are recognized only through their documented exact
+Gameplay error; other acquisition failures propagate.
+
+`GameplayWorldComposition` pins the actual accepted native/Lua descriptor and codec
+generation through behavior shutdown. It releases that lease before native
+retirement, allowing the normal owner-lane queue to drain. Lua declarations use
+the same policy before behavior callbacks. The headless product supplies an owned
+complete project inventory even when no module was selected; its actual world
+request resolves server/client operation. Standalone and other intentionally
+non-network host constructors retain absent-policy semantics. This additive host
+C++ layout requires rebuilding consumers of `GameModuleHostOptions` and the
+non-installed application composition headers; native SDK contexts and fingerprint
+remain unchanged. Editor/cook integration is separate and remains required for
+full canonical descriptor capability acceptance.
+
 ### Script descriptor generation
 
 Lua behavior compilation translates the source `replication` table into the same

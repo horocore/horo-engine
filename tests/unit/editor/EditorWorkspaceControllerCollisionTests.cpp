@@ -33,12 +33,11 @@ namespace Horo::Editor {
         }
 
         EditorWorkspaceDependencies Services(Project &project) {
-            return {.mutableAssetRegistry = &project.registry,
-                    .world = {.collision = {.inventory = &project.inventory, .activation = &project.activation}},
+            return {.assets = {.mutableAssetRegistry = &project.registry, .source = project.source},
+                    .world = {.documentSessionOwner = IdOf<Assets::AssetId>(40)},
+                    .collision = {.inventory = &project.inventory, .activation = &project.activation},
                     .mutations = &project.mutations,
-                    .durableFiles = &project.files,
-                    .assetRegistrySource = project.source,
-                    .documentSessionOwner = IdOf<Assets::AssetId>(40)};
+                    .durableFiles = &project.files};
         }
     }  // namespace
 
@@ -48,10 +47,10 @@ namespace Horo::Editor {
         Runtime::RuntimeSceneService runtime;
         auto dependencies = Services(project);
         SECTION("missing inventory") {
-            dependencies.world.collision.inventory = nullptr;
+            dependencies.collision.inventory = nullptr;
         }
         SECTION("missing activation") {
-            dependencies.world.collision.activation = nullptr;
+            dependencies.collision.activation = nullptr;
         }
         EditorWorkspaceController controller{project.root, runtime, project.registry.Snapshot(), dependencies};
         CHECK(controller.CollisionSettings().HasError());
@@ -131,7 +130,7 @@ namespace Horo::Editor {
             return receipt;
         }};
         auto services = Services(project);
-        services.world.collision.previewReceipt = &source;
+        services.collision.previewReceipt = &source;
         Runtime::RuntimeSceneService runtime;
         EditorWorkspaceController controller{project.root, runtime, project.registry.Snapshot(), services};
         const auto opened = controller.CollisionSettings();

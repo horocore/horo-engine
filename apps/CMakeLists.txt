@@ -19,6 +19,23 @@ target_include_directories(HoroHostModuleComposition PUBLIC
 )
 target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation HoroEngine::PlatformServices)
 
+# Fixed application UI lifecycle composition; stage only its non-installed owning contracts.
+set(HORO_RUNTIME_UI_PAINT_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/runtime_ui_paint_host_headers")
+file(MAKE_DIRECTORY "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}")
+configure_file(common/ui/RuntimeUiPaintHost.h "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}/RuntimeUiPaintHost.h" COPYONLY)
+configure_file(common/ui/RuntimeUiPaintProjection.h "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}/RuntimeUiPaintProjection.h" COPYONLY)
+add_library(HoroRuntimeUiPaintHost STATIC
+    common/ui/RuntimeUiPaintHost.cpp
+    common/ui/RuntimeUiPaintHostFrames.cpp
+    common/ui/RuntimeUiPaintHostSource.cpp
+    common/ui/RuntimeUiPaintHostOutput.cpp
+    common/ui/RuntimeUiPaintHostPresentation.cpp
+    common/ui/RuntimeUiPaintProjection.cpp
+    common/ui/RuntimeUiPaintProjectionFrames.cpp)
+target_compile_features(HoroRuntimeUiPaintHost PUBLIC cxx_std_20)
+target_include_directories(HoroRuntimeUiPaintHost PUBLIC "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}")
+target_link_libraries(HoroRuntimeUiPaintHost PUBLIC HoroEngine::UiAnimationRuntimeIntegration HoroEngine::RenderFrontend)
+
 # Application-only observer; Scene remains the sole native candidate owner. Only
 # this header and its declared non-installed Physics boundary reach consumers.
 set(HORO_SCENE_PHYSICS_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_physics_host_headers")
@@ -43,6 +60,8 @@ target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySceneHostI
 
 add_library(HoroNetworkProductHost STATIC
     common/NetworkProductHost.cpp
+    common/NetworkProductSession.cpp
+    common/NetworkProductTransport.cpp
     common/HeadlessNetworkServices.cpp
     common/HeadlessSceneLoadBoundary.cpp
     common/HeadlessProjectScene.cpp
@@ -375,6 +394,7 @@ if(HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditor
         PRIVATE
             HoroPackageProjectHost
+            HoroRuntimeUiPaintHost
             HoroEditorUiStyleHostInternal
             HoroEngine::ShaderBuild
             HoroEngine::Gui

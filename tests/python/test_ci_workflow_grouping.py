@@ -160,6 +160,17 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
 })
 
 
+def test_windows_multiview_consumer_shares_build_and_execution_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    consumer = "HoroMultiviewSceneExtractionPublicHeaderConsumer"
+    assert consumer in targets("HORO_CI_WINDOWS_TARGETS")
+    assert f"add_executable({consumer} " in tests_cmake
+    assert f"add_test(NAME {consumer} COMMAND {consumer})" in tests_cmake
+    registration = re.search(rf'set_tests_properties\({consumer} PROPERTIES LABELS "([^"]+)"\)', tests_cmake)
+    assert registration is not None
+    assert "ci-windows" in registration.group(1).split(";")
+
+
 def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == (targets("HORO_CI_AUDIO_TARGETS") | WINDOWS_NON_AUDIO_TARGETS
         | TERRAIN_RENDER_TARGETS | GAMEPLAY_CHARACTER_TARGETS)
@@ -658,7 +669,8 @@ def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform
 
 def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composition() -> None:
     job = workflow_job("shaders")
-    assert "HoroEditorVulkanShaderCook --describe-tools" in job
+    job += (ROOT / ".github/actions/cook-vulkan-viewport/action.yml").read_text(encoding="utf-8")
+    assert 'HoroEditorVulkanShaderCook" --describe-tools' in job
     assert "${archive_digest#sha256:}" in job
     assert "verify-shader-tool" in job
     assert '--relative-path "$executable_relative_path" --sha256 "$executable_digest"' in job

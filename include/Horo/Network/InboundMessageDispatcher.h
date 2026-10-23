@@ -29,6 +29,8 @@ namespace Horo::Network {
         DeliveryPolicy delivery{DeliveryPolicy::ReliableOrdered}; /**< Admitted transport delivery class, never payload-derived. */
     };
 
+    class NetworkAdmissionController;
+
     /** @brief Finite owner-owned storage and work budgets. */
     struct InboundDispatchLimits final {
         std::size_t maximumSessions{64};       /**< Concurrent admitted sessions. */
@@ -56,7 +58,8 @@ namespace Horo::Network {
     public:
         virtual ~IInboundSessionHost() = default;
         /** @brief Handles a non-packet transport event; connectivity alone must not grant gameplay admission. */
-        virtual void OnTransportEvent(NetworkTransportEvent event) noexcept = 0;
+        /** @param event Borrowed through this synchronous call only; copy any retained data before returning. */
+        virtual void OnTransportEvent(const NetworkTransportEvent &event) noexcept = 0;
     };
 
     /** @brief Exact binding of one accepted message class to one owner and phase. */
@@ -104,6 +107,14 @@ namespace Horo::Network {
                                                    const std::shared_ptr<IInboundMessageHandler> &handler);
         /** @brief Borrows a host admission observer weakly; absence never admits a transport peer. */
         void SetSessionHost(const std::shared_ptr<IInboundSessionHost> &host) noexcept;
+        /** @brief Bind the sole runtime admission controller weakly; absence preserves pre-active rejection. */
+        void SetAdmissionController(const std::shared_ptr<NetworkAdmissionController> &controller) noexcept;
+
+        /** @brief Verify that admission and dispatch share the identical canonical codec snapshot. @return True for the exact borrow. */
+        [[nodiscard]] bool UsesCodecRegistry(const MessageCodecRegistry &codecs) const noexcept {
+            return &codecs_ == &codecs;
+        }
+
         /** @brief Revokes one exact binding; queued packets cannot invoke it afterward. */
         void RevokeHandler(ProtocolId protocol, MessageTypeId message) noexcept;
         /** @brief Polls transport then decodes and dispatches within a finite owner-thread budget. @return Report or infrastructure
@@ -148,6 +159,7 @@ namespace Horo::Network {
         std::vector<std::shared_ptr<Session>> sessions_;
         std::vector<Handler> handlers_;
         std::weak_ptr<IInboundSessionHost> sessionHost_;
+        std::weak_ptr<NetworkAdmissionController> admission_;
         std::size_t queued_{};
         std::uint64_t lastTick_{};
         bool overflowed_{};

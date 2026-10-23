@@ -50,12 +50,13 @@ namespace Horo::Tests::CanvasUi {
             REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
             controller =
                 std::make_unique<EditorWorkspaceController>(project.root, runtime, project.assets.Snapshot(),
-                                                            EditorWorkspaceDependencies{.mutableAssetRegistry = &project.assets,
+                                                            EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = &project.assets},
+                                                                                        .world = {.documentSessionOwner =
+                                                                                                      project.workspace},
                                                                                         .uiInspectorResources = project.resources.get(),
                                                                                         .mutations = &project.mutations,
                                                                                         .durableFiles = &project.files,
-                                                                                        .jobs = &project.jobs,
-                                                                                        .documentSessionOwner = project.workspace});
+                                                                                        .jobs = &project.jobs});
             const Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellation.Token()};
             REQUIRE(runtime.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
             controller->SynchronizeRuntimeScenePreview();

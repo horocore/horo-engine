@@ -81,7 +81,7 @@ namespace Horo::Runtime::Ui {
                                               viewport.intrinsic,
                                               viewport.canvas,
                                               viewport.policy,
-                                              storage.candidate.presentation};
+                                              storage.candidate.presentation.revision};
         auto layout =
             canvas->layoutEngine->Prepare(tree, {sources, viewport.constraints, viewport.content, &evaluator.Value(), viewport.fontScale});
         if (layout.HasError())
@@ -109,7 +109,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::Storage::CanPublishAttachments */
     Result<void> UiAnimationOwner::Storage::CanPublishAttachments(const UiElementTree &tree) const {
-        for (const auto &attachment : attachments) {
+        for (const auto &attachment : presentation.attachments) {
             if (!attachment || !attachment->active)
                 continue;
             if (!attachment->preparedLayout)

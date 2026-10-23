@@ -282,7 +282,9 @@ namespace {
         EditorWorkspaceController controller{projectRoot,
                                              runtimeScene,
                                              registry.Snapshot(),
-                                             {.mutableAssetRegistry = &registry, .mutations = &mutations, .durableFiles = &files}};
+                                             {.assets = {.mutableAssetRegistry = &registry},
+                                              .mutations = &mutations,
+                                              .durableFiles = &files}};
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;
@@ -331,7 +333,9 @@ namespace {
         EditorWorkspaceController controller{projectRoot,
                                              runtimeScene,
                                              registry.Snapshot(),
-                                             {.mutableAssetRegistry = &registry, .mutations = &mutations, .durableFiles = &files}};
+                                             {.assets = {.mutableAssetRegistry = &registry},
+                                              .mutations = &mutations,
+                                              .durableFiles = &files}};
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;
@@ -383,7 +387,9 @@ namespace {
         EditorWorkspaceController controller{projectRoot,
                                              runtimeScene,
                                              registry.Snapshot(),
-                                             {.mutableAssetRegistry = &registry, .mutations = &mutations, .durableFiles = &files}};
+                                             {.assets = {.mutableAssetRegistry = &registry},
+                                              .mutations = &mutations,
+                                              .durableFiles = &files}};
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;

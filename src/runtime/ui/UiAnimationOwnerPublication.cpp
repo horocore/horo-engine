@@ -4,10 +4,10 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::PublishAttachments */
     void UiAnimationOwner::PublishAttachments(Storage &storage) noexcept {
         auto &frame = *storage.frames[storage.candidate.frameSlot];
-        frame.selection = storage.candidate.selection;
+        frame.selection = storage.candidate.presentation.selection;
         frame.attachments.clear();
         frame.focusGeometry.clear();
-        for (auto &entry : storage.attachments) {
+        for (auto &entry : storage.presentation.attachments) {
             if (!entry || !entry->active)
                 continue;
             auto &attachment = *entry;
@@ -25,9 +25,10 @@ namespace Horo::Runtime::Ui {
             attachment.preparedClipping.reset();
             attachment.selection.reset();
         }
-        storage.presentation = storage.candidate.presentation.IsValid() ? storage.candidate.presentation : storage.presentation;
-        storage.publishedViewport = storage.candidate.viewport;
-        storage.attachmentDirty = false;
+        storage.presentation.revision =
+            storage.candidate.presentation.revision.IsValid() ? storage.candidate.presentation.revision : storage.presentation.revision;
+        storage.presentation.publishedViewport = storage.candidate.presentation.viewport;
+        storage.presentation.attachmentDirty = false;
     }
 
     /** @copydoc UiAnimationOwner::PublishSemanticInteraction */

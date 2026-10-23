@@ -362,6 +362,7 @@ add_executable(HoroNetworkApiTests
         unit/runtime/networking/PacketQueueTests.cpp
         unit/runtime/networking/ProtocolIdentityTests.cpp
         unit/runtime/networking/ReplicationDescriptorTests.cpp
+        unit/runtime/networking/ReplicationMetadataCaptureTests.cpp
         unit/runtime/networking/ReplicationDeclarationPolicyTests.cpp
         unit/runtime/networking/NetworkReplicationInventoryTests.cpp
         unit/runtime/networking/ReplicationDescriptorRegistryTests.cpp
@@ -483,12 +484,16 @@ add_test(NAME HoroNetworkModePublicHeaderConsumer COMMAND HoroNetworkModePublicH
 set_tests_properties(HoroNetworkModePublicHeaderConsumer PROPERTIES LABELS "unit;network;headless")
 add_executable(HoroNetworkModeHostIntegrationTests
         integration/network/NetworkModeHostIntegrationTests.cpp
+        integration/network/NetworkProductSessionTests.cpp
+        integration/network/NetworkProductAdmissionTests.cpp
+        integration/network/NetworkAdmissionBoundaryTests.cpp
+    integration/network/NetworkAdmissionObserverTests.cpp
 )
 target_compile_features(HoroNetworkModeHostIntegrationTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
 target_include_directories(HoroNetworkModeHostIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
 target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroNetworkProductHost HoroEngine::NetworkTransportNull
-    HoroEngine::Platform)
+    HoroEngine::Platform MbedTLS::mbedcrypto)
 horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
 add_test(NAME HoroNetworkStandaloneProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product standalone 2)
 set_tests_properties(HoroNetworkStandaloneProductLaunch PROPERTIES LABELS "integration;network;headless;product")
@@ -2017,12 +2022,13 @@ set_tests_properties(HoroGameplayPhysicsSdkContract PROPERTIES LABELS "gameplay;
 add_executable(HoroGameplayRuntimeUiSdkHostConsumer
         support/GameplayRuntimeUiSdkHostConsumer.cpp
         unit/runtime/ui/UiHotReloadTestFixture.cpp
+        unit/runtime/renderer/RenderFrontendTestSupport.cpp
         support/AllocationProbe.cpp)
 target_compile_features(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/helpers" "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ui")
 target_link_libraries(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE HoroEngine::RuntimeUi HoroEngine::GameplayModuleHost
-        HoroEngine::Platform Catch2::Catch2)
+        HoroRuntimeUiPaintHost HoroEngine::RenderNull HoroEngine::Platform Catch2::Catch2)
 add_test(NAME HoroGameplayRuntimeUiSdkContract COMMAND ${CMAKE_COMMAND}
     "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
     "-DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_runtime_ui_sdk"
@@ -2039,6 +2045,17 @@ add_test(NAME HoroGameplayRuntimeUiSdkContract COMMAND ${CMAKE_COMMAND}
     "-DBUILD_CONFIG=$<CONFIG>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayRuntimeUiSdkContract.cmake")
 set_tests_properties(HoroGameplayRuntimeUiSdkContract PROPERTIES LABELS "gameplay;runtime_ui;sdk;headless" RUN_SERIAL TRUE TIMEOUT 120)
+add_executable(HoroRuntimeUiPaintHostTests
+        unit/application/RuntimeUiPaintHostTests.cpp
+        unit/application/RuntimeUiPaintHostOutputTests.cpp
+        unit/runtime/ui/UiHotReloadTestFixture.cpp
+        unit/runtime/renderer/RenderFrontendTestSupport.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroRuntimeUiPaintHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiPaintHostTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/helpers" "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ui")
+target_link_libraries(HoroRuntimeUiPaintHostTests PRIVATE HoroRuntimeUiPaintHost HoroEngine::RenderNull HoroEngine::Platform)
+horo_register_catch_test(HoroRuntimeUiPaintHostTests LABELS "unit;application;runtime_ui;headless")
 add_executable(HoroLuaReplicationPublicHeaderConsumer support/LuaReplicationPublicHeaderConsumer.cpp)
 target_compile_features(HoroLuaReplicationPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroLuaReplicationPublicHeaderConsumer PRIVATE HoroEngine::GameplayLua)
@@ -2719,6 +2736,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabCreationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
+            unit/editor/EditorWorkspaceWorldBakeReplicationTests.cpp
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp
             unit/editor/EditorWorkspaceStreamingMountTests.cpp
             unit/editor/WorkspaceReadSourcesTests.cpp
@@ -3257,6 +3275,7 @@ add_executable(HoroEditorViewportSceneTests
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroWorldBakeApplicationTests
+        unit/application/WorldBakeReplicationTests.cpp
         unit/application/WorldBakeApplicationTests.cpp
         unit/application/WorldBakeNativeSourceTests.cpp
 )
@@ -5077,6 +5096,8 @@ if (HORO_BUILD_RENDER_METAL)
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalParallelRecordingSmoke.mm)
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalLightFrameUploadSmoke.mm)
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalLightCullingSmoke.mm)
+    target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalUiPaintSmoke.mm
+        integration/renderer/MetalUiPaintFixture.cpp)
     target_compile_features(HoroMetalGraphExecutionSmoke PRIVATE cxx_std_20)
     target_compile_options(HoroMetalGraphExecutionSmoke PRIVATE -fobjc-arc)
     target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src

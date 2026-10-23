@@ -40,6 +40,7 @@ namespace Horo::UiStyleTest {
                                         UiStyleValueSource::Literal(UiStyleDimension{640}), false},
                                        {CoreUiStylePropertyId(UiCoreStyleProperty::Fill),
                                         UiStyleValueSource::Literal(UiStyleColor{0.2F, 0.3F, 0.4F, 1}), false}};
+            // A later same-layer write to a sealed property is the actual transactional rejection.
             style.style.states = {{UiVisualStateMask{UiVisualState::Disabled},
                                    {},
                                    UiStateLayer::Availability,

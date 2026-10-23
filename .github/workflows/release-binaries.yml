@@ -44,7 +44,7 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: dependency_cache
         with:
           path: ~/.cmake/fetchcontent
@@ -131,7 +131,7 @@ jobs:
 
       - name: Save dependency cache on main
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cmake/fetchcontent
           key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
@@ -158,7 +158,7 @@ jobs:
         run: brew install ninja
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: dependency_cache
         with:
           path: ~/.cmake/fetchcontent
@@ -212,7 +212,7 @@ jobs:
 
       - name: Save dependency cache on main
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cmake/fetchcontent
           key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
@@ -233,10 +233,10 @@ jobs:
           fetch-tags: true
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@1583d6b38d7b86129b83e1c73e4d8d455ca32f48
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
 
       - name: Cache sccache
-        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: compiler_cache
         with:
           path: ${{ env.SCCACHE_DIR }}
@@ -244,7 +244,7 @@ jobs:
           restore-keys: sccache-release-windows-
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
@@ -311,14 +311,14 @@ jobs:
 
       - name: Save compiler cache on main
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.compiler_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ env.SCCACHE_DIR }}
           key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
 
       - name: Save dependency cache on main
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: ${{ steps.dependency_cache.outputs.cache-primary-key }}

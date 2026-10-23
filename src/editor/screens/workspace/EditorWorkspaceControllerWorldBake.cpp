@@ -34,9 +34,9 @@ namespace Horo::Editor {
         else {
             constexpr std::string_view core = "Horo.Editor.WorldBake.Core.v1";
             const auto digest = ComputeSha256(std::as_bytes(std::span{core.data(), core.size()}));
-            m_worldBakeProject.fence = {dependencies.documentSessionOwner, 1, digest};
+            m_worldBakeProject.fence = {dependencies.world.documentSessionOwner, 1, digest};
             m_worldBakeProject.settings = digest;
-            m_worldBakeProject.triggers = dependencies.world.triggerBinding;
+            m_worldBakeProject.triggers = dependencies.triggerBinding;
             m_worldBakeProject.dependencySource = dependencies.worldBake.dependencies;
         }
         m_viewModel.worldBakeAvailable = m_worldBake != nullptr;
@@ -73,10 +73,10 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::StartWorldBake */
     Result<OperationId> EditorWorkspaceController::StartWorldBake(const Application::WorldBakeMode mode,
-                                                                  const WorldDocumentFence expected) {
+                                                                  const WorldDocumentFence &expected) {
         if (!m_worldBake)
             return Result<OperationId>::Failure(MakeError(Application::WorldBakeErrors::Closed));
-        auto &owner = m_partitionedWorld ? *m_partitionedWorld : WorldDocuments();
+        const auto &owner = m_partitionedWorld ? *m_partitionedWorld : WorldDocuments();
         const auto current = owner.Snapshot();
         if (current.HasError())
             return Result<OperationId>::Failure(current.ErrorValue());
@@ -85,6 +85,14 @@ namespace Horo::Editor {
         const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
         auto project = m_worldBakeProject;
         project.fence.registryRevision = registry.Revision().value;
+        if (!m_gameplayRegistry)
+            return Result<OperationId>::Failure(MakeError(Application::WorldBakeErrors::Dependency));
+        if (const auto *error = m_gameplayRegistry->ReplicationMetadataError())
+            return Result<OperationId>::Failure(*error);
+        if (!m_gameplayRegistry->ReplicationMetadata())
+            return Result<OperationId>::Failure(MakeError(Application::WorldBakeErrors::Dependency));
+        project.replication = m_gameplayRegistry->ReplicationMetadata();
+        project.fence.replication = project.replication->Fingerprint();
         Application::WorldBakeRequest request{.document = current.Value(),
                                               .project = std::move(project),
                                               .registry = registry,
@@ -110,6 +118,10 @@ namespace Horo::Editor {
             return;
         const auto current = (m_partitionedWorld ? *m_partitionedWorld : WorldDocuments()).Snapshot();
         auto project = m_worldBakeProject.fence;
+        project.replication =
+            m_gameplayRegistry && !m_gameplayRegistry->ReplicationMetadataError() && m_gameplayRegistry->ReplicationMetadata()
+                ? m_gameplayRegistry->ReplicationMetadata()->Fingerprint()
+                : Sha256Digest{};
         project.registryRevision = (m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry).Revision().value;
         const auto lease = current.HasValue() ? current.Value() : PartitionedWorldSnapshotLease{};
         m_worldBake->Pump(lease, project);
@@ -120,7 +132,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::RequestWorldBakeCancellation */
     Result<void> EditorWorkspaceController::RequestWorldBakeCancellation(const std::optional<OperationId> expected) {
-        if (!m_worldBakeOperations || !expected || expected != m_viewModel.worldBakeOperation)
+        if (!m_worldBakeOperations || !expected.has_value() || expected != m_viewModel.worldBakeOperation)
             return Result<void>::Failure(MakeError(Application::WorldBakeErrors::Stale));
         if (!m_worldBakeOperations->RequestCancel(*expected))
             return Result<void>::Failure(MakeError(Application::WorldBakeErrors::Stale));
@@ -137,11 +149,12 @@ namespace Horo::Editor {
         }
         if (command.command != BakeWorldCells && command.command != ValidateWorldCells)
             return false;
-        const auto accepted = command.worldDocumentFence
-                                  ? StartWorldBake(command.command == BakeWorldCells ? Application::WorldBakeMode::Bake
-                                                                                     : Application::WorldBakeMode::Validate,
-                                                   *command.worldDocumentFence)
-                                  : Result<OperationId>::Failure(MakeError(WorldDocumentErrors::Invalid));
+        if (!command.worldDocumentFence) {
+            m_viewModel.worldDocumentError = MakeError(WorldDocumentErrors::Invalid);
+            return true;
+        }
+        const auto mode = command.command == BakeWorldCells ? Application::WorldBakeMode::Bake : Application::WorldBakeMode::Validate;
+        const auto accepted = StartWorldBake(mode, *command.worldDocumentFence);
         m_viewModel.worldDocumentError = accepted.HasError() ? std::optional{accepted.ErrorValue()} : std::nullopt;
         return true;
     }

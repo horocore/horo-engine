@@ -60,6 +60,15 @@ namespace Horo::Editor {
             return bridge;
         }
 
+        /** @brief Selects an injected navigator or a lazy native fallback without invoking either during composition. */
+        DiagnosticSourceNavigator ComposeDiagnosticNavigator(const DiagnosticSourceNavigator &injected) {
+            if (injected)
+                return injected;
+            return [](const DiagnosticSourceRequest &source) {
+                return OpenInExternalEditor(source.absolutePath) || RevealInNativeFileManager(source.absolutePath);
+            };
+        }
+
         [[nodiscard]] std::filesystem::path ResolveProjectRoot(const std::filesystem::path &projectRoot) {
             std::error_code error;
             std::filesystem::path resolved = std::filesystem::absolute(projectRoot, error).lexically_normal();
@@ -79,45 +88,41 @@ namespace Horo::Editor {
                                                          Runtime::RuntimeSceneService &runtimeScene,
                                                          const Assets::AssetRegistrySnapshot &assetRegistry,
                                                          const EditorWorkspaceDependencies &dependencies)
-        : m_partitionedWorld(dependencies.world.document), m_runtimeScene(runtimeScene),
-          m_triggerBinding(dependencies.world.triggerBinding), m_playSceneFactory(dependencies.gameplay.sceneFactory),
+        : m_partitionedWorld(dependencies.world.partitionedWorld), m_runtimeScene(runtimeScene),
+          m_triggerBinding(dependencies.triggerBinding), m_playSceneFactory(dependencies.gameplay.sceneFactory),
           m_assetRegistry(assetRegistry), m_sourceOpenService(projectRoot, m_documentRegistry),
-          m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.procedural.catalog.document,
-                         dependencies.mutations, dependencies.durableFiles, dependencies.procedural.migrator),
+          m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.world.documentSessionOwner,
+                         dependencies.procedural.catalog.document, dependencies.mutations, dependencies.durableFiles,
+                         dependencies.procedural.migrator),
           m_prefabStageFactory(dependencies.prefab.stageFactory), m_pcgPreviewJobs(dependencies.jobs),
           m_pcgPreviewCatalog(dependencies.procedural.catalog.schemas), m_pcgPreviewInputs(dependencies.procedural.previewInputs),
-          m_prefabSourceCapture(dependencies.prefab.sources), m_workspaceSession(dependencies.documentSessionOwner),
-          m_streamingPreviewPolicy(dependencies.world.streamingPolicy), m_streamingPreview(dependencies.world.streamingPreview),
-          m_worldSourceFiles(dependencies.world.files), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
-          m_uiInspectorResources(dependencies.uiInspectorResources), m_collisionInventory(dependencies.world.collision.inventory),
-          m_collisionActivation(dependencies.world.collision.activation),
-          m_previewCollisionReceipt(dependencies.world.collision.previewReceipt), m_collisionSceneOwner(dependencies.documentSessionOwner),
-          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles),
-          m_assetRegistrySource(dependencies.assetRegistrySource), m_importerCatalog(dependencies.importerCatalog),
+          m_prefabSourceCapture(dependencies.prefab.sources), m_workspaceSession(dependencies.world.documentSessionOwner),
+          m_streamingPreviewPolicy(dependencies.world.streamingPreviewPolicy), m_streamingPreview(dependencies.world.streamingPreview),
+          m_worldSourceFiles(dependencies.world.sourceFiles), m_mutableAssetRegistry(dependencies.assets.mutableAssetRegistry),
+          m_uiInspectorResources(dependencies.uiInspectorResources), m_collisionInventory(dependencies.collision.inventory),
+          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
+          m_collisionSceneOwner(dependencies.world.documentSessionOwner), m_mutations(dependencies.mutations),
+          m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assets.source),
+          m_importerCatalog(dependencies.assets.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceNavigation.sourceOpenNavigator),
-          m_diagnosticSourceNavigator(dependencies.sourceNavigation.diagnosticSourceNavigator),
+          m_diagnosticSourceNavigator(ComposeDiagnosticNavigator(dependencies.sourceNavigation.diagnosticSourceNavigator)),
           m_gameplayBuilds(dependencies.gameplay.builds), m_gameplayBuildEnvironment(dependencies.gameplay.environment),
           m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
-          m_worldDocuments(dependencies.documentSessionOwner), m_playSession(dependencies.networkDebugger),
-          m_audioPreview(dependencies.audioPreview), m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
+          m_worldDocuments(dependencies.world.documentSessionOwner), m_playSession(dependencies.networkDebugger),
+          m_audioPreview(dependencies.audioPreview), m_audioPreviewWorkspace(dependencies.world.documentSessionOwner) {
         m_viewModel.pcgPalette = dependencies.procedural.catalog.palette;
         m_viewModel.pcgSchemas = dependencies.procedural.catalog.schemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         InitializeWorldBake(dependencies);
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
-        m_inspectorDocumentOwner = dependencies.documentSessionOwner;
+        m_inspectorDocumentOwner = dependencies.world.documentSessionOwner;
         m_inspectorHost = dependencies.inspectorHost;
-        m_physicsDocumentOwner = dependencies.documentSessionOwner;
+        m_physicsDocumentOwner = dependencies.world.documentSessionOwner;
         m_engineEventBridge = CreateEngineEventBridge(dependencies.engineEvents, m_dataBus);
         m_viewModel.workspacePanelHost.AttachDocumentIdentityRegistry(m_documentRegistry);
-        if (!m_diagnosticSourceNavigator) {
-            m_diagnosticSourceNavigator = [](const DiagnosticSourceRequest &source) {
-                return OpenInExternalEditor(source.absolutePath) || RevealInNativeFileManager(source.absolutePath);
-            };
-        }
         const std::filesystem::path absoluteProjectRoot = ResolveProjectRoot(projectRoot);
         InitializeProjectState(absoluteProjectRoot);
         InitializeWorkspaceLayout();

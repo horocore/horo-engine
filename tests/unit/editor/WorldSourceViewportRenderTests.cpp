@@ -381,7 +381,7 @@ namespace {
         document.sources.clear();
         const auto original = world.Open(document).Value();
         Runtime::RuntimeSceneService runtime;
-        EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.document = &world}}};
+        EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.partitionedWorld = &world}}};
         const auto origin = Point::FromMillimeters(9'000'000'000'000'000, 0, 0);
         REQUIRE(controller.SetWorldViewportBinding({original, origin, 1}).HasValue());
         WorldSourceViewportTool tool;
@@ -410,7 +410,7 @@ namespace {
         PartitionedWorldWorkspace world{Owner()};
         const auto complete = world.Open(Document()).Value();
         Runtime::RuntimeSceneService runtime;
-        EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.document = &world}}};
+        EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.partitionedWorld = &world}}};
         REQUIRE(controller.SetWorldViewportBinding({complete, {}, 1}).HasValue());
         WorldSourceViewportTool tool;
         OpenSources(harness, tool, controller.ViewModel());

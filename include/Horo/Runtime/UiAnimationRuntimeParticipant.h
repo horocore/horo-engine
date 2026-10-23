@@ -218,6 +218,12 @@ namespace Horo::Runtime {
          * @return Reclaimed count or typed busy/lifecycle failure. Never call inside extraction/publication.
          */
         [[nodiscard]] Result<std::size_t> DrainRetired();
+        /** @brief Observes the sole owner's existing retirement fence without reclaiming or mutating it.
+         * @return Whether this stopped participant can be released on its owner thread after external frame/job leases drain.
+         * @details Fixed application adapters retain detached participants until this becomes true. A foreign thread cannot
+         * authorize destruction. This forwards canonical ownership evidence; it is not another lifetime authority.
+         */
+        [[nodiscard]] bool CanReclaim() const noexcept;
 
     private:
         friend std::unique_ptr<UiAnimationRuntimeParticipant> std::make_unique<UiAnimationRuntimeParticipant>(std::unique_ptr<Storage> &&);

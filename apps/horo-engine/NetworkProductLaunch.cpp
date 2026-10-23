@@ -2,15 +2,13 @@
 
 #include "HeadlessNetworkServices.h"
 #include "HeadlessProjectScene.h"
-#include "Horo/Network/InboundMessageDispatcher.h"
-#include "Horo/Network/MessageCodecRegistry.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkErrors.h"
-#include "Horo/Network/NetworkMetricTransport.h"
 #include "Horo/Network/NetworkTransport.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "NetworkProductHost.h"
 #include "NetworkProductLaunchOptions.h"
+#include "NetworkProductTransport.h"
 
 #include <exception>
 #if HORO_PRODUCT_HAS_GNS
@@ -215,100 +213,11 @@ namespace Horo::Application::Internal {
             Net::NetworkModeServiceRequest request_;
         };
 
-#if HORO_PRODUCT_HAS_GNS
-        class GnsProductTransport final : public Net::INetworkModeService {
-        public:
-            GnsProductTransport(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind, const Net::NetworkAddress &connect,
-                                std::shared_ptr<NetworkDebuggerService> debugger)
-                : debugger_(std::move(debugger)), metrics_(debugger_->Producer().Source().session, true, &debugger_->Producer()),
-                  role_(role), bind_(bind), connect_(connect) {}
-
-            Result<void> Prepare() override {
-                auto created = Net::CreateGnsTransport();
-                if (created.HasError())
-                    return Result<void>::Failure(created.ErrorValue());
-                transport_ = std::make_unique<Net::NetworkMetricTransport>(std::move(created).Value(), metrics_, &debugger_->Producer());
-                if (auto initialized =
-                        transport_->Initialize({.maximumConnections = 8, .maximumEventsPerPoll = 64, .maximumMessageBytes = 1200});
-                    initialized.HasError())
-                    return initialized;
-                // This reference product installs no credential authority or gameplay descriptors.
-                // Its real poll path therefore uses the router's fail-closed pre-active behavior.
-                auto identities = Net::ProtocolIdentityRegistry::Create({});
-                if (identities.HasError())
-                    return Result<void>::Failure(identities.ErrorValue());
-                auto codecs = Net::MessageCodecRegistry::Create({}, identities.Value());
-                if (codecs.HasError())
-                    return Result<void>::Failure(codecs.ErrorValue());
-                codecs_.emplace(std::move(codecs).Value());
-                auto router = Net::InboundMessageDispatcher::Create(*transport_, *codecs_);
-                if (router.HasError())
-                    return Result<void>::Failure(router.ErrorValue());
-                router_ = std::move(router).Value();
-                return Result<void>::Success();
-            }
-
-            Result<void> Activate() override {
-                using enum Net::NetworkProjectRole;
-                if (role_ == ListenServer || role_ == DedicatedServer) {
-                    auto listening = transport_->Listen({.bindAddress = bind_, .maximumConnections = 8});
-                    if (listening.HasError())
-                        return Result<void>::Failure(listening.ErrorValue());
-                    listener_ = listening.Value();
-                }
-                if (role_ == Client || role_ == ListenServer) {
-                    auto connecting = transport_->Connect({.endpoint = connect_});
-                    if (connecting.HasError())
-                        return Result<void>::Failure(connecting.ErrorValue());
-                }
-                return Result<void>::Success();
-            }
-
-            Result<void> RunPhase(const Runtime::RuntimePhase phase) override {
-                if (phase != Runtime::RuntimePhase::NetworkPoll)
-                    return Result<void>::Success();
-                if (auto polled = router_->RunNetworkPoll(++pollTick_); polled.HasError())
-                    return Result<void>::Failure(polled.ErrorValue());
-                (void)metrics_.Publish();
-                const auto snapshot = metrics_.Snapshot();
-                (void)debugger_->Publish(debugger_->Producer().Source(), &snapshot);
-                return Result<void>::Success();
-            }
-
-            Result<void> RunFixedTick(const Runtime::FixedStepContext &) override {
-                return Result<void>::Success();
-            }
-
-            void Shutdown() noexcept override {
-                if (router_ != nullptr)
-                    router_->Shutdown();
-                router_.reset();
-                codecs_.reset();
-                if (transport_ != nullptr) {
-                    if (listener_.IsValid())
-                        static_cast<void>(transport_->CloseListener(listener_));
-                    transport_->Shutdown();
-                    transport_.reset();
-                }
-            }
-
-        private:
-            std::shared_ptr<NetworkDebuggerService> debugger_;
-            Net::NetworkMetrics metrics_;
-            Net::NetworkProjectRole role_;
-            Net::NetworkAddress bind_;
-            Net::NetworkAddress connect_;
-            std::unique_ptr<Net::INetworkTransport> transport_;
-            std::optional<Net::MessageCodecRegistry> codecs_;
-            std::unique_ptr<Net::InboundMessageDispatcher> router_;
-            Net::ListenerHandle listener_{};
-            std::uint64_t pollTick_{};
-        };
-#endif
-
         [[nodiscard]] Net::NetworkModeFactories ProductFactories(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind,
                                                                  const Net::NetworkAddress &connect,
-                                                                 std::shared_ptr<NetworkDebuggerService> debugger) {
+                                                                 std::shared_ptr<NetworkDebuggerService> debugger,
+                                                                 std::shared_ptr<ClientSessionOwner> sessions,
+                                                                 std::shared_ptr<const NetworkProductAdmission> admission) {
             Net::NetworkModeFactories factories;
             for (const auto kind : {Net::NetworkModeServiceKind::Session, Net::NetworkModeServiceKind::LocalPlayer}) {
                 factories.services[static_cast<std::size_t>(kind)] = [](const Net::NetworkModeServiceRequest &request) {
@@ -318,12 +227,16 @@ namespace Horo::Application::Internal {
             }
 #if HORO_PRODUCT_HAS_GNS
             factories.services[static_cast<std::size_t>(Net::NetworkModeServiceKind::Transport)] =
-                [role, bind, connect, debugger](const Net::NetworkModeServiceRequest &) {
-                return Result<std::unique_ptr<Net::INetworkModeService>>::Success(
-                    std::make_unique<GnsProductTransport>(role, bind, connect, debugger));
+                [role, bind, connect, debugger, sessions, admission](const Net::NetworkModeServiceRequest &) {
+                auto transport = Net::CreateGnsTransport();
+                if (transport.HasError())
+                    return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(transport.ErrorValue());
+                return CreateNetworkProductTransport(std::move(transport).Value(), role, bind, connect, debugger, sessions, admission);
             };
 #else
             static_cast<void>(debugger);
+            static_cast<void>(sessions);
+            static_cast<void>(admission);
             static_cast<void>(role);
             static_cast<void>(bind);
             static_cast<void>(connect);
@@ -373,10 +286,44 @@ namespace Horo::Application::Internal {
             return worlds;
         }
 
+        /** @brief Owns complete project admission policy while binding the explicitly selected world services. */
+        [[nodiscard]] Result<Net::NetworkModeFactories> ComposeProductWorldServices(
+            std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductLaunch &launch,
+            const Net::NetworkProjectSettings &project, Net::NetworkModeFactories factories, HeadlessProjectSceneResources *resources) {
+            std::optional<Gameplay::GameplayReplicationAdmissionPolicy> replicationAdmission;
+            if (launch.role != Net::NetworkProjectRole::Standalone)
+                replicationAdmission.emplace(Gameplay::GameplayReplicationAdmissionPolicy{.inventory = project.ReplicationInventory()});
+            if (!resources)
+                return Result<Net::NetworkModeFactories>::Success(
+                    ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay, replicationAdmission));
+            HeadlessSceneActivationInput input{.mode = launch.sceneInput.physicsMode,
+                                               .settings = *resources->settings,
+                                               .registry = resources->registry,
+                                               .loads = *resources->loads,
+                                               .load = resources->load,
+                                               .prefabLoads = resources->prefabLoads.get()};
+            return ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay,
+                                                       replicationAdmission);
+        }
+
+        /** @brief Select an explicit millisecond owner clock; standalone constructs no session capability. */
+        std::shared_ptr<ClientSessionOwner> CreateProductSessions(const std::shared_ptr<Clock> &clock, const Net::NetworkProjectRole role) {
+            if (role == Net::NetworkProjectRole::Standalone)
+                return nullptr;
+            auto domain = std::make_shared<NetworkProductSessionClock>(clock, Duration::FromMilliseconds(1), clock->MonotonicNow());
+            return std::make_shared<ClientSessionOwner>(std::move(domain));
+        }
+
+        /** @brief Explicit optional runtime owners supplied by the executable composition root. */
+        struct ProductRuntimeCapabilities final {
+            HeadlessProjectSceneResources *resources{};
+            std::shared_ptr<const NetworkProductAdmission> admission;
+        };
+
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
-            Clock &clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
+            std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
-            Net::NetworkTargetDiagnostic &diagnostic, HeadlessProjectSceneResources *resources = nullptr) {
+            Net::NetworkTargetDiagnostic &diagnostic, ProductRuntimeCapabilities capabilities) {
             const auto product = BuiltProduct(project);
             const auto inventory = LinkedPackageInventory(project);
             const auto hostFacts = HeadlessHostFacts(project);
@@ -398,23 +345,14 @@ namespace Horo::Application::Internal {
             auto debugger = std::make_shared<NetworkDebuggerService>();
             (void)debugger->Begin(worlds.values[0].scene.value, 1, launch.role != Net::NetworkProjectRole::Standalone,
                                   Net::NetworkDiagnosticProvider::Native);
-            auto factories = ProductFactories(launch.role, launch.bind, launch.connect, debugger);
-            if (resources) {
-                HeadlessSceneActivationInput input{.mode = launch.sceneInput.physicsMode,
-                                                   .settings = *resources->settings,
-                                                   .registry = resources->registry,
-                                                   .loads = *resources->loads,
-                                                   .load = resources->load,
-                                                   .prefabLoads = resources->prefabLoads.get()};
-                auto configured =
-                    ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay);
-                if (configured.HasError())
-                    return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
-                factories = std::move(configured).Value();
-            } else {
-                factories = ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay);
-            }
-            return NetworkProductHost::Create(clock,
+            auto sessions = CreateProductSessions(clock, launch.role);
+            auto configured = ComposeProductWorldServices(std::move(scene), launch, project,
+                                                          ProductFactories(launch.role, launch.bind, launch.connect, debugger, sessions,
+                                                                           std::move(capabilities.admission)),
+                                                          capabilities.resources);
+            if (configured.HasError())
+                return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
+            return NetworkProductHost::Create(*clock,
                                               {project,
                                                product,
                                                inventory,
@@ -423,8 +361,9 @@ namespace Horo::Application::Internal {
                                                selection,
                                                1,
                                                {worlds.values.data(), worlds.count},
-                                               presentation},
-                                              std::move(factories), &diagnostic, debugger);
+                                               presentation,
+                                               std::move(sessions)},
+                                              std::move(configured).Value(), &diagnostic, debugger);
         }
 
         [[nodiscard]] int RunProductFrames(NetworkProductHost &runtime, const ProductLaunch &launch, const ProductWorlds &worlds) {
@@ -450,7 +389,7 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
-    int RunNetworkProduct(const std::span<char *> arguments) {
+    int RunNetworkProduct(const std::span<char *> arguments, std::shared_ptr<const NetworkProductAdmission> admission) {
         auto launch = ParseNetworkProductLaunch(arguments);
         if (launch.HasError()) {
             std::cerr << "horo-engine: " << launch.ErrorValue().message << '\n';
@@ -465,10 +404,10 @@ namespace Horo::Application::Internal {
             return 3;
         }
         const auto worlds = WorldsFor(launch.Value().role);
-        SteadyClock clock;
+        auto clock = std::make_shared<SteadyClock>();
         Net::NetworkTargetDiagnostic diagnostic;
-        auto runtime =
-            ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic, resources.get());
+        auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic,
+                                      {resources.get(), std::move(admission)});
         if (runtime.HasError()) {
             std::cerr << "horo-engine: network product admission failed (capability " << static_cast<int>(diagnostic.capability)
                       << ", reason " << static_cast<int>(diagnostic.reason) << ")\n";

@@ -65,7 +65,8 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
         void Open(const Assets::AssetId session) {
             controller = std::make_unique<
                 EditorWorkspaceController>(project.directory.path, runtime, project.registry.Snapshot(),
-                                           EditorWorkspaceDependencies{.mutations = persistenceAvailable ? &project.mutations : nullptr,
+                                           EditorWorkspaceDependencies{.world = {.documentSessionOwner = session},
+                                                                       .mutations = persistenceAvailable ? &project.mutations : nullptr,
                                                                        .durableFiles = persistenceAvailable ? &project.files : nullptr,
                                                                        .sourceNavigation =
                                                                            {.sourceOpenNavigator =
@@ -82,7 +83,6 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
                 diagnosticPath = source.absolutePath;
                 return true;
             }},
-                                                                       .documentSessionOwner = session,
                                                                        .prefab = {.sources = [this](const auto &registry, const auto roots,
                                                                                                     const auto &limits,
                                                                                                     const auto &cancellation) {

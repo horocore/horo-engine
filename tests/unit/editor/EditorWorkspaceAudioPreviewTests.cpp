@@ -18,7 +18,8 @@ namespace {
         AudioWorkspace() {
             REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
             controller = std::make_unique<EditorWorkspaceController>(project.root, runtime, project.registry.Snapshot(),
-                                                                     EditorWorkspaceDependencies{.documentSessionOwner = project.workspace,
+                                                                     EditorWorkspaceDependencies{.world = {.documentSessionOwner =
+                                                                                                               project.workspace},
                                                                                                  .audioPreview = &host});
             Commit();
             REQUIRE_FALSE(controller->ViewModel().objects.empty());

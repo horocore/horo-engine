@@ -177,19 +177,48 @@ namespace Horo::Network {
             }
         }
 
-        void WriteU8(std::vector<std::byte> &output, const std::uint8_t value) {
+        template <class Output> void WriteU8(Output &output, const std::uint8_t value) {
             output.push_back(static_cast<std::byte>(value));
         }
 
-        void WriteU16(std::vector<std::byte> &output, const std::uint16_t value) {
+        template <class Output> void WriteU16(Output &output, const std::uint16_t value) {
             WriteU8(output, static_cast<std::uint8_t>(value >> 8U));
             WriteU8(output, static_cast<std::uint8_t>(value));
         }
 
-        void WriteU32(std::vector<std::byte> &output, const std::uint32_t value) {
+        template <class Output> void WriteU32(Output &output, const std::uint32_t value) {
             WriteU16(output, static_cast<std::uint16_t>(value >> 16U));
             WriteU16(output, static_cast<std::uint16_t>(value));
         }
+
+        /** @brief One canonical fixed-header writer shared by owned and secure borrowed payload encoding. */
+        template <class Output, class Envelope>
+        void WriteFixedHeader(Output &output, const Envelope &envelope, const std::size_t headerBytes, const std::size_t payloadBytes,
+                              const std::size_t fieldCount) {
+            for (const auto byte : EnvelopeMagic)
+                output.push_back(byte);
+            WriteU8(output, EnvelopeVersion);
+            WriteU8(output, 0);
+            WriteU16(output, static_cast<std::uint16_t>(headerBytes));
+            WriteU16(output, envelope.protocol.Value());
+            WriteU16(output, envelope.message.Value());
+            WriteU16(output, envelope.schema.Value());
+            WriteU16(output, envelope.schemaVersion.major);
+            WriteU16(output, envelope.schemaVersion.minor);
+            WriteU32(output, envelope.sequence.Value());
+            WriteU32(output, envelope.acknowledgement.Value());
+            WriteU32(output, static_cast<std::uint32_t>(payloadBytes));
+            WriteU16(output, static_cast<std::uint16_t>(fieldCount));
+        }
+
+        struct BoundedOutput final {
+            std::span<std::byte> bytes;
+            std::size_t offset{};
+
+            void push_back(const std::byte value) noexcept {
+                bytes[offset++] = value;
+            }
+        };
 
         [[nodiscard]] std::uint8_t ReadU8(const std::span<const std::byte> input, std::size_t &offset) noexcept {
             return std::to_integer<std::uint8_t>(input[offset++]);
@@ -355,6 +384,31 @@ namespace Horo::Network {
                 return Fail<MessageCodecDescriptor>(NetworkErrors::MessageEnvelopeCapacityExceeded);
             return Result<MessageCodecDescriptor>::Success(*codec);
         }
+
+        /** @brief Shares the complete framing validation between borrowed and owned decode paths. */
+        struct ValidatedFrame final {
+            ParsedHeader parsed;
+            std::size_t knownFields{};
+        };
+
+        [[nodiscard]] Result<ValidatedFrame> ValidateFrame(const std::span<const std::byte> frame, const MessageCodecRegistry &registry,
+                                                           const MessageEnvelopeLimits &limits, const MessageEnvelopeAdmissionState state) {
+            if (const ErrorCodeDescriptor *admission = AdmissionError(state); admission != nullptr)
+                return Fail<ValidatedFrame>(*admission);
+            auto parsed = ParseHeader(frame, limits);
+            if (parsed.HasError())
+                return Result<ValidatedFrame>::Failure(parsed.ErrorValue());
+            if (const auto totalBytes = CheckedSum(parsed.Value().headerBytes, parsed.Value().payloadBytes);
+                !totalBytes.has_value() || *totalBytes != frame.size())
+                return Fail<ValidatedFrame>(NetworkErrors::MessageEnvelopeInvalid);
+            if (const auto codec = ValidateDecodedCodec(parsed.Value(), registry, limits); codec.HasError())
+                return Result<ValidatedFrame>::Failure(codec.ErrorValue());
+            const auto known = ValidateEncodedFields(frame, parsed.Value(), registry, limits);
+            if (known.HasError())
+                return Result<ValidatedFrame>::Failure(known.ErrorValue());
+            return Result<ValidatedFrame>::Success({std::move(parsed).Value(), known.Value()});
+        }
+
     }  // namespace
 
     /** @copydoc MessageCodecRegistry::Create */
@@ -415,19 +469,7 @@ namespace Horo::Network {
         try {
             std::vector<std::byte> output;
             output.reserve(plan.Value().totalBytes);
-            output.insert(output.end(), EnvelopeMagic.begin(), EnvelopeMagic.end());
-            WriteU8(output, EnvelopeVersion);
-            WriteU8(output, 0);
-            WriteU16(output, static_cast<std::uint16_t>(plan.Value().headerBytes));
-            WriteU16(output, envelope.protocol.Value());
-            WriteU16(output, envelope.message.Value());
-            WriteU16(output, envelope.schema.Value());
-            WriteU16(output, envelope.schemaVersion.major);
-            WriteU16(output, envelope.schemaVersion.minor);
-            WriteU32(output, envelope.sequence.Value());
-            WriteU32(output, envelope.acknowledgement.Value());
-            WriteU32(output, static_cast<std::uint32_t>(envelope.payload.size()));
-            WriteU16(output, static_cast<std::uint16_t>(plan.Value().fields.size()));
+            WriteFixedHeader(output, envelope, plan.Value().headerBytes, envelope.payload.size(), plan.Value().fields.size());
             for (const MessageEnvelopeField *field : plan.Value().fields) {
                 WriteU16(output, field->id.Value());
                 WriteU8(output, static_cast<std::uint8_t>(field->requirement));
@@ -442,24 +484,50 @@ namespace Horo::Network {
         }
     }
 
+    /** @copydoc EncodeMessageEnvelopePayloadInto */
+    Result<std::size_t> EncodeMessageEnvelopePayloadInto(const MessageEnvelopePayloadView &envelope, const MessageCodecRegistry &registry,
+                                                         const std::span<std::byte> output, const MessageEnvelopeLimits &limits) {
+        if (!ValidEnvelopeLimits(limits) || envelope.fieldCount != 0)
+            return Fail<std::size_t>(NetworkErrors::MessageEnvelopeInvalid);
+        ParsedHeader parsed;
+        parsed.envelope.protocol = envelope.protocol;
+        parsed.envelope.message = envelope.message;
+        parsed.envelope.schema = envelope.schema;
+        parsed.envelope.schemaVersion = envelope.schemaVersion;
+        parsed.payloadBytes = envelope.payload.size();
+        if (const auto codec = ValidateDecodedCodec(parsed, registry, limits); codec.HasError())
+            return Result<std::size_t>::Failure(codec.ErrorValue());
+        const auto total = CheckedSum(FixedHeaderBytes, envelope.payload.size());
+        if (!total || *total > limits.maximumFrameBytes || *total > output.size() ||
+            envelope.payload.size() > std::numeric_limits<std::uint32_t>::max())
+            return Fail<std::size_t>(NetworkErrors::MessageEnvelopeCapacityExceeded);
+        BoundedOutput writer{output};
+        WriteFixedHeader(writer, envelope, FixedHeaderBytes, envelope.payload.size(), 0);
+        std::ranges::copy(envelope.payload, output.begin() + static_cast<std::ptrdiff_t>(writer.offset));
+        return Result<std::size_t>::Success(*total);
+    }
+
+    /** @copydoc InspectMessageEnvelope */
+    Result<MessageEnvelopePayloadView> InspectMessageEnvelope(const std::span<const std::byte> frame, const MessageCodecRegistry &registry,
+                                                              const MessageEnvelopeLimits &limits,
+                                                              const MessageEnvelopeAdmissionState state) {
+        auto validated = ValidateFrame(frame, registry, limits, state);
+        if (validated.HasError())
+            return Result<MessageEnvelopePayloadView>::Failure(validated.ErrorValue());
+        const auto &parsed = validated.Value().parsed;
+        const auto &header = parsed.envelope;
+        return Result<MessageEnvelopePayloadView>::Success({header.protocol, header.message, header.schema, header.schemaVersion,
+                                                            header.sequence, header.acknowledgement, parsed.fieldCount,
+                                                            frame.subspan(parsed.headerBytes, parsed.payloadBytes)});
+    }
+
     /** @copydoc DecodeMessageEnvelope */
     Result<MessageEnvelope> DecodeMessageEnvelope(const std::span<const std::byte> frame, const MessageCodecRegistry &registry,
                                                   const MessageEnvelopeLimits &limits, const MessageEnvelopeAdmissionState state) {
-        if (const ErrorCodeDescriptor *admission = AdmissionError(state); admission != nullptr)
-            return Fail<MessageEnvelope>(*admission);
-        Result<ParsedHeader> parsed = ParseHeader(frame, limits);
-        if (parsed.HasError())
-            return Result<MessageEnvelope>::Failure(parsed.ErrorValue());
-
-        if (const auto totalBytes = CheckedSum(parsed.Value().headerBytes, parsed.Value().payloadBytes);
-            !totalBytes.has_value() || *totalBytes != frame.size())
-            return Fail<MessageEnvelope>(NetworkErrors::MessageEnvelopeInvalid);
-        if (const Result<MessageCodecDescriptor> codec = ValidateDecodedCodec(parsed.Value(), registry, limits); codec.HasError())
-            return Result<MessageEnvelope>::Failure(codec.ErrorValue());
-
-        const auto knownFields = ValidateEncodedFields(frame, parsed.Value(), registry, limits);
-        if (knownFields.HasError())
-            return Result<MessageEnvelope>::Failure(knownFields.ErrorValue());
-        return CopyDecodedEnvelope(frame, std::move(parsed).Value(), registry, knownFields.Value());
+        auto validated = ValidateFrame(frame, registry, limits, state);
+        if (validated.HasError())
+            return Result<MessageEnvelope>::Failure(validated.ErrorValue());
+        auto owned = std::move(validated).Value();
+        return CopyDecodedEnvelope(frame, std::move(owned.parsed), registry, owned.knownFields);
     }
 }  // namespace Horo::Network

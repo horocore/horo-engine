@@ -3,6 +3,17 @@
 #include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::Render::MetalBackendTests {
+    namespace {
+        /** @brief Releases a deliberately active test encoder before frame cancellation or worker join during assertion unwinding. */
+        struct FirstWorkerRelease final {
+            ParallelObservation &observation;
+
+            ~FirstWorkerRelease() {
+                observation.releaseFirst.store(true);
+            }
+        };
+    }  // namespace
+
     TEST_CASE("Metal closing retains its presentation attachment and rejects restart until actual runtime drain",
               "[unit][renderer][metal][shutdown]") {
         PortState state;
@@ -145,12 +156,15 @@ namespace Horo::Render::MetalBackendTests {
             REQUIRE(frame.PollParallelExecution().HasError());
         }
         SECTION("retain closing owner while encoder is active") {
+            const FirstWorkerRelease release{*fixture.observation};
+            fixture.observation->deferFirstCancellation.store(true);
             REQUIRE(fixture.frontend->BeginShutdown().HasValue());
             const auto pending = fixture.frontend->PollDrain();
             REQUIRE(pending.HasValue());
             CHECK(pending.Value() == RenderBackendDrainProgress::Pending);
             CHECK(fixture.state.destroyCount == 0);
             REQUIRE(frame.PollParallelExecution().HasError());
+            fixture.observation->releaseFirst.store(true);
         }
         if (fixture.observation->failIndex == 1) {
             fixture.observation->releaseFirst.store(true);

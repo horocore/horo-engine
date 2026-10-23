@@ -4,7 +4,9 @@ cbuffer PaintParameters : register(b0, space0) {
     float Opacity;
     uint Sampling;
     uint Flags;
-    uint3 Reserved;
+    uint Reserved0;
+    uint Reserved1;
+    uint Reserved2;
     float2 MaskExtent;
     uint2 MaskReserved;
     float4 CornerRadii;
@@ -36,7 +38,7 @@ PaintOutput PaintVertex(PaintInput input) {
 }
 
 float4 PaintFragment(PaintOutput input) : SV_Target0 {
-    if (any(Reserved != 0u) || any(MaskReserved != 0u))
+    if (Reserved0 != 0u || Reserved1 != 0u || Reserved2 != 0u || any(MaskReserved != 0u))
         discard;
     float2 uv = input.uv;
     if ((Flags & 2u) != 0u)

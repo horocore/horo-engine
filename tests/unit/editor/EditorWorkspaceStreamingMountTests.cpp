@@ -31,11 +31,12 @@ namespace Horo::Editor {
                     file.write(reinterpret_cast<const char *>(encoded.bytes.data()), static_cast<std::streamsize>(encoded.bytes.size()));
                 }
                 const auto files = Platform::CreateNativeProjectReadFiles(directory.Path(), owner.ToString(), 1).Value();
-                controller = std::make_unique<EditorWorkspaceController>(directory.Path(), scene, Assets::AssetRegistrySnapshot{},
-                                                                         EditorWorkspaceDependencies{.world = {.streamingPolicy = &policy,
-                                                                                                               .streamingPreview = &bridge,
-                                                                                                               .files = files},
-                                                                                                     .documentSessionOwner = owner});
+                controller =
+                    std::make_unique<EditorWorkspaceController>(directory.Path(), scene, Assets::AssetRegistrySnapshot{},
+                                                                EditorWorkspaceDependencies{.world = {.sourceFiles = files,
+                                                                                                      .documentSessionOwner = owner,
+                                                                                                      .streamingPreviewPolicy = &policy,
+                                                                                                      .streamingPreview = &bridge}});
                 REQUIRE(controller->OpenWorldCompositionSource("source.horoworld").HasValue());
                 const auto root = controller->WorldDocuments().Snapshot().Value();
                 PartitionedWorldSource source{.shape = WS::StreamingSourceBox{Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0),

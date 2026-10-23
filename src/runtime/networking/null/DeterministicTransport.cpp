@@ -384,6 +384,23 @@ namespace Horo::Network {
         return Result<std::size_t>::Success(discarded);
     }
 
+    /** @copydoc DeterministicTransport::ReplaceScenario */
+    Result<void> DeterministicTransport::ReplaceScenario(const std::uint64_t expectedRevision,
+                                                         const TransportImpairmentScenarioV1 &scenario) {
+        if (shuttingDown_)
+            return Fail<void>(NetworkErrors::TransportShuttingDown);
+        if (descriptor_.scenario.revision != expectedRevision)
+            return Fail<void>(NetworkErrors::TransportHandleInvalid);
+        auto candidate = descriptor_;
+        candidate.scenario = scenario;
+        if (descriptor_.mode != DeterministicTransportMode::Simulated || !ValidScenario(candidate) ||
+            scenario.revision <= expectedRevision || scenario.seed != descriptor_.scenario.seed ||
+            scenario.maximumFragmentBytes != descriptor_.scenario.maximumFragmentBytes)
+            return Fail<void>(NetworkErrors::TransportBudgetInvalid);
+        descriptor_.scenario = scenario;
+        return Result<void>::Success();
+    }
+
     /** @copydoc DeterministicTransport::Shutdown */
     std::size_t DeterministicTransport::Shutdown() noexcept {
         if (shuttingDown_)

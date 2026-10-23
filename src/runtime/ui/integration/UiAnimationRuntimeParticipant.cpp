@@ -213,6 +213,11 @@ namespace Horo::Runtime {
         return storage_->owner.DrainRetired();
     }
 
+    /** @copydoc UiAnimationRuntimeParticipant::CanReclaim */
+    bool UiAnimationRuntimeParticipant::CanReclaim() const noexcept {
+        return storage_ && storage_->ownerThread == std::this_thread::get_id() && storage_->stopped && storage_->owner.CanReclaim();
+    }
+
     /** @copydoc UiAnimationRuntimeParticipant::ApplyPresentation */
     Result<bool> UiAnimationRuntimeParticipant::ApplyPresentation(const Ui::UiPresentationReceipt &receipt) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped)

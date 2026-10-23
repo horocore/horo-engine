@@ -1,5 +1,6 @@
 #include "Horo/Network/InboundMessageDispatcher.h"
 
+#include "Horo/Network/NetworkAdmissionController.h"
 #include "Horo/Network/NetworkErrors.h"
 
 #include <algorithm>
@@ -155,6 +156,12 @@ namespace Horo::Network {
             sessionHost_ = host;
     }
 
+    /** @copydoc InboundMessageDispatcher::SetAdmissionController */
+    void InboundMessageDispatcher::SetAdmissionController(const std::shared_ptr<NetworkAdmissionController> &controller) noexcept {
+        if (std::this_thread::get_id() == owner_ && !shuttingDown_)
+            admission_ = controller;
+    }
+
     /** @copydoc InboundMessageDispatcher::RevokeHandler */
     void InboundMessageDispatcher::RevokeHandler(const ProtocolId protocol, const MessageTypeId message) noexcept {
         if (std::this_thread::get_id() != owner_)
@@ -184,8 +191,14 @@ namespace Horo::Network {
             return DispatchPacket(event, nowTick);
         if (event.kind == Closed || event.kind == Failed)
             RevokeSession(event.connection);
+        if (auto admission = admission_.lock()) {
+            if (const auto observed = admission->OnTransportEvent(event, nowTick); observed.HasError())
+                return Result<void>::Failure(observed.ErrorValue());
+            if (event.kind == Accepted || event.kind == Connected)
+                return Result<void>::Success();
+        }
         if (auto host = sessionHost_.lock())
-            host->OnTransportEvent(std::move(event));
+            host->OnTransportEvent(event);
         else if (event.kind == Accepted || event.kind == Connected)
             return transport_.Close(event.connection);  // No host trust authority; fail closed.
         return Result<void>::Success();
@@ -225,6 +238,14 @@ namespace Horo::Network {
 
     /** @copydoc InboundMessageDispatcher::DispatchPacket */
     Result<void> InboundMessageDispatcher::DispatchPacket(NetworkTransportEvent &event, const std::uint64_t nowTick) {
+        if (const bool registered = std::ranges::any_of(sessions_,
+                                                        [&event](const auto &entry) {
+            return entry->connection == event.connection;
+        });
+            !registered) {
+            if (auto admission = admission_.lock())
+                return admission->ConsumeControl(event, nowTick);
+        }
         auto session = AdmitSession(event.connection, nowTick);
         if (session.HasError())
             return Result<void>::Failure(std::move(session).ErrorValue());
@@ -357,6 +378,7 @@ namespace Horo::Network {
         sessions_.clear();
         handlers_.clear();
         sessionHost_.reset();
+        admission_.reset();
         for (std::size_t index = 0; index < queued_; ++index)
             queue_[index] = {};
         queued_ = 0;

@@ -45,6 +45,8 @@ namespace Horo::Application::Internal {
             moduleRetirements;                                         /**< Explicit application owner, drained before final shutdown. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Explicit host grant; absent means typed unavailable. */
         GameplayCharacterPermission characterPermission{GameplayCharacterPermission::Denied};
+        std::optional<Gameplay::GameplayReplicationAdmissionPolicy>
+            replicationAdmission; /**< Complete host inventory; absent only for non-network hosts. */
     };
 
     /** @brief Explicit asset authorities and bounds for a composition-owned cooked prefab provider.
@@ -177,6 +179,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Activate(Runtime::RuntimeScene &scene, const GameplayWorldSelection &selection);
         /** @brief Loads the explicitly selected module/script and freezes its registry before any callback. */
         [[nodiscard]] Result<void> RegisterModule(const GameplayWorldSelection &selection);
+        /** @brief Loads and contributes one native generation with pre-Start replication admission and retained rollback ownership.
+         * @param selection Exact artifact, host policy and explicit retirement owner.
+         * @return Original load/admission/contribution failure, or a contributed native generation.
+         */
+        [[nodiscard]] Result<void> RegisterNativeModule(const GameplayWorldSelection &selection);
+        /** @brief Pins and admits the loaded generation before any behavior callback. @param selection Complete host policy.
+         * @return Original acquisition or declaration failure; native pre-Start admission already ran in its loader. */
+        [[nodiscard]] Result<void> AdmitReplication(const GameplayWorldSelection &selection);
         std::shared_ptr<Gameplay::GameplayPhysicsContext> physics_;
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi_;
         std::shared_ptr<Gameplay::GameplayCharacterContext> character_;
@@ -184,6 +194,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> moduleRetirements_;
         std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
         std::unique_ptr<Gameplay::LuaBehaviorProgram> script_;
+        std::optional<Gameplay::GameplayReplicationLease> replicationLease_; /**< Released after callbacks and before native retirement. */
         Gameplay::BehaviorRegistry registry_;
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
         std::unique_ptr<Prefab::PrefabTemplateProvider> ownedTemplates_;

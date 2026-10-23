@@ -1,5 +1,6 @@
 #include "Horo/Network/AdmissionProtection.h"
 #include "Horo/Network/InboundMessageDispatcher.h"
+#include "Horo/Network/NetworkAdmissionController.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/ReplicationInboundApply.h"
 #include "Horo/Network/ReplicationSnapshotHistory.h"
@@ -33,6 +34,14 @@ namespace {
         requires(std::shared_ptr<Horo::Runtime::RuntimeScene> scene, std::vector<Horo::Network::SceneReplicationFieldBinding> fields) {
             Source({}, scene, fields);
         };
+    static_assert(!std::is_default_constructible_v<Horo::Network::ProofIssuanceAuthorization>);
+    static_assert(!std::is_copy_constructible_v<Horo::Network::NetworkAdmissionController>);
+    static_assert(!std::is_default_constructible_v<Horo::Network::NetworkAdmissionController>);
+    template <typename Controller>
+    concept BypassesAdmissionFactory = requires { Controller{{}, {}}; };
+    static_assert(!BypassesAdmissionFactory<Horo::Network::NetworkAdmissionController>);
+    static_assert(std::is_same_v<decltype(&Horo::Network::IInboundSessionHost::OnTransportEvent),
+                                 void (Horo::Network::IInboundSessionHost::*)(const Horo::Network::NetworkTransportEvent &) noexcept>);
     static_assert(!BypassesRpcFactory<Horo::Network::RpcGameplayDispatch>);
     static_assert(!BypassesInboundFactory<Horo::Network::InboundMessageDispatcher>);
     static_assert(!BypassesCaptureFactory<Horo::Network::ReplicationStateCapture>);

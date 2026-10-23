@@ -54,7 +54,7 @@ namespace {
 
 TEST_CASE("Physics Inspector controller commits once through canonical history and events", "[unit][editor][physics][inspector]") {
     Runtime::RuntimeSceneService runtime;
-    EditorWorkspaceController controller{"test-project", runtime, {}, {.documentSessionOwner = Identity(1)}};
+    EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.documentSessionOwner = Identity(1)}}};
     REQUIRE(controller.ViewModel().objects.size() == 1);
     Select(controller, controller.ViewModel().objects.front().id);
     auto command = Creation(controller.ViewModel());
@@ -84,7 +84,7 @@ TEST_CASE("Physics Inspector controller commits once through canonical history a
 TEST_CASE("Physics Inspector rejects an expired selection even if the same object is selected again",
           "[unit][editor][physics][inspector]") {
     Runtime::RuntimeSceneService runtime;
-    EditorWorkspaceController controller{"test-project", runtime, {}, {.documentSessionOwner = Identity(1)}};
+    EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.documentSessionOwner = Identity(1)}}};
     const auto first = controller.ViewModel().objects.front().id;
     Select(controller, first);
     auto stale = Creation(controller.ViewModel());
@@ -110,7 +110,7 @@ TEST_CASE("Physics Inspector requires the explicit host document opening identit
 
 TEST_CASE("Collider viewport edits use the real Inspector transaction owner and one undo event", "[unit][editor][physics][collider]") {
     Runtime::RuntimeSceneService runtime;
-    EditorWorkspaceController controller{"test-project", runtime, {}, {.documentSessionOwner = Identity(1)}};
+    EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.documentSessionOwner = Identity(1)}}};
     CreateCompound(controller);
     EditorWorkspaceViewCommandData selection;
     selection.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
@@ -157,7 +157,7 @@ TEST_CASE("Collider viewport edits use the real Inspector transaction owner and 
 
 TEST_CASE("Collider viewport selection and permission fences reject detached stale gestures", "[unit][editor][physics][collider]") {
     Runtime::RuntimeSceneService runtime;
-    EditorWorkspaceController controller{"test-project", runtime, {}, {.documentSessionOwner = Identity(1)}};
+    EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.documentSessionOwner = Identity(1)}}};
     const auto id = controller.ViewModel().objects.front().id;
     Select(controller, id);
     controller.ProcessCommand(Creation(controller.ViewModel()));

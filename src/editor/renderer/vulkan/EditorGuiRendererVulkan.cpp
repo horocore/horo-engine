@@ -4,6 +4,7 @@
 #include "RenderFrontendResourceAccess.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstring>
 #include <exception>
@@ -23,6 +24,16 @@ namespace Horo::Editor {
 
         VKAPI_ATTR VkResult VKAPI_CALL DenyDeviceIdle(VkDevice) {
             return VK_ERROR_FEATURE_NOT_PRESENT;
+        }
+
+        /** @brief ImGui's WSI helpers are instance commands, never device-resolver queries. */
+        bool IsInstanceCommand(const char *name) {
+            constexpr std::array InstanceCommands{"vkDestroySurfaceKHR", "vkGetPhysicalDeviceMemoryProperties",
+                                                  "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", "vkGetPhysicalDeviceSurfaceFormatsKHR",
+                                                  "vkGetPhysicalDeviceSurfacePresentModesKHR"};
+            return std::ranges::any_of(InstanceCommands, [name](const char *command) {
+                return std::strcmp(name, command) == 0;
+            });
         }
 
         /** @brief Load-time C++ callback failure, caught before returning through the application boundary. */
@@ -70,6 +81,8 @@ namespace Horo::Editor {
             name = "vkCmdBeginRendering";
         if (std::strcmp(name, "vkCmdEndRenderingKHR") == 0)
             name = "vkCmdEndRendering";
+        if (IsInstanceCommand(name))
+            return device.instanceResolver(device.instance, name);
         if (const auto native = device.deviceResolver(device.device, name))
             return native;
         return device.instanceResolver(device.instance, name);
