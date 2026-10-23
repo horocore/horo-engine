@@ -695,6 +695,50 @@ The earlier bucket capacity planner remains an offline alternative, not a
 configured R2 service. Compiler checkpoints remain in Actions storage and can
 still be evicted. The 10–15 minute target is not yet achieved.
 
+### Compiler checkpoint fallback in public GHCR
+
+The compiler exporter uses the existing public SDK package with distinct
+`compiler-v1-<namespace-sha256>` tags and the
+`application/vnd.horo.compiler-cache.v1` artifact type. It does not reuse the
+SDK compatibility schema. Its namespace is the existing native OS, architecture,
+compiler/version, profile and configuration cache prefix, or the separate
+instrumented Sonar prefix. Compiler entry hashes remain authoritative; no flags,
+header checks, quality scope or instrumentation are relaxed.
+
+`compiler-checkpoints.yml` runs only on reviewed main code, on a completed
+canonical main push, a schedule, or manual dispatch. Its four platform/profile
+exports run serially, use existing main Actions snapshots, and never compile.
+Missing snapshots skip publication. Triggering workflow conclusions do not grant
+trust: repository, branch and push event must match. A successful checkpoint
+means compilation completed, not that tests or quality gates passed.
+
+The exporter checks the public package's source checkpoint before packing and
+skips the same or newer run/attempt. Publication replaces one namespace tag only
+after its blob upload completes. Only an explicit missing manifest permits a
+first publication; outages and incompatible manifests fail without overwriting.
+A single workflow concurrency group prevents competing latest-tag writers. New
+compiler/toolchain namespaces get distinct tags; old namespace/tag cleanup is
+not automated in this first rollout. GHCR version storage must be monitored;
+Actions duplicate retention remains independent.
+
+PRs retain their existing jobs and read-only package permissions. They first
+restore Actions storage, then try the anonymous public fallback on a miss for
+native Debug or Sonar. The client uses an empty credential store and a 90-second
+network budget. A fixed digest selects the blob, capped at 3 GiB compressed and
+4 GiB expanded. A bounded manifest requires the independently selected namespace,
+source key, regular portable paths, sizes and per-file SHA-256. Every file is
+verified privately before installing any entry. Configuration, locks and counters
+are excluded; local entries/settings are preserved. Restore runs before compiler
+activity, with the Windows cache server stopped. A failed fetch retains normal
+compilation. The CLI chooses only the two fixed workspace cache paths, rather
+than accepting an arbitrary destination.
+
+This is independent storage against Actions quota eviction, not a latency
+measurement or a replacement for dependency packages. Hosted publication and
+anonymous cross-platform restores still require qualification before claiming
+the 10–15 minute target. Large transfers and warm linking/analysis remain part
+of each job's measured duration.
+
 ### Symptoms of a stale build
 
 - Build succeeds but runtime behavior is wrong (old object files

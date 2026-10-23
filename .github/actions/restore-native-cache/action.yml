@@ -10,10 +10,19 @@ inputs:
   dependency-profile:
     description: Optional dependency selection namespace; defaults to the compiler profile
     default: ''
+  compiler-only:
+    description: Skip dependency sources when exporting compiler checkpoints
+    default: 'false'
+  external-cache:
+    description: Try the public compiler fallback on an Actions miss
+    default: 'true'
   max-size:
     description: Maximum compiler cache size
     required: true
 outputs:
+  compiler-matched-key:
+    description: Existing trusted main checkpoint selected by Actions
+    value: ${{ steps.compiler.outputs.cache-matched-key }}
   compiler-key:
     description: Immutable key for the new compiler checkpoint
     value: ${{ steps.compiler.outputs.cache-primary-key }}
@@ -92,6 +101,7 @@ runs:
     # Keep download metadata with the sources so FetchContent does not clone
     # them again. Dependency object/build directories are never archived.
     - name: Restore dependency sources
+      if: inputs.compiler-only != 'true'
       id: deps
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
       with:
@@ -111,6 +121,27 @@ runs:
         key: native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-
+
+    - name: Install optional compiler registry client
+      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug'
+      continue-on-error: true
+      uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
+      with:
+        version: 1.3.0
+
+    - name: Restore optional public compiler checkpoint
+      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug'
+      continue-on-error: true
+      timeout-minutes: 3
+      shell: bash
+      env:
+        COMPILER_NAMESPACE: native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-
+        RUNNER_PLATFORM: ${{ runner.os }}
+      run: |
+        if [[ "$RUNNER_PLATFORM" == Windows ]]; then
+          sccache --stop-server || true
+        fi
+        python3 .github/scripts/compiler_registry.py fetch --key "$COMPILER_NAMESPACE"
 
     - name: Report restores and reset per-run statistics
       shell: bash
