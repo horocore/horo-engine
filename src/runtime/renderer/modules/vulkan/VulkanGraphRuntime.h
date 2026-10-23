@@ -3,9 +3,19 @@
 /** @file VulkanGraphRuntime.h
  * @brief Device-private translation of canonical graph submissions and resource states.
  */
+#include "VulkanEditorGraphicsBridge.h"
 #include "VulkanResourceRuntime.h"
 
 namespace Horo::Render::Detail {
+    /** @brief Acquired WSI output, borrowed until this same frame submits or aborts. */
+    struct VulkanGuiOutput {
+        VkImage image{};
+        VkImageView view{};
+        VkSemaphore renderFinished{};
+        FramebufferExtent extent;
+        ClearColor clearColor;
+    };
+
     /** @brief Borrowed selected-device configuration consumed synchronously during graph initialization. */
     struct VulkanGraphInitialization {
         VkDevice device;
@@ -33,11 +43,20 @@ namespace Horo::Render::Detail {
         /** @brief Returns effective indexed draw and explicitly enabled layer routing facts for this device. */
         [[nodiscard]] MultiviewCapabilities MultiviewSupport() const noexcept;
         [[nodiscard]] Result<void> BeginFrame(FrameToken frame);
+        /** @brief Borrows the exact active frame's retired retention slot for exclusive editor ring reuse. */
+        [[nodiscard]] Result<VulkanFrameRetentionSlot> FrameSlot(FrameToken frame) const;
+        /** @brief Reports whether this current frame still precedes every native recording use. */
+        [[nodiscard]] bool CanWriteFrameInputs(FrameToken frame) const noexcept;
         [[nodiscard]] Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request);
         /** @brief Records one bounded reflected material pass using this runtime's existing submission owner.
          * @param request Exact frame, offscreen target, immutable draws and explicit frontend submission/lease.
          * @return Success with synchronous lease transfer or typed validation/native recording failure. */
         [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request);
+        /** @brief Admits the existing GUI completion lease before any executor records native commands. */
+        [[nodiscard]] Result<void> PrepareGuiComposition(const GuiCompositionRequest &request);
+        /** @brief Records one GUI tail through this frame's sole submission/retention owner. */
+        [[nodiscard]] Result<void> ExecuteGui(const GuiCompositionRequest &request, const VulkanGuiOutput &output,
+                                              IVulkanGuiEncoder &encoder);
         /** @brief Submits exact copied Horo records; partial success retains accepted work and closes admission on failure. */
         [[nodiscard]] Result<void> SubmitFrame(FrameToken frame);
         void AbortFrame(FrameToken frame) noexcept;

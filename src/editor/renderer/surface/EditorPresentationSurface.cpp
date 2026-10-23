@@ -1,5 +1,6 @@
 #include "EditorPresentationSurface.h"
 
+#include "Horo/Runtime/Render/RenderPresentationOutput.h"
 #include "Horo/Runtime/Render/RenderSurfaceLifecycleErrors.h"
 
 #include <limits>
@@ -60,9 +61,20 @@ namespace Horo::Editor {
             return Result<EditorSurfaceObservation>::Failure(current.ErrorValue());
         if (const auto admitted = ValidateAdmission(mode, admission); admitted.HasError())
             return Result<EditorSurfaceObservation>::Failure(admitted.ErrorValue());
+        bool replacedPending = false;
+        if (pending_) {
+            if (extent && pending_->command.target->extent == *extent)
+                return CompletePending();
+            if (auto cancelled = CancelPending(); cancelled.HasError())
+                return Result<EditorSurfaceObservation>::Failure(cancelled.ErrorValue());
+            current = surface_.Snapshot();
+            if (current.HasError())
+                return Result<EditorSurfaceObservation>::Failure(current.ErrorValue());
+            replacedPending = true;
+        }
         if (!extent)
             return Suspend(current.Value());
-        if (current.Value().state == Render::RenderSurfaceState::Lost && recovery == EditorSurfaceRecovery::Defer)
+        if (current.Value().state == Render::RenderSurfaceState::Lost && recovery == EditorSurfaceRecovery::Defer && !replacedPending)
             return Result<EditorSurfaceObservation>::Success({current.Value(), std::nullopt});
         if (MatchesActiveOutput(current.Value(), *extent, mode))
             return Result<EditorSurfaceObservation>::Success({current.Value(), std::nullopt});
@@ -109,12 +121,37 @@ namespace Horo::Editor {
         if (transition.HasError())
             return Result<EditorSurfaceObservation>::Failure(transition.ErrorValue());
         admittedMode_ = mode;
-        const auto realized = realizer_->Resize(transition.Value().command.target->extent);
-        auto completed = surface_.Complete(transition.Value(), realized.HasValue() ? Render::RenderSurfaceRealization::Ready
-                                                                                   : Render::RenderSurfaceRealization::Lost);
+        pending_ = transition.Value();
+        return CompletePending();
+    }
+
+    /** @copydoc EditorPresentationSurface::CancelPending */
+    Result<void> EditorPresentationSurface::CancelPending() {
+        if (!pending_)
+            return Result<void>::Success();
+        const auto completed = surface_.Complete(*pending_, Render::RenderSurfaceRealization::Lost);
+        if (completed.HasError())
+            return Result<void>::Failure(completed.ErrorValue());
+        pending_.reset();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorPresentationSurface::CompletePending */
+    Result<EditorSurfaceObservation> EditorPresentationSurface::CompletePending() {
+        const auto realized = realizer_->Resize(pending_->command.target->extent);
+        if (realized.HasError() &&
+            realized.ErrorValue().domain.Value() == Render::RenderPresentationErrors::DrawableUnavailable.domain.Value() &&
+            realized.ErrorValue().code.Value() == Render::RenderPresentationErrors::DrawableUnavailable.code.Value()) {
+            const auto snapshot = surface_.Snapshot();
+            return snapshot.HasError() ? Result<EditorSurfaceObservation>::Failure(snapshot.ErrorValue())
+                                       : Result<EditorSurfaceObservation>::Success({snapshot.Value(), std::nullopt});
+        }
+        auto completed = surface_.Complete(*pending_, realized.HasValue() ? Render::RenderSurfaceRealization::Ready
+                                                                          : Render::RenderSurfaceRealization::Lost);
         if (completed.HasError())
             return Result<EditorSurfaceObservation>::Failure(realized.HasError() ? WithCause(completed.ErrorValue(), realized.ErrorValue())
                                                                                  : completed.ErrorValue());
+        pending_.reset();
         return Result<EditorSurfaceObservation>::Success(
             {std::move(completed).Value(), realized.HasError() ? std::optional{realized.ErrorValue()} : std::nullopt});
     }
@@ -127,6 +164,11 @@ namespace Horo::Editor {
         if (admission == EditorSurfaceAdmission::FrameActive)
             return Result<Render::RenderSurfaceSnapshot>::Failure(
                 MakeError(Render::RenderSurfaceLifecycleErrors::InvalidState, "Cancel the active frame before closing its surface."));
+        if (auto cancelled = CancelPending(); cancelled.HasError())
+            return Result<Render::RenderSurfaceSnapshot>::Failure(cancelled.ErrorValue());
+        current = surface_.Snapshot();
+        if (current.HasError())
+            return current;
         // An unattached host has no surface generation to close.
         if (current.Value().state == Render::RenderSurfaceState::Unattached) {
             closed_ = true;

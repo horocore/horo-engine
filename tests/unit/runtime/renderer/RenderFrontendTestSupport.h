@@ -75,7 +75,12 @@ namespace Horo::Tests::RenderFrontendTesting {
         bool supportsBufferResources{true};
         bool supportsMeshResources{true};
         bool supportsTextureResources{true};
+        std::optional<Error> textureMemoryCostFailure;
         bool supportsRenderTargetResources{true};
+        int guiAdmissions{};
+        bool failGuiAdmission{};
+        RenderSubmissionOrder guiOrder;
+        RenderTimelinePoint guiSignal;
     };
 
     // Catch runs these cases serially; each case resets this process-owned backend assertion ledger.

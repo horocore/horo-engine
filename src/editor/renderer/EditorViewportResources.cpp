@@ -76,7 +76,8 @@ namespace Horo::Editor {
                                                                                        const EditorViewportExtent requestedExtent) {
         if (const Result<void> meshes = SynchronizeMeshes(scene.meshResources); meshes.HasError())
             return Result<std::optional<Render::RenderTargetHandle>>::Failure(meshes.ErrorValue());
-        if (const Result<void> shadow = SynchronizeShadowResources(); shadow.HasError())
+        if (const Result<void> shadow = config_.prepareDirectionalShadow ? SynchronizeShadowResources() : Result<void>::Success();
+            shadow.HasError())
             return Result<std::optional<Render::RenderTargetHandle>>::Failure(shadow.ErrorValue());
         if (const Result<void> target = requestedExtent.IsValid() ? SynchronizeTarget(requestedExtent) : Result<void>::Success();
             target.HasError())
@@ -115,6 +116,16 @@ namespace Horo::Editor {
 
     Render::RenderTargetHandle EditorViewportResources::ShadowTarget() const noexcept {
         return shadowTarget_;
+    }
+
+    /** @copydoc EditorViewportResources::ColorTexture */
+    Render::RenderTextureHandle EditorViewportResources::ColorTexture() const noexcept {
+        return viewportTarget_.colorTexture;
+    }
+
+    /** @copydoc EditorViewportResources::ColorTextureView */
+    Render::RenderTextureViewHandle EditorViewportResources::ColorTextureView() const noexcept {
+        return viewportTarget_.colorView;
     }
 
     Render::RenderTextureViewHandle EditorViewportResources::ShadowTextureView() const noexcept {
@@ -214,7 +225,7 @@ namespace Horo::Editor {
         auto vertex = frontend_->CreateBuffer(config_.memoryScope,
                                               {.byteSize = resource.vertices.size_bytes(),
                                                .usage = Render::RenderBufferUsage::Vertex,
-                                               .access = Render::RenderBufferAccess::DeviceLocal},
+                                               .access = config_.meshBufferAccess},
                                               std::as_bytes(resource.vertices));
         if (vertex.HasError())
             return Result<void>::Failure(vertex.ErrorValue());
@@ -223,7 +234,7 @@ namespace Horo::Editor {
         auto index = frontend_->CreateBuffer(config_.memoryScope,
                                              {.byteSize = resource.indices.size_bytes(),
                                               .usage = Render::RenderBufferUsage::Index,
-                                              .access = Render::RenderBufferAccess::DeviceLocal},
+                                              .access = config_.meshBufferAccess},
                                              std::as_bytes(resource.indices));
         if (index.HasError()) {
             ReleaseMesh(resident);

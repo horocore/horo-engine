@@ -48,6 +48,7 @@ if(HORO_BUILD_NETWORK_GNS)
     # Upstream protobuf's CMake target names are fixed to `protobuf`; adding it
     # directly avoids requiring a system protoc or a preinstalled package.
     add_subdirectory("${horo_protobuf_SOURCE_DIR}" "${horo_protobuf_BINARY_DIR}")
+    include(HoroProtobufCoverage)
 
     # GNS calls find_package(Protobuf CONFIG) to obtain protobuf_generate_cpp.
     # Give it only the already-created in-tree target and an in-tree protoc rule.
@@ -551,6 +552,31 @@ if(HORO_BUILD_EDITOR_GUI)
         )
         target_compile_definitions(HoroThirdPartyImGuiOpenGL PUBLIC GL_SILENCE_DEPRECATION)
         target_link_libraries(HoroThirdPartyImGuiOpenGL PUBLIC HoroThirdPartyImGui OpenGL::GL)
+    endif()
+
+    # The native encoder borrows Horo's command buffer and exact retired frame slot.
+    # Transform a pinned copy in BUILD; never patch FetchContent's shared source.
+    if(HORO_BUILD_RENDER_VULKAN AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        set(_horo_imgui_vulkan_slots
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/imgui-vulkan/imgui_impl_vulkan_horo.cpp")
+        add_custom_command(
+            OUTPUT "${_horo_imgui_vulkan_slots}"
+            COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/scripts/project.py" imgui-vulkan-slots
+                --source "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
+                --output "${_horo_imgui_vulkan_slots}"
+            DEPENDS
+                "${PROJECT_SOURCE_DIR}/scripts/project.py"
+                "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
+            COMMENT "Prepare pinned ImGui Vulkan encoder for canonical Horo slots"
+            VERBATIM
+        )
+        add_library(HoroThirdPartyImGuiVulkan STATIC "${_horo_imgui_vulkan_slots}")
+        add_library(HoroThirdParty::ImGuiVulkan ALIAS HoroThirdPartyImGuiVulkan)
+        target_compile_features(HoroThirdPartyImGuiVulkan PUBLIC cxx_std_20)
+        target_compile_definitions(HoroThirdPartyImGuiVulkan PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
+        target_link_libraries(HoroThirdPartyImGuiVulkan PUBLIC HoroThirdPartyImGui Vulkan::Headers)
     endif()
 
     if(HORO_BUILD_RENDER_METAL)

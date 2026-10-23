@@ -275,6 +275,10 @@ if(HORO_BUILD_EDITOR_GUI)
         set(HORO_EDITOR_BUILD_ASSET_ROOT "$<TARGET_FILE_DIR:HoroEditor>/${HORO_EDITOR_PACKAGED_ASSET_ROOT_RELATIVE}")
     endif()
 
+    # Offline qualification stages generated cook output beside the same assets consumed by the real host.
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroEditorAssetRoot-$<CONFIG>.txt"
+        CONTENT "${HORO_EDITOR_BUILD_ASSET_ROOT}\n")
+
     add_custom_command(TARGET HoroEditor POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${PROJECT_SOURCE_DIR}/assets"
@@ -423,8 +427,20 @@ if(HORO_BUILD_EDITOR_GUI)
         target_link_libraries(HoroEditor PRIVATE HoroEngine::EditorViewportOpenGL)
     endif()
 
+    if(HORO_BUILD_RENDER_VULKAN)
+        target_compile_definitions(HoroEditor PRIVATE HORO_HAS_RENDER_VULKAN=1)
+        target_sources(HoroEditor PRIVATE HoroEditor/app/EditorVulkanShaderAssets.cpp)
+        target_link_libraries(HoroEditor PRIVATE HoroEditorVulkanGuiInternal)
+    endif()
+
     if(HORO_BUILD_RENDER_METAL)
         target_compile_definitions(HoroEditor PRIVATE HORO_HAS_RENDER_METAL=1)
         target_link_libraries(HoroEditor PRIVATE HoroEngine::EditorViewportMetal)
     endif()
 endif()
+
+# Offline preparation tool, never linked into HoroEditor or a runtime renderer.
+add_executable(HoroEditorVulkanShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VulkanViewportCook.cpp)
+target_compile_features(HoroEditorVulkanShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorVulkanShaderCook PRIVATE HoroEditorVulkanShaderInternal
+    HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)

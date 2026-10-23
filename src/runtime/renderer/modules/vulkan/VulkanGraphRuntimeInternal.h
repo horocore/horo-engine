@@ -48,6 +48,7 @@ namespace Horo::Render::Detail {
 
         struct Submission {
             VulkanCommandTicket ticket;
+            VkSemaphore presentationSignal{};
             RenderQueueSubmission value;
             std::array<RenderTimelinePoint, RenderGraphSubmissionLimits::MaximumQueues> waits;
             RenderGraphExecutionRange passes;
@@ -57,6 +58,7 @@ namespace Horo::Render::Detail {
         struct Dispatch {
             PFN_vkCmdPipelineBarrier2 barrier{};
             PFN_vkCmdCopyBuffer2 copy{};
+            PFN_vkCmdCopyBufferToImage2 copyImage{};
             PFN_vkCmdBeginRendering beginRendering{};
             PFN_vkCmdEndRendering endRendering{};
             PFN_vkCmdBindPipeline bindPipeline{};
@@ -97,12 +99,47 @@ namespace Horo::Render::Detail {
         /** @brief Active-frame admission and terminal submission/shutdown state, owned together by the command runtime. */
         struct Lifecycle {
             FrameToken frame;
+            VulkanCommandRetention *pins{}; /**< Same canonical retained owner shared by viewport and later GUI tail. */
             bool recorded{false};
             bool closing{false};
             bool failedSubmission{false};
         };
 
         Lifecycle lifecycle;
+        std::array<VulkanGuiSample, GuiCompositionPreparation::MaximumResources> guiSamples;
+        std::array<VulkanGuiBuffer, GuiCompositionPreparation::MaximumResources> guiBuffers;
+
+        struct GuiSamplePlan {
+            RenderGraphExecutionRange before;
+            RenderGraphExecutionRange after;
+            bool upload{};
+        };
+
+        std::array<GuiSamplePlan, GuiCompositionPreparation::MaximumResources> guiPlans;
+        RenderGraphExecutionRange guiBufferBarriers;
+        std::optional<RenderQueueSubmission> guiSubmission;
+        std::array<RenderTimelinePoint, RenderGraphSubmissionLimits::MaximumQueues> guiWaits;
+        std::array<GuiSampledResourceInstance, GuiCompositionPreparation::MaximumResources> guiIdentities;
+        std::array<std::uint64_t, GuiCompositionPreparation::MaximumResources> guiBufferIdentities;
+        std::size_t guiSampleCount{};
+        std::size_t guiBufferCount{};
+        std::array<VulkanGuiSampleBinding, GuiCompositionPreparation::MaximumResources> guiSampleBindings;
+        std::array<VulkanGuiBufferBinding, GuiCompositionPreparation::MaximumResources> guiNativeBuffers;
+        bool guiPrepared{};
+        bool guiRecorded{};
+
+        /** @brief Adds a GUI state transition using earlier recorded producers without publishing unsent state. */
+        [[nodiscard]] Result<void> GuiState(const VulkanGraphResource &resource, RenderGraphLogicalState next,
+                                            const RenderQueueSubmission &submission, bool requireContents);
+        /** @brief Reads the most recent pending state, falling back to the canonical accepted state. */
+        [[nodiscard]] const VulkanGraphResourceState &PendingState(const VulkanGraphResource &resource) const;
+        /** @brief Encodes prepared uploads and whole-output GUI rendering into a borrowed canonical command. */
+        [[nodiscard]] Result<void> EncodeGui(VkCommandBuffer command, const GuiCompositionRequest &request, const VulkanGuiOutput &output,
+                                             IVulkanGuiEncoder &encoder);
+        /** @brief Prepares bounded native GUI resources, with exact upload-before-sample ordering. */
+        /** @brief Pins exact input buffers and synthesizes their current canonical tail barriers. */
+        [[nodiscard]] Result<void> PrepareGuiBuffers(const GuiCompositionRequest &request);
+        [[nodiscard]] Result<void> PrepareGuiResources(const GuiCompositionRequest &request);
 
         /** @brief Borrows the synchronous resolver to load optional material dispatch without copying or allocation. */
         template <typename Resolver> void LoadMaterialDispatch(VkDevice device, const Resolver &resolver) {

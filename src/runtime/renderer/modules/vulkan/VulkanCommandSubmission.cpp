@@ -81,7 +81,8 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc VulkanCommandRuntime::Submit */
-    Result<void> VulkanCommandRuntime::Submit(const VulkanCommandTicket ticket, const RenderQueueSubmission &submission) {
+    Result<void> VulkanCommandRuntime::Submit(const VulkanCommandTicket ticket, const RenderQueueSubmission &submission,
+                                              const VkSemaphore presentationSignal) {
         if (const auto access = impl_->Access(true); access.HasError())
             return access;
         const auto [queue, slot] = impl_->FindTicket(ticket);
@@ -89,6 +90,10 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         if (const auto valid = impl_->ValidateSubmission(*queue, submission); valid.HasError())
             return valid;
+        if (presentationSignal != VK_NULL_HANDLE && std::ranges::any_of(impl_->queues, [presentationSignal](const auto &owner) {
+            return owner.timeline == presentationSignal;
+        }))
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid));
         std::array<VkSemaphoreSubmitInfo, RenderGraphSubmissionLimits::MaximumQueues> waits{};
         for (std::size_t index = 0; index < submission.waits.size(); ++index) {
             const auto point = submission.waits[index];
@@ -97,18 +102,23 @@ namespace Horo::Render::Detail {
                             .value = point.value,
                             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
         }
-        const VkSemaphoreSubmitInfo signal{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                           .semaphore = queue->timeline,
-                                           .value = submission.signal.value,
-                                           .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+        // SYNC: timeline completion and presentation semaphore consumption have separate retirement proofs.
+        const std::array<VkSemaphoreSubmitInfo, 2> signals{{{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                                             .semaphore = queue->timeline,
+                                                             .value = submission.signal.value,
+                                                             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
+                                                            {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                                             .semaphore = presentationSignal,
+                                                             .value = 0,
+                                                             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}}};
         const VkCommandBufferSubmitInfo command{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = slot->command};
         const VkSubmitInfo2 native{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
                                    .waitSemaphoreInfoCount = static_cast<std::uint32_t>(submission.waits.size()),
                                    .pWaitSemaphoreInfos = waits.data(),
                                    .commandBufferInfoCount = 1,
                                    .pCommandBufferInfos = &command,
-                                   .signalSemaphoreInfoCount = 1,
-                                   .pSignalSemaphoreInfos = &signal};
+                                   .signalSemaphoreInfoCount = presentationSignal == VK_NULL_HANDLE ? 1U : 2U,
+                                   .pSignalSemaphoreInfos = signals.data()};
         if (const auto result = impl_->dispatch.submit(queue->binding.native, 1, &native, VK_NULL_HANDLE); result != VK_SUCCESS) {
             auto error = impl_->NativeError("vkQueueSubmit2", result);
             if (impl_->lost)

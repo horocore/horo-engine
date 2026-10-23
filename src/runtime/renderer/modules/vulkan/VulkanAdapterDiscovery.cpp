@@ -30,7 +30,8 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] bool SupportsPresentation(const VulkanAdapterCandidate &candidate, const bool available) {
-            return available && Detail::VulkanContains(candidate.deviceExtensions, "VK_KHR_swapchain") &&
+            return available && Detail::VulkanContains(candidate.deviceExtensions, "VK_KHR_swapchain") && candidate.swapchainMaintenance &&
+                   Detail::VulkanContains(candidate.deviceExtensions, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) &&
                    Detail::VulkanHasQueue(candidate, true);
         }
 
@@ -81,7 +82,14 @@ namespace Horo::Render {
             if (!loader.standardApiVariant) {
                 return Result<VulkanAdapterEnumeration>::Failure(MakeError(VulkanBackendErrors::ApiVariantUnsupported));
             }
-            if (auto instance = runtimePort.CreateInstance(VulkanInstanceRequest{.apiVersion = Detail::RequiredVulkanApiVersion});
+            auto extensions = runtimePort.RequiredPresentationExtensions();
+            if (extensions.HasError())
+                return Result<VulkanAdapterEnumeration>::Failure(extensions.ErrorValue());
+            for (const auto &extension : extensions.Value())
+                if (!Detail::VulkanContains(loader.instanceExtensions, extension))
+                    return Result<VulkanAdapterEnumeration>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported));
+            if (auto instance = runtimePort.CreateInstance(VulkanInstanceRequest{.apiVersion = Detail::RequiredVulkanApiVersion,
+                                                                                 .enabledExtensions = std::move(extensions).Value()});
                 instance.HasError()) {
                 return Result<VulkanAdapterEnumeration>::Failure(std::move(instance).ErrorValue());
             }

@@ -1,5 +1,7 @@
 #include "RenderFrontendTestSupport.h"
 
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+
 namespace Horo::Tests::RenderFrontendTesting {
     void Check(const bool condition) {
         REQUIRE((condition));
@@ -44,6 +46,8 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+            if (lifecycleState.textureMemoryCostFailure)
+                return Result<RenderMemoryCostPlan>::Failure(*lifecycleState.textureMemoryCostFailure);
             const std::size_t bytes = RenderTextureBaseLevelByteSize(descriptor).value_or(0);
             return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(bytes, 2));
         }
@@ -132,6 +136,23 @@ namespace Horo::Tests::RenderFrontendTesting {
             Check(plan.frame == lifecycleState.activeFrame);
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Execute) {
                 throw InjectedBackendException{"Injected execution failure."};
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> PrepareGuiComposition(const GuiCompositionRequest &request) override {
+            ++lifecycleState.guiAdmissions;
+            if (!lifecycleState.frameActive || request.frame != lifecycleState.activeFrame || lifecycleState.failGuiAdmission)
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+            if (request.lease != nullptr) {
+                if (request.transfer == nullptr || (lifecycleState.graphLease != nullptr && lifecycleState.graphLease != request.lease))
+                    return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+                lifecycleState.graphLease = request.lease;
+                request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
+            }
+            if (request.submission.has_value()) {
+                lifecycleState.guiOrder = request.submission->order;
+                lifecycleState.guiSignal = request.submission->signal;
             }
             return Result<void>::Success();
         }

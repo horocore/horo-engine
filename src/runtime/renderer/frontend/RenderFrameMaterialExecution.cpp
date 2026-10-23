@@ -4,6 +4,7 @@
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
 #include "RenderResourceRegistry.h"
+#include "RenderSubmissionAllocator.h"
 
 #include <array>
 #include <memory>
@@ -45,12 +46,19 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrameScope::ExecuteMaterialRequest */
     Result<void> RenderFrameScope::ExecuteMaterialRequest(RenderMaterialExecutionRequest request) {
+        auto submissionHistory = *owner_->submissionAllocator_;
         RenderGraphLeaseTransfer transfer;
         const auto release = [&transfer](IRenderGraphResourceLease *lease) {
             if (transfer.authority == RenderGraphLeaseAuthority::Frontend)
                 lease->Release();
         };
         std::unique_ptr<IRenderGraphResourceLease, decltype(release)> lease{request.lease, release};
+        if (request.submission) {
+            if (auto imported = submissionHistory.Admit(std::span{&*request.submission, 1}); imported.HasError()) {
+                Abort();
+                return imported;
+            }
+        }
         request.transfer = &transfer;
         if (const auto consumed = backend_->ExecuteMaterialPass(request); consumed.HasError()) {
             Abort();
@@ -61,7 +69,8 @@ namespace Horo::Render {
             Abort();
             return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
         }
-        static_cast<void>(lease.release());
+        completionLease_ = lease.release();
+        *owner_->submissionAllocator_ = submissionHistory;
         return Result<void>::Success();
     }
 

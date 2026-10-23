@@ -26,6 +26,7 @@ namespace Horo::Application::Internal {
         None,
         OpenGL,
         Metal,
+        Vulkan,
     };
 
     /** @brief Build-time and startup choices that determine one host module graph. */

@@ -46,7 +46,7 @@ jobs:
           --commit ${{ github.sha }}
       - name: Publish attributable package and evidence
         if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75bde44955e1dbb3e9c9b7d2113
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: horo-extension-${{ matrix.platform }}-${{ github.sha }}
           path: ci-artifacts/

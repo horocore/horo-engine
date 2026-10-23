@@ -19,7 +19,7 @@ concurrency:
 jobs:
   sonar:
     name: SonarCloud
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
@@ -95,6 +95,12 @@ jobs:
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
 
+      # Ubuntu 26 defaults to Python 3.14; keep the existing coverage/pytest pins on their qualified interpreter.
+      - name: Select coverage Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
       - name: Install coverage tools
         run: |
           python3 -m venv /tmp/horo-coverage
@@ -108,7 +114,7 @@ jobs:
         id: build
         run: |
           ccache --zero-stats
-          cmake --build --preset sonar
+          cmake --build --preset sonar --target all HoroEditorVulkanShaderCook
           ccache --show-stats
 
       # Checkpoint build inputs before coverage and analysis. A later scan timeout
@@ -129,6 +135,23 @@ jobs:
           path: |
             ${{ github.workspace }}/.sonar/ccache
           key: ${{ steps.compiler.outputs.cache-primary-key }}
+
+      # The build explicitly includes the EXCLUDE_FROM_ALL cook target. Run its
+      # pinned tools on their supported host before coverage, without another job.
+      - name: Cook canonical viewport assets for coverage
+        uses: ./.github/actions/cook-vulkan-viewport
+        with:
+          build-directory: build/sonar
+          asset-root: ${{ github.workspace }}/build/sonar/native-editor-assets
+
+      - name: Verify and select viewport data for coverage
+        run: |
+          set -euo pipefail
+          asset_root="$GITHUB_WORKSPACE/build/sonar/native-editor-assets"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          HORO_VIEWPORT_SOURCE_TREE="$(git rev-parse 'HEAD^{tree}')" \
+            python3 .github/scripts/viewport_asset_bundle.py verify --root "$asset_root"
+          printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$asset_root" >> "$GITHUB_ENV"
 
       - name: Run C++ coverage tests
         run: xvfb-run -a ctest --preset sonar

@@ -1,0 +1,284 @@
+#include "OpenXRFrameCompositorTestFixture.h"
+
+namespace Horo::Tests::OpenXR {
+    namespace {
+        TEST_CASE("Native XR compositor snapshots admitted pacing before loader callbacks", "[unit][xr][compositor][pacing]") {
+            CompositorFixture f;
+            NativeFramePacingPolicy pacing;
+            f.script.mutatePacing = &pacing;
+            REQUIRE(f.compositor.Bind({&FrameScript::GetProc}, pacing).HasValue());
+            CHECK(pacing.maximumFramesInFlight == 2);
+            const auto frame = f.Begin();
+            const auto observation = f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(8'500'000));
+            REQUIRE(observation.HasValue());
+            CHECK(observation.Value().cpuSubmissionDeadlineNanoseconds == 8'500'000);
+            CHECK(observation.Value().deadline == NativeFrameDeadline::WithinBudget);
+            f.Empty(frame);
+        }
+
+        TEST_CASE("Native XR compositor preserves predicted protocol and reports finite renderer deadlines",
+                  "[unit][xr][compositor][pacing]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto frame = f.Begin();
+            REQUIRE_FALSE(f.compositor.Wait().HasValue());
+            CHECK(f.script.waits == 1);
+            auto observation = f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(8'500'000));
+            REQUIRE(observation.HasValue());
+            CHECK(observation.Value().deadline == NativeFrameDeadline::WithinBudget);
+            CHECK(observation.Value().remainingNanoseconds == 0);
+            CHECK(observation.Value().framesInFlight == 1);
+            CHECK(observation.Value().predictedPeriodNanoseconds == f.script.period);
+            observation = f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(8'500'001));
+            REQUIRE(observation.HasValue());
+            CHECK(observation.Value().deadline == NativeFrameDeadline::CpuSubmissionMissed);
+            observation = f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(10'000'000));
+            REQUIRE(observation.HasValue());
+            CHECK(observation.Value().deadline == NativeFrameDeadline::DisplayMissed);
+            REQUIRE_FALSE(f.compositor.EndEmpty(frame).HasValue());
+            CHECK(f.script.ends == 0);
+            f.Empty(frame);
+            CHECK(f.script.layers == 0);
+            REQUIRE_FALSE(f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(1)).HasValue());
+        }
+
+        TEST_CASE("Native XR compositor submits complete released array views and fences reacquisition", "[unit][xr][compositor]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto frame = f.Begin();
+            REQUIRE(f.frames.LocateViews(frame, 2) == XRFrameStatus::Ok);
+            REQUIRE(f.color.Acquire().HasValue());
+            REQUIRE(f.color.Wait(0).Value());
+            const auto imported = f.color.Import();
+            REQUIRE(imported.HasValue());
+            const auto image = imported.Value().image;
+            REQUIRE(f.frames.Acquire(frame, image) == XRFrameStatus::Ok);
+            const auto plan = f.Plan(frame, image);
+            const std::array owners{NativeProjectionTarget{&f.color, image}};
+            REQUIRE_FALSE(f.compositor.EndProjection(frame, plan, owners).HasValue());
+            CHECK(f.script.ends == 0);
+            REQUIRE_FALSE(f.color.PollRelease().Value());
+            REQUIRE_FALSE(f.color.BorrowReleased(image).HasValue());
+            f.images.complete = true;
+            const std::array completed{image};
+            REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, image) == XRFrameStatus::Ok);
+            f.spaces.stale = true;
+            REQUIRE_FALSE(f.compositor.EndProjection(frame, plan, owners).HasValue());
+            CHECK(f.script.ends == 0);
+            f.spaces.stale = false;
+            const auto incompatibleUsage = f.Plan(frame, image, nullptr, true);
+            REQUIRE_FALSE(f.compositor.EndProjection(frame, incompatibleUsage, owners).HasValue());
+            CHECK(f.script.ends == 0);
+            REQUIRE(f.compositor.EndProjection(frame, plan, owners).HasValue());
+            CHECK(f.script.layers == 1);
+            CHECK(f.script.views == 2);
+            CHECK(f.script.encoded[0].subImage.imageArrayIndex == 0);
+            CHECK(f.script.encoded[1].subImage.imageArrayIndex == 1);
+            CHECK(std::abs(f.script.encoded[0].fov.angleLeft + 0.78539816F) < 0.00001F);
+            CHECK(f.script.encoded[0].pose.position.y == 1);
+            REQUIRE(f.color.BorrowReleased(image).HasValue());
+            REQUIRE(f.color.Acquire().HasValue());
+            REQUIRE_FALSE(f.color.BorrowReleased(image).HasValue());
+            REQUIRE(f.color.Wait(0).Value());
+            REQUIRE(f.color.PollRelease().Value());
+        }
+
+        TEST_CASE("Native XR depth composition preserves explicit depth conventions and complete view chains",
+                  "[unit][xr][compositor][depth]") {
+            CompositorFixture f{true};
+            f.Bind();
+            const auto frame = f.Begin();
+            REQUIRE(f.frames.LocateViews(frame, 2) == XRFrameStatus::Ok);
+            REQUIRE(f.color.Acquire().HasValue());
+            REQUIRE(f.color.Wait(0).Value());
+            const auto color = f.color.Import();
+            REQUIRE(color.HasValue());
+            REQUIRE(f.depthOwner.Acquire().HasValue());
+            REQUIRE(f.depthOwner.Wait(0).Value());
+            const auto depth = f.depthOwner.Import();
+            REQUIRE(depth.HasValue());
+            const auto colorImage = color.Value().image;
+            const auto depthImage = depth.Value().image;
+            REQUIRE(f.frames.Acquire(frame, colorImage) == XRFrameStatus::Ok);
+            REQUIRE(f.frames.Acquire(frame, depthImage) == XRFrameStatus::Ok);
+            const auto plan = f.Plan(frame, colorImage, &depthImage);
+            f.images.complete = true;
+            const std::array complete{colorImage, depthImage};
+            REQUIRE(f.frames.Submit(frame, complete) == XRFrameStatus::Ok);
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.depthOwner.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, colorImage) == XRFrameStatus::Ok);
+            REQUIRE(f.frames.Release(frame, depthImage) == XRFrameStatus::Ok);
+            const std::array owners{NativeProjectionTarget{&f.color, colorImage}, NativeProjectionTarget{&f.depthOwner, depthImage}};
+            REQUIRE_FALSE(f.compositor.EndProjection(frame, plan, owners).HasValue());
+            NativeProjectionDepth convention{.nearMeters = 1000, .farMeters = 0.1F};
+            convention.maximumDepth = 2;
+            REQUIRE_FALSE(f.compositor.EndProjection(frame, plan, owners, &convention).HasValue());
+            CHECK(f.script.ends == 0);
+            convention.maximumDepth = 1;
+            REQUIRE(f.compositor.EndProjection(frame, plan, owners, &convention).HasValue());
+            CHECK(f.script.depths[0].type == XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR);
+            CHECK(f.script.depths[0].nearZ == 1000);
+            CHECK(f.script.depths[0].farZ == 0.1F);
+            CHECK(f.script.depths[1].subImage.imageArrayIndex == 1);
+        }
+
+        TEST_CASE("Native XR compositor rejects partial initialization budgets and unsupported color without native wait",
+                  "[unit][xr][compositor]") {
+            CompositorFixture f;
+            REQUIRE_FALSE(f.compositor.Bind({}, {}).HasValue());
+            REQUIRE_FALSE(f.compositor.Bind({&FrameScript::GetProc}, {.gpuBudgetNanoseconds = 0}).HasValue());
+            REQUIRE_FALSE(f.compositor.Bind({&FrameScript::GetProc}, {.maximumFramesInFlight = 2}).HasValue());
+            REQUIRE_FALSE(f.compositor.Bind({&FrameScript::GetProc}, {}, NativeCompositorColorSpace::Rec709).HasValue());
+            f.script.missingEnd = true;
+            REQUIRE_FALSE(f.compositor.Bind({&FrameScript::GetProc}, {}).HasValue());
+            REQUIRE_FALSE(f.compositor.Wait().HasValue());
+            CHECK(f.script.waits == 0);
+            f.script.missingEnd = false;
+            f.Bind();
+            const auto frame = f.Begin();
+            f.Empty(frame);
+        }
+
+        TEST_CASE("Native XR logical replacement after wait fences native begin before dispatch", "[unit][xr][compositor][lifecycle]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto waited = f.compositor.Wait();
+            REQUIRE(waited.HasValue());
+            REQUIRE(waited.Value().status == XRFrameStatus::Ok);
+            const auto replacement =
+                f.sessions.Activate(f.native.capabilities, f.native.capabilities.System(), f.native.capabilities.Revision(), f.native.plan);
+            REQUIRE(replacement.HasValue());
+            REQUIRE_FALSE(f.compositor.Begin(waited.Value().frame).HasValue());
+            CHECK(f.script.begins == 0);
+            CHECK(f.frames.Snapshot().phase == XRFramePhase::Waited);
+            f.Recover();
+        }
+
+        TEST_CASE("Native XR wait failure cancels only its reservation", "[unit][xr][compositor][lifecycle]") {
+            CompositorFixture f;
+            f.Bind();
+            f.script.waitResult = XR_ERROR_RUNTIME_FAILURE;
+            REQUIRE_FALSE(f.compositor.Wait().HasValue());
+            CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
+            f.script.waitResult = XR_SUCCESS;
+            const auto frame = f.Begin();
+            f.Empty(frame);
+        }
+
+        TEST_CASE("Native XR unusable Horo prediction preserves exact native cleanup time", "[unit][xr][compositor][lifecycle]") {
+            CompositorFixture f;
+            f.Bind();
+            f.script.prediction = GENERATE(XrTime{0}, XrTime{-10});
+            const auto waited = f.compositor.Wait();
+            REQUIRE(waited.HasValue());
+            REQUIRE(waited.Value().status == XRFrameStatus::InvalidInput);
+            REQUIRE(waited.Value().frame.IsValid());
+            REQUIRE_FALSE(f.frames.Snapshot().renderAdmitted);
+            const auto frame = waited.Value().frame;
+            REQUIRE(f.compositor.Begin(frame).HasValue());
+            CHECK(f.frames.LocateViews(frame, 2) == XRFrameStatus::Unsupported);
+            REQUIRE_FALSE(f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(1)).HasValue());
+            SECTION("native cleanup succeeds") {
+                REQUIRE(f.compositor.EndEmpty(frame).HasValue());
+                CHECK(f.script.ends == 1);
+                CHECK(f.script.layers == 0);
+            }
+            SECTION("failed native cleanup retains frame debt") {
+                f.script.endResult = XR_ERROR_RUNTIME_FAILURE;
+                REQUIRE_FALSE(f.compositor.EndEmpty(frame).HasValue());
+                CHECK(f.frames.Snapshot().frame == frame);
+                CHECK(f.frames.Snapshot().phase == XRFramePhase::Begun);
+                REQUIRE_FALSE(f.compositor.EndEmpty(frame).HasValue());
+                REQUIRE_FALSE(f.compositor.Wait().HasValue());
+                CHECK(f.script.ends == 1);
+                f.Recover();
+            }
+        }
+
+        TEST_CASE("Native XR unusable period retains a real frame obligation", "[unit][xr][compositor][pacing]") {
+            CompositorFixture f;
+            f.Bind();
+            f.script.period = 0;
+            const auto frame = f.Begin();
+            REQUIRE_FALSE(f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(1)).HasValue());
+            f.Empty(frame);
+        }
+
+        TEST_CASE("Native XR begin and end failure require explicit quiescent recovery", "[unit][xr][compositor][lifecycle]") {
+            CompositorFixture f;
+            f.Bind();
+            SECTION("native begin failure") {
+                const auto waited = f.compositor.Wait();
+                REQUIRE(waited.HasValue());
+                f.script.beginResult = XR_ERROR_RUNTIME_FAILURE;
+                REQUIRE_FALSE(f.compositor.Begin(waited.Value().frame).HasValue());
+                REQUIRE_FALSE(f.compositor.Wait().HasValue());
+                CHECK(f.frames.Snapshot().phase == XRFramePhase::Waited);
+                f.Recover();
+            }
+            SECTION("native end failure is not retried as successful") {
+                const auto frame = f.Begin();
+                REQUIRE(f.frames.Abort(frame) == XRFrameStatus::Ok);
+                f.script.endResult = XR_ERROR_RUNTIME_FAILURE;
+                REQUIRE_FALSE(f.compositor.EndEmpty(frame).HasValue());
+                REQUIRE_FALSE(f.compositor.EndEmpty(frame).HasValue());
+                CHECK(f.script.ends == 1);
+                f.Recover();
+            }
+        }
+
+        TEST_CASE("Native XR wrong-thread recovery cannot discard frame debt or close admission", "[unit][xr][compositor][lifecycle]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto frame = f.Begin();
+            const auto now = IdentityValue<XRRenderPredictionTime>(1);
+            bool rejectedReset{};
+            bool rejectedShutdown{};
+            bool rejectedObservation{};
+            std::thread foreign{[&] {
+                rejectedReset = f.compositor.ResetAfterQuiescence().HasError();
+                rejectedShutdown = f.compositor.BeginShutdown().HasError();
+                rejectedObservation = f.compositor.ObservePacing(frame, now).HasError();
+            }};
+            foreign.join();
+            REQUIRE(rejectedReset);
+            REQUIRE(rejectedShutdown);
+            REQUIRE(rejectedObservation);
+            CHECK(f.frames.Snapshot().frame == frame);
+            CHECK(f.script.ends == 0);
+            f.Empty(frame);
+            const auto next = f.Begin();
+            f.Empty(next);
+        }
+
+        TEST_CASE("Native XR logical replacement fences the outstanding native frame until quiescent recovery",
+                  "[unit][xr][compositor][lifecycle]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto frame = f.Begin();
+            const auto replacement =
+                f.sessions.Activate(f.native.capabilities, f.native.capabilities.System(), f.native.capabilities.Revision(), f.native.plan);
+            REQUIRE(replacement.HasValue());
+            REQUIRE(replacement.Value() != frame.session);
+            REQUIRE_FALSE(f.compositor.EndEmpty(frame).HasValue());
+            CHECK(f.script.ends == 0);
+            f.Recover();
+        }
+
+        TEST_CASE("Native XR shutdown closes waits while allowing the exact outstanding frame to retire", "[unit][xr][compositor]") {
+            CompositorFixture f;
+            f.Bind();
+            f.script.render = false;
+            const auto frame = f.Begin();
+            REQUIRE(f.compositor.BeginShutdown().HasValue());
+            REQUIRE_FALSE(f.compositor.Wait().HasValue());
+            REQUIRE(f.compositor.EndEmpty(frame).HasValue());
+            REQUIRE_FALSE(f.compositor.Wait().HasValue());
+            CHECK(f.script.waits == 1);
+            CHECK(f.script.ends == 1);
+        }
+    }  // namespace
+}  // namespace Horo::Tests::OpenXR

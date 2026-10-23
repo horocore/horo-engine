@@ -1,5 +1,7 @@
 #include "EditorUiTestSurface.h"
 
+#include "Horo/Runtime/Render/RenderFrontend.h"
+
 #include <imgui.h>
 #include <stdexcept>
 #include <string_view>
@@ -22,6 +24,11 @@ namespace Horo::Tests {
 
             [[nodiscard]] Math::ClipDepthRange ClipDepthRange() const noexcept override {
                 return Math::ClipDepthRange::NegativeOneToOne;
+            }
+
+            [[nodiscard]] Horo::Result<void> ExecutePreparedFrame(Horo::Render::RenderFrameScope &frame,
+                                                                  std::span<const Horo::Render::RenderPassDescriptor> passes) override {
+                return frame.Execute(passes);
             }
 
             [[nodiscard]] Result<void> ExecuteStaticMeshPass(const Render::StaticMeshPassDescriptor &) override {

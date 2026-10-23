@@ -198,6 +198,15 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::End */
     XRFrameStatus XRFrameLifecycle::End(const XRFrameId &frame, const std::uint32_t layerCount) noexcept {
+        if (const auto status = ValidateEnd(frame, layerCount); status != XRFrameStatus::Ok)
+            return status;
+        lastEnded_ = frame;
+        ClearFrame();
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::ValidateEnd */
+    XRFrameStatus XRFrameLifecycle::ValidateEnd(const XRFrameId &frame, const std::uint32_t layerCount) const noexcept {
         if (const XRFrameStatus valid = ValidateCurrent(frame); valid != XRFrameStatus::Ok)
             return valid;
         if (current_.phase == XRFramePhase::Waited)
@@ -217,9 +226,19 @@ namespace Horo::XR {
             return XRFrameStatus::OutOfOrder;
         }
 
-        lastEnded_ = frame;
-        ClearFrame();
         return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::ValidateReleasedImage */
+    XRFrameStatus XRFrameLifecycle::ValidateReleasedImage(const XRFrameId &frame, const XRSwapchainImageId &image) const noexcept {
+        if (const auto status = ValidateCurrent(frame); status != XRFrameStatus::Ok)
+            return status;
+        if (!image.IsValid())
+            return XRFrameStatus::InvalidInput;
+        const auto index = FindImage(image);
+        if (index == XRFrameHardLimits::MaximumImages)
+            return XRFrameStatus::ImageNotAcquired;
+        return released_[index] ? XRFrameStatus::Ok : XRFrameStatus::ImageNotReleased;
     }
 
     /** @copydoc XRFrameLifecycle::Snapshot */

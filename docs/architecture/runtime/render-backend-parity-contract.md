@@ -316,6 +316,18 @@ engine cancellation token at this stage without allocating a second cancellation
 source. The executor owns its draw-data
 and image leases through presentation or cancellation; it cannot present or
 select another backend. The stage shares the frame's render-thread affinity.
+The existing executor prepares a bounded frame-bound declaration of actually drawn
+frontend texture-view/sampler generations. `ComposeGui` resolves those generations,
+extends the same active completion lease (or acquires its first lease), and supplies
+one `GuiCompositionRequest` to the backend and executor. Borrowed-active-recording
+and explicit-Graphics-submission are typed modes; explicit identities come only
+from the frontend's existing submission allocator. The backend proves lease
+transfer before encoding; submitted resources remain pinned until native completion,
+including after abort. Unknown or stale image IDs fail before recording. The
+matching private GL/Metal adapter may recognize its exact current native-owned
+font atlas; that exemption never covers frontend images or arbitrary unknown IDs.
+The private viewport/GUI pair hands off its existing typed view generation on each
+composition, replacing it on resize and withdrawing it on close.
 This extends the established frame contract because calling the editor adapter
 directly bypassed lifecycle admission. HoroEditor and the interactive UI-test
 renderer migrate their direct calls to this stage; non-GUI hosts keep the existing

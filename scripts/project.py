@@ -2261,7 +2261,176 @@ def compatibility_main(argv=None) -> None:
         output.write_text(generated, encoding="utf-8")  # NOSONAR
 
 
-TOOL_COMMANDS = {'android': apk_main, 'extension-bootstrap': bootstrap_main, 'extension-ci': author_main, 'extension': scaffold_main, 'gameplay': gameplay_main, 'migrations': migration_main, 'compatibility': compatibility_main}
+
+IMGUI_VULKAN_SOURCE_SHA256 = "73e622f913e664a81452a90217622298f4eed28c4e6a3cbfb1b373f23652a73f"
+IMGUI_VULKAN_SIGNATURE = "void ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer command_buffer, VkPipeline pipeline)"
+IMGUI_VULKAN_END_MARKER = "bool ImGui_ImplVulkan_CreateFontsTexture()"
+IMGUI_VULKAN_BUFFER_RING = """    if (wrb->FrameRenderBuffers == nullptr)
+    {
+        wrb->Index = 0;
+        wrb->Count = v->ImageCount;
+        wrb->FrameRenderBuffers = (ImGui_ImplVulkan_FrameRenderBuffers*)IM_ALLOC(sizeof(ImGui_ImplVulkan_FrameRenderBuffers) * wrb->Count);
+        memset((void*)wrb->FrameRenderBuffers, 0, sizeof(ImGui_ImplVulkan_FrameRenderBuffers) * wrb->Count);
+    }
+    IM_ASSERT(wrb->Count == v->ImageCount);
+    wrb->Index = (wrb->Index + 1) % wrb->Count;"""
+IMGUI_VULKAN_BUFFER_GROWTH = """        if (rb->VertexBuffer == VK_NULL_HANDLE || rb->VertexBufferSize < vertex_size)
+            CreateOrResizeBuffer(rb->VertexBuffer, rb->VertexBufferMemory, rb->VertexBufferSize, vertex_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        if (rb->IndexBuffer == VK_NULL_HANDLE || rb->IndexBufferSize < index_size)
+            CreateOrResizeBuffer(rb->IndexBuffer, rb->IndexBufferMemory, rb->IndexBufferSize, index_size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);"""
+IMGUI_VULKAN_PREPARE = """
+// Horo adaptation: native buffer storage remains frontend-owned and budgeted.
+bool HoroImGuiVulkanPrepareSlots(uint32_t count)
+{
+    ImGui_ImplVulkan_Data* bd = ImGui_ImplVulkan_GetBackendData();
+    if (bd == nullptr || count == 0 || count > 8)
+        return false;
+    ImGui_ImplVulkan_WindowRenderBuffers* wrb = &bd->MainWindowRenderBuffers;
+    if (wrb->FrameRenderBuffers != nullptr)
+        return false;
+    wrb->FrameRenderBuffers = (ImGui_ImplVulkan_FrameRenderBuffers*)IM_ALLOC(sizeof(ImGui_ImplVulkan_FrameRenderBuffers) * count);
+    if (wrb->FrameRenderBuffers == nullptr)
+        return false;
+    wrb->Count = count;
+    memset((void*)wrb->FrameRenderBuffers, 0, sizeof(ImGui_ImplVulkan_FrameRenderBuffers) * count);
+    return true;
+}
+
+// Binding is permitted only for a canonical retired slot, before its encoder runs.
+bool HoroImGuiVulkanBindSlot(uint32_t slot, uint32_t count, VkBuffer vertices, VkDeviceMemory vertex_memory,
+                            VkDeviceSize vertex_bytes, VkBuffer indices, VkDeviceMemory index_memory, VkDeviceSize index_bytes)
+{
+    ImGui_ImplVulkan_Data* bd = ImGui_ImplVulkan_GetBackendData();
+    if (bd == nullptr || slot >= count || count != bd->MainWindowRenderBuffers.Count ||
+        !vertices || !vertex_memory || !vertex_bytes || !indices || !index_memory || !index_bytes)
+        return false;
+    ImGui_ImplVulkan_FrameRenderBuffers* rb = &bd->MainWindowRenderBuffers.FrameRenderBuffers[slot];
+    rb->VertexBuffer = vertices;
+    rb->VertexBufferMemory = vertex_memory;
+    rb->VertexBufferSize = vertex_bytes;
+    rb->IndexBuffer = indices;
+    rb->IndexBufferMemory = index_memory;
+    rb->IndexBufferSize = index_bytes;
+    return true;
+}
+
+// Detach borrowed native storage after drain, before upstream destroys its ring metadata.
+void HoroImGuiVulkanDetachSlots()
+{
+    ImGui_ImplVulkan_Data* bd = ImGui_ImplVulkan_GetBackendData();
+    if (bd == nullptr)
+        return;
+    ImGui_ImplVulkan_WindowRenderBuffers* wrb = &bd->MainWindowRenderBuffers;
+    if (wrb->FrameRenderBuffers != nullptr)
+        memset((void*)wrb->FrameRenderBuffers, 0, sizeof(ImGui_ImplVulkan_FrameRenderBuffers) * wrb->Count);
+}
+
+"""
+
+
+def imgui_vulkan_replace_once(text: str, old: str, new: str) -> str:
+    """Reject dependency drift or an ambiguous adaptation instead of silently patching it."""
+    if text.count(old) != 1:
+        raise ValueError("Pinned ImGui Vulkan adaptation site is absent or ambiguous")
+    return text.replace(old, new, 1)
+
+
+def imgui_vulkan_slots_transform(source: bytes) -> str:
+    """Preserve every unrelated source byte and adapt exactly the one audited encoder."""
+    if hashlib.sha256(source).hexdigest() != IMGUI_VULKAN_SOURCE_SHA256:
+        raise ValueError("ImGui Vulkan source differs from reviewed revision 993fa347495860ed44b83574254ef2a317d0c14f")
+    text = source.decode("utf-8")
+    if text.count(IMGUI_VULKAN_SIGNATURE) != 1 or text.count(IMGUI_VULKAN_END_MARKER) != 1:
+        raise ValueError("Pinned ImGui Vulkan function boundary changed")
+    start, end = text.index(IMGUI_VULKAN_SIGNATURE), text.index(IMGUI_VULKAN_END_MARKER)
+    function = text[start:end]
+    function = imgui_vulkan_replace_once(function, IMGUI_VULKAN_SIGNATURE,
+        "bool HoroImGuiVulkanRenderDrawDataForSlot(ImDrawData* draw_data, VkCommandBuffer command_buffer, uint32_t canonical_slot, uint32_t canonical_count, VkDescriptorSet (*resolve_texture)(ImTextureID, void*), void* texture_context, VkPipeline pipeline)")
+    function = imgui_vulkan_replace_once(function, "        return;", "        return true;")
+    function = imgui_vulkan_replace_once(function, IMGUI_VULKAN_BUFFER_RING, """    if (resolve_texture == nullptr || canonical_count == 0 || canonical_slot >= canonical_count ||
+        wrb->FrameRenderBuffers == nullptr || wrb->Count != canonical_count)
+        return false;
+    wrb->Index = canonical_slot;""")
+    function = imgui_vulkan_replace_once(function, "AlignBufferSize(draw_data->TotalVtxCount * sizeof(ImDrawVert), bd->BufferMemoryAlignment)",
+        "draw_data->TotalVtxCount * sizeof(ImDrawVert)")
+    function = imgui_vulkan_replace_once(function, "AlignBufferSize(draw_data->TotalIdxCount * sizeof(ImDrawIdx), bd->BufferMemoryAlignment)",
+        "draw_data->TotalIdxCount * sizeof(ImDrawIdx)")
+    flush_start = function.index("        VkMappedMemoryRange range[2] = {};")
+    flush_end = function.index("        vkUnmapMemory", flush_start)
+    function = function[:flush_start] + "        // Horo supplies host-coherent memory; no explicit flush is required.\n" + function[flush_end:]
+    function = imgui_vulkan_replace_once(function, """        check_vk_result(err);
+        err = vkMapMemory(v->Device, rb->IndexBufferMemory, 0, index_size, 0, (void**)&idx_dst);
+        check_vk_result(err);""", """        if (err != VK_SUCCESS)
+            return false;
+        err = vkMapMemory(v->Device, rb->IndexBufferMemory, 0, index_size, 0, (void**)&idx_dst);
+        if (err != VK_SUCCESS)
+        {
+            vkUnmapMemory(v->Device, rb->VertexBufferMemory);
+            return false;
+        }""")
+    function = imgui_vulkan_replace_once(function, IMGUI_VULKAN_BUFFER_GROWTH, """        if (rb->VertexBuffer == VK_NULL_HANDLE || rb->VertexBufferSize < vertex_size ||
+            rb->IndexBuffer == VK_NULL_HANDLE || rb->IndexBufferSize < index_size)
+            return false;""")
+    function = imgui_vulkan_replace_once(function, "                VkDescriptorSet desc_set = (VkDescriptorSet)pcmd->GetTexID();", """                VkDescriptorSet desc_set = resolve_texture(pcmd->GetTexID(), texture_context);
+                if (desc_set == VK_NULL_HANDLE)
+                {
+                    platform_io.Renderer_RenderState = nullptr;
+                    return false;
+                }""")
+    close = function.rfind("}")
+    if close < 0 or function[close + 1:].strip():
+        raise ValueError("Pinned ImGui Vulkan function tail changed")
+    function = function[:close] + "    return true;\n" + function[close:]
+    return text[:start] + function + IMGUI_VULKAN_PREPARE + text[end:]
+
+
+def imgui_vulkan_slots_main(argv=None) -> None:
+    """Write only an independent generated build source, never the fetched dependency tree."""
+    parser = argparse.ArgumentParser(description="Prepare the pinned ImGui Vulkan encoder for canonical retired slots")
+    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    source, output = args.source.resolve(), args.output.resolve()
+    if output.is_relative_to(source.parent.parent):
+        parser.error("Output must be outside the fetched ImGui source tree")
+    generated = imgui_vulkan_slots_transform(source.read_bytes())
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(generated, encoding="utf-8", newline="")
+
+
+def verify_shader_tool_executable(root: Path, relative_path: str, digest: str) -> Path:
+    """Verify the catalog-selected executable without escaping its extracted artifact root."""
+    if (not relative_path or "\\" in relative_path or ":" in relative_path or
+            any(part in ("", ".", "..") for part in relative_path.split("/"))):
+        raise ValueError("Shader tool path must be a confined relative POSIX path")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+        raise ValueError("Shader tool digest must be a canonical SHA-256")
+    root = root.resolve(strict=True)
+    executable = (root / relative_path).resolve(strict=True)
+    if not root.is_dir() or not executable.is_relative_to(root) or not executable.is_file():
+        raise ValueError("Shader tool executable escapes the extracted artifact root")
+    if not os.access(executable, os.X_OK) or executable.stat().st_size > MAXIMUM_FILE:
+        raise ValueError("Shader tool executable is not executable or exceeds the size bound")
+    actual = hashlib.sha256()
+    with executable.open("rb") as source:
+        while block := source.read(1024 * 1024):
+            actual.update(block)
+    if actual.hexdigest() != digest.removeprefix("sha256:"):
+        raise ValueError("Shader tool executable does not match its reviewed digest")
+    return executable
+
+
+def verify_shader_tool_main(argv=None) -> None:
+    """Print only the verified catalog-selected executable for the qualification host."""
+    parser = argparse.ArgumentParser(description="Verify a locked extracted shader tool")
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--relative-path", required=True)
+    parser.add_argument("--sha256", required=True)
+    args = parser.parse_args(argv)
+    print(verify_shader_tool_executable(args.root, args.relative_path, args.sha256))
+
+
+TOOL_COMMANDS = {'verify-shader-tool': verify_shader_tool_main, 'imgui-vulkan-slots': imgui_vulkan_slots_main, 'android': apk_main, 'extension-bootstrap': bootstrap_main, 'extension-ci': author_main, 'extension': scaffold_main, 'gameplay': gameplay_main, 'migrations': migration_main, 'compatibility': compatibility_main}
 
 
 def main(argv=None) -> int:

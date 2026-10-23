@@ -8,6 +8,7 @@ add_test(NAME HoroSaveObservabilityDependencyPolicyTest
     "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"
     -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveObservabilityDependencyPolicyTest.cmake")
 set_tests_properties(HoroSaveObservabilityDependencyPolicyTest PROPERTIES LABELS "unit;save;architecture")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroProtobufCoverageTests.cmake")
 include(Catch)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroCiSuites.cmake")
 
@@ -1496,7 +1497,7 @@ horo_register_catch_test(HoroXRActionBindingTests LABELS "unit;xr;input;headless
 
 if(HORO_BUILD_XR_OPENXR)
     add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRActionBindingsTests.cpp
-        unit/runtime/xr/OpenXRSwapchainTests.cpp)
+        unit/runtime/xr/OpenXRSwapchainTests.cpp unit/runtime/xr/OpenXRFrameCompositorTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
@@ -2267,6 +2268,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/AssetImportSourcePreviewTests.cpp
             unit/editor/ScreenViewPresentationTests.cpp
             unit/editor/EditorThemeBehaviorTests.cpp
+            unit/editor/EditorGuiCompositionTests.cpp
     )
     target_compile_features(HoroEditorPresentationTests PRIVATE cxx_std_20)
     target_include_directories(HoroEditorPresentationTests PRIVATE
@@ -2933,7 +2935,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroGlobalDockPanelRenderTests PRIVATE cxx_std_20)
     target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp
         ../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)
-    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::RenderApi)
+    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::RenderApi HoroEngine::RenderFrontend)
     target_include_directories(HoroGlobalDockPanelRenderTests PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
@@ -3001,6 +3003,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     target_link_libraries(HoroViewportPanelRenderTests
             PRIVATE
+            HoroEngine::RenderFrontend
             HoroEngine::Gui
             HoroThirdParty::ImGui
     )
@@ -3382,6 +3385,10 @@ target_link_libraries(HoroEditorViewportResourceTests
         HoroEngine::RenderNull
 )
 
+add_executable(HoroViewportOverlayTriangleTests unit/editor/ViewportOverlayTriangleTests.cpp)
+target_link_libraries(HoroViewportOverlayTriangleTests PRIVATE HoroEngine::EditorViewportScene HoroEditorTestInternals)
+horo_register_catch_test(HoroViewportOverlayTriangleTests LABELS "unit;editor;renderer;headless")
+
 # White-box editor tests opt into implementation headers explicitly. Keep this
 # non-installed test interface separate from every production usage requirement;
 # legacy editor/... include spellings require the source root until those tests
@@ -3600,6 +3607,11 @@ add_executable(HoroShaderCompilerPipelineTests
 target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform)
+add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp)
+target_compile_features(HoroShaderReflectionCookTests PRIVATE cxx_std_20)
+target_link_libraries(HoroShaderReflectionCookTests PRIVATE HoroEditorVulkanShaderInternal)
+horo_register_catch_test(HoroShaderReflectionCookTests LABELS "unit;renderer;shader;headless")
+
 add_executable(HoroRenderFrontendTests
         support/AllocationProbe.cpp
         unit/runtime/renderer/RenderParallelWorkTests.cpp
@@ -3608,9 +3620,11 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderGraphTransientResourceTests.cpp
         unit/runtime/renderer/RenderGraphTransientReservationTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
+        unit/runtime/renderer/RenderSubmissionAllocatorTests.cpp
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
         unit/runtime/renderer/RenderFrontendLifecycleTests.cpp
+            unit/runtime/renderer/RenderFrontendGuiCompositionTests.cpp
         unit/runtime/renderer/RenderFrontendPresentationTests.cpp
         unit/runtime/renderer/RenderFrontendRecoveryTests.cpp
         unit/runtime/renderer/RenderFrontendTerrainGraphTests.cpp
@@ -5210,11 +5224,14 @@ horo_register_catch_test(HoroD3D12InitializationTests LABELS "native;renderer;d3
 
 if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests
+        unit/runtime/renderer/VulkanPresentationRuntimeTests.cpp
+        unit/runtime/renderer/VulkanPresentationBackendTests.cpp
             unit/runtime/renderer/VulkanRenderBackendTests.cpp
             unit/runtime/renderer/VulkanResourceRuntimeTests.cpp
             unit/runtime/renderer/VulkanShaderRuntimeTests.cpp
             unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
             unit/runtime/renderer/VulkanGraphRuntimeTests.cpp
+            unit/runtime/renderer/VulkanGuiCommandTests.cpp
             unit/runtime/renderer/VulkanExternalImageTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
@@ -5254,6 +5271,19 @@ if (HORO_BUILD_RENDER_VULKAN)
                 LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE
                 FAIL_REGULAR_EXPRESSION "Validation Error;VUID-")
     endif ()
+endif ()
+
+# Native editor qualification consumes the same host-owned Vulkan GUI/viewport pair.
+# Platform admission remains intact; macOS cannot qualify this backend via a guard bypass.
+if (HORO_ENABLE_GPU_SMOKE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET HoroEditorVulkanGuiInternal)
+    add_executable(HoroEditorVulkanPresentationSmoke
+        integration/renderer/EditorVulkanPresentationSmoke.cpp
+        ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorVulkanShaderAssets.cpp)
+    target_include_directories(HoroEditorVulkanPresentationSmoke PRIVATE
+        ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app)
+    target_link_libraries(HoroEditorVulkanPresentationSmoke PRIVATE
+        HoroEditorVulkanGuiInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+    horo_register_catch_test(HoroEditorVulkanPresentationSmoke LABELS "native;renderer;vulkan;gui;qualification")
 endif ()
 
 set(HORO_CATCH_TEST_TARGETS

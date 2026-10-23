@@ -310,6 +310,29 @@ namespace Horo::Render {
                 CompleteActiveFrame();
             }
 
+            /** @copydoc IRenderBackend::PrepareGuiComposition */
+            Result<void> PrepareGuiComposition(const GuiCompositionRequest &request) override {
+                if (!IsOwnerThread())
+                    return WrongThread<void>();
+                if (const auto frame = ValidateActiveFrame(request.frame); frame.HasError())
+                    return frame;
+                if (request.mode != GuiCompositionMode::BorrowedActiveRecording || request.submission.has_value() ||
+                    !request.buffers.empty() ||
+                    std::ranges::any_of(request.resources,
+                                        [](const GuiSampledResourceInstance &sample) {
+                    return sample.uploadSource != 0;
+                }) ||
+                    request.resources.size() > GuiCompositionPreparation::MaximumResources ||
+                    (!request.resources.empty() && request.lease == nullptr))
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+                if (request.lease != nullptr) {
+                    if (request.transfer == nullptr || !execution_.RetainFrameLease(activeFrameSlot_, *request.lease))
+                        return SynchronizationFailure<void>();
+                    request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
+                }
+                return Result<void>::Success();
+            }
+
             /** @copydoc IRenderBackend::Resize */
             Result<void> Resize(const FramebufferExtent extent) override {
                 if (!IsOwnerThread())

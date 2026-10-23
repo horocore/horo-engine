@@ -283,4 +283,39 @@ namespace {
         REQUIRE(runtime.QueryTextureMemoryCost(colorDescriptor).HasError());
     }
 
+    TEST_CASE("Vulkan retired frame writes admit exact vertex bytes without widening other buffer usages", "[renderer][vulkan][resource]") {
+        NativeResourceScope native;
+        Detail::VulkanResourceRuntime runtime;
+        InitializeNativeResourceRuntime(runtime);
+        auto descriptor = HostVisibleVertexBuffer();
+        bool admitted = true;
+        SECTION("Uniform") {
+            descriptor.usage = RenderBufferUsage::Uniform;
+        }
+        SECTION("Vertex") {}
+        SECTION("Index") {
+            descriptor.usage = RenderBufferUsage::Index;
+            admitted = false;
+        }
+        SECTION("Mixed vertex and index") {
+            descriptor.usage = RenderBufferUsage::Vertex | RenderBufferUsage::Index;
+            admitted = false;
+        }
+        SECTION("Device local") {
+            descriptor.access = RenderBufferAccess::DeviceLocal;
+            admitted = false;
+        }
+        const auto cost = runtime.QueryBufferMemoryCost(descriptor);
+        REQUIRE(cost.HasValue());
+        const auto buffer = runtime.CreateBuffer(descriptor, {}, TestSupport::PlacementFor(cost.Value(), 1));
+        REQUIRE(buffer.HasValue());
+        std::array<std::byte, 64> bytes;
+        bytes.fill(std::byte{0x37});
+        CHECK(runtime.WriteHostFrameBuffer(buffer.Value(), bytes).HasValue() == admitted);
+        if (admitted)
+            CHECK(std::ranges::equal(std::span{native.state.mapped}.first(bytes.size()), bytes));
+        CHECK(runtime.WriteHostFrameBuffer(buffer.Value(), std::span{bytes}.first(63)).HasError());
+        runtime.DestroyBuffer(buffer.Value());
+        CHECK(runtime.WriteHostFrameBuffer(buffer.Value(), bytes).HasError());
+    }
 }  // namespace

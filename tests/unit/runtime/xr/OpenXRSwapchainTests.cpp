@@ -97,6 +97,23 @@ namespace Horo::Tests::OpenXR {
         };
     }  // namespace
 
+    TEST_CASE("OpenXR compositor borrow requires latest completed release and fences replacement", "[unit][xr][native][swapchain]") {
+        SwapchainFixture f;
+        f.Create();
+        const auto acquired = f.Import();
+        REQUIRE_FALSE(f.owner.BorrowReleased(acquired.image).HasValue());
+        REQUIRE_FALSE(f.owner.PollRelease().Value());
+        REQUIRE_FALSE(f.owner.BorrowReleased(acquired.image).HasValue());
+        f.images.complete = true;
+        REQUIRE(f.owner.PollRelease().Value());
+        REQUIRE(f.owner.BorrowReleased(acquired.image).HasValue());
+        REQUIRE(f.owner.Close().Value());
+        REQUIRE_FALSE(f.owner.BorrowReleased(acquired.image).HasValue());
+        ++f.request.target.slot.generation;
+        f.Create();
+        REQUIRE_FALSE(f.owner.BorrowReleased(acquired.image).HasValue());
+    }
+
     TEST_CASE("OpenXR enumeration context forwards captured state and exact native output", "[unit][xr][native][swapchain]") {
         const auto native = NativeHandle<XrSwapchain>(1);
         std::uint32_t calls{};

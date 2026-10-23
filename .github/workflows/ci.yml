@@ -65,6 +65,11 @@ jobs:
       - name: Check C++ formatting
         run: python3 scripts/dev.py format --check
 
+      - name: Test Protobuf coverage scope contracts
+        run: |
+          cmake -S tests/cmake/protobuf_coverage -B build/protobuf-coverage
+          ctest --test-dir build/protobuf-coverage --output-on-failure --no-tests=error
+
       - name: Test Python tooling
         run: pytest tests/python/
 
@@ -111,7 +116,7 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          - os: ubuntu-24.04
+          - os: ubuntu-26.04
             preset: ci-linux-debug
             cc: gcc
             cxx: g++
@@ -145,7 +150,8 @@ jobs:
       - name: Configure focused headless Vulkan composition
         run: >-
           cmake --preset "${{ matrix.preset }}"
-          -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=OFF
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
           -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
           -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
           -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
@@ -155,6 +161,40 @@ jobs:
           HoroMultiviewSceneExtractionTests HoroMultiviewSceneExtractionPublicHeaderConsumer HoroXRApiTests HoroXROpenXRTests
           HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingTests HoroMaterialBindingPublicHeaderConsumer
           HoroRenderGraphTests HoroRenderFrontendTests HoroRenderBackendRegistryTests HoroXROpenXRHostInterfaceConsumer --parallel 2
+      - name: Build the matching Vulkan editor composition
+        if: runner.os == 'Linux'
+        run: |
+          cmake --build build/ci --target HoroEditor HoroEditorVulkanShaderCook \
+            HoroShaderReflectionCookTests HoroEditorVulkanPresentationSmoke \
+            HoroRenderFrontendPublicHeaderConsumer HoroRenderApiPublicHeaderConsumer --parallel 2
+          python3 - <<'PYCODE'
+          import json
+          from pathlib import Path
+          commands = json.loads(Path("build/ci/compile_commands.json").read_text())
+          sources = [Path(entry["file"]).as_posix() for entry in commands]
+          required = {
+              "src/runtime/renderer/modules/vulkan/VulkanPresentationRuntime.cpp",
+              "src/runtime/renderer/modules/vulkan/VulkanGuiCommands.cpp",
+              "src/editor/renderer/vulkan/EditorGuiRendererVulkan.cpp",
+              "src/editor/renderer/vulkan/EditorViewportRendererVulkan.cpp",
+              "tests/integration/renderer/EditorVulkanPresentationSmoke.cpp",
+          }
+          missing = [name for name in required if not any(source.endswith(name) for source in sources)]
+          if missing:
+              raise SystemExit(f"Native Vulkan translation units missing from the actual compile database: {missing}")
+          PYCODE
+      - name: Cook the viewport with the canonical locked tools
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/cook-vulkan-viewport
+        with:
+          asset-root: ${{ github.workspace }}/build/ci/native-editor-assets
+      - name: Stage the canonical viewport assets for the editor
+        if: runner.os == 'Linux'
+        run: |
+          asset_root="$GITHUB_WORKSPACE/build/ci/native-editor-assets"
+          editor_asset_root="$(cat build/ci/apps/HoroEditorAssetRoot-Debug.txt)"
+          cmake -E copy_directory "$asset_root" "$editor_asset_root"
+          printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$editor_asset_root" >> "$GITHUB_ENV"
       - name: Build Vulkan command smoke
         if: runner.os == 'Linux'
         run: cmake --build build/ci --target HoroVulkanCommandExecutionSmoke --parallel 2
@@ -189,6 +229,19 @@ jobs:
         run: >-
           ctest --test-dir build/ci --no-tests=error --output-on-failure
           --timeout 90 -R '^HoroVulkanCommandExecutionSmoke$' --output-junit vulkan-commands.xml
+      - name: Qualify the real Vulkan GUI and WSI pair
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci/vulkan-editor-evidence
+          vulkaninfo --summary > build/ci/vulkan-editor-evidence/driver.txt
+          cp "$RUNNER_TEMP/viewport-cook-tools/catalog.tsv" build/ci/vulkan-editor-evidence/
+          xvfb-run -a ctest --test-dir build/ci --no-tests=error --verbose --parallel 1 --timeout 30 \
+            -R '^(HoroEditorVulkanPresentationSmoke::|HoroShaderReflectionCookTests::)' \
+            --output-junit vulkan-editor.xml 2>&1 | tee build/ci/vulkan-editor-evidence/native.log
+          if grep -E 'Validation (Error|Warning)|VUID-' build/ci/vulkan-editor-evidence/native.log; then
+            exit 1
+          fi
       - name: Upload shader test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -196,6 +249,9 @@ jobs:
           name: shader-results-${{ runner.os }}
           path: |
             build/ci/*.xml
+            build/ci/vulkan-editor-evidence/
+            build/ci/native-editor-assets/
+            build/ci/compile_commands.json
             build/ci/Testing/Temporary/LastTest.log
           if-no-files-found: warn
 

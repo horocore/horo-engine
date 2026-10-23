@@ -82,8 +82,14 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Retain(VulkanCommandTicket ticket, VulkanCommandRetention &retention);
         /** @brief Validates a complete exact batch against currently admitted timelines without mutation or allocation. */
         [[nodiscard]] Result<void> ValidateBatch(std::span<const RenderGraphQueueSubmission> records) const;
-        /** @brief Submits one executable ticket with exact globally ordered GPU waits and signal; never CPU-waits. */
-        [[nodiscard]] Result<void> Submit(VulkanCommandTicket ticket, const RenderQueueSubmission &submission);
+        /** @brief Submits an executable ticket through the canonical ordered timeline, optionally signaling its WSI tail.
+         * @param ticket Exact executable command owner. @param submission Frontend-issued queue/order/waits/completion.
+         * @param presentationSignal Borrowed binary semaphore owned by the acquired swapchain image; null for offscreen work.
+         * @return Typed admission/native outcome; failure retains the unsent ticket and never publishes completion.
+         * @details The WSI owner proves binary semaphore retirement independently of the canonical timeline. No wait occurs.
+         */
+        [[nodiscard]] Result<void> Submit(VulkanCommandTicket ticket, const RenderQueueSubmission &submission,
+                                          VkSemaphore presentationSignal = VK_NULL_HANDLE);
         /** @brief Nonblocking completion drain; releases only proven-complete command and resident references. */
         [[nodiscard]] Result<void> Poll();
         /** @brief Observes exact admitted completion; only declared finite purposes may block. */

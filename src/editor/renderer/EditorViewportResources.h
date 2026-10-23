@@ -16,6 +16,8 @@ namespace Horo::Editor {
         Render::RenderTextureFormat depthFormat{Render::RenderTextureFormat::Depth32Float};
         Render::RenderTextureAspect depthAspect{Render::RenderTextureAspect::Depth};
         EditorViewportImageResolver resolveImage{nullptr};
+        Render::RenderBufferAccess meshBufferAccess{Render::RenderBufferAccess::DeviceLocal};
+        bool prepareDirectionalShadow{true}; /**< Allocate only attachments actually consumed by the selected viewport recipe. */
     };
 
     /** @brief Owns frontend-backed viewport resources and atomic replacement state. */
@@ -36,6 +38,10 @@ namespace Horo::Editor {
         [[nodiscard]] Render::RenderTargetHandle Target() const noexcept;
         [[nodiscard]] Render::RenderTargetHandle ShadowTarget() const noexcept;
         [[nodiscard]] Render::RenderTextureViewHandle ShadowTextureView() const noexcept;
+        /** @brief Exact current color view borrowed by the matching GUI composition. */
+        [[nodiscard]] Render::RenderTextureViewHandle ColorTextureView() const noexcept;
+        /** @brief Exact existing color storage, borrowed to compile a clear recipe at its resource boundary. */
+        [[nodiscard]] Render::RenderTextureHandle ColorTexture() const noexcept;
         [[nodiscard]] EditorViewportExtent AllocatedExtent() const noexcept;
         [[nodiscard]] std::uintptr_t ImageIdentity() const noexcept;
         [[nodiscard]] bool IsReady() const noexcept;

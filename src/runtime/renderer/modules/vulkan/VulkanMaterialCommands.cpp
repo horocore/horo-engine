@@ -271,11 +271,9 @@ namespace Horo::Render::Detail {
         const RenderGraphQueueSubmission record{*request.submission, {0, 1}};
         if (auto timelines = impl_->commands.ValidateBatch(std::span{&record, 1}); timelines.HasError())
             return timelines;
-        auto pins = std::ranges::find_if(impl_->retention, [](const auto &entry) {
-            return entry.references == 0;
-        });
-        if (pins == impl_->retention.end())
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
+        auto *pins = impl_->lifecycle.pins;
+        if (pins == nullptr || pins->references != 0 || pins->lease != nullptr)
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         pins->resources.clear();
         if (auto prepared = impl_->PrepareMaterial(request, *pins); prepared.HasError()) {
             pins->resources.clear();
