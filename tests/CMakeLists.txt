@@ -8,6 +8,7 @@ add_test(NAME HoroSaveObservabilityDependencyPolicyTest
     "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"
     -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveObservabilityDependencyPolicyTest.cmake")
 set_tests_properties(HoroSaveObservabilityDependencyPolicyTest PROPERTIES LABELS "unit;save;architecture")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroProtobufCoverageTests.cmake")
 include(Catch)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroCiSuites.cmake")
 

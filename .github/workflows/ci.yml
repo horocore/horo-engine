@@ -65,6 +65,11 @@ jobs:
       - name: Check C++ formatting
         run: python3 scripts/dev.py format --check
 
+      - name: Test Protobuf coverage scope contracts
+        run: |
+          cmake -S tests/cmake/protobuf_coverage -B build/protobuf-coverage
+          ctest --test-dir build/protobuf-coverage --output-on-failure --no-tests=error
+
       - name: Test Python tooling
         run: pytest tests/python/
 
