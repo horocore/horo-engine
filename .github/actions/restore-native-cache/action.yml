@@ -132,7 +132,6 @@ runs:
     - name: Restore optional public compiler checkpoint
       if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug'
       continue-on-error: true
-      timeout-minutes: 3
       shell: bash
       env:
         COMPILER_NAMESPACE: native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-

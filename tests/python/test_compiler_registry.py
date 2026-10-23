@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import json
+import re
 from pathlib import Path
 import shutil
 import sys
@@ -271,3 +272,15 @@ def test_destination_symlink_cannot_mutate_outside(tmp_path):
 def test_windows_operational_names_rejected(name):
     with pytest.raises(ValueError):
         compiler.entry_name(name)
+
+
+def test_composite_step_schema_excludes_workflow_only_properties():
+    root = Path(__file__).resolve().parents[2]
+    action = (root / ".github/actions/restore-native-cache/action.yml").read_text(encoding="utf-8")
+    # GitHub validates composite metadata before any step condition is evaluated.
+    # These are step properties; nested env/with keys have deeper indentation.
+    properties = set(re.findall(r"^    (?:- |  )([a-z-]+):", action, re.MULTILINE))
+    allowed = {"name", "id", "if", "run", "shell", "uses", "with", "env",
+               "working-directory", "continue-on-error"}
+    assert properties <= allowed
+    assert "timeout-minutes" not in properties
