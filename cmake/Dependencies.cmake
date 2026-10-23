@@ -288,9 +288,8 @@ set(HB_HAVE_CORETEXT OFF CACHE BOOL "" FORCE)
 set(HB_HAVE_GOBJECT OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     harfbuzz
-    GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git
-    GIT_TAG "${HORO_HARFBUZZ_REVISION}"
-    GIT_SHALLOW TRUE
+    URL https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/${HORO_HARFBUZZ_REVISION}
+    URL_HASH SHA256=6af13e0f154d52a60328a278de00cab26277a616958173a129d91d8f2e8e0284
 )
 FetchContent_MakeAvailable(harfbuzz)
 
@@ -351,9 +350,8 @@ endif()
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     CURL
-    GIT_REPOSITORY https://github.com/curl/curl.git
-    GIT_TAG "${HORO_CURL_REVISION}"
-    GIT_SHALLOW TRUE
+    URL https://codeload.github.com/curl/curl/tar.gz/${HORO_CURL_REVISION}
+    URL_HASH SHA256=1bbcbe03719ffd2293b8c71903ef977efcd1f7133255264e4c42171e50ccae68
 )
 FetchContent_MakeAvailable(CURL)
 set(BUILD_TESTING "${_HORO_BUILD_TESTING}" CACHE BOOL "" FORCE)
@@ -424,6 +422,8 @@ if(HORO_BUILD_EDITOR_GUI OR HORO_BUILD_AUDIO_SDL3 OR HORO_BUILD_INPUT_SDL3 OR
     set(HORO_SDL3_REVISION
         "f87239e71e42da91ca317a12eefb82cfbf3393eb"
     )
+    # Archive builds have no Git metadata; retain an exact source revision.
+    set(SDL_REVISION "SDL-${HORO_SDL3_REVISION}" CACHE STRING "Pinned SDL revision" FORCE)
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON CACHE BOOL "" FORCE)
     set(SDL_TEST OFF CACHE BOOL "" FORCE)
@@ -431,8 +431,8 @@ if(HORO_BUILD_EDITOR_GUI OR HORO_BUILD_AUDIO_SDL3 OR HORO_BUILD_INPUT_SDL3 OR
 
     FetchContent_Declare(
         SDL3
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG "${HORO_SDL3_REVISION}"
+        URL https://codeload.github.com/libsdl-org/SDL/tar.gz/${HORO_SDL3_REVISION}
+        URL_HASH SHA256=363ab3eb2225d700bf0b67bc16349f9949125c747ac50da3ba805c2d3a61b2a0
     )
     FetchContent_MakeAvailable(SDL3)
 
