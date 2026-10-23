@@ -55,10 +55,8 @@ jobs:
             .cmake/fetchcontent/*-src
             .cmake/fetchcontent/*-subbuild
           # Cache fetched sources and download metadata, never coverage objects or build trees.
-          key: sonar-v3-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/Horo*Dependency.cmake') }}
-          restore-keys: |
-            sonar-v3-deps-${{ runner.os }}-${{ runner.arch }}-
-            sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-
+          # Disconnected FetchContent cannot safely update an arbitrary old pin.
+          key: sonar-v4-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'cmake/Dependencies.cmake', 'cmake/*Dependency.cmake', 'cmake/Horo*DependencyPolicy.cmake', 'cmake/HoroGnsProtobufConfig.cmake') }}
 
       - name: Restore compiler cache
         id: compiler

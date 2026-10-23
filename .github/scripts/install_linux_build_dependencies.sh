@@ -4,7 +4,7 @@
 set -euo pipefail
 
 packages=(
-  ninja-build ccache unzip python3-venv xvfb xauth libssl-dev
+  ninja-build ccache lld unzip python3-venv xvfb xauth libssl-dev
   libwayland-dev wayland-protocols libxkbcommon-dev
   libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
   libxext-dev libxss-dev libxtst-dev libxxf86vm-dev

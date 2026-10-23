@@ -2,7 +2,7 @@
   "version": 6,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 25,
+    "minor": 29,
     "patch": 0
   },
   "configurePresets": [
@@ -53,7 +53,11 @@
         "rhs": "Linux"
       },
       "cacheVariables": {
-        "HORO_BUILD_RENDER_METAL": "OFF"
+        "HORO_BUILD_RENDER_METAL": "OFF",
+        "CMAKE_LINKER_TYPE": "LLD",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,--threads=2",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--threads=2",
+        "CMAKE_MODULE_LINKER_FLAGS": "-Wl,--threads=2"
       }
     },
     {

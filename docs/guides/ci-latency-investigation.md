@@ -41,8 +41,8 @@ attributing all PR cache misses to the cache storage model.
 ## First change: bound package acquisition
 
 `setup-build-tools` delegates Linux installation to
-`.github/scripts/install_linux_build_dependencies.sh`. The package list is
-unchanged. The script uses invocation-local Ubuntu sources and package indexes,
+`.github/scripts/install_linux_build_dependencies.sh`. The original package list is
+preserved; the subsequent Linux linker experiment additionally installs `lld`. The script uses invocation-local Ubuntu sources and package indexes,
 retains Ubuntu signature/hash validation, and tries the official archive before
 the Azure mirror. Each mirror has a 45-second index budget and a 90-second
 archive-download budget, with a 10-second termination grace per timed operation.
@@ -105,6 +105,32 @@ Release audio compilation now uses two workers, matching the bounded auxiliary
 builds. Its real-time tests continue to use one worker. The effect on memory and
 runtime must be checked on all three hosted platforms.
 
+## Linux linker qualification
+
+The Linux Debug preset (and inherited Sonar preset) selects CMake's `LLD` linker
+and caps each executable/shared/module link to two threads. GCC, coverage flags,
+optimization modes and test selectors remain unchanged. Other platform linkers
+and the headless auxiliary presets retain their existing defaults. The CI preset
+file now requires CMake 3.29, which introduced `CMAKE_LINKER_TYPE`; the project's
+ordinary non-preset build requirement is unchanged. The inspected hosted images
+provide newer CMake versions.
+
+The earlier Sonar build performed 787 link operations and still took nine minutes
+with 98.75% compiler-cache hits. This motivates measuring LLD, but does not prove
+that linking accounts for all nine minutes. Ubuntu probes compile and execute
+coverage-instrumented static/shared-library consumers and dynamically loaded
+modules through the real preset's linker settings, verify the LLD marker in the
+ELF files, and check concurrent GCC counters with both BFD and LLD. Five probes
+passed on Ubuntu 24.04 amd64 (emulated, one CPU/1 GiB). This is compatibility
+validation, not an engine performance result; full hosted qualification remains
+required before adopting the change.
+
+Dependency cache identities now include `SourceEditorWidgetDependency.cmake` as
+well as Horo-prefixed helpers. Sonar restores only exact declaration/default keys:
+a broad old-revision fallback is incompatible with disconnected FetchContent's
+ability to fetch newly pinned commits. These changes protect pin validity; they
+do not solve the cache capacity problem by themselves.
+
 ## OSS capacity and concurrent PRs
 
 The design uses standard public-repository runners. As checked on 2026-10-23,
@@ -129,6 +155,25 @@ Measure queue delay separately from execution time. Ten macOS jobs need at least
 two waves under a five-slot limit, even if every job executes within 15 minutes.
 Paid larger runners, larger cache quotas and repository-wide cache deletion are
 not part of this change. PRs do not publish duplicate dependency/compiler caches.
+
+## Observed cache pressure
+
+On 2026-10-23, the Actions cache listing contained five entries totaling
+10,156,320,046 bytes: Linux/macOS compiler snapshots, two Windows compiler
+snapshots, and one macOS dependency snapshot. The two Windows snapshots alone
+used 4,297,053,643 bytes. Previously observed Sonar compiler, dependency and
+scanner entries were no longer listed. This is consistent with capacity-driven
+eviction; the listing alone does not identify who removed an entry or prove the
+configured repository quota. The cache usage endpoint's count was inconsistent
+with the listing, so use enumerated entries rather than that count.
+
+Budget against the free 10 GB allocation until a different quota is verified.
+Per-run immutable main compiler keys can retain duplicate platform snapshots and
+crowd out other platforms. Full fetched Git histories also consume substantial
+space: the local source clones held about 1 GB of Git metadata. A sustainable
+policy must bound retained main snapshots and reduce dependency-cache payloads;
+raising each cache limit or adding PR writers would amplify the problem. No
+existing cache was manually deleted during this investigation.
 
 ## Remaining work and acceptance
 

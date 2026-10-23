@@ -689,3 +689,13 @@ def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:
     assert "profile: [qualification-debug, qualification-release]" in android
     assert preset("buildPresets", "ci-audio-release")["jobs"] == 2
     assert preset("testPresets", "ci-audio-release")["execution"]["jobs"] == 1
+
+
+def test_linux_linker_is_explicit_and_bounded_without_changing_other_platforms() -> None:
+    assert PRESETS["cmakeMinimumRequired"] == {"major": 3, "minor": 29, "patch": 0}
+    linux = preset("configurePresets", "ci-linux-debug")["cacheVariables"]
+    assert linux["CMAKE_LINKER_TYPE"] == "LLD"
+    for kind in ("EXE", "SHARED", "MODULE"):
+        assert linux[f"CMAKE_{kind}_LINKER_FLAGS"] == "-Wl,--threads=2"
+    for name in ("ci-base", "ci-native-debug", "ci-macos-debug", "ci-windows-debug"):
+        assert "CMAKE_LINKER_TYPE" not in preset("configurePresets", name)["cacheVariables"]
