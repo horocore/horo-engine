@@ -207,7 +207,7 @@ namespace {
             auto foreignDocument = std::move(foreign).Value();
             const auto foreignResult = foreignDocument.Execute(operation);
             REQUIRE(foreignResult.HasError());
-            REQUIRE(foreignResult.ErrorValue().code == TerrainEditErrors::WrongDocument.code);
+            REQUIRE(foreignResult.ErrorValue().code.Value() == TerrainEditErrors::WrongDocument.code.Value());
             REQUIRE(foreignDocument.Source().holes == original.holes);
             REQUIRE(foreignDocument.Source().heightsMeters == original.heightsMeters);
             REQUIRE(foreignDocument.Source().weights == original.weights);
@@ -218,10 +218,10 @@ namespace {
             const auto state = document.State();
             const auto rejected = document.Execute(operation);
             REQUIRE(rejected.HasError());
-            REQUIRE(rejected.ErrorValue().code == TerrainEditErrors::StaleRevision.code);
+            REQUIRE(rejected.ErrorValue().code.Value() == TerrainEditErrors::StaleRevision.code.Value());
             const auto staleUndo = document.Undo(operation.fence);
             REQUIRE(staleUndo.HasError());
-            REQUIRE(staleUndo.ErrorValue().code == TerrainEditErrors::StaleRevision.code);
+            REQUIRE(staleUndo.ErrorValue().code.Value() == TerrainEditErrors::StaleRevision.code.Value());
             RequireContent(carved, 4);
             RequireHistory(state, 1, 0, true);
             REQUIRE(document.HistoryBytes() == bytes);
