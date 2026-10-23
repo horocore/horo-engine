@@ -33,12 +33,11 @@ namespace Horo::Editor {
         }
 
         EditorWorkspaceDependencies Services(Project &project) {
-            return {.mutableAssetRegistry = &project.registry,
+            return {.assets = {.mutableAssetRegistry = &project.registry, .source = project.source},
+                    .world = {.documentSessionOwner = IdOf<Assets::AssetId>(40)},
                     .collision = {.inventory = &project.inventory, .activation = &project.activation},
                     .mutations = &project.mutations,
-                    .durableFiles = &project.files,
-                    .assetRegistrySource = project.source,
-                    .documentSessionOwner = IdOf<Assets::AssetId>(40)};
+                    .durableFiles = &project.files};
         }
     }  // namespace
 

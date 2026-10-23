@@ -437,6 +437,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/ProtocolIdentity.h
     Horo/Network/ProtocolIdentityRegistry.h
     Horo/Network/ReplicationDescriptor.h
+    Horo/Network/ReplicationMetadataCapture.h
     Horo/Network/ReplicationDeclarationPolicy.h
     Horo/Network/ReplicationDescriptorRegistry.h
     Horo/Network/ReplicationIdentity.h
@@ -450,6 +451,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/AdmissionProtection.h
+    Horo/Network/NetworkAdmissionController.h
     Horo/Network/InboundMessageDispatcher.h
     Horo/Network/NetworkModeComposition.h
     Horo/Network/TransportBackendComposition.h
@@ -470,6 +472,7 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNetworkTransportNull PUBLIC_HEADERS
     Horo/Network/DeterministicTransport.h
+    Horo/Network/NetworkChaosScenario.h
 )
 
 horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS

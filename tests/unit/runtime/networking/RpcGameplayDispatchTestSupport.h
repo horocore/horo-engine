@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared RPC admission, world and callback fixtures; target-private test support.
-#include "Horo/Network/DeterministicTransport.h"
+#include "Horo/Network/NetworkChaosScenario.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/RpcGameplayDispatch.h"
 #include "Horo/Runtime/FrameScheduler.h"
@@ -26,7 +26,7 @@ namespace Horo::Network {
         // Test adapter only: normalization retains the production deterministic impairment and copy ownership.
         class ImpairedTransport final : public INetworkTransport {
         public:
-            static DeterministicTransport Make(const bool loss) {
+            static NetworkChaosScenario Make(const bool loss) {
                 DeterministicTransportDescriptor descriptor{.mode = DeterministicTransportMode::Simulated,
                                                             .maximumScheduledDeliveries = 16,
                                                             .maximumPayloadBytes = 1024,
@@ -51,18 +51,30 @@ namespace Horo::Network {
                                                                          .lossPerTenThousand = static_cast<std::uint16_t>(loss ? 10000 : 0),
                                                                          .duplicatePerTenThousand = 10000,
                                                                          .maximumFragmentBytes = 1024}};
-                auto created = DeterministicTransport::Create(descriptor);
+                const std::array topology{TestSupport::Connection()};
+                const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Stall},
+                                          NetworkChaosAction{2, NetworkChaosActionKind::Resume}};
+                auto created = NetworkChaosScenario::Create({.profile = NetworkChaosProfile::Test,
+                                                             .scope = Scope(),
+                                                             .revision = 1,
+                                                             .durationTicks = 32,
+                                                             .transport = descriptor,
+                                                             .topology = topology,
+                                                             .timeline = timeline});
                 REQUIRE(created.HasValue());
                 return std::move(created).Value();
             }
 
-            DeterministicTransport transport;
-            std::uint64_t tick{21};
+            static NetworkChaosScope Scope() {
+                return {TestSupport::Session(100), TestSupport::Session()};
+            }
+
+            NetworkChaosScenario transport;
+            std::uint64_t tick{1};
 
             explicit ImpairedTransport(const bool loss) : transport(Make(loss)) {
-                REQUIRE(transport.Open(TestSupport::Connection()).HasValue());
-                std::array<DeterministicTransportEvent, 1> empty;
-                REQUIRE(transport.Advance(tick, empty).Value() == 0);
+                std::array<DeterministicTransportEvent, 16> empty;
+                REQUIRE(transport.Advance(Scope(), tick, empty).Value() == 0);
             }
 
             Result<void> Initialize(const NetworkTransportConfig &) override {
@@ -78,12 +90,12 @@ namespace Horo::Network {
             }
 
             Result<void> Send(ConnectionHandle connection, ChannelId channel, std::span<const std::byte> payload, DeliveryPolicy) override {
-                const auto sent = transport.Send(connection, channel, TransportTrafficClass::Reliable, 0, payload);
+                const auto sent = transport.Send(Scope(), connection, channel, TransportTrafficClass::Reliable, 0, payload);
                 return sent.HasError() ? Result<void>::Failure(sent.ErrorValue()) : Result<void>::Success();
             }
 
             Result<void> Close(ConnectionHandle connection) override {
-                const auto closed = transport.Close(connection);
+                const auto closed = transport.Close(Scope(), connection);
                 return closed.HasError() ? Result<void>::Failure(closed.ErrorValue()) : Result<void>::Success();
             }
 
@@ -93,7 +105,7 @@ namespace Horo::Network {
 
             Result<std::size_t> PollEvents(INetworkTransportEventConsumer &consumer) override {
                 std::array<DeterministicTransportEvent, 16> events;
-                auto advanced = transport.Advance(++tick, events);
+                auto advanced = transport.Advance(Scope(), ++tick, events);
                 if (advanced.HasError())
                     return advanced;
                 for (std::size_t index = 0; index < advanced.Value(); ++index) {

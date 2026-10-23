@@ -91,6 +91,53 @@ failure retains the old pair. Shutdown revokes role views first and releases
 participants in reverse construction order. Host-provided factories remain
 responsible for their concrete worker, lease, and native-resource teardown.
 
+The private application `ClientSessionOwner` retains the exact shared
+`PeerSessionLifecycle` supplied by the host trust authority. Its explicitly
+selected `NetworkProductSessionClock` retains its source and defines a positive
+tick quantum and nonnegative epoch shared with admission deadlines. Ticks are
+one-based integer intervals, never render-frame counts or implicit wall time.
+Non-standalone products require that capability before factories run; standalone
+omits it. The reference product selects a millisecond domain from a retained
+monotonic source, without installing a credential authority.
+
+At the start of `NetworkPoll`, the application publishes one clock tick and
+expires its admitted lifecycle **before** invoking Transport. The same published
+tick reaches the inbound dispatcher, so a packet at credential/deadline equality
+cannot dispatch gameplay. The existing Session service boundary then reconciles
+transport-produced close/failure/cancellation before Scene/Physics callbacks;
+service ordering remains Transport, Session, world services. Clock rollback
+permanently fails closed, revokes the role and rejects queued travel. Recorded
+travel failures survive automatic/explicit shutdown until consumed once; a new
+travel request cannot erase an unread result. Shutdown discards an unexecuted
+request without inventing a failure. Independent hosts start with no prior result,
+and a retired owner cannot restart. Original
+canonical terminal kind/reason survives later native failure and shutdown.
+
+The same owner observes the dispatcher's non-packet events. A terminal affects
+only its exact connection handle; a replacement session requires a new transport
+generation because native events do not carry a gameplay-session generation.
+Unknown connectivity is closed, never authenticated. Transport services detach
+the borrowed binding before native destruction, including partial preparation
+rollback. Detach retires the binding, and restart requires a fresh owner.
+Shutdown terminalizes the retained peer before its borrowed diagnostics/services
+retire. This private host migration replaces caller-supplied admission ticks and
+borrowed lifecycle references with the explicit shared lease/domain; the product
+launcher and concrete host fixtures use that same seam. It neither defines a
+pre-active wire protocol nor installs credential/trust services.
+
+Headless network world activation consumes the complete authored replication
+inventory against the actual immutable native/Lua registration generation. The
+actual world request selects ServerActivation or ClientActivation; missing policy,
+Unknown completeness and an explicit mismatching operation fail closed. Empty
+complete inventory remains distinct from unknown metadata, and a no-gameplay
+world assesses against no installed modules. Standalone intentionally omits this
+network gate. Admission grants neither authentication nor state-apply authority.
+Native policy runs after inert registry freeze and before service factories or
+module Start; Lua policy runs before behavior activation. Gameplay retains the
+accepted descriptor/code lease until callbacks and registries are retired, then
+releases it before native module retirement. Failed travel keeps the old world
+and its accepted generation; no schema or module is inferred from requirements.
+
 ## Target Topology and Module Ownership
 
 The network subsystem is organized into four distinct CMake targets with strict compile-time boundaries:
@@ -163,6 +210,35 @@ delivery. Disconnect and shutdown are explicit caller-thread lifecycle events.
 Null/simulated evidence qualifies deterministic orchestration only; it never
 qualifies native sockets, encryption, latency, or production throughput and is
 never an implicit fallback from a failed production backend.
+
+`NetworkChaosScenario` is an explicitly composed `NetworkTransportNull` test/preview
+owner, not a decorator around a production transport. Its default profile is
+`Disabled`; release composition must preserve that policy. Every send, close and
+tick carries the exact pinned host/session generation. A scenario cannot discover
+another transport, listener, session, or credential authority.
+
+The versioned replay input copies up to 16 unique initial connection slots, 128
+ordered timeline actions and 64 expected checkpoints into fixed storage. The
+finite duration and declared event-drain budget are part of replay identity.
+Timeline actions run before the tick's delivery drain, using consecutive relative
+ticks. Impairment replacements preserve seed/random-stream identity and fragment
+storage; they affect future sends without rewriting queued deliveries. Stalls
+retain bounded work while rate-budget ticks advance. Disconnect removes pending
+old-generation deliveries. Restart retains the real old-generation disconnect
+event and defers opening the exact next generation until that event is drained.
+Stalls and a saturated output budget preserve this bounded pending state; explicit
+close, duration expiry and shutdown cancel it. Overlapping lifecycle actions for
+an undrained restart fail terminally. The ordinary session router receives the
+actual disconnect before any next-generation packet admission. Restart grants
+no session authentication or replication authority.
+
+Checkpoint mismatch terminates and discards the remaining run. Optional evidence
+contains only local ticks and aggregate action/fragment/disconnect/checkpoint
+counts; disabling this evidence does not disable expected-checkpoint validation.
+The immutable copied topology, seed and timeline remain available to the test
+owner for replay. No payload, endpoint, account or secret is captured. Editor
+preset storage, live command authorization and condition-simulator widgets remain
+the separate NET-008.6 workflow; this core does not implement or complete it.
 
 ### 4. `HoroEngine::NetworkTransportGNS`
 
@@ -521,6 +597,101 @@ authenticated peer evidence and product-anchor trust; LAN requires paired or
 product-anchor trust. Only an explicitly configured, proven in-memory loopback may
 omit transport protection. Unavailable authorities, weaker trust, malformed evidence,
 timeout, cancellation and shutdown all fail closed and cannot publish late results.
+
+### Runtime admission control composition and wire version 1
+
+`NetworkAdmissionController` composes the existing negotiator, admission ledger,
+authentication adapter and canonical lifecycle. Applications inject one immutable
+policy, existing codec snapshot and retained authority/proof/channel/random
+capabilities before transport initialization. `ValidateHandshakeLocalDescriptor`
+validates inert compatibility metadata without constructing a peer; the controller
+also requires the exact selected transport capability declaration. Local capability
+resolution uses that descriptor's exact revision after equality with the selected
+transport; peer selection uses the revision carried by its validated immutable
+capability descriptor, never a synthetic revision or a local handle. Neither creating
+policy nor capturing application configuration invokes providers or opens listeners.
+
+The product reserves four distinct mandatory identities in its existing protocol
+inventory, in `AdmissionControlKind` order. There are no global reserved message
+IDs. Admission uses reliable ordered channel zero and the canonical message
+envelope, schema version 1.0, no extension fields and a positive strictly increasing
+sequence per endpoint. Raw frame bytes and work counts are charged before parsing.
+`InspectMessageEnvelope` and owned decoding share the same validation implementation;
+the admission controller borrows proof payload bytes synchronously instead of
+creating an ordinary decoded proof vector. Outbound proof/frame scratch is bounded
+and securely cleared. The normal active dispatcher continues to decode gameplay.
+
+All payload integers are unsigned, big endian; booleans are exactly zero or one.
+Each payload begins with one byte equal to 1. Parsers reject truncation, trailing
+bytes, invalid enum values, duplicate/unsorted features and all declared bounds.
+The closed payload layouts, in field order, are:
+
+| Kind | Canonical payload after the version byte |
+| --- | --- |
+| Offer | Handshake contract u32; protocol u16; minimum and maximum version (major/minor u16 each); schema fingerprint u64; supported then required features (u8 count, ascending u16 IDs); compression support booleans and required-compression u8; 32-byte nonce; transport requirements; immutable transport capabilities |
+| Challenge | Selected protocol u16, version (u16/u16), fingerprint u64, selected features (u8 count, ascending u16 IDs), compression u8 and selected transport evidence; policy u64, policy revision u64, owner transcript digest 32 bytes, client nonce 32 bytes, server nonce 32 bytes |
+| Proof | Policy u64, revision u64, owner transcript digest 32 bytes, client nonce 32 bytes, server nonce 32 bytes, proof length u16, bounded proof bytes |
+| Acknowledgement | Response boolean; owner transcript digest 32 bytes; secure-channel binding digest 32 bytes; client nonce 32 bytes; server nonce 32 bytes |
+
+Transport requirements encode delivery booleans in `DeliveryPolicy` order, channel
+count u32, message ceiling u64, deadline requirement u8 and deadline ceiling u32.
+Capabilities encode contract u32, revision u64, delivery support u8 values in enum
+order, channel count u32, message ceiling u64, deadline support u8 and ceiling u32.
+Selected transport evidence encodes capability revision u64, admitted-delivery
+booleans, channel count u32, message ceiling u64, deadline-enabled boolean and
+ceiling u32. These layouts are implemented once in the runtime admission codec.
+
+Connection handles and admission generations are endpoint-local and never appear
+on the wire. The challenge owner computes its digest using its own canonical
+selection and local fences. The other endpoint validates public selection, policy
+and both role-ordered nonces, preserving that opaque owner digest. Its own adapter
+validates the canonical certificate-to-peer authority prefix before minting a
+private `ProofIssuanceAuthorization` bound to local generation, evidence and deadline.
+Only that grant reaches the injected bounded synchronous proof source. The source
+must validate context; it cannot select trust or publish authentication. Providers
+requiring asynchronous I/O cannot use this synchronous capability.
+
+Each endpoint independently authenticates the proof for its own challenge. A
+binding proposal is echoed by the peer, but its acknowledgement alone never grants
+Active: the local adapter must already have accepted authentication, then revalidate
+current channel/certificate/peer evidence, deadline and credential expiry. Activation
+uses the same lifecycle retained by the dispatcher and client application owner.
+An optional prepared projection retains that same pending lifecycle solely for
+terminal diagnostics; it grants no client role or dispatch authority and cannot
+replace a live candidate. Server pending state stays in bounded runtime slots. A required client projection that expires
+at either pending or activation publication cancels the candidate locally and
+revokes any exact router registration. It is not reported as peer authentication
+failure. Server-only observers remain optional; repeated shutdown preserves the
+first canonical terminal and does not retire a peer twice.
+
+`Created`, `Negotiating`, `Authenticating` and `Activating` may record a truthful
+protocol/authentication rejection. `Closing` preserves its first close reason;
+Active and terminal sessions cannot be rewritten as admission failures. Runtime
+publication rollback uses canonical cancellation and exact registration revocation.
+Untrusted peer denial closes only that generation; transport-wide failures retain
+the original typed infrastructure error and terminalize the owned sessions.
+
+The private application `NetworkProductAdmission` capture owns feature/channel
+storage, codec and provider lifetimes. Both the real GNS factory and paired native
+regressions use `CreateNetworkProductTransport`; only the application factory selects
+a backend. The shared clock publishes one monotonic tick before transport polling.
+Pending/active expiry and rollback run before ingress, and post-poll reconciliation
+precedes world simulation/travel. Shutdown retires controller and dispatcher before
+transport detach/destruction, and releases captured providers last. Partial startup,
+overlapping transport attachment and repeated shutdown follow the same ownership
+boundary. Standalone and absent-admission callers retain explicit fail-closed
+semantics; no account, lobby, default credential or implicit trust provider is added.
+
+The narrow public migration adds the controller/proof capability and borrowed
+envelope view to their existing owning targets. `NetworkRuntime` publicly depends
+on `Security` only for backend-neutral `SecureBytes` and `SecureRandomSource`;
+platform entropy/backend implementation stays at application composition. Existing
+negotiator construction reuses inert validation; existing adapter callers may still
+authenticate directly, while product control admission requires the issuance grant
+and activation revalidation. Public-header consumers and actual paired product
+regressions cover these declared edges. The private launch takes an optional owned
+capture; all existing callers deliberately omit it and remain without a trust
+fallback until their composition root injects real capabilities.
 
 `PeerSessionLifecycle` owns the next created-through-closed gameplay-session boundary.
 It pins the exact `HandshakeSelection` and `AuthenticationResult`, admits activation
@@ -1140,3 +1311,32 @@ The modal/store run on the editor owner thread. The host retains its durable
 filesystem and shared GUI context until modal shutdown; the modal owns the store
 and draft and copies committed projections. Cancellation discards only the draft.
 Existing single-session Play behavior remains its own lifecycle authority.
+
+
+### Admission provider containment and synchronous event observation
+
+The runtime admission provider boundary catches both standard and non-standard
+foreign exceptions. Its private synchronous invocation helper is genuinely
+`noexcept`: it returns an empty optional after a throw, including a result
+construction failure. The boundary adds no allocation; a provider and its typed
+result may allocate. The owning authentication/controller method constructs the
+original sanitized typed failure or cancellation **after** the boundary returns.
+Marking that allocating owner method `noexcept` would incorrectly turn a typed
+failure construction problem into process termination and is not the contract.
+Retirement instead records an allocation-free private cleanup outcome while
+preserving the first canonical terminal reason and once-only close attempt.
+
+`IInboundSessionHost::OnTransportEvent` now borrows `const NetworkTransportEvent&`
+only for the synchronous call. The dispatcher owns the event through return;
+observers copy anything they retain. The actual client observer retains only its
+existing canonical generation-qualified lifecycle, never the borrowed packet.
+This replaces the former by-value callback to avoid unnecessary large event
+moves/copies; the dispatcher, application observer and external consumers must
+rebuild for this deliberate signature migration.
+
+Factory-only `NetworkAdmissionController` and inert `ReplicationMetadataCapture`
+construction use standard shared ownership with a private nonaggregate admission
+key. The key's constructor is inaccessible to callers, including braced
+`X{{}}` expressions. Public consumers compile negative construction probes;
+only the existing validated factory creates the key. This is a construction
+migration, not a second registration or admission authority.

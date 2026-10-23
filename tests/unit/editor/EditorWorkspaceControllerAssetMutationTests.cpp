@@ -29,6 +29,12 @@ namespace {
     using TestWorkspaceController = HoroEditorWorkspaceControllerPolicyTests::FocusedWorkspaceController;
     using namespace HoroEditorWorkspaceControllerFilesystemTests;
 
+    /** @brief Bind the same project mutation authority and registry for actual asset operations. */
+    EditorWorkspaceDependencies AssetMutationDependencies(Assets::AssetRegistry &registry, ProjectMutationCoordinator &mutations,
+                                                          DurableFileSystem &files) {
+        return {.assets = {.mutableAssetRegistry = &registry}, .mutations = &mutations, .durableFiles = &files};
+    }
+
     /** @brief Verify Trashed Asset Pair. */
     void VerifyTrashedAssetPair(const std::filesystem::path &projectRoot, const std::filesystem::path &renamed) {
         const std::filesystem::path trashRoot = projectRoot / ".horo/local/trash";
@@ -61,10 +67,8 @@ namespace {
         Runtime::RuntimeSceneService runtimeScene;
         CancellationSource cancellation;
         REQUIRE((runtimeScene.Startup(cancellation.Token()).HasValue()));
-        EditorWorkspaceController controller{projectRoot,
-                                             runtimeScene,
-                                             registry.Snapshot(),
-                                             {.mutableAssetRegistry = &registry, .mutations = &mutations, .durableFiles = &files}};
+        EditorWorkspaceController controller{projectRoot, runtimeScene, registry.Snapshot(),
+                                             AssetMutationDependencies(registry, mutations, files)};
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;
@@ -117,10 +121,8 @@ namespace {
         Runtime::RuntimeSceneService runtimeScene;
         CancellationSource cancellation;
         REQUIRE((runtimeScene.Startup(cancellation.Token()).HasValue()));
-        EditorWorkspaceController controller{projectRoot,
-                                             runtimeScene,
-                                             registry.Snapshot(),
-                                             {.mutableAssetRegistry = &registry, .mutations = &mutations, .durableFiles = &files}};
+        EditorWorkspaceController controller{projectRoot, runtimeScene, registry.Snapshot(),
+                                             AssetMutationDependencies(registry, mutations, files)};
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;
@@ -186,10 +188,8 @@ namespace {
         Runtime::RuntimeSceneService runtimeScene;
         CancellationSource cancellation;
         REQUIRE((runtimeScene.Startup(cancellation.Token()).HasValue()));
-        EditorWorkspaceController controller{projectRoot,
-                                             runtimeScene,
-                                             registry.Snapshot(),
-                                             {.mutableAssetRegistry = &registry, .mutations = &mutations, .durableFiles = &files}};
+        EditorWorkspaceController controller{projectRoot, runtimeScene, registry.Snapshot(),
+                                             AssetMutationDependencies(registry, mutations, files)};
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;

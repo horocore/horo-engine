@@ -1,4 +1,5 @@
 #pragma once
+#include "../helpers/ProjectReplicationTestSupport.h"
 #include "EditorInspectorTestSupport.h"
 #include "Horo/Foundation/Paths.h"
 #include "OwnedTestDirectory.h"
@@ -53,6 +54,7 @@ namespace Horo::Editor::Tests::InspectorControllerSupport {
         explicit Fixture(Extensions::EditorInspectorDefinition definition = Extensions::Tests::InspectorSupport::Definition(),
                          std::string_view defaultValue = "9007199254740993")
             : provider(std::move(definition)) {
+            Horo::Tests::WriteReplicationProject(project.Path());
             std::filesystem::create_directories(project.Path() / "assets/scripts");
             const auto source = project.Path() / "assets/scripts/Counter.horo_script";
             {
@@ -69,10 +71,15 @@ namespace Horo::Editor::Tests::InspectorControllerSupport {
             }
             ValidateAuthoredBehavior(source);
             REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
-            controller = std::make_unique<EditorWorkspaceController>(project.Path(), runtime, Assets::AssetRegistrySnapshot{},
-                                                                     EditorWorkspaceDependencies{.documentSessionOwner =
-                                                                                                     Assets::AssetId::FromBytes({1}),
-                                                                                                 .inspectorHost = &provider.host});
+            controller =
+                std::make_unique<EditorWorkspaceController>(project.Path(), runtime, Assets::AssetRegistrySnapshot{},
+                                                            EditorWorkspaceDependencies{.world = {.documentSessionOwner =
+                                                                                                      Assets::AssetId::FromBytes({1})},
+                                                                                        .inspectorHost = &provider.host});
+            EditorWorkspaceViewCommandData create;
+            create.command = EditorWorkspaceViewCommand::CreatePrimitive;
+            create.primitivePayload = Runtime::PrimitiveId{"primitive.mesh.box"};
+            Process(create);
             REQUIRE(!controller->ViewModel().objects.empty());
             REQUIRE(controller->ViewModel().availableBehaviors.size() == 1);
             object = controller->ViewModel().objects.front().id;
