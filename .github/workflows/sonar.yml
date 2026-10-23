@@ -55,10 +55,8 @@ jobs:
             .cmake/fetchcontent/*-src
             .cmake/fetchcontent/*-subbuild
           # Cache fetched sources and download metadata, never coverage objects or build trees.
-          key: sonar-v3-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/Horo*Dependency.cmake') }}
-          restore-keys: |
-            sonar-v3-deps-${{ runner.os }}-${{ runner.arch }}-
-            sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-
+          # Disconnected FetchContent cannot safely update an arbitrary old pin.
+          key: sonar-v4-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'cmake/Dependencies.cmake', 'cmake/*Dependency.cmake', 'cmake/Horo*DependencyPolicy.cmake', 'cmake/HoroGnsProtobufConfig.cmake') }}
 
       - name: Restore compiler cache
         id: compiler
@@ -148,6 +146,9 @@ jobs:
         id: scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # The default ~4-GB heap stopped taint analysis early. Leave room
+          # within the 16-GB runner for CFamily native workers and Node.js.
+          SONAR_SCANNER_JAVA_OPTS: -Xmx6g
         run: |
           "$SONAR_USER_HOME/sonar-scanner-$SONAR_SCANNER_VERSION-linux-x64/bin/sonar-scanner" \
             -Dsonar.organization=horocore \

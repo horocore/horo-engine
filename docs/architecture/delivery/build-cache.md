@@ -562,6 +562,119 @@ the proactive counterpart to the recovery procedures below and implements the
 
 ## Stale Cache Recovery
 
+### External storage migration contract
+
+The selected external storage backend is an S3-compatible object store, initially
+Cloudflare R2. GitHub Actions remains the execution service. Migration must keep
+the existing test selection, instrumented coverage, static analysis and quality
+gates. A cache hit is never evidence that a test or quality gate passed.
+
+There are two independent payload types:
+
+- Dependency SDK packages contain compiled vendor libraries, headers, generated
+  configuration, required host tools, notices and test fixtures. A downloaded
+  source archive is not an SDK package. In particular, current tests use ufbx's
+  `data` directory, Catch2's CMake integration and ImGui test-engine headers;
+  removing the source tree without supplying these would reduce validation.
+- Compiler caches contain Horo translation-unit results validated by ccache or
+  sccache. They do not contain test results or replace link/test execution.
+
+SDK identities must include dependency pins and Horo patches, package recipe,
+target OS and architecture, compiler identity, platform SDK, C++ ABI/CRT,
+configuration, relevant feature switches and instrumentation flags. Native
+Debug, Release and Sonar coverage packages are distinct. Consumers reject a
+manifest mismatch and build from the pinned sources. Packages must work after
+relocation and must not expose producer-machine include paths.
+
+Only trusted main runs may publish. PRs, including fork PRs, receive no storage
+write credentials and do not start producer jobs. Existing successful main
+builds supply publication inputs; a serialized publisher owns the dedicated
+bucket's manifests and retention. Before consuming any uploaded input it checks
+the producing repository, event, main ref and commit. It must not execute code
+from an untrusted artifact. Existing per-platform PR job limits and cancellation
+of obsolete PR commits remain in place.
+
+Read access must not require a write credential. Public OSS payloads may be
+served through a dedicated HTTPS domain; production traffic must not depend on
+R2's rate-limited development endpoint. Reads have bounded timeouts. Missing,
+incompatible, corrupt or unavailable payloads produce an explicit cache-miss
+diagnostic and fall back to the normal build. Archive validation and staging
+must complete before a package becomes visible to CMake.
+
+The initial application storage budget is 9,000,000,000 bytes in a dedicated
+bucket. This leaves headroom under R2's advertised 10 GB-month free storage
+allowance; it is not a billing cap and does not bound request charges or other
+buckets. Account-wide usage and request counts must also be checked before
+claiming zero cost. Publication accounts for old/new generation overlap and
+incomplete multipart uploads. If the candidate cannot fit while preserving all
+currently published packages, skip publication and report capacity pressure.
+Do not delete the only usable package merely to make an upload fit.
+
+The pure planner in `.github/scripts/external-cache-policy.js` counts the whole
+bucket, preserves objects referenced by published manifests, and only proposes
+removing unreferenced objects in `horo-ci/v1/`. A publisher must collect a complete
+paginated inventory, all manifest references and incomplete upload reservations,
+then revalidate under the single-writer lock before applying this plan. Unknown
+objects count toward capacity but are not eligible for deletion.
+
+The SDK payload format is implemented by
+`.github/scripts/dependency_package.py` (Python 3.11 or newer). A producer stages
+the complete relocatable SDK, supplies an independently computed identity JSON
+and invokes `pack --root <staging> --identity <identity.json> --output <sdk.tar.gz>`.
+A consumer invokes `restore --archive <sdk.tar.gz> --identity <expected.json>
+--destination <absent-directory>`. Neither operation accesses the network.
+The identity has exactly these fields: `platform`, `architecture`, `compiler`,
+`sdk`, `abi`, `configuration`, `dependencies`, `recipe`, `instrumentation` and
+`features`. Explicit values such as `none` distinguish disabled instrumentation
+from missing metadata. These values must describe the actual resolved build;
+the payload tool does not discover toolchains or infer ABI compatibility.
+
+The archive starts with a bounded JSON manifest and contains regular files only.
+The producer materializes symlinks when staging, freezes staging during packing,
+and includes executable host tools as executable files. The consumer checks
+identity, per-file SHA-256 and sizes, rejects extra/missing members and unsafe or
+non-portable paths, and stages outside the final destination. Only a completely
+validated payload is renamed into place. A verified manifest receipt remains
+inside the destination. Digests detect corruption; transport authentication and
+trusted-writer restrictions establish provenance. An archive's own digest list
+does not establish publisher trust.
+
+The first CMake integration is Unicode/ICU. Configure a producer with
+`HORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON` and build `horo-package-unicode` after the
+normal native build. Archives appear in `build-dir/dependency-sdk/packages`.
+A consumer sets `HORO_DEPENDENCY_SDK_CACHE` to a directory of trusted archives.
+`HoroDependencySdk.cmake` computes the identity from the recipe, compiler,
+platform SDK and effective global build flags. It restores only the matching
+archive and verifies an existing restored payload again on reconfigure.
+Unicode keeps the same target/alias, interface definitions and data installation
+contract. A missing Python 3.11 interpreter, missing archive or failed verification
+uses the existing source build. Both options are disabled/empty by default.
+
+The initial integration supports single-configuration native builds. Coverage,
+profiling and sanitizer flags deliberately retain source compilation until
+instrumented object/profile relocation is qualified. In particular, this
+integration must not replace Sonar's coverage objects with an ordinary native
+SDK. Extending the package path to these configurations is outstanding work.
+
+Implementation status: the capacity planner and payload format have offline
+regression coverage, including linking a relocated native fixture after removing
+its producer tree. The real pinned ICU source was also built and packaged on
+macOS with AppleClang 21, Debug and two build workers. Its package contained the
+library, public headers, license and dictionary data. A fresh consumer configured
+with FetchContent fully disconnected imported the library, created no `_deps`
+directory and compiled zero ICU objects (the producer compiled 203). Both ran
+the same NFC normalization probe with the packaged ICU data. The 24,139,674-byte
+archive's local producer build/pack took 58.036 seconds and consumer compile/link
+took 0.666 seconds according to Ninja logs; these exclude configure, network and
+test time and are not hosted or full-engine timings.
+
+Other dependency recipes, Windows/Linux package qualification, the external
+transport and workflow publication are not connected yet. Existing GitHub caches
+remain authoritative until those components pass cross-platform
+package-relocation, corruption/fallback and hosted timing validation. This
+section is not a claim that external caching or the 10–15 minute target is
+already achieved.
+
 ### Symptoms of a stale build
 
 - Build succeeds but runtime behavior is wrong (old object files
