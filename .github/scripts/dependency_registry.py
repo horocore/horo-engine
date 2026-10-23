@@ -35,6 +35,7 @@ class Registry:
     """Own a short-lived credential store and a shared network time budget."""
 
     def __init__(self, directory: Path, seconds: int = 60):
+        """Create isolated credentials and one deadline for all client calls."""
         self.executable = shutil.which("oras")
         if not self.executable:
             raise ValueError("ORAS unavailable")
@@ -51,7 +52,8 @@ class Registry:
         # Never include stdout/stderr in exceptions: authentication output is
         # not part of user diagnostics. Credentials are passed only on stdin.
         result = subprocess.run(
-            [self.executable, *arguments, "--registry-config", str(self.config)],
+            ["oras", *arguments, "--registry-config", str(self.config)],
+            executable=self.executable, shell=False,
             cwd=cwd, input=secret, text=True, capture_output=True,
             timeout=remaining, check=False)
         if result.returncode:
@@ -78,7 +80,8 @@ def descriptor(manifest: str) -> dict:
         raise ValueError("Unexpected SDK registry manifest")
     layer = document["layers"][0]
     if (layer.get("mediaType") != LAYER_TYPE
-            or type(layer.get("size")) is not int
+            or not isinstance(layer.get("size"), int)
+            or isinstance(layer.get("size"), bool)
             or not 0 < layer["size"] <= MAX_ARCHIVE_BYTES
             or not re.fullmatch(r"sha256:[0-9a-f]{64}", layer.get("digest", ""))):
         raise ValueError("Invalid SDK registry layer")

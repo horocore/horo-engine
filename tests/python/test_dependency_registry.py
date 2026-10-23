@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import shutil
 import sys
+from types import SimpleNamespace
+import uuid
 
 import pytest
 
-from test_dependency_package import identity as identity, sdk
+from test_dependency_package import sdk
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +20,21 @@ SPEC = importlib.util.spec_from_file_location(
 registry = importlib.util.module_from_spec(SPEC)
 sys.modules["dependency_package"] = sdk
 SPEC.loader.exec_module(registry)
+
+
+@pytest.fixture(name="identity")
+def registry_identity():
+    """Use a complete compatibility identity without importing another fixture."""
+    return {key: "registry-fixture" for key in sdk.IDENTITY_FIELDS}
+
+
+@pytest.fixture(name="publisher_environment")
+def trusted_environment(monkeypatch):
+    """Provide a fresh non-secret credential value for each publisher test."""
+    for key, value in {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
+                       "GITHUB_REPOSITORY": "horocore/horo-engine", "GITHUB_ACTOR": "fixture",
+                       "HORO_PACKAGE_TOKEN": uuid.uuid4().hex}.items():
+        monkeypatch.setenv(key, value)
 
 
 @pytest.fixture
@@ -88,12 +105,9 @@ def test_untrusted_publish_rejected_before_io(monkeypatch, identity, event, ref,
         registry.publish(Path("nonexistent.tar.gz"), identity)
 
 
-def test_existing_key_is_never_replaced(remote, monkeypatch, identity):
+@pytest.mark.usefixtures("publisher_environment")
+def test_existing_key_is_never_replaced(remote, identity):
     archive, _, calls = remote
-    for key, value in {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
-                       "GITHUB_REPOSITORY": "horocore/horo-engine", "GITHUB_ACTOR": "fixture",
-                       "HORO_PACKAGE_TOKEN": "fixture-token"}.items():
-        monkeypatch.setenv(key, value)
     registry.publish(archive, identity)
     assert all(call[0] != "push" for call in calls)
 
@@ -114,6 +128,27 @@ def test_credential_store_does_not_inherit_docker_login(monkeypatch, tmp_path):
         assert client.config.stat().st_mode & 0o077 == 0
 
 
+def test_registry_uses_fixed_client_and_stdin_credentials(monkeypatch, tmp_path):
+    monkeypatch.setattr(shutil, "which", lambda _: "/fixture/oras")
+    calls = []
+
+    def execute(arguments, **options):
+        calls.append((arguments, options))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(registry.subprocess, "run", execute)
+    client = registry.Registry(tmp_path)
+    secret = uuid.uuid4().hex
+    client.run("login", "ghcr.io", "--username", "fixture", "--password-stdin", secret=secret)
+    arguments, options = calls[0]
+    assert arguments[0] == "oras"
+    assert options["executable"] == "/fixture/oras"
+    assert options["shell"] is False
+    assert options["input"] == secret
+    assert secret not in arguments
+
+
+@pytest.mark.usefixtures("publisher_environment")
 def test_registry_outage_cannot_replace_a_published_key(remote, monkeypatch, identity):
     archive, _, calls = remote
     original = registry.Registry.run
@@ -124,10 +159,6 @@ def test_registry_outage_cannot_replace_a_published_key(remote, monkeypatch, ide
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(registry.Registry, "run", unavailable)
-    for key, value in {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
-                       "GITHUB_REPOSITORY": "horocore/horo-engine", "GITHUB_ACTOR": "fixture",
-                       "HORO_PACKAGE_TOKEN": "fixture-token"}.items():
-        monkeypatch.setenv(key, value)
     with pytest.raises(ValueError, match="unavailable"):
         registry.publish(archive, identity)
     assert all(call[0] != "push" for call in calls)
