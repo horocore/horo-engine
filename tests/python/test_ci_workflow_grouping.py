@@ -81,6 +81,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
     "HoroD3D12InitializationTests", "HoroD3D12ResourceTests",
     "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
+    "HoroMultiviewSceneExtractionPublicHeaderConsumer",
     "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
     "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
     "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
@@ -659,7 +660,8 @@ def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composit
     job = workflow_job("shaders")
     assert "HoroEditorVulkanShaderCook --describe-tools" in job
     assert "${archive_digest#sha256:}" in job
-    assert "${executable_digest#sha256:}" in job
+    assert "verify-shader-tool" in job
+    assert '--relative-path "$executable_relative_path" --sha256 "$executable_digest"' in job
     assert "sha256sum --check" in job
     assert "HORO_EDITOR_VULKAN_ASSET_ROOT" in job
     assert "assets/shaders/editor/viewport.hlsl" in job

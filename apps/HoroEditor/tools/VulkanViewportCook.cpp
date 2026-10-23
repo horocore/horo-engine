@@ -133,7 +133,7 @@ int main(int argc, char **argv) {
                 (tool.tool == Horo::Render::ShaderCompilerTool::Dxc || tool.tool == Horo::Render::ShaderCompilerTool::SpirvTools ||
                  tool.tool == Horo::Render::ShaderCompilerTool::SpirvCross))
                 std::cout << static_cast<unsigned>(tool.tool) << '\t' << tool.source << '\t' << tool.archiveSha256 << '\t'
-                          << tool.executableSha256 << '\n';
+                          << tool.executableSha256 << '\t' << tool.executableRelativePath << '\n';
         return 0;
     }
     if (argc != 7) {

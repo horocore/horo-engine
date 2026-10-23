@@ -50,6 +50,13 @@ target is unavailable only when that host's verified snapshot lacks one of the
 exact required tools. There is no fallback to the Ubuntu catalog, an ambient
 SDK, another backend, or a locally invented digest.
 
+The verified DXC archive preserves the prefix `linux_dxc_2026_07_29.x86_x64/`;
+its executable is `linux_dxc_2026_07_29.x86_x64/bin/dxc`, with companions under
+the matching `lib/`. The immutable private catalog owns each executable path
+relative to the extracted artifact root. Qualification consumes that path and
+rejects absolute/traversing paths, resolved symlink escapes, non-executable
+files, oversized files and executable hash mismatches before invocation.
+
 DXC's same-archive runtime companions are `libdxcompiler.so`
 (`be01593d3ff635fca6f20b044aa49c777f6409e50a28fb0242a0c87272620b62`)
 and `libdxil.so`
