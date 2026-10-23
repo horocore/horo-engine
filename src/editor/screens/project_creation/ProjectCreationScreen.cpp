@@ -50,8 +50,9 @@ namespace Horo::Editor {
             }
 
             void Draw(const GuiContentRegion &contentRegion) override {
-                const auto command = DrawProjectCreationView(controller_, state_, context_, inputRouter_, rendererAvailability_,
-                                                             contentRegion, logoTexture_);
+                const auto command =
+                    GuiLive::Invoke<&DrawProjectCreationView>(context_.theme.liveReload, controller_, state_, context_, inputRouter_,
+                                                              rendererAvailability_, contentRegion, logoTexture_);
                 if (command == ProjectCreationViewCommand::ReturnToWelcome) {
                     static_cast<void>(host_.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
                 } else if (command == ProjectCreationViewCommand::CreateProject) {

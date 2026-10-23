@@ -94,7 +94,8 @@ namespace Horo::Editor {
             }
 
             void Draw(const GuiContentRegion &contentRegion) override {
-                const ProjectLoadingViewCommand command = DrawProjectLoadingView(state_, context_, contentRegion);
+                const ProjectLoadingViewCommand command =
+                    GuiLive::Invoke<&DrawProjectLoadingView>(context_.theme.liveReload, state_, context_, contentRegion);
                 hasPresentedLoadingView_ = true;
                 if (readyStateAwaitingPresentation_)
                     readyStatePresented_ = true;

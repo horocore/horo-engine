@@ -8,6 +8,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Editor/SettingsModal.h"
@@ -279,16 +280,17 @@ namespace Horo::Editor {
     /** @copydoc GuiScreenHost::Start */
     Result<void> GuiScreenHost::Start(GuiRoute initialRoute) {
         if (shutdown_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostShutdown));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::HostShutdown>()));
         if (started_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostAlreadyStarted));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::HostAlreadyStarted>()));
         if (!IsRoutePayloadValid(initialRoute)) {
-            return Result<void>::Failure(MakeError(NavigationErrors::InvalidRouteParameters, "Invalid initial route payload."));
+            return Result<void>::Failure(
+                MakeError(GuiLive::HostSymbol<&NavigationErrors::InvalidRouteParameters>(), "Invalid initial route payload."));
         }
 
         std::unique_ptr<GuiScreen> initialScreen = CreateScreen(initialRoute);
         if (!initialScreen) {
-            return Result<void>::Failure(MakeError(NavigationErrors::ScreenCreationFailed));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::ScreenCreationFailed>()));
         }
         if (Result<void> entered = initialScreen->OnEnter(initialRoute); entered.HasError()) {
             return entered;
@@ -371,7 +373,7 @@ namespace Horo::Editor {
     /** @copydoc GuiScreenHost::RequestRendererRestart */
     Result<void> GuiScreenHost::RequestRendererRestart(EditorRendererRestartRequest request) {
         if (shutdown_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostShutdown));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::HostShutdown>()));
         rendererRestartRequest_ = std::move(request);
         const Result<void> close = RequestCloseApplication();
         if (close.HasError())
@@ -414,27 +416,29 @@ namespace Horo::Editor {
 
     Result<void> GuiScreenHost::Navigate(GuiRoute destination) {
         if (gameplayClosePending_)
-            return Result<void>::Failure(MakeError(NavigationErrors::Busy, "Application gameplay retirement is still pending."));
-        if (shutdown_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostShutdown));
-        if (!started_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostNotStarted));
-        if (!IsRoutePayloadValid(destination)) {
             return Result<void>::Failure(
-                MakeError(NavigationErrors::InvalidRouteParameters, "Invalid route payload for requested route kind."));
+                MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Application gameplay retirement is still pending."));
+        if (shutdown_)
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::HostShutdown>()));
+        if (!started_)
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::HostNotStarted>()));
+        if (!IsRoutePayloadValid(destination)) {
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::InvalidRouteParameters>(),
+                                                   "Invalid route payload for requested route kind."));
         }
         if (navigationBusy_) {
-            return Result<void>::Failure(MakeError(NavigationErrors::Busy, "Navigation already in progress."));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Navigation already in progress."));
         }
         if (pendingRequirement_.has_value() || pendingTarget_.has_value()) {
-            return Result<void>::Failure(MakeError(NavigationErrors::Busy, "Leave resolution already pending."));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Leave resolution already pending."));
         }
         if (AreRoutesIdentical(activeRoute_, destination)) {
             return Result<void>::Success();
         }
         if (isScreenCallbackActive_) {
             if (pendingNavigation_.has_value()) {
-                return Result<void>::Failure(MakeError(NavigationErrors::Busy, "Navigation already queued this frame."));
+                return Result<void>::Failure(
+                    MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Navigation already queued this frame."));
             }
             pendingNavigation_ = std::move(destination);
             return Result<void>::Success();
@@ -444,11 +448,11 @@ namespace Horo::Editor {
 
     Result<void> GuiScreenHost::RequestCloseApplication() {
         if (shutdown_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostShutdown));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::HostShutdown>()));
         if (!started_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostNotStarted));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::HostNotStarted>()));
         if (navigationBusy_ || pendingRequirement_.has_value() || pendingTarget_.has_value()) {
-            return Result<void>::Failure(MakeError(NavigationErrors::Busy, "Navigation already in progress."));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Navigation already in progress."));
         }
         return ExecuteLeaveCheckAndCommit(LeaveTarget{ApplicationCloseTarget{}});
     }
@@ -465,15 +469,17 @@ namespace Horo::Editor {
 
         const auto decision = activeScreen_->CanLeave(target);
         if (decision.disposition == LeaveDisposition::Deny) {
-            return Result<void>::Failure(MakeError(NavigationErrors::LeaveDenied, "Active screen denied leave transition."));
+            return Result<void>::Failure(
+                MakeError(GuiLive::HostSymbol<&NavigationErrors::LeaveDenied>(), "Active screen denied leave transition."));
         }
         if (decision.disposition == LeaveDisposition::RequireResolution) {
             if (!decision.requirement.has_value()) {
-                return Result<void>::Failure(
-                    MakeError(NavigationErrors::InvalidLeaveRequirement, "Screen requested leave resolution without a requirement."));
+                return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::InvalidLeaveRequirement>(),
+                                                       "Screen requested leave resolution without a requirement."));
             }
             if (resolutionAttemptCount_ >= 5) {
-                return Result<void>::Failure(MakeError(NavigationErrors::LeaveResolutionLimitExceeded, "Exceeded resolution attempts."));
+                return Result<void>::Failure(
+                    MakeError(GuiLive::HostSymbol<&NavigationErrors::LeaveResolutionLimitExceeded>(), "Exceeded resolution attempts."));
             }
             pendingRequirement_ = decision.requirement;
             pendingTarget_ = target;

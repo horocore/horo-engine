@@ -79,7 +79,7 @@ namespace Horo::Editor {
             using BuiltInPaneAdapter::BuiltInPaneAdapter;
 
             void Draw(const GlobalDockPaneDrawContext &context) override {
-                pane_.Draw(context.contentOrigin, context.contentWidth, context.gui);
+                GuiLive::Invoke<&Pane::Draw>(context.gui.theme.liveReload, pane_, context.contentOrigin, context.contentWidth, context.gui);
             }
 
         private:
@@ -99,7 +99,8 @@ namespace Horo::Editor {
             }
 
             void Draw(const GlobalDockPaneDrawContext &context) override {
-                pane_.Draw(context.contentOrigin, context.contentWidth, context.viewModel, context.command, context.gui);
+                GuiLive::Invoke<&AssetBrowserPane::Draw>(context.gui.theme.liveReload, pane_, context.contentOrigin, context.contentWidth,
+                                                         context.viewModel, context.command, context.gui);
             }
 
         private:
@@ -119,7 +120,8 @@ namespace Horo::Editor {
             }
 
             void Draw(const GlobalDockPaneDrawContext &context) override {
-                pane_.Draw(context.contentOrigin, context.contentWidth, context.gui);
+                GuiLive::Invoke<&GlobalDockConsolePane::Draw>(context.gui.theme.liveReload, pane_, context.contentOrigin,
+                                                              context.contentWidth, context.gui);
             }
 
         private:
@@ -139,7 +141,8 @@ namespace Horo::Editor {
             }
 
             void Draw(const GlobalDockPaneDrawContext &context) override {
-                pane_.Draw(context.contentOrigin, context.contentWidth, context.command, context.gui);
+                GuiLive::Invoke<&GlobalDockBuildOutputPane::Draw>(context.gui.theme.liveReload, pane_, context.contentOrigin,
+                                                                  context.contentWidth, context.command, context.gui);
             }
 
         private:
@@ -159,7 +162,8 @@ namespace Horo::Editor {
             }
 
             void Draw(const GlobalDockPaneDrawContext &context) override {
-                pane_.Draw(context.contentOrigin, context.contentWidth, context.gui);
+                GuiLive::Invoke<&GlobalDockOperationsPane::Draw>(context.gui.theme.liveReload, pane_, context.contentOrigin,
+                                                                 context.contentWidth, context.gui);
             }
 
         private:
@@ -179,7 +183,8 @@ namespace Horo::Editor {
             }
 
             void Draw(const GlobalDockPaneDrawContext &context) override {
-                pane_.Draw(context.contentOrigin, context.contentWidth, context.gui);
+                GuiLive::Invoke<&GlobalDockNetworkPane::Draw>(context.gui.theme.liveReload, pane_, context.contentOrigin,
+                                                              context.contentWidth, context.gui);
             }
 
         private:

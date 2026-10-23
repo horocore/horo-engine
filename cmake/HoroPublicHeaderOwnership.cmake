@@ -1263,6 +1263,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/EditorEngineEventBridge.h
     Horo/Editor/EditorMenuModel.h
     Horo/Editor/EditorModalHost.h
+    Horo/Editor/GuiLiveReload.h
     Horo/Editor/EditorServiceRegistry.h
     Horo/Editor/EditorSurfaceIdentity.h
     Horo/Editor/EditorSettingsEvents.h

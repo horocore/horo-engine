@@ -7,8 +7,11 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 
 #include <algorithm>
+#include <array>
+#include <cfloat>
 #include <filesystem>
 #include <ranges>
+#include <string>
 
 namespace Horo::Editor {
     namespace {
@@ -78,11 +81,27 @@ namespace Horo::Editor {
     /** @copydoc DrawAssetBrowserBackgroundActions */
     void DrawAssetBrowserBackgroundActions(const EditorWorkspaceViewModel &viewModel, AssetBrowserInteractionSession &interactionSession,
                                            EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+        const ILocalizationService &localization = context.localization;
+        constexpr std::array actionKeys = {"workspace.content_browser.action.paste_here",
+                                           "workspace.content_browser.action.move_here",
+                                           "workspace.content_browser.action.create_folder",
+                                           "workspace.content_browser.action.create_lua_behavior",
+                                           "workspace.content_browser.action.create_native_behavior",
+                                           "workspace.content_browser.action.import_here",
+                                           "workspace.content_browser.action.refresh"};
+        float widestLabel = 0.0F;
+        for (const char *key : actionKeys) {
+            const std::string &label = localization.Get("editor", key);
+            widestLabel =
+                std::max(widestLabel, context.theme.fonts.sans->CalcTextSizeA(Theme::TextPx::Label(), FLT_MAX, 0.0F, label.c_str()).x);
+        }
+        const float width =
+            std::clamp(widestLabel + Ui::ScaledLayoutValue(64.0F), Ui::ScaledLayoutValue(176.0F), Ui::ScaledLayoutValue(340.0F));
+        ImGui::SetNextWindowSize({width, 0.0F});
         if (!Ui::BeginContextWindowMenu("##ContentBrowserBackgroundMenu"))
             return;
 
         const ContentBrowserDirectory &directory = viewModel.contentBrowser;
-        const ILocalizationService &localization = context.localization;
         DrawPasteAction(directory.absoluteCurrentPath, viewModel.contentBrowserClipboard.mode, context, command);
         Ui::ContextMenuSeparator();
         if (Ui::ContextMenuItem((localization.Get("editor", "workspace.content_browser.action.create_folder") +

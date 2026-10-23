@@ -2231,6 +2231,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/NavigationDefinitionPresentationTests.cpp
             unit/editor/NavigationPolicyPresentationTests.cpp
             unit/editor/ProjectCreationViewPresentationTests.cpp
+            unit/editor/GameplayBehaviorModalPresentationTests.cpp
             unit/editor/AssetImportModalPresentationTests.cpp
             unit/editor/AssetImportSourcePreviewTests.cpp
             unit/editor/ScreenViewPresentationTests.cpp
@@ -2248,6 +2249,33 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroEngine::Extensions
             HoroThirdParty::ImGui
     )
+    add_executable(HoroEditorThemeLiveReloadTests unit/editor/EditorThemeBehaviorTests.cpp)
+    target_compile_features(HoroEditorThemeLiveReloadTests PRIVATE cxx_std_20)
+    target_include_directories(HoroEditorThemeLiveReloadTests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+    target_link_libraries(HoroEditorThemeLiveReloadTests PRIVATE HoroEngine::Gui HoroEngine::EditorServices Catch2::Catch2WithMain)
+    add_test(NAME HoroEditorThemeLiveReloadTests COMMAND HoroEditorThemeLiveReloadTests)
+    set_tests_properties(HoroEditorThemeLiveReloadTests PROPERTIES LABELS "unit;editor;headless;theme")
+    add_executable(HoroGuiLiveReloadDispatchTests unit/editor/GuiLiveReloadDispatchTests.cpp)
+    target_compile_features(HoroGuiLiveReloadDispatchTests PRIVATE cxx_std_20)
+    target_link_libraries(HoroGuiLiveReloadDispatchTests PRIVATE HoroEngine::EditorServices Catch2::Catch2WithMain)
+    add_test(NAME HoroGuiLiveReloadDispatchTests COMMAND HoroGuiLiveReloadDispatchTests)
+    set_tests_properties(HoroGuiLiveReloadDispatchTests PROPERTIES LABELS "unit;editor;development")
+    if(HORO_EDITOR_LIVE_UI)
+        get_target_property(HORO_RCCPP_ROOT HoroThirdPartyRccpp HORO_RCCPP_ROOT)
+        set(HORO_GUI_LIVE_DIR "${PROJECT_BINARY_DIR}/gui-live")
+        add_executable(HoroEditorGuiLiveReloadTests unit/editor/EditorGuiLiveReloadTests.cpp)
+        target_compile_features(HoroEditorGuiLiveReloadTests PRIVATE cxx_std_20)
+        target_include_directories(HoroEditorGuiLiveReloadTests PRIVATE "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/tests")
+        target_include_directories(HoroEditorGuiLiveReloadTests SYSTEM PRIVATE "${HORO_RCCPP_ROOT}/RuntimeCompiler" "${HORO_RCCPP_ROOT}/RuntimeObjectSystem")
+        target_link_libraries(HoroEditorGuiLiveReloadTests PRIVATE HoroEngine::Gui HoroGuiLiveReloadInternal HoroThirdPartyRccpp Catch2::Catch2WithMain)
+        target_compile_definitions(HoroEditorGuiLiveReloadTests PRIVATE
+            HORO_TEST_WELCOME_SOURCE="${PROJECT_SOURCE_DIR}/src/editor/screens/welcome/WelcomeView.cpp"
+            HORO_TEST_SHARED_UI_SOURCE="${PROJECT_SOURCE_DIR}/src/editor/design_system/components/EditorUiComponents.cpp"
+            HORO_TEST_WELCOME_WRAPPER="${HORO_GUI_LIVE_DIR}/GuiLive_Welcome.cpp")
+        horo_attach_gui_live_host(HoroEditorGuiLiveReloadTests)
+        add_test(NAME HoroEditorGuiLiveReloadTests COMMAND HoroEditorGuiLiveReloadTests)
+        set_tests_properties(HoroEditorGuiLiveReloadTests PROPERTIES LABELS "unit;editor;development;ci-windows" TIMEOUT 600)
+    endif()
     add_executable(HoroAssetImportModalLifecycleTests
             unit/editor/AssetImportModalLifecycleTests.cpp
     )

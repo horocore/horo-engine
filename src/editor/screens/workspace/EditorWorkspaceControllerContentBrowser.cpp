@@ -204,11 +204,11 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ReconcileContentBrowserNavigation() {
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteRootPath);
+        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.projectRoot);
         const std::filesystem::path current = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteCurrentPath);
         const auto isValidHistoryEntry = [&root, &current](const std::filesystem::path &entry) {
             const std::filesystem::path normalized = NormalizeAbsolute(entry);
-            return !normalized.empty() && normalized != current && IsContentBrowserDirectoryTargetAllowed(root, normalized);
+            return !normalized.empty() && normalized != current && IsProjectContentBrowserDirectoryTargetAllowed(root, normalized);
         };
         std::erase_if(m_contentBrowserBackHistory, [&isValidHistoryEntry](const std::filesystem::path &entry) {
             return !isValidHistoryEntry(entry);
@@ -221,9 +221,9 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::NavigateContentBrowser(const std::filesystem::path &absoluteDirectory, const bool recordHistory) {
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteRootPath);
+        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.projectRoot);
         const std::filesystem::path destination = NormalizeAbsolute(absoluteDirectory);
-        if (!IsContentBrowserDirectoryTargetAllowed(root, destination)) {
+        if (!IsProjectContentBrowserDirectoryTargetAllowed(root, destination)) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_target";
             return;
         }
@@ -251,7 +251,7 @@ namespace Horo::Editor {
         while (!m_contentBrowserBackHistory.empty()) {
             const std::filesystem::path destination = m_contentBrowserBackHistory.back();
             m_contentBrowserBackHistory.pop_back();
-            if (!IsContentBrowserDirectoryTargetAllowed(m_viewModel.contentBrowser.absoluteRootPath, destination)) {
+            if (!IsProjectContentBrowserDirectoryTargetAllowed(m_viewModel.projectRoot, destination)) {
                 continue;
             }
             if (!current.empty())
@@ -270,7 +270,7 @@ namespace Horo::Editor {
         while (!m_contentBrowserForwardHistory.empty()) {
             const std::filesystem::path destination = m_contentBrowserForwardHistory.back();
             m_contentBrowserForwardHistory.pop_back();
-            if (!IsContentBrowserDirectoryTargetAllowed(m_viewModel.contentBrowser.absoluteRootPath, destination)) {
+            if (!IsProjectContentBrowserDirectoryTargetAllowed(m_viewModel.projectRoot, destination)) {
                 continue;
             }
             if (!current.empty())

@@ -1,0 +1,2 @@
+# git apply must read patch context lines with LF endings, including on Windows.
+*.patch text eol=lf

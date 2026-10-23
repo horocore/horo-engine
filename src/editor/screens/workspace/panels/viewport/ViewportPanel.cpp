@@ -390,8 +390,13 @@ namespace Horo::Editor {
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
         const ImVec2 pointer = ImGui::GetMousePos();
+        const auto statusRow =
+            ResolveViewportStatusRow(layout.origin, {layout.width, layout.height}, viewModel.objects.size(), context.localization);
+        const bool pointerOverStatus =
+            pointer.y >= statusRow.objectsPosition.y && pointer.y <= statusRow.objectsPosition.y + statusRow.height;
         const bool pointerOverControls =
-            navigationLayer_.CapturesPointer() || (pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F);
+            navigationLayer_.CapturesPointer() || pointerOverStatus ||
+            (pointer.y >= layout.origin.y && pointer.y <= ResolveViewportToolbar(layout.origin, {layout.width, layout.height}).bottom);
         const bool inputEligible = ViewportInputEligible();
         const bool surfaceInteractive = !pointerOverControls || interaction_.IsActive();
         const bool surfaceHovered = PrepareViewportInput(layout, inputEligible, surfaceInteractive);

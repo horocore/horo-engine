@@ -1954,7 +1954,7 @@ namespace Horo::Editor::Ui {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
         ImGui::PushStyleColor(ImGuiCol_ChildBg, foregroundBorder_ ? ImVec4{} : Theme::Bg0());
         ImGui::BeginChild("##ModalFooter", {0.0F, footerHeight_}, border,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+                          ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         const ImVec2 position = ImGui::GetWindowPos();
         ImGui::GetWindowDrawList()->AddLine(position, {position.x + ImGui::GetWindowWidth(), position.y}, Theme::U32(Theme::Border()),
                                             1.0F);

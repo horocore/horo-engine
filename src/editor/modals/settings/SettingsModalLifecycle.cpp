@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "../extension_pages/EditorPageView.h"
 #include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/SettingsModal.h"
@@ -46,7 +47,7 @@ namespace Horo::Editor {
 
     Result<void> SettingsModal::OnOpen(EditorModalContext &context) {
         if (m_pagesUnsupported)
-            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::EditorThemeTokenInvalid));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Extensions::ExtensionErrors::EditorThemeTokenInvalid>()));
         m_events = &context.events;
         m_revertedPublished = false;
         LoadSettingsForModal(m_draft, m_settings);

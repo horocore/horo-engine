@@ -627,7 +627,7 @@ Theme sources are:
 - custom presets in `~/.horo/themes/*.json` (current implementation; target:
   `Platform::UserConfigDirectory()/horo/themes/*.theme.json`)
 - an optional project override at `<project>/.horo/theme.json`
-- an explicit external preset selected through `HORO_THEME_FILE`
+- an explicit external preset selected through `HORO_THEME_OVERRIDE`
 
 Current theme file format (flat, for rapid iteration):
 
@@ -673,6 +673,41 @@ structured diagnostic. Color, spacing, shape, dimensions, and motion changes
 apply live. Typography changes that require a font-atlas rebuild are prepared
 outside rendering and swapped at a safe frame boundary; they do not require an
 application restart.
+
+The local Debug watcher currently implements bounded background inspection of
+the selected JSON source, owner-thread frame-boundary publication and a
+`Theme::ThemeReloadedEvent`. Font-atlas replacement is not part of this watcher.
+The optional native Windows Debug RCC++ integration replaces actual registered
+built-in GUI drawing through `GuiLive::IRegistry`, borrowed from `ThemeContext`.
+Its typed dispatch preserves reference arguments and value/void results, rejects
+signature mismatches, and publishes completed modules only before a frame. There
+is no per-screen virtual interface. `HoroGui` owns the registered sources and
+generated adapters; a dedicated non-installed internal target carries compiler
+metadata to application composition. No repository-wide private include root
+is published to the application.
+
+The development import bridge resolves Horo/ImGui calls against the running
+host, sharing its context, design tokens and service authorities. This trusted
+built-in compiler path is distinct from external package schemas and does not
+extend their capabilities. Editor/panel/modal objects remain host-owned and are
+borrowed only for synchronous drawing. Member adapters bypass original virtual
+tables explicitly. Common screen, workspace, dock and modal call sites own
+dispatch; GUI drawing bodies contain no live-reload guards. Generated registrations
+derive entry/signature identities and map polymorphic draws by their concrete
+host type. `GuiLiveReload.h` is owned by `EditorServices`, allowing its modal host
+to dispatch through this backend-neutral contract without a dependency on
+`HoroGui`. Modals never store the registry; headless hosts default to none.
+Shared component and presentation-helper sources are compiled with registered
+entries into one replacement module. Their inventory derives from the owning
+`HoroGui` target; component implementations need no per-file dispatch guard.
+The shell, status bar and snackbar use the same dispatch contract. Theme/font
+authority and native source-widget/platform backends remain in the host.
+Mutable state stays in original owners, rather
+than module statics. Header, object-layout and signature changes require a host
+rebuild/restart. A failed compile/link keeps the last working module. Disabled
+builds use null dispatch and retain ordinary GUI linkage.
+See [Local editor UI iteration](../../guides/editor-live-development.md) for its
+explicit source scope and development-only build option.
 
 ## User Customization
 

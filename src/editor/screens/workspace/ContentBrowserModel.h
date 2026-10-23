@@ -116,7 +116,7 @@ namespace Horo::Editor {
     /**
      * @brief Builds a deterministic directory projection from disk folders, asset files, and a registry snapshot.
      * @param absoluteProjectRoot Absolute open-project root.
-     * @param requestedAbsoluteDirectory Absolute directory to display, or empty to select the asset root.
+     * @param requestedAbsoluteDirectory Absolute asset/source directory to display, or empty to select the asset root.
      * @param snapshot Immutable authoritative asset registry snapshot.
      * @return Owned absolute-path directory snapshot. Invalid targets safely fall back to the asset root.
      */
@@ -132,6 +132,15 @@ namespace Horo::Editor {
      */
     [[nodiscard]] bool IsContentBrowserDirectoryTargetAllowed(const std::filesystem::path &absoluteRoot,
                                                               const std::filesystem::path &absoluteTarget);
+
+    /**
+     * @brief Validates navigation inside the project's asset or native-source roots.
+     * @param absoluteProjectRoot Absolute open-project root.
+     * @param absoluteTarget Existing absolute directory candidate.
+     * @return True only for a contained directory in either permitted root.
+     */
+    [[nodiscard]] bool IsProjectContentBrowserDirectoryTargetAllowed(const std::filesystem::path &absoluteProjectRoot,
+                                                                     const std::filesystem::path &absoluteTarget);
 
     /**
      * @brief Projects visible entry indices without mutating the authoritative directory snapshot.

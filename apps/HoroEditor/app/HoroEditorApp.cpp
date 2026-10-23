@@ -1,6 +1,8 @@
 #include "HoroEditorApp.h"
 
 #include "EditorAudioPreviewHost.h"
+#include "EditorFrameAdmission.h"
+#include "EditorGuiLiveReload.h"
 #include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
@@ -826,6 +828,11 @@ namespace Horo::Editor {
         }
 
         void ApplySavedThemePreference() {
+            const char *overridePath = std::getenv("HORO_THEME_OVERRIDE");
+            const int active = Theme::GetActiveThemeIndex();
+            if (overridePath && active >= 0 && static_cast<std::size_t>(active) < Theme::GetThemeList().size() &&
+                Theme::GetThemeList()[static_cast<std::size_t>(active)].sourcePath == overridePath)
+                return;
             auto doc = LoadEditorSettingsDocument();
             if (doc.loadedFromDisk && !doc.parseError) {
                 const auto savedIndex = static_cast<int>(doc.settings.themePreset);
@@ -1094,10 +1101,11 @@ namespace Horo::Editor {
         public:
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
                                      EditorViewportSceneState &viewportSceneState, EditorSettingsSnapshot &settingsSnapshot,
-                                     std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock,
-                                     const EditorRuntimeAuthorities &authorities) noexcept
+                                     EditorGuiLiveReload &liveGui, std::optional<EditorRendererRestartRequest> &rendererRestart,
+                                     Clock &clock, const EditorRuntimeAuthorities &authorities)
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), authorities_(authorities), pacing_{clock}
+                  themeReload_(params.background.jobs, params.editorEvents), liveGui_(liveGui), rendererRestart_(&rendererRestart),
+                  authorities_(authorities), pacing_{clock}
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                   ,
                   qualification_{params.options.qualifySurfaceLifecycle}
@@ -1110,6 +1118,8 @@ namespace Horo::Editor {
             }
 
             Result<void> Startup(const CancellationToken &cancellation) override {
+                if (auto liveUi = liveGui_.Start(); liveUi.HasError())
+                    return liveUi;
                 pacing_.hostCancellation = cancellation;
                 const auto timing = p_->presentation.renderFrontend.PollNativePresentTiming();
                 if (timing.HasError() &&
@@ -1152,6 +1162,10 @@ namespace Horo::Editor {
             Result<void> OnPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
                 switch (phase) {
                     case Runtime::RuntimePhase::BeginFrame:
+#if !defined(NDEBUG)
+                        themeReload_.Update(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
+#endif
+                        liveGui_.Update(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
                         p_->inputBackend.BeginFrame(inputFrameNumber_++);
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::PollPlatformEvents:
@@ -1196,6 +1210,7 @@ namespace Horo::Editor {
             }
 
             void Shutdown() noexcept override {
+                themeReload_.Shutdown();
                 try {
                     static_cast<void>(authorities_.packages->Close());
                 } catch (...) {
@@ -1362,11 +1377,11 @@ namespace Horo::Editor {
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
+                focusedWidgetInputContext_.Reset();
                 auto renderBegun = BeginRenderFrame(context);
                 if (renderBegun.HasError())
                     return Result<void>::Failure(renderBegun.ErrorValue());
 
-                focusedWidgetInputContext_.Reset();
                 if (renderBegun.Value()) {
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                     qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiBegin);
@@ -1422,9 +1437,9 @@ namespace Horo::Editor {
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Extraction);
 #endif
 
-                screenHost_->Draw();
+                GuiLive::Invoke<&GuiScreenHost::Draw>(liveGui_.Registry(), *screenHost_);
                 DrawModalBackdrop();
-                p_->modalHost.Draw();
+                p_->modalHost.Draw(liveGui_.Registry());
                 ImGui::Render();
 
                 preparedPasses_.count = 0;
@@ -1572,6 +1587,8 @@ namespace Horo::Editor {
 #endif
                 auto begun = p_->presentation.renderFrontend.BeginFrame(
                     Render::FrameDescriptor{.frameNumber = context.frameNumber, .outputExtent = outputExtent});
+                if (begun.HasError() && IsDeferredFrameAdmission(begun.ErrorValue()))
+                    return Result<bool>::Success(false);
                 if (begun.HasError())
                     return Result<bool>::Failure(begun.ErrorValue());
                 frame_.emplace(std::move(begun).Value());
@@ -1625,7 +1642,7 @@ namespace Horo::Editor {
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Presentation);
 #endif
                 Result<void> result = frame_->Present(timing);
-                if (result.HasValue() && presentedFrames_ != std::numeric_limits<std::uint64_t>::max())
+                if (result.HasValue() && presentedFrames_ != (std::numeric_limits<std::uint64_t>::max)())
                     ++presentedFrames_;
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                 qualification_.RecordPresent(result.HasValue());
@@ -1669,6 +1686,8 @@ namespace Horo::Editor {
             GuiScreenHost *screenHost_{};
             EditorViewportSceneState *viewportSceneState_{};
             EditorSettingsSnapshot *settingsSnapshot_{};
+            Theme::LiveReload themeReload_;
+            EditorGuiLiveReload &liveGui_;
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
             EditorRuntimeAuthorities authorities_;
             EditorPacingState pacing_;
@@ -1816,7 +1835,8 @@ namespace Horo::Editor {
 
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
-            ThemeContext themeContext{p.fonts};
+            EditorGuiLiveReload liveGui;
+            ThemeContext themeContext{p.fonts, liveGui.Registry()};
             EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
             EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
             std::optional<UpdateExperienceSession> updateSession;
@@ -2048,8 +2068,8 @@ namespace Horo::Editor {
                 return std::nullopt;
             }
             auto participant =
-                std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, rendererRestart, clock,
-                                                           EditorRuntimeAuthorities{nullptr, &*packages, &navigationBakes});
+                std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui, rendererRestart,
+                                                           clock, EditorRuntimeAuthorities{nullptr, &*packages, &navigationBakes});
             participant->BindHost(*runtime);
             EditorRuntimeParticipant *pacingParticipant = participant.get();
             Result<void> startup = runtime->AddParticipant(std::move(participant));

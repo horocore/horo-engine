@@ -669,6 +669,13 @@ never mutates GUI route state directly. Stateful open requests return typed
 
 ### Project source-file policy and open routing
 
+Native C++ behavior creation writes into `source/gameplay` and reveals that
+directory in the Asset Browser after the source files are written successfully.
+The browser can project the project's `source` tree as a separate navigation root;
+its asset root remains the default. Navigation history can cross those roots,
+while directories outside both roots remain rejected. Native source files do not
+require asset metadata sidecars to appear in this projection.
+
 All Asset Browser activations, build diagnostics, and editor commands submit one
 `SourceOpenRequest` to `SourceFileOpenService`. The request carries its origin,
 optional line/column, and whether an external fallback is permitted; callers do

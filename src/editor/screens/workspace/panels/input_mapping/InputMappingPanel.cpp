@@ -150,8 +150,8 @@ namespace Horo::Editor {
         drawList->AddCircleFilled({center.x + 5.0F, center.y}, 2.0F, color);
     }
 
-    void InputMappingPanel::DrawPanel(const ImVec2 &, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
-                                      EditorWorkspaceViewCommandData &, const EditorGuiContext &context) {
+    void InputMappingPanel::DrawPanel(const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
+                                      EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         projectRoot_ = viewModel.projectRoot;
         const std::array labels{
             context.localization.Get("editor", "workspace.input_mapping.actions").c_str(),

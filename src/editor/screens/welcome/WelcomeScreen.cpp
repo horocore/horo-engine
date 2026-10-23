@@ -71,7 +71,8 @@ namespace Horo::Editor {
                     return;
                 }
                 const WelcomeViewResult result =
-                    DrawWelcomeView(viewModel_, viewState_, context_, WelcomeViewAssets{(ImTextureID)logoTexture_}, contentRegion);
+                    GuiLive::Invoke<&DrawWelcomeView>(context_.theme.liveReload, viewModel_, viewState_, context_,
+                                                      WelcomeViewAssets{(ImTextureID)logoTexture_}, contentRegion);
                 if (modalHost_.HasOpenModal()) {
                     // A modal owns interaction — ignore any commands the view emits this frame.
                     return;
@@ -181,11 +182,11 @@ namespace Horo::Editor {
                     const std::filesystem::path root{project.rootPath};
                     auto modified = std::filesystem::last_write_time(root, error);
                     if (error)
-                        modified = std::filesystem::file_time_type::min();
+                        modified = (std::filesystem::file_time_type::min)();
                     error.clear();
                     const auto metadataModified = std::filesystem::last_write_time(root / ".horo/project.json", error);
                     if (!error)
-                        modified = std::max(modified, metadataModified);
+                        modified = (std::max)(modified, metadataModified);
                     viewState_.projectModifiedTimes.push_back(modified);
                 }
             }

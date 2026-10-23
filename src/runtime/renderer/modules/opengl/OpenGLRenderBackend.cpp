@@ -12,6 +12,7 @@
 #include <exception>
 #include <functional>
 #include <glad/gl.h>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -403,8 +404,18 @@ namespace Horo::Render {
             };
 
             static constexpr std::size_t MaximumNativeLifetimes = 65'535;
-            std::map<NativeLifetimeKey, NativeLifetimeRecord> nativeLifetimes_;
-            NativeLifetimeKey nativeLifetimeCursor_{};
+            using NativeLifetimeMap = std::multimap<NativeLifetimeKey, NativeLifetimeRecord>;
+            NativeLifetimeMap nativeLifetimes_;
+            NativeLifetimeMap::iterator nativeLifetimeCursor_{nativeLifetimes_.end()};
+
+            /** @brief Equivalent keys retain insertion order; only the newest allocation can still be active. */
+            NativeLifetimeMap::iterator FindActiveNativeLifetime(const NativeLifetimeKey key) noexcept {
+                const auto after = nativeLifetimes_.upper_bound(key);
+                if (after == nativeLifetimes_.begin())
+                    return nativeLifetimes_.end();
+                const auto newest = std::prev(after);
+                return newest->first == key && !newest->second.retiring ? newest : nativeLifetimes_.end();
+            }
 
             /** @brief Allocates tracking before any upload command can be accepted; lifetime remains charged on native failure. */
             [[nodiscard]] Result<void> TrackNativeLifetime(const NativeResourceKind kind, const std::uint64_t identity,
@@ -417,12 +428,14 @@ namespace Horo::Render {
                                   "Charged native allocations require real nonblocking retirement-fence dispatch."));
                 if (auto polled = PollNativeLifetimes(); polled.HasError())
                     return polled;
-                if (nativeLifetimes_.size() >= MaximumNativeLifetimes || nativeLifetimes_.contains({kind, identity}))
+                if (nativeLifetimes_.size() >= MaximumNativeLifetimes ||
+                    FindActiveNativeLifetime({kind, identity}) != nativeLifetimes_.end())
                     return Result<void>::Failure(
                         MakeError(OpenGLBackendErrors::ResourceCreationFailed,
-                                  "Native lifetime storage or a recycled native identity remains owned by pending retirement."));
+                                  "Native lifetime storage is full or the native identity already has an active allocation."));
                 try {
-                    nativeLifetimes_.try_emplace({kind, identity}, std::move(lifetime));
+                    // OpenGL can recycle a deleted name while its previous allocation's fence is still pending.
+                    nativeLifetimes_.emplace(NativeLifetimeKey{kind, identity}, NativeLifetimeRecord{std::move(lifetime)});
                 } catch (const std::bad_alloc &) {
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed,
                                                            "Native lifetime tracking allocation failed before upload."));
@@ -432,8 +445,8 @@ namespace Horo::Render {
 
             /** @brief Marks deletion after all native references are dropped; pending/failed fences retain the exact charge. */
             void RetireNativeLifetime(const NativeResourceKind kind, const std::uint64_t identity) noexcept {
-                const auto found = nativeLifetimes_.find({kind, identity});
-                if (found == nativeLifetimes_.end() || found->second.retiring)
+                const auto found = FindActiveNativeLifetime({kind, identity});
+                if (found == nativeLifetimes_.end())
                     return;
                 found->second.retiring = true;
                 found->second.fence = functions_.sync.fence();
@@ -444,12 +457,11 @@ namespace Horo::Render {
             [[nodiscard]] Result<void> PollNativeLifetimes() {
                 if (nativeLifetimes_.empty())
                     return Result<void>::Success();
-                auto current = nativeLifetimes_.upper_bound(nativeLifetimeCursor_);
-                if (current == nativeLifetimes_.end())
-                    current = nativeLifetimes_.begin();
+                if (nativeLifetimeCursor_ == nativeLifetimes_.end())
+                    nativeLifetimeCursor_ = nativeLifetimes_.begin();
                 const auto count = std::min(std::size_t{64}, nativeLifetimes_.size());
                 for (std::size_t examined = 0; examined < count && !nativeLifetimes_.empty(); ++examined) {
-                    nativeLifetimeCursor_ = current->first;
+                    const auto current = nativeLifetimeCursor_;
                     const auto &record = current->second;
                     bool complete = false;
                     if (record.retiring) {
@@ -462,11 +474,11 @@ namespace Horo::Render {
                     }
                     if (complete) {
                         functions_.sync.destroy(record.fence);
-                        current = nativeLifetimes_.erase(current);
+                        nativeLifetimeCursor_ = nativeLifetimes_.erase(current);
                     } else
-                        ++current;
-                    if (current == nativeLifetimes_.end())
-                        current = nativeLifetimes_.begin();
+                        ++nativeLifetimeCursor_;
+                    if (nativeLifetimeCursor_ == nativeLifetimes_.end())
+                        nativeLifetimeCursor_ = nativeLifetimes_.begin();
                 }
                 return Result<void>::Success();
             }
@@ -479,7 +491,7 @@ namespace Horo::Render {
                         functions_.sync.destroy(record.fence);
                 }
                 nativeLifetimes_.clear();
-                nativeLifetimeCursor_ = {};
+                nativeLifetimeCursor_ = nativeLifetimes_.end();
             }
 
             void CompleteActiveFrame() noexcept {
