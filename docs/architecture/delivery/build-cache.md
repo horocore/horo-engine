@@ -294,6 +294,13 @@ failed isolation check fails the job. Sonar keeps its existing four-worker
 coverage configuration. Hosted duration and failure results must be recorded
 separately from the small fixture's concurrency proof.
 
+Sonar's fastcov collection uses up to four gcov workers on its four-CPU Linux
+runner. Batches remain capped at 64 inputs and execute sequentially; increasing
+worker count does not expand the batch, source filters or collected line
+universe. Trace merging and report validation still complete before publishing
+coverage. Worker-count experiments must compare full counters, including shared
+source merges and zero-hit lines, and qualify memory use on the hosted runner.
+
 ### Layer 1: Compiler Cache
 
 | Platform | Cache tool | Cache key |
