@@ -13,7 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build/ci-audio-release"
 RESULTS = ROOT / "build/windows-cache-benchmark"
-GROUPS = ("src/foundation/", "src/runtime/ui/", "src/runtime/physics/", "src/runtime/navigation/")
+GROUPS = ("src/foundation/", "src/runtime/ui/", "src/physics/", "src/runtime/navigation/")
 
 
 def run(arguments, output, environment):
@@ -37,7 +37,7 @@ def select_objects():
             source = Path(command["file"]).resolve()
             if not source.is_relative_to(ROOT) or not source.relative_to(ROOT).as_posix().startswith(group):
                 continue
-            if Path(command["directory"]).resolve() != BUILD:
+            if not Path(command["directory"]).resolve().is_relative_to(BUILD):
                 continue
             output = (BUILD / command["output"]).resolve()
             assert output.is_relative_to(BUILD)
@@ -84,11 +84,12 @@ def measure(index, mode, workers, targets, environment):
 def main():
     RESULTS.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
-    targets = select_objects()
     order = [("server", 2), ("server", 4), ("client", 2), ("client", 4)]
     summary = {"scope": "48 real Release objects on one runner, unchanged flags/cache; no full-job or runtime claim",
-               "targets": targets, "samples": []}
+               "samples": []}
     try:
+        targets = select_objects()
+        summary["targets"] = targets
         _, reference = measure("warm", "server", 4, targets, environment)
         for index, (mode, workers) in enumerate(order + list(reversed(order))):
             sample, actual = measure(index, mode, workers, targets, environment)
