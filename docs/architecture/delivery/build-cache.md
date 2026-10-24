@@ -665,9 +665,10 @@ inside the destination. Digests detect corruption; transport authentication and
 trusted-writer restrictions establish provenance. An archive's own digest list
 does not establish publisher trust.
 
-The first CMake integration is Unicode/ICU. Configure a producer with
-`HORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON` and build `horo-package-unicode` after the
-normal native build. Archives appear in `build-dir/dependency-sdk/packages`.
+The CMake integrations cover Unicode/ICU and the pinned static HarfBuzz shaping
+library. Configure a producer with `HORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON` and
+build `horo-package-dependencies`, or the individual `horo-package-unicode` and
+`horo-package-harfbuzz` targets. Archives appear in `build-dir/dependency-sdk/packages`.
 A consumer sets `HORO_DEPENDENCY_SDK_CACHE` to a directory of trusted archives.
 `HoroDependencySdk.cmake` computes the identity from the recipe, compiler,
 platform SDK and effective global build flags. It restores only the matching
@@ -675,6 +676,16 @@ archive and verifies an existing restored payload again on reconfigure.
 Unicode keeps the same target/alias, interface definitions and data installation
 contract. A missing Python 3.11 interpreter, missing archive or failed verification
 uses the existing source build. Both options are disabled/empty by default.
+
+HarfBuzz keeps the exportable `harfbuzz` target used by gameplay modules. Its
+package contains the static archive, upstream public header inventory, generated
+feature header and license. A verified hit bypasses upstream configuration as
+well as compilation. Custom platform shaping integrations and shared-library
+builds retain the upstream source path. The existing main-only SDK workflow
+publishes both recipes without adding PR jobs or writers. HarfBuzz round-trip,
+external gameplay linkage, corrupt-package fallback and instrumentation fallback
+are covered by small offline fixtures; real vendor and hosted timing qualification
+must be recorded separately.
 
 The initial integration supports single-configuration native builds. Coverage,
 profiling and sanitizer flags deliberately retain source compilation until
@@ -698,7 +709,8 @@ The current transport is public GHCR through
 `.github/scripts/dependency_registry.py`; readers use an empty credential store
 and only canonical main producers publish. The native SDK producer has completed
 on Linux, macOS and Windows, and Linux job `120596826395` verified a published
-package and configured without recompiling Unicode. Other dependency recipes,
+package and configured without recompiling Unicode. The HarfBuzz extension,
+other dependency recipes,
 full platform consumers and stable hosted timing still require qualification.
 The earlier bucket capacity planner remains an offline alternative, not a
 configured R2 service. Core compiler checkpoints use GHCR directly, independently
