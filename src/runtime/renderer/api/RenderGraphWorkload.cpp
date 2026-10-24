@@ -55,6 +55,8 @@ namespace Horo::Render {
                                            const RenderGraphWorkload &workload) {
             using enum RenderGraphAccess;
             const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
+            if (const auto *paint = std::get_if<RenderGraphUiPaint>(&workload))
+                return ValidateUiPaintWorkload(request, pass, *paint).HasValue();
             if (std::holds_alternative<RenderGraphMultiview>(workload))
                 return true;  // The outer admission preserves the original typed multiview failure before recording uses.
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
@@ -275,6 +277,13 @@ namespace Horo::Render {
 
     /** @copydoc ValidateRenderGraphExecutionRequest */
     Result<void> ValidateRenderGraphExecutionRequest(const RenderGraphExecutionRequest &request) {
+        if (request.role > RenderGraphExecutionRole::UiComposition ||
+            (request.role == RenderGraphExecutionRole::UiComposition &&
+             (request.workloads.empty() || !std::ranges::all_of(request.workloads, [](const auto &binding) {
+            return std::holds_alternative<RenderGraphUiPaint>(binding.workload);
+        }))))
+            return Result<void>::Failure(
+                MakeError(RenderGraphExecutionErrors::InvalidGraph, "UI composition is one explicit paint-only frame stage."));
         const auto &graph = request.graph;
         if (!graph.Owner().IsValid() || graph.Resources().size() > RenderGraphLimits::HardMaxResources ||
             graph.Passes().size() > RenderGraphLimits::HardMaxPasses || request.workloads.size() != graph.Passes().size() ||

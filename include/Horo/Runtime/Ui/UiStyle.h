@@ -347,7 +347,8 @@ namespace Horo::Runtime::Ui {
     /** @brief Load-time owned definition set handed to the Runtime UI style domain. */
     struct UiStyleRegistryDefinition final {
         std::vector<UiStylePropertyDescriptor> properties;
-        std::vector<UiStyleAssetDefinition> assets;
+        std::vector<UiStyleAssetDefinition>
+            assets; /**< May be empty: registered properties remain authoritative without authored namespaces. */
     };
 
     /** @brief Explicit lifecycle of an immutable style registry owner. */
@@ -369,6 +370,8 @@ namespace Horo::Runtime::Ui {
          * @param definition Owned property, token, class, state, and asset definitions.
          * @param generation Non-zero owner-published registry generation.
          * @return Move-only active registry or a typed failure; no partial state is published.
+         * @details Properties must be nonempty and valid. Zero authored namespaces permits registered defaults, inheritance,
+         * typed inline and host policy values; it does not grant any asset, class or token identity.
          */
         [[nodiscard]] static Result<RuntimeStyleRegistry> Create(UiStyleRegistryDefinition definition, RuntimeStyleGeneration generation);
         ~RuntimeStyleRegistry();
@@ -440,7 +443,7 @@ namespace Horo::Runtime::Ui {
     /** @brief Per-element typed style inputs borrowed only for one owner-thread update. */
     struct UiStyleElementInput final {
         UiElementHandle element;
-        RuntimeStyleAssetId asset;
+        RuntimeStyleAssetId asset; /**< Absent selects no asset chain; explicit identities must exist in the same registry. */
         UiStyleClassReference typeClass;
         std::span<const UiStyleClassReference> classes;
         std::span<const UiStyleAssignment> inlineProperties;

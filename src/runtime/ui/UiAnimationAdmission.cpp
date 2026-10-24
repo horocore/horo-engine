@@ -14,8 +14,9 @@ namespace Horo::Runtime::Ui::AnimationInternal {
             for (std::size_t index = 0; index < definition.layoutBindings.size(); ++index) {
                 const auto &binding = definition.layoutBindings[index];
                 if (const auto property = std::ranges::find(properties, binding.property, &UiStylePropertyDescriptor::id);
-                    binding.field >= UiAnimationLayoutField::Count || tree.Find(binding.target).HasError() ||
-                    property == properties.end() || property->category != UiStyleValueCategory::Dimension || !property->effects.measure)
+                    binding.field >= UiAnimationLayoutField::Count || binding.values >= UiAnimationLayoutValuePolicy::Count ||
+                    tree.Find(binding.target).HasError() || property == properties.end() ||
+                    property->category != UiStyleValueCategory::Dimension || !property->effects.measure)
                     return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
                 const auto prior = std::span(definition.layoutBindings).first(index);
                 if (std::ranges::any_of(prior, [&](const auto &other) {
@@ -61,8 +62,9 @@ namespace Horo::Runtime::Ui::AnimationInternal {
                 return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
             for (std::size_t index = 0; index < definition.elements.size(); ++index) {
                 const auto &element = definition.elements[index];
-                if (tree.Find(element.element).HasError() || !registry.HasAsset(element.asset) || !element.layout.IsValid() ||
-                    !element.intrinsic.IsValid() || (element.typeClass.IsValid() && !registry.HasClass(element.typeClass)))
+                if (tree.Find(element.element).HasError() || (element.asset.IsValid() && !registry.HasAsset(element.asset)) ||
+                    !element.layout.IsValid() || !element.intrinsic.IsValid() ||
+                    (element.typeClass.IsValid() && !registry.HasClass(element.typeClass)))
                     return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
                 if (std::ranges::any_of(element.classes, [&](const auto &styleClass) {
                     return !registry.HasClass(styleClass);

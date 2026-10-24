@@ -22,7 +22,8 @@ namespace Horo::Runtime::Ui {
     Result<void> UiAnimationOwner::AdmitCommand(const Storage &storage) {
         if (storage.ownerThread != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (storage.lifecycle.stopped || storage.lifecycle.draining || storage.candidate.admitted || storage.lifecycle.pointerDispatching)
+        if (!storage.publisher.IsAvailable() || storage.lifecycle.stopped || storage.lifecycle.draining || storage.candidate.admitted ||
+            storage.lifecycle.pointerDispatching)
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (storage.pendingCommands == storage.limits.commands)
             return Result<void>::Failure(MakeError(UiErrors::AnimationBudgetExceeded));

@@ -196,10 +196,44 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        /** @brief Bounds explicit authored names before adapter execution or identity serialization. */
+        [[nodiscard]] bool ValidReflectionRequest(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
+            if (!request.reflection)
+                return true;
+            const auto &reflection = *request.reflection;
+            if (reflection.tool.tool != ShaderCompilerTool::SpirvCross || !HasNonZeroDigest(reflection.tool.buildDigest) ||
+                !IsValidIdentity(reflection.tool.release, limits.maximumIdentityBytes) || reflection.names.size() > 128 ||
+                reflection.names.size() != request.manifest.bindings.size())
+                return false;
+            std::size_t parameters = 0;
+            for (const auto &binding : reflection.names) {
+                if (!binding.id.IsValid() || !IsValidIdentity(binding.name, limits.maximumIdentityBytes) ||
+                    binding.parameters.size() > 512 - parameters ||
+                    std::ranges::count(reflection.names, binding.id, &ShaderReflectionBindingName::id) != 1 ||
+                    std::ranges::count(reflection.names, binding.name, &ShaderReflectionBindingName::name) != 1 ||
+                    std::ranges::find(request.manifest.bindings, binding.id, &ShaderResourceBinding::id) ==
+                        request.manifest.bindings.end() ||
+                    binding.parameters.size() !=
+                        static_cast<std::size_t>(std::ranges::count(request.manifest.parameters, binding.id, &ShaderParameter::binding)))
+                    return false;
+                parameters += binding.parameters.size();
+                for (const auto &parameter : binding.parameters) {
+                    const auto declared = std::ranges::find(request.manifest.parameters, parameter.id, &ShaderParameter::id);
+                    if (!parameter.id.IsValid() || !IsValidIdentity(parameter.name, limits.maximumIdentityBytes) ||
+                        std::ranges::count(binding.parameters, parameter.id, &ShaderReflectionParameterName::id) != 1 ||
+                        std::ranges::count(binding.parameters, parameter.name, &ShaderReflectionParameterName::name) != 1 ||
+                        declared == request.manifest.parameters.end() || declared->binding != binding.id)
+                        return false;
+                }
+            }
+            return true;
+        }
+
         [[nodiscard]] Result<void> ValidateRequest(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
             if (request.source.empty() || request.source.size() > limits.maximumSourceBytes || request.targets.empty() ||
                 request.targets.size() > limits.maximumTargets || request.targets.size() != request.manifest.targets.size() ||
-                request.dependencies.size() > limits.maximumDependencies || request.defines.size() > limits.maximumDefines)
+                request.dependencies.size() > limits.maximumDependencies || request.defines.size() > limits.maximumDefines ||
+                !ValidReflectionRequest(request, limits))
                 return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
 
             if (const auto manifestResult = ValidateShaderManifest(request.manifest); manifestResult.HasError())
@@ -261,6 +295,24 @@ namespace Horo::Render {
             }
         }
 
+        /** @brief Adds explicit reflected cook inputs without changing keys for legacy unreflected requests. */
+        void AppendReflectionIdentity(std::vector<std::byte> &bytes, const ShaderCompilerReflectionRequest &request) {
+            AppendString(bytes, "horo.shader-reflection-request.v1");
+            AppendInteger(bytes, static_cast<std::uint8_t>(request.tool.tool));
+            AppendString(bytes, request.tool.release);
+            AppendDigest(bytes, request.tool.buildDigest);
+            AppendInteger(bytes, static_cast<std::uint32_t>(request.names.size()));
+            for (const auto &binding : request.names) {
+                AppendInteger(bytes, binding.id.value);
+                AppendString(bytes, binding.name);
+                AppendInteger(bytes, static_cast<std::uint32_t>(binding.parameters.size()));
+                for (const auto &parameter : binding.parameters) {
+                    AppendInteger(bytes, parameter.id.value);
+                    AppendString(bytes, parameter.name);
+                }
+            }
+        }
+
         [[nodiscard]] Result<Sha256Digest> BuildArtifactKey(const ShaderCompilationRequest &request,
                                                             const ShaderCompilerTargetDescriptor &target,
                                                             const Sha256Digest &sourceDigest) {
@@ -289,6 +341,8 @@ namespace Horo::Render {
                     AppendString(bytes, define.value);
                 }
                 AppendTargetIdentity(bytes, target);
+                if (request.reflection)
+                    AppendReflectionIdentity(bytes, *request.reflection);
                 return Result<Sha256Digest>::Success(ComputeSha256(bytes));
             } catch (const std::bad_alloc &) {
                 return Result<Sha256Digest>::Failure(MakeError(ShaderCompilerPipelineErrors::ArtifactIdentityUnavailable));
@@ -479,6 +533,27 @@ namespace Horo::Render {
                 {ShaderCompilerPhase::PipelineValidation, target.requirement.backend, request.manifest.sourceRevision, {}, {}, {}});
         }
 
+        /** @brief Rejects missing or foreign cook records before publishing the immutable target artifact. */
+        [[nodiscard]] bool ValidReflectedOutput(const CompiledShaderArtifact &output, const ShaderCompilationRequest &request,
+                                                const ShaderCompilerTargetDescriptor &target) {
+            if (!request.reflection)
+                return !output.reflection;
+            if (!output.reflection)
+                return false;
+            const auto &record = *output.reflection;
+            const auto &tool = request.reflection->tool;
+            if (ValidateReflectedShaderArtifact(output, record).HasError() || record.reflectionTool.tool != tool.tool ||
+                record.reflectionTool.release != tool.release || record.reflectionTool.buildDigest != tool.buildDigest ||
+                !HasNonZeroDigest(record.cookedArtifactKey))
+                return false;
+            const auto &reflection = record.reflection;
+            const ShaderReflectionCandidate candidate{reflection.backend,    reflection.interfaceSchemaVersion, reflection.bindings,
+                                                      reflection.parameters, reflection.stageInterface,         reflection.targetBindings,
+                                                      reflection.sourceMap};
+            const auto normalized = NormalizeShaderReflection(request.manifest, target.requirement, candidate);
+            return !normalized.HasError() && normalized.Value().interfaceCompatibility == reflection.interfaceCompatibility;
+        }
+
         /** @brief Owns one target key, borrowed stream and candidate until its complete output validates. */
         [[nodiscard]] Result<CompiledShaderArtifact> CompileTarget(const ShaderCompilationRequest &request,
                                                                    const ShaderCompilerTargetDescriptor &target,
@@ -494,15 +569,30 @@ namespace Horo::Render {
                 stream.emplace(*diagnostics, request.manifest, target, limits);
             if (auto started = BeginTarget(stream, request, target); started.HasError())
                 return Result<CompiledShaderArtifact>::Failure(started.ErrorValue());
-            const ShaderCompilerInvocation invocation{request.manifest, request.source, request.dependencies,       request.defines, target,
-                                                      key.Value(),      limits,         stream ? &*stream : nullptr};
+            const ShaderCompilerInvocation invocation{request.manifest,
+                                                      request.source,
+                                                      request.dependencies,
+                                                      request.defines,
+                                                      target,
+                                                      key.Value(),
+                                                      limits,
+                                                      stream ? &*stream : nullptr,
+                                                      request.reflection ? &*request.reflection : nullptr};
             auto output =
                 AdmitAdapterOutput(InvokeAdapter(adapter, invocation, cancellation), request, target, limits, cancellation, stream);
             if (output.HasError())
                 return Result<CompiledShaderArtifact>::Failure(std::move(output).ErrorValue());
             auto value = std::move(output).Value();
-            return Result<CompiledShaderArtifact>::Success({value.backend, value.payloadFormat, key.Value(), std::move(value.payload),
-                                                            std::move(value.debugPayload), std::move(value.diagnostics)});
+            CompiledShaderArtifact artifact{value.backend,
+                                            value.payloadFormat,
+                                            key.Value(),
+                                            std::move(value.payload),
+                                            std::move(value.debugPayload),
+                                            std::move(value.diagnostics),
+                                            std::move(value.reflection)};
+            if (!ValidReflectedOutput(artifact, request, target))
+                return Result<CompiledShaderArtifact>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidAdapterOutput));
+            return Result<CompiledShaderArtifact>::Success(std::move(artifact));
         }
     }  // namespace
 

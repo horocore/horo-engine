@@ -266,7 +266,7 @@ namespace Horo::Runtime::Ui::StyleInternal {
     }  // namespace
 
     Result<void> ValidateAssetAndClassShape(const UiStyleRegistryDefinition &definition) {
-        if (definition.properties.empty() || definition.properties.size() > MaximumUiStyleProperties || definition.assets.empty() ||
+        if (definition.properties.empty() || definition.properties.size() > MaximumUiStyleProperties ||
             definition.assets.size() > MaximumUiStyleAssets)
             return Failure(UiErrors::StyleInvalid);
         if (const auto valid = ValidateProperties(definition); valid.HasError())

@@ -304,6 +304,12 @@ namespace Horo::Runtime::Ui {
         return storage ? storage->state : UiActionRouterState::Stopped;
     }
 
+    /** @copydoc UiActionRouter::BindRouteIncarnation */
+    Result<void> UiActionRouter::BindRouteIncarnation(const UiRouteInstanceId route) {
+        auto *const storage = StateStorage();
+        return storage ? storage->asyncActions.BindRouteIncarnation(route) : Failure(UiErrors::ActionLifecycleUnavailable);
+    }
+
     /** @copydoc UiActionRouter::ReserveInteractionReplacement */
     Result<void> UiActionRouter::ReserveInteractionReplacement() {
         const auto *const active = StateStorage();
@@ -336,8 +342,7 @@ namespace Horo::Runtime::Ui {
             owner.interaction.Compare(prior.interaction) == UiRevisionRelation::Older)
             return Failure(UiErrors::ActionSourceStale);
         const bool swap = prior != owner;
-        if (swap && (active->count != 0 || !active->asyncActions.CanPrepareReplacementSource() ||
-                     !replacement_->asyncActions.CanPrepareReplacementSource()))
+        if (swap && (active->count != 0 || !replacement_->asyncActions.CanPrepareReplacementSource()))
             return Failure(UiErrors::ActionLifecycleUnavailable);
         if (swap && active->nextSequence == 0)
             return Failure(UiErrors::GenerationExhausted);
@@ -370,7 +375,7 @@ namespace Horo::Runtime::Ui {
             active->lastIssued != replacementSequence_ || active->count != replacementCount_ || active->dispatching ||
             active->state != UiActionRouterState::Active || (replacementSwap_ ? replacement_->owner : active->owner) != owner)
             return Failure(UiErrors::ActionSourceStale);
-        if (replacementSwap_ && (active->count != 0 || !active->asyncActions.CanPrepareReplacementSource()))
+        if (replacementSwap_ && active->count != 0)
             return Failure(UiErrors::ActionSourceStale);
         return Result<void>::Success();
     }
@@ -378,6 +383,9 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiActionRouter::PublishInteractionReplacement */
     void UiActionRouter::PublishInteractionReplacement() noexcept {
         if (replacementSwap_) {
+            // The active router keeps the same operation slots; issued keys retain their original source.
+            storage_->asyncActions.SwapOperationStorage(replacement_->asyncActions);
+            replacement_->asyncActions.AdvanceInteractionSource(replacement_->owner);
             storage_.swap(replacement_);
             replacement_->state = UiActionRouterState::Retiring;
         }
@@ -391,13 +399,19 @@ namespace Horo::Runtime::Ui {
         replacementSwap_ = false;
     }
 
+    /** @copydoc UiActionRouter::CanCollectRetired */
+    bool UiActionRouter::CanCollectRetired() const noexcept {
+        return (!storage_ || !storage_->asyncActions.HasErrorObservers()) &&
+               (!replacement_ || !replacement_->asyncActions.HasErrorObservers());
+    }
+
     /** @copydoc UiActionRouter::DrainInteractionReplacement */
     std::size_t UiActionRouter::DrainInteractionReplacement() const noexcept {
         if (!storage_ || replacementPrepared_ || storage_->dispatching)
             return 0;
-        auto count = storage_->asyncActions.DrainReplacementSource();
+        auto count = storage_->asyncActions.CollectReleased();
         if (replacement_)
-            count += replacement_->asyncActions.DrainReplacementSource();
+            count += replacement_->asyncActions.CollectReleased();
         return count;
     }
 

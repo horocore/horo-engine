@@ -37,49 +37,74 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    /** @copydoc UiControlStateMachine::Storage::BlocksInteractionReplacement */
-    bool UiControlStateMachine::Storage::BlocksInteractionReplacement() const noexcept {
-        return pending || (asyncAction && asyncAction->Busy());
+    /** @copydoc UiControlStateMachine::Storage::CopyInteractionState */
+    void UiControlStateMachine::Storage::CopyInteractionState(const Storage &source) {
+        descriptor = source.descriptor;
+        state = source.state;
+        editStartText = source.editStartText;
+        if (textEditor)
+            *textEditor = *source.textEditor;
+        configuredAvailability = source.configuredAvailability;
+        asyncAction = source.asyncAction;
+        pendingDefault = source.pendingDefault;
+        pressSource = source.pressSource;
+        adjustment = source.adjustment;
+        lastSequence = source.lastSequence;
+        lastTick = source.lastTick;
+        textResetRevision = source.textResetRevision;
+        repeatNextTick = source.repeatNextTick;
+        pending = source.pending;
+        repeatArmed = source.repeatArmed;
+        lifecycle = source.lifecycle;
+    }
+
+    /** @copydoc UiControlStateMachine::Storage::ProjectAsync */
+    void UiControlStateMachine::Storage::ProjectAsync(std::optional<UiAsyncActionSnapshot> projection) {
+        const bool busy = projection && projection->Busy();
+        if (busy)
+            ClearTransient(false);
+        asyncAction = std::move(projection);
+        SetAvailabilityProjection(configuredAvailability == UiControlAvailability::Enabled && busy ? UiControlAvailability::Busy
+                                                                                                   : configuredAvailability);
     }
 
     /** @copydoc UiControlStateMachine::PrepareInteractionReplacement */
-    Result<void> UiControlStateMachine::PrepareInteractionReplacement(const UiActionOwnerContext &owner) {
+    Result<void> UiControlStateMachine::PrepareInteractionReplacement(const UiActionOwnerContext &owner,
+                                                                      const UiAsyncActionStore *actions) {
         if (const auto admitted = CanPrepareInteractionReplacement(owner); admitted.HasError())
             return admitted;
-        const bool swap = Owner() != owner;
-        if (swap && (replacement_->asyncAction || storage_->BlocksInteractionReplacement()))
-            return Result<void>::Failure(MakeError(UiErrors::ControlDefaultPending));
         auto stamp = CaptureReloadStamp();
         if (stamp.HasError())
             return Result<void>::Failure(stamp.ErrorValue());
-        if (!swap) {
-            replacementSwap_ = false;
-            replacementSource_.emplace(std::move(stamp).Value());
-            return Result<void>::Success();
+        auto projected =
+            actions ? actions->Project({Owner(), Element()}) : Result<std::optional<UiAsyncActionSnapshot>>::Success(std::nullopt);
+        if (projected.HasError())
+            return Result<void>::Failure(projected.ErrorValue());
+        replacement_->CopyInteractionState(*storage_);
+        replacement_->ProjectAsync(std::move(projected).Value());
+        replacementActions_ = actions;
+        replacementSwap_ = true;
+        replacementSource_.emplace(std::move(stamp).Value());
+        return RebasePreparedInteraction(owner);
+    }
+
+    /** @copydoc UiControlStateMachine::RebasePreparedInteraction */
+    Result<void> UiControlStateMachine::RebasePreparedInteraction(const UiActionOwnerContext &owner) {
+        if (!replacementSource_ || !owner.IsValid() || !SameAudience(Owner(), owner) ||
+            owner.interaction.Compare(Owner().interaction) == UiRevisionRelation::Older)
+            return Result<void>::Failure(MakeError(UiErrors::ControlSourceStale));
+        if (owner != Owner()) {
+            if (replacement_->pending)
+                return Result<void>::Failure(MakeError(UiErrors::ControlDefaultPending));
+            UiControlDetail::SetPressed(replacement_->state, false);
+            UiControlDetail::SetRepeating(replacement_->state, false);
+            replacement_->repeatArmed = false;
+            replacement_->repeatNextTick = 0;
+            replacement_->adjustment = UiControlAdjustment::Count;
         }
-        replacement_->descriptor = storage_->descriptor;
         std::visit([&owner](auto &typed) noexcept {
             typed.base.owner = owner;
         }, replacement_->descriptor);
-        replacement_->state = storage_->state;
-        replacement_->editStartText = storage_->editStartText;
-        if (replacement_->textEditor)
-            *replacement_->textEditor = *storage_->textEditor;
-        replacement_->configuredAvailability = storage_->configuredAvailability;
-        replacement_->asyncAction.reset();
-        replacement_->lastSequence = storage_->lastSequence;
-        replacement_->lastTick = storage_->lastTick;
-        replacement_->textResetRevision = storage_->textResetRevision;
-        replacement_->pending = false;
-        replacement_->repeatArmed = false;
-        replacement_->repeatNextTick = 0;
-        replacement_->adjustment = UiControlAdjustment::Count;
-        replacement_->lifecycle = UiControlLifecycleState::Active;
-        UiControlDetail::SetPressed(replacement_->state, false);
-        UiControlDetail::SetRepeating(replacement_->state, false);
-        // Editing and its Cancel baseline are logical form state; neither is discarded by an interaction-only replacement.
-        replacementSwap_ = true;
-        replacementSource_.emplace(std::move(stamp).Value());
         return Result<void>::Success();
     }
 
@@ -88,6 +113,10 @@ namespace Horo::Runtime::Ui {
         if (!replacement_ || !replacementSource_ || !MatchesReloadStamp(*replacementSource_) ||
             (replacementSwap_ ? UiControlDetail::BaseOf(replacement_->descriptor).owner : Owner()) != owner)
             return Result<void>::Failure(MakeError(UiErrors::ControlSourceStale));
+        if (replacementActions_ &&
+            !replacementActions_->CanPublishObservation({Owner(), Element()},
+                                                        replacement_->asyncAction ? &*replacement_->asyncAction : nullptr))
+            return Result<void>::Failure(MakeError(UiErrors::ActionSourceStale));
         return Result<void>::Success();
     }
 
@@ -96,17 +125,24 @@ namespace Horo::Runtime::Ui {
         return replacementSwap_ ? replacement_->state : storage_->state;
     }
 
+    /** @copydoc UiControlStateMachine::PreparedAsyncAction */
+    const std::optional<UiAsyncActionSnapshot> &UiControlStateMachine::PreparedAsyncAction() const noexcept {
+        return replacement_->asyncAction;
+    }
+
     /** @copydoc UiControlStateMachine::PublishInteractionReplacement */
     void UiControlStateMachine::PublishInteractionReplacement() noexcept {
         if (replacementSwap_)
             storage_.swap(replacement_);
         replacementSource_.reset();
+        replacementActions_ = nullptr;
         replacementSwap_ = false;
     }
 
     /** @copydoc UiControlStateMachine::AbandonInteractionReplacement */
     void UiControlStateMachine::AbandonInteractionReplacement() noexcept {
         replacementSource_.reset();
+        replacementActions_ = nullptr;
         replacementSwap_ = false;
     }
 

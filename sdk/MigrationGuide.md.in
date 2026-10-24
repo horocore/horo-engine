@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 21 / `gameplay-sdk21`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 22 / `gameplay-sdk22`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -213,6 +213,21 @@ and complete consumer/lifecycle revalidation, not the maximum prior number.
 
 Rollback: restore a coherent previous engine, SDK and rebuilt module set, then
 restart play. Never edit fingerprints or force-load a mismatched binary.
+
+## Gameplay SDK21 → SDK22 (Scene borrowed-view lifetime)
+
+Rebuild the engine host, every native gameplay module, generated descriptor bundle
+and optional SDK consumer with boundary22 / `gameplay-sdk22`. `RuntimeSceneView`
+now carries cold owner-liveness evidence, owner-thread identity and cached Scene
+identities; `RuntimeScene` owns the matching liveness token. This changes their C++
+value layout without adding a capability or a second Scene publication authority.
+All prior native boundary generations, including SDK21, are rejected before module
+activation. Use the current `CurrentGameplayBuildFingerprint()` and rebuild the
+actual native module; never edit a descriptor to bypass incompatibility.
+
+Rollback requires restoring the previous engine, SDK, rebuilt modules and packaged
+compatibility matrix together. A module compiled against SDK21 cannot safely use
+SDK22 Scene values, even when its source uses only unchanged methods.
 
 ## Gameplay SDK19/20 → SDK21 (Navigation, Character, AI and Runtime UI union)
 

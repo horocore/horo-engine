@@ -196,7 +196,7 @@ TEST_CASE("Responsive bases preserve computed width animation and accessibility 
         REQUIRE(fixture.host->RunFrame().HasValue());
         const auto first = Frame(participant);
         const auto child = first.Controls().front().source.element;
-        const auto &derived = *first.Attachments().front().layout;
+        const auto derived = *first.Attachments().front().layout;
         REQUIRE(derived.Get(child).Value().arrangement.contentBox.extent.width == (accessible ? 64 : 300));
         REQUIRE(derived.Get(child).Value().arrangement.contentBox.extent.height == 40);
         fixture.clock.Advance(Duration::FromMilliseconds(100));

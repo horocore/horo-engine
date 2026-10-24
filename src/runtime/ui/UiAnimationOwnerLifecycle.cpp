@@ -90,7 +90,9 @@ namespace Horo::Runtime::Ui {
         }
         if (storage_->presentation.inspector)
             storage_->presentation.inspector->Shutdown();
-        CancelRouteValidated(*storage_, UiAnimationCancellation::Shutdown);
+        // Service shutdown may already have retired the sole publisher and cancelled its semantic routes.
+        if (storage_->publisher.Current())
+            CancelRouteValidated(*storage_, UiAnimationCancellation::Shutdown);
         storage_->publisher.Shutdown();
         if (storage_->resolver.State() == UiStyleResolverState::Active)
             (void)storage_->resolver.BeginRetirement();
@@ -98,21 +100,29 @@ namespace Horo::Runtime::Ui {
             (void)storage_->registry.BeginRetirement();
     }
 
-    /** @copydoc UiAnimationOwner::DrainRetired */
-    Result<std::size_t> UiAnimationOwner::DrainRetired() {
-        if (!storage_ || storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching)
-            return Result<std::size_t>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+    /** @copydoc UiAnimationOwner::Storage::ReleaseUnobservedFrames */
+    void UiAnimationOwner::Storage::ReleaseUnobservedFrames() {
         // The application calls this outside frame work; owned frame slots retain snapshots until external leases drain.
-        if (storage_->lifecycle.stopped) {
-            for (const auto &frame : storage_->frames) {
-                if (frame.use_count() != 1)
-                    continue;
+        for (std::size_t index = 0; index < frames.size(); ++index) {
+            const auto &frame = frames[index];
+            if (frame.use_count() != 1)
+                continue;
+            if (lifecycle.stopped || !currentFrame.has_value() || index != *currentFrame)
+                frame->controls.clear();
+            if (lifecycle.stopped) {
                 frame->styles.reset();
                 frame->layout.reset();
                 frame->clipped.reset();
                 frame->generation = {};
             }
         }
+    }
+
+    /** @copydoc UiAnimationOwner::DrainRetired */
+    Result<std::size_t> UiAnimationOwner::DrainRetired() {
+        if (!storage_ || storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching)
+            return Result<std::size_t>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        storage_->ReleaseUnobservedFrames();
         std::size_t reclaimed{};
         if (auto *generation = storage_->publisher.Current()) {
             for (const auto &canvas : generation->Canvases()) {

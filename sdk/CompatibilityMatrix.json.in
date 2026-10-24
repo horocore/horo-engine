@@ -26,8 +26,8 @@
   },
   "gameplay": {
     "separateContract": true,
-    "boundaryVersion": 21,
-    "fingerprintGeneration": "gameplay-sdk21",
+    "boundaryVersion": 22,
+    "fingerprintGeneration": "gameplay-sdk22",
     "distribution": "Separate engine build-tree SDK; not included as an installed gameplay SDK in this extension package.",
     "compatibility": "Exact engine/compiler/platform/configuration fingerprint and descriptor revision; rebuild modules and descriptor bundles after generation changes."
   },

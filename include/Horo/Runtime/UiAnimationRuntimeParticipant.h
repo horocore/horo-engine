@@ -87,6 +87,35 @@ namespace Horo::Runtime {
         UiAnimationClockController controller;
     };
 
+    /** @brief Load-time derived caches of one exact source; this is neither a host frame nor presentation/input authority.
+     * @details A retained prototype pins its canonical generation. It exposes only immutable computed presentation values;
+     * real Acquire/ApplyPresentation remain unavailable until a successful actual scheduler publication.
+     */
+    class UiAnimationSourcePresentation final {
+    public:
+        /** @brief Borrows the canonical computed style baseline. @return Pinned immutable style snapshot. */
+        [[nodiscard]] const Ui::UiComputedStyleSnapshot &Styles() const noexcept {
+            return baseline_.Styles();
+        }
+
+        /** @brief Borrows the canonical layout baseline. @return Pinned immutable layout snapshot. */
+        [[nodiscard]] const Ui::UiLayoutSnapshot &Layout() const noexcept {
+            return baseline_.Layout();
+        }
+
+        /** @brief Borrows optional canonical clipping. @return Pinned clipping or null. */
+        [[nodiscard]] const Ui::UiLayoutClipSnapshot *Clipping() const noexcept {
+            return baseline_.Clipping();
+        }
+
+    private:
+        friend class UiAnimationRuntimeParticipant;
+
+        explicit UiAnimationSourcePresentation(Ui::UiAnimationFrameLease baseline) noexcept : baseline_(std::move(baseline)) {}
+
+        Ui::UiAnimationFrameLease baseline_;
+    };
+
     /**
      * @brief Real ordered lifecycle participant binding one actual scheduler issuer and privately owned UI canvas aggregate.
      * @details Register before consumers that extract this canvas. VariableUpdate stages an inactive frame; RenderExtraction
@@ -98,6 +127,12 @@ namespace Horo::Runtime {
         struct Storage;
 
     public:
+        /** @brief Prepares initial source presentation before activation without a RuntimeHost dispatch or time advancement.
+         * @return Immutable prototype for native resource/program preparation, or typed lifecycle/source failure.
+         * @pre Owner-thread load-time operation before Startup, commands and the first actual runtime frame; exactly once.
+         * @post Acquire and presentation/input admission remain closed until actual VariableUpdate/RenderExtraction succeeds.
+         */
+        [[nodiscard]] Result<UiAnimationSourcePresentation> PrepareSourcePresentation();
         /** @brief Creates actual application-boundary ownership before host registration.
          * @param owner Complete uniquely owned admitted UI animation canvas.
          * @param source Exact actual host/scheduler DispatchSource; default-invalid capabilities reject.
@@ -150,6 +185,13 @@ namespace Horo::Runtime {
                                                               Ui::RuntimeStyleRegistry registry, Ui::UiStyleResolver styles,
                                                               Ui::UiAnimationCanvasDefinition definition,
                                                               const Ui::UiAnimationReloadAdmission &admission,
+                                                              const CancellationToken &cancellation = {});
+        /** @brief Reloads a service-attached source through the same canonical service and derives fresh clock capabilities.
+         * @param service Exact source service; never retained by wrapper address. @param instance Exact admitted instance.
+         * @param preparation Complete trusted source and derived replacement resources. @param cancellation Preparation fence.
+         * @return Source/derived outcomes and fresh controller, or original failure retaining previous source/controller/frame. */
+        [[nodiscard]] Result<UiAnimationRuntimeReload> Reload(Ui::RuntimeUiService &service, Ui::RuntimeUiInstanceId instance,
+                                                              Ui::UiAnimationReloadPreparation preparation,
                                                               const CancellationToken &cancellation = {});
         /** @brief Starts one nonblocking authored animation through the actual retained canvas owner.
          * @param animation Stable admitted definition.
@@ -211,10 +253,20 @@ namespace Horo::Runtime {
          * @return Reclaimed count or typed busy/lifecycle failure. Never call inside extraction/publication.
          */
         [[nodiscard]] Result<std::size_t> DrainRetired();
+        /** @brief Observes the sole owner's existing retirement fence without reclaiming or mutating it.
+         * @return Whether this stopped participant can be released on its owner thread after external frame/job leases drain.
+         * @details Fixed application adapters retain detached participants until this becomes true. A foreign thread cannot
+         * authorize destruction. This forwards canonical ownership evidence; it is not another lifetime authority.
+         */
+        [[nodiscard]] bool CanReclaim() const noexcept;
 
     private:
         friend std::unique_ptr<UiAnimationRuntimeParticipant> std::make_unique<UiAnimationRuntimeParticipant>(std::unique_ptr<Storage> &&);
         explicit UiAnimationRuntimeParticipant(std::unique_ptr<Storage> storage) noexcept;
+        /** @brief Shares controller reservation and replacement after either standalone or coordinated canonical reload. */
+        [[nodiscard]] Result<UiAnimationRuntimeReload> ReloadSource(Ui::RuntimeUiService *service, Ui::RuntimeUiInstanceId instance,
+                                                                    Ui::UiAnimationReloadPreparation preparation,
+                                                                    const CancellationToken &cancellation);
         [[nodiscard]] Result<void> PrepareFrame(const RuntimeDispatchFacts &facts);
         [[nodiscard]] Result<void> PublishFrame(const RuntimeDispatchFacts &facts);
         std::unique_ptr<Storage> storage_;

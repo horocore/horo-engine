@@ -19,6 +19,7 @@
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/RenderSubmission.h"
 #include "Horo/Runtime/Render/Texture.h"
+#include "Horo/Runtime/Render/UiPaintKernel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -31,6 +32,7 @@
 
 namespace Horo::Render {
     struct RenderGraphExecutionRequest;
+    struct NativeUiPaintFrameUpdate;
     class IRenderGraphResourceLease;
     struct RenderGraphLeaseTransfer;
     struct RenderShaderModuleDescriptor;
@@ -594,6 +596,16 @@ namespace Horo::Render {
          */
         [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
+
+        /** @brief Realizes the exact UI paint vertex ABI, premultiplied blend and bounded stencil pipeline family.
+         * @param kernel Cooked artifact, exact native reflection and explicit attachment formats.
+         * @return Native owner-thread preparation lease or original typed unsupported/admission failure.
+         * @details No native handles, source compilation, backend selection or fallback escape this boundary. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel);
+        /** @brief Updates one free reusable native UI slot after complete owner/usage/capacity/GPU validation.
+         * @param update Exact resolved residents and synchronous immutable CPU data.
+         * @return Typed unsupported/busy/invalid failure preserving prior accepted revision, or complete success. */
+        [[nodiscard]] virtual Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update);
 
         /**
          * @brief Updates a reusable frame slot only after all prior native buffer use has completed.

@@ -4,25 +4,23 @@
 #include <limits>
 
 namespace Horo::Runtime::Ui {
-    namespace {
-        /** @brief Qualifies only bounded actual retained-tree parent lineage. */
-        bool WithinRoot(const UiElementTree &tree, UiElementHandle target, const UiElementId rootId) {
-            const auto root = tree.Find(rootId);
-            if (root.HasError())
-                return false;
-            std::size_t remaining = tree.Size();
-            while (remaining != 0 && target.IsValid()) {
-                --remaining;
-                if (target == root.Value())
-                    return true;
-                const auto record = tree.Get(target);
-                if (record.HasError())
-                    return false;
-                target = record.Value().parent;
-            }
+    /** @copydoc UiAnimationOwner::WithinRouteRoot */
+    bool UiAnimationOwner::WithinRouteRoot(const UiElementTree &tree, UiElementHandle target, const UiElementId rootId) {
+        const auto root = tree.Find(rootId);
+        if (root.HasError())
             return false;
+        std::size_t remaining = tree.Size();
+        while (remaining != 0 && target.IsValid()) {
+            --remaining;
+            if (target == root.Value())
+                return true;
+            const auto record = tree.Get(target);
+            if (record.HasError())
+                return false;
+            target = record.Value().parent;
         }
-    }  // namespace
+        return false;
+    }
 
     /** @copydoc UiAnimationOwner::ReadCanvas */
     const UiReloadCanvas *UiAnimationOwner::ReadCanvas(const Storage &storage) noexcept {
@@ -209,7 +207,7 @@ namespace Horo::Runtime::Ui {
             const auto binding = std::ranges::find(storage.definition.routes, top->metadata.id, &UiAnimationRouteBinding::route);
             if (binding == storage.definition.routes.end())
                 return true;
-            return WithinRoot(canvas->tree, target, binding->root);
+            return WithinRouteRoot(canvas->tree, target, binding->root);
         }
         const auto *canvas = ReadCanvas(storage);
         if (!canvas)
@@ -227,7 +225,7 @@ namespace Horo::Runtime::Ui {
         const auto binding = std::ranges::find(storage.definition.routes, *route, &UiAnimationRouteBinding::route);
         if (binding == storage.definition.routes.end())
             return true;
-        return WithinRoot(canvas->tree, target, binding->root);
+        return WithinRouteRoot(canvas->tree, target, binding->root);
     }
 
     /** @copydoc UiAnimationOwner::RouteTargetEligible */
@@ -245,6 +243,6 @@ namespace Horo::Runtime::Ui {
         const auto binding = std::ranges::find(storage.definition.routes, top->metadata.id, &UiAnimationRouteBinding::route);
         if (binding == storage.definition.routes.end())
             return true;
-        return WithinRoot(canvas->tree, target, binding->root);
+        return WithinRouteRoot(canvas->tree, target, binding->root);
     }
 }  // namespace Horo::Runtime::Ui

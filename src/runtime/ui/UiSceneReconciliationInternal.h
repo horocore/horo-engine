@@ -9,22 +9,27 @@ namespace Horo::Runtime::Ui {
         struct Entry final {
             UiSceneInstanceDescriptor descriptor;
             UiHotReload publisher;
+            bool sceneRevoked{};
+            bool providerRevoked{};
         };
 
         explicit Storage(UiSceneReconciliationLimits bounds)
             : limits(bounds), active(bounds.maximumInstances), retired(bounds.maximumRetiredInstances + bounds.maximumInstances),
-              issued(bounds.previousInstanceSlot) {}
+              preparations(bounds.maximumPreparedTransitions), issued(bounds.previousInstanceSlot) {}
 
         UiSceneReconciliationLimits limits;
         std::vector<std::optional<Entry>> active;
         std::vector<std::optional<Entry>> retired;
+        std::vector<std::weak_ptr<UiSceneReconciliation::Prepared::Storage>> preparations;
         std::uint32_t issued{};
         std::uint64_t revision{1};
         std::uint32_t preparedCount{};
         bool stopped{};
         bool collecting{};
         bool shutdownRequested{};
+        const void *publicationSeal{}; /**< Identity of the one owner-thread service publication token, never user supplied. */
         void Stop() noexcept;
+        void FlushSceneRevocations() noexcept;
 
         [[nodiscard]] std::size_t Find(RuntimeUiInstanceId instance) const noexcept {
             for (std::size_t i = 0; i < active.size(); ++i)
@@ -69,7 +74,10 @@ namespace Horo::Runtime::Ui {
         std::vector<Retire> retiring;
         std::vector<Rebind> rebinding;
         std::vector<UiSceneReconciliation::Storage::Entry> incoming;
+        std::vector<std::shared_ptr<Detail::UiAnimationSourceReservation>> animationSources;
+        std::vector<std::weak_ptr<Detail::UiAnimationSourceReservation>> preparedAnimations;
         bool consumed{};
+        bool abandoned{}; /**< A facade abandonment revokes derived candidate access even while its generation remains pinned. */
         bool admitted{};
 
         /** @brief Pins one exact outgoing publisher and its complete source stamps before retirement. */

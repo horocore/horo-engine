@@ -253,3 +253,35 @@ namespace Horo::Tests::RenderFrontendTesting {
         CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
     }
 }  // namespace Horo::Tests::RenderFrontendTesting
+
+namespace Horo::Tests::RenderFrontendTesting {
+    TEST_CASE("Frontend UI stencil admission retains selected capability exact usage and native cost failure",
+              "[renderer][resource][descriptor][ui_paint]") {
+        lifecycleState = {};
+        const RenderTextureDescriptor descriptor{.extent = {100, 100},
+                                                 .format = RenderTextureFormat::Depth32FloatStencil8,
+                                                 .usage = RenderTextureUsage::RenderAttachment};
+        auto unsupported = CreateTrackingFrontend();
+        REQUIRE(unsupported->CreateTexture(descriptor).HasError());
+        CHECK(unsupported->UploadSnapshot().pendingRequests == 0);
+        lifecycleState.uiPaint.enabled = true;
+        auto frontend = CreateTrackingFrontend();
+        const auto created = frontend->CreateTexture(descriptor);
+        REQUIRE(created.HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend->ResourceOperationResult(created.Value().operation).HasValue());
+        REQUIRE(frontend->ReleaseTexture(created.Value().handle).HasValue());
+        auto sampled = descriptor;
+        sampled.usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
+        REQUIRE(frontend->CreateTexture(sampled).HasError());
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        const auto failure = MakeError(RenderMemoryBudgetErrors::UnsupportedAllocation, "Selected stencil allocation rejected.");
+        lifecycleState.textureMemoryCostFailure = failure;
+        const auto failed = frontend->CreateTexture(descriptor);
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().domain.Value() == failure.domain.Value());
+        CHECK(failed.ErrorValue().code.Value() == failure.code.Value());
+        CHECK(failed.ErrorValue().message == failure.message);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+    }
+}  // namespace Horo::Tests::RenderFrontendTesting

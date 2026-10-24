@@ -1153,6 +1153,9 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/RenderSurfaceLifecycleErrors.h
     Horo/Runtime/Render/RenderGraph.h
     Horo/Runtime/Render/RenderGraphWorkload.h
+    Horo/Runtime/Render/UiPaintWorkload.h
+    Horo/Runtime/Render/UiPaintKernel.h
+    Horo/Runtime/Render/UiPaintFrameUpload.h
     Horo/Runtime/Render/RenderGraphExecution.h
     Horo/Runtime/Render/RenderGraphInspection.h
     Horo/Runtime/Render/RenderGraphInspectionErrors.h
@@ -1195,6 +1198,8 @@ horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/LightFrameBufferPool.h
+    Horo/Runtime/Render/UiPaintFrameBufferPool.h
+    Horo/Runtime/Render/UiPaintProgram.h
     Horo/Runtime/Render/RenderFrontend.h
     Horo/Runtime/Render/RenderGraphTransientResources.h
     Horo/Runtime/Render/RenderMemoryBudget.h

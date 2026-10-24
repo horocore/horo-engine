@@ -1,6 +1,7 @@
 #include "RenderFrontendTestSupport.h"
 
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/UiPaintKernel.h"
 
 namespace Horo::Tests::RenderFrontendTesting {
     void Check(const bool condition) {
@@ -14,6 +15,9 @@ namespace Horo::Tests::RenderFrontendTesting {
         using std::runtime_error::runtime_error;
     };
 
+    /** @brief Metadata test resident only; this deliberately does not execute shader code. */
+    class TrackingUiPaintKernel final : public IResidentUiPaintKernel {};
+
     class TrackingBackend final : public IRenderBackend {
     public:
         TrackingBackend()
@@ -23,13 +27,22 @@ namespace Horo::Tests::RenderFrontendTesting {
                             .supportsTextureResources = lifecycleState.supportsTextureResources,
                             .supportsRenderTargetResources = lifecycleState.supportsRenderTargetResources} {}
 
-        Result<void> Initialize(const RenderBackendConfig &) override {
+        Result<void> Initialize(const RenderBackendConfig &config) override {
             ++lifecycleState.initializeCount;
             initialized_ = true;
             const auto incarnation = AcquireRenderDeviceIncarnation();
             if (incarnation.HasError())
                 return Result<void>::Failure(incarnation.ErrorValue());
             capabilities_.support.deviceIncarnation = incarnation.Value();
+            if (lifecycleState.uiPaint.enabled) {
+                capabilities_.support.features.Enable(RenderCapability::UiPaint);
+                capabilities_.support.features.Enable(RenderCapability::TextureResources);
+                capabilities_.support.limits.maxTextureDimension2D = 16'384;
+                capabilities_.support.formats.sampleCountMask = std::uint64_t{1} << 1;
+                capabilities_.support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32FloatStencil8)] =
+                    RenderTextureUsage::RenderAttachment;
+                capabilities_.support.limits.maxFramesInFlight = config.maxFramesInFlight;
+            }
             capabilities_.supportsSubmissionObservation = lifecycleState.supportsSubmissionObservation;
             if (lifecycleState.throwDuringInitialize) {
                 throw InjectedBackendException{"Injected initialization failure."};
@@ -104,6 +117,25 @@ namespace Horo::Tests::RenderFrontendTesting {
             ++lifecycleState.destroyRenderTargetCount;
         }
 
+        Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel) override {
+            if (!lifecycleState.uiPaint.enabled)
+                return IRenderBackend::RealizeUiPaintKernel(kernel);
+            ++lifecycleState.uiPaint.kernels;
+            return Result<std::shared_ptr<IResidentUiPaintKernel>>::Success(std::make_shared<TrackingUiPaintKernel>());
+        }
+
+        Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &native) override {
+            if (native.update.cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(UiPaintFrameErrors::Cancelled));
+            auto &audit = lifecycleState.uiPaint;
+            if (audit.pending)
+                return Result<void>::Failure(MakeError(UiPaintFrameErrors::Pending));
+            ++audit.updates;
+            audit.revision = native.update.revision;
+            audit.instances = native.instances;
+            return Result<void>::Success();
+        }
+
         Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
             Check(!lifecycleState.frameActive);
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Begin) {
@@ -160,8 +192,26 @@ namespace Horo::Tests::RenderFrontendTesting {
         Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
             if (!request.submissions.empty())
                 return IRenderBackend::ExecuteGraph(request);
+            if (request.role == RenderGraphExecutionRole::UiComposition) {
+                auto &audit = lifecycleState.uiPaint;
+                ++audit.graphCalls;
+                if (audit.onGraph)
+                    audit.onGraph();
+                if (audit.failGraphCall == audit.graphCalls)
+                    return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+                auto &passes = lifecycleState.uiPaint.passes;
+                passes.clear();
+                for (const auto &binding : request.workloads) {
+                    if (const auto *paint = std::get_if<RenderGraphUiPaint>(&binding.workload))
+                        passes.push_back({paint->color,
+                                          {paint->sampledResources.begin(), paint->sampledResources.end()},
+                                          {paint->draws.begin(), paint->draws.end()}});
+                }
+            }
             lifecycleState.graphResources.assign(request.resources.begin(), request.resources.end());
             lifecycleState.graphLease = request.lease;
+            if (lifecycleState.uiPaint.retainAfterAbort && request.transfer)
+                request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
             return Execute({request.frame, {}});
         }
 
@@ -191,7 +241,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         void AbortFrame(const FrameToken frame) noexcept override {
             if (lifecycleState.frameActive && frame == lifecycleState.activeFrame) {
                 ++lifecycleState.abortCount;
-                if (lifecycleState.graphLease != nullptr) {
+                if (lifecycleState.graphLease != nullptr && !lifecycleState.uiPaint.retainAfterAbort) {
                     lifecycleState.graphLease->Release();
                     lifecycleState.graphLease = nullptr;
                 }
@@ -203,7 +253,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         void AbortActiveFrame() noexcept override {
             if (lifecycleState.frameActive) {
                 ++lifecycleState.abortCount;
-                if (lifecycleState.graphLease != nullptr) {
+                if (lifecycleState.graphLease != nullptr && !lifecycleState.uiPaint.retainAfterAbort) {
                     lifecycleState.graphLease->Release();
                     lifecycleState.graphLease = nullptr;
                 }

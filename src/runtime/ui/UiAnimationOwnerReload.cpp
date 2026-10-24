@@ -59,9 +59,9 @@ namespace Horo::Runtime::Ui {
         try {
             // The inert private holder has no current generation and admits no operation. Only the successful structural
             // publication transfers the existing sole publisher into this fully prepared replacement.
-            auto next =
-                std::make_shared<Storage>(UiHotReload{std::shared_ptr<UiHotReload::Storage>{}}, std::move(registry), std::move(styles),
-                                          std::move(definition), source.limits, std::move(reserved).Value(), canvas->controls.size());
+            auto next = std::make_shared<Storage>(Detail::UiAnimationPublisher{UiHotReload{std::shared_ptr<UiHotReload::Storage>{}}},
+                                                  std::move(registry), std::move(styles), std::move(definition), source.limits,
+                                                  std::move(reserved).Value(), canvas->controls.size());
             if (const auto bound = InitializeBindings(*next, replacement); bound.HasError())
                 return Result<std::shared_ptr<Storage>>::Failure(bound.ErrorValue());
             for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {
@@ -135,8 +135,11 @@ namespace Horo::Runtime::Ui {
         if (prepared.HasError())
             return Result<UiAnimationReloadResult>::Failure(prepared.ErrorValue());
         auto reservation = std::move(prepared).Value();
-        auto next = PrepareReloadStorage(*storage_, *storage_->publisher.AnimationReplacement(reservation), allocator, std::move(registry),
-                                         std::move(styles), std::move(definition), policy);
+        auto *replacementSource = storage_->publisher.Replacement(reservation);
+        if (!replacementSource)
+            return Result<UiAnimationReloadResult>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        auto next = PrepareReloadStorage(*storage_, *replacementSource, allocator, std::move(registry), std::move(styles),
+                                         std::move(definition), policy);
         if (next.HasError())
             return Result<UiAnimationReloadResult>::Failure(next.ErrorValue());
         auto outcomes = PrepareReloadOutcomes(*storage_);

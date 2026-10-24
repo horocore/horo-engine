@@ -28,6 +28,7 @@
 #include "editor/screens/workspace/prefab/PrefabCreation.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
+#include "editor/ui/UiCanvasPreview.h"
 
 #include <filesystem>
 #include <memory>
@@ -144,6 +145,8 @@ namespace Horo::Editor {
         UiCanvasSave,
         UiCanvasApplyPresentation,
         UiCanvasSelectTheme,
+        UiCanvasUpdatePreview,
+        UiCanvasCommitLayout,
         UiCanvasReload,
         SaveScene,
         SaveSceneAs,
@@ -297,11 +300,19 @@ namespace Horo::Editor {
         SequenceTimelineState timeline;
     };
 
+    /** @brief Workspace-only preview session and its correlated immutable layout result or typed diagnostic. */
+    struct UiCanvasPreviewPresentation final {
+        UiCanvasPreviewState state;
+        std::optional<UiCanvasPreview> layout;
+        std::optional<Error> diagnostic;
+    };
+
     /** @brief Cached immutable hierarchy presentation; no source data is rebuilt during drawing. */
     struct UiCanvasWorkspaceDocument final {
         DocumentIdentity identity;
         UiCanvasDocumentStateId state;
         Runtime::Ui::UiElementId root;
+        UiCanvasPreviewPresentation preview;
         Runtime::Ui::UiElementId selection;
         std::uint64_t selectionRevision{1};
         Assets::AssetRegistryRevision inspectorAssets;
@@ -374,6 +385,8 @@ namespace Horo::Editor {
         UiCanvasDocumentStateId uiCanvasState;
         Runtime::Ui::UiElementId uiCanvasElement;
         Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
+        std::optional<UiCanvasPreviewState> uiCanvasPreviewState;
+        Runtime::Ui::UiLogicalPoint uiCanvasLayoutDelta;
         std::optional<UiCanvasMoveElement> uiCanvasMove;
         std::optional<UiCanvasSetPresentation> uiCanvasPresentation;
         std::uint64_t uiCanvasSelectionRevision{};

@@ -35,6 +35,18 @@ namespace Horo::Render {
         return Result<UiRenderImageTexture>::Success(UiRenderImageTexture{created.Value(), reference, std::move(acquired).Value(), page});
     }
 
+    /** @copydoc RenderFrontend::CreateUiMaskTexture */
+    Result<UiRenderImageTexture> RenderFrontend::CreateUiMaskTexture(const Runtime::Ui::UiImageResourceRegistry &registry,
+                                                                     const Runtime::Ui::UiImageResourceHandle image,
+                                                                     const std::uint32_t page, const std::span<const std::byte> pixels) {
+        auto created = CreateUiImageTexture(registry, image, page, pixels);
+        if (created.HasError())
+            return created;
+        auto texture = std::move(created).Value();
+        texture.source_.role = Runtime::Ui::UiRenderResourceRole::Mask;
+        return Result<UiRenderImageTexture>::Success(std::move(texture));
+    }
+
     /** @copydoc RenderFrontend::CreateUiGlyphAtlasTexture */
     Result<UiRenderAtlasTexture> RenderFrontend::CreateUiGlyphAtlasTexture(const Runtime::Ui::UiGlyphAtlas &atlas,
                                                                            const Runtime::Ui::UiGlyphAtlasPageId page,

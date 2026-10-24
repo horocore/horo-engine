@@ -1,9 +1,11 @@
+#include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipeline.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/ShaderManifestErrors.h"
 #include "support/TypedIdentityTestSupport.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <span>
@@ -122,6 +124,76 @@ namespace {
 
         mutable std::vector<Sha256Digest> keys;
         mutable std::vector<ShaderTargetBackend> backends;
+    };
+
+    /** @brief Scripted metadata adapter exercises result ownership/admission only, never actual tool qualification. */
+    class ReflectedAdapter final : public IShaderCompilerAdapter {
+    public:
+        enum class Mutation {
+            None,
+            Missing,
+            Key,
+            Payload,
+            Tool,
+            Interface,
+            Mapping
+        } mutation{Mutation::None};
+
+        Result<ShaderCompilerAdapterOutput> Compile(const ShaderCompilerInvocation &invocation,
+                                                    const CancellationToken &token) const override {
+            RecordingAdapter compiler;
+            auto result = compiler.Compile(invocation, token);
+            if (result.HasError() || mutation == Mutation::Missing)
+                return result;
+            auto output = std::move(result).Value();
+            REQUIRE(invocation.reflection != nullptr);
+            ShaderReflectionCandidate candidate{.backend = invocation.target.requirement.backend,
+                                                .interfaceSchemaVersion = invocation.target.requirement.interfaceSchemaVersion};
+            candidate.bindings.push_back({{1},
+                                          ShaderResourceKind::UniformBuffer,
+                                          ShaderResourceAccess::ReadOnly,
+                                          1,
+                                          ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment,
+                                          true});
+            candidate.parameters.push_back({{1}, {1}, ShaderValueType::Float32, 1, 4, 1});
+            candidate.targetBindings.push_back({.id = {1}});
+            auto normalized = NormalizeShaderReflection(invocation.manifest, invocation.target.requirement, candidate);
+            REQUIRE(normalized.HasValue());
+            const std::array stages{ShaderArtifactStage{ShaderStage::Vertex, "VertexMain", {1}},
+                                    ShaderArtifactStage{ShaderStage::Fragment, "FragmentMain", {2}}};
+            auto payload = PackageShaderArtifactStages(invocation.target.requirement.backend, invocation.target.requirement.payloadFormat,
+                                                       stages, invocation.limits.maximumPayloadBytes);
+            REQUIRE(payload.HasValue());
+            output.payload = std::move(payload).Value();
+            CompiledShaderArtifact compiled{output.backend,
+                                            output.payloadFormat,
+                                            invocation.artifactKey,
+                                            std::move(output.payload),
+                                            {},
+                                            {}};
+            auto cooked = CookReflectedShaderArtifact(compiled, invocation.reflection->tool, std::move(normalized).Value());
+            output.payload = std::move(compiled.payload);
+            REQUIRE(cooked.HasValue());
+            auto record = std::make_shared<ReflectedShaderArtifact>(std::move(cooked).Value());
+            if (mutation == Mutation::Key)
+                record->compiledArtifactKey = Digest(8);
+            if (mutation == Mutation::Payload)
+                record->payloadDigest = Digest(8);
+            if (mutation == Mutation::Tool)
+                record->reflectionTool.release += "other";
+            if (mutation == Mutation::Interface)
+                record->reflection.interfaceCompatibility = {};
+            if (mutation == Mutation::Mapping) {
+                record->reflection.targetBindings.front().nativeBinding = 5;
+                const auto &value = record->reflection;
+                const ShaderReflectionCandidate alternate{value.backend,    value.interfaceSchemaVersion, value.bindings,
+                                                          value.parameters, value.stageInterface,         value.targetBindings,
+                                                          value.sourceMap};
+                REQUIRE(NormalizeShaderReflection(invocation.manifest, invocation.target.requirement, alternate).HasValue());
+            }
+            output.reflection = std::move(record);
+            return Result<ShaderCompilerAdapterOutput>::Success(std::move(output));
+        }
     };
 
     class CountingDiagnosticSink final : public IShaderCompilerDiagnosticSink {
@@ -434,4 +506,76 @@ TEST_CASE("Legacy compiler diagnostics are forwarded once and host sink failure 
     sink.reject = true;
     RequireError(CompileShaderTargets(request, adapter, {}, {}, &sink), ShaderManifestErrors::InvalidManifest);
     CHECK(sink.count == 1);
+}
+
+TEST_CASE("Compiler result retains exactly the requested immutable same-cook reflection", "[runtime][renderer][shader-compiler]") {
+    auto request = ValidRequest();
+    request.targets = {request.targets[2]};
+    request.manifest.targets = {request.manifest.targets[2]};
+    request.reflection = ShaderCompilerReflectionRequest{Tool(ShaderCompilerTool::SpirvCross, 3), {{{1}, "Parameters", {{{1}, "Tint"}}}}};
+    ReflectedAdapter adapter;
+    const auto result = CompileShaderTargets(request, adapter, {});
+    REQUIRE(result.HasValue());
+    REQUIRE(result.Value().artifacts.size() == 1);
+    const auto copy = result.Value();
+    const auto &artifact = copy.artifacts.front();
+    REQUIRE(artifact.reflection != nullptr);
+    CHECK(artifact.reflection == result.Value().artifacts.front().reflection);
+    CHECK(artifact.reflection->compiledArtifactKey == artifact.artifactKey);
+    CHECK(artifact.reflection->payloadDigest == ComputeSha256(std::as_bytes(std::span{artifact.payload})));
+    auto renamed = request;
+    renamed.reflection->names.front().parameters.front().name = "OtherTint";
+    const auto changed = CompileShaderTargets(renamed, adapter, {});
+    REQUIRE(changed.HasValue());
+    CHECK(changed.Value().artifacts.front().artifactKey != artifact.artifactKey);
+}
+
+TEST_CASE("Compiler result rejects missing foreign or stale reflected records", "[runtime][renderer][shader-compiler]") {
+    auto request = ValidRequest();
+    request.targets = {request.targets[2]};
+    request.manifest.targets = {request.manifest.targets[2]};
+    request.reflection = ShaderCompilerReflectionRequest{Tool(ShaderCompilerTool::SpirvCross, 3), {{{1}, "Parameters", {{{1}, "Tint"}}}}};
+    ReflectedAdapter adapter;
+    SECTION("Missing") {
+        adapter.mutation = ReflectedAdapter::Mutation::Missing;
+    }
+    SECTION("Key") {
+        adapter.mutation = ReflectedAdapter::Mutation::Key;
+    }
+    SECTION("Payload") {
+        adapter.mutation = ReflectedAdapter::Mutation::Payload;
+    }
+    SECTION("Tool") {
+        adapter.mutation = ReflectedAdapter::Mutation::Tool;
+    }
+    SECTION("Interface") {
+        adapter.mutation = ReflectedAdapter::Mutation::Interface;
+    }
+    SECTION("Valid alternate mapping with stale cooked identity") {
+        adapter.mutation = ReflectedAdapter::Mutation::Mapping;
+    }
+    CHECK(CompileShaderTargets(request, adapter, {}).HasError());
+}
+
+TEST_CASE("Compiler bounds and validates logical reflection requests before invoking tools", "[runtime][renderer][shader-compiler]") {
+    auto request = ValidRequest();
+    request.reflection = ShaderCompilerReflectionRequest{Tool(ShaderCompilerTool::SpirvCross, 3), {{{1}, "Parameters", {{{1}, "Tint"}}}}};
+    SECTION("Duplicate binding") {
+        request.reflection->names.push_back(request.reflection->names.front());
+    }
+    SECTION("Duplicate parameter") {
+        request.reflection->names.front().parameters.push_back({{1}, "Other"});
+    }
+    SECTION("Foreign logical member") {
+        request.reflection->names.front().parameters.front().id = {2};
+    }
+    SECTION("Oversized authored name") {
+        request.reflection->names.front().name.resize(513, 'x');
+    }
+    SECTION("Wrong tool role") {
+        request.reflection->tool.tool = ShaderCompilerTool::Dxc;
+    }
+    RecordingAdapter adapter;
+    CHECK(CompileShaderTargets(request, adapter, {}).HasError());
+    CHECK(adapter.keys.empty());
 }

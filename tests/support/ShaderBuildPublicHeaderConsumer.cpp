@@ -14,3 +14,6 @@ using CompileSignature = Horo::Result<Horo::Render::ShaderCompilationBatch> (*)(
 static_assert(std::is_same_v<decltype(&Horo::Render::CompileShaderTargets), CompileSignature>);
 static_assert(!std::is_copy_constructible_v<Horo::Application::ShaderBuildService>);
 static_assert(std::is_same_v<decltype(Horo::Application::ShaderBuildRequest{}.operationId), std::optional<Horo::OperationId>>);
+
+static_assert(std::is_same_v<decltype(Horo::Render::ShaderCompilerAdapterOutput{}.reflection),
+                             std::shared_ptr<const Horo::Render::ReflectedShaderArtifact>>);

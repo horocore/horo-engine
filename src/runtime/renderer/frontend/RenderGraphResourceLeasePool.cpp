@@ -39,12 +39,27 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc RenderGraphResourceLeasePool::RenderGraphResourceLeasePool */
-    RenderGraphResourceLeasePool::RenderGraphResourceLeasePool(RenderResourceRegistry &registry, const std::size_t maximumPins)
+    RenderGraphResourceLeasePool::RenderGraphResourceLeasePool(RenderResourceRegistry &registry, const std::size_t maximumPins,
+                                                               const std::size_t maximumUiCaptures)
         : registry_(&registry), maximumPins_(maximumPins) {
         for (auto &lease : leases_) {
             lease.pool = this;
             lease.pins.reserve(std::min(maximumPins, RenderGraphLimits::HardMaxResources));
+            lease.ui.resize(maximumUiCaptures);
         }
+    }
+
+    /** @copydoc RenderGraphResourceLeasePool::UiRetentionStorageBytes */
+    std::size_t RenderGraphResourceLeasePool::UiRetentionStorageBytes() const noexcept {
+        std::size_t bytes{};
+        for (const auto &lease : leases_)
+            bytes += lease.ui.capacity() * sizeof(Lease::UiCapture);
+        return bytes;
+    }
+
+    /** @copydoc RenderGraphResourceLeasePool::MaximumUiCaptures */
+    std::size_t RenderGraphResourceLeasePool::MaximumUiCaptures() const noexcept {
+        return leases_.front().ui.size();
     }
 
     /** @copydoc IRenderGraphResourceLease::Release */
@@ -60,7 +75,15 @@ namespace Horo::Render::Detail {
         for (std::size_t index = 0; index < materialCount; ++index)
             materials[index].reset();
         materialCount = 0;
-        ui.Release();
+        for (auto &capture : std::span{ui}.first(uiCount)) {
+            capture.source.Release();
+            for (auto &kernel : capture.kernels)
+                kernel.reset();
+            if (capture.transient)
+                capture.transient->inFlight = false;
+            capture.transient = nullptr;
+        }
+        uiCount = 0;
         if (transient != nullptr) {
             transient->inFlight = false;
             transient = nullptr;
@@ -69,16 +92,17 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc RenderGraphResourceLeasePool::Lease::PinResource */
-    Result<void> RenderGraphResourceLeasePool::Lease::PinResource(const RenderGraphResource &resource) {
+    Result<void> RenderGraphResourceLeasePool::Lease::PinResource(const RenderGraphResource &resource,
+                                                                  RenderGraphTransientResourceSet *resourceTransient) {
         const auto *binding = &resource.binding;
         if (resource.resourceClass == RenderGraphResourceClass::Transient) {
-            if (transient == nullptr || resource.id.value == 0 || resource.id.value > transient->bindings.size()) {
+            if (resourceTransient == nullptr || resource.id.value == 0 || resource.id.value > resourceTransient->bindings.size()) {
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
             }
             const auto index = resource.id.value - 1U;
-            if (transient->lifetimes[index].disposition == RenderGraphLifetimeDisposition::Unused)
+            if (resourceTransient->lifetimes[index].disposition == RenderGraphLifetimeDisposition::Unused)
                 return Result<void>::Success();
-            binding = &transient->bindings[index];
+            binding = &resourceTransient->bindings[index];
         }
         const auto resolved = ResolveGraphResidentIdentity(*binding);
         if (resolved.HasError()) {
@@ -215,14 +239,15 @@ namespace Horo::Render::Detail {
             if (transient != nullptr)
                 transient->inFlight = true;
             for (const auto &resource : resources) {
-                if (const auto pinned = lease.PinResource(resource); pinned.HasError()) {
+                if (const auto pinned = lease.PinResource(resource, transient); pinned.HasError()) {
                     return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
                 }
             }
             if (ui != nullptr) {
-                if (const auto captured = lease.ui.Capture(*ui, resources); captured.HasError()) {
+                if (const auto captured = lease.ui.front().source.Capture(*ui, resources); captured.HasError()) {
                     return Result<IRenderGraphResourceLease *>::Failure(captured.ErrorValue());
                 }
+                lease.uiCount = 1;
             }
             if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
                 return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());

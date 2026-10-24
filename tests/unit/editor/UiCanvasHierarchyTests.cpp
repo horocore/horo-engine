@@ -1,6 +1,7 @@
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Ui/UiDocumentSerialization.h"
+#include "UiCanvasPreview.h"
 
 #include <algorithm>
 #include <array>
@@ -282,4 +283,60 @@ TEST_CASE("Canvas publication fences reject undo ABA replacement and reopened se
     REQUIRE(layoutOnly.inlineStyle.empty());
     REQUIRE_FALSE(layoutOnly.styleAsset.IsValid());
     REQUIRE(reopened.Execute(reopened.CurrentState(), UiCanvasSetPresentation{Id<UiElementId>(4), layoutOnly}).HasValue());
+}
+
+TEST_CASE("Visual layout commits one owner transaction and rejects gestures across undo reload and close", "[ui_canvas][manipulation]") {
+    Fixture fixture;
+    auto owner = fixture.Open();
+    Create(owner, 4);
+    auto element = owner.Document().Elements().back();
+    element.presentation->layout.positioning = UiLayoutPositioning::Absolute;
+    element.presentation->layout.width = UiLength::Dip(100 * 64);
+    element.presentation->layout.height = UiLength::Dip(60 * 64);
+    REQUIRE(owner.Execute(owner.CurrentState(), UiCanvasSetPresentation{element.id, element.presentation}).HasValue());
+    UiCanvasPreviewState state;
+    state.snap = false;
+    state.tool = UiCanvasLayoutTool::Move;
+    const auto preview = BuildUiCanvasPreview(owner.Document(), state, owner.Identity().instance);
+    REQUIRE(preview.HasValue());
+    const auto edit = PrepareUiCanvasLayoutGesture(element, preview.Value().boxes.back().bounds, {17, -23}, {800 * 64, 600 * 64}, state);
+    REQUIRE(edit.HasValue());
+    const auto start = owner.CurrentState();
+    REQUIRE(owner.Execute(start, edit.Value()).HasValue());
+    CHECK(owner.Document().Elements().back().presentation->layout.offsets.left == 17);
+    REQUIRE(owner.Undo(owner.CurrentState()).HasValue());
+    CHECK(owner.Document().Elements().back().presentation->layout.offsets.left == 0);
+    CHECK(owner.Execute(start, edit.Value()).HasError());
+    REQUIRE(owner.Redo(owner.CurrentState()).HasValue());
+    CHECK(owner.Document().Elements().back().presentation->layout.offsets.left == 17);
+    const auto beforeReload = owner.CurrentState();
+    REQUIRE(owner.Reload(UiCanvasReloadPolicy::DiscardChanges).HasValue());
+    CHECK(owner.Execute(beforeReload, edit.Value()).HasError());
+    const auto beforeClose = owner.CurrentState();
+    REQUIRE(owner.Close().HasValue());
+    CHECK(owner.Execute(beforeClose, edit.Value()).HasError());
+}
+
+TEST_CASE("Visual layout selection fence rejects A to B to A after real canonical selection changes",
+          "[ui_canvas][manipulation][selection]") {
+    Fixture fixture;
+    auto owner = fixture.Open();
+    Create(owner, 4);
+    Create(owner, 5);
+    REQUIRE(owner.Select(owner.CurrentState(), Id<UiElementId>(4)).HasValue());
+    const auto element = std::ranges::find(owner.Document().Elements(), Id<UiElementId>(4), &UiDocumentElement::id);
+    REQUIRE(element != owner.Document().Elements().end());
+    auto presentation = *element->presentation;
+    presentation.layout.offsets.left = 17;
+    const UiCanvasSetPresentation edit{element->id, presentation};
+    const auto state = owner.CurrentState();
+    const std::uint64_t capturedSelection = 10;
+    REQUIRE(owner.Select(state, Id<UiElementId>(5)).HasValue());
+    REQUIRE(owner.Select(state, Id<UiElementId>(4)).HasValue());
+    CHECK(owner.CurrentState() == state);
+    CHECK(owner.Selection() == edit.element);
+    CHECK(ExecuteUiCanvasLayoutGesture(owner, state, capturedSelection, capturedSelection + 2, edit).HasError());
+    CHECK(owner.CurrentState() == state);
+    REQUIRE(ExecuteUiCanvasLayoutGesture(owner, state, capturedSelection + 2, capturedSelection + 2, edit).HasValue());
+    CHECK(std::ranges::find(owner.Document().Elements(), edit.element, &UiDocumentElement::id)->presentation->layout.offsets.left == 17);
 }

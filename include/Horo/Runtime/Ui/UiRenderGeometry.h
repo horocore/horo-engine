@@ -74,6 +74,7 @@ namespace Horo::Runtime::Ui {
         std::uint32_t transform{};               /**< Snapshot transform table index. */
         std::uint32_t clip{NoUiRenderIndex};     /**< Snapshot clip table index, or sentinel. */
         std::uint32_t mask{NoUiRenderIndex};     /**< Snapshot mask table index, or sentinel. */
+        std::uint32_t group{NoUiRenderIndex};    /**< Isolation boundary; batches never cross groups. */
 
         /** @brief Checks only the closed primitive and sentinel representation. @return Whether the key is representable. */
         [[nodiscard]] bool IsValid() const noexcept;

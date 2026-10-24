@@ -25,6 +25,7 @@ namespace Horo::Tests::UiAccess {
         RuntimeUiService service{Take(RuntimeUiService::Create(Take(UiSceneReconciliation::Create({Owner()}))))};
         UiActionOwnerContext actionOwner;
         bool bindingsEnabled{};
+        bool canonicalElements{};
         UiBindingProviderSchema schema{MakeSchema()};
 
         static UiBindingProviderInstanceId Provider() {
@@ -44,7 +45,8 @@ namespace Horo::Tests::UiAccess {
             return Take(UiBindingProviderSchema::Create(descriptor));
         }
 
-        explicit Fixture(bool sceneOwned = false, bool bindings = false) : bindingsEnabled(bindings) {
+        explicit Fixture(bool sceneOwned = false, bool bindings = false, bool catalogElements = false)
+            : bindingsEnabled(bindings), canonicalElements(catalogElements) {
             auto generation = Make(1);
             auto publisher = Take(UiHotReload::Create(std::move(generation)));
             UiSceneInstanceDescriptor descriptor{Instance(), {}};
@@ -54,13 +56,20 @@ namespace Horo::Tests::UiAccess {
             REQUIRE(service.Admit(descriptor, std::move(publisher), Lifecycle).HasValue());
         }
 
-        UiReloadGeneration Make(std::uint64_t version) {
-            auto generation = Generation(slots, version);
+        UiReloadGeneration Make(std::uint64_t version, std::uint64_t runtimeRevision = 0) {
+            LayerOptions options;
+            options.canonicalElements = canonicalElements;
+            options.runtimeRevision = runtimeRevision;
+            auto generation = Generation(slots, version, 32, false, 0, 0, canonicalElements ? 4 : 3, options);
             auto &canvas = *generation.Canvas(Stable<UiCanvasId>(2));
+            REQUIRE(canvas.layout.has_value());
             actionOwner = {canvas.tree.Instance(),       canvas.tree.Canvas(),
                            canvas.tree.SourceDocument(), canvas.tree.SourceDocumentRevision(),
-                           canvas.tree.Revision(),       Revision<UiInteractionRevision>(version)};
+                           canvas.tree.Revision(),       canvas.layout->Descriptor().interaction};
             canvas.actions.emplace(Take(UiActionRouter::Create({actionOwner, 128, {}})));
+            REQUIRE(canvas.actions->Owner() == actionOwner);
+            for (const auto &control : canvas.controls)
+                REQUIRE(control.control.Owner() == actionOwner);
             if (bindingsEnabled) {
                 const std::array initial{UiBindingPropertyUpdate{0, std::string{"initial"}}};
                 const std::array registrations{UiBindingProviderRegistration{Provider(), UiBindingProviderScopeKind::GameInstance, &schema,

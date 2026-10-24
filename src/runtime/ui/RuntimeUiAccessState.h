@@ -13,6 +13,7 @@ namespace Horo::Runtime::Ui::Detail {
     inline constexpr std::size_t EventLimit = 64;
     inline constexpr std::size_t ActionLimit = 128;
     struct RuntimeUiServiceState;
+    struct UiAnimationSourceReservation;
     struct RuntimeUiScope;
     using ClientResult = Result<std::shared_ptr<const RuntimeUiClient>>;
     using ScopeIssuer = std::function<ClientResult(const std::shared_ptr<RuntimeUiServiceState> &, const RuntimeUiGrant &,
@@ -57,6 +58,7 @@ namespace Horo::Runtime::Ui::Detail {
         UiCanvasInstanceId incarnation;
         UiReloadLease lease;
         std::optional<UiEventDispatcher> events;
+        bool sceneRevoked{};
     };
 
     struct PendingAction final {
@@ -65,6 +67,7 @@ namespace Horo::Runtime::Ui::Detail {
         UiCanvasId canvas;
         std::weak_ptr<RuntimeUiScope> scope;
         bool occupied{};
+        bool sceneRevoked{};
     };
 
     /** @brief Sole application registry owner; mutation and inventories are owner-thread-only. */
@@ -76,9 +79,12 @@ namespace Horo::Runtime::Ui::Detail {
         const ScopeIssuer issue;
         bool active{true};
         bool dispatching{};
+        bool scenePublication{}; /**< Short sealed Scene commit window; owner commands cannot reenter canonical state. */
         bool shutdownRequested{};
+        bool sceneRevocationsPending{};
         std::array<std::weak_ptr<RuntimeUiScope>, ScopeLimit> scopes;
         std::array<Dispatcher, 64> dispatchers;
+        std::array<std::weak_ptr<UiAnimationSourceReservation>, 64> animationSources;
         std::array<PendingAction, ActionLimit> actions;
     };
 
@@ -90,6 +96,8 @@ namespace Horo::Runtime::Ui::Detail {
 
     /** @brief Releases internal generation leases after the final borrowed dispatch has unwound; external leases still fence reclaim. */
     void FinishShutdown(RuntimeUiServiceState &owner) noexcept;
+    /** @brief Releases only revoked Scene attribution after the final borrowed dispatch or publication closes. */
+    void FinishSceneRevocations(RuntimeUiServiceState &owner) noexcept;
 
     /** @brief Pins the host state across a borrowed callback and defers recursive service destruction until dispatch returns. */
     class RuntimeUiDispatchGuard final {
@@ -100,6 +108,7 @@ namespace Horo::Runtime::Ui::Detail {
 
         ~RuntimeUiDispatchGuard() {
             owner_->dispatching = false;
+            FinishSceneRevocations(*owner_);
             if (owner_->shutdownRequested)
                 FinishShutdown(*owner_);
         }

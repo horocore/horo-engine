@@ -40,17 +40,17 @@ namespace Horo::UiStyleTest {
                                         UiStyleValueSource::Literal(UiStyleDimension{640}), false},
                                        {CoreUiStylePropertyId(UiCoreStyleProperty::Fill),
                                         UiStyleValueSource::Literal(UiStyleColor{0.2F, 0.3F, 0.4F, 1}), false}};
+            // A later same-layer write to a sealed property is the actual transactional rejection.
             style.style.states = {{UiVisualStateMask{UiVisualState::Disabled},
                                    {},
                                    UiStateLayer::Availability,
                                    {{CoreUiStylePropertyId(UiCoreStyleProperty::Fill),
-                                     UiStyleValueSource::Literal(UiStyleColor{0.5F, 0.5F, 0.5F, 1}), true}}}};
-            // States follow inline values; rejection requires a later write to the sealed property.
-            style.style.states.push_back({UiVisualStateMask{UiVisualState::Disabled},
-                                          {},
-                                          UiStateLayer::Availability,
-                                          {{CoreUiStylePropertyId(UiCoreStyleProperty::Fill),
-                                            UiStyleValueSource::Literal(UiStyleColor{0.2F, 0.3F, 0.4F, 1}), false}}});
+                                     UiStyleValueSource::Literal(UiStyleColor{0.5F, 0.5F, 0.5F, 1}), true}}},
+                                  {UiVisualStateMask{UiVisualState::Disabled},
+                                   {},
+                                   UiStateLayer::Availability,
+                                   {{CoreUiStylePropertyId(UiCoreStyleProperty::Fill),
+                                     UiStyleValueSource::Literal(UiStyleColor{0.8F, 0.8F, 0.8F, 1}), false}}}};
             WriteStyle();
             Rebuild();
             factory = MakeEditorUiInspectorResourcesFactory(jobs, assets, mutations, files);

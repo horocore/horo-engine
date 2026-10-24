@@ -37,14 +37,15 @@ namespace Horo::Render {
             return (requested & ~supportedUsageBits) == std::byte{} ? Supported : Unsupported;
         }
 
-        [[nodiscard]] constexpr bool IsCurrentTextureFormatSupported(const RenderTextureFormat format) noexcept {
+        [[nodiscard]] constexpr bool IsCurrentTextureFormatSupported(const RenderTextureFormat format,
+                                                                     const bool uiPaintAvailable = false) noexcept {
             using enum RenderTextureFormat;
             return format == Rgba8Unorm || format == Rgba16Float || format == Rgba32Float || format == Depth24Stencil8 ||
-                   format == Depth32Float;
+                   format == Depth32Float || (uiPaintAvailable && format == Depth32FloatStencil8);
         }
 
-        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureDescriptor(
-            const RenderTextureDescriptor &descriptor) noexcept {
+        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureDescriptor(const RenderTextureDescriptor &descriptor,
+                                                                                          const bool uiPaintAvailable) noexcept {
             using enum RenderTextureUsage;
             using enum ResourceDescriptorAdmission;
             constexpr std::byte supportedUsageBits = std::byte{static_cast<std::uint8_t>(Sampled)} |
@@ -53,13 +54,15 @@ namespace Horo::Render {
             const auto requested = static_cast<std::byte>(descriptor.usage);
             const bool supported = descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 &&
                                    descriptor.mipCount == 1 && descriptor.layerCount == 1 && descriptor.sampleCount == 1 &&
-                                   IsCurrentTextureFormatSupported(descriptor.format) && (requested & ~supportedUsageBits) == std::byte{};
+                                   IsCurrentTextureFormatSupported(descriptor.format, uiPaintAvailable) &&
+                                   (requested & ~supportedUsageBits) == std::byte{};
             return supported ? Supported : Unsupported;
         }
 
-        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(
-            const RenderTextureViewDescriptor &descriptor) noexcept {
-            return descriptor.dimension == RenderTextureViewDimension::TwoD && IsCurrentTextureFormatSupported(descriptor.format)
+        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,
+                                                                                              const bool uiPaintAvailable) noexcept {
+            return descriptor.dimension == RenderTextureViewDimension::TwoD &&
+                           IsCurrentTextureFormatSupported(descriptor.format, uiPaintAvailable)
                        ? ResourceDescriptorAdmission::Supported
                        : ResourceDescriptorAdmission::Unsupported;
         }
@@ -340,7 +343,8 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
                                   "The texture descriptor is structurally invalid: " + DescribeRenderTextureRequest(descriptor)));
-        if (AdmitCurrentTextureDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
+        if (AdmitCurrentTextureDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::UiPaint)) ==
+            ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this texture descriptor combination: " +
@@ -348,6 +352,8 @@ namespace Horo::Render {
         if (!backend_->Capabilities().supportsTextureResources)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic textures."));
+        if (descriptor.format == RenderTextureFormat::Depth32FloatStencil8 && !backend_->Capabilities().support.Supports(descriptor))
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
         if (const auto baseLevelBytes = RenderTextureBaseLevelByteSize(descriptor);
             !baseLevelBytes.has_value() || (!initialData.empty() && initialData.size() != *baseLevelBytes))
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
@@ -393,7 +399,8 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureViewDescriptor, "The texture-view descriptor is structurally invalid."));
         }
-        if (AdmitCurrentTextureViewDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported) {
+        if (AdmitCurrentTextureViewDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::UiPaint)) ==
+            ResourceDescriptorAdmission::Unsupported) {
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this texture-view descriptor combination."));

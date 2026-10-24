@@ -12,6 +12,7 @@
 #include <glad/gl.h>
 #include <imgui.h>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace Horo::Render::OpenGLSmokeTests {
@@ -292,14 +293,18 @@ namespace Horo::Render::OpenGLSmokeTests {
         Check(pixels[center] < 150 && pixels[center + 1] > 130 && pixels[center + 2] > 150);
     }
 
-    /** @brief Checks actual ImGui sampling into the primary backbuffer despite retained offscreen bindings. */
-    void CheckGuiComposition(Editor::EditorGuiRendererOpenGL &gui, RenderFrameScope &frame, const EditorViewportTextureView view,
-                             const CallerOpenGLState &callerState) {
+    /** @brief Builds actual GUI CPU draw data while resource admission is still open, before any native scope. */
+    void PrepareGuiComposition(Editor::EditorGuiRendererOpenGL &gui, const EditorViewportTextureView view) {
         REQUIRE(gui.BeginFrame().HasValue());
         ImGui::NewFrame();
         ImGui::GetForegroundDrawList()->AddImage(static_cast<ImTextureID>(view.textureId), {0, 0}, {512, 384}, {view.u0, view.v0},
                                                  {view.u1, view.v1});
         ImGui::Render();
+    }
+
+    /** @brief Checks actual ImGui sampling into the primary backbuffer despite retained offscreen bindings. */
+    void CheckGuiComposition(Editor::EditorGuiRendererOpenGL &gui, RenderFrameScope &frame, const EditorViewportTextureView view,
+                             const CallerOpenGLState &callerState) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         glDrawBuffer(GL_NONE);
         ConfigureCallerOpenGLState(callerState);
@@ -320,7 +325,7 @@ namespace Horo::Render::OpenGLSmokeTests {
         CHECK(glGetError() == GL_NO_ERROR);
     }
 
-    /** @brief Covers initialization, invalid input and lost-current-context rejection before native drawing. */
+    /** @brief Covers initialization, invalid input, owned context restoration and foreign-thread denial before native drawing. */
     void InitializeGui(Editor::EditorGuiRendererOpenGL &gui, SDL_Window &window, HeadlessOpenGLPresentationPort &presentationPort) {
         CHECK(gui.BeginFrame().HasError());
         CHECK(gui.RenderDrawData({}).HasError());
@@ -332,9 +337,18 @@ namespace Horo::Render::OpenGLSmokeTests {
         REQUIRE(uploaded.HasValue());
         gui.DestroyTexture(uploaded.Value());
         gui.DestroyTexture(uploaded.Value());
+        const auto context = SDL_GL_GetCurrentContext();
         REQUIRE(SDL_GL_MakeCurrent(&window, nullptr));
-        CHECK(gui.BeginFrame().HasError());
-        // Restore the borrowed context through the presentation owner after rejection.
+        REQUIRE(gui.BeginFrame().HasValue());
+        CHECK(SDL_GL_GetCurrentContext() == context);
+        CHECK(SDL_GL_GetCurrentWindow() == &window);
+        bool foreignRejected = false;
+        std::thread foreign([&] {
+            foreignRejected = gui.BeginFrame().HasError();
+        });
+        foreign.join();
+        CHECK(foreignRejected);
+        CHECK(SDL_GL_GetCurrentContext() == context);
         REQUIRE(presentationPort.MakeCurrent().HasValue());
     }
 
@@ -372,12 +386,13 @@ namespace Horo::Render::OpenGLSmokeTests {
         const RenderTargetHandle target = PrepareViewportTarget(viewport, *frontend, scene, extent);
         viewport.RequestExtent(extent);
 
+        const EditorViewportTextureView textureView = viewport.TextureView();
+        Check(textureView.IsValid());
+        PrepareGuiComposition(gui, textureView);
         RenderFrameScope frame = ExecuteViewportFrame(*frontend, scene, target, extent, callerState);
         CheckCallerOpenGLState(callerState);
         RestoreDefaultOpenGLState();
         Check(viewport.IsReady());
-        const EditorViewportTextureView textureView = viewport.TextureView();
-        Check(textureView.IsValid());
         Check(textureView.v0 == 1.0F && textureView.v1 == 0.0F);
         CheckViewportPixels(textureView, extent.width, extent.height);
         CheckGuiComposition(gui, frame, textureView, callerState);

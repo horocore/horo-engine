@@ -72,7 +72,10 @@
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "Horo/Runtime/Ui/UiErrors.h"
 #include "HostModuleComposition.h"
+#include "RuntimeUiPaintHost.h"
+#include "RuntimeUiPaintProjectSources.h"
 #include "editor/EditorServiceErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
@@ -118,6 +121,7 @@
 #include <array>
 #include <cerrno>
 #include <charconv>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -127,6 +131,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <numeric>
 #include <optional>
 #include <portable-file-dialogs.h>
 #include <span>
@@ -890,6 +895,7 @@ namespace Horo::Editor {
             std::unique_ptr<IEditorGuiRenderer> guiRenderer;
             std::unique_ptr<IEditorViewportRenderer> viewportRenderer;
             Render::RenderTargetHandle viewportTarget;
+            std::optional<Application::Internal::RuntimeUiPaintPort> uiRetirement;
             bool retirementBegun{false};
             std::optional<Error> retirementFailure;
         };
@@ -899,6 +905,59 @@ namespace Horo::Editor {
                          .domain = ErrorDomainId{"horo.editor.renderer"},
                          .severity = ErrorSeverity::Critical,
                          .message = std::move(message)};
+        }
+
+        /** @brief Preserves the independently reported finite binary display scale as an exact reduced rational. */
+        [[nodiscard]] Result<Runtime::Ui::UiCanvasDeviceScale> RuntimeUiDisplayScale(const float scale) {
+            using Scale = Result<Runtime::Ui::UiCanvasDeviceScale>;
+            if (!std::isfinite(scale) || scale <= 0.0F)
+                return Scale::Failure(MakeError(Runtime::Ui::UiErrors::CanvasSpaceInvalid, SDL_GetError()));
+            int exponent{};
+            const auto fraction = std::frexp(scale, &exponent);
+            exponent -= std::numeric_limits<float>::digits;
+            std::uint64_t numerator = static_cast<std::uint32_t>(std::ldexp(fraction, std::numeric_limits<float>::digits));
+            while ((numerator & 1U) == 0U) {
+                numerator >>= 1;
+                ++exponent;
+            }
+            if (exponent < -32 || exponent > 32)
+                return Scale::Failure(MakeError(Runtime::Ui::UiErrors::CanvasSpaceOverflow));
+            std::uint64_t denominator = 1;
+            if (exponent >= 0)
+                numerator <<= exponent;
+            else
+                denominator <<= -exponent;
+            const auto common = std::gcd(numerator, denominator);
+            numerator /= common;
+            denominator /= common;
+            if (numerator > std::numeric_limits<std::uint32_t>::max() || denominator > std::numeric_limits<std::uint32_t>::max())
+                return Scale::Failure(MakeError(Runtime::Ui::UiErrors::CanvasSpaceOverflow));
+            return Scale::Success({static_cast<std::uint32_t>(numerator), static_cast<std::uint32_t>(denominator)});
+        }
+
+        /** @brief Converts actual logical-window safe bounds into the same committed drawable's physical coordinate space. */
+        [[nodiscard]] Result<Runtime::Ui::UiCanvasViewportEvidence> CaptureRuntimeUiOutput(SDL_Window &window,
+                                                                                           const Render::FramebufferExtent pixels) {
+            using Output = Result<Runtime::Ui::UiCanvasViewportEvidence>;
+            int width{};
+            int height{};
+            SDL_Rect safe{};
+            if (!SDL_GetWindowSize(&window, &width, &height) || !SDL_GetWindowSafeArea(&window, &safe))
+                return Output::Failure(MakeError(Runtime::Ui::UiErrors::CanvasSpaceInvalid, SDL_GetError()));
+            if (width <= 0 || height <= 0 || safe.x < 0 || safe.y < 0 || safe.w <= 0 || safe.h <= 0 || safe.x > width || safe.y > height ||
+                safe.w > width - safe.x || safe.h > height - safe.y)
+                return Output::Failure(MakeError(Runtime::Ui::UiErrors::CanvasSpaceInvalid));
+            const auto scale = RuntimeUiDisplayScale(SDL_GetWindowDisplayScale(&window));
+            if (scale.HasError())
+                return Output::Failure(scale.ErrorValue());
+            const auto inset = [](const int logical, const std::uint32_t physical, const int extent) {
+                return static_cast<std::uint32_t>((static_cast<std::uint64_t>(logical) * physical + extent - 1) / extent);
+            };
+            return Output::Success(
+                {{pixels.width, pixels.height},
+                 scale.Value(),
+                 {inset(safe.x, pixels.width, width), inset(safe.y, pixels.height, height),
+                  inset(width - safe.x - safe.w, pixels.width, width), inset(height - safe.y - safe.h, pixels.height, height)}});
         }
 
         /** @brief Retains both native renderer owners before initialization so failures use explicit host retirement. */
@@ -1076,12 +1135,14 @@ namespace Horo::Editor {
             IEditorGuiRenderer &guiRenderer;
             IEditorViewportRenderer &viewportRenderer;
             Render::RenderTargetHandle viewportTarget;
+            std::optional<Application::Internal::RuntimeUiPaintPort> &uiRetirement;
         };
 
         struct EditorOperationServices {
             BuildOutputStore &buildOutputStore;
             OperationStore &operationStore;
             Application::ShaderBuildService &shaderBuild;
+            std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
         };
 
         struct EditorBackgroundServices {
@@ -1130,6 +1191,7 @@ namespace Horo::Editor {
             Runtime::RuntimeHost *runtime;
             Application::Internal::PackageProjectHost *packages;
             EditorNavigationBakeHost *navigation;
+            Application::Internal::RuntimeUiPaintPort ui;
         };
 
         /** @brief Value-owned prepared viewport/GUI workload and the mesh generation used to assemble it. */
@@ -1255,6 +1317,11 @@ namespace Horo::Editor {
                 p_->background.jobs.StopAccepting();
                 static_cast<void>(pacing_.pacer.Stop());
                 frame_.reset();
+                if (guiFrameStarted_) {
+                    ImGui::EndFrame();
+                    guiFrameStarted_ = false;
+                }
+                extractedFrameReady_ = false;
                 if (pacing_.surface) {
                     const auto closed = pacing_.surface->Close();
                     surfaceClosed_ = closed.HasValue();
@@ -1412,17 +1479,21 @@ namespace Horo::Editor {
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
-                auto renderBegun = BeginRenderFrame(context);
-                if (renderBegun.HasError())
-                    return Result<void>::Failure(renderBegun.ErrorValue());
-
+                if (const auto updated = UpdatePacingSurface(); updated.HasError())
+                    return updated;
+                const auto snapshot = pacing_.surface->Snapshot();
+                if (snapshot.HasError())
+                    return Result<void>::Failure(snapshot.ErrorValue());
+                extractedFrameReady_ = false;
                 focusedWidgetInputContext_.Reset();
-                if (renderBegun.Value()) {
+                if (!nativePresentationPending_ && snapshot.Value().state == Render::RenderSurfaceState::Ready) {
+                    // Consume the preceding viewport request before Draw captures its current image identity.
+                    if (const auto prepared = PrepareViewportResources(); prepared.HasError())
+                        return prepared;
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                     qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiBegin);
 #endif
                     if (const Result<void> guiBegun = p_->presentation.guiRenderer.BeginFrame(); guiBegun.HasError()) {
-                        frame_.reset();
                         return guiBegun;
                     }
                     if (const EditorScrollDelta scrollDelta = scrollSmoother_.Consume(ImGui::GetIO().DeltaTime); !scrollDelta.IsEmpty()) {
@@ -1430,6 +1501,7 @@ namespace Horo::Editor {
                         ImGui::GetIO().AddMouseWheelEvent(scrollDelta.horizontal, scrollDelta.vertical);
                     }
                     ImGui::NewFrame();
+                    guiFrameStarted_ = true;
 
                     if (p_->presentation.io.WantTextInput) {
                         focusedWidgetInputContext_ = p_->inputRouter.PushContext(Input::InputContextId{"editor.focused_widget"},
@@ -1466,17 +1538,18 @@ namespace Horo::Editor {
             }
 
             Result<void> ExtractFrame() {
-                if (!frame_.has_value())
+                if (!guiFrameStarted_)
                     return Result<void>::Success();
-#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
-                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Extraction);
-#endif
 
                 screenHost_->Draw();
                 DrawModalBackdrop();
                 p_->modalHost.Draw();
                 ImGui::Render();
-
+                guiFrameStarted_ = false;
+                // Draw may synchronously start Play; its cold Scene/UI preparation still precedes native admission.
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Extraction);
+#endif
                 preparedPasses_.count = 0;
                 const EditorViewportSceneView viewportScene = viewportSceneState_->View();
                 if (const EditorViewportExtent viewportExtent = p_->presentation.viewportRenderer.RequestedExtent();
@@ -1512,6 +1585,7 @@ namespace Horo::Editor {
                                                                                      .clearColor =
                                                                                          Render::ClearColor{Theme::Bg0().x, Theme::Bg0().y,
                                                                                                             Theme::Bg0().z, 1.0F}}};
+                extractedFrameReady_ = true;
                 return Result<void>::Success();
             }
 
@@ -1601,20 +1675,32 @@ namespace Horo::Editor {
                         nativePresentationPending_ = !available.Value();
                     }
                 }
+                if (observed.Value().snapshot.state == Render::RenderSurfaceState::Ready &&
+                    SurfaceAdmission() == EditorSurfaceAdmission::Idle && !nativePresentationPending_ &&
+                    (authorities_.ui.Phase() == Application::Internal::RuntimeUiPaintHostPhase::Active ||
+                     authorities_.ui.Phase() == Application::Internal::RuntimeUiPaintHostPhase::NoSource)) {
+                    const auto output = CaptureRuntimeUiOutput(*p_->presentation.window, pacing_.committedOutputExtent);
+                    if (output.HasError())
+                        return Result<void>::Failure(output.ErrorValue());
+                    const auto updated = authorities_.ui.UpdateOutput(output.Value());
+                    if (updated.HasError())
+                        return updated;
+                }
                 return pacing_.pacer.Configure({p_->options.frameRateLimit}, observed.Value().snapshot);
             }
 
             Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
-                if (auto updated = UpdatePacingSurface(); updated.HasError())
-                    return Result<bool>::Failure(updated.ErrorValue());
-                const auto snapshot = pacing_.surface->Snapshot();
-                if (snapshot.HasError())
-                    return Result<bool>::Failure(snapshot.ErrorValue());
-                if (nativePresentationPending_ || snapshot.Value().state != Render::RenderSurfaceState::Ready)
+                // The output was frozen before GUI CPU work. Recheck only availability, never resize/reproject after extraction.
+                const auto available = p_->presentation.renderFrontend.PollPresentationAvailability(pacing_.committedOutputExtent);
+                if (available.HasError()) {
+                    const auto &error = available.ErrorValue();
+                    if (error.domain.Value() == Render::RenderPresentationErrors::DrawableUnavailable.domain.Value() &&
+                        error.code.Value() == Render::RenderPresentationErrors::DrawableUnavailable.code.Value())
+                        return Result<bool>::Success(false);
+                    return Result<bool>::Failure(error);
+                }
+                if (!available.Value())
                     return Result<bool>::Success(false);
-                // Retain pending viewport work while the native surface cannot admit rendering.
-                if (const Result<void> prepared = PrepareViewportResources(); prepared.HasError())
-                    return Result<bool>::Failure(prepared.ErrorValue());
                 const Render::FramebufferExtent outputExtent = pacing_.committedOutputExtent;
                 pacing_.presentingFrameNumber = context.frameNumber;
 
@@ -1660,15 +1746,24 @@ namespace Horo::Editor {
                                                                              {extent.width, extent.height});
             }
 
-            Result<void> ExecuteFrame(const Runtime::FrameContext &) {
-                if (!frame_.has_value())
+            Result<void> ExecuteFrame(const Runtime::FrameContext &context) {
+                if (!std::exchange(extractedFrameReady_, false))
+                    return Result<void>::Success();
+                auto begun = BeginRenderFrame(context);
+                if (begun.HasError())
+                    return Result<void>::Failure(begun.ErrorValue());
+                if (!begun.Value())
                     return Result<void>::Success();
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Execution);
 #endif
-                return p_->presentation.viewportRenderer
-                    .ExecutePreparedFrame(*frame_, std::span<const Render::RenderPassDescriptor>{preparedPasses_.descriptors.data(),
-                                                                                                 preparedPasses_.count});
+                const auto scene =
+                    p_->presentation.viewportRenderer
+                        .ExecutePreparedFrame(*frame_, std::span<const Render::RenderPassDescriptor>{preparedPasses_.descriptors.data(),
+                                                                                                     preparedPasses_.count});
+                if (scene.HasError())
+                    return scene;
+                return authorities_.ui.ComposeUi(*frame_, context.frameNumber);
             }
 
             /** @brief Observes the actual native present at its owner boundary, before host timing is committed. */
@@ -1677,6 +1772,9 @@ namespace Horo::Editor {
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Presentation);
 #endif
                 Result<void> result = frame_->Present(timing);
+                const auto uiReceipt = authorities_.ui.Presented(pacing_.presentingFrameNumber, result.HasValue());
+                if (uiReceipt.HasError())
+                    return result.HasError() ? Result<void>::Failure(WithCause(uiReceipt.ErrorValue(), result.ErrorValue())) : uiReceipt;
                 if (result.HasValue() && presentedFrames_ != std::numeric_limits<std::uint64_t>::max())
                     ++presentedFrames_;
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
@@ -1732,6 +1830,8 @@ namespace Horo::Editor {
 #endif
             EditorSurfaceRecovery surfaceRecovery_{EditorSurfaceRecovery::Defer};
             bool nativePresentationPending_{false};
+            bool guiFrameStarted_{};     /**< ImGui CPU frame requiring Render or EndFrame, independent of native scope. */
+            bool extractedFrameReady_{}; /**< Completed GUI/cold-source extraction eligible for one native admission. */
             Input::FrameNumber inputFrameNumber_{1};
             Input::InputContextToken focusedWidgetInputContext_;
             EditorPreparedPasses preparedPasses_;
@@ -1782,13 +1882,19 @@ namespace Horo::Editor {
             RegisterDefaultWorkspacePanels(registry, graphInspectionPanes);
         }
 
-        /** @brief Shuts down the runtime before checking surface closure and preserving the host's prior health. */
-        bool CompleteEditorRuntimeShutdown(Runtime::RuntimeHost &runtime, const EditorRuntimeParticipant &participant, const bool healthy) {
+        /** @brief Shuts down the runtime and collects revoked UI owners before preserving the host's prior health. */
+        bool CompleteEditorRuntimeShutdown(Runtime::RuntimeHost &runtime, const EditorRuntimeParticipant &participant, const bool healthy,
+                                           const Application::Internal::RuntimeUiPaintPort &uiPort) {
             runtime.Shutdown();
             bool completed = participant.SurfaceClosed();
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             completed = completed && participant.QualificationPassed();
 #endif
+            const auto uiDrained = uiPort.CollectRetired();
+            if (uiDrained.HasError() || !uiDrained.Value()) {
+                LOG_ERROR("editor.runtime", "Runtime UI retirement has not reached quiescence.");
+                return false;
+            }
             return healthy && completed;
         }
 
@@ -1866,6 +1972,27 @@ namespace Horo::Editor {
                    ((!options.exitAfterFirstFrame && options.exitAfterFrames == 0) || completedFrame);
         }
 
+        /** @brief Registers scene and UI source owners before any editor consumer starts; retains revoked UI storage through native drain.
+         */
+        Result<Application::Internal::RuntimeUiPaintPort> RegisterEditorRuntimeSources(
+            Runtime::RuntimeHost &runtime, std::unique_ptr<Runtime::RuntimeLifecycleParticipant> scene,
+            EditorPresentationPorts &presentation, Application::Internal::RuntimeUiPaintComposition ui) {
+            using Preparation = Result<Application::Internal::RuntimeUiPaintPort>;
+            if (const Result<void> addedScene = runtime.AddParticipant(std::move(scene)); addedScene.HasError()) {
+                LOG_ERROR("editor.runtime", "Runtime scene service registration failed: %s", addedScene.ErrorValue().message.c_str());
+                return Preparation::Failure(addedScene.ErrorValue());
+            }
+            const auto port = ui.port;
+            // Presentation owns revoked UI storage until its same native completion generation has drained.
+            presentation.uiRetirement = port;
+            const auto registered = runtime.AddParticipant(std::move(ui.participant));
+            if (registered.HasError()) {
+                LOG_ERROR("editor.runtime", "Runtime UI registration failed: %s", registered.ErrorValue().message.c_str());
+                return Preparation::Failure(registered.ErrorValue());
+            }
+            return Preparation::Success(port);
+        }
+
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             ThemeContext themeContext{p.fonts};
@@ -1909,10 +2036,50 @@ namespace Horo::Editor {
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
             const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
+            SteadyClock clock;
+            auto createdRuntime = Runtime::RuntimeHost::Create(clock);
+            if (createdRuntime.HasError())
+                return std::nullopt;
+            auto uiComposition =
+                Application::Internal::RuntimeUiPaintHost::Compose(p.presentation.renderFrontend, createdRuntime.Value()->DispatchSource(),
+                                                                   {.ownership = Runtime::Ui::UiOwnershipGeneration::Create(1).Value(),
+                                                                    .maximumInstances = 8,
+                                                                    .maximumRetiredInstances = 8,
+                                                                    .maximumPreparedTransitions = 2});
+            if (uiComposition.HasError())
+                return std::nullopt;
+            auto allocator = Runtime::Ui::UiElementSlotAllocator::Create(Runtime::Ui::UiOwnershipGeneration::Create(1).Value());
+            if (allocator.HasError())
+                return std::nullopt;
+            Application::Internal::RuntimeUiPaintProjectPolicy uiPolicy;
+            if (p.presentation.renderFrontend.Capabilities().backend == Render::RenderBackendId{"metal"})
+                uiPolicy.source =
+                    Application::Internal::RuntimeUiPaintPackagedAssets{EditorAssetRoot(), Render::ShaderTargetBackend::Metal};
+            if (p.operationServices.uiPaintTarget)
+                uiPolicy.source = Application::Internal::RuntimeUiPaintProjectCompiler{p.background.jobs, p.operationServices.shaderBuild,
+                                                                                       AssetPath("shaders/runtime/ui_paint.hlsl"),
+                                                                                       *p.operationServices.uiPaintTarget};
+            int uiWidth{}, uiHeight{};
+            if (!SDL_GetWindowSizeInPixels(p.presentation.window, &uiWidth, &uiHeight))
+                return std::nullopt;
+            if (uiWidth > 0 && uiHeight > 0) {
+                const auto output = CaptureRuntimeUiOutput(*p.presentation.window,
+                                                           {static_cast<std::uint32_t>(uiWidth), static_cast<std::uint32_t>(uiHeight)});
+                if (output.HasError() || uiComposition.Value().port.UpdateOutput(output.Value()).HasError())
+                    return std::nullopt;
+            }
+            auto projectUi =
+                Application::Internal::RuntimeUiPaintProjectSources::Create(uiComposition.Value().port,
+                                                                            std::make_shared<Runtime::Ui::UiElementSlotAllocator>(
+                                                                                std::move(allocator).Value()),
+                                                                            std::move(uiPolicy));
+            if (projectUi.HasError())
+                return std::nullopt;
             auto capturedPolicy = CaptureEditorScenePolicy(p.options);
             if (capturedPolicy.HasError())
                 return std::nullopt;
             auto scenePolicy = std::move(capturedPolicy).Value();
+            scenePolicy.uiSources = std::move(projectUi).Value();
             std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
             if (scenePolicy.cooked)
                 worldBakeDependencies.emplace(scenePolicy.cooked->targetRoot, scenePolicy.cooked->target,
@@ -2077,31 +2244,25 @@ namespace Horo::Editor {
             screenHost.Services().Register<Application::NetworkDebuggerService>(networkDebugger);
             screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(networkDebugger);
             screenHost.Services().Register<Application::INetworkDebuggerControl>(networkDebugger);
+            std::optional<EditorRendererRestartRequest> rendererRestart;
+            std::unique_ptr<Runtime::RuntimeHost> runtime = std::move(createdRuntime).Value();
+            auto runtimeSources =
+                RegisterEditorRuntimeSources(*runtime, std::move(runtimeScene), p.presentation, std::move(uiComposition).Value());
+            if (runtimeSources.HasError()) {
+                screenHost.RequestFatalShutdown();
+                screenHost.Shutdown();
+                return std::nullopt;
+            }
             if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
                 LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();
                 screenHost.Shutdown();
                 return std::nullopt;
             }
-            std::optional<EditorRendererRestartRequest> rendererRestart;
-            SteadyClock clock;
-            auto createdRuntime = Runtime::RuntimeHost::Create(clock);
-            if (createdRuntime.HasError()) {
-                LOG_ERROR("editor.runtime", "Runtime host creation failed: %s", createdRuntime.ErrorValue().message.c_str());
-                screenHost.RequestFatalShutdown();
-                screenHost.Shutdown();
-                return std::nullopt;
-            }
-            std::unique_ptr<Runtime::RuntimeHost> runtime = std::move(createdRuntime).Value();
-            if (const Result<void> addedScene = runtime->AddParticipant(std::move(runtimeScene)); addedScene.HasError()) {
-                LOG_ERROR("editor.runtime", "Runtime scene service registration failed: %s", addedScene.ErrorValue().message.c_str());
-                screenHost.RequestFatalShutdown();
-                screenHost.Shutdown();
-                return std::nullopt;
-            }
             auto participant =
                 std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, rendererRestart, clock,
-                                                           EditorRuntimeAuthorities{nullptr, &*packages, &navigationBakes});
+                                                           EditorRuntimeAuthorities{nullptr, &*packages, &navigationBakes,
+                                                                                    runtimeSources.Value()});
             participant->BindHost(*runtime);
             EditorRuntimeParticipant *pacingParticipant = participant.get();
             Result<void> startup = runtime->AddParticipant(std::move(participant));
@@ -2117,7 +2278,7 @@ namespace Horo::Editor {
             }
 
             const bool healthy = RunEditorFrames(p.options, *pacingParticipant, *runtime, screenHost);
-            p.healthy = CompleteEditorRuntimeShutdown(*runtime, *pacingParticipant, healthy);
+            p.healthy = CompleteEditorRuntimeShutdown(*runtime, *pacingParticipant, healthy, runtimeSources.Value());
             RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
             return rendererRestart;
         }
@@ -2277,6 +2438,7 @@ namespace Horo::Editor {
         OperationStore &operations;
         const EditorUpdateHostServices *updateHost;
         std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler;
+        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
     };
 
     struct EditorSessionResult final {
@@ -2309,7 +2471,8 @@ namespace Horo::Editor {
         RunEditorMainLoopParams loopParams{launch.startup.options,
                                            launch.telemetry,
                                            {&launch.window, launch.io, *launch.composition.frontend, *launch.composition.guiRenderer,
-                                            *launch.composition.viewportRenderer, launch.composition.viewportTarget},
+                                            *launch.composition.viewportRenderer, launch.composition.viewportTarget,
+                                            launch.composition.uiRetirement},
                                            launch.fonts,
                                            launch.textures,
                                            projectCreationService,
@@ -2324,7 +2487,7 @@ namespace Horo::Editor {
                                            inputBackend,
                                            inputRouter,
                                            launch.logs,
-                                           {launch.buildOutput, launch.operations, shaderBuild}};
+                                           {launch.buildOutput, launch.operations, shaderBuild, launch.uiPaintTarget}};
         auto rendererRestart = RunEditorMainLoop(loopParams);
         return {std::move(rendererRestart), loopParams.healthy};
     }
@@ -2362,6 +2525,14 @@ namespace Horo::Editor {
             const auto drained = composition.frontend->PollDrain();
             if (drained.HasError() || drained.Value() != Progress::Drained)
                 return drained;
+        }
+        if (composition.uiRetirement) {
+            const auto collected = composition.uiRetirement->CollectRetired();
+            if (collected.HasError())
+                return Result<Progress>::Failure(collected.ErrorValue());
+            if (!collected.Value())
+                return Result<Progress>::Success(Progress::Pending);
+            composition.uiRetirement.reset();
         }
         if (composition.guiRenderer)
             DestroyEditorTextures(textures, *composition.guiRenderer);
@@ -2520,7 +2691,8 @@ namespace Horo::Editor {
 
     /** @copydoc RunEditorGuiApp */
     int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost,
-                        std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler) {
+                        std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler,
+                        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget) {
         // ── Bootstrap logging before any subsystem ───────────────────────
         auto observabilitySession = InitializeEditorObservability();
         auto saveTelemetryResult = Runtime::SaveTelemetryRegistration::Create();
@@ -2570,9 +2742,10 @@ namespace Horo::Editor {
 
         LOG_INFO("editor.startup", "Editor initialised with renderer '%s' — entering main loop", prepared->options.rendererBackend.c_str());
 
-        EditorSessionResult session = RunEditorSession(
-            {*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures, presentation->composition,
-             editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost, std::move(shaderCompiler)});
+        EditorSessionResult session =
+            RunEditorSession({*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures,
+                              presentation->composition, editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost,
+                              std::move(shaderCompiler), std::move(uiPaintTarget)});
 
         RetireEditorSessionPresentation(*presentation, session);
         saveTelemetry.reset();

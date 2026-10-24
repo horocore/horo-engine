@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/RuntimeUiService.h"
 #include "UiAnimationRuntimeInternal.h"
 
 #include <new>
@@ -10,6 +11,25 @@ namespace Horo::Runtime {
                                                                            Ui::UiAnimationCanvasDefinition definition,
                                                                            const Ui::UiAnimationReloadAdmission &admission,
                                                                            const CancellationToken &cancellation) {
+        return ReloadSource(nullptr, {},
+                            {std::move(replacement), allocator, std::move(registry), std::move(styles), std::move(definition), admission},
+                            cancellation);
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::Reload(Ui::RuntimeUiService &, Ui::RuntimeUiInstanceId,
+     * Ui::UiAnimationReloadPreparation, const CancellationToken &) */
+    Result<UiAnimationRuntimeReload> UiAnimationRuntimeParticipant::Reload(Ui::RuntimeUiService &service,
+                                                                           const Ui::RuntimeUiInstanceId instance,
+                                                                           Ui::UiAnimationReloadPreparation preparation,
+                                                                           const CancellationToken &cancellation) {
+        return ReloadSource(&service, instance, std::move(preparation), cancellation);
+    }
+
+    /** @copydoc UiAnimationRuntimeParticipant::ReloadSource */
+    Result<UiAnimationRuntimeReload> UiAnimationRuntimeParticipant::ReloadSource(Ui::RuntimeUiService *service,
+                                                                                 const Ui::RuntimeUiInstanceId instance,
+                                                                                 Ui::UiAnimationReloadPreparation preparation,
+                                                                                 const CancellationToken &cancellation) {
         if (storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->prepared ||
             storage_->source.BindingStatus() != RuntimeDispatchStatus::Valid)
             return Result<UiAnimationRuntimeReload>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
@@ -20,8 +40,10 @@ namespace Horo::Runtime {
             return Result<UiAnimationRuntimeReload>::Failure(MakeError(Ui::UiErrors::AnimationStorageExhausted));
         }
         controls->capacity = storage_->controls->capacity;
-        auto result = storage_->owner.Reload(std::move(replacement), allocator, std::move(registry), std::move(styles),
-                                             std::move(definition), admission, cancellation);
+        auto result = service ? service->Reload(instance, storage_->owner, std::move(preparation), cancellation)
+                              : storage_->owner.Reload(std::move(preparation.generation), preparation.allocator,
+                                                       std::move(preparation.registry), std::move(preparation.styles),
+                                                       std::move(preparation.definition), preparation.admission, cancellation);
         if (result.HasError())
             return Result<UiAnimationRuntimeReload>::Failure(result.ErrorValue());
         const auto clocks = storage_->owner.ClockBindings();
