@@ -131,31 +131,26 @@ def test_source_editor_pin_participates_in_dependency_identity(source_root: Path
 def test_sonar_dependency_restore_requires_exact_inputs() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github/workflows/sonar.yml").read_text()
-    restore = workflow.split("- name: Restore FetchContent dependencies", 1)[1].split("- name: Restore compiler cache", 1)[0]
+    restore = workflow.split("- name: Restore FetchContent dependencies", 1)[1].split("- name: Identify instrumented compilers", 1)[0]
     assert "restore-keys:" not in restore
     for pattern in ("CMakeLists.txt", "cmake/Dependencies.cmake", "cmake/*Dependency.cmake",
                     "cmake/Horo*DependencyPolicy.cmake", "cmake/HoroGnsProtobufConfig.cmake"):
         assert f"'{pattern}'" in restore
 
 
-def test_sonar_consumer_and_exporter_share_actual_compiler_identity() -> None:
+def test_sonar_consumer_and_direct_publication_share_actual_compiler_identity() -> None:
     root = Path(__file__).resolve().parents[2]
     sonar = (root / ".github/workflows/sonar.yml").read_text(encoding="utf-8")
-    exporter = (root / ".github/workflows/compiler-checkpoints.yml").read_text(encoding="utf-8")
     namespace = ("sonar-v3-${{ runner.os }}-${{ runner.arch }}-"
                  "${{ steps.compiler_identity.outputs.c-compiler }}-"
                  "${{ steps.compiler_identity.outputs.compiler }}-main-")
-    for workflow in (sonar, exporter):
-        assert "id: compiler_identity" in workflow
-        assert '--cc gcc --cxx g++ --cc-version "$(gcc -dumpfullversion -dumpversion)"' in workflow
-        assert '--cxx-version "$(g++ -dumpfullversion -dumpversion)"' in workflow
-        assert f"key: {namespace}${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}" in workflow
-        assert f"            {namespace}\n" in workflow
+    assert "id: compiler_identity" in sonar
+    assert '--cc gcc --cxx g++ --cc-version "$(gcc -dumpfullversion -dumpversion)"' in sonar
+    assert '--cxx-version "$(g++ -dumpfullversion -dumpversion)"' in sonar
+    assert f"key: {namespace}${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}" in sonar
     assert f"COMPILER_NAMESPACE: {namespace}" in sonar
-    assert sonar.index("name: Identify instrumented compilers") < sonar.index("name: Restore compiler cache")
-    assert "runs-on: ubuntu-26.04" in sonar
-    assert "runner: ubuntu-26.04\n            profile: sonar" in exporter
+    assert sonar.index("name: Identify instrumented compilers") < sonar.index("name: Restore optional public compiler checkpoint")
+    assert "runs-on: &sonar_runner ubuntu-26.04" in sonar
     assert "      CC: gcc\n      CXX: g++" in sonar
-    # Legacy data can bootstrap reads, but the exporter must not republish it as v3.
-    assert "sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-" in sonar
-    assert "sonar-v2" not in exporter
+    assert "Restore compiler cache" not in sonar
+    assert "Save compiler cache" not in sonar

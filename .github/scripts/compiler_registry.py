@@ -209,27 +209,20 @@ def fetch(namespace: str) -> None:
         print(f"Verified public compiler checkpoint: {expected}")
 
 
-def trusted_publisher(environment: dict) -> bool:
-    """Require canonical main; workflow_run additionally verifies triggering provenance."""
-    if (environment.get("GITHUB_REPOSITORY") != "horocore/horo-engine"
-            or environment.get("GITHUB_REF") != "refs/heads/main"):
-        return False
-    event = environment.get("GITHUB_EVENT_NAME")
-    if event in {"schedule", "workflow_dispatch"}:
-        return True
-    if event != "workflow_run":
-        return False
-    document = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-    run = document["workflow_run"]
-    return (run["head_repository"]["full_name"] == "horocore/horo-engine"
-            and run["head_branch"] == "main" and run["event"] == "push")
+def trusted_publisher(environment: dict, namespace: str) -> bool:
+    """Allow only the owning build workflow on canonical main, never a delayed exporter."""
+    owner = {"native": "CI", "sonar": "SonarCloud"}.get(namespace.split("-", 1)[0])
+    return (owner is not None and environment.get("GITHUB_WORKFLOW") == owner
+            and environment.get("GITHUB_REPOSITORY") == "horocore/horo-engine"
+            and environment.get("GITHUB_REF") == "refs/heads/main"
+            and environment.get("GITHUB_EVENT_NAME") in {"push", "workflow_dispatch"})
 
 
 def publish(key: str) -> None:
     """Single-writer latest checkpoint; never replace it with an older main run."""
-    if not trusted_publisher(os.environ):
-        raise ValueError("Only the trusted main exporter may publish compiler entries")
     namespace, order = split_key(key)
+    if not trusted_publisher(os.environ, namespace):
+        raise ValueError("Only the owning main build may publish compiler entries")
     ref = reference(namespace)
     source = cache_root(namespace)
     with tempfile.TemporaryDirectory(dir=source.parent) as temporary:
@@ -251,6 +244,7 @@ def publish(key: str) -> None:
                      "--annotation", f"io.horo.compiler.source-key={key}",
                      "--annotation", "org.opencontainers.image.source=https://github.com/horocore/horo-engine",
                      cwd=root)
+        print(f"Published compiler checkpoint: {key}")
 
 
 def main() -> int:
