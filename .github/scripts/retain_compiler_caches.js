@@ -4,7 +4,7 @@
 // Source, scanner, other workflow and PR caches are never deleted here.
 function snapshotPrefix(cache) {
   if (cache.ref !== 'refs/heads/main' || cache.size_in_bytes <= 0) return null;
-  const match = cache.key.match(/^(native-v1-(?:Linux|Windows|macOS)-(?:X64|ARM64)-.+-(?:native-tests-v1-Debug|native-variants-v1-Mixed)-main-|sonar-v2-gcc-Linux-X64-main-)\d+-\d+$/);
+  const match = cache.key.match(/^(native-v1-(?:Linux|Windows|macOS)-(?:X64|ARM64)-.+-(?:native-tests-v1-Debug|native-variants-v1-Mixed)-main-|sonar-v2-gcc-Linux-X64-main-|sonar-v3-Linux-X64-gcc-\d+(?:\.\d+)+-gcc-\d+(?:\.\d+)+-main-)\d+-\d+$/);
   return match ? `${match[1]}:${cache.version}` : null;
 }
 

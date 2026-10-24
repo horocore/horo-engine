@@ -7,6 +7,7 @@
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "NetworkModeBindingTestSupport.h"
 #include "NetworkProductHost.h"
 #include "NetworkTestUtils.h"
 
@@ -28,6 +29,11 @@ namespace Horo::Network {
 
     namespace {
         struct ProductOwners final {
+            NetworkWorldBindingSetup worldSetup = ModeBindingTests::Setup();
+            std::shared_ptr<ModeBindingTests::BindingFixture> binding = std::make_shared<ModeBindingTests::BindingFixture>();
+            std::shared_ptr<NetworkWorldBindingController> remotePublisher;
+            std::shared_ptr<ModeBindingTests::BindingFixture> remoteWire;
+            NetworkProjectRole selectedMode{NetworkProjectRole::Count};
             std::size_t factoryCalls{};
             std::size_t sceneFactoryCalls{};
             std::size_t constructedTransport{};
@@ -129,10 +135,8 @@ namespace Horo::Network {
             return factories;
         }
 
-        [[nodiscard]] inline NetworkModeWorld World(const NetworkModeWorldKind kind, const std::uint64_t scene,
-                                                    const std::uint64_t authority = 0) {
-            return {kind, Runtime::SceneRuntimeId{scene},
-                    authority == 0 ? ReplicationAuthorityEpoch{} : ReplicationAuthorityEpoch::Create(authority).Value()};
+        [[nodiscard]] inline NetworkModeWorld World(const NetworkModeWorldKind kind, const std::uint64_t scene) {
+            return {kind, Runtime::SceneRuntimeId{scene}};
         }
 
         [[nodiscard]] inline std::shared_ptr<PeerSessionLifecycle> AdmittedSession(
@@ -144,7 +148,7 @@ namespace Horo::Network {
             selection.connection = connection;
             selection.sessionGeneration = generation;
             selection.protocol = WireIdentity<ProtocolId>(1);
-            selection.version = {1, 2};
+            selection.version = {1, 0};
             selection.schemaFingerprint = 42;
             selection.features.values[0] = WireIdentity<ProtocolFeatureId>(1);
             selection.features.values[1] = WireIdentity<ProtocolFeatureId>(2);
@@ -330,6 +334,7 @@ namespace Horo::Network {
             const NetworkModePresentation presentation, const std::shared_ptr<ProductOwners> &owners,
             const bool omitRoleFromPackage = false, const bool unknownReplicationInventory = false,
             const std::optional<Application::Internal::GameplayWorldSelection> &gameplay = std::nullopt) {
+            owners->selectedMode = mode;
             auto input = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
             input.supportedRoles = NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::Client | NetworkProjectRoleSet::ListenServer |
                                    NetworkProjectRoleSet::DedicatedServer;
@@ -345,54 +350,159 @@ namespace Horo::Network {
             REQUIRE(project.HasValue());
             const auto facts = ProductFacts(project.Value(), mode, omitRoleFromPackage);
             auto factories = ProductWorldFactories(project.Value(), owners, gameplay);
-            return Application::Internal::NetworkProductHost::Create(clock,
-                                                                     {project.Value(), facts.product, facts.inventory, facts.host,
-                                                                      facts.requirements, facts.selection, 6, worlds, presentation,
-                                                                      mode == NetworkProjectRole::Standalone ? nullptr : owners->sessions},
-                                                                     std::move(factories));
+            auto created =
+                Application::Internal::NetworkProductHost::Create(clock,
+                                                                  {project.Value(), facts.product, facts.inventory, facts.host,
+                                                                   facts.requirements, facts.selection, 6, worlds, presentation,
+                                                                   mode == NetworkProjectRole::Standalone ? nullptr : owners->sessions,
+                                                                   NetworkWorldCompositionPurpose::Gameplay,
+                                                                   mode == NetworkProjectRole::Standalone
+                                                                       ? std::nullopt
+                                                                       : std::optional{owners->worldSetup}},
+                                                                  std::move(factories));
+            if (created.HasValue() && mode != NetworkProjectRole::Standalone)
+                owners->binding->binding = owners->sessions->WorldBinding();
+            return created;
+        }
+
+        /** @brief A remote canonical Runtime owner issues identity; fixture code never constructs a world descriptor. */
+        inline void PrepareRemotePublisher(const std::shared_ptr<ProductOwners> &owners) {
+            if (owners->remotePublisher)
+                return;
+            NetworkModePlan plan;
+            plan.mode = NetworkProjectRole::DedicatedServer;
+            plan.hostGeneration = 1;
+            plan.build = Id<NetworkProductBuildId>(1);
+            plan.productRevision = Id<NetworkProductCapabilityRevision>(1);
+            plan.hostRevision = Id<NetworkHostCapabilityRevision>(1);
+            plan.projectRevision = Id<NetworkProjectSettingsRevision>(1);
+            plan.provider = Id<NetworkTransportProviderId>(1);
+            plan.protocolVersion = {1, 0};
+            plan.worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 900);
+            plan.worldCount = 1;
+            auto created = NetworkWorldBindingController::Create(plan, owners->worldSetup);
+            REQUIRE(created.HasValue());
+            owners->remotePublisher = std::move(created).Value();
+            owners->remoteWire = std::make_shared<ModeBindingTests::BindingFixture>();
+            owners->remoteWire->setup = owners->worldSetup;
+            owners->remoteWire->AttachOwner(owners->remotePublisher);
+            REQUIRE(owners->remotePublisher->Prepare().HasValue());
+            REQUIRE(owners->remotePublisher->Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+            owners->remoteWire->server = AdmittedSession(ConnectionHandle::Create(3, 1).Value(), Session(8));
+            REQUIRE(owners->remotePublisher->BindPeer(AdmissionEndpoint::Server, owners->remoteWire->server, Session(8), 22).HasValue());
+        }
+
+        inline void PublishProductClient(Application::Internal::NetworkProductHost &host, const std::shared_ptr<ProductOwners> &owners,
+                                         const std::shared_ptr<PeerSessionLifecycle> &client) {
+            owners->binding->setup = owners->worldSetup;
+            if (!owners->binding->dispatcher)
+                owners->binding->AttachOwner(owners->binding->binding);
+            owners->binding->RegisterClient(client);
+            REQUIRE(host.RunFrame().HasValue());
+            if (owners->selectedMode == NetworkProjectRole::ListenServer) {
+                owners->binding->server = AdmittedSession(ConnectionHandle::Create(3, 1).Value(), Session(8));
+                auto owner = owners->binding->binding.lock();
+                REQUIRE(owner);
+                REQUIRE(owner->BindPeer(AdmissionEndpoint::Server, owners->binding->server, Session(8), 22).HasValue());
+                owners->binding->Deliver();
+            } else {
+                PrepareRemotePublisher(owners);
+                REQUIRE(owners->remotePublisher->Flush(22).HasValue());
+                const auto &wire = owners->remoteWire->transport;
+                auto &local = owners->binding->transport;
+                local.event = {.kind = NetworkTransportEventKind::PacketReceived,
+                               .connection = client->Connection(),
+                               .channel = {},
+                               .delivery = DeliveryPolicy::ReliableOrdered,
+                               .payload = std::vector<std::byte>(wire.sent.begin(), wire.sent.begin() + wire.size)};
+                local.queued = true;
+                const auto delivered = owners->binding->dispatcher->RunNetworkPoll(22);
+                REQUIRE(delivered.HasValue());
+                REQUIRE(delivered.Value().rejectedPackets == 0);
+            }
+            REQUIRE(host.RunFrame().HasValue());
+        }
+
+        inline void DeliverRemoteProductControl(Application::Internal::NetworkProductHost &host,
+                                                const std::shared_ptr<ProductOwners> &owners, const ConnectionHandle connection) {
+            REQUIRE(owners->remotePublisher->Flush(22).HasValue());
+            const auto &wire = owners->remoteWire->transport;
+            auto &local = owners->binding->transport;
+            local.event = {.kind = NetworkTransportEventKind::PacketReceived,
+                           .connection = connection,
+                           .channel = {},
+                           .delivery = DeliveryPolicy::ReliableOrdered,
+                           .payload = std::vector<std::byte>(wire.sent.begin(), wire.sent.begin() + wire.size)};
+            local.queued = true;
+            const auto delivered = owners->binding->dispatcher->RunNetworkPoll(22);
+            REQUIRE(delivered.HasValue());
+            REQUIRE(delivered.Value().rejectedPackets == 0);
+            REQUIRE(host.RunFrame().HasValue());
+        }
+
+        inline void CompleteProductTravel(Application::Internal::NetworkProductHost &host, const std::shared_ptr<ProductOwners> &owners) {
+            REQUIRE(host.RunFrame().HasValue());  // Stage all local services at the actual product safe point.
+            if (owners->selectedMode == NetworkProjectRole::ListenServer) {
+                owners->binding->Deliver();
+                REQUIRE(host.RunFrame().HasValue());
+                owners->binding->Deliver();
+                return;
+            }
+            REQUIRE(owners->selectedMode == NetworkProjectRole::Client);
+            const std::array remoteWorld{World(NetworkModeWorldKind::AuthorityServer, 901)};
+            REQUIRE(owners->remotePublisher->PrepareTravel(remoteWorld).HasValue());
+            DeliverRemoteProductControl(host, owners, Connection());
+            REQUIRE(owners->remotePublisher->Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+            DeliverRemoteProductControl(host, owners, Connection());
         }
 
         inline void VerifyClientLifecycle(Application::Internal::NetworkProductHost &host, const NetworkProjectRole mode,
-                                          const std::span<const NetworkModeWorld> worlds) {
+                                          const std::span<const NetworkModeWorld> worlds, const std::shared_ptr<ProductOwners> &owners) {
             const auto clientIndex = worlds.size() - 1;
             auto pending = PeerSessionLifecycle::Create(Connection(), Session(), {10, 20, 30, 100, 10});
             REQUIRE(pending.HasValue());
             CHECK_FALSE(host.AdmitClientSession(NetworkModeWorldKind::Client,
                                                 std::make_shared<PeerSessionLifecycle>(std::move(pending).Value()), Connection(), Session())
                             .HasValue());
-            CHECK_FALSE(host.Role(NetworkModeWorldKind::Client, worlds[clientIndex].scene).Value().session.has_value());
+            CHECK(host.Role(NetworkModeWorldKind::Client, worlds[clientIndex].scene).HasError());
             auto active = AdmittedSession();
             REQUIRE(host.AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session()).HasValue());
+            PublishProductClient(host, owners, active);
             CHECK(host.Role(NetworkModeWorldKind::Client, worlds[clientIndex].scene).Value().session == Session());
             std::array<NetworkModeWorld, 2> replacement{};
             if (mode == NetworkProjectRole::Client) {
                 replacement[0] = World(NetworkModeWorldKind::Client, 102);
             } else {
-                replacement[0] = World(NetworkModeWorldKind::AuthorityServer, 103, 110);
+                replacement[0] = World(NetworkModeWorldKind::AuthorityServer, 103);
                 replacement[1] = World(NetworkModeWorldKind::Client, 104);
             }
             REQUIRE(host.RequestTravel({replacement.data(), worlds.size()}, Session()).HasValue());
-            REQUIRE(host.RunFrame().HasValue());
+            CompleteProductTravel(host, owners);
             CHECK_FALSE(host.TakeTravelFailure().has_value());
             for (std::size_t index = 0; index < worlds.size(); ++index) {
                 CHECK_FALSE(host.Role(worlds[index].kind, worlds[index].scene).HasValue());
                 CHECK(host.Role(replacement[index].kind, replacement[index].scene).HasValue());
             }
             REQUIRE(host.DisconnectClient(NetworkModeWorldKind::Client, Session()).HasValue());
-            CHECK_FALSE(host.Role(NetworkModeWorldKind::Client, replacement[clientIndex].scene).Value().session.has_value());
+            CHECK(host.Role(NetworkModeWorldKind::Client, replacement[clientIndex].scene).HasError());
             CHECK_FALSE(host.AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session()).HasValue());
         }
 
         inline void VerifyNonClientTravel(Application::Internal::NetworkProductHost &host, const NetworkProjectRole mode,
                                           const std::span<const NetworkModeWorld> worlds) {
             const std::array replacement{mode == NetworkProjectRole::Standalone ? World(NetworkModeWorldKind::Standalone, 101)
-                                                                                : World(NetworkModeWorldKind::AuthorityServer, 105, 111)};
+                                                                                : World(NetworkModeWorldKind::AuthorityServer, 105)};
             REQUIRE(host.RequestTravel(worlds).HasValue());
             REQUIRE(host.RunFrame().HasValue());
             CHECK(host.TakeTravelFailure().has_value());
             CHECK(host.Role(worlds[0].kind, worlds[0].scene).HasValue());
             REQUIRE(host.RequestTravel(replacement).HasValue());
             REQUIRE(host.RunFrame().HasValue());
+            if (mode == NetworkProjectRole::DedicatedServer) {
+                CHECK(host.Role(worlds[0].kind, worlds[0].scene).HasValue());
+                CHECK(host.Role(replacement[0].kind, replacement[0].scene).HasError());
+                REQUIRE(host.RunFrame().HasValue());  // The next actual safe point publishes the prepared world.
+            }
             CHECK_FALSE(host.TakeTravelFailure().has_value());
             CHECK_FALSE(host.Role(worlds[0].kind, worlds[0].scene).HasValue());
             CHECK(host.Role(replacement[0].kind, replacement[0].scene).HasValue());
@@ -408,11 +518,11 @@ namespace Horo::Network {
                     worlds[0] = World(NetworkModeWorldKind::Client, 2);
                     return 1;
                 case NetworkProjectRole::ListenServer:
-                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 3, 10);
+                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 3);
                     worlds[1] = World(NetworkModeWorldKind::Client, 4);
                     return 2;
                 case NetworkProjectRole::DedicatedServer:
-                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 5, 11);
+                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 5);
                     return 1;
                 case NetworkProjectRole::Count:
                     FAIL("Invalid closed network mode");

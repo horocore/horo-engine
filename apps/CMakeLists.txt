@@ -51,6 +51,7 @@ add_library(HoroNetworkProductHost STATIC
     common/GameplayWorldComposition.cpp
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua

@@ -23,6 +23,8 @@ namespace Horo::Application::Internal {
         std::span<const Network::NetworkModeWorld> worlds;
         Network::NetworkModePresentation presentation{};
         std::shared_ptr<ClientSessionOwner> sessions; /**< Required in network modes; retained through teardown. */
+        Network::NetworkWorldCompositionPurpose purpose{Network::NetworkWorldCompositionPurpose::Gameplay};
+        std::optional<Network::NetworkWorldBindingSetup> worldBinding; /**< Required for network gameplay, not transport qualification. */
     };
 
     // Application-owned bridge: target admission precedes the canonical runtime lifecycle.
@@ -79,6 +81,10 @@ namespace Horo::Application::Internal {
         [[nodiscard]] const ClientConnectionAttemptTerminal *ClientConnectionTerminal() const noexcept;
         [[nodiscard]] Result<void> DisconnectClient(Network::NetworkModeWorldKind world, Network::NetworkOperationGeneration generation);
         [[nodiscard]] Result<Network::NetworkModeRoleView> Role(Network::NetworkModeWorldKind world, Runtime::SceneRuntimeId scene) const;
+        /** @brief Acquire role-derived permission from the same committed world used by this actual mode host. */
+        [[nodiscard]] Result<Network::ReplicationWorldReadLease> AcquireReplication(Network::NetworkModeWorldKind world,
+                                                                                    const Network::ReplicationWorldWorkRequest &request,
+                                                                                    Network::ReplicationWorldCapability capability) const;
         void Shutdown() noexcept;
 
     private:

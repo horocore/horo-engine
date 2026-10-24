@@ -97,13 +97,10 @@ namespace Horo::Application::Internal {
                         }
                         return PreparePhysics();
                     }
-                    case Network::NetworkModeServiceKind::Replication: {
-                        auto lifecycle = Network::ReplicationWorldLifecycle::Create();
-                        if (lifecycle.HasError())
-                            return Result<void>::Failure(lifecycle.ErrorValue());
-                        replication_.emplace(std::move(lifecycle).Value());
+                    case Network::NetworkModeServiceKind::Replication:
+                        // NetworkModeComposition owns the canonical Stage/Commit/Acquire lifecycle.
+                        // This process-scoped facade never creates a competing empty world owner.
                         return Result<void>::Success();
-                    }
                     default:
                         return Result<void>::Failure(
                             MakeError(Network::NetworkErrors::NetworkModeInvalid, "Headless world factory received a non-world service."));
@@ -204,13 +201,10 @@ namespace Horo::Application::Internal {
                 }
                 if (owners_->gameplay && owners_->gameplay->moduleRetirements)
                     (void)owners_->gameplay->moduleRetirements->Drain();
-                if (replication_.has_value())
-                    replication_->BeginShutdown();
                 if (physicsWorld_ != nullptr)
                     physicsWorld_->Shutdown();
                 physicsWorld_.reset();
                 record_.reset();
-                replication_.reset();
             }
 
         private:
@@ -366,7 +360,6 @@ namespace Horo::Application::Internal {
             std::shared_ptr<WorldRecord> record_;
             std::unique_ptr<Physics::PhysicsWorld> physicsWorld_;
             std::unique_ptr<GameplayWorldComposition> gameplay_;
-            std::optional<Network::ReplicationWorldLifecycle> replication_;
             std::uint64_t localTick_{};
             std::uint64_t phaseFrame_{};
             bool configuredActivated_{};

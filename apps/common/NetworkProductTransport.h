@@ -3,6 +3,7 @@
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkAdmissionController.h"
+#include "Horo/Network/NetworkWorldBinding.h"
 #include "NetworkProductSession.h"
 
 #include <array>
@@ -33,7 +34,8 @@ namespace Horo::Application::Internal {
         /** @brief Factory-only stable shared capture; only Capture can create the nonaggregate construction key. */
         NetworkProductAdmission(ConstructionKey, const Network::NetworkAdmissionPolicy &policy,
                                 Network::NetworkAdmissionProviders providers, std::shared_ptr<const Network::MessageCodecRegistry> codecs,
-                                std::span<const NetworkProductInboundHandler> handlers);
+                                std::span<const NetworkProductInboundHandler> handlers,
+                                std::optional<Network::NetworkWorldBindingSetup> binding);
         /**
          * @brief Deep-capture spans and retain the exact canonical codec/provider owners.
          * @param policy Host-selected inert admission policy, borrowed only during this call.
@@ -44,7 +46,8 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] static Result<std::shared_ptr<const NetworkProductAdmission>> Capture(
             const Network::NetworkAdmissionPolicy &policy, Network::NetworkAdmissionProviders providers,
-            std::shared_ptr<const Network::MessageCodecRegistry> codecs, std::span<const NetworkProductInboundHandler> handlers = {});
+            std::shared_ptr<const Network::MessageCodecRegistry> codecs, std::span<const NetworkProductInboundHandler> handlers = {},
+            std::optional<Network::NetworkWorldBindingPolicy> worldBinding = std::nullopt);
         NetworkProductAdmission(const NetworkProductAdmission &) = delete;
         NetworkProductAdmission &operator=(const NetworkProductAdmission &) = delete;
 
@@ -63,6 +66,11 @@ namespace Horo::Application::Internal {
             return handlers_;
         }
 
+        /** @brief Borrow validated canonical world policy; absence cannot select gameplay composition. */
+        [[nodiscard]] const std::optional<Network::NetworkWorldBindingSetup> &WorldBinding() const noexcept {
+            return binding_;
+        }
+
         /** @brief Borrow the retained canonical codec owner. @return Exact immutable codec snapshot. */
         [[nodiscard]] const std::shared_ptr<const Network::MessageCodecRegistry> &Codecs() const noexcept {
             return codecs_;
@@ -73,6 +81,7 @@ namespace Horo::Application::Internal {
         std::array<Network::ProtocolFeatureId, Network::MaximumHandshakeFeatures> required_{};
         std::vector<Network::MessageDeliveryChannel> channels_;
         std::vector<NetworkProductInboundHandler> handlers_;
+        std::optional<Network::NetworkWorldBindingSetup> binding_;
         Network::NetworkAdmissionPolicy policy_;
         Network::NetworkAdmissionProviders providers_;
         std::shared_ptr<const Network::MessageCodecRegistry> codecs_;

@@ -1,6 +1,7 @@
 #include "NetworkProductTransport.h"
 
 #include "Horo/Network/NetworkMetricTransport.h"
+#include "NetworkModeHostAccess.h"
 
 #include <algorithm>
 #include <new>
@@ -10,9 +11,10 @@ namespace Horo::Application::Internal {
     NetworkProductAdmission::NetworkProductAdmission(ConstructionKey, const Network::NetworkAdmissionPolicy &policy,
                                                      Network::NetworkAdmissionProviders providers,
                                                      std::shared_ptr<const Network::MessageCodecRegistry> codecs,
-                                                     const std::span<const NetworkProductInboundHandler> handlers)
+                                                     const std::span<const NetworkProductInboundHandler> handlers,
+                                                     std::optional<Network::NetworkWorldBindingSetup> binding)
         : channels_(policy.gameplayChannels.begin(), policy.gameplayChannels.end()), handlers_(handlers.begin(), handlers.end()),
-          policy_(policy), providers_(std::move(providers)), codecs_(std::move(codecs)) {
+          binding_(std::move(binding)), policy_(policy), providers_(std::move(providers)), codecs_(std::move(codecs)) {
         const auto &features = policy.local.compatibility.features;
         std::ranges::copy(features.supported, supported_.begin());
         std::ranges::copy(features.required, required_.begin());
@@ -24,15 +26,38 @@ namespace Horo::Application::Internal {
     /** @copydoc NetworkProductAdmission::Capture */
     Result<std::shared_ptr<const NetworkProductAdmission>> NetworkProductAdmission::Capture(
         const Network::NetworkAdmissionPolicy &policy, Network::NetworkAdmissionProviders providers,
-        std::shared_ptr<const Network::MessageCodecRegistry> codecs, const std::span<const NetworkProductInboundHandler> handlers) {
+        std::shared_ptr<const Network::MessageCodecRegistry> codecs, const std::span<const NetworkProductInboundHandler> handlers,
+        std::optional<Network::NetworkWorldBindingPolicy> worldBinding) {
         if (!codecs || policy.local.compatibility.features.supported.size() > Network::MaximumHandshakeFeatures ||
             policy.local.compatibility.features.required.size() > Network::MaximumHandshakeFeatures || policy.gameplayChannels.empty() ||
             policy.gameplayChannels.size() > 64 || handlers.size() > 128)
             return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
                 MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
+        std::optional<Network::NetworkWorldBindingSetup> binding;
+        if (worldBinding) {
+            if (auto valid = Network::ValidateNetworkWorldBindingPolicy(*worldBinding, policy.local, *codecs); valid.HasError())
+                return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(valid.ErrorValue());
+            const auto control = std::ranges::find(policy.gameplayChannels, Network::MessageTrafficClass::Control,
+                                                   &Network::MessageDeliveryChannel::traffic);
+            const auto command = std::ranges::find(policy.gameplayChannels, Network::MessageTrafficClass::Command,
+                                                   &Network::MessageDeliveryChannel::traffic);
+            if (control == policy.gameplayChannels.end() || command == policy.gameplayChannels.end() ||
+                std::ranges::count(policy.gameplayChannels, Network::MessageTrafficClass::Control,
+                                   &Network::MessageDeliveryChannel::traffic) != 1 ||
+                control->channel == command->channel || control->delivery != Network::DeliveryPolicy::ReliableOrdered ||
+                !control->channel.IsWithin(policy.local.transport.maximumChannels) || policy.maximumPeers > 64 ||
+                std::ranges::any_of(policy.controls, [&worldBinding](const auto &identity) {
+                return identity.protocol == worldBinding->control.protocol && identity.id == worldBinding->control.id;
+            }))
+                return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
+                    MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
+            binding = Network::NetworkWorldBindingSetup{*worldBinding, codecs, policy.local.compatibility.schemaFingerprint,
+                                                        control->channel, static_cast<std::uint32_t>(policy.maximumPeers)};
+        }
         try {
             return Result<std::shared_ptr<const NetworkProductAdmission>>::Success(
-                std::make_shared<NetworkProductAdmission>(ConstructionKey{}, policy, std::move(providers), std::move(codecs), handlers));
+                std::make_shared<NetworkProductAdmission>(ConstructionKey{}, policy, std::move(providers), std::move(codecs), handlers,
+                                                          std::move(binding)));
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(
                 MakeError(Network::NetworkErrors::AdmissionLimitExceeded));
@@ -69,13 +94,18 @@ namespace Horo::Application::Internal {
                 if (auto admission = ConfigureAdmission(); admission.HasError())
                     return admission;
                 router_->SetSessionHost(sessions_);
+                if (auto world = sessions_->WorldBinding().lock()) {
+                    if (auto attached = world->Attach(*transport_, *router_, world); attached.HasError())
+                        return attached;
+                }
                 return Result<void>::Success();
             }
 
             Result<void> Prepare() override {
                 if (stopped_ || prepared_)
                     return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkLifecycleTransitionInvalid));
-                if (auto initialized = transport_->Initialize({maximumPeers_, 64, maximumMessageBytes_}); initialized.HasError())
+                if (auto initialized = transport_->Initialize({maximumPeers_, 64, maximumMessageBytes_, maximumChannels_});
+                    initialized.HasError())
                     return initialized;
                 if (auto attached = sessions_->AttachTransport(*transport_); attached.HasError())
                     return attached;
@@ -105,6 +135,12 @@ namespace Horo::Application::Internal {
             }
 
             Result<void> RunPhase(const Runtime::RuntimePhase phase) override {
+                if (phase == Runtime::RuntimePhase::NetworkFlush) {
+                    if (auto world = sessions_->WorldBinding().lock()) {
+                        const auto tick = sessions_->PollTick();
+                        return tick.HasError() ? Result<void>::Failure(tick.ErrorValue()) : world->Flush(tick.Value());
+                    }
+                }
                 if (phase != Runtime::RuntimePhase::NetworkPoll)
                     return Result<void>::Success();
                 auto tick = sessions_->PollTick();
@@ -136,6 +172,9 @@ namespace Horo::Application::Internal {
                 stopped_ = true;
                 if (admission_)
                     admission_->Shutdown(lastTick_);
+                if (transport_)
+                    if (auto world = sessions_->WorldBinding().lock())
+                        world->Detach(*transport_);
                 if (router_)
                     router_->Shutdown();
                 admission_.reset();
@@ -164,6 +203,7 @@ namespace Horo::Application::Internal {
                     codecs_ = capture_->Codecs();
                     maximumPeers_ = static_cast<std::uint32_t>(capture_->Policy().maximumPeers);
                     maximumMessageBytes_ = static_cast<std::uint32_t>(capture_->Policy().envelope.maximumFrameBytes);
+                    maximumChannels_ = capture_->Policy().local.transport.maximumChannels;
                 } else {
                     auto identities = Net::ProtocolIdentityRegistry::Create({});
                     if (identities.HasError())
@@ -215,6 +255,7 @@ namespace Horo::Application::Internal {
             std::uint64_t lastTick_{};
             std::uint32_t maximumPeers_{8};
             std::uint32_t maximumMessageBytes_{1200};
+            std::uint32_t maximumChannels_{1};
             bool prepared_{};
             bool stopped_{};
         };

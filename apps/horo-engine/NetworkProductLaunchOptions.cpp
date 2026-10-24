@@ -215,6 +215,13 @@ namespace Horo::Application::Internal {
             std::optional<bool> prefabGrant;
             for (std::size_t index = 0; index < arguments.size();) {
                 const std::string_view key{arguments[index]};
+                if (key == "--transport-qualification") {
+                    if (launch.purpose != Net::NetworkWorldCompositionPurpose::Gameplay)
+                        return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
+                    launch.purpose = Net::NetworkWorldCompositionPurpose::TransportQualification;
+                    ++index;
+                    continue;
+                }
                 if (key == "--prefab") {
                     if (auto permission = ReadPrefabPermission(arguments, index, prefabGrant); permission.HasError())
                         return permission;
@@ -233,6 +240,9 @@ namespace Horo::Application::Internal {
                 if (auto applied = ReadSceneOption(arguments, index, seen, launch.sceneInput); applied.HasError())
                     return applied;
             }
+            if (launch.gameplay && launch.purpose == Net::NetworkWorldCompositionPurpose::TransportQualification)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Transport qualification cannot request a gameplay module."));
             if (auto permission = ApplyPrefabPermission(launch, prefabGrant); permission.HasError())
                 return permission;
             return ValidateSceneOptions(seen, launch.sceneInput);

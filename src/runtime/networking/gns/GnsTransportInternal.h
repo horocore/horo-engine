@@ -41,6 +41,40 @@ namespace Horo::Network {
     [[nodiscard]] bool ValidNativeMessage(const SteamNetworkingMessage_t *message, std::uint32_t maximumBytes) noexcept;
     [[nodiscard]] bool ValidGnsTransportConfig(const NetworkTransportConfig &config) noexcept;
 
+    /** @brief Immutable private native call pair. A bound context/code must outlive transport shutdown and callback drain.
+     * Production defaults invoke the exact pinned native APIs. No global override or allocation is introduced.
+     */
+    class GnsLaneOperations final {
+    public:
+        using Configure = EResult(void *, ISteamNetworkingSockets &, HSteamNetConnection, int);
+        using Send = void(void *, ISteamNetworkingSockets &, SteamNetworkingMessage_t **, int64 *);
+        GnsLaneOperations() = default;
+
+        GnsLaneOperations(Configure &configure, Send &send, void *context) noexcept
+            : configure_(&configure), send_(&send), context_(context) {}
+
+        [[nodiscard]] EResult ConfigureLanes(ISteamNetworkingSockets &sockets, HSteamNetConnection connection, int count) const {
+            return configure_(context_, sockets, connection, count);
+        }
+
+        void SendMessage(ISteamNetworkingSockets &sockets, SteamNetworkingMessage_t **message, int64 *result) const {
+            send_(context_, sockets, message, result);
+        }
+
+    private:
+        static EResult ConfigureNative(void *, ISteamNetworkingSockets &sockets, HSteamNetConnection connection, int count) {
+            return sockets.ConfigureConnectionLanes(connection, count, nullptr, nullptr);
+        }
+
+        static void SendNative(void *, ISteamNetworkingSockets &sockets, SteamNetworkingMessage_t **message, int64 *result) {
+            sockets.SendMessages(1, message, result, false);
+        }
+
+        Configure *configure_{&ConfigureNative};
+        Send *send_{&SendNative};
+        void *context_{};
+    };
+
     class GnsTransport final : public INetworkTransport {
     public:
         explicit GnsTransport(std::string resolverServer = {}) : resolverServer_(std::move(resolverServer)) {}
@@ -51,6 +85,10 @@ namespace Horo::Network {
          * Failed cleanup transfers only pending native ownership, never this override, to the process retry owner.
          */
         explicit GnsTransport(void (&kill)()) : nativeOwner_{.kill = &kill} {}
+
+        /** @brief Bind a private foreign-call pair; fixed callback code/context must outlive Shutdown and callback drain. */
+        GnsTransport(GnsLaneOperations::Configure &configure, GnsLaneOperations::Send &send, void *context) noexcept
+            : lanes_(configure, send, context) {}
 
         GnsTransport(std::shared_ptr<GnsSecurity> security, const NetworkTransportConfig &config)
             : config_(config), security_(std::move(security)) {}
@@ -92,6 +130,11 @@ namespace Horo::Network {
         [[nodiscard]] bool CloseNativeConnections() noexcept;
         [[nodiscard]] Result<ConnectionHandle> ReserveConnection();
         [[nodiscard]] Result<void> StartNative(ConnectionSlot &slot, const SteamNetworkingIPAddr &address);
+        /** @brief Configure the exact selected native lanes before publishing directional readiness. */
+        [[nodiscard]] bool ConfigureLanes(const ConnectionSlot &slot) noexcept;
+        /** @brief Copy into one native-owned lane message; retain cleanup ownership until successful native transfer. */
+        [[nodiscard]] std::optional<std::int64_t> SendOnLane(const ConnectionSlot &slot, ChannelId channel,
+                                                             std::span<const std::byte> payload, DeliveryPolicy delivery);
         [[nodiscard]] ConnectionSlot *Find(ConnectionHandle handle) noexcept;
         [[nodiscard]] ConnectionSlot *Find(HSteamNetConnection native) noexcept;
         /** @brief Reserve the bounded original-listener pending slot and accept native ownership without publishing readiness. */
@@ -124,6 +167,7 @@ namespace Horo::Network {
         // Sockets, selected-root generation and resolver initialization retire together on
         // shutdown/partial failure. Failed native retirement transfers to NativeHost retry ownership.
         NativeOwnership nativeOwner_;
+        const GnsLaneOperations lanes_;
         NetworkTransportConfig config_{};
         ListenerHandle listener_{};
         HSteamListenSocket nativeListener_{k_HSteamListenSocket_Invalid};

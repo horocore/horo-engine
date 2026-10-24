@@ -1,6 +1,7 @@
 #include "GnsTransportInternal.h"
 #include "Horo/Network/NetworkErrors.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -32,27 +33,62 @@ namespace Horo::Network {
             return Fail(NetworkErrors::TransportHandleInvalid);
         if (slot->phase != ConnectionPhase::Connected)
             return Fail(NetworkErrors::TransportConnectionFailed);
-        if (channel.Value() != 0 || payload.size() > config_.maximumMessageBytes)
+        if (channel.Value() >= config_.maximumChannels || payload.size() > config_.maximumMessageBytes)
             return Fail(NetworkErrors::TransportLimitExceeded);
         if (delivery != DeliveryPolicy::ReliableOrdered && delivery != DeliveryPolicy::UnreliableUnordered)
             return Fail(NetworkErrors::TransportDeliveryUnsupported);
-        const int flags = delivery == DeliveryPolicy::ReliableOrdered ? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable;
-        const std::byte empty{};
-        const void *bytes = payload.empty() ? static_cast<const void *>(&empty) : payload.data();
-        const auto result = GnsDetail::NativeCall([this, slot, bytes, payload, flags] {
-            return nativeOwner_.sockets->SendMessageToConnection(slot->native, bytes, static_cast<std::uint32_t>(payload.size()), flags,
-                                                                 nullptr);
-        });
+        const auto result = SendOnLane(*slot, channel, payload, delivery);
         if (!result)
             return Fail(NetworkErrors::TransportNativeUnavailable);
-        if (*result == k_EResultLimitExceeded)
+        if (*result == -static_cast<std::int64_t>(k_EResultLimitExceeded))
             return Fail(delivery == DeliveryPolicy::ReliableOrdered ? NetworkErrors::TransportReliableBackpressure
                                                                     : NetworkErrors::TransportLimitExceeded);
-        if (*result != k_EResultOK)
+        if (*result <= 0)
             return Fail(NetworkErrors::TransportConnectionFailed);
         ++stats_.sentMessages;
         stats_.sentBytes += payload.size();
         return Result<void>::Success();
+    }
+
+    /** @copydoc GnsTransport::ConfigureLanes */
+    bool GnsTransport::ConfigureLanes(const ConnectionSlot &slot) noexcept {
+        // Native streams have independent reliable ordering. Equal priority/weight
+        // avoids assigning semantic priority to a host-selected channel number.
+        return GnsDetail::NativeCall([this, &slot] {
+            return lanes_.ConfigureLanes(*nativeOwner_.sockets, slot.native, static_cast<int>(config_.maximumChannels));
+        }).value_or(k_EResultFail) == k_EResultOK;
+    }
+
+    /** @copydoc GnsTransport::SendOnLane */
+    std::optional<std::int64_t> GnsTransport::SendOnLane(const ConnectionSlot &slot, const ChannelId channel,
+                                                         const std::span<const std::byte> payload, const DeliveryPolicy delivery) {
+        auto *message = GnsDetail::NativeCall([payload] {
+            return SteamNetworkingUtils()->AllocateMessage(static_cast<int>(payload.size()));
+        }).value_or(nullptr);
+        if (!message)
+            return std::nullopt;
+        // SendMessages(false) nulls this exact pointer when native ownership transfers.
+        // A rejected message remains ours and must be released, including on exceptions.
+        const auto release = [&message](SteamNetworkingMessage_t *) noexcept {
+            if (message)
+                (void)GnsDetail::NativeVoid([&message] {
+                    message->Release();
+                });
+        };
+        const std::unique_ptr<SteamNetworkingMessage_t, decltype(release)> owner(message, release);
+        if (message->m_cbSize != static_cast<int>(payload.size()) || (!payload.empty() && !message->m_pData))
+            return std::nullopt;
+        if (!payload.empty())
+            std::copy(payload.begin(), payload.end(), static_cast<std::byte *>(message->m_pData));
+        message->m_conn = slot.native;
+        message->m_idxLane = static_cast<std::uint16_t>(channel.Value());
+        message->m_nFlags =
+            delivery == DeliveryPolicy::ReliableOrdered ? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable;
+        return GnsDetail::NativeCall([this, &message] {
+            int64 result{};
+            lanes_.SendMessage(*nativeOwner_.sockets, &message, &result);
+            return static_cast<std::int64_t>(result);
+        });
     }
 
     void GnsTransport::PollMessages() {
@@ -85,13 +121,13 @@ namespace Horo::Network {
                 });
         };
         const std::unique_ptr<SteamNetworkingMessage_t, decltype(release)> owned(message, release);
-        if (!ValidNativeMessage(message, config_.maximumMessageBytes)) {
+        if (!ValidNativeMessage(message, config_.maximumMessageBytes) || message->m_idxLane >= config_.maximumChannels) {
             End(slot, NetworkTransportEventKind::Failed, &NetworkErrors::TransportMalformedPacket);
             return false;
         }
         NetworkTransportEvent event{.kind = NetworkTransportEventKind::PacketReceived,
                                     .connection = slot.handle,
-                                    .channel = ChannelId{},
+                                    .channel = ChannelId::Create(message->m_idxLane, config_.maximumChannels).Value(),
                                     .delivery = (message->m_nFlags & k_nSteamNetworkingSend_Reliable)
                                                     ? DeliveryPolicy::ReliableOrdered
                                                     : DeliveryPolicy::UnreliableUnordered};

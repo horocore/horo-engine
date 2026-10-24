@@ -92,8 +92,6 @@ namespace Horo::AI {
                 selection.protocolVersion = {1, 0};
                 world.kind = mode == Network::NetworkProjectRole::Client ? Network::NetworkModeWorldKind::Client
                                                                          : Network::NetworkModeWorldKind::AuthorityServer;
-                if (world.kind == Network::NetworkModeWorldKind::AuthorityServer)
-                    world.authority = Network::ReplicationAuthorityEpoch::Create(1).Value();
             }
             const Network::NetworkModePresentation presentation{.localPlayer = mode == Network::NetworkProjectRole::Client};
             auto plan = Network::ResolveNetworkModePlan(assessment, selection, 17, std::span{&world, 1}, presentation);
@@ -103,7 +101,8 @@ namespace Horo::AI {
                 factory = [](const Network::NetworkModeServiceRequest &) {
                     return Result<std::unique_ptr<Network::INetworkModeService>>::Success(std::make_unique<ReadyService>());
                 };
-            auto host = Network::NetworkModeComposition::Create(plan.Value(), std::move(factories));
+            auto host = Network::NetworkModeComposition::Create(plan.Value(), std::move(factories),
+                                                                Network::NetworkWorldCompositionPurpose::TransportQualification);
             REQUIRE(host.HasValue());
             auto composition = std::move(host).Value();
             REQUIRE(composition.Start().HasValue());

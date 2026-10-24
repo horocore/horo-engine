@@ -59,7 +59,7 @@ namespace Horo::Application::Internal {
             capabilities.delivery.fill(Unsupported);
             capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::UnreliableUnordered)] = Available;
             capabilities.delivery[static_cast<std::size_t>(Net::DeliveryPolicy::ReliableOrdered)] = Available;
-            capabilities.maximumChannels = 1;
+            capabilities.maximumChannels = 3;
             capabilities.maximumMessageBytes = 1200;
             return capabilities;
         }
@@ -225,7 +225,8 @@ namespace Horo::Application::Internal {
             if (!admission)
                 return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(MakeError(Net::NetworkErrors::AdmissionPolicyInvalid));
             auto selected =
-                SelectNetworkProductGns(admission->Policy(), admission->Providers(), admission->Codecs(), admission->Handlers(), options);
+                SelectNetworkProductGns(admission->Policy(), admission->Providers(), admission->Codecs(), admission->Handlers(), options,
+                                        admission->WorldBinding() ? std::optional{admission->WorldBinding()->policy} : std::nullopt);
             if (selected.HasError())
                 return Result<std::unique_ptr<Net::INetworkModeService>>::Failure(selected.ErrorValue());
             auto composition = std::move(selected).Value();
@@ -290,20 +291,18 @@ namespace Horo::Application::Internal {
             ProductWorlds worlds;
             switch (role) {
                 case Net::NetworkProjectRole::Standalone:
-                    worlds.values[0] = {Net::NetworkModeWorldKind::Standalone, Runtime::SceneRuntimeId{1}, {}};
+                    worlds.values[0] = {Net::NetworkModeWorldKind::Standalone, Runtime::SceneRuntimeId{1}};
                     break;
                 case Net::NetworkProjectRole::Client:
-                    worlds.values[0] = {Net::NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{2}, {}};
+                    worlds.values[0] = {Net::NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{2}};
                     break;
                 case Net::NetworkProjectRole::ListenServer:
-                    worlds.values[0] = {Net::NetworkModeWorldKind::AuthorityServer, Runtime::SceneRuntimeId{3},
-                                        IdentityOf<Net::ReplicationAuthorityEpoch>(1)};
-                    worlds.values[1] = {Net::NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{4}, {}};
+                    worlds.values[0] = {Net::NetworkModeWorldKind::AuthorityServer, Runtime::SceneRuntimeId{3}};
+                    worlds.values[1] = {Net::NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{4}};
                     worlds.count = 2;
                     break;
                 case Net::NetworkProjectRole::DedicatedServer:
-                    worlds.values[0] = {Net::NetworkModeWorldKind::AuthorityServer, Runtime::SceneRuntimeId{5},
-                                        IdentityOf<Net::ReplicationAuthorityEpoch>(1)};
+                    worlds.values[0] = {Net::NetworkModeWorldKind::AuthorityServer, Runtime::SceneRuntimeId{5}};
                     break;
                 case Net::NetworkProjectRole::Count:
                     break;
@@ -346,10 +345,32 @@ namespace Horo::Application::Internal {
             std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity;
         };
 
+        /** @brief Reject requested network gameplay before composition when no explicit world authority was supplied. */
+        [[nodiscard]] Result<void> ValidateGameplayBinding(const ProductLaunch &launch,
+                                                           const std::optional<Net::NetworkWorldBindingSetup> &binding) {
+            if (launch.role != Net::NetworkProjectRole::Standalone && launch.purpose == Net::NetworkWorldCompositionPurpose::Gameplay &&
+                !binding)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::AdmissionPolicyInvalid,
+                              "Network gameplay requires explicit host-injected world binding and security authorities."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Create the optional diagnostic owner from the actual host-selected world and product mode. */
+        std::shared_ptr<NetworkDebuggerService> CreateProductDebugger(const ProductWorlds &worlds, const Net::NetworkProjectRole role) {
+            auto debugger = std::make_shared<NetworkDebuggerService>();
+            (void)debugger->Begin(worlds.values[0].scene.value, 1, role != Net::NetworkProjectRole::Standalone,
+                                  Net::NetworkDiagnosticProvider::Native);
+            return debugger;
+        }
+
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
             std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
             Net::NetworkTargetDiagnostic &diagnostic, ProductRuntimeCapabilities capabilities) {
+            const auto binding = capabilities.admission ? capabilities.admission->WorldBinding() : std::nullopt;
+            if (auto valid = ValidateGameplayBinding(launch, binding); valid.HasError())
+                return Result<std::unique_ptr<NetworkProductHost>>::Failure(valid.ErrorValue());
             const auto product = BuiltProduct(project);
             const auto inventory = LinkedPackageInventory(project);
             const auto hostFacts = HeadlessHostFacts(project);
@@ -368,9 +389,7 @@ namespace Horo::Application::Internal {
             }
             const Net::NetworkModePresentation presentation{.localPlayer = launch.role == Net::NetworkProjectRole::Client ||
                                                                            launch.role == Net::NetworkProjectRole::ListenServer};
-            auto debugger = std::make_shared<NetworkDebuggerService>();
-            (void)debugger->Begin(worlds.values[0].scene.value, 1, launch.role != Net::NetworkProjectRole::Standalone,
-                                  Net::NetworkDiagnosticProvider::Native);
+            auto debugger = CreateProductDebugger(worlds, launch.role);
             auto sessions = CreateProductSessions(clock, launch.role);
             auto configured =
                 ComposeProductWorldServices(std::move(scene), launch, project,
@@ -389,7 +408,9 @@ namespace Horo::Application::Internal {
                                                1,
                                                {worlds.values.data(), worlds.count},
                                                presentation,
-                                               std::move(sessions)},
+                                               std::move(sessions),
+                                               launch.purpose,
+                                               binding},
                                               std::move(configured).Value(), &diagnostic, debugger);
         }
 

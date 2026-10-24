@@ -57,7 +57,9 @@ namespace Horo::Network {
                 ++worldCallbacks;
         };
         const std::array nextWorld{World(NetworkModeWorldKind::Client, 3)};
-        REQUIRE(product.host->RequestTravel(nextWorld).HasValue());
+        const auto unreadyTravel = product.host->RequestTravel(nextWorld);
+        REQUIRE(unreadyTravel.HasError());
+        REQUIRE(unreadyTravel.ErrorValue().code.Value() == NetworkErrors::NetworkModeUnavailable.code.Value());
         product.ingress->transport.Queue({.kind = NetworkTransportEventKind::Failed, .connection = Connection(), .failure = failure});
         const auto frame = product.host->RunFrame();
         REQUIRE(frame.HasError());
@@ -68,10 +70,7 @@ namespace Horo::Network {
         REQUIRE(terminal->failure == failure);
         REQUIRE(product.ingress->transport.stopped);
         REQUIRE(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).HasError());
-        auto travelFailure = product.host->TakeTravelFailure();
-        REQUIRE(travelFailure);
-        REQUIRE(travelFailure->domain.Value() == failure->domain.Value());
-        REQUIRE(travelFailure->code.Value() == failure->code.Value());
+        REQUIRE_FALSE(product.host->TakeTravelFailure());  // No gameplay world existed to accept travel.
         RequireRetiredAttempt(product, terminal, failure);
     }
 
@@ -113,7 +112,7 @@ namespace Horo::Network {
         auto owners = std::make_shared<ProductOwners>();
         auto ingress = InstallIngress(owners);
         ingress->transport.acceptedConnect = Connection();
-        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 1, 1), World(NetworkModeWorldKind::Client, 2)};
+        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 1), World(NetworkModeWorldKind::Client, 2)};
         auto created = Product(clock, NetworkProjectRole::ListenServer, worlds, {.localPlayer = true}, owners);
         REQUIRE(created.HasValue());
         auto host = std::move(created).Value();
@@ -124,7 +123,7 @@ namespace Horo::Network {
                                   .failure = &NetworkErrors::TransportNativeUnavailable});
         REQUIRE(host->RunFrame().HasValue());
         REQUIRE_FALSE(host->ClientConnectionTerminal());
-        REQUIRE(host->Role(NetworkModeWorldKind::AuthorityServer, worlds[0].scene).HasValue());
+        REQUIRE(host->Role(NetworkModeWorldKind::AuthorityServer, worlds[0].scene).HasError());  // Listen aggregate is still unready.
         ingress->transport.Queue(
             {.kind = NetworkTransportEventKind::Failed, .connection = Connection(), .failure = &NetworkErrors::TransportConnectionFailed});
         const auto failed = host->RunFrame();
