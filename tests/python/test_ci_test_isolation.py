@@ -174,7 +174,7 @@ def _assert_suite_overlap(events: dict, groups: tuple) -> None:
     assert max(event["start"] for event in first_cases) < min(event["end"] for event in first_cases)
 
 
-@pytest.mark.parametrize(("isolate", "workers"), [(True, 2), (True, 4), (False, 2)])
+@pytest.mark.parametrize(("isolate", "workers"), [(True, 2), (True, 3), (True, 4), (False, 2)])
 def test_generated_suite_properties_preserve_contracts_and_control_concurrency(tmp_path: Path, isolate: bool, workers: int) -> None:
     build, evidence = prepare_isolation_project(tmp_path, isolate, workers)
     manifest = json.loads(run("ctest", "--test-dir", str(build), "--show-only=json-v1").stdout)

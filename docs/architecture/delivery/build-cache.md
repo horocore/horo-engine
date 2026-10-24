@@ -275,6 +275,25 @@ test selection. UI, release, Network GNS, and the other focused jobs are separat
 follow-up rollout scopes. Sonar compiler/coverage and analysis caches remain in
 their existing namespaces.
 
+### Native CTest capacity
+
+Native Debug tests use four CTest workers on Linux and Windows and three on
+macOS ARM64, matching the standard public runner CPU counts in
+[GitHub's runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories).
+These are processes inside the existing platform job; matrix widths and runner
+job counts do not increase. Build worker budgets, test filters, assertions,
+timeouts and JUnit paths remain unchanged.
+
+All three native Debug configurations enable executable-suite isolation. Cases
+within one executable retain their resource lock and private work/temp/home
+directories; independent executables can overlap. Direct integration contracts,
+GPU/display and realtime suites retain their serial execution requirements.
+Windows verifies the actual generated CTest properties, environment and overlap
+with small two-, three- and four-worker fixtures before the native build. A
+failed isolation check fails the job. Sonar keeps its existing four-worker
+coverage configuration. Hosted duration and failure results must be recorded
+separately from the small fixture's concurrency proof.
+
 ### Layer 1: Compiler Cache
 
 | Platform | Cache tool | Cache key |

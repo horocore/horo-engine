@@ -416,6 +416,14 @@ jobs:
           echo "HORO_QUALIFICATION_PYTHON=$verifier_python" >> "$GITHUB_ENV"
           "$verifier_python" -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
 
+      - name: Verify Windows CTest fixture isolation
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: |
+          "$HORO_QUALIFICATION_PYTHON" -m pip install --no-cache-dir --only-binary=:all: pytest==8.3.4
+          "$HORO_QUALIFICATION_PYTHON" -m pytest tests/python/test_ci_test_isolation.py \
+            -k test_generated_suite_properties_preserve_contracts_and_control_concurrency -q
+
       - name: Restore dependency and compiler caches
         id: cache
         uses: ./.github/actions/restore-native-cache
