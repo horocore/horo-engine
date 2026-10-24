@@ -43,26 +43,36 @@ def reader(tmp_path_factory):
     compiler = shutil.which("cl" if os.name == "nt" else "c++")
     if compiler is None:
         pytest.skip("Fixture reader qualification requires a C++20 compiler")
+    compiler = str(Path(compiler).resolve(strict=True))
     directory = tmp_path_factory.mktemp("fixture reader ü")
     source = directory / "reader.cpp"
     source.write_text(DRIVER, encoding="utf-8")
     binary = directory / ("reader.exe" if os.name == "nt" else "reader")
     include = ROOT / "tests/support"
+    # executable selects the absolute binary; argv[0] only selects its driver name.
+    # Source, flags and paths are argv elements and never form a shell command.
     if os.name == "nt":
-        command = [compiler, "/nologo", "/std:c++20", "/EHsc", f"/I{include}", str(source), f"/Fe:{binary}"]
+        subprocess.run(  # nosec B607
+            ["cl", "/nologo", "/std:c++20", "/EHsc", f"/I{include}", str(source), f"/Fe:{binary}"],
+            executable=compiler, cwd=directory, capture_output=True, text=True, timeout=60,
+            check=True, shell=False,  # nosec B603
+        )
     else:
-        command = [compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pedantic",
-                   "-I", str(include), str(source), "-o", str(binary)]
-    # The executable is resolved above; source and flags are fixed by this fixture.
-    subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=60,
-                   check=True, shell=False)  # nosec B603
+        subprocess.run(  # nosec B607
+            ["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pedantic",
+             "-I", str(include), str(source), "-o", str(binary)],
+            executable=compiler, cwd=directory, capture_output=True, text=True, timeout=60,
+            check=True, shell=False,  # nosec B603
+        )
     return binary
 
 
 def read(reader, path, *bounds):
     # Execute only the driver compiled by this module; paths remain argv elements.
-    return subprocess.run([str(reader), str(path), *map(str, bounds)], capture_output=True,
-                          timeout=30, check=False, shell=False)  # nosec B603
+    return subprocess.run(  # nosec B607
+        ["reader", str(path), *map(str, bounds)], executable=str(reader.resolve(strict=True)),
+        capture_output=True, timeout=30, check=False, shell=False,  # nosec B603
+    )
 
 
 @pytest.mark.parametrize("payload", [b"", b"\0\r\n\xff", bytes(range(256)) * 4096],
