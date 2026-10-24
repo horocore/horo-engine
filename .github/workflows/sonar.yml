@@ -154,16 +154,27 @@ jobs:
           printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$asset_root" >> "$GITHUB_ENV"
 
       - name: Run C++ coverage tests
-        run: xvfb-run -a ctest --preset sonar
+        id: cpp_tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          ctest --preset sonar --show-only=json-v1 > build/sonar/coverage-ctest-discovery.json
+          xvfb-run -a ctest --preset sonar
 
+      # A completed failing main suite still supplies coverage for the branch
+      # analysis cache. Preserve its failure, and keep failing PRs fail-fast.
       - name: Run Python coverage tests
+        id: python_tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && (steps.cpp_tests.outcome == 'success' || (github.ref == 'refs/heads/main' && steps.cpp_tests.outcome == 'failure')) }}
         run: |
           /tmp/horo-coverage/bin/coverage run --source=scripts -m pytest tests/python --quiet
           /tmp/horo-coverage/bin/coverage xml -o build/sonar/python-coverage.xml
 
       - name: Collect fastcov line coverage
         id: coverage
-        run: bash .github/scripts/collect_sonar_coverage.sh
+        if: ${{ !cancelled() && steps.python_tests.outcome == 'success' }}
+        run: |
+          /tmp/horo-coverage/bin/python .github/scripts/validate_sonar_test_completion.py
+          bash .github/scripts/collect_sonar_coverage.sh
 
       - name: Upload coverage evidence
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
@@ -176,12 +187,18 @@ jobs:
           path: |
             build/sonar/coverage.xml
             build/sonar/fastcov-coverage.json
+            build/sonar/ctest.xml
+            build/sonar/coverage-ctest-discovery.json
+            build/sonar/python-coverage.xml
 
       - name: Install cached Sonar scanner
+        id: scanner_install
+        if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: bash .github/scripts/install_sonar_scanner.sh
 
       - name: Analyze code and wait for Quality Gate
         id: scan
+        if: ${{ !cancelled() && steps.scanner_install.outcome == 'success' }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           # The default ~4-GB heap stopped taint analysis early. Leave room
