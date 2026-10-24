@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiTextLayout.h"
 #include "Horo/Runtime/Ui/UiTextUnicode.h"
 #include "support/AllocationProbe.h"
+#include "support/FixtureFileRead.h"
 
 #include <algorithm>
 #include <array>
@@ -19,9 +20,7 @@ namespace Horo::Runtime::Ui {
         }
 
         UiTextUnicodeRuntime LoadUnicode() {
-            std::ifstream input(HORO_UNICODE_DATA_FILE, std::ios::binary);
-            REQUIRE(input.good());
-            const std::vector<char> bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+            const auto bytes = ::Horo::Tests::ReadFixtureBytes(HORO_UNICODE_DATA_FILE);
             return RequireValue(UiTextUnicodeRuntime::Create(std::as_bytes(std::span(bytes))));
         }
 
