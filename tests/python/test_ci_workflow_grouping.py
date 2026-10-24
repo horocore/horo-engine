@@ -20,6 +20,14 @@ def workflow_job(name: str) -> str:
     return match.group(1)
 
 
+def shader_qualification_steps(shader_job: str) -> str:
+    publisher = re.search(r"      - name: Publish main shader compiler checkpoint\n.*?(?=\n      - name:)",
+                          shader_job, re.S)
+    assert publisher is not None
+    assert "uses: ./.github/actions/publish-compiler-checkpoint" in publisher.group()
+    return shader_job.replace(publisher.group(), "")
+
+
 def preset(kind: str, name: str) -> dict:
     return next(item for item in PRESETS[kind] if item["name"] == name)
 
@@ -461,7 +469,7 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
         assert not selected.search(f"{target}Unrelated::case")
     assert "-R '^HoroVulkanCommandExecutionSmoke$'" in native_job
     assert not selected.search("UnrelatedTests::case")
-    assert "continue-on-error" not in native_job
+    assert "continue-on-error" not in shader_qualification_steps(native_job)
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
     assert 'FAIL_REGULAR_EXPRESSION "Validation Error;VUID-"' in tests_cmake
@@ -666,7 +674,7 @@ def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform
     assert "VulkanTransform.frag" in shader_workflow
     assert "HORO_VULKAN_TRANSFORM_VERTEX" in shader_workflow
     assert "'[native-smoke]'" in shader_workflow
-    assert "continue-on-error" not in shader_workflow
+    assert "continue-on-error" not in shader_qualification_steps(shader_workflow)
 
 
 def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composition() -> None:

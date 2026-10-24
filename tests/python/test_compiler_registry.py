@@ -147,12 +147,30 @@ def test_invalid_oci_layer_prevents_blob_download(snapshot, monkeypatch, field, 
     "native-v1-Linux-X64-gcc-13.3.0-gcc-13.3.0-native-tests-v1-Debug-main-400-1",
     "native-v1-macOS-ARM64-appleclang-21.0.0-appleclang-21.0.0-native-tests-v1-Debug-main-400-1",
     "native-v1-Windows-X64-msvc-19.44.35229-msvc-19.44.35229-native-tests-v1-Debug-main-400-1",
+    "native-v1-Linux-X64-gcc-15.2.0-gcc-15.2.0-native-shaders-v1-Debug-main-400-1",
+    "native-v1-Windows-X64-msvc-19.44.35229-msvc-19.44.35229-native-shaders-v1-Debug-main-400-1",
     KEY,
 ])
 def test_real_checkpoint_names(key):
     namespace, order = compiler.split_key(key)
     assert order == (400, 1)
     assert compiler.reference(namespace).startswith(transport.REGISTRY + ":compiler-v1-")
+
+
+def test_shader_profile_restores_its_own_checkpoint_without_importing_native_entries(snapshot, monkeypatch, tmp_path):
+    namespace = "native-v1-Linux-X64-gcc-15.2.0-gcc-15.2.0-native-shaders-v1-Debug-main-"
+    key = namespace + "400-1"
+    compiler.pack(tmp_path / "source", key, snapshot)
+    install_fake_registry(snapshot, monkeypatch, key=key)
+    compiler.fetch(namespace)
+    destination = compiler.cache_root(namespace)
+    assert (destination / "a/b/entryR").read_bytes() == b"compiler object"
+    assert not (destination / "ccache.conf").exists()
+    staging = tmp_path / "rejected"
+    staging.mkdir()
+    native = namespace.replace("native-shaders-v1", "native-tests-v1")
+    with pytest.raises(ValueError):
+        compiler.unpack(snapshot, native, staging)
 
 
 @pytest.mark.parametrize("key", [KEY + "/../x", KEY.replace("main", "pr"), KEY + "\n", "unknown-1-1"])

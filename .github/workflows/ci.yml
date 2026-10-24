@@ -118,9 +118,13 @@ jobs:
       cancel-in-progress: false
     name: Shaders · ${{ matrix.os }}
     needs: tooling
+    if: ${{ !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+    permissions:
+      contents: read
+      packages: read
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    strategy:
+    strategy: &shader_strategy
       fail-fast: false
       # Share hosted capacity across concurrent PRs without adding shards.
       max-parallel: 1
@@ -136,14 +140,14 @@ jobs:
             cc: cl
             cxx: cl
             launcher: sccache
-    env:
+    env: &shader_environment
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
       HORO_COMPILER_LAUNCHER: ${{ matrix.launcher }}
-    defaults:
+    defaults: &shader_defaults
       run:
         shell: bash
-    steps:
+    steps: &shader_steps
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: ./.github/actions/setup-build-tools
       - name: Select software Vulkan driver
@@ -152,10 +156,14 @@ jobs:
           selected_icd="$(python3 scripts/dev.py select-lavapipe-icd)"
           printf 'VK_DRIVER_FILES=%s\n' "$selected_icd" >> "$GITHUB_ENV"
       - name: Restore compatible main dependency and compiler caches
+        id: shader_cache
         uses: ./.github/actions/restore-native-cache
         with:
           compiler-storage: registry
-          profile: native-tests-v1
+          # Ubuntu 26 uses a different GCC from the primary Linux matrix.
+          # This composition owns a checkpoint produced by the same shader job.
+          profile: native-shaders-v1
+          dependency-profile: native-tests-v1
           mode: Debug
           max-size: 2G
       - name: Configure focused headless Vulkan composition
@@ -209,6 +217,20 @@ jobs:
       - name: Build Vulkan command smoke
         if: runner.os == 'Linux'
         run: cmake --build build/ci --target HoroVulkanCommandExecutionSmoke --parallel 2
+      - name: Report shader compiler cache statistics
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            sccache --show-stats
+          else
+            ccache --show-stats
+          fi
+      - name: Publish main shader compiler checkpoint
+        if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: ./.github/actions/publish-compiler-checkpoint
+        with:
+          key: ${{ steps.shader_cache.outputs.compiler-key }}
       - name: Run Vulkan native-call and lifecycle regressions
         run: >-
           ctest --test-dir build/ci --no-tests=error --parallel 1 --timeout 90 --output-on-failure
@@ -954,3 +976,22 @@ jobs:
     env: *native_environment
     strategy: *native_strategy
     steps: *native_steps
+
+  # Select one shader matrix per run. Only its canonical main copy can publish;
+  # PR names, runner count and matrix width remain the same.
+  shaders-main:
+    concurrency:
+      group: ${{ github.workflow }}-shaders-${{ matrix.os }}-${{ github.ref }}
+      cancel-in-progress: false
+    name: Shaders · ${{ matrix.os }} (main)
+    needs: tooling
+    if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults: *shader_defaults
+    env: *shader_environment
+    strategy: *shader_strategy
+    steps: *shader_steps

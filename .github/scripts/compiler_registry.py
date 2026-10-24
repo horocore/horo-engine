@@ -27,7 +27,7 @@ MAX_ARCHIVE_BYTES = 3 * 1024 ** 3
 MAX_EXPANDED_BYTES = 4 * 1024 ** 3
 KEY_PATTERN = re.compile(
     r"(native-v1-(?:Linux|Windows|macOS)-(?:X64|ARM64)-"
-    r"[a-z0-9.-]+-[a-z0-9.-]+-(?:native-tests-v1-Debug|native-variants-v1-Mixed)-main-|"
+    r"[a-z0-9.-]+-[a-z0-9.-]+-(?:native-tests-v1-Debug|native-shaders-v1-Debug|native-variants-v1-Mixed)-main-|"
     r"sonar-v2-gcc-Linux-X64-main-|"
     r"sonar-v3-Linux-X64-gcc-[0-9]+(?:\.[0-9]+)+-gcc-[0-9]+(?:\.[0-9]+)+-main-)"
     r"([1-9][0-9]*)-([1-9][0-9]*)")
