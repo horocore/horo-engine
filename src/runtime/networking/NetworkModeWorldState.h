@@ -80,7 +80,7 @@ namespace Horo::Network::Detail {
         /** @brief Stage only the host-selected local Scene, checking a listen server's exact occurrence first. */
         [[nodiscard]] Result<void> StageClient(const NetworkWorldBindingRecord &record, std::size_t index, std::uint64_t nowTick);
         [[nodiscard]] Result<std::unique_ptr<World>> Stage(Runtime::SceneRuntimeId scene, ReplicationExecutionRole role,
-                                                           const NetworkWorldBindingRecord &record);
+                                                           const NetworkWorldBindingRecord &record) const;
 
         NetworkModePlan plan_;
         const NetworkWorldBindingPolicy policy_;

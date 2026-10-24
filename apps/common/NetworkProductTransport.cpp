@@ -39,9 +39,9 @@ namespace Horo::Application::Internal {
                 return Result<std::shared_ptr<const NetworkProductAdmission>>::Failure(valid.ErrorValue());
             const auto control = std::ranges::find(policy.gameplayChannels, Network::MessageTrafficClass::Control,
                                                    &Network::MessageDeliveryChannel::traffic);
-            const auto command = std::ranges::find(policy.gameplayChannels, Network::MessageTrafficClass::Command,
-                                                   &Network::MessageDeliveryChannel::traffic);
-            if (control == policy.gameplayChannels.end() || command == policy.gameplayChannels.end() ||
+            if (const auto command = std::ranges::find(policy.gameplayChannels, Network::MessageTrafficClass::Command,
+                                                       &Network::MessageDeliveryChannel::traffic);
+                control == policy.gameplayChannels.end() || command == policy.gameplayChannels.end() ||
                 std::ranges::count(policy.gameplayChannels, Network::MessageTrafficClass::Control,
                                    &Network::MessageDeliveryChannel::traffic) != 1 ||
                 control->channel == command->channel || control->delivery != Network::DeliveryPolicy::ReliableOrdered ||

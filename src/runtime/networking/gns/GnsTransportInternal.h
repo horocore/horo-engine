@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -41,57 +42,97 @@ namespace Horo::Network {
     [[nodiscard]] bool ValidNativeMessage(const SteamNetworkingMessage_t *message, std::uint32_t maximumBytes) noexcept;
     [[nodiscard]] bool ValidGnsTransportConfig(const NetworkTransportConfig &config) noexcept;
 
-    /** @brief Immutable private native call pair. A bound context/code must outlive transport shutdown and callback drain.
-     * Production defaults invoke the exact pinned native APIs. No global override or allocation is introduced.
+    /** @brief Closed qualification faults at the native lane boundary; production selects neither. */
+    enum class GnsLaneFailure : std::uint8_t {
+        ConfigureRejected,
+        SendRejected
+    };
+
+    /** @brief Stable borrowed qualification state, confined to the transport owner thread.
+     * SendRejected never submits its message to the SDK. The caller's existing RAII owner
+     * synchronously invokes Release -> ReleaseFunc -> m_pfnFreeData before Send returns.
+     * Therefore no SDK worker retains this state or callback; Shutdown cannot leave a
+     * queued reference. Declare this nonmoving state before the borrowing transport and
+     * retain it through transport destruction and callback drain.
      */
+    struct GnsLaneFailureInjection final {
+        explicit GnsLaneFailureInjection(const GnsLaneFailure selected) noexcept : failure(selected) {}
+
+        GnsLaneFailureInjection(const GnsLaneFailureInjection &) = delete;
+        GnsLaneFailureInjection &operator=(const GnsLaneFailureInjection &) = delete;
+        GnsLaneFailureInjection(GnsLaneFailureInjection &&) = delete;
+        GnsLaneFailureInjection &operator=(GnsLaneFailureInjection &&) = delete;
+
+        const GnsLaneFailure failure;
+        std::size_t configured{};
+        std::size_t sends{};
+        std::size_t freedPayloads{};
+        std::thread::id freedOn{};
+        void (*originalFree)(SteamNetworkingMessage_t *){};
+        int64 originalUserData{};
+    };
+
+    /** @brief Native lane operations with an optional typed, owner-thread qualification fault. */
     class GnsLaneOperations final {
     public:
-        using Configure = EResult(void *, ISteamNetworkingSockets &, HSteamNetConnection, int);
-        using Send = void(void *, ISteamNetworkingSockets &, SteamNetworkingMessage_t **, int64 *);
-        GnsLaneOperations() = default;
-
-        GnsLaneOperations(Configure &configure, Send &send, void *context) noexcept
-            : configure_(&configure), send_(&send), context_(context) {}
+        explicit GnsLaneOperations(GnsLaneFailureInjection *failure = nullptr) noexcept : failure_(failure) {}
 
         [[nodiscard]] EResult ConfigureLanes(ISteamNetworkingSockets &sockets, HSteamNetConnection connection, int count) const {
-            return configure_(context_, sockets, connection, count);
-        }
-
-        void SendMessage(ISteamNetworkingSockets &sockets, SteamNetworkingMessage_t **message, int64 *result) const {
-            send_(context_, sockets, message, result);
-        }
-
-    private:
-        static EResult ConfigureNative(void *, ISteamNetworkingSockets &sockets, HSteamNetConnection connection, int count) {
+            if (failure_) {
+                ++failure_->configured;
+                if (failure_->failure == GnsLaneFailure::ConfigureRejected)
+                    return k_EResultInvalidParam;
+            }
             return sockets.ConfigureConnectionLanes(connection, count, nullptr, nullptr);
         }
 
-        static void SendNative(void *, ISteamNetworkingSockets &sockets, SteamNetworkingMessage_t **message, int64 *result) {
-            sockets.SendMessages(1, message, result, false);
+        void SendMessage(ISteamNetworkingSockets &sockets, SteamNetworkingMessage_t **message, int64 *result) const {
+            if (!failure_ || failure_->failure != GnsLaneFailure::SendRejected) {
+                sockets.SendMessages(1, message, result, false);
+                return;
+            }
+            ++failure_->sends;
+            failure_->originalFree = (*message)->m_pfnFreeData;
+            failure_->originalUserData = (*message)->m_nUserData;
+            (*message)->m_nUserData = static_cast<int64>(reinterpret_cast<std::uintptr_t>(failure_));
+            (*message)->m_pfnFreeData = &RecordFreedPayload;
+            *result = -static_cast<int64>(k_EResultLimitExceeded);
+            // Leave the exact native allocation caller-owned. No SDK queue sees the probe.
         }
 
-        Configure *configure_{&ConfigureNative};
-        Send *send_{&SendNative};
-        void *context_{};
+    private:
+        /** @brief Observe the pinned native Release callback, then restore and invoke its real data free. */
+        static void RecordFreedPayload(SteamNetworkingMessage_t *message) {
+            auto &failure = *reinterpret_cast<GnsLaneFailureInjection *>(static_cast<std::uintptr_t>(message->m_nUserData));
+            ++failure.freedPayloads;
+            failure.freedOn = std::this_thread::get_id();
+            message->m_nUserData = failure.originalUserData;
+            message->m_pfnFreeData = failure.originalFree;
+            if (failure.originalFree)
+                failure.originalFree(message);
+        }
+
+        GnsLaneFailureInjection *failure_{};
+    };
+
+    /** @brief Cold, target-private composition inputs for one native transport owner.
+     * kill is non-null code retained through teardown; security is owned; the optional
+     * failure state is a stable owner-thread borrow governed by GnsLaneFailureInjection.
+     */
+    struct GnsTransportSetup final {
+        std::string resolverServer;
+        std::reference_wrapper<void()> kill{GameNetworkingSockets_Kill};
+        std::shared_ptr<GnsSecurity> security;
+        NetworkTransportConfig config{};
+        GnsLaneFailureInjection *laneFailure{};
     };
 
     class GnsTransport final : public INetworkTransport {
     public:
-        explicit GnsTransport(std::string resolverServer = {}) : resolverServer_(std::move(resolverServer)) {}
-
-        /** @brief Cold qualification-only foreign cleanup boundary; function reference cannot be null.
-         * @param kill Fixed executable code that must outlive this adapter. Production factories always use the real default.
-         * @details One pointer is read only during lifecycle teardown, never the I/O/frame hot path.
-         * Failed cleanup transfers only pending native ownership, never this override, to the process retry owner.
-         */
-        explicit GnsTransport(void (&kill)()) : nativeOwner_{.kill = &kill} {}
-
-        /** @brief Bind a private foreign-call pair; fixed callback code/context must outlive Shutdown and callback drain. */
-        GnsTransport(GnsLaneOperations::Configure &configure, GnsLaneOperations::Send &send, void *context) noexcept
-            : lanes_(configure, send, context) {}
-
-        GnsTransport(std::shared_ptr<GnsSecurity> security, const NetworkTransportConfig &config)
-            : config_(config), security_(std::move(security)) {}
+        /** @brief Capture cold composition inputs without invoking native APIs or selecting a backend. */
+        explicit GnsTransport(GnsTransportSetup setup = {})
+            : nativeOwner_{.kill = &setup.kill.get()}, lanes_(setup.laneFailure), config_(setup.config),
+              resolverServer_(std::move(setup.resolverServer)), security_(std::move(setup.security)) {}
 
         ~GnsTransport() override {
             Shutdown();

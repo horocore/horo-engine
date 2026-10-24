@@ -8,6 +8,6 @@ namespace Horo::Network {
     struct NetworkModeHostAccess final {
         /** @brief Borrow the stable owner across supported composition moves. @return Weak canonical owner, or empty for
          * standalone/qualification. */
-        [[nodiscard]] static std::weak_ptr<NetworkWorldBindingController> Binding(NetworkModeComposition &mode) noexcept;
+        [[nodiscard]] static std::weak_ptr<NetworkWorldBindingController> Binding(const NetworkModeComposition &mode) noexcept;
     };
 }  // namespace Horo::Network

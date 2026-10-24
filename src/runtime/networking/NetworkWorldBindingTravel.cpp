@@ -1,5 +1,7 @@
 #include "NetworkWorldBindingState.h"
 
+#include <algorithm>
+
 namespace Horo::Network {
     /** @copydoc NetworkWorldBindingController::PrepareTravel */
     Result<void> NetworkWorldBindingController::PrepareTravel(const std::span<const NetworkModeWorld> worlds) {
@@ -31,10 +33,9 @@ namespace Horo::Network {
         const auto *prepared = impl_->worlds.PreparedServerBinding();
         if (!prepared)
             return true;  // A remote client still requires the matching authenticated CommitTravel.
-        for (const auto &peer : impl_->peers)
-            if (peer.lifecycle && peer.sendsWorld && (peer.frameBytes != 0 || peer.sent != *prepared))
-                return false;
-        return true;
+        return std::ranges::none_of(impl_->peers, [prepared](const Impl::Peer &peer) {
+            return peer.lifecycle && peer.sendsWorld && (peer.frameBytes != 0 || peer.sent != *prepared);
+        });
     }
 
     /** @copydoc NetworkWorldBindingController::Commit */

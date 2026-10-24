@@ -391,7 +391,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkModeHostAccess::Binding */
-    std::weak_ptr<NetworkWorldBindingController> NetworkModeHostAccess::Binding(NetworkModeComposition &mode) noexcept {
+    std::weak_ptr<NetworkWorldBindingController> NetworkModeHostAccess::Binding(const NetworkModeComposition &mode) noexcept {
         return mode.binding_;
     }
 

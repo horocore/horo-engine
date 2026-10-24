@@ -6,8 +6,8 @@
 namespace Horo::Network {
     struct NetworkWorldBindingController::Impl final {
         struct BusyScope final {
-            explicit BusyScope(bool &busy) noexcept : busy(busy) {
-                busy = true;
+            explicit BusyScope(bool &ownerBusy) noexcept : busy(ownerBusy) {
+                ownerBusy = true;
             }
 
             ~BusyScope() {
@@ -34,15 +34,18 @@ namespace Horo::Network {
             std::optional<Error> failure;
         };
 
-        Impl(NetworkModePlan plan, NetworkWorldBindingSetup setup)
+        Impl(const NetworkModePlan &plan, NetworkWorldBindingSetup setup)
             : worlds(plan, setup.policy, setup.schemaFingerprint), setup(std::move(setup)), version(plan.protocolVersion), role(plan.mode) {
         }
 
         [[nodiscard]] Result<void> CheckOwner() const;
         [[nodiscard]] Result<void> ValidatePeer(const PeerSessionLifecycle &peer, NetworkOperationGeneration generation,
                                                 std::uint64_t nowTick) const;
-        [[nodiscard]] Result<void> Queue(Peer &peer, const NetworkWorldBindingRecord &record, std::uint64_t nowTick);
-        [[nodiscard]] Result<void> QueueFrame(Peer &peer, MessageEnvelopePayloadView message, std::uint64_t nowTick);
+        [[nodiscard]] Result<void> Queue(Peer &peer, const NetworkWorldBindingRecord &record, std::uint64_t nowTick) const;
+        [[nodiscard]] Result<void> QueueFrame(Peer &peer, MessageEnvelopePayloadView message, std::uint64_t nowTick) const;
+        /** @brief Queue only an advancing server publication, preserving pending traffic and late-join initial identity. */
+        [[nodiscard]] Result<void> QueueWorldUpdate(Peer &peer, const NetworkWorldBindingRecord *prepared,
+                                                    const NetworkWorldBindingRecord *current, std::uint64_t nowTick) const;
         [[nodiscard]] Result<void> Send(Peer &peer, std::uint64_t nowTick);
         void Retire(Peer &peer, std::uint64_t nowTick) noexcept;
         void ClearPending() noexcept;

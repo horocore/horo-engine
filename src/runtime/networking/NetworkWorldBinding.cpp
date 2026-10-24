@@ -22,8 +22,8 @@ namespace Horo::Network {
     Result<void> ValidateNetworkWorldBindingPolicy(const NetworkWorldBindingPolicy &policy, const HandshakeLocalDescriptor &local,
                                                    const MessageCodecRegistry &codecs) {
         const auto &identity = policy.control;
-        const auto codec = codecs.FindCodec(identity.protocol, identity.id);
-        if (!identity.protocol.IsValid() || !identity.id.IsValid() || !identity.schema.IsValid() || !identity.version.IsValid() ||
+        if (const auto codec = codecs.FindCodec(identity.protocol, identity.id);
+            !identity.protocol.IsValid() || !identity.id.IsValid() || !identity.schema.IsValid() || !identity.version.IsValid() ||
             identity.optional || !policy.feature.IsValid() || !policy.expectedServer.IsValid() || !policy.expectedProvenance.IsValid() ||
             !policy.authorityPublisher.IsValid() || identity.protocol != local.compatibility.protocol ||
             std::ranges::find(local.compatibility.features.required, policy.feature) == local.compatibility.features.required.end() ||
@@ -38,8 +38,8 @@ namespace Horo::Network {
         if (!ValidRecord(record))
             return Result<NetworkWorldBindingBytes>::Failure(MakeError(NetworkErrors::NetworkModeInvalid));
         NetworkWorldBindingBytes bytes{};
-        AdmissionWire::Writer writer{bytes};
-        if (!writer.Number(WireVersion, 2) || !writer.Number(static_cast<std::uint16_t>(record.kind), 2) ||
+        if (AdmissionWire::Writer writer{bytes};
+            !writer.Number(WireVersion, 2) || !writer.Number(static_cast<std::uint16_t>(record.kind), 2) ||
             !writer.Number(record.worldSession.Value(), 8) || !writer.Number(record.remoteEpoch.Value(), 8) ||
             !writer.Number(record.schemaFingerprint, 8) || !writer.Bytes(std::as_bytes(std::span{record.expectedPriorBinding.bytes})))
             return Result<NetworkWorldBindingBytes>::Failure(MakeError(NetworkErrors::NetworkModeInvalid));
@@ -50,8 +50,10 @@ namespace Horo::Network {
     Result<NetworkWorldBindingRecord> DecodeNetworkWorldBinding(const std::span<const std::byte> bytes) {
         AdmissionWire::Reader reader{bytes};
         NetworkWorldBindingRecord record;
-        std::uint16_t version{}, kind{};
-        std::uint64_t session{}, epoch{};
+        std::uint16_t version{};
+        std::uint16_t kind{};
+        std::uint64_t session{};
+        std::uint64_t epoch{};
         if (bytes.size() != NetworkWorldBindingWireBytes || !reader.Number(version, 2) || version != WireVersion ||
             !reader.Number(kind, 2) || kind >= static_cast<std::uint16_t>(NetworkWorldBindingKind::Count) || !reader.Number(session, 8) ||
             !reader.Number(epoch, 8) || !reader.Number(record.schemaFingerprint, 8) ||

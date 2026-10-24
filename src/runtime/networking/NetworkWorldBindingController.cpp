@@ -7,8 +7,9 @@ namespace Horo::Network {
     /** @copydoc NetworkWorldBindingController::Create */
     Result<std::shared_ptr<NetworkWorldBindingController>> NetworkWorldBindingController::Create(NetworkModePlan plan,
                                                                                                  NetworkWorldBindingSetup setup) {
-        const auto codec = setup.codecs ? setup.codecs->FindCodec(setup.policy.control.protocol, setup.policy.control.id) : std::nullopt;
-        if (!codec || codec->schema != setup.policy.control.schema || !codec->supportedVersions.Contains(setup.policy.control.version) ||
+        if (const auto codec =
+                setup.codecs ? setup.codecs->FindCodec(setup.policy.control.protocol, setup.policy.control.id) : std::nullopt;
+            !codec || codec->schema != setup.policy.control.schema || !codec->supportedVersions.Contains(setup.policy.control.version) ||
             codec->maximumPayloadBytes != NetworkWorldBindingWireBytes || setup.schemaFingerprint == 0 || !setup.policy.feature.IsValid() ||
             !setup.policy.expectedServer.IsValid() || !setup.policy.expectedProvenance.IsValid() ||
             !setup.policy.authorityPublisher.IsValid() || setup.maximumPeers == 0 || setup.maximumPeers > 64 ||
@@ -56,10 +57,10 @@ namespace Horo::Network {
             !impl_->setup.controlChannel.IsWithin(transport.Capabilities().maximumChannels))
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         const auto &control = impl_->setup.policy.control;
-        auto registered =
-            dispatcher.RegisterHandler({control.protocol, control.id, MessageTrafficClass::Control, Runtime::RuntimePhase::NetworkPoll, 4},
-                                       owner);
-        if (registered.HasError())
+        if (auto registered = dispatcher.RegisterHandler({control.protocol, control.id, MessageTrafficClass::Control,
+                                                          Runtime::RuntimePhase::NetworkPoll, 4},
+                                                         owner);
+            registered.HasError())
             return registered;
         dispatcher.worldBinding_ = owner;
         dispatcher.requiresWorldBinding_ = true;
@@ -98,9 +99,9 @@ namespace Horo::Network {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
-        const auto &control = impl_->setup.policy.control;
-        if (!impl_->transport || message.protocol != control.protocol || message.message != control.id ||
-            message.schema != control.schema || message.schemaVersion != control.version || !message.fields.empty())
+        if (const auto &control = impl_->setup.policy.control; !impl_->transport || message.protocol != control.protocol ||
+                                                               message.message != control.id || message.schema != control.schema ||
+                                                               message.schemaVersion != control.version || !message.fields.empty())
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         const auto decoded = DecodeNetworkWorldBinding(message.payload);
         if (decoded.HasError())

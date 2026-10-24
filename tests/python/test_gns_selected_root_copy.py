@@ -8,6 +8,10 @@ import shutil
 import pytest
 
 
+ORIGINAL_SOURCE = "original @preserved@ ${preserved}\n"
+PATCHED_SOURCE = "patched @preserved@ ${preserved}\n"
+
+
 def _prepare_patch_repository(project: Path, patch_path: Path, git: str,
                               pytester: pytest.Pytester, autocrlf_checkout: bool) -> None:
     """Keep checkout conversion inside an isolated index using the real attribute."""
@@ -41,11 +45,12 @@ def isolated_git_config(tmp_path: Path, request: pytest.FixtureRequest,
     assert git_config.read_text(encoding="utf-8") == config_text
 
 
+@pytest.mark.parametrize("pristine_newline", [b"\n", b"\r\n"])
 @pytest.mark.usefixtures("isolated_git_config")
 @pytest.mark.parametrize("inside_repository", [True, False])
 @pytest.mark.parametrize("autocrlf_checkout", [False, True])
 def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, autocrlf_checkout: bool,
-                                      pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch):
+                                      pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, pristine_newline: bytes):
     project = tmp_path / "project with space ü"
     project.mkdir()
     git = shutil.which("git")
@@ -56,23 +61,23 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, 
     monkeypatch.chdir(project)
     parent_source = project / "src/sentinel.cpp"
     parent_source.parent.mkdir()
-    parent_source.write_text("original\n", encoding="utf-8")
+    parent_source.write_bytes(ORIGINAL_SOURCE.encode().replace(b"\n", pristine_newline))
     pristine = project / "pristine"
     (pristine / "src").mkdir(parents=True)
-    (pristine / "src/sentinel.cpp").write_text("original\n", encoding="utf-8")
+    (pristine / "src/sentinel.cpp").write_bytes(ORIGINAL_SOURCE.encode().replace(b"\n", pristine_newline))
     (pristine / "LICENSE").write_text("fixture license\n", encoding="utf-8")
     helper = project / "cmake/HoroGnsSelectedRoot.cmake"
     helper.parent.mkdir()
     shutil.copyfile(Path(__file__).resolve().parents[2] / "cmake/HoroGnsSelectedRoot.cmake", helper)
     patch_dir = helper.parent / "patches/gns"
     patch_dir.mkdir(parents=True)
-    patch = "--- a/src/sentinel.cpp\n+++ b/src/sentinel.cpp\n@@ -1 +1 @@\n-original\n+patched\n"
+    patch = f"--- a/src/sentinel.cpp\n+++ b/src/sentinel.cpp\n@@ -1 +1 @@\n-{ORIGINAL_SOURCE}+{PATCHED_SOURCE}"
     patch_path = patch_dir / "horo-gns-selected-root-v1.patch"
     patch_path.write_bytes(patch.encode())
     digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
     manifest = {"patchSha256": digest(patch), "licenseSha256": digest("fixture license\n"),
-                "paths": [{"path": "src/sentinel.cpp", "pristineSha256": digest("original\n"),
-                           "candidateSha256": digest("patched\n")} ]}
+                "paths": [{"path": "src/sentinel.cpp", "pristineSha256": digest(ORIGINAL_SOURCE),
+                           "candidateSha256": digest(PATCHED_SOURCE)} ]}
     (patch_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     _prepare_patch_repository(project, patch_path, git, pytester, autocrlf_checkout)
     build = project / "build" if inside_repository else tmp_path / "external build"
@@ -85,12 +90,12 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, 
         result = pytester.run(cmake, "-P", str(script), timeout=15)
         assert result.ret == 0, result.stdout.str() + result.stderr.str()
         owned = Path(result_path.read_text())
-        assert (owned / "src/sentinel.cpp").read_bytes() == b"patched\n"
-        assert parent_source.read_text() == "original\n"
-        assert (pristine / "src/sentinel.cpp").read_text() == "original\n"
+        assert (owned / "src/sentinel.cpp").read_bytes() == PATCHED_SOURCE.encode()
+        assert parent_source.read_text() == ORIGINAL_SOURCE
+        assert (pristine / "src/sentinel.cpp").read_text() == ORIGINAL_SOURCE
     (owned / "src/sentinel.cpp").write_text("corrupted\n", encoding="utf-8")
     rejected = pytester.run(cmake, "-P", str(script), timeout=15)
     assert rejected.ret != 0
     assert "source changed" in rejected.stderr.str()
-    assert parent_source.read_text() == "original\n"
-    assert (pristine / "src/sentinel.cpp").read_text() == "original\n"
+    assert parent_source.read_text() == ORIGINAL_SOURCE
+    assert (pristine / "src/sentinel.cpp").read_text() == ORIGINAL_SOURCE

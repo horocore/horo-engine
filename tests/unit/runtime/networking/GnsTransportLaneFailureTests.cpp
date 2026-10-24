@@ -64,47 +64,6 @@ namespace {
         return connection.Value();
     }
 
-    struct Operations final {
-        std::size_t configured{};
-        std::size_t sends{};
-        std::size_t freedPayloads{};
-        void (*originalFree)(SteamNetworkingMessage_t *){};
-        int64 originalUserData{};
-
-        static EResult ConfigureFails(void *context, ISteamNetworkingSockets &, HSteamNetConnection, int) {
-            ++static_cast<Operations *>(context)->configured;
-            return k_EResultInvalidParam;
-        }
-
-        static EResult ConfigureReal(void *context, ISteamNetworkingSockets &sockets, HSteamNetConnection connection, int count) {
-            ++static_cast<Operations *>(context)->configured;
-            return sockets.ConfigureConnectionLanes(connection, count, nullptr, nullptr);
-        }
-
-        static void SendReal(void *, ISteamNetworkingSockets &sockets, SteamNetworkingMessage_t **message, int64 *result) {
-            sockets.SendMessages(1, message, result, false);
-        }
-
-        static void FreePayload(SteamNetworkingMessage_t *message) {
-            auto &context = *reinterpret_cast<Operations *>(static_cast<std::uintptr_t>(message->m_nUserData));
-            ++context.freedPayloads;
-            message->m_nUserData = context.originalUserData;
-            if (context.originalFree)
-                context.originalFree(message);
-        }
-
-        static void SendRejected(void *context, ISteamNetworkingSockets &, SteamNetworkingMessage_t **message, int64 *result) {
-            auto &state = *static_cast<Operations *>(context);
-            ++state.sends;
-            state.originalFree = (*message)->m_pfnFreeData;
-            state.originalUserData = (*message)->m_nUserData;
-            (*message)->m_nUserData = static_cast<int64>(reinterpret_cast<std::uintptr_t>(context));
-            (*message)->m_pfnFreeData = &FreePayload;  // Documented native ownership callback, not the reserved release function.
-            *result = -static_cast<int64>(k_EResultLimitExceeded);
-            // false-mode rejection MUST leave the real native allocation caller-owned.
-        }
-    };
-
     /** @brief Send an interleaved native series on each distinct configured lane. */
     void SendLaneSeries(INetworkTransport &transport, const ConnectionHandle outgoing) {
         for (std::uint8_t sequence = 0; sequence < 4; ++sequence) {
@@ -136,8 +95,8 @@ namespace {
 }  // namespace
 
 TEST_CASE("GNS lane configuration failure never publishes readiness and retires exact generations once", "[network][gns][lanes]") {
-    Operations operations;  // Context and callback code outlive the transport and native drain.
-    GnsTransport transport{Operations::ConfigureFails, Operations::SendReal, &operations};
+    GnsLaneFailureInjection operations{GnsLaneFailure::ConfigureRejected};
+    GnsTransport transport{GnsTransportSetup{.laneFailure = &operations}};
     REQUIRE(transport.Initialize({.maximumConnections = 4, .maximumEventsPerPoll = 32, .maximumChannels = 2}).HasValue());
     Events events;
     const auto connection = Loopback(transport, events, NetworkTransportEventKind::Failed, 2);
@@ -175,8 +134,10 @@ TEST_CASE("GNS lane configuration failure never publishes readiness and retires 
 }
 
 TEST_CASE("GNS rejected native lane send releases the real caller-owned payload once without accepted stats", "[network][gns][lanes]") {
-    Operations operations;
-    GnsTransport transport{Operations::ConfigureReal, Operations::SendRejected, &operations};
+    // This nonmoving borrow precedes the transport. Rejected messages never enter
+    // an SDK queue: the pinned ReleaseFunc calls m_pfnFreeData synchronously.
+    GnsLaneFailureInjection operations{GnsLaneFailure::SendRejected};
+    GnsTransport transport{GnsTransportSetup{.laneFailure = &operations}};
     REQUIRE(transport.Initialize({.maximumConnections = 4, .maximumEventsPerPoll = 32, .maximumChannels = 2}).HasValue());
     Events events;
     const auto connection = Loopback(transport, events, NetworkTransportEventKind::Connected, 1);
@@ -188,6 +149,7 @@ TEST_CASE("GNS rejected native lane send releases the real caller-owned payload 
     REQUIRE(rejected.ErrorValue().code.Value() == NetworkErrors::TransportReliableBackpressure.code.Value());
     REQUIRE(operations.sends == 1);
     REQUIRE(operations.freedPayloads == 1);  // Native Release actually invoked the documented data callback.
+    REQUIRE(operations.freedOn == std::this_thread::get_id());
     REQUIRE(transport.Stats().sentMessages == 0);
     REQUIRE(transport.Stats().sentBytes == 0);
     transport.Shutdown();

@@ -44,7 +44,16 @@ function(horo_prepare_gns_selected_root pristine out_source)
             if(EXISTS "${owned}/${path}")
                 file(READ "${owned}/${path}" text)
                 string(REPLACE "\r\n" "\n" text "${text}")
-                file(WRITE "${owned}/${path}" "${text}")
+                # CONFIGURE emits one final LF for its template line. Remove only
+                # the pinned source's final LF before the single variable expansion;
+                # vendor @...@/${...} text is never interpreted as a template.
+                string(REGEX REPLACE "\n$" "" text "${text}")
+                file(CONFIGURE OUTPUT "${owned}/${path}" CONTENT "@text@" @ONLY NEWLINE_STYLE UNIX)
+                file(SHA256 "${owned}/${path}" materialized)
+                string(JSON expected GET "${manifest}" paths ${index} pristineSha256)
+                if(NOT materialized STREQUAL expected)
+                    message(FATAL_ERROR "GNS build-owned pristine bytes changed during normalization: ${path}")
+                endif()
             endif()
         endforeach()
         find_package(Git REQUIRED)

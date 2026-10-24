@@ -30,7 +30,7 @@ namespace Horo::Network::Detail {
 
     Result<std::unique_ptr<NetworkModeWorldState::World>> NetworkModeWorldState::Stage(const Runtime::SceneRuntimeId scene,
                                                                                        const ReplicationExecutionRole role,
-                                                                                       const NetworkWorldBindingRecord &record) {
+                                                                                       const NetworkWorldBindingRecord &record) const {
         auto created = ReplicationWorldLifecycle::Create();
         if (created.HasError())
             return Result<std::unique_ptr<World>>::Failure(created.ErrorValue());
@@ -75,8 +75,7 @@ namespace Horo::Network::Detail {
                 worlds[index].scene == plan_.worlds[index].scene || (index != 0 && worlds[0].scene == worlds[index].scene))
                 return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeStale));
         }
-        const auto server = Index(NetworkModeWorldKind::AuthorityServer);
-        if (server != plan_.worldCount) {
+        if (const auto server = Index(NetworkModeWorldKind::AuthorityServer); server != plan_.worldCount) {
             auto issued = issuer_.Issue(worlds[server].scene);
             if (issued.HasError())
                 return Result<void>::Failure(issued.ErrorValue());
@@ -144,8 +143,8 @@ namespace Horo::Network::Detail {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeStale));
         if (auto active = peer->AdmitGameplay(connection, generation, nowTick); active.HasError())
             return active;
-        const auto *authentication = peer->Authentication();
-        if (!authentication || authentication->principal.principal != policy_.expectedServer ||
+        if (const auto *authentication = peer->Authentication();
+            !authentication || authentication->principal.principal != policy_.expectedServer ||
             authentication->principal.provenance != policy_.expectedProvenance ||
             std::ranges::find(authentication->principal.capabilities.Values(), policy_.authorityPublisher) ==
                 authentication->principal.capabilities.Values().end())
@@ -193,8 +192,8 @@ namespace Horo::Network::Detail {
         if (auto active = client_->AdmitGameplay(connection_, peerGeneration_, context.ownerTick); active.HasError())
             return active;
         const auto *authentication = client_->Authentication();
-        const auto *negotiation = client_->Negotiation();
-        if (!authentication || !negotiation || authentication->principal.principal != policy_.expectedServer ||
+        if (const auto *negotiation = client_->Negotiation();
+            !authentication || !negotiation || authentication->principal.principal != policy_.expectedServer ||
             authentication->principal.provenance != policy_.expectedProvenance ||
             std::ranges::find(authentication->principal.capabilities.Values(), policy_.authorityPublisher) ==
                 authentication->principal.capabilities.Values().end() ||
@@ -258,8 +257,7 @@ namespace Horo::Network::Detail {
                                                     const std::uint64_t nowTick) {
         // A listen client can only mirror its actual local server occurrence,
         // while still requiring the real authenticated inbound control path.
-        const auto server = Index(NetworkModeWorldKind::AuthorityServer);
-        if (server != plan_.worldCount) {
+        if (const auto server = Index(NetworkModeWorldKind::AuthorityServer); server != plan_.worldCount) {
             const auto *expected = travelPending_ ? PreparedServerBinding() : ServerBinding();
             auto selected = expected ? *expected : NetworkWorldBindingRecord{};
             if (record.kind == NetworkWorldBindingKind::Initial) {
@@ -328,8 +326,7 @@ namespace Horo::Network::Detail {
             nowTick_ = nowTick;
             return;
         }
-        const auto index = Index(NetworkModeWorldKind::Client);
-        if (index != plan_.worldCount) {
+        if (const auto index = Index(NetworkModeWorldKind::Client); index != plan_.worldCount) {
             if (current_[index])
                 current_[index]->lifecycle.BeginShutdown();
             current_[index].reset();
@@ -407,10 +404,10 @@ namespace Horo::Network::Detail {
         if (stopped_)
             return;
         stopped_ = true;
-        for (auto &world : current_)
+        for (const auto &world : current_)
             if (world)
                 world->lifecycle.BeginShutdown();
-        for (auto &world : candidate_)
+        for (const auto &world : candidate_)
             if (world)
                 world->lifecycle.BeginShutdown();
         client_.reset();

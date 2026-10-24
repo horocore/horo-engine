@@ -10,8 +10,8 @@ namespace Horo::Network {
                                                                    const std::uint64_t tick) const {
         if (auto active = peer.AdmitGameplay(peer.Connection(), generation, tick); active.HasError())
             return active;
-        const auto *selection = peer.Negotiation();
-        if (!selection || selection->protocol != setup.policy.control.protocol || selection->version != version ||
+        if (const auto *selection = peer.Negotiation();
+            !selection || selection->protocol != setup.policy.control.protocol || selection->version != version ||
             selection->schemaFingerprint != setup.schemaFingerprint || !setup.controlChannel.IsWithin(selection->transport.channelCount) ||
             std::ranges::find(selection->features.Values(), setup.policy.feature) == selection->features.Values().end())
             return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
@@ -34,10 +34,11 @@ namespace Horo::Network {
                          (impl_->role != NetworkProjectRole::Client && impl_->role != NetworkProjectRole::ListenServer))))
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeInvalid));
         const auto end = impl_->peers.begin() + impl_->setup.maximumPeers;
-        auto existing = std::find_if(impl_->peers.begin(), end, [&peer](const Impl::Peer &slot) {
+        if (auto existing = std::find_if(impl_->peers.begin(), end,
+                                         [&peer](const Impl::Peer &slot) {
             return slot.lifecycle && slot.connection == peer->Connection();
         });
-        if (existing != end)
+            existing != end)
             return existing->lifecycle == peer && existing->generation == generation && existing->sendsWorld == server
                        ? Result<void>::Success()
                        : Result<void>::Failure(MakeError(NetworkErrors::NetworkModeStale));
@@ -75,7 +76,8 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
-    Result<void> NetworkWorldBindingController::Impl::Queue(Peer &peer, const NetworkWorldBindingRecord &record, const std::uint64_t tick) {
+    Result<void> NetworkWorldBindingController::Impl::Queue(Peer &peer, const NetworkWorldBindingRecord &record,
+                                                            const std::uint64_t tick) const {
         if (peer.frameBytes != 0)
             return peer.pending && *peer.pending == record ? Result<void>::Success()
                                                            : Result<void>::Failure(MakeError(NetworkErrors::TransportReliableBackpressure));
@@ -83,14 +85,16 @@ namespace Horo::Network {
         if (payload.HasError())
             return Result<void>::Failure(payload.ErrorValue());
         const auto &control = setup.policy.control;
-        auto queued = QueueFrame(peer, {control.protocol, control.id, control.schema, control.version, {}, {}, 0, payload.Value()}, tick);
-        if (queued.HasError())
+        if (auto queued =
+                QueueFrame(peer, {control.protocol, control.id, control.schema, control.version, {}, {}, 0, payload.Value()}, tick);
+            queued.HasError())
             return queued;
         peer.pending = record;
         return Result<void>::Success();
     }
 
-    Result<void> NetworkWorldBindingController::Impl::QueueFrame(Peer &peer, MessageEnvelopePayloadView message, const std::uint64_t tick) {
+    Result<void> NetworkWorldBindingController::Impl::QueueFrame(Peer &peer, MessageEnvelopePayloadView message,
+                                                                 const std::uint64_t tick) const {
         if (peer.frameBytes != 0)
             return Result<void>::Failure(MakeError(NetworkErrors::TransportReliableBackpressure));
         if (peer.sequence == std::numeric_limits<std::uint32_t>::max() ||
@@ -202,6 +206,31 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
+    /** @copydoc NetworkWorldBindingController::Impl::QueueWorldUpdate */
+    Result<void> NetworkWorldBindingController::Impl::QueueWorldUpdate(Peer &peer, const NetworkWorldBindingRecord *prepared,
+                                                                       const NetworkWorldBindingRecord *current,
+                                                                       const std::uint64_t tick) const {
+        // A peer joining during travel receives the published world first.
+        if (!peer.sendsWorld)
+            return Result<void>::Success();
+        const auto *record = current;
+        if (peer.sent && prepared)
+            record = prepared;
+        if (const bool advances =
+                record && (!peer.sent || record->worldSession > peer.sent->worldSession ||
+                           (record->worldSession == peer.sent->worldSession && record->kind == NetworkWorldBindingKind::CommitTravel &&
+                            peer.sent->kind == NetworkWorldBindingKind::PrepareTravel));
+            peer.frameBytes == 0 && advances) {
+            auto selected = *record;
+            if (!peer.sent) {
+                selected.kind = NetworkWorldBindingKind::Initial;
+                selected.expectedPriorBinding = {};
+            }
+            return Queue(peer, selected, tick);
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc NetworkWorldBindingController::Flush */
     Result<void> NetworkWorldBindingController::Flush(const std::uint64_t nowTick) {
         if (auto checked = Reconcile(nowTick); checked.HasError())
@@ -214,22 +243,8 @@ namespace Horo::Network {
         for (auto &peer : impl_->peers) {
             if (!peer.lifecycle)
                 continue;
-            // A peer joining during travel first receives the OLD published world;
-            // an uncommitted candidate can never masquerade as an initial world.
-            const auto *record = peer.sendsWorld ? (peer.sent && prepared ? prepared : current) : nullptr;
-            const bool advances =
-                record && (!peer.sent || record->worldSession > peer.sent->worldSession ||
-                           (record->worldSession == peer.sent->worldSession && record->kind == NetworkWorldBindingKind::CommitTravel &&
-                            peer.sent->kind == NetworkWorldBindingKind::PrepareTravel));
-            if (peer.frameBytes == 0 && advances) {
-                auto selected = *record;
-                if (!peer.sent) {
-                    selected.kind = NetworkWorldBindingKind::Initial;
-                    selected.expectedPriorBinding = {};
-                }
-                if (auto queued = impl_->Queue(peer, selected, nowTick); queued.HasError())
-                    return queued;  // Local encoding/capacity error precedes any new publication.
-            }
+            if (auto queued = impl_->QueueWorldUpdate(peer, prepared, current, nowTick); queued.HasError())
+                return queued;  // Local encoding/capacity error precedes any new publication.
             if (auto sent = impl_->Send(peer, nowTick); sent.HasError()) {
                 if (impl_->stopped)
                     return sent;

@@ -209,6 +209,18 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Consume exactly one gameplay module selection without advancing on failure. */
+        Result<void> ReadGameplaySelection(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (launch.gameplay || arguments.size() - index < 5)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
+            auto selection = ParseGameplaySelection(arguments.subspan(index, 5));
+            if (selection.HasError())
+                return Result<void>::Failure(selection.ErrorValue());
+            launch.gameplay = std::move(selection).Value();
+            index += 5;
+            return Result<void>::Success();
+        }
+
         /** @brief Keeps legacy gameplay suffix parsing separate from paired explicit Scene options. */
         Result<void> ParseSceneOptions(const std::span<char *> arguments, ProductLaunch &launch) {
             SeenSceneOptions seen{};
@@ -228,13 +240,8 @@ namespace Horo::Application::Internal {
                     continue;
                 }
                 if (key == "--game-module" || key == "--game-script") {
-                    if (launch.gameplay || arguments.size() - index < 5)
-                        return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
-                    auto selection = ParseGameplaySelection(arguments.subspan(index, 5));
-                    if (selection.HasError())
-                        return Result<void>::Failure(selection.ErrorValue());
-                    launch.gameplay = std::move(selection).Value();
-                    index += 5;
+                    if (auto selected = ReadGameplaySelection(arguments, index, launch); selected.HasError())
+                        return selected;
                     continue;
                 }
                 if (auto applied = ReadSceneOption(arguments, index, seen, launch.sceneInput); applied.HasError())

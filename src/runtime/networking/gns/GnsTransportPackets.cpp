@@ -38,7 +38,7 @@ namespace Horo::Network {
         if (delivery != DeliveryPolicy::ReliableOrdered && delivery != DeliveryPolicy::UnreliableUnordered)
             return Fail(NetworkErrors::TransportDeliveryUnsupported);
         const auto result = SendOnLane(*slot, channel, payload, delivery);
-        if (!result)
+        if (!result.has_value())
             return Fail(NetworkErrors::TransportNativeUnavailable);
         if (*result == -static_cast<std::int64_t>(k_EResultLimitExceeded))
             return Fail(delivery == DeliveryPolicy::ReliableOrdered ? NetworkErrors::TransportReliableBackpressure
@@ -79,7 +79,7 @@ namespace Horo::Network {
         if (message->m_cbSize != static_cast<int>(payload.size()) || (!payload.empty() && !message->m_pData))
             return std::nullopt;
         if (!payload.empty())
-            std::copy(payload.begin(), payload.end(), static_cast<std::byte *>(message->m_pData));
+            std::ranges::copy(payload, static_cast<std::byte *>(message->m_pData));
         message->m_conn = slot.native;
         message->m_idxLane = static_cast<std::uint16_t>(channel.Value());
         message->m_nFlags =
