@@ -83,8 +83,8 @@ def test_foreign_fork_sonar_policy_is_preserved() -> None:
 
 
 @pytest.mark.parametrize("workflow,readonly,writer,fields", [
-    ("ci", "test", "test-main", ("steps", "env", "strategy", "defaults", "timeout-minutes")),
-    ("sonar", "sonar", "sonar-main", ("steps", "env", "runs-on", "timeout-minutes")),
+    ("ci", "test", "test-main", ("steps", "env", "strategy", "defaults")),
+    ("sonar", "sonar", "sonar-main", ("steps", "env", "runs-on")),
 ])
 def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
     workflow: str, readonly: str, writer: str, fields: tuple[str, ...],
@@ -95,6 +95,8 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
     assert "      packages: read\n" in reader
     assert "packages: write" not in reader
     assert "      packages: write\n" in main
+    assert "    timeout-minutes: 180\n" in reader
+    assert "    timeout-minutes: 180\n" in main
     for field in fields:
         match = re.search(rf"^    {field}: &(\w+)", reader, re.MULTILINE)
         assert match is not None

@@ -315,7 +315,7 @@ jobs:
       contents: read
       packages: read
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: &native_timeout 180
+    timeout-minutes: 180
     defaults: &native_defaults
       run:
         shell: bash
@@ -933,7 +933,7 @@ jobs:
       contents: read
       packages: write
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: *native_timeout
+    timeout-minutes: 180
     defaults: *native_defaults
     env: *native_environment
     strategy: *native_strategy
