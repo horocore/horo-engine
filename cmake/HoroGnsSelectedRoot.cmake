@@ -48,7 +48,7 @@ function(horo_prepare_gns_selected_root pristine out_source)
                 # the pinned source's final LF before the single variable expansion;
                 # vendor @...@/${...} text is never interpreted as a template.
                 string(REGEX REPLACE "\n$" "" text "${text}")
-                file(CONFIGURE OUTPUT "${owned}/${path}" CONTENT "@text@" @ONLY NEWLINE_STYLE UNIX)
+                file(CONFIGURE OUTPUT "${owned}/${path}" CONTENT [=[@text@]=] @ONLY NEWLINE_STYLE UNIX)
                 file(SHA256 "${owned}/${path}" materialized)
                 string(JSON expected GET "${manifest}" paths ${index} pristineSha256)
                 if(NOT materialized STREQUAL expected)
