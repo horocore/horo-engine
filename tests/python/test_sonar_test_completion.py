@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "sonar_completion", ROOT / ".github/scripts/validate_sonar_test_completion.py"
 )
-assert SPEC is not None and SPEC.loader is not None
+assert SPEC is not None
+assert SPEC.loader is not None
 completion = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(completion)
 
