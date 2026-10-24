@@ -331,6 +331,14 @@ source merges and zero-hit lines, and qualify memory use on the hosted runner.
 
 Key design decisions:
 
+- **Source revision scope:** Keep `HORO_SOURCE_REVISION` on the application
+  translation units that read it: terminal entry, network product launch and
+  editor application composition. The value remains the current Git revision
+  (or the existing `unknown` fallback); other compile definitions and runtime
+  identity checks are unchanged. Passing this changing value to whole targets
+  unnecessarily invalidates compiler and CFamily analysis caches for unrelated
+  application sources on every commit.
+
 - **Compiler identity:** Every compiler-cache key includes a normalized
   compiler identity obtained after toolchain setup. The identity includes the
   compiler family and full version, for example `clang-19.1.7` or
