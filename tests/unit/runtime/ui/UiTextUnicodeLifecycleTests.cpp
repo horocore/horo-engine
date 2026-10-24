@@ -1,21 +1,18 @@
 #include "Horo/Runtime/Ui/UiTextUnicode.h"
+#include "support/FixtureFileRead.h"
 
 #include <catch2/catch_test_macros.hpp>
-#include <fstream>
-#include <iterator>
 #include <optional>
-#include <vector>
+#include <string>
 
 TEST_CASE("Host Unicode shutdown waits for native paragraph leases and is terminal", "[runtime_ui][unicode][shutdown]") {
     using namespace Horo::Runtime::Ui;
-    std::ifstream input(HORO_UNICODE_DATA_FILE, std::ios::binary);
-    REQUIRE(input.good());
-    std::vector<char> bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    auto bytes = Horo::Tests::ReadFixtureBytes(HORO_UNICODE_DATA_FILE);
     auto created = UiTextUnicodeRuntime::Create(std::as_bytes(std::span(bytes)));
     REQUIRE(created.HasValue());
     auto runtime = std::move(created).Value();
     // Registration must retain the runtime's aligned copy, not the host input.
-    std::vector<char>{}.swap(bytes);
+    std::string{}.swap(bytes);
     auto admitted = UiTextUnicodeAnalyzer::Create(runtime, {128, 8, 64, 64, 16, 2});
     REQUIRE(admitted.HasValue());
     std::optional<UiTextUnicodeAnalyzer> analyzer(std::move(admitted).Value());
