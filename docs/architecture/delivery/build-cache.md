@@ -740,7 +740,19 @@ compiler/toolchain namespaces get distinct tags; old namespace/tag cleanup is
 not automated in this first rollout. GHCR version storage must be monitored;
 Actions duplicate retention remains independent.
 
-PRs restore native Debug, auxiliary variants and instrumented Sonar directly
+Shader jobs use their own `native-shaders-v1` Debug profile, produced by the
+same shader composition on main. Ubuntu 26's GCC 15 compiler cannot read the
+primary native Linux GCC 13 namespace. Sharing that profile without a producer
+left every shader run cold, even after main had compiled the same sources.
+The shader publisher runs after the native build steps and before runtime
+qualification, with the same bounded optional upload. Its per-platform main
+lanes serialize writers. The read-only/main definitions share one matrix through
+anchors; exactly one definition executes, keeping two platform jobs with a
+per-run matrix width of one. PRs never publish. Dependency sources can still use
+the native source-cache profile because compiler objects are stored separately.
+Both platforms report per-run compiler hit/miss statistics before publication.
+
+PRs restore native Debug, shader, auxiliary variants and instrumented Sonar directly
 from GHCR. These stores neither read nor write Actions compiler snapshots, so
 source/scanner caches no longer compete with their multi-gigabyte copies.
 Other focused compiler profiles can retain Actions storage. The public client

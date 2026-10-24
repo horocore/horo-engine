@@ -49,10 +49,10 @@ runs:
         case "$COMPILER_STORAGE" in
           actions) ;;
           registry)
-            if [[ "$COMPILER_PROFILE:$COMPILER_MODE" != native-tests-v1:Debug && "$COMPILER_PROFILE:$COMPILER_MODE" != native-variants-v1:Mixed ]]; then
-              echo 'Registry storage requires a primary or auxiliary compiler profile' >&2
-              exit 1
-            fi
+            case "$COMPILER_PROFILE:$COMPILER_MODE" in
+              native-tests-v1:Debug|native-shaders-v1:Debug|native-variants-v1:Mixed) ;;
+              *) echo 'Registry storage requires a qualified compiler profile' >&2; exit 1 ;;
+            esac
             ;;
           *) echo 'Unknown compiler storage' >&2; exit 1 ;;
         esac
@@ -142,7 +142,7 @@ runs:
           native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-
 
     - name: Install optional compiler registry client
-      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && ((inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug') || (inputs.profile == 'native-variants-v1' && inputs.mode == 'Mixed'))
+      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && (((inputs.profile == 'native-tests-v1' || inputs.profile == 'native-shaders-v1') && inputs.mode == 'Debug') || (inputs.profile == 'native-variants-v1' && inputs.mode == 'Mixed'))
       continue-on-error: true
       uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
       with:
@@ -150,7 +150,7 @@ runs:
 
     - name: Restore optional public compiler checkpoint
       id: public_compiler
-      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && ((inputs.profile == 'native-tests-v1' && inputs.mode == 'Debug') || (inputs.profile == 'native-variants-v1' && inputs.mode == 'Mixed'))
+      if: inputs.external-cache == 'true' && steps.compiler.outputs.cache-matched-key == '' && (((inputs.profile == 'native-tests-v1' || inputs.profile == 'native-shaders-v1') && inputs.mode == 'Debug') || (inputs.profile == 'native-variants-v1' && inputs.mode == 'Mixed'))
       continue-on-error: true
       shell: bash
       env:
