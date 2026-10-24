@@ -73,6 +73,7 @@ namespace Horo::Render::Detail {
         native.endRendering(command);
         if (encoded.HasError())
             return encoded;
+        Barriers(command, guiExternalFinalBarriers);
         OutputBarrier(native.barrier, command, output.image, true);
         return Result<void>::Success();
     }
@@ -97,12 +98,52 @@ namespace Horo::Render::Detail {
             !std::ranges::equal(request.resources, std::span{impl_->guiIdentities}.first(impl_->guiSampleCount), equalSample) ||
             !std::ranges::equal(request.buffers, std::span{impl_->guiBufferIdentities}.first(impl_->guiBufferCount)))
             return Result<void>::Failure(Impl::Invalid("GUI encoder changed its admitted submission or resource identities."));
-        const auto updateOffset = impl_->updates.size();
+
+        // Preparing resources may append upload state before a later sample/output/ticket is rejected.
+        // Keep the earlier scene's exact state and retained owners; only this unsent attempt rolls back.
+        /** @brief Stack-only suffix transaction; native ticket admission transfers cleanup to the existing abort owner. */
+        struct PreparationRollback final {
+            Impl &graph;
+            VulkanCommandRetention &pins;
+            const std::size_t updateCount;
+            const std::size_t barrierCount;
+            const std::size_t resourceCount;
+            const RenderGraphExecutionRange bufferBarriers;
+            const RenderGraphExecutionRange externalBarriers;
+            bool committed{};
+
+            ~PreparationRollback() noexcept {
+                if (committed)
+                    return;
+                graph.updates.erase(graph.updates.begin() + updateCount, graph.updates.end());
+                graph.barriers.erase(graph.barriers.begin() + barrierCount, graph.barriers.end());
+                pins.resources.erase(pins.resources.begin() + resourceCount, pins.resources.end());
+                graph.guiBufferBarriers = bufferBarriers;
+                graph.guiExternalFinalBarriers = externalBarriers;
+                // Per-sample scratch is overwritten completely on retry and is never read before successful preparation.
+            }
+        } rollback{*impl_,
+                   *pins,
+                   impl_->updates.size(),
+                   impl_->barriers.size(),
+                   pins->resources.size(),
+                   impl_->guiBufferBarriers,
+                   impl_->guiExternalFinalBarriers};
+
+        const auto updateOffset = rollback.updateCount;
         if (const auto prepared = impl_->PrepareGuiResources(request); prepared.HasError())
             return prepared;
+        if (!output.legacyUnmanagedOutput &&
+            std::ranges::any_of(std::span{impl_->guiSamples}.first(request.resources.size()), [](const VulkanGuiSample &sample) {
+            return sample.requiredFinal.has_value();
+        }))
+            return Result<void>::Failure(
+                Impl::Unsupported("XR first-eye mirror requires the explicitly admitted legacy unmanaged output."));
         const auto ticket = impl_->commands.Begin(request.submission->queue);
         if (ticket.HasError())
             return Result<void>::Failure(ticket.ErrorValue());
+        // This ticket now belongs to the canonical abort/submission path, which retains all pending native debt.
+        rollback.committed = true;
         impl_->submissions.emplace_back();
         auto &submission = impl_->submissions.back();
         submission.ticket = ticket.Value();

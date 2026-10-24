@@ -118,7 +118,7 @@ namespace Horo::Tests::OpenXR {
                 return Result<std::int64_t>::Success(formats.front());
             }
 
-            Result<void> Enumerate(std::uint32_t, const IOpenXRSwapchainImageEnumeration &) override {
+            Result<void> Enumerate(const NativeSwapchainRequest &, std::uint32_t, const IOpenXRSwapchainImageEnumeration &) override {
                 return Result<void>::Success();
             }
 

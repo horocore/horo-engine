@@ -73,7 +73,7 @@ namespace Horo::Runtime {
         DerivedResources
     };
     /** @brief Host-only activation virtual contract revision; all host participants must rebuild together. */
-    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 2;
+    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 3;
     struct SceneInitialPlacement;
 
     /** @brief Detached subsystem state prepared for one aggregate runtime-scene candidate. */
@@ -184,6 +184,16 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] virtual Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &definition,
                                                                                         RuntimeSceneView scene) = 0;
+
+        /** @brief Prepares optional detached owner state for normal unload of the exact active Scene.
+         * @param scene Borrowed active generation; implementations must retain their own immutable leases, never component pointers.
+         * @return An optional owned candidate, or the original typed failure preserving all active roots.
+         * @details The service prepares and validates every retirement candidate before any publication. A null candidate opts out.
+         * Publish must remove only this Scene's ownership without allocation or failure. Candidate Shutdown abandons unpublished
+         * work or releases an already published transaction. Forced service shutdown skips this fallible hook: the active
+         * activation candidate's Shutdown must revoke its scope and retain/drain outstanding leases independently.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneActivationCandidate>> PrepareRetirement(RuntimeSceneView scene);
     };
 
     namespace ScenePublicationDetail {
@@ -894,7 +904,11 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> QueuePreparationWithRestore(RuntimeSceneDefinition definition,
                                                                std::unique_ptr<SceneAggregateRestore> restore,
                                                                RuntimeSceneConfig config = {});
-        /** @brief Queues active-scene unload; repeated unload with no pending transition is harmless. */
+        /** @brief Queues transactional active-scene unload; repeated unload with no pending transition is harmless.
+         * @return Success on admission, or typed shutdown/reentrant/structural-operation rejection.
+         * @details Deferred retirement preparation or validation failure preserves the Scene and all owner roots, and reaches
+         * TakeOperationError(). Forced Shutdown revokes directly and never depends on fallible retirement preparation.
+         */
         [[nodiscard]] Result<void> QueueUnload();
         /** @brief Queues one structural batch against the current active scene. @param commands Batch consumed on success.
          * @return Success or a typed state/pending-operation error. */
@@ -989,7 +1003,9 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> SubmitPreparationLoads();
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
         [[nodiscard]] Result<void> PrepareParticipantPhase(const RuntimeSceneDefinition &definition, SceneActivationPhase phase);
-        [[nodiscard]] Result<void> CommitDeferredChanges();
+        [[nodiscard]] Result<void> CommitDeferredChanges(const CancellationToken &cancellation);
+        /** @brief Prepares and validates all unload owners before the existing no-fail lifecycle publication boundary. */
+        [[nodiscard]] Result<void> RetireActiveScene(const CancellationToken &cancellation);
         /** @brief Waits for owners and validates every candidate before any ownership transfer.
          * @return Ready, pending, or the original typed preparation/validation failure. */
         [[nodiscard]] Result<bool> PreparePendingPublication();

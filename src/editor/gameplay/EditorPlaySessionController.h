@@ -32,6 +32,13 @@ namespace Horo::Editor {
         EditorPlaySessionState priorState{EditorPlaySessionState::Playing};
     };
 
+    /** @brief Explicit private Play view policy; selected XR must match the real factory participant. */
+    enum class EditorPlayViewSource {
+        AuthoredCamera,
+        SelectedXr
+    };
+    class IEditorPlayXrHost;
+
     /** @brief Owns one isolated Scene service host and gameplay runner without mutating the authoring document. */
     class EditorPlaySessionController final {
     public:
@@ -47,12 +54,16 @@ namespace Horo::Editor {
         /** @brief Admits isolated Play preparation from one committed authoring snapshot.
          * @param authoring Committed immutable document. @param registry Frozen registry outliving pending preparation and active Play.
          * @param factory Explicit application composition; absence supports assetless private callers only.
+         * @param viewSource Explicit authored-camera or selected-XR behavior.
+         * @param selectedXrHost Exact actual factory participant, mandatory only for selected XR; outlives Play.
          * @param triggerBinding Exact conversion capture. @return Success for accepted preparation or typed rejection.
          * @details Assetless preparation may finish immediately. Required assets retain Starting until owner update pumping completes.
          */
         [[nodiscard]] Result<void> Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
                                          const EditorPlaySceneFactory &factory = {},
-                                         const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
+                                         const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {},
+                                         EditorPlayViewSource viewSource = EditorPlayViewSource::AuthoredCamera,
+                                         const IEditorPlayXrHost *selectedXrHost = nullptr);
         /**
          * @brief Creates and starts an isolated runtime clone after gating authored gameplay components against a module snapshot.
          * @param authoring Immutable committed authoring snapshot.
@@ -60,6 +71,8 @@ namespace Horo::Editor {
          * @param components Frozen component descriptor registry for the active project generation.
          * @param factory Explicit host composition; absence admits only assetless private callers with no optional native services.
          * @param triggerBinding Exact project capture used when conversion is required.
+         * @param viewSource Explicit authored-camera or selected-XR behavior.
+         * @param selectedXrHost Exact factory participant identity, mandatory for selected XR; outlives Play.
          * @return Accepted preparation or a typed Play-gate/conversion/runtime activation error.
          * @pre Registry/module ownership outlives pending preparation and Play; reload waits until readiness.
          * @details No normal-frame wait: presentation/fixed updates pump bounded Scene progress while Starting.
@@ -68,7 +81,9 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<void> Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
                                          const Gameplay::ComponentRegistry &components, const EditorPlaySceneFactory &factory = {},
-                                         const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
+                                         const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {},
+                                         EditorPlayViewSource viewSource = EditorPlayViewSource::AuthoredCamera,
+                                         const IEditorPlayXrHost *selectedXrHost = nullptr);
         /** @brief Pauses fixed simulation while leaving presentation active. */
         [[nodiscard]] Result<void> Pause();
         /** @brief Resumes continuous fixed simulation. */
@@ -118,6 +133,8 @@ namespace Horo::Editor {
         [[nodiscard]] DocumentRevision AuthoringRevision() const noexcept;
 
     private:
+        EditorPlayViewSource viewSource_{EditorPlayViewSource::AuthoredCamera};
+        const IEditorPlayXrHost *selectedXrHost_{};
         /** @brief Acquires one configured owner and admits its asynchronous Scene preparation without waiting. */
         [[nodiscard]] Result<void> BeginPreparation(Runtime::RuntimeSceneDefinition definition, const Gameplay::BehaviorRegistry &registry,
                                                     const EditorPlaySceneFactory &factory);

@@ -61,6 +61,65 @@ namespace Horo::XR::OpenXRInternal {
         NativeSwapchainRequest request;
         XRSwapchainImageId image;
         mutable bool releaseStateProved{};
+        Render::Detail::VulkanExternalViewDispatch viewDispatch;
+        Render::Detail::VulkanExternalNativeViews views;
+
+        ~Source() override {
+            if (request.texture.layerCount > 1)
+                for (auto view : views.layers)
+                    if (view != VK_NULL_HANDLE)
+                        viewDispatch.destroy(device, view, nullptr);
+            if (views.attachment != VK_NULL_HANDLE)
+                viewDispatch.destroy(device, views.attachment, nullptr);
+        }
+
+        Render::Detail::VulkanExternalNativeViews PreparedNativeViews() const noexcept override {
+            return views;
+        }
+
+        bool AdmitsFirstEyeGuiMirror(const Render::RenderTextureViewDescriptor &view) const noexcept override {
+            const auto format = request.texture.format;
+            return request.role == NativeSwapchainRole::Color && views.layerCount > 0 && views.layers[0] != VK_NULL_HANDLE &&
+                   (format == Render::RenderTextureFormat::Rgba8Unorm || format == Render::RenderTextureFormat::Bgra8Unorm) &&
+                   request.texture.layerCount >= 2 && Render::HasTextureUsage(request.texture.usage, Render::RenderTextureUsage::Sampled) &&
+                   view.format == format && view.aspect == Render::RenderTextureAspect::Color &&
+                   view.dimension == Render::RenderTextureViewDimension::TwoD && view.baseMip == 0 && view.mipCount == 1 &&
+                   view.baseLayer == 0 && view.layerCount == 1;
+        }
+
+        /** @brief Creates the exact immutable array/eye views cold, before acquisition publication. */
+        Result<void> PrepareViews() {
+            const bool depth = request.role == NativeSwapchainRole::Depth;
+            VkImageViewCreateInfo info{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                       .image = native,
+                                       .viewType = request.texture.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                                       .format = static_cast<VkFormat>(*NativeFormat(request.texture.format)),
+                                       .subresourceRange = {depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
+                                                            request.texture.layerCount}};
+            auto result = viewDispatch.create(device, &info, nullptr, &views.attachment);
+            if (result != VK_SUCCESS || views.attachment == VK_NULL_HANDLE) {
+                views.attachment = VK_NULL_HANDLE;
+                return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Preparing the native XR attachment view failed."));
+            }
+            if (request.texture.layerCount == 1) {
+                views.layers[0] = views.attachment;
+                views.layerCount = 1;
+                return Result<void>::Success();
+            }
+            info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            info.subresourceRange.layerCount = 1;
+            for (std::uint32_t layer = 0; layer < request.texture.layerCount; ++layer) {
+                info.subresourceRange.baseArrayLayer = layer;
+                result = viewDispatch.create(device, &info, nullptr, &views.layers[layer]);
+                if (result != VK_SUCCESS || views.layers[layer] == VK_NULL_HANDLE) {
+                    views.layers[layer] = VK_NULL_HANDLE;
+                    return Result<void>::Failure(
+                        MakeError(XRErrors::OperationUnavailable, "Preparing a native XR layer attachment view failed."));
+                }
+                ++views.layerCount;
+            }
+            return Result<void>::Success();
+        }
 
         Result<void> Validate() const override {
             if (binding->device != device || binding->queueFamilyIndex != family || binding->queueIndex != 0)
@@ -115,8 +174,9 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRVulkanSwapchainImages::OpenXRVulkanSwapchainImages */
     OpenXRVulkanSwapchainImages::OpenXRVulkanSwapchainImages(Render::RenderFrontend &frontend, IOpenXRGraphicsBinding &graphics,
-                                                             const XrGraphicsBindingVulkanKHR &binding, const Render::RenderQueueId queue)
-        : frontend_(&frontend), graphics_(&graphics), binding_(&binding), queue_(queue) {}
+                                                             const XrGraphicsBindingVulkanKHR &binding, const Render::RenderQueueId queue,
+                                                             const Render::Detail::VulkanExternalViewDispatch views)
+        : frontend_(&frontend), graphics_(&graphics), binding_(&binding), queue_(queue), views_(views) {}
 
     /** @copydoc OpenXRVulkanSwapchainImages::~OpenXRVulkanSwapchainImages */
     OpenXRVulkanSwapchainImages::~OpenXRVulkanSwapchainImages() {
@@ -134,11 +194,12 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRVulkanSwapchainImages::Validate */
     Result<void> OpenXRVulkanSwapchainImages::Validate(const NativeSwapchainRequest &request) const {
         if (owner_ == nullptr || binding_->type != XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR || binding_->device == VK_NULL_HANDLE ||
-            !queue_.IsValid() || binding_->queueIndex != 0 || !request.texture.IsValid())
+            !queue_.IsValid() || binding_->queueIndex != 0 || !request.texture.IsValid() || !views_.create || !views_.destroy)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (request.foveation != NativeSwapchainFoveation::None ||
             (request.role != NativeSwapchainRole::Color && request.role != NativeSwapchainRole::Depth) ||
             !NativeFormat(request.texture.format).has_value() || request.texture.sampleCount != 1 ||
+            request.texture.layerCount > Render::Detail::VulkanExternalNativeViews::MaximumLayers ||
             request.texture.dimension != Render::RenderTextureDimension::TwoD || request.texture.mipCount != 1 ||
             !Render::HasTextureUsage(request.texture.usage, Render::RenderTextureUsage::RenderAttachment))
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
@@ -159,7 +220,10 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRVulkanSwapchainImages::Enumerate */
-    Result<void> OpenXRVulkanSwapchainImages::Enumerate(const std::uint32_t count, const IOpenXRSwapchainImageEnumeration &enumeration) {
+    Result<void> OpenXRVulkanSwapchainImages::Enumerate(const NativeSwapchainRequest &request, const std::uint32_t count,
+                                                        const IOpenXRSwapchainImageEnumeration &enumeration) {
+        if (auto valid = Validate(request); valid.HasError())
+            return valid;
         if (!enumeration.IsAvailable() || count == 0 || count > sources_.size() || count_ != 0)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         std::array<XrSwapchainImageVulkanKHR, 64> images{};
@@ -192,6 +256,10 @@ namespace Horo::XR::OpenXRInternal {
             source->native = images[index].image;
             source->family = binding_->queueFamilyIndex;
             source->queue = queue_;
+            source->request = request;
+            source->viewDispatch = views_;
+            if (auto prepared = source->PrepareViews(); prepared.HasError())
+                return prepared;  // Prefix views stay owned until the canonical Reset before native swapchain destruction.
             sources_[index] = std::move(source);
             ++count_;
         }
@@ -211,7 +279,14 @@ namespace Horo::XR::OpenXRInternal {
         if (index >= count_ || imported_.IsValid())
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         const auto &source = sources_[index];
-        source->request = request;
+        const auto &prepared = source->request;
+        const auto &left = prepared.texture;
+        const auto &right = request.texture;
+        if (prepared.target != request.target || prepared.role != request.role || prepared.foveation != request.foveation ||
+            left.dimension != right.dimension || left.extent != right.extent || left.format != right.format ||
+            left.mipCount != right.mipCount || left.layerCount != right.layerCount || left.sampleCount != right.sampleCount ||
+            left.usage != right.usage || left.depth != right.depth || source->views.attachment == VK_NULL_HANDLE)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         source->image = image;
         source->releaseStateProved = false;
         auto imported = Render::Detail::RenderExternalTextureAccess::Import(*frontend_, source);

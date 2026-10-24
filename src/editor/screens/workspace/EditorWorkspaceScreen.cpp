@@ -16,7 +16,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         : packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
           modalHost_(services.Get<EditorModalHost>()), context_(services.GetConst<EditorGuiContext>()),
           contributions_{services.Get<WorkspacePanelRegistry>(), services.Get<EditorStatusItemRegistry>()},
-          input_(services.Get<Input::InputRouter>()),
+          input_(services.Get<Input::InputRouter>()), xr_{services.TryGet<IEditorPlayXrHost>()},
           view_(context_, contributions_.panels, services.Get<std::uintptr_t>(), input_.router, input_.context,
                 services.TryGet<Extensions::EditorActivityHost>(), services.TryGet<IEditorGuiRenderer>()),
           viewportSceneState_(services.Get<EditorViewportSceneState>()), runtimeScene_(services.Get<Runtime::RuntimeSceneService>()),
@@ -67,6 +67,15 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
         host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
         LoadProjectInputProfile(controller_->ViewModel().projectRoot);
+        if (auto attached = AttachXrInput(); attached.HasError()) {
+            if (input_.previousProfile) {
+                if (auto restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError())
+                    LOG_ERROR("editor.input", "Failed to restore the host profile after XR admission: %s",
+                              restored.ErrorValue().message.c_str());
+                input_.previousProfile.reset();
+            }
+            return attached;
+        }
         RestoreExtensionWorkspace();
         viewportSceneState_.Replace(controller_->ViewportScene());
         publishedRevisions_.scene = controller_->ViewportScene().documentRevision;
@@ -124,6 +133,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnInputSnapshot */
     void EditorWorkspaceScreen::OnInputSnapshot() {
+        ObserveXrPlayState();
         if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
                              controller_->ViewModel().playState != EditorPlayState::Paused)) {
             input_.gameplayFrames.Reset();

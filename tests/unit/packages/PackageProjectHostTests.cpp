@@ -151,4 +151,58 @@ namespace {
         REQUIRE(fixture.host->Close().HasValue());
         CHECK(application->Restore().HasError());
     }
+
+    TEST_CASE("Package installed snapshot fences exact fresh owner generation without restoring", "[packages][application][host]") {
+        HostFixture fixture;
+        auto application = fixture.Acquire();
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto generation = fixture.host->Generation();
+        const auto empty = fixture.host->InstalledRecord(root, generation);
+        REQUIRE(empty.HasValue());
+        CHECK_FALSE(empty.Value());
+        CHECK(fixture.source.calls == 0);
+        CHECK(fixture.host->InstalledRecord(root, 0).HasError());
+        CHECK(fixture.host->InstalledRecord(root, generation + 1).HasError());
+        CHECK(fixture.host->InstalledRecord(fixture.content.Path(), generation).HasError());
+        bool foreignRejected{};
+        std::thread foreign{[&] {
+            foreignRejected = fixture.host->InstalledRecord(root, generation).HasError();
+        }};
+        foreign.join();
+        CHECK(foreignRejected);
+        fixture.clock.now = Duration::FromMilliseconds(1001);
+        CHECK(fixture.host->InstalledRecord(root, generation).HasError());
+        CHECK(fixture.source.calls == 0);
+    }
+
+    TEST_CASE("Package installed snapshot retains sealed bytes after exact project retirement", "[packages][application][host]") {
+        HostFixture fixture;
+        auto application = fixture.Acquire();
+        const auto operation = application->Install();
+        REQUIRE(operation.HasValue());
+        bool installed{};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (std::chrono::steady_clock::now() < deadline) {
+            REQUIRE(fixture.host->Pump(Packages::PackageActivationBoundary::Quiescent).HasValue());
+            const auto current = application->Query(operation.Value());
+            REQUIRE(current.HasValue());
+            if (current.Value().outcome != PackageOperationOutcome::Running) {
+                REQUIRE(current.Value().outcome == PackageOperationOutcome::Succeeded);
+                installed = true;
+                break;
+            }
+            std::this_thread::yield();
+        }
+        REQUIRE(installed);
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        const auto generation = fixture.host->Generation();
+        auto snapshot = fixture.host->InstalledRecord(root, generation);
+        REQUIRE(snapshot.HasValue());
+        REQUIRE(snapshot.Value());
+        REQUIRE(snapshot.Value()->Revision() != 0);
+        REQUIRE(fixture.host->Retire(root).HasValue());
+        CHECK(fixture.host->InstalledRecord(root, generation).HasError());
+        REQUIRE(snapshot.Value()->Graph()->packages.size() == 1);
+        CHECK(snapshot.Value()->Graph()->packages.front().archive->Digest() == fixture.graph.archive.Digest());
+    }
 }  // namespace

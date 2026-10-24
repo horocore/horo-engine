@@ -1,5 +1,7 @@
+#include "support/AllocationProbe.h"
 #include "support/renderer/MultiviewTestSupport.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
@@ -30,6 +32,17 @@ namespace Horo::Render {
         const std::array<std::uint32_t, 2> layers{1, 0};
         const auto packed = PackMultiviewShaderParameters(layout, views, model, layers);
         REQUIRE(packed.HasValue());
+        std::array<std::byte, 256> slot;
+        slot.fill(std::byte{0xA5});
+        const auto before = slot;
+        const auto allocations = Horo::Tests::AllocationProbe::Count();
+        const auto written = PackMultiviewShaderParameters(layout, views, model, layers, slot);
+        const auto after = Horo::Tests::AllocationProbe::Count();
+        REQUIRE(written.HasValue());
+        REQUIRE(after == allocations);
+        REQUIRE(written.Value() == packed.Value().bytes.size());
+        REQUIRE(std::ranges::equal(std::span{slot}.first(written.Value()), packed.Value().bytes));
+        REQUIRE(std::ranges::equal(std::span{slot}.subspan(written.Value()), std::span{before}.subspan(written.Value())));
         CHECK(packed.Value().bytes.size() == ComputeMaterialParameterBufferByteSize(layout, {1}).Value());
         const auto translation = [columnMajor](const std::size_t row) {
             return columnMajor ? 48 + row * 4 : row * 16 + 12;
@@ -62,5 +75,10 @@ namespace Horo::Render {
             layout.parameters[0].matrixStride = 4;
         }
         REQUIRE(PackMultiviewShaderParameters(layout, views, Math::Mat4::Identity(), layers).HasError());
+        std::array<std::byte, 256> slot;
+        slot.fill(std::byte{0xA5});
+        const auto original = slot;
+        REQUIRE(PackMultiviewShaderParameters(layout, views, Math::Mat4::Identity(), layers, slot).HasError());
+        REQUIRE(slot == original);
     }
 }  // namespace Horo::Render

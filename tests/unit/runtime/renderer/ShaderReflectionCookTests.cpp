@@ -180,3 +180,53 @@ TEST_CASE("Viewport reflection requires the exact admitted DXC block type identi
     REQUIRE(normalized.HasError());
     CHECK(normalized.ErrorValue().message.find("uniform block identity") != std::string::npos);
 }
+
+TEST_CASE("Canonical multiview consumer requires actual bound reflection and closed position/uniform ABI", "[renderer][shader-cook][xr]") {
+    // Scripted Cross schema tests the production admission/codec, not actual compiler/native execution.
+    std::array<SpirvReflectionStage, 2> stages{{{ShaderStage::Vertex, "VSMain", R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
+          "inputs":[{"name":"position","type":"vec3","location":0}],
+          "types":{"_1":{"members":[
+            {"name":"WorldToClip","type":"mat4","offset":0,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64},
+            {"name":"LocalToWorld","type":"mat4","offset":2048,"matrix_stride":16},
+            {"name":"ViewLayers","type":"uint","offset":2112,"array":[32],"array_size_is_literal":[true],"array_stride":16}]}},
+          "ubos":[{"type":"_1","name":"type.MultiviewParameters","block_size":2624,"set":0,"binding":0}]})"},
+                                                {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}],
+          "outputs":[{"name":"color","type":"vec4","location":0}]})"}}};
+    bool invalidAttributes{};
+    bool alteredPayload{};
+    SECTION("exact position-only optimized interface") {}
+    SECTION("foreign attribute width") {
+        ReplaceEvidence(stages[0].json, "\"type\":\"vec3\"", "\"type\":\"vec2\"");
+        invalidAttributes = true;
+    }
+    SECTION("altered compiled payload") {
+        alteredPayload = true;
+    }
+    const auto normalized = NormalizeVulkanReflection(EditorVulkanMultiviewShaderManifest(), EditorVulkanViewportShaderTarget(), stages,
+                                                      EditorVulkanMultiviewReflectionNames());
+    REQUIRE(normalized.HasValue());
+    const std::array packageStages{ShaderArtifactStage{ShaderStage::Vertex, "VSMain", {1}},
+                                   ShaderArtifactStage{ShaderStage::Fragment, "PSMain", {2}}};
+    const auto payload = PackageShaderArtifactStages(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, packageStages, 1024);
+    REQUIRE(payload.HasValue());
+    CompiledShaderArtifact compiled{.backend = ShaderTargetBackend::Vulkan,
+                                    .payloadFormat = ShaderPayloadFormat::SpirV16,
+                                    .artifactKey = ComputeSha256(std::as_bytes(std::span{payload.Value()})),
+                                    .payload = payload.Value()};
+    const auto cooked =
+        CookReflectedShaderArtifact(compiled, {ShaderCompilerTool::SpirvCross, "scripted-official-schema", compiled.artifactKey},
+                                    normalized.Value());
+    REQUIRE(cooked.HasValue());
+    const auto encoded = EncodeReflectedShaderArtifact(cooked.Value());
+    REQUIRE(encoded.HasValue());
+    if (alteredPayload)
+        compiled.payload.back() ^= 1;
+    const auto loaded = LoadEditorVulkanMultiviewCook(compiled.payload, encoded.Value());
+    if (invalidAttributes || alteredPayload)
+        REQUIRE(loaded.HasError());
+    else {
+        REQUIRE(loaded.HasValue());
+        REQUIRE(loaded.Value().metadata.cookedArtifactKey == cooked.Value().cookedArtifactKey);
+        REQUIRE(LoadEditorVulkanViewportCook(compiled.payload, encoded.Value()).HasError());
+    }
+}

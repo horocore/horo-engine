@@ -110,8 +110,10 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::optional<Error> ValidatePlayPrerequisites(const SceneDocumentSnapshot &authoring,
-                                                                     const Gameplay::ComponentRegistry &components) {
-            if (std::ranges::none_of(authoring.objects, [](const SceneObjectSnapshot &object) {
+                                                                     const Gameplay::ComponentRegistry &components,
+                                                                     const EditorPlayViewSource viewSource) {
+            if (viewSource == EditorPlayViewSource::AuthoredCamera &&
+                std::ranges::none_of(authoring.objects, [](const SceneObjectSnapshot &object) {
                 return object.components.camera.has_value() && object.components.camera->enabled;
             }))
                 return InvalidTransition("Play Mode requires an authored camera component.");
@@ -125,27 +127,39 @@ namespace Horo::Editor {
     /** @copydoc EditorPlaySessionController::Start */
     Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
                                                     const EditorPlaySceneFactory &factory,
-                                                    const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding) {
+                                                    const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding,
+                                                    const EditorPlayViewSource viewSource, const IEditorPlayXrHost *selectedXrHost) {
         static const Gameplay::ComponentRegistry missingComponents = [] {
             Gameplay::ComponentRegistry registry;
             static_cast<void>(registry.Freeze());
             return registry;
         }();
-        return Start(authoring, registry, missingComponents, factory, triggerBinding);
+        return Start(authoring, registry, missingComponents, factory, triggerBinding, viewSource, selectedXrHost);
     }
 
     /** @copydoc EditorPlaySessionController::Start */
     Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
                                                     const Gameplay::ComponentRegistry &components, const EditorPlaySceneFactory &factory,
-                                                    const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding) {
+                                                    const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding,
+                                                    const EditorPlayViewSource viewSource, const IEditorPlayXrHost *selectedXrHost) {
         if (state_ != EditorPlaySessionState::Idle && state_ != EditorPlaySessionState::Failed)
             return Result<void>::Failure(InvalidTransition("A play session is already active."));
         Stop();
         state_ = EditorPlaySessionState::Starting;
         lastError_.reset();
         authoringRevision_ = authoring.revision;
+        if (viewSource > EditorPlayViewSource::SelectedXr ||
+            (viewSource == EditorPlayViewSource::SelectedXr && (!factory || !selectedXrHost)) ||
+            (viewSource == EditorPlayViewSource::AuthoredCamera && selectedXrHost)) {
+            const auto error = InvalidTransition("Selected XR Play requires its actual application factory and host.");
+            Fail(error);
+            return Result<void>::Failure(error);
+        }
+        viewSource_ = viewSource;
+        selectedXrHost_ = selectedXrHost;
 
-        if (std::optional<Error> prerequisiteError = ValidatePlayPrerequisites(authoring, components); prerequisiteError.has_value()) {
+        if (std::optional<Error> prerequisiteError = ValidatePlayPrerequisites(authoring, components, viewSource_);
+            prerequisiteError.has_value()) {
             Error error = std::move(*prerequisiteError);
             Fail(error);
             return Result<void>::Failure(std::move(error));
@@ -185,6 +199,8 @@ namespace Horo::Editor {
             return Result<void>::Failure(prepared.ErrorValue());
         if (!prepared.Value())
             return Result<void>::Failure(InvalidTransition("The Play Scene host is unavailable."));
+        if (viewSource_ == EditorPlayViewSource::SelectedXr && prepared.Value()->SelectedXrHost() != selectedXrHost_)
+            return Result<void>::Failure(InvalidTransition("Play factory does not own the selected XR participant."));
         sceneHost_ = std::move(prepared).Value();
         ++nextRuntimeId_;
         preparationCancellation_ = CancellationSource{};

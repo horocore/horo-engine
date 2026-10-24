@@ -1,4 +1,8 @@
 #include "SceneDocumentTestSupport.h"
+#include "editor/renderer/xr/EditorXrSceneGeometry.h"
+#include "editor/renderer/xr/EditorXrTrackingRoot.h"
+
+#include <thread>
 
 namespace {
     using namespace Horo::Editor::SceneDocumentTestSupport;
@@ -63,6 +67,116 @@ namespace {
         return {parent.Value().object, lightObject.Value().object, *components.light};
     }
 
+    TEST_CASE("XR camera-free geometry pins the canonical meshes and rejects stale workspace or candidate mappings", "[unit][editor][xr]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeHierarchyScene(document);
+        Runtime::PrimitiveMeshCache primitives;
+        EditorAssetMeshCache assets;
+        auto owner = std::make_unique<EditorXrSceneSourceOwner>(document, primitives, assets);
+        const auto port = owner->Port();
+        auto scene = MakeRuntimeScene(document);
+        const auto revision = scene->View().DefinitionRevision();
+        REQUIRE(revision.value == document.State().value);
+        REQUIRE(revision.value != document.Revision().value);
+        REQUIRE(port.Capture({document.Revision().value}, scene->View()).HasError());
+        REQUIRE(port.Capture({revision.value + 1}, scene->View()).HasError());
+        auto captured = port.Capture(revision, scene->View());
+        REQUIRE(captured.HasValue());
+        auto prepared = std::move(captured).Value();
+        REQUIRE(prepared->Resources().size() == 1);
+        auto instances = prepared->Update(scene->View());
+        REQUIRE(instances.HasValue());
+        REQUIRE(instances.Value().size() == 1);
+        const auto origin = Math::TransformPoint(instances.Value()[0].localToWorld, {});
+        CHECK(NearlyEqual(origin.x, 2.0F));
+        CHECK(NearlyEqual(origin.y, 3.0F));
+        const auto desktop = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, primitives);
+        REQUIRE(desktop.HasValue());
+        CHECK(desktop.Value().instances[0].mesh == instances.Value()[0].mesh);
+        CHECK(desktop.Value().instanceObjects[0] == objects.child);
+        CHECK(prepared->Resources()[0].vertices.data() == desktop.Value().meshResources[0].vertices.data());
+        SECTION("foreign Scene occurrence cannot reuse the authored IDs") {
+            auto definition = ConvertSceneDocumentToRuntime(document.Snapshot(), Runtime::SceneDefinitionId{1});
+            REQUIRE(definition.HasValue());
+            auto other = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{2});
+            REQUIRE(other.HasValue());
+            CHECK(prepared->Update(other.Value()->View()).HasError());
+        }
+        SECTION("source edit revokes before candidate access") {
+            EditorHistory history;
+            SceneDocumentCommandExecutor commands(document, history);
+            REQUIRE(commands.Execute(CreateSceneObjectCommand{.name = "New source revision"}).HasValue());
+            CHECK(prepared->ValidateSource().HasError());
+            CHECK(prepared->Update(scene->View()).HasError());
+        }
+        SECTION("cache reload retires the prior source incarnation without dropping its owned payload") {
+            const auto *vertices = prepared->Resources()[0].vertices.data();
+            assets.Clear();
+            CHECK(prepared->ValidateSource().HasError());
+            CHECK(prepared->Resources()[0].vertices.data() == vertices);
+        }
+        SECTION("explicit cancellation does not discard queued mesh leases") {
+            prepared->Revoke();
+            CHECK(prepared->Update(scene->View()).HasError());
+            CHECK(prepared->Resources()[0].IsValid());
+        }
+        SECTION("wrong lane rejects without borrowing document or caches") {
+            bool rejected = false;
+            std::thread worker([&] {
+                rejected = prepared->ValidateSource().HasError();
+            });
+            worker.join();
+            CHECK(rejected);
+        }
+        SECTION("retired workspace cannot be revived by its weak port") {
+            owner.reset();
+            CHECK(prepared->ValidateSource().HasError());
+            CHECK(port.Capture(revision, scene->View()).HasError());
+            CHECK(prepared->Resources()[0].IsValid());
+        }
+    }
+
+    TEST_CASE("XR strict geometry admission keeps the original desktop instance capacity", "[unit][editor][xr]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands(document, history);
+        for (std::size_t index = 0; index <= PreparedEditorXrGeometry::MaximumInstances; ++index)
+            REQUIRE(
+                commands.Execute(CreateSceneObjectCommand{.name = "Box", .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}}).HasValue());
+        Runtime::PrimitiveMeshCache primitives;
+        EditorAssetMeshCache assets;
+        EditorXrSceneSourceOwner owner(document, primitives, assets);
+        auto scene = MakeRuntimeScene(document);
+        CHECK(owner.Port().Capture(scene->View().DefinitionRevision(), scene->View()).HasError());
+        const auto desktop = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, primitives);
+        REQUIRE(desktop.HasValue());
+        CHECK(desktop.Value().instances.size() == PreparedEditorXrGeometry::MaximumInstances + 1);
+    }
+
+    TEST_CASE("XR imported geometry absence is a strict error while desktop retains its prior omission policy", "[unit][editor][xr]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands(document, history);
+        const auto asset = Assets::AssetId::Parse("00112233-4455-6677-8899-aabbccddeeff");
+        REQUIRE(asset.HasValue());
+        REQUIRE(commands.Execute(CreateSceneObjectCommand{.name = "Imported", .meshAsset = asset.Value()}).HasValue());
+        Runtime::PrimitiveMeshCache primitives;
+        EditorAssetMeshCache assets;
+        EditorXrSceneSourceOwner owner(document, primitives, assets);
+        auto scene = MakeRuntimeScene(document);
+        CHECK(owner.Port().Capture(scene->View().DefinitionRevision(), scene->View()).HasError());
+        const auto snapshot = document.Snapshot();
+        const auto desktop = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, primitives, &snapshot, &assets);
+        REQUIRE(desktop.HasValue());
+        CHECK(desktop.Value().instances.empty());
+    }
+
     TEST_CASE("Extraction Resolves Hierarchy Into World Matrices", "[unit][editor]") {
         using namespace Horo;
         using namespace Horo::Editor;
@@ -86,6 +200,37 @@ namespace {
         const Math::Vec3 resolvedParentOrigin = Math::TransformPoint(resolved.Value().parentToWorld, {});
         REQUIRE((NearlyEqual(resolvedOrigin.x, 2.0F) && NearlyEqual(resolvedOrigin.y, 3.0F)));
         REQUIRE((NearlyEqual(resolvedParentOrigin.x, 2.0F) && NearlyEqual(resolvedParentOrigin.y, 0.0F)));
+    }
+
+    TEST_CASE("XR tracking root resolves exact authored rigid hierarchy and rejects missing or scaled placement", "[unit][editor][xr]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        auto scene = MakeRuntimeScene(document);
+        const auto root = ResolveXrTrackingRoot(scene->View(), Runtime::SceneObjectId{objects.light.value});
+        REQUIRE(root.HasValue());
+        CHECK(NearlyEqual(root.Value().translation.x, 2.0F));
+        CHECK(NearlyEqual(root.Value().translation.y, 3.0F));
+        const auto direction = root.Value().rotation.Rotate({0.0F, 0.0F, -1.0F});
+        CHECK(NearlyEqual(direction.x, -1.0F));
+        CHECK(NearlyEqual(direction.z, 0.0F));
+        CHECK(ResolveXrTrackingRoot(scene->View(), Runtime::SceneObjectId{}).HasError());
+        CHECK(ResolveXrTrackingRoot(scene->View(), Runtime::SceneObjectId{999999}).HasError());
+        const auto stale = scene->View();
+        scene.reset();
+        CHECK(ResolveXrTrackingRoot(stale, Runtime::SceneObjectId{objects.light.value}).HasError());
+
+        EditorHistory history;
+        SceneDocument scaledDocument;
+        SceneDocumentCommandExecutor commands{scaledDocument, history};
+        for (const auto scale : {Math::Vec3{1.0F, 2.0F, 1.0F}, Math::Vec3{-1.0F, 1.0F, 1.0F}}) {
+            const auto created = commands.Execute(
+                CreateSceneObjectCommand{.name = "Invalid tracking root", .localTransform = Math::Transform{.scale = scale}});
+            REQUIRE(created.HasValue());
+            auto scaled = MakeRuntimeScene(scaledDocument);
+            CHECK(ResolveXrTrackingRoot(scaled->View(), Runtime::SceneObjectId{created.Value().object.value}).HasError());
+        }
     }
 
     TEST_CASE("Extraction Applies Hierarchy Transform Previews", "[unit][editor]") {

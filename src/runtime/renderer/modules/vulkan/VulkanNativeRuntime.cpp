@@ -104,7 +104,17 @@ namespace Horo::Render {
                     return Result<void>::Failure(MissingEntryPoint("vkGetInstanceProcAddr"));
                 }
                 loaderAcquired_ = true;
+                auto requirements = loaderPort_->RequiredGraphicsRequirements();
+                if (requirements.HasError())
+                    return Result<void>::Failure(requirements.ErrorValue());
+                enabledGraphics_.host.emplace(std::move(requirements).Value());
                 return Result<void>::Success();
+            }
+
+            Result<VulkanHostGraphicsRequirements> RequiredGraphicsRequirements() override {
+                if (!loaderAcquired_ || !enabledGraphics_.host)
+                    return Result<VulkanHostGraphicsRequirements>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
+                return Result<VulkanHostGraphicsRequirements>::Success(*enabledGraphics_.host);
             }
 
             Result<VulkanLoaderCapabilities> QueryLoaderCapabilities() override {
@@ -152,7 +162,18 @@ namespace Horo::Render {
             }
 
             Result<void> CreateInstance(const VulkanInstanceRequest &request) override {
-                const std::vector<const char *> extensionNames = NativeNames(request.enabledExtensions);
+                if (instance_ != VK_NULL_HANDLE)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::AlreadyInitialized));
+                const auto admitted = request;
+                if (!enabledGraphics_.host)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
+                if (!enabledGraphics_.host->Allows(admitted.apiVersion))
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::LoaderVersionUnsupported));
+                if (!std::ranges::all_of(enabledGraphics_.host->Instance(), [&admitted](const auto &name) {
+                    return std::ranges::find(admitted.enabledExtensions, name) != admitted.enabledExtensions.end();
+                }))
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::InstanceExtensionMissing));
+                const std::vector<const char *> extensionNames = NativeNames(admitted.enabledExtensions);
                 const auto extensionCount = static_cast<std::uint32_t>(extensionNames.size());
                 const char *validationLayer = "VK_LAYER_KHRONOS_validation";
                 const VkApplicationInfo applicationInfo{
@@ -161,13 +182,13 @@ namespace Horo::Render {
                     .applicationVersion = VK_MAKE_API_VERSION(0, 0, 1, 0),
                     .pEngineName = "Horo Engine",
                     .engineVersion = VK_MAKE_API_VERSION(0, 0, 1, 0),
-                    .apiVersion = VK_MAKE_API_VERSION(0, request.apiVersion.major, request.apiVersion.minor, request.apiVersion.patch),
+                    .apiVersion = VK_MAKE_API_VERSION(0, admitted.apiVersion.major, admitted.apiVersion.minor, admitted.apiVersion.patch),
                 };
                 const VkInstanceCreateInfo createInfo{
                     .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                     .pApplicationInfo = &applicationInfo,
-                    .enabledLayerCount = request.enableValidation ? 1U : 0U,
-                    .ppEnabledLayerNames = request.enableValidation ? &validationLayer : nullptr,
+                    .enabledLayerCount = admitted.enableValidation ? 1U : 0U,
+                    .ppEnabledLayerNames = admitted.enableValidation ? &validationLayer : nullptr,
                     .enabledExtensionCount = extensionCount,
                     .ppEnabledExtensionNames = extensionNames.data(),
                 };
@@ -176,7 +197,7 @@ namespace Horo::Render {
                 }
                 if (auto loaded = LoadInstanceDispatch(); loaded.HasError())
                     return loaded;
-                if (std::ranges::find(request.enabledExtensions, VK_KHR_SURFACE_EXTENSION_NAME) != request.enabledExtensions.end()) {
+                if (std::ranges::find(admitted.enabledExtensions, VK_KHR_SURFACE_EXTENSION_NAME) != admitted.enabledExtensions.end()) {
                     auto created = loaderPort_->CreatePresentationSurface(instance_);
                     if (created.HasError())
                         return Result<void>::Failure(created.ErrorValue());
@@ -184,6 +205,8 @@ namespace Horo::Render {
                         return Result<void>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported));
                     surface_ = created.Value();
                 }
+                enabledGraphics_.api = admitted.apiVersion;
+                enabledGraphics_.instanceExtensions = admitted.enabledExtensions;
                 return Result<void>::Success();
             }
 
@@ -236,29 +259,48 @@ namespace Horo::Render {
                 return queueInfoCount;
             }
 
+            /** @brief Revalidates the same-instance runtime device and exact required extension request before native creation. */
+            Result<void> ValidateHostDevice(const VkPhysicalDevice device, const VulkanDeviceRequest &request) const {
+                const auto allowed = loaderPort_->AcceptPhysicalDevice(instance_, device);
+                if (allowed.HasError())
+                    return Result<void>::Failure(allowed.ErrorValue());
+                if (!allowed.Value() || !enabledGraphics_.host)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::AdapterRequirementsUnsupported));
+                if (!std::ranges::all_of(enabledGraphics_.host->Device(), [&request](const auto &name) {
+                    return std::ranges::find(request.enabledExtensions, name) != request.enabledExtensions.end();
+                }))
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::DeviceExtensionMissing));
+                return Result<void>::Success();
+            }
+
             Result<void> CreateDevice(const VulkanDeviceRequest &request) override {
-                const auto selected = std::ranges::find(nativeAdapters_, request.adapter, &NativeAdapter::id);
+                if (device_ != VK_NULL_HANDLE)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::AlreadyInitialized));
+                const auto admitted = request;
+                const auto selected = std::ranges::find(nativeAdapters_, admitted.adapter, &NativeAdapter::id);
                 if (selected == nativeAdapters_.end()) {
                     return Result<void>::Failure(MakeError(VulkanBackendErrors::AdapterNotFound));
                 }
+                if (const auto host = ValidateHostDevice(selected->device, admitted); host.HasError())
+                    return host;
                 constexpr float priority{1.0F};
                 std::array<VkDeviceQueueCreateInfo, 3> queueInfos{};
-                const auto queueInfoCount = PrepareDeviceQueues(request, priority, queueInfos);
-                const std::vector<const char *> extensionNames = NativeNames(request.enabledExtensions);
+                const auto queueInfoCount = PrepareDeviceQueues(admitted, priority, queueInfos);
+                const std::vector<const char *> extensionNames = NativeNames(admitted.enabledExtensions);
                 VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT
                     maintenance{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
-                                .swapchainMaintenance1 = request.enableSwapchainMaintenance};
+                                .swapchainMaintenance1 = admitted.enableSwapchainMaintenance};
                 VkPhysicalDeviceVulkan13Features features13{
                     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-                    .pNext = request.enableSwapchainMaintenance ? &maintenance : nullptr,
-                    .synchronization2 = request.enabledFeatures.synchronization2,
-                    .dynamicRendering = request.enabledFeatures.dynamicRendering,
+                    .pNext = admitted.enableSwapchainMaintenance ? &maintenance : nullptr,
+                    .synchronization2 = admitted.enabledFeatures.synchronization2,
+                    .dynamicRendering = admitted.enabledFeatures.dynamicRendering,
                 };
                 const VkPhysicalDeviceVulkan12Features features12{
                     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                     .pNext = &features13,
-                    .timelineSemaphore = request.enabledFeatures.timelineSemaphore,
-                    .shaderOutputLayer = request.enableVertexLayerRouting,
+                    .timelineSemaphore = admitted.enabledFeatures.timelineSemaphore,
+                    .shaderOutputLayer = admitted.enableVertexLayerRouting,
                 };
                 const VkDeviceCreateInfo createInfo{
                     .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -272,10 +314,13 @@ namespace Horo::Render {
                     result != VK_SUCCESS) {
                     return Result<void>::Failure(NativeFailure("vkCreateDevice", result));
                 }
-                if (auto dispatch = LoadDeviceDispatch(request); dispatch.HasError()) {
+                if (auto dispatch = LoadDeviceDispatch(admitted); dispatch.HasError()) {
                     return dispatch;
                 }
-                return InitializeResources(selected->device, request);
+                auto initialized = InitializeResources(selected->device, admitted);
+                if (initialized.HasValue())
+                    enabledGraphics_.deviceExtensions = admitted.enabledExtensions;
+                return initialized;
             }
 
             /** @brief Binds borrowed editor device facts and validates their canonical graphics queue role. */
@@ -488,6 +533,7 @@ namespace Horo::Render {
                     dispatch_.destroyDevice(device_, nullptr);
                 }
                 device_ = VK_NULL_HANDLE;
+                enabledGraphics_.deviceExtensions.clear();
                 graphicsQueue_ = VK_NULL_HANDLE;
                 presentationQueue_ = VK_NULL_HANDLE;
                 transferQueue_ = VK_NULL_HANDLE;
@@ -505,6 +551,8 @@ namespace Horo::Render {
                     dispatch_.destroyInstance(instance_, nullptr);
                 }
                 instance_ = VK_NULL_HANDLE;
+                enabledGraphics_.instanceExtensions.clear();
+                enabledGraphics_.api = {};
                 ClearInstanceDispatch();
             }
 
@@ -514,6 +562,7 @@ namespace Horo::Render {
                     loaderPort_->ReleaseLoader();
                 }
                 loaderAcquired_ = false;
+                enabledGraphics_.host.reset();
                 dispatch_.getInstanceProcAddr = nullptr;
                 dispatch_.createInstance = nullptr;
             }
@@ -681,6 +730,9 @@ namespace Horo::Render {
                 if (queues.HasError()) {
                     return Result<VulkanAdapterCandidate>::Failure(std::move(queues).ErrorValue());
                 }
+                const auto hostAllowed = loaderPort_->AcceptPhysicalDevice(instance_, device);
+                if (hostAllowed.HasError())
+                    return Result<VulkanAdapterCandidate>::Failure(hostAllowed.ErrorValue());
                 auto driverAllowed = loaderPort_->IsDriverAllowed(properties.properties);
                 if (driverAllowed.HasError()) {
                     return Result<VulkanAdapterCandidate>::Failure(std::move(driverAllowed).ErrorValue());
@@ -702,6 +754,7 @@ namespace Horo::Render {
                     .standardApiVariant = VK_API_VERSION_VARIANT(properties.properties.apiVersion) == 0,
                     .portabilitySubset = portabilitySubset,
                     .driverAllowed = driverAllowed.Value(),
+                    .hostAllowed = hostAllowed.Value(),
                     .vertexLayerRouting = features12.shaderOutputLayer == VK_TRUE,
                     .swapchainMaintenance = hasMaintenance && maintenance.swapchainMaintenance1 == VK_TRUE,
                 });
@@ -820,6 +873,13 @@ namespace Horo::Render {
             RenderTimelinePoint presentationCompletion_;
             PrimaryOutputAttachment presentationOutput_;
             bool primaryOutputPrepared_{};
+
+            struct EnabledGraphicsState {
+                std::optional<VulkanHostGraphicsRequirements> host;
+                VulkanApiVersion api;
+                std::vector<std::string> instanceExtensions;
+                std::vector<std::string> deviceExtensions;
+            } enabledGraphics_;
 
             VkInstance instance_{VK_NULL_HANDLE};
 

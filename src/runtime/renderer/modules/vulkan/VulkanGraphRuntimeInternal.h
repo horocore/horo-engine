@@ -117,6 +117,7 @@ namespace Horo::Render::Detail {
 
         std::array<GuiSamplePlan, GuiCompositionPreparation::MaximumResources> guiPlans;
         RenderGraphExecutionRange guiBufferBarriers;
+        RenderGraphExecutionRange guiExternalFinalBarriers;
         std::optional<RenderQueueSubmission> guiSubmission;
         std::array<RenderTimelinePoint, RenderGraphSubmissionLimits::MaximumQueues> guiWaits;
         std::array<GuiSampledResourceInstance, GuiCompositionPreparation::MaximumResources> guiIdentities;

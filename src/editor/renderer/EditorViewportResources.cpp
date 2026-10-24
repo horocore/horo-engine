@@ -10,6 +10,11 @@
 #include <utility>
 
 namespace Horo::Editor {
+    /** @copydoc EditorViewportResources::PrepareMeshes */
+    Result<void> EditorViewportResources::PrepareMeshes(std::span<const EditorViewportMeshResourceView> resources) {
+        return SynchronizeMeshes(resources);
+    }
+
     namespace {
         [[nodiscard]] Error MakeViewportError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
@@ -106,7 +111,7 @@ namespace Horo::Editor {
 
     std::optional<EditorViewportResources::MeshBinding> EditorViewportResources::FindMesh(const std::uint64_t sourceId) const noexcept {
         if (const auto mesh = meshes_.find(sourceId); mesh != meshes_.end())
-            return MeshBinding{mesh->second.mesh, mesh->second.indexCount};
+            return MeshBinding{mesh->second.mesh, mesh->second.indexCount, mesh->second.descriptor};
         return std::nullopt;
     }
 
@@ -199,18 +204,20 @@ namespace Horo::Editor {
         if (indexReady.HasError())
             return Result<bool>::Failure(indexReady.ErrorValue());
         if (!resident.mesh.IsValid() && vertexReady.Value() && indexReady.Value()) {
-            auto mesh = frontend_->CreateMesh({.vertexBuffer = resident.vertexBuffer,
-                                               .indexBuffer = resident.indexBuffer,
-                                               .vertexStride = sizeof(Render::MeshVertex),
-                                               .vertexCount = static_cast<std::uint32_t>(resource.vertices.size()),
-                                               .indexFormat = Render::RenderIndexFormat::UInt32,
-                                               .indexCount = resident.indexCount,
-                                               .topology = Render::RenderPrimitiveTopology::Triangles,
-                                               .localBounds = resource.localBounds});
+            const Render::RenderMeshDescriptor descriptor{.vertexBuffer = resident.vertexBuffer,
+                                                          .indexBuffer = resident.indexBuffer,
+                                                          .vertexStride = sizeof(Render::MeshVertex),
+                                                          .vertexCount = static_cast<std::uint32_t>(resource.vertices.size()),
+                                                          .indexFormat = Render::RenderIndexFormat::UInt32,
+                                                          .indexCount = resident.indexCount,
+                                                          .topology = Render::RenderPrimitiveTopology::Triangles,
+                                                          .localBounds = resource.localBounds};
+            auto mesh = frontend_->CreateMesh(descriptor);
             if (mesh.HasError())
                 return Result<bool>::Failure(mesh.ErrorValue());
             resident.mesh = mesh.Value().handle;
             resident.meshOperation = mesh.Value().operation;
+            resident.descriptor = descriptor;
         }
         return ResourceReady(*frontend_, resident.mesh, resident.meshOperation);
     }

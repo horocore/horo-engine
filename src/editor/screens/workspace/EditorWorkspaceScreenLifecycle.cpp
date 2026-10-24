@@ -111,6 +111,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnLeave */
     void EditorWorkspaceScreen::OnLeave() {
+        DetachXrInput();
         workspaceControllerLifetime_.reset();
         view_.ResetSourceSession();
         sourceCommands_.EndSession();

@@ -10,10 +10,17 @@
 
 #include <compare>
 #include <cstddef>
+#include <memory>
 #include <span>
 #include <vector>
 
 namespace Horo::Render {
+    namespace Detail {
+        class PreparedRenderGraphTemplate;
+        class RenderGraphResourceLeasePool;
+        class RenderGraphTemplateBindingState;
+    }  // namespace Detail
+
     /** @brief Contiguous range into one immutable array owned by a compiled execution plan. */
     struct RenderGraphExecutionRange {
         std::size_t offset{0};
@@ -109,6 +116,9 @@ namespace Horo::Render {
         [[nodiscard]] std::span<const RenderGraphExternalRelease> ExternalReleases() const noexcept;
 
     private:
+        friend class RenderFrameScope;
+        friend class Detail::PreparedRenderGraphTemplate;
+        friend class Detail::RenderGraphResourceLeasePool;
         friend Result<CompiledRenderGraphExecution> CompileRenderGraphExecution(const RenderGraph &, const RenderGraphSchedule &,
                                                                                 const RenderGraphSynchronizationPlan &,
                                                                                 std::span<const RenderQueueAssignment>);
@@ -128,6 +138,7 @@ namespace Horo::Render {
         /** @brief Adopts fully validated, backend-neutral execution storage. */
         CompiledRenderGraphExecution(RenderGraphOwnerId owner, Storage storage) noexcept;
 
+        std::shared_ptr<Detail::RenderGraphTemplateBindingState> templateBinding_;
         RenderGraphOwnerId owner_;
         std::vector<RenderGraphResource> resources_;
         std::vector<RenderGraphExecutionPass> passes_;

@@ -21,7 +21,7 @@ namespace Horo::Editor {
     EditorViewportRendererVulkan::EditorViewportRendererVulkan(Render::RenderFrontend &frontend,
                                                                Render::Detail::VulkanEditorGraphicsBridge &bridge,
                                                                EditorVulkanViewportCook cooked) noexcept
-        : frontend_(frontend), bridge_(bridge), shader_{.cooked = std::move(cooked)},
+        : frontend_(frontend), bridge_(bridge), shader_{.payload = std::move(cooked.payload), .metadata = std::move(cooked.metadata)},
           resources_(frontend, {.resolveImage = &ViewportImage,
                                 .meshBufferAccess = Render::RenderBufferAccess::HostVisible,
                                 .prepareDirectionalShadow = false}) {}
@@ -74,6 +74,12 @@ namespace Horo::Editor {
         if (shader_.materials)
             static_cast<void>(shader_.materials->Shutdown());
         shader_.materials.reset();
+        for (auto &slot : xrDrawSlots_)
+            for (auto &draw : slot)
+                draw.material.reset();
+        if (xrShader_.materials)
+            static_cast<void>(xrShader_.materials->Shutdown());
+        xrShader_.materials.reset();
         initialized_ = false;
         childAttached_ = false;
         recordedEver_ = false;
@@ -86,6 +92,7 @@ namespace Horo::Editor {
         if (childAttached_ && bridge_.Port())
             bridge_.Port()->DetachDeviceChild(*this);
         ReleaseNative();
+        ReleaseXrGraph();
         emptyGraph_.reset();
         emptyGraphTexture_ = {};
         resources_.Shutdown();
@@ -108,6 +115,19 @@ namespace Horo::Editor {
         shader_.pipeline = {};
         shader_.vertex = {};
         shader_.fragment = {};
+        for (auto &slot : xrDrawSlots_)
+            for (auto &draw : slot) {
+                if (draw.buffer.IsValid())
+                    static_cast<void>(frontend_.ReleaseBuffer(draw.buffer));
+                draw = {};
+            }
+        if (xrShader_.pipeline.IsValid())
+            static_cast<void>(frontend_.ReleaseGraphicsPipeline(xrShader_.pipeline));
+        if (xrShader_.vertex.IsValid())
+            static_cast<void>(frontend_.ReleaseShaderModule(xrShader_.vertex));
+        if (xrShader_.fragment.IsValid())
+            static_cast<void>(frontend_.ReleaseShaderModule(xrShader_.fragment));
+        xrShader_ = {};
     }
 
     /** @copydoc IEditorViewportRenderer::PrepareResources */
@@ -148,6 +168,8 @@ namespace Horo::Editor {
     }
 
     EditorViewportTextureView EditorViewportRendererVulkan::TextureView() const noexcept {
+        if (const auto projection = XrLogicalProjection(); projection.IsValid())
+            return projection;
         return resources_.IsReady()
                    ? EditorViewportTextureView{.textureId = resources_.ImageIdentity(), .sampledView = resources_.ColorTextureView()}
                    : EditorViewportTextureView{};

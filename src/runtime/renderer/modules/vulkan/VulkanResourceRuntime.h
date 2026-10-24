@@ -9,6 +9,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 
 namespace Horo::Render::Detail {
     /** @brief Actual native generation state committed only after successful queue submission. */
@@ -59,6 +60,7 @@ namespace Horo::Render::Detail {
         VulkanGraphResource staging;
         VkImageView view{};
         VkSampler sampler{};
+        std::optional<RenderGraphLogicalState> requiredFinal; /**< Exact external state to restore after the actual GUI draw. */
     };
 
     /** @brief Borrowed coherent encoder buffer; frontend/native retention remains the sole owner. */

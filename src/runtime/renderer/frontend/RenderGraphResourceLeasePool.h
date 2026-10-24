@@ -1,6 +1,7 @@
 #pragma once
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "RenderGraphTemplate.h"
 #include "RenderResourceRegistry.h"
 #include "UiRenderSubmissionRetention.h"
 
@@ -32,7 +33,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources,
                                                                   UiRenderSubmission *ui = nullptr,
                                                                   RenderGraphTransientResourceSet *transient = nullptr,
-                                                                  std::span<const RenderGraphPassWorkload> workloads = {});
+                                                                  std::span<const RenderGraphPassWorkload> workloads = {},
+                                                                  std::shared_ptr<RenderGraphTemplateBindingState> templateBinding = {});
         /** @brief Retains material consumers and exact target/mesh pins using the same preallocated frame-completion pool.
          * @param pins Resolved target and mesh generations. @param draws Immutable materials to retain through completion.
          * @return Existing frame lease or typed capacity/residency failure with complete rollback. */
@@ -66,6 +68,7 @@ namespace Horo::Render::Detail {
             [[nodiscard]] Result<void> PinIdentity(const Pin &pin);
             /** @brief Retains exact multiview mesh/material/view generations using this existing completion lease. */
             [[nodiscard]] Result<void> PinMultiview(const RenderGraphMultiview &workload);
+            std::shared_ptr<RenderGraphTemplateBindingState> templateBinding;
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;

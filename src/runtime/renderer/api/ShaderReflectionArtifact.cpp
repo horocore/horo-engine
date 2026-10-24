@@ -1,6 +1,6 @@
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
-#include "ShaderReflectionCookJson.h"
+#include "ShaderReflectionArtifactJson.h"
 
 namespace Horo::Render {
     using namespace ShaderReflectionCookDetail;
@@ -25,26 +25,55 @@ namespace Horo::Render {
     Result<ReflectedShaderArtifact> CookReflectedShaderArtifact(const CompiledShaderArtifact &compiled,
                                                                 const ShaderCompilerToolIdentity &reflectionTool,
                                                                 NormalizedShaderReflection reflection, const std::uint32_t layoutVersion) {
-        if (DecodeShaderArtifactStages(compiled.payload, ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, 64U * 1024U * 1024U)
-                .HasError())
-            return Result<ReflectedShaderArtifact>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
-        ReflectedShaderArtifact artifact{layoutVersion,  compiled.artifactKey,  ComputeSha256(std::as_bytes(std::span{compiled.payload})),
-                                         reflectionTool, std::move(reflection), {}};
-        if (!ValidEnvelope(artifact) || compiled.backend != ShaderTargetBackend::Vulkan ||
-            compiled.payloadFormat != ShaderPayloadFormat::SpirV16)
-            return Result<ReflectedShaderArtifact>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
-        artifact.cookedArtifactKey = Identity(artifact);
-        return Result<ReflectedShaderArtifact>::Success(std::move(artifact));
+        try {
+            ReflectedShaderArtifact artifact{layoutVersion,
+                                             compiled.artifactKey,
+                                             ComputeSha256(std::as_bytes(std::span{compiled.payload})),
+                                             reflectionTool,
+                                             std::move(reflection),
+                                             {}};
+            if (!ValidEnvelope(artifact))
+                return Result<ReflectedShaderArtifact>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
+            artifact.cookedArtifactKey = Identity(artifact);
+            if (const auto valid = ValidateReflectedShaderArtifact(compiled, artifact); valid.HasError())
+                return Result<ReflectedShaderArtifact>::Failure(valid.ErrorValue());
+            return Result<ReflectedShaderArtifact>::Success(std::move(artifact));
+        } catch (const std::bad_alloc &) {
+            return Result<ReflectedShaderArtifact>::Failure(MakeError(ShaderReflectionErrors::AllocationFailed));
+        }
+    }
+
+    /** @copydoc ValidateReflectedShaderArtifact */
+    Result<void> ValidateReflectedShaderArtifact(const CompiledShaderArtifact &compiled, const ReflectedShaderArtifact &artifact) {
+        try {
+            const bool supported =
+                (compiled.backend == ShaderTargetBackend::Vulkan && compiled.payloadFormat == ShaderPayloadFormat::SpirV16) ||
+                (compiled.backend == ShaderTargetBackend::Metal && compiled.payloadFormat == ShaderPayloadFormat::MetalLibrary24);
+            if (!supported || !ValidEnvelope(artifact) || compiled.backend != artifact.reflection.backend ||
+                compiled.artifactKey != artifact.compiledArtifactKey || compiled.payload.empty() ||
+                compiled.payload.size() > 64U * 1024U * 1024U ||
+                ComputeSha256(std::as_bytes(std::span{compiled.payload})) != artifact.payloadDigest ||
+                DecodeShaderArtifactStages(compiled.payload, compiled.backend, compiled.payloadFormat, 64U * 1024U * 1024U).HasError() ||
+                artifact.cookedArtifactKey != Identity(artifact))
+                return Result<void>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(ShaderReflectionErrors::AllocationFailed));
+        }
     }
 
     /** @copydoc EncodeReflectedShaderArtifact */
     Result<std::vector<std::uint8_t>> EncodeReflectedShaderArtifact(const ReflectedShaderArtifact &artifact) {
-        if (!ValidEnvelope(artifact) || artifact.cookedArtifactKey != Identity(artifact))
-            return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
-        const auto text = ArtifactJson(artifact, true).dump();
-        if (text.size() > MaximumMetadataBytes)
-            return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderReflectionErrors::InvalidLimits));
-        return Result<std::vector<std::uint8_t>>::Success({text.begin(), text.end()});
+        try {
+            if (!ValidEnvelope(artifact) || artifact.cookedArtifactKey != Identity(artifact))
+                return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
+            const auto text = ArtifactJson(artifact, true).dump();
+            if (text.size() > MaximumMetadataBytes)
+                return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderReflectionErrors::InvalidLimits));
+            return Result<std::vector<std::uint8_t>>::Success({text.begin(), text.end()});
+        } catch (const std::bad_alloc &) {
+            return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderReflectionErrors::AllocationFailed));
+        }
     }
 
     /** @copydoc DecodeReflectedShaderArtifact */

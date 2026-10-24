@@ -21,6 +21,7 @@
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
+#include "editor/gameplay/host/EditorPlayXrHost.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorViewportRenderer.h"
@@ -62,6 +63,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         SelectionRevision selection{};
         ViewportRevision viewport{};
         std::uint64_t viewportScene{0};
+    };
+
+    /** @brief Borrowed explicit XR host connection; observes the existing Play projection, never owns its state. */
+    struct WorkspaceXrPlayConnection final {
+        IEditorPlayXrHost *host{};
+        std::optional<EditorPlayState> observed;
+        bool attached{};
     };
 
     /** @brief Workspace-scoped input ownership; frames are released before their context, and the router is borrowed. */
@@ -129,6 +137,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     public:
         /** @brief Binds borrowed application capabilities before any project activation. */
         explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages);
+        /** @brief Revokes any failed-enter XR connection before the existing context member is destroyed. */
+        ~EditorWorkspaceScreen() override;
         /** @brief Reports the workspace route identity. */
         ScreenId Id() const override;
         /** @brief Activates a reserved project session after controller preparation. */
@@ -201,6 +211,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void PublishViewportSceneIfChanged();
         /** @brief Projects document and selection status through registered status items. */
         void UpdateStatusItems();
+        /** @brief Attaches the actual existing context after its canonical project input profile is installed. */
+        [[nodiscard]] Result<void> AttachXrInput();
+        /** @brief Forwards exact canonical Play transitions and stops affected Play on an original host failure. */
+        void ObserveXrPlayState();
+        /** @brief Revokes Input admission before context/profile retirement; native debt stays application-owned. */
+        void DetachXrInput();
 
         PackageWorkspaceAccess packages_;
         GuiScreenHost &host_;
@@ -211,6 +227,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const EditorGuiContext &context_;
         WorkspaceContributionRegistries contributions_;
         WorkspaceInputState input_;
+        WorkspaceXrPlayConnection xr_;
         EditorWorkspaceView view_;
         EditorViewportSceneState &viewportSceneState_;
         Runtime::RuntimeSceneService &runtimeScene_;

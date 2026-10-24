@@ -66,6 +66,12 @@ namespace Horo::Application::Internal {
         /** @brief Issues a capability retaining all concrete authorities through pending callbacks.
          * @return Aliasing application capability or typed closed/owner-lane failure; no competing lifecycle owner. */
         [[nodiscard]] Result<std::shared_ptr<PackageApplication>> Application();
+        /** @brief Reads the existing committed availability record on the owner lane without granting native execution.
+         * @return Sealed immutable graph lease, empty before installation, or typed closed/foreign-lane failure.
+         * @details The record retains archive bytes after session retirement; callers separately validate current host generation,
+         * publisher/deployment trust and native lifetime. No store, restore, activation or XR dependency is introduced.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>> InstalledRecord() const;
         /** @brief Advances the shared operation at an actual host boundary. @param boundary Actual host phase. @return Typed outcome. */
         [[nodiscard]] Result<void> Pump(Packages::PackageActivationBoundary boundary);
         /** @brief Requests cancellation and owner-lane retirement without waiting.

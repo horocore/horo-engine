@@ -41,6 +41,21 @@ namespace Horo::Render::Detail {
     [[nodiscard]] Result<std::uint32_t> SelectTransferQueue(const VulkanAdapterCandidate &candidate, const RenderBackendConfig &config,
                                                             std::uint32_t graphics);
 
+    /** @brief Merges exact host preflight instance requirements with existing platform/baseline names before native creation.
+     * @param required Existing WSI/validation requirements. @param loader Actual loader capabilities.
+     * @param host Immutable selected-host requirements. @return Exact unique names or typed version/missing-extension denial.
+     */
+    [[nodiscard]] Result<std::vector<std::string>> ResolveHostInstanceExtensions(std::vector<std::string> required,
+                                                                                 const VulkanLoaderCapabilities &loader,
+                                                                                 const VulkanHostGraphicsRequirements &host);
+    /** @brief Merges exact host device requirements with existing backend names before creating the selected device.
+     * @param required Existing backend feature names. @param candidate Actual selected physical-device facts.
+     * @param host Immutable selected-host requirements. @return Exact unique names or typed missing-extension denial.
+     */
+    [[nodiscard]] Result<std::vector<std::string>> ResolveHostDeviceExtensions(std::vector<std::string> required,
+                                                                               const VulkanAdapterCandidate &candidate,
+                                                                               const VulkanHostGraphicsRequirements &host);
+
     /** @brief Test seam that shares registration implementation with host composition. */
     [[nodiscard]] Result<void> RegisterVulkanRenderBackendWithRuntimePort(RenderBackendRegistry &registry, IVulkanRuntimePort &runtimePort);
     /** @brief Registration seam that retains one backend-owned native runtime. */

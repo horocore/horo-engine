@@ -141,7 +141,7 @@ namespace Horo::XR::OpenXRInternal {
         if (count_ == 0 || count_ > MaximumImages)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         const OpenXRSwapchainImageEnumeration enumeration{native_, dispatch_.enumerate};
-        if (auto images = images_->Enumerate(count_, enumeration); images.HasError())
+        if (auto images = images_->Enumerate(request_, count_, enumeration); images.HasError())
             return images;
         if (auto sessionState = session_->Validate(request_.target.session); sessionState.HasError())
             return sessionState;

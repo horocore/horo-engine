@@ -65,6 +65,10 @@ namespace Horo::Render::Detail {
             transient->inFlight = false;
             transient = nullptr;
         }
+        if (templateBinding) {
+            templateBinding->inFlight_ = false;
+            templateBinding.reset();
+        }
         active = false;
     }
 
@@ -193,10 +197,11 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc RenderGraphResourceLeasePool::Acquire */
-    Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::Acquire(const std::span<const RenderGraphResource> resources,
-                                                                              UiRenderSubmission *ui,
-                                                                              RenderGraphTransientResourceSet *transient,
-                                                                              const std::span<const RenderGraphPassWorkload> workloads) {
+    Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::Acquire(
+        const std::span<const RenderGraphResource> resources, UiRenderSubmission *ui, RenderGraphTransientResourceSet *transient,
+        const std::span<const RenderGraphPassWorkload> workloads, std::shared_ptr<RenderGraphTemplateBindingState> templateBinding) {
+        if (templateBinding && (!templateBinding->bound_ || templateBinding->inFlight_))
+            return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceNotReady));
         if (transient != nullptr && (transient->inFlight || transient->released))
             return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceNotReady));
         if (resources.size() > RenderGraphLimits::HardMaxResources) {
@@ -211,6 +216,11 @@ namespace Horo::Render::Detail {
                 pending->Release();
             };
             std::unique_ptr<Lease, decltype(rollback)> transaction{&lease, rollback};
+            if (templateBinding) {
+                templateBinding->bound_ = false;
+                templateBinding->inFlight_ = true;
+                lease.templateBinding = std::move(templateBinding);
+            }
             lease.transient = transient;
             if (transient != nullptr)
                 transient->inFlight = true;

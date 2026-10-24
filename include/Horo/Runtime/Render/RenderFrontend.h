@@ -49,6 +49,7 @@ namespace Horo::Render {
         class RenderResourceUploadQueue;
         class RenderFrontendResourceAccess;
         class RenderExternalTextureAccess;
+        class PreparedRenderGraphTemplate;
         class RenderGraphResourceLeasePool;
         class RenderGraphTransientResourcePool;
         class RenderParallelWorkState;
@@ -734,6 +735,7 @@ namespace Horo::Render {
         friend class RenderFrameScope;
         friend class Detail::RenderFrontendResourceAccess;
         friend class Detail::RenderExternalTextureAccess;
+        friend class Detail::PreparedRenderGraphTemplate;
 
         class ConstructionKey {
             ConstructionKey() = default;

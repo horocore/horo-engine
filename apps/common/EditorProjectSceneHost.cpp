@@ -80,6 +80,11 @@ namespace Horo::Application::Internal {
                     return added;
                 if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_)); added.HasError())
                     return added;
+                selectedXrHost_ = policy.xrHost;
+                if (policy.xrHost) {
+                    if (auto added = scenes_->AddActivationParticipant(policy.xrHost->MakeSceneParticipant()); added.HasError())
+                        return added;
+                }
                 if (policy.prefabGranted) {
                     auto limits = Prefab::PrefabLimitProfile::Create({});
                     if (limits.HasError())
@@ -98,6 +103,10 @@ namespace Horo::Application::Internal {
 
             Physics::PhysicsRuntimeMode PhysicsMode() const noexcept {
                 return physics_->Mode();
+            }
+
+            const Editor::IEditorPlayXrHost *SelectedXrHost() const noexcept override {
+                return selectedXrHost_;
             }
 
             Runtime::RuntimeSceneService &Scenes() noexcept override {
@@ -199,6 +208,8 @@ namespace Horo::Application::Internal {
             }
 
         private:
+            Editor::IEditorPlayXrHost *selectedXrHost_{};
+
             /** @brief Captures immutable registry/cook payloads before constructing any Scene/native owner. */
             Result<void> CaptureAssets(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                                        const Runtime::RuntimeSceneDefinition *definition) {

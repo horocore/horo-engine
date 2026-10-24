@@ -5,6 +5,7 @@
  */
 #include "CommittedSceneAssets.h"
 #include "EditorPlaySceneHost.h"
+#include "EditorPlayXrHost.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "ScenePhysicsHost.h"
 
@@ -15,7 +16,8 @@ namespace Horo::Application::Internal {
     struct EditorProjectScenePolicy final {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
         std::optional<SceneCookSelection> cooked;
-        bool prefabGranted{}; /**< Independent explicit host permission; committed file presence never grants access. */
+        Editor::IEditorPlayXrHost *xrHost{}; /**< Explicit borrowed actual Play XR host; preview/prefab policies leave it absent. */
+        bool prefabGranted{};                /**< Independent explicit host permission; committed file presence never grants access. */
         std::vector<AI::AiControllerDescriptor> aiControllers; /**< Owned inert catalog copied with the app policy. */
     };
 

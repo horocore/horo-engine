@@ -1,4 +1,4 @@
-#include "ShaderReflectionCookJson.h"
+#include "ShaderReflectionArtifactJson.h"
 
 #include <algorithm>
 
@@ -95,12 +95,18 @@ namespace Horo::Render::ShaderReflectionCookDetail {
         return artifact.layoutVersion == 1 && artifact.reflectionTool.tool == ShaderCompilerTool::SpirvCross &&
                !artifact.reflectionTool.release.empty() && artifact.reflectionTool.release.size() <= 256 &&
                hasDigest(artifact.compiledArtifactKey) && hasDigest(artifact.payloadDigest) &&
-               hasDigest(artifact.reflectionTool.buildDigest) && artifact.reflection.backend == ShaderTargetBackend::Vulkan &&
+               hasDigest(artifact.reflectionTool.buildDigest) &&
+               (artifact.reflection.backend == ShaderTargetBackend::Vulkan || artifact.reflection.backend == ShaderTargetBackend::Metal) &&
                hasDigest(artifact.reflection.interfaceCompatibility.digest) && artifact.reflection.sourceMap.empty() &&
                artifact.reflection.bindings.size() <= limits.maximumBindings &&
                artifact.reflection.parameters.size() <= limits.maximumParameters &&
                artifact.reflection.stageInterface.size() <= limits.maximumStageInterfaceVariables &&
-               artifact.reflection.targetBindings.size() <= limits.maximumTargetBindingEntries;
+               artifact.reflection.targetBindings.size() <= limits.maximumTargetBindingEntries &&
+               std::ranges::all_of(artifact.reflection.targetBindings, [&](const auto &entry) {
+            return entry.nativeName.size() <= limits.maximumIdentityBytes;
+        }) && std::ranges::all_of(artifact.reflection.stageInterface, [&](const auto &entry) {
+            return entry.nativeName.size() <= limits.maximumIdentityBytes;
+        });
     }
 
     /** @copydoc Identity */

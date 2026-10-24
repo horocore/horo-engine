@@ -9,10 +9,13 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Render/ShaderManifest.h"
+#include "Horo/Runtime/Render/ShaderReflection.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -31,6 +34,37 @@ namespace Horo::Render {
         ShaderCompilerTool tool{ShaderCompilerTool::Dxc};
         std::string release;
         Sha256Digest buildDigest;
+    };
+
+    /** @brief Explicit logical-to-authored member mapping; offsets always come from actual tool output. */
+    struct ShaderReflectionParameterName {
+        ShaderParameterId id;
+        std::string name;
+    };
+
+    /** @brief Authored names corresponding to one manifest binding and its parameter IDs. */
+    struct ShaderReflectionBindingName {
+        ShaderBindingId id;
+        std::string name;
+        std::vector<ShaderReflectionParameterName> parameters;
+    };
+
+    /** @brief Complete normalized reflection identity for one exact immutable compilation artifact.
+     * @details The payload remains in CompiledShaderArtifact. This record binds its key and bytes to the actual
+     * reflection tool and normalized target map; consumers must not substitute independently authored layout evidence. */
+    struct ReflectedShaderArtifact {
+        std::uint32_t layoutVersion{1};
+        Sha256Digest compiledArtifactKey;
+        Sha256Digest payloadDigest;
+        ShaderCompilerToolIdentity reflectionTool;
+        NormalizedShaderReflection reflection;
+        Sha256Digest cookedArtifactKey;
+    };
+
+    /** @brief Optional explicit cook-stage reflection request; no tool or logical-name discovery occurs. */
+    struct ShaderCompilerReflectionRequest {
+        ShaderCompilerToolIdentity tool;
+        std::vector<ShaderReflectionBindingName> names;
     };
 
     /** @brief Explicit intermediate validation environment for a compilation route. */
@@ -95,6 +129,7 @@ namespace Horo::Render {
         std::vector<ShaderCompilerDependency> dependencies;
         std::vector<ShaderCompilerDefine> defines;
         std::vector<ShaderCompilerTargetDescriptor> targets;
+        std::optional<ShaderCompilerReflectionRequest> reflection; /**< Absent preserves routes without reflected output. */
     };
 
     /** @brief Stable diagnostic category available before source-map normalization. */
@@ -168,6 +203,7 @@ namespace Horo::Render {
         std::vector<std::uint8_t> payload;
         std::vector<std::uint8_t> debugPayload;
         std::vector<ShaderCompilerDiagnostic> diagnostics;
+        std::shared_ptr<const ReflectedShaderArtifact> reflection; /**< Same cook-boundary result; absent only when not requested. */
     };
 
     /** @brief One immutable invocation borrowed by the adapter for the duration of Compile. */
@@ -180,6 +216,7 @@ namespace Horo::Render {
         Sha256Digest artifactKey;
         ShaderCompilerLimits limits;
         IShaderCompilerDiagnosticSink *diagnostics{}; /**< Optional host sink; callbacks run synchronously and must not retain borrows. */
+        const ShaderCompilerReflectionRequest *reflection{}; /**< Optional synchronous borrow from the immutable request. */
     };
 
     /** @brief Private-toolchain seam; implementations must not retain borrowed invocation data. */
@@ -208,7 +245,33 @@ namespace Horo::Render {
         std::vector<std::uint8_t> payload;
         std::vector<std::uint8_t> debugPayload;
         std::vector<ShaderCompilerDiagnostic> diagnostics;
+        std::shared_ptr<const ReflectedShaderArtifact> reflection; /**< Same cook-boundary result; absent only when not requested. */
     };
+
+    /** @brief Binds exact compiled bytes/key, tool and normalized layout into the existing canonical cooked identity.
+     * @param compiled Exact immutable target output. @param reflectionTool Actual admitted reflection tool identity.
+     * @param reflection Validated normalized evidence. @param layoutVersion Supported record layout, currently one.
+     * @return Owned bound value or typed invalid/capacity failure; no compiler, file or native work occurs. */
+    [[nodiscard]] Result<ReflectedShaderArtifact> CookReflectedShaderArtifact(const CompiledShaderArtifact &compiled,
+                                                                              const ShaderCompilerToolIdentity &reflectionTool,
+                                                                              NormalizedShaderReflection reflection,
+                                                                              std::uint32_t layoutVersion = 1);
+    /** @brief Recomputes the single canonical cooked identity and verifies its exact compiled key, payload and backend.
+     * @param compiled Exact immutable payload to consume. @param artifact Its same-boundary record.
+     * @return Success or typed altered/malformed/unsupported record failure; error construction may allocate. */
+    [[nodiscard]] Result<void> ValidateReflectedShaderArtifact(const CompiledShaderArtifact &compiled,
+                                                               const ReflectedShaderArtifact &artifact);
+    /** @brief Encodes at most one MiB of canonical value metadata without compilation/native work.
+     * @param artifact Complete unmodified record. @return Canonical bytes or typed invalid/capacity failure. */
+    [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeReflectedShaderArtifact(const ReflectedShaderArtifact &artifact);
+    /** @brief Rejects altered payload/layout/identity and malformed or oversized metadata before runtime admission.
+     * @param manifest Exact logical interface. @param target Exact target requirement.
+     * @param payload Owned caller's compiled bytes. @param metadata Canonical bounded record encoding.
+     * @return Validated owned record or typed evidence failure. */
+    [[nodiscard]] Result<ReflectedShaderArtifact> DecodeReflectedShaderArtifact(const ShaderManifest &manifest,
+                                                                                const ShaderTargetRequirement &target,
+                                                                                std::span<const std::uint8_t> payload,
+                                                                                std::span<const std::uint8_t> metadata);
 
     /** @brief Published dependency identity without retaining the private include snapshot bytes. */
     struct CompiledShaderDependency final {

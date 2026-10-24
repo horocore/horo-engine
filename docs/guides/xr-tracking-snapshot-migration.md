@@ -39,6 +39,37 @@ Typed outcomes must remain distinct:
 - `xr.operation.capacity_exceeded`: the complete publication exceeds admitted bounds.
 - `xr.tracking_snapshot.invalid`: evidence is malformed, contradictory, or non-canonical.
 
+## Native source admission at the application cutoff
+
+The private OpenXR producer now offers `OpenXRActionBindings::ObservePoses` before
+there are any runtime-issued device IDs. It returns at most five actual head and
+prepared grip/aim observations at the same synchronized simulation sample time.
+It shares the existing pose collector and consumes the same opportunity as
+`SamplePoses`; callers must not invoke both against one `Sync`. The legacy method
+retains its existing-device filtering and returns the same typed device records.
+
+`OpenXRApplicationSession::AppendInput` translates that fixed packet into the
+non-installed `XRTrackingPublication::ObserveSources` contract. XRRuntime validates
+the complete role/kind/session/origin/time packet before changing source records,
+then uses its existing `ObserveDevice` issuer. The application never constructs a
+device ID. It samples scalar actions with those IDs, publishes through the same
+snapshot owner, and appends to the existing Input transaction; it does not commit
+Input itself.
+
+An inactive pose action does not prove physical disconnection. No source is created
+from an interaction-profile name, a prepared binding, or an invalid head pose. Known
+sources become `TrackingLost`, retaining independently invalid components and their
+known capabilities. Resumed tracking alone preserves device generation. Actual
+session/binding replacement and explicit disconnection evidence retain the existing
+generation rules. Failure revokes the candidate snapshot, allowing the host's one
+Input cutoff to neutralize XR without erasing keyboard/gamepad contributions.
+
+All packets and source-update scratch are fixed arrays; no allocation, native
+dispatch resolution, lock, second clock or snapshot issuer is added to a successful
+sample. The new native-dispatch and XRRuntime-owner regression cases are source
+coverage until executed on the current frozen worktree; they are not hardware
+qualification.
+
 ## Validation Record
 
 `HoroXRApiTests` covers immutable ownership, exact confidence, allocation-free query,

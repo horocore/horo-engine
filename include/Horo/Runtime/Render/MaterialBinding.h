@@ -223,6 +223,21 @@ namespace Horo::Render {
                                                                                 ShaderBindingId binding,
                                                                                 std::span<const MaterialParameterValue> values,
                                                                                 const MaterialBindingLimits &limits = {});
+    /** @brief Packs a complete uniform block into caller-owned bounded storage using the SAME canonical ABI.
+     * @param layout Canonical final-artifact layout. @param binding Active uniform resource.
+     * @param values Complete typed borrowed values, disjoint from destination storage.
+     * @param destination Owner-retained byte storage; no pointer alignment beyond byte alignment is required.
+     * @param limits Finite layout/packing bounds, including the hard 64 KiB block ceiling.
+     * @return Required/written prefix size or the original typed invalid descriptor error.
+     * @post Size, scalar types/counts, reflected bounds, occupied-byte overlap and input aliasing are validated BEFORE
+     * any destination write. Failure preserves every byte. Success zeroes padding in the required prefix and leaves
+     * any suffix unchanged. Success allocates no memory, performs no native work and borrows nothing after return.
+     * @pre Owner retains the populated bytes through the actual upload/record operation; no concurrent mutation.
+     */
+    [[nodiscard]] Result<std::size_t> PackMaterialParameterBinding(const MaterialBindingLayout &layout, ShaderBindingId binding,
+                                                                   std::span<const MaterialParameterValue> values,
+                                                                   std::span<std::byte> destination,
+                                                                   const MaterialBindingLimits &limits = {});
     /** @brief Validates logical resource membership, packing, arrays and frontend ownership before realization.
      * @param descriptor Exact material input. @param owner Owning frontend. @param limits Finite input bounds.
      * @return Parameter byte charge or typed validation failure. */

@@ -17,6 +17,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "editor/document/SceneDocument.h"
+#include "editor/gameplay/host/EditorPlayState.h"
 #include "editor/project_model/EditorTransformTool.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
@@ -38,16 +39,6 @@
 #include <vector>
 
 namespace Horo::Editor {
-    /** @brief Presentation projection of the editor play-session lifecycle. */
-    enum class EditorPlayState : std::uint8_t {
-        Idle,
-        Starting,
-        Playing,
-        Paused,
-        Stopping,
-        Failed,
-    };
-
     /** @brief Typed presentation kind projected from authored scene components. */
     enum class SceneObjectKind : std::uint8_t {
         Mesh,

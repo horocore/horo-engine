@@ -263,4 +263,79 @@ namespace Horo::XR {
                                                     fixture.revision, fixture.origin),
                                  XRErrors::OperationInvalid));
     }
+
+    TEST_CASE("XR action snapshots bind exact generation and plan revision independently of pose validity",
+              "[unit][xr][tracking-snapshot]") {
+        TrackingFixture fixture;
+        fixture.poses.clear();
+        fixture.devices[1].state = XRTrackedDeviceState::TrackingLost;
+        const std::array actions{XRTrackedActionRecord{fixture.controller.id, 4, XRTrackedActionKind::Boolean, true, 1, 0}};
+        auto descriptor = fixture.Descriptor();
+        descriptor.limits.maximumActions = 8;
+        descriptor.bindingRevision = 19;
+        descriptor.actions = actions;
+        const auto before = Tests::AllocationProbe::Count();
+        auto candidate = XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin);
+        const auto after = Tests::AllocationProbe::Count();
+        REQUIRE(candidate.HasValue());
+        CHECK(after == before);
+        CHECK(candidate.Value().BindingRevision() == 19);
+        REQUIRE(candidate.Value().Actions().size() == 1);
+        CHECK(candidate.Value().Actions()[0] == actions[0]);
+        const auto copyBefore = Tests::AllocationProbe::Count();
+        const auto retained = candidate.Value();
+        const auto copyAfter = Tests::AllocationProbe::Count();
+        CHECK(copyBefore == copyAfter);
+        CHECK(retained.Actions()[0].device == fixture.controller.id);
+        CHECK(retained.Poses().empty());
+    }
+
+    TEST_CASE("XR action snapshot validation rejects complete malformed candidates atomically", "[unit][xr][tracking-snapshot]") {
+        TrackingFixture fixture;
+        std::array actions{XRTrackedActionRecord{fixture.controller.id, 4, XRTrackedActionKind::Boolean, true, 1, 0}};
+        auto descriptor = fixture.Descriptor();
+        descriptor.limits.maximumActions = 1;
+        descriptor.bindingRevision = 19;
+        descriptor.actions = actions;
+        REQUIRE(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasValue());
+        descriptor.bindingRevision = 0;
+        CHECK(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasError());
+        descriptor.bindingRevision = 19;
+        for (const auto invalid : {XRTrackedActionRecord{fixture.controller.id, 4, XRTrackedActionKind::Boolean, true, 0.5F, 0},
+                                   XRTrackedActionRecord{fixture.controller.id, 4, XRTrackedActionKind::Scalar, false, 1, 0},
+                                   XRTrackedActionRecord{fixture.controller.id, 4, XRTrackedActionKind::Scalar, true, 1, 1}}) {
+            actions[0] = invalid;
+            CHECK(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasError());
+        }
+        actions[0] = {fixture.controller.id, 4, XRTrackedActionKind::Boolean, true, 1, 0};
+        descriptor.focus = XRTrackingFocusState::Unfocused;
+        CHECK(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasError());
+        descriptor.focus = XRTrackingFocusState::Focused;
+        actions[0].device = {fixture.session, {21, 2}};
+        CHECK(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasError());
+        CHECK(actions[0].device.slot.generation == 2);
+    }
+
+    TEST_CASE("XR action snapshot ordering and aggregate capacity are finite", "[unit][xr][tracking-snapshot]") {
+        TrackingFixture fixture;
+        const XRTrackedActionRecord value{fixture.controller.id, 4, XRTrackedActionKind::Boolean, true, 1, 0};
+        const std::array duplicate{value, value};
+        auto descriptor = fixture.Descriptor();
+        descriptor.limits.maximumActions = 1;
+        descriptor.bindingRevision = 2;
+        descriptor.actions = duplicate;
+        CHECK(HasErrorIdentity(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin), XRErrors::CapacityExceeded));
+        descriptor.limits.maximumActions = 2;
+        CHECK(HasErrorIdentity(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin), XRErrors::TrackingSnapshotInvalid));
+        descriptor.limits.maximumActions = XRTrackingSnapshotHardLimits::MaximumActions + 1;
+        CHECK(HasErrorIdentity(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin), XRErrors::CapacityExceeded));
+    }
+
+    TEST_CASE("XR inline snapshot storage has an explicit finite copy budget", "[unit][xr][tracking-snapshot][storage-budget]") {
+        CHECK(sizeof(XRTrackingSnapshot) <= 256U * 1024U);
+        CHECK(sizeof(XRTrackedDeviceRecord) <= 128U);
+        CHECK(sizeof(XRTrackedPoseRecord) <= 512U);
+        CHECK(sizeof(XRTrackedActionRecord) <= 128U);
+        static_assert(std::is_nothrow_copy_constructible_v<XRTrackingSnapshot>);
+    }
 }  // namespace Horo::XR

@@ -94,7 +94,7 @@ namespace Horo::Render {
                 Abort();
                 return Result<void>::Failure(multiview.ErrorValue());
             }
-            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads);
+            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads, graph.templateBinding_);
             if (leased.HasError()) {
                 Abort();
                 return Result<void>::Failure(leased.ErrorValue());

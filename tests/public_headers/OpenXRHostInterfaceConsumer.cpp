@@ -30,3 +30,11 @@ Horo::Result<Horo::XR::OpenXRInternal::NativeSessionBorrow> BorrowComposedNative
 }
 
 static_assert(!std::is_copy_constructible_v<Horo::XR::OpenXRInternal::OpenXRFrameCompositor>);
+
+// The real host can obtain native evidence before XRRuntime issues device identities,
+// using only this dedicated non-installed interface's staged dependencies.
+Horo::Result<Horo::XR::OpenXRInternal::NativePoseObservations> ObserveComposedNativeSources(
+    const Horo::XR::OpenXRInternal::OpenXRActionBindings &owner, const Horo::XR::XRSessionId &session, const Horo::XR::XRTimeEvidence &time,
+    const Horo::XR::XRWorldOriginRevision origin) {
+    return owner.ObservePoses(session, time, origin);
+}

@@ -650,6 +650,7 @@ horo_configure_target_header_boundary(HoroAndroidInputIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
+    Horo/Runtime/InputCollection.h
 )
 horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
     Horo/Physics/CharacterPolicies.h
@@ -956,6 +957,7 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroXRInputBindings PUBLIC_HEADERS
     Horo/XR/XRActionBindings.h
+    Horo/XR/XRInputProjection.h
 )
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
