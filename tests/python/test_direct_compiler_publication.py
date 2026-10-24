@@ -37,13 +37,19 @@ def boolean_value(node: ast.AST) -> str | bool:
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.BoolOp):
-        values = (boolean_value(value) for value in node.values)
-        return all(values) if isinstance(node.op, ast.And) else any(values)
+        return logical_value(node)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return not boolean_value(node.operand)
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
         return comparison_value(node)
     raise ValueError("Unexpected token-guard expression")
+
+
+def logical_value(node: ast.BoolOp) -> str | bool:
+    """Preserve operand values for Actions' conditional group-key selection."""
+    values = [boolean_value(value) for value in node.values]
+    short_circuit = isinstance(node.op, ast.Or)
+    return next((value for value in values if bool(value) == short_circuit), values[-1])
 
 
 def comparison_value(node: ast.Compare) -> bool:
@@ -52,6 +58,71 @@ def comparison_value(node: ast.Compare) -> bool:
     if operation is None:
         raise ValueError("Unexpected token-guard comparison")
     return operation(boolean_value(node.left), boolean_value(node.comparators[0]))
+
+
+def concurrency_key(block: str, context: dict[str, str]) -> str:
+    """Resolve the actual workflow group with the same restricted expression subset."""
+    match = re.search(r"^\s+group: (.*)$", block, re.MULTILINE)
+    assert match is not None
+
+    def interpolate(expression: re.Match[str]) -> str:
+        source = expression[1].strip()
+        for name, value in context.items():
+            source = source.replace(name, repr(value))
+        source = source.replace("&&", " and ").replace("||", " or ")
+        return str(boolean_value(ast.parse(source, mode="eval").body))
+
+    return re.sub(r"\$\{\{(.*?)\}\}", interpolate, match[1])
+
+
+def ci_context(ref: str, run: str, platform: str = "Linux / GCC") -> dict[str, str]:
+    return {"github.workflow": "CI", "github.ref": ref, "github.run_id": run,
+            "matrix.name": platform, "matrix.os": platform}
+
+
+def test_pr_burst_keeps_obsolete_commit_cancellation_scoped_to_each_ref() -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = source.split("\njobs:", 1)[0]
+    keys = set()
+    for number in range(1, 11):
+        ref = f"refs/pull/{number}/merge"
+        first = concurrency_key(workflow, ci_context(ref, f"{number}01"))
+        assert first == concurrency_key(workflow, ci_context(ref, f"{number}02"))
+        keys.add(first)
+    assert len(keys) == 10
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
+    main = "refs/heads/main"
+    assert concurrency_key(workflow, ci_context(main, "101")) != concurrency_key(workflow, ci_context(main, "102"))
+
+
+@pytest.mark.parametrize("name", ["tooling", "android-storage", "shaders", "directx-resources"])
+def test_main_support_lanes_coalesce_without_cancelling_other_prs(name: str) -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    block = job(source, name)
+    main = "refs/heads/main"
+    assert concurrency_key(block, ci_context(main, "101")) == concurrency_key(block, ci_context(main, "102"))
+    assert "      cancel-in-progress: false\n" in block
+    keys = {concurrency_key(block, ci_context(f"refs/pull/{number}/merge", str(number)))
+            for number in range(1, 11)}
+    assert len(keys) == 10
+
+
+def test_main_native_writers_serialize_by_platform_without_global_head_of_line_wait() -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    block = job(source, "test-main")
+    keys = set()
+    for platform in ("Linux / GCC", "macOS / Clang", "Windows / MSVC"):
+        context = ci_context("refs/heads/main", "101", platform)
+        key = concurrency_key(block, context)
+        context["github.run_id"] = "102"
+        assert concurrency_key(block, context) == key
+        keys.add(key)
+    assert len(keys) == 3
+    assert "      cancel-in-progress: false\n" in block
+    assert "    concurrency:" not in job(source, "test")
+    shader = job(source, "shaders")
+    assert concurrency_key(shader, ci_context("refs/heads/main", "101", "ubuntu-26.04")) != concurrency_key(
+        shader, ci_context("refs/heads/main", "102", "windows-2022"))
 
 
 @pytest.mark.parametrize("workflow,readonly,writer", [
@@ -108,8 +179,9 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
     group = re.search(r"^  group: (.*)$", source, re.MULTILINE)
     assert group is not None
     assert "${{ github.workflow }}" in group[1]
-    assert "${{ github.ref }}" in group[1]
-    assert "run_id" not in group[1]
+    assert "github.ref" in group[1]
+    if workflow == "sonar":
+        assert "run_id" not in group[1]
 
 
 def step(source: str, name: str) -> str:

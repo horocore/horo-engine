@@ -512,22 +512,29 @@ change or an intentional clean-build run.
 
 ### Concurrency
 
-CI workflows use:
+PR workflow groups use the workflow name and ref, with cancellation enabled only
+for `pull_request`. A newer commit cancels obsolete work for that PR; different
+PRs never share a group. Cache reads use the last verified checkpoint.
 
-```yaml
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-```
+Native CI main runs have independent workflow admission and bounded job lanes.
+Tooling, Android storage and D3D12 each have one lane; shader and native lanes
+include the matrix platform. Each lane permits one active job and the default
+single pending job. New pending work replaces older pending work, while active
+main builds finish publication and qualification. A slow Windows job therefore
+does not hold the next Linux cache producer behind the entire old workflow.
+The existing per-run native width of two and shader width of one are preserved.
+Across overlapping main runs, native work is bounded to one job per platform;
+this is not a global limit on PR jobs. Supporting lanes are unique per PR run,
+so they cannot replace jobs in unrelated PRs. No additional jobs are created.
 
-This means a new push cancels the in-progress run for the same ref.
-Cancelled runs do not corrupt cache entries — GitHub's cache restore
-is always from the last successful save.
-
-`ci.yml` and Sonar use `cancel-in-progress` only for pull requests. An active
-main run may finish its cache checkpoints; newer main pushes replace a pending
-run rather than repeatedly interrupting the canonical cache producer. Stale PR
-runs remain cancellable.
+Sonar retains one workflow-level main lane because its analysis cache has one
+canonical writer. Native publisher lanes serialize both Debug and auxiliary
+publication for each platform. GitHub organization runner limits still apply:
+the Free plan allows 20 concurrent jobs including at most five macOS jobs.
+Ten simultaneous PRs can therefore wait for macOS capacity even when execution
+fits the target duration. Measure admission delay and runner duration separately.
+See [Actions limits](https://docs.github.com/en/actions/reference/limits#job-concurrency-limits-for-github-hosted-runners)
+and [concurrency semantics](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency).
 
 ### Scheduled Cold Builds
 
@@ -726,7 +733,7 @@ skips the same or newer run/attempt. Publication replaces one namespace tag only
 after its blob upload completes. Only an explicit missing manifest permits a
 first publication; outages and incompatible manifests fail without overwriting.
 CI owns native namespaces and SonarCloud owns instrumented namespaces. Their
-existing coalesced main concurrency groups serialize writes; platforms/profiles
+native platform lanes and the Sonar main concurrency group serialize writes; platforms/profiles
 have distinct tags. The CLI rejects delayed exporter events and wrong workflow
 owners, including old exporter runs that check out the new main code. New
 compiler/toolchain namespaces get distinct tags; old namespace/tag cleanup is

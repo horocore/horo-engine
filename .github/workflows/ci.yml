@@ -29,11 +29,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # PR commits supersede their ref; main is bounded by the job lanes below.
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tooling:
+    concurrency:
+      group: ${{ github.workflow }}-tooling-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Format & Tooling Check
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -77,6 +81,9 @@ jobs:
         run: node --test tests/javascript/cache-retention.test.js tests/javascript/external-cache-policy.test.js
 
   android-storage:
+    concurrency:
+      group: ${{ github.workflow }}-android-storage-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Android Storage · NDK arm64 API 29
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -106,6 +113,9 @@ jobs:
           CPP
 
   shaders:
+    concurrency:
+      group: ${{ github.workflow }}-shaders-${{ matrix.os }}-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Shaders · ${{ matrix.os }}
     needs: tooling
     runs-on: ${{ matrix.os }}
@@ -257,6 +267,9 @@ jobs:
           if-no-files-found: warn
 
   directx-resources:
+    concurrency:
+      group: ${{ github.workflow }}-directx-resources-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: D3D12 · Windows WARP resources
     needs: tooling
     runs-on: windows-2022
@@ -926,6 +939,9 @@ jobs:
   # Identical build/test steps, but only trusted main receives a write token.
   # Exactly one matrix is selected per run; PR check names stay unchanged.
   test-main:
+    concurrency:
+      group: ${{ github.workflow }}-native-${{ matrix.name }}-${{ github.ref }}
+      cancel-in-progress: false
     name: Test · ${{ matrix.name }} (main)
     needs: tooling
     if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
