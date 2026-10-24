@@ -36,6 +36,11 @@ namespace Horo::Tests::RenderFrontendTesting {
             capabilities_.support.deviceIncarnation = incarnation.Value();
             if (lifecycleState.uiPaint.enabled) {
                 capabilities_.support.features.Enable(RenderCapability::UiPaint);
+                capabilities_.support.features.Enable(RenderCapability::TextureResources);
+                capabilities_.support.limits.maxTextureDimension2D = 16'384;
+                capabilities_.support.formats.sampleCountMask = std::uint64_t{1} << 1;
+                capabilities_.support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32FloatStencil8)] =
+                    RenderTextureUsage::RenderAttachment;
                 capabilities_.support.limits.maxFramesInFlight = config.maxFramesInFlight;
             }
             capabilities_.supportsSubmissionObservation = lifecycleState.supportsSubmissionObservation;
@@ -188,6 +193,12 @@ namespace Horo::Tests::RenderFrontendTesting {
             if (!request.submissions.empty())
                 return IRenderBackend::ExecuteGraph(request);
             if (request.role == RenderGraphExecutionRole::UiComposition) {
+                auto &audit = lifecycleState.uiPaint;
+                ++audit.graphCalls;
+                if (audit.onGraph)
+                    audit.onGraph();
+                if (audit.failGraphCall == audit.graphCalls)
+                    return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
                 auto &passes = lifecycleState.uiPaint.passes;
                 passes.clear();
                 for (const auto &binding : request.workloads) {
@@ -199,6 +210,8 @@ namespace Horo::Tests::RenderFrontendTesting {
             }
             lifecycleState.graphResources.assign(request.resources.begin(), request.resources.end());
             lifecycleState.graphLease = request.lease;
+            if (lifecycleState.uiPaint.retainAfterAbort && request.transfer)
+                request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
             return Execute({request.frame, {}});
         }
 
@@ -228,7 +241,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         void AbortFrame(const FrameToken frame) noexcept override {
             if (lifecycleState.frameActive && frame == lifecycleState.activeFrame) {
                 ++lifecycleState.abortCount;
-                if (lifecycleState.graphLease != nullptr) {
+                if (lifecycleState.graphLease != nullptr && !lifecycleState.uiPaint.retainAfterAbort) {
                     lifecycleState.graphLease->Release();
                     lifecycleState.graphLease = nullptr;
                 }
@@ -240,7 +253,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         void AbortActiveFrame() noexcept override {
             if (lifecycleState.frameActive) {
                 ++lifecycleState.abortCount;
-                if (lifecycleState.graphLease != nullptr) {
+                if (lifecycleState.graphLease != nullptr && !lifecycleState.uiPaint.retainAfterAbort) {
                     lifecycleState.graphLease->Release();
                     lifecycleState.graphLease = nullptr;
                 }

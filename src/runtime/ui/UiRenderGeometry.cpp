@@ -228,8 +228,10 @@ namespace Horo::Runtime::Ui {
             PublishLease &operator=(const PublishLease &) = delete;
 
             ~PublishLease() {
-                if (storage_ != nullptr)
+                if (storage_ != nullptr) {
+                    storage_->source.reset();
                     storage_->leases.store(0, std::memory_order_release);
+                }
             }
 
             void Commit() noexcept {
@@ -243,7 +245,7 @@ namespace Horo::Runtime::Ui {
 
         mutable std::atomic<std::uint64_t> leases{};
         UiRenderGeometryPlanDescriptor descriptor;
-        std::optional<UiRenderSnapshot> source;
+        mutable std::optional<UiRenderSnapshot> source;
         std::vector<UiRenderVertex> vertices;
         std::vector<std::uint32_t> indices;
         std::vector<UiRenderGeometryBatch> batches;
@@ -479,7 +481,19 @@ namespace Horo::Runtime::Ui {
     void UiRenderGeometryPlan::Release() noexcept {
         if (!storage_)
             return;
-        storage_->leases.fetch_sub(1, std::memory_order_acq_rel);
+        auto current = storage_->leases.load(std::memory_order_acquire);
+        for (;;) {
+            if (current == 1) {
+                // The building sentinel also excludes reuse during last-reader source retirement.
+                if (!storage_->leases.compare_exchange_weak(current, BuildingLease, std::memory_order_acq_rel))
+                    continue;
+                storage_->source.reset();
+                storage_->leases.store(0, std::memory_order_release);
+                break;
+            }
+            if (storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_acq_rel))
+                break;
+        }
         storage_.reset();
     }
 
@@ -544,7 +558,7 @@ namespace Horo::Runtime::Ui {
             ++storage_->failedBuilds;
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryLifecycleUnavailable);
         }
-        if (!snapshot.IsValid()) {
+        if (!snapshot.IsValid() || snapshot.IsPreparationOnly()) {
             ++storage_->failedBuilds;
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryInvalid);
         }

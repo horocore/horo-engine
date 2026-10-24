@@ -444,8 +444,10 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     assert "-DHORO_BUILD_XR_OPENXR=ON" in native_job
     assert "--no-tests=error" in native_job
     setup = (ROOT / ".github/actions/setup-build-tools/action.yml").read_text(encoding="utf-8")
+    assert "bash .github/scripts/install_linux_build_dependencies.sh" in setup
+    installer = (ROOT / ".github/scripts/install_linux_build_dependencies.sh").read_text(encoding="utf-8")
     for dependency in ("vulkan-validationlayers", "mesa-vulkan-drivers", "vulkan-tools", "glslang-tools"):
-        assert dependency in setup
+        assert dependency in installer
     assert "scripts/dev.py select-lavapipe-icd" in native_job
     assert "VK_DRIVER_FILES=%s" in native_job
     assert "lvp_icd.x86_64.json" not in native_job
@@ -685,3 +687,48 @@ def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composit
     assert "HoroEditorAssetRoot-Debug.txt" in job
     apps = (ROOT / "apps/CMakeLists.txt").read_text(encoding="utf-8")
     assert "HoroEditorAssetRoot-$<CONFIG>.txt" in apps
+
+
+def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -> None:
+    native = workflow_job("test")
+    first = native.index("name: Checkpoint main Debug compiler cache")
+    auxiliary = native.index("name: Configure Metal shader and presentation tests")
+    last = native.index("name: Checkpoint complete dependency sources")
+    assert native.index("name: Build Debug") < first < auxiliary < last
+    debug_checkpoint = native[first:auxiliary]
+    assert "dependency-ready: 'false'" in debug_checkpoint
+    dependency_checkpoint = native[last:native.index("name: Prepare Windows mixer allocation diagnostics")]
+    assert "compiler-ready: 'false'" in dependency_checkpoint
+    assert "steps.xr_configure.outcome == 'success'" in dependency_checkpoint
+    action = (ROOT / ".github/actions/save-native-cache/action.yml").read_text(encoding="utf-8")
+    assert "github.ref == 'refs/heads/main' && inputs.compiler-ready == 'true'" in action
+
+
+def test_parallel_ctest_preserves_suite_selection_and_bounds_runner_work() -> None:
+    assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
+    for name in ("ci-linux-debug", "ci-macos-debug"):
+        assert preset("testPresets", name)["execution"]["jobs"] == 2
+    assert preset("testPresets", "sonar")["execution"]["jobs"] == 4
+    assert preset("testPresets", "ci-linux-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
+    assert preset("testPresets", "ci-macos-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
+    assert preset("testPresets", "sonar")["filter"] == {"include": {"label": "^sonar-coverage$"}}
+
+
+def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:
+    assert "max-parallel: 2" in workflow_job("test")
+    assert "max-parallel: 1" in workflow_job("shaders")
+    android = (ROOT / ".github/workflows/android-package.yml").read_text(encoding="utf-8")
+    assert "max-parallel: 1" in android
+    assert "profile: [qualification-debug, qualification-release]" in android
+    assert preset("buildPresets", "ci-audio-release")["jobs"] == 2
+    assert preset("testPresets", "ci-audio-release")["execution"]["jobs"] == 1
+
+
+def test_linux_linker_is_explicit_and_bounded_without_changing_other_platforms() -> None:
+    assert PRESETS["cmakeMinimumRequired"] == {"major": 3, "minor": 29, "patch": 0}
+    linux = preset("configurePresets", "ci-linux-debug")["cacheVariables"]
+    assert linux["CMAKE_LINKER_TYPE"] == "LLD"
+    for kind in ("EXE", "SHARED", "MODULE"):
+        assert linux[f"CMAKE_{kind}_LINKER_FLAGS"] == "-Wl,--threads=2"
+    for name in ("ci-base", "ci-native-debug", "ci-macos-debug", "ci-windows-debug"):
+        assert "CMAKE_LINKER_TYPE" not in preset("configurePresets", name)["cacheVariables"]

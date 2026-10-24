@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Runtime/Render/RenderGraph.h"
+#include "Horo/Runtime/Render/RenderGraphTransientResources.h"
 #include "Horo/Runtime/Ui/UiGlyphAtlas.h"
 #include "Horo/Runtime/Ui/UiImageResource.h"
 #include "Horo/Runtime/Ui/UiRenderGeometry.h"
@@ -15,6 +16,8 @@
 
 namespace Horo::Render {
     class RenderFrontend;
+    class CompiledRenderGraphExecution;
+    struct RenderGraphPassWorkload;
     inline constexpr std::size_t MaximumUiSubmissionImages = 64;
     /** @brief Maximum face/page bindings, not distinct faces; one face may span several atlas pages. */
     inline constexpr std::size_t MaximumUiSubmissionFonts = 32;
@@ -133,4 +136,13 @@ namespace Horo::Render {
         std::span<const UiRenderFontBinding> fonts;  /**< At most MaximumUiSubmissionFonts bindings. */
         Runtime::Ui::UiGlyphAtlas::FrameLease atlas; /**< Sealed exact pin set required whenever font bindings are present. */
     };
+
+    /** @brief One synchronous member of the unique ordered UI composition phase; no native handles or backend choice. */
+    struct UiPaintGraphComposition final {
+        const CompiledRenderGraphExecution *graph{};
+        std::span<const RenderGraphPassWorkload> workloads;
+        UiRenderSubmission source;
+        RenderGraphTransientResourcesHandle transient;
+    };
+
 }  // namespace Horo::Render

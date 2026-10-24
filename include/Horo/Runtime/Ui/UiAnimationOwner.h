@@ -18,7 +18,7 @@ namespace Horo::Runtime::Ui {
     /** @brief Inert authored style/layout input adopted only after exact retained-tree and registry admission. */
     struct UiAnimationElementDefinition final {
         UiElementId element;
-        RuntimeStyleAssetId asset;
+        RuntimeStyleAssetId asset; /**< Optional authored namespace; absent uses the same registered-default/inline/policy cascade. */
         UiStyleClassReference typeClass;
         std::vector<UiStyleClassReference> classes;
         std::vector<UiStyleAssignment> inlineProperties;
@@ -220,6 +220,9 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         friend class UiAnimationOwner;
+        friend class UiRenderExtractor;
+        /** @brief Proves exact retained canonical tree issuance without exposing source mutation authority. */
+        [[nodiscard]] bool MatchesSourceTree(const UiElementTree &tree) const noexcept;
         explicit UiAnimationFrameLease(std::shared_ptr<const Storage> storage) noexcept;
         std::shared_ptr<const Storage> storage_;
     };
@@ -471,6 +474,11 @@ namespace Horo::Runtime::Ui {
     private:
         friend class UiPointerControlRoute;
         friend class Horo::Runtime::UiAnimationRuntimeParticipant;
+        /** @brief Prepares the exact private source's initial derived presentation without issuing a runtime frame or consuming time.
+         * @param viewport Explicit host output policy. @return Immutable baseline or typed lifecycle/source failure.
+         * @pre No prior frame, commands, route gate or timeline; only the composing participant can call this load-time operation.
+         */
+        [[nodiscard]] Result<UiAnimationFrameLease> PrepareSourcePresentation(const UiAnimationViewport &viewport);
         /** @brief Private real-adapter preparation; every clock fact is copied from an unforgeable stack-borrowed host read. */
         [[nodiscard]] Result<Prepared> Prepare(const UiAnimationHostRead &read, const UiAnimationViewport &viewport);
         /** @brief Revalidates all source/candidate owners before callback-free whole-frame publication. */

@@ -1,6 +1,7 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "RuntimeSceneErrors.h"
 #include "RuntimeScenePublicationInternal.h"
 
 #include <utility>
@@ -55,6 +56,8 @@ namespace Horo::Runtime {
         for (const auto &candidate : pending_.candidates) {
             if (const auto valid = candidate->ValidatePublication(); valid.HasError())
                 return Result<bool>::Failure(valid.ErrorValue());
+            if (shutdownDeferred_)
+                return Result<bool>::Failure(MakeError(SceneErrors::ServiceShutdown));
         }
         return Result<bool>::Success(true);
     }
@@ -76,7 +79,7 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    Result<void> RuntimeSceneService::CommitDeferredChanges() {
+    Result<void> RuntimeSceneService::CommitDeferredChanges(const CancellationToken &cancellation) {
         using enum TransitionKind;
         if (structuralCommands_) {
             const auto revision = assetPreparationServices_.registry ? assetPreparationServices_.registry->Snapshot().Revision()
@@ -112,10 +115,8 @@ namespace Horo::Runtime {
                 return Result<void>::Success();
             }
         } else if (transition_ == Unload) {
-            SceneAggregate retired = std::move(active_);
-            ScenePublicationDetail::ShutdownCandidates(retired.candidates);
-            retired.restore.reset();
-            retired.scene.reset();
+            if (const auto retired = RetireActiveScene(cancellation); retired.HasError())
+                operationError_ = retired.ErrorValue();
         }
         transition_ = None;
         return Result<void>::Success();

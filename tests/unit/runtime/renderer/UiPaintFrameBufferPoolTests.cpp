@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/UiPaintFrameBufferPool.h"
 #include "RenderFrontendTestSupport.h"
+#include "UiPaintFrontendState.h"
 
 namespace {
     using namespace Horo;
@@ -133,4 +134,37 @@ TEST_CASE("UI resident pool unsupported admission creates no residents", "[rende
     CHECK(lifecycleState.createBufferCount == 0);
     CHECK(frontend->UploadSnapshot().pendingRequests == 0);
     CHECK(frontend->MemorySnapshot().reservationCount == 0);
+}
+
+TEST_CASE("UI resident pool retains failed creation cleanup without releasing retired generations", "[renderer][ui-paint][pool]") {
+    auto frontend = Frontend();
+    auto created = UiPaintFrameBufferPool::Create(*frontend, Budget, 2);
+    REQUIRE(created.HasValue());
+    auto pool = std::move(created).Value();
+    lifecycleState.failResourceCreation = true;
+    REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    Candidate candidate;
+    const auto failed = pool->Update(0, candidate.vertices, candidate.indices, candidate.parameters);
+    REQUIRE(failed.HasError());
+    CHECK(failed.ErrorValue().domain.Value() == "render.test");
+    CHECK(failed.ErrorValue().code.Value() == "render.test.resource_failed");
+    REQUIRE(pool->Shutdown().HasValue());
+    REQUIRE(pool->Shutdown().HasValue());
+    CHECK(lifecycleState.destroyBufferCount == 0);
+    CHECK(frontend->MemorySnapshot().reservationCount == 0);
+    CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+}
+
+TEST_CASE("UI creation observation cannot excuse genuinely stale succeeded ownership", "[renderer][ui-paint][pool]") {
+    auto frontend = Frontend();
+    const auto created = frontend->CreateBuffer({.byteSize = 16, .usage = RenderBufferUsage::Vertex}, {});
+    REQUIRE(created.HasValue());
+    REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    auto handle = created.Value().handle;
+    REQUIRE(frontend->ReleaseBuffer(handle).HasValue());
+    REQUIRE(Horo::Render::Detail::ObserveUiPaintCreation(*frontend, created.Value().operation, handle).HasValue());
+    CHECK(handle == created.Value().handle);
+    const auto stale = frontend->ReleaseBuffer(handle);
+    REQUIRE(stale.HasError());
+    CHECK(stale.ErrorValue().code.Value() == "render.frontend.resource.stale");
 }

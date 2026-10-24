@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiRenderSnapshot.h"
 #include "Horo/Runtime/UiAnimationRuntimeParticipant.h"
 
 #include <type_traits>
@@ -64,6 +65,13 @@ static_assert(std::is_same_v<decltype(&UiAnimationClockController::Step), StepSi
 static_assert(std::is_same_v<decltype(std::declval<const UiAnimationRuntimeParticipant &>().CanReclaim()), bool>);
 static_assert(noexcept(std::declval<const UiAnimationRuntimeParticipant &>().CanReclaim()));
 
+using SourcePresentation = Horo::Runtime::UiAnimationSourcePresentation;
+static_assert(!std::is_default_constructible_v<SourcePresentation>);
+static_assert(!std::is_convertible_v<SourcePresentation, Horo::Runtime::Ui::UiAnimationFrameLease>);
+using PrepareSourceSignature = Horo::Result<SourcePresentation> (UiAnimationRuntimeParticipant::*)();
+static_assert(std::is_same_v<decltype(&UiAnimationRuntimeParticipant::PrepareSourcePresentation), PrepareSourceSignature>);
+static_assert(!std::is_invocable_v<PrepareSourceSignature, const UiAnimationRuntimeParticipant &>);
+
 int main() {
     const RuntimeDispatchSource absent;
     if (absent.BindingStatus() != RuntimeDispatchStatus::Invalid)
@@ -71,3 +79,11 @@ int main() {
     UiAnimationClockController absentController;
     return absentController.Clock(Horo::Runtime::Ui::UiTimeDomain::Manual).HasError() ? 0 : 2;
 }
+
+static_assert(Horo::Runtime::Ui::UiAnimationLayoutBinding{}.values == Horo::Runtime::Ui::UiAnimationLayoutValuePolicy::AllComputedValues);
+
+using AnimatedExtractSignature = Horo::Result<Horo::Runtime::Ui::UiRenderSnapshot> (Horo::Runtime::Ui::UiRenderExtractor::*)(
+    const Horo::Runtime::Ui::UiElementTree &, const Horo::Runtime::Ui::UiRenderSnapshotDescriptor &,
+    const Horo::Runtime::Ui::UiRenderProjection &, const Horo::Runtime::Ui::UiAnimationFrameLease &);
+static_assert(std::is_same_v<decltype(static_cast<AnimatedExtractSignature>(&Horo::Runtime::Ui::UiRenderExtractor::Extract)),
+                             AnimatedExtractSignature>);

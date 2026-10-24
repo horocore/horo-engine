@@ -7,7 +7,7 @@ namespace Horo::Application::Internal {
 
     namespace {
         /** @brief Resolves paint from the actual computed publication without repeating cascade or layout. */
-        Result<UiDrawCommand> ComputedPaint(const Row &row, const UiAnimationFrameLease &frame) {
+        Result<UiDrawCommand> ComputedPaint(const Row &row, const PaintProjectionDetail::Presentation &frame) {
             auto style = ProjectUiElementStyle(*row.source, row.element);
             auto layout = ProjectUiElementLayout(*row.source, row.element);
             if (style.HasError())
@@ -60,7 +60,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc RuntimeUiPaintProjection::Storage::PaintRow */
-    Result<void> RuntimeUiPaintProjection::Storage::PaintRow(const std::size_t index, const UiAnimationFrameLease &frame) {
+    Result<void> RuntimeUiPaintProjection::Storage::PaintRow(const std::size_t index, const PaintProjectionDetail::Presentation &frame) {
         auto &row = rows[index];
         auto computed = ComputedPaint(row, frame);
         const auto layout = frame.Layout().Get(row.element);
@@ -112,7 +112,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc RuntimeUiPaintProjection::Storage::Build */
-    Result<void> RuntimeUiPaintProjection::Storage::Build(const UiAnimationFrameLease &frame) {
+    Result<void> RuntimeUiPaintProjection::Storage::Build(const PaintProjectionDetail::Presentation &frame) {
         // Worst-case capacity is checked before any push; ordinary successful frames cannot grow a vector.
         if (rows.size() + declaration.components.size() > descriptor.limits.commands)
             return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));

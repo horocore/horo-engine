@@ -65,8 +65,16 @@ jobs:
       - name: Check C++ formatting
         run: python3 scripts/dev.py format --check
 
+      - name: Test Protobuf coverage scope contracts
+        run: |
+          cmake -S tests/cmake/protobuf_coverage -B build/protobuf-coverage
+          ctest --test-dir build/protobuf-coverage --output-on-failure --no-tests=error
+
       - name: Test Python tooling
         run: pytest tests/python/
+
+      - name: Test cache retention policy
+        run: node --test tests/javascript/cache-retention.test.js tests/javascript/external-cache-policy.test.js
 
   android-storage:
     name: Android Storage · NDK arm64 API 29
@@ -104,6 +112,8 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      # Share hosted capacity across concurrent PRs without adding shards.
+      max-parallel: 1
       matrix:
         include:
           - os: ubuntu-26.04
@@ -328,6 +338,7 @@ jobs:
       HORO_LOG_LEVEL: debug
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           - name: Linux / GCC
@@ -393,12 +404,35 @@ jobs:
           mode: Debug
           max-size: 2G
 
+      - name: Setup optional dependency registry client
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
+        with:
+          version: 1.3.0
+
       - name: Configure Debug
-        run: cmake --preset "${{ matrix.preset }}" -DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"
+        run: >-
+          cmake --preset "${{ matrix.preset }}" -DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"
+          -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk"
+          -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON
 
       - name: Build Debug
         id: debug_build
         run: cmake --build --preset "${{ matrix.preset }}"
+
+      # Preserve Debug's working set before Release/Metal/provider variants
+      # compete for the bounded compiler cache. Later failures retain this
+      # completed checkpoint; only main may publish it.
+      - name: Checkpoint main Debug compiler cache
+        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/save-native-cache
+        with:
+          compiler-key: ${{ steps.cache.outputs.compiler-key }}
+          dependency-key: ${{ steps.cache.outputs.dependency-key }}
+          dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
+          dependency-ready: 'false'
 
       - name: Qualify OpenGL editor GUI composition with Mesa
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.debug_build.outcome == 'success' }}
@@ -423,6 +457,18 @@ jobs:
           python3 .github/scripts/ui_paint_fixture.py apple \
             --root "$RUNNER_TEMP/ui-paint-msl" --output "$RUNNER_TEMP/ui-paint-offline"
           printf 'HORO_UI_PAINT_METAL_FIXTURE=%s\n' "$RUNNER_TEMP/ui-paint-offline" >> "$GITHUB_ENV"
+      # Switch after Debug's checkpoint so auxiliary configurations never evict
+      # its primary working set. This uses the existing platform job and tools.
+      - name: Restore auxiliary compiler variants
+        id: variants_cache
+        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-variants-v1
+          mode: Mixed
+          max-size: 2G
+          compiler-only: 'true'
+
       - name: Configure Metal shader and presentation tests
         if: runner.os == 'macOS'
         run: >-
@@ -541,7 +587,20 @@ jobs:
         if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
         run: cmake --preset ci-xr-disabled
 
-      - name: Checkpoint main build caches
+      # Compiler entries remain individually content checked even if a later
+      # test fails. Preserve successful auxiliary compilation before testing.
+      - name: Checkpoint auxiliary compiler variants
+        if: ${{ !cancelled() && steps.variants_cache.outcome == 'success' && (steps.release_build.outcome == 'success' || steps.network_build.outcome == 'success' || steps.xr_build.outcome == 'success') }}
+        continue-on-error: true
+        uses: ./.github/actions/save-native-cache
+        with:
+          compiler-profile: native-variants-v1
+          compiler-key: ${{ steps.variants_cache.outputs.compiler-key }}
+          dependency-key: ''
+          dependency-hit: 'true'
+          dependency-ready: 'false'
+
+      - name: Checkpoint complete dependency sources
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         continue-on-error: true
         uses: ./.github/actions/save-native-cache
@@ -549,6 +608,7 @@ jobs:
           compiler-key: ${{ steps.cache.outputs.compiler-key }}
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
+          compiler-ready: 'false'
           dependency-ready: ${{ steps.xr_configure.outcome == 'success' && (needs.tooling.outputs.network != 'true' || steps.network_configure.outcome == 'success') }}
 
       - name: Prepare Windows mixer allocation diagnostics

@@ -11,20 +11,22 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (!evidence.IsValid())
             return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
-        if (!state_->source && state_->phase == RuntimeUiPaintHostPhase::NoSource)
-            return Result<void>::Success();
-        if (!state_->source || state_->phase != RuntimeUiPaintHostPhase::Active)
-            return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        auto &source = *state_->source;
-        const auto resolved = ResolveUiScreenCanvasWithEvidence(source.output.canvas, evidence);
-        if (resolved.HasError())
-            return Result<void>::Failure(resolved.ErrorValue());
-        if (source.output.pending == evidence || (!source.output.pending && source.output.current == evidence))
-            return Result<void>::Success();
-        source.output.pending = evidence;
-        source.output.awaitingPresentation = true;
-        // These are local observations only; any already submitted native frame retains its canonical completion pins.
-        source.ReleaseFrame();
+        const auto sources = state_->Sources();
+        for (auto *source : sources) {
+            if (!source)
+                continue;
+            const auto resolved = ResolveUiScreenCanvasWithEvidence(source->output.canvas, evidence);
+            if (resolved.HasError())
+                return Result<void>::Failure(resolved.ErrorValue());
+        }
+        state_->output = evidence;
+        for (auto *source : sources) {
+            if (!source || source->output.pending == evidence || (!source->output.pending && source->output.current == evidence))
+                continue;
+            source->output.pending = evidence;
+            source->output.awaitingPresentation = true;
+            source->ReleaseFrame();
+        }
         return Result<void>::Success();
     }
 

@@ -146,6 +146,22 @@ namespace Horo::Render::Detail {
         return IsValid() && implemented.support.Supports(descriptor);
     }
 
+    /** @copydoc SupportsMetalUiPaint */
+    bool SupportsMetalUiPaint(const MetalDeviceCapabilities &capabilities) noexcept {
+        if (!capabilities.IsValid() || capabilities.implemented.support.limits.maxFramesInFlight == 0 ||
+            capabilities.implemented.support.limits.maxVertexAttributes < 3)
+            return false;
+        using enum RenderTextureFormat;
+        using enum RenderTextureUsage;
+        for (const auto descriptor : {RenderTextureDescriptor{.extent = {1, 1}, .format = Bgra8Unorm, .usage = RenderAttachment},
+                                      RenderTextureDescriptor{.extent = {1, 1}, .format = Rgba16Float, .usage = Sampled | RenderAttachment},
+                                      RenderTextureDescriptor{.extent = {1, 1}, .format = Rgba8Unorm, .usage = Sampled | CopyDestination},
+                                      RenderTextureDescriptor{.extent = {1, 1}, .format = Depth32FloatStencil8, .usage = RenderAttachment}})
+            if (!capabilities.SupportsTexture(descriptor))
+                return false;
+        return true;
+    }
+
     Result<MetalDeviceCapabilities> AdmitMetalDevice(const MetalDeviceFacts &facts, const MetalDeviceAdmissionRequest &request) {
         if (const Result<void> deviceFacts = ValidateDeviceFacts(facts); deviceFacts.HasError()) {
             return Result<MetalDeviceCapabilities>::Failure(deviceFacts.ErrorValue());

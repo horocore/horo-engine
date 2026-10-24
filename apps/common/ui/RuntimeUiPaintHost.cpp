@@ -1,5 +1,7 @@
 #include "RuntimeUiPaintHostInternal.h"
 
+#include <algorithm>
+
 namespace Horo::Application::Internal {
     using namespace Runtime::Ui;
 
@@ -7,6 +9,31 @@ namespace Horo::Application::Internal {
         /** @brief Returns the canonical UI lifecycle failure for a revoked or foreign-thread application port. */
         Result<void> Unavailable() {
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        }
+
+        /** @brief Collects one exact source only after its derived/native admission has closed. */
+        Result<bool> CollectSource(std::unique_ptr<Detail::RuntimeUiPaintSource> &source) {
+            if (!source)
+                return Result<bool>::Success(true);
+            if (source->retiring) {
+                const auto retired = source->Retire();
+                if (retired.HasError())
+                    return Result<bool>::Failure(retired.ErrorValue());
+            }
+            if (source->retiredProgram) {
+                const auto closed = source->retiredProgram->Shutdown();
+                if (closed.HasError())
+                    return Result<bool>::Failure(closed.ErrorValue());
+                source->retiredProgram.reset();
+            }
+            if (!source->retiring)
+                return Result<bool>::Success(true);
+            if (const auto drained = source->animation->DrainRetired(); drained.HasError())
+                return Result<bool>::Failure(drained.ErrorValue());
+            if (!source->animation->CanReclaim())
+                return Result<bool>::Success(false);
+            source.reset();
+            return Result<bool>::Success(true);
         }
     }  // namespace
 
@@ -39,11 +66,13 @@ namespace Horo::Application::Internal {
     Result<void> RuntimeUiPaintHost::Startup(const CancellationToken &cancellation) {
         if (!state_->Available() || state_->started || cancellation.IsCancellationRequested())
             return Unavailable();
-        if (state_->source) {
-            const auto started = state_->source->animation->Startup(state_->cancellation.Token());
-            if (started.HasError())
-                return started;
-        }
+        for (auto *source : state_->Sources())
+            if (source && !source->started) {
+                const auto started = source->animation->Startup(state_->cancellation.Token());
+                if (started.HasError())
+                    return started;
+                source->started = true;
+            }
         state_->started = true;
         return Result<void>::Success();
     }
@@ -59,26 +88,17 @@ namespace Horo::Application::Internal {
             if (applied.HasError())
                 return Result<void>::Failure(applied.ErrorValue());
         }
-        if (!state_->source || state_->phase != RuntimeUiPaintHostPhase::Active)
-            return Result<void>::Success();
-        auto &source = *state_->source;
-        if (phase == Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands) {
-            const auto output = source.ApplyOutput();
-            if (output.HasError())
-                return output;
-        }
-        if (phase == Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands && source.refresh) {
-            const auto refreshed = source.Refresh(*state_->frontend, state_->cancellation.Token());
-            if (refreshed.HasError())
-                return refreshed;
-        }
         state_->dispatching = true;
-        const auto forwarded = source.animation->OnPhase(phase, context);
+        for (auto *source : state_->Sources()) {
+            if (!source)
+                continue;
+            const auto forwarded = source->OnPhase(state_->service, *state_->frontend, phase, context, state_->cancellation.Token());
+            if (forwarded.HasError()) {
+                state_->dispatching = false;
+                return forwarded;
+            }
+        }
         state_->dispatching = false;
-        if (forwarded.HasError())
-            return forwarded;
-        if (phase == Runtime::RuntimePhase::RenderExtraction)
-            return source.Extract(state_->service, context.frameNumber, state_->cancellation.Token());
         return Result<void>::Success();
     }
 
@@ -86,12 +106,18 @@ namespace Horo::Application::Internal {
     Result<void> RuntimeUiPaintHost::OnFixedUpdate(const Runtime::FixedStepContext &context) {
         if (!state_->Available() || !state_->started || state_->dispatching)
             return Unavailable();
-        if (!state_->source || state_->phase != RuntimeUiPaintHostPhase::Active)
-            return Result<void>::Success();
         state_->dispatching = true;
-        const auto updated = state_->source->animation->OnFixedUpdate(context);
+        for (auto *source : state_->Sources()) {
+            if (!source)
+                continue;
+            const auto updated = source->animation->OnFixedUpdate(context);
+            if (updated.HasError()) {
+                state_->dispatching = false;
+                return updated;
+            }
+        }
         state_->dispatching = false;
-        return updated;
+        return Result<void>::Success();
     }
 
     /** @copydoc RuntimeUiPaintHost::Shutdown */
@@ -138,31 +164,41 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintPort::CollectRetired */
     Result<bool> RuntimeUiPaintPort::CollectRetired() const {
-        if (!state_ || state_->owner != std::this_thread::get_id() || state_->dispatching)
+        if (!state_ || state_->owner != std::this_thread::get_id() || state_->dispatching || state_->sceneSealed || state_->scenePreparing)
             return Result<bool>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (state_->phase == RuntimeUiPaintHostPhase::Failed && state_->source) {
-            const auto retired = state_->Retire();
-            if (retired.HasError())
-                return Result<bool>::Failure(retired.ErrorValue());
-        }
-        if (state_->source && state_->source->retiredProgram) {
-            const auto closed = state_->source->retiredProgram->Shutdown();
-            if (closed.HasError())
-                return Result<bool>::Failure(closed.ErrorValue());
-            state_->source->retiredProgram.reset();
-        }
-        if (state_->phase == RuntimeUiPaintHostPhase::Retiring && state_->source) {
-            auto drained = state_->source->animation->DrainRetired();
-            if (drained.HasError())
-                return Result<bool>::Failure(drained.ErrorValue());
-            if (!state_->source->animation->CanReclaim())
-                return Result<bool>::Success(false);
-            state_->source.reset();
-            state_->phase = RuntimeUiPaintHostPhase::NoSource;
-        }
+        bool drained = true;
+        const auto collect = [&](auto &entry) -> Result<void> {
+            const auto slot = entry ? entry->retirementSlot : NoUiRenderIndex;
+            const auto result = CollectSource(entry);
+            if (result.HasError())
+                return Result<void>::Failure(result.ErrorValue());
+            drained = drained && result.Value();
+            if (!entry && slot < state_->reservedRetirements.size())
+                state_->reservedRetirements[slot] = false;
+            return Result<void>::Success();
+        };
+        if (const auto result = collect(state_->source); result.HasError())
+            return Result<bool>::Failure(result.ErrorValue());
+        for (auto &entry : state_->sceneSources)
+            if (const auto result = collect(entry); result.HasError())
+                return Result<bool>::Failure(result.ErrorValue());
+        for (auto &entry : state_->retiredSources)
+            if (entry) {
+                if (const auto result = collect(entry); result.HasError())
+                    return Result<bool>::Failure(result.ErrorValue());
+            }
+        const auto active = state_->Sources();
+        if (std::ranges::any_of(active, [](auto *entry) {
+            return entry != nullptr;
+        }))
+            state_->phase = RuntimeUiPaintHostPhase::Active;
+        else
+            state_->phase = drained ? RuntimeUiPaintHostPhase::NoSource : RuntimeUiPaintHostPhase::Retiring;
         const auto collected = state_->service.CollectRetired();
         if (collected.HasError())
             return Result<bool>::Failure(collected.ErrorValue());
+        if (!drained)
+            return Result<bool>::Success(false);
         return state_->revoked ? state_->service.CanReclaim() : Result<bool>::Success(true);
     }
 }  // namespace Horo::Application::Internal

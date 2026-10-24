@@ -6,6 +6,25 @@ namespace Horo::Application::Internal {
     namespace PaintProjectionDetail {
         using namespace Runtime::Ui;
 
+        /** @brief Borrowed same-owner computed inputs for both private preparation and actual frame extraction. */
+        struct Presentation final {
+            const UiComputedStyleSnapshot &styles;
+            const UiLayoutSnapshot &layout;
+            const UiLayoutClipSnapshot *clipping{};
+
+            [[nodiscard]] const UiComputedStyleSnapshot &Styles() const noexcept {
+                return styles;
+            }
+
+            [[nodiscard]] const UiLayoutSnapshot &Layout() const noexcept {
+                return layout;
+            }
+
+            [[nodiscard]] const UiLayoutClipSnapshot *Clipping() const noexcept {
+                return clipping;
+            }
+        };
+
         /** @brief Load-time resolved source row; all pointers are pinned by the containing exact generation lease. */
         struct Row final {
             const UiDocumentElement *source{};
@@ -45,8 +64,8 @@ namespace Horo::Application::Internal {
             : source(std::move(pin)), declaration(std::move(input)), extractor(std::move(render)), descriptor(policy) {}
 
         [[nodiscard]] Result<void> AdmitRows();
-        [[nodiscard]] Result<void> Build(const Runtime::Ui::UiAnimationFrameLease &frame);
-        [[nodiscard]] Result<void> PaintRow(std::size_t index, const Runtime::Ui::UiAnimationFrameLease &frame);
+        [[nodiscard]] Result<void> Build(const PaintProjectionDetail::Presentation &frame);
+        [[nodiscard]] Result<void> PaintRow(std::size_t index, const PaintProjectionDetail::Presentation &frame);
         [[nodiscard]] Result<void> BeginScopes(std::size_t index, const Runtime::Ui::UiDrawCommand &paint);
         [[nodiscard]] Result<void> CloseGroups();
     };

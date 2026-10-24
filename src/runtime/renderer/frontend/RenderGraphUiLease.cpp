@@ -51,7 +51,7 @@ namespace Horo::Render::Detail {
         if (existing == nullptr) {
             auto acquired = Acquire(resources, &ui, transient);
             if (acquired.HasValue())
-                static_cast<Lease *>(acquired.Value())->uiKernels = std::move(kernels);
+                static_cast<Lease *>(acquired.Value())->ui.front().kernels = std::move(kernels);
             return acquired;
         }
         if (resources.size() > RenderGraphLimits::HardMaxResources || (transient && (transient->inFlight || transient->released)))
@@ -59,7 +59,11 @@ namespace Horo::Render::Detail {
         const auto selected = std::ranges::find_if(leases_, [existing](const Lease &candidate) {
             return candidate.active && static_cast<const IRenderGraphResourceLease *>(&candidate) == existing;
         });
-        if (selected == leases_.end() || selected->uiCaptured || selected->uiTransient)
+        if (selected == leases_.end() || selected->uiCount == selected->ui.size())
+            return Outcome::Failure(MakeError(FrontendErrors::ResourceNotReady));
+        if (std::ranges::any_of(std::span{selected->ui}.first(selected->uiCount), [&](const auto &capture) {
+            return capture.source.HasGeometry(ui);
+        }))
             return Outcome::Failure(MakeError(FrontendErrors::ResourceNotReady));
         const auto initialPins = selected->pins.size();
         const auto rollbackPins = [initialPins](Lease *pending) {
@@ -69,11 +73,11 @@ namespace Horo::Render::Detail {
         for (const auto &resource : resources)
             if (const auto retained = selected->PinResource(resource, transient); retained.HasError())
                 return Outcome::Failure(retained.ErrorValue());
-        if (const auto captured = selected->ui.Capture(ui, resources); captured.HasError())
+        if (const auto captured = selected->ui[selected->uiCount].source.Capture(ui, resources); captured.HasError())
             return Outcome::Failure(captured.ErrorValue());
-        selected->uiCaptured = true;
-        selected->uiKernels = std::move(kernels);
-        selected->uiTransient = transient;
+        auto &capture = selected->ui[selected->uiCount++];
+        capture.kernels = std::move(kernels);
+        capture.transient = transient;
         if (transient)
             transient->inFlight = true;
         return Outcome::Success(transaction.release());

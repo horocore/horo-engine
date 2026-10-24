@@ -8,6 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 import pytest
 
+pytest_plugins = ["pytester"]
+
 
 @pytest.fixture
 def repository_root() -> Path:

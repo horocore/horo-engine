@@ -7,6 +7,10 @@
 #include "Horo/Runtime/UiAnimationRuntimeParticipant.h"
 #include "RuntimeUiPaintProjection.h"
 
+namespace Horo::Runtime {
+    class SceneActivationCandidate;
+}
+
 namespace Horo::Application::Internal {
     namespace Detail {
         struct RuntimeUiPaintHostState;
@@ -55,6 +59,14 @@ namespace Horo::Application::Internal {
         Runtime::Ui::UiRenderGeometryArenaDescriptor geometry;
         Render::UiPaintProgramDescriptor program;
         Render::CookedUiPaintKernel kernel;
+        std::shared_ptr<Runtime::Ui::UiElementSlotAllocator>
+            allocatorLifetime; /**< Optional exact owner pin; must alias allocator when supplied. */
+    };
+
+    /** @brief Same canonical private source plus fully owned derived/native preparation; no Scene component borrow survives. */
+    struct RuntimeUiPaintSceneSourcePreparation final {
+        Runtime::Ui::UiSceneActivation activation;
+        RuntimeUiPaintSourcePreparation paint;
     };
 
     class RuntimeUiPaintHost;
@@ -76,6 +88,18 @@ namespace Horo::Application::Internal {
                                                                                         const CancellationToken &cancellation = {}) const;
         /** @brief Attaches one real admitted source and reserves its complete derived producer transactionally. */
         [[nodiscard]] Result<void> AttachSource(RuntimeUiPaintSourcePreparation preparation) const;
+        /** @brief Prepares all exact incoming Scene sources and one sealed canonical transaction before Scene publication.
+         * @param transition Actual previous/next runtime Scene generation; absence expresses initial activation or normal unload.
+         * @param incoming Complete authored component inventory, in actual Scene paint order.
+         * @param replacements Explicit complete persistent provider rebindings, never inferred from current Scene state.
+         * @param cancellation Exact load-operation ancestry.
+         * @return Generic Scene-owned activation/retirement candidate or original failure preserving every active source.
+         * @details Fixed product inventory admits at most eight TOTAL manual/Scene sources and uses reserved retirement slots.
+         * The candidate's no-fail Publish runs only under the existing Scene claim; Shutdown revokes only its exact Scene.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PrepareScene(
+            Runtime::Ui::UiSceneTransitionRequest transition, std::vector<RuntimeUiPaintSceneSourcePreparation> incoming,
+            std::vector<Runtime::Ui::UiSceneBindingReplacement> replacements = {}, const CancellationToken &cancellation = {}) const;
         /** @brief Coordinates the same source publisher/derived owner; failed preparation keeps the prior source and native program. */
         [[nodiscard]] Result<Runtime::UiAnimationRuntimeReload> Reload(Runtime::Ui::UiAnimationReloadPreparation preparation,
                                                                        RuntimeUiPaintDeclaration declaration,
@@ -103,6 +127,8 @@ namespace Horo::Application::Internal {
 
     private:
         friend class RuntimeUiPaintHost;
+        friend class RuntimeUiPaintSceneTransaction;
+        friend class RuntimeUiPaintProjectSources;
 
         explicit RuntimeUiPaintPort(std::shared_ptr<Detail::RuntimeUiPaintHostState> state) noexcept : state_(std::move(state)) {}
 

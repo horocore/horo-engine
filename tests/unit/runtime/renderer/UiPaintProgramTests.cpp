@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Render/UiPaintProgram.h"
 #include "RenderFrontendTestSupport.h"
+#include "RenderResourceRegistry.h"
+#include "UiPaintFrontendState.h"
 #include "UiSubmissionSourceFixture.h"
 
 namespace {
@@ -69,6 +71,11 @@ namespace {
             return UiRequire(arena.Build(snapshot, projection));
         }
 
+        UiRenderGeometryPlan ExtractInto(UiRenderGeometryArena &target) {
+            const auto geometry = Extract();
+            return UiRequire(target.Build(geometry.SourceSnapshot(), projection));
+        }
+
         std::unique_ptr<UiPaintProgram> Create(const UiRenderGeometryPlan &geometry, std::span<const RenderTextureHandle> extra = {}) {
             std::vector handles{texture->Creation().handle};
             handles.insert(handles.end(), extra.begin(), extra.end());
@@ -94,6 +101,47 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("UI program retains every failed creation outcome through operation history eviction", "[renderer][ui-paint][program]") {
+    ProgramFixture fixture;
+    REQUIRE(fixture.frontend->ProcessResourceRequests().HasValue());
+    const auto geometry = fixture.Extract();
+    const std::array textures{fixture.texture->Creation().handle};
+    auto result = UiPaintProgram::Create(*fixture.frontend, {fixture.projection, {512, 768, 128}, 1, 32}, geometry.SourceSnapshot(),
+                                         textures, CookedUiPaintKernel{});
+    REQUIRE(result.HasValue());
+    auto program = std::move(result).Value();
+    lifecycleState.failResourceCreation = true;
+    const auto sentinel = fixture.frontend->CreateBuffer({.byteSize = 16, .usage = RenderBufferUsage::Vertex}, {});
+    REQUIRE(sentinel.HasValue());
+    REQUIRE(fixture.frontend->ProcessResourceRequests().HasValue());
+    const auto failed = program->ValidatePreparation();
+    REQUIRE(failed.HasError());
+    CHECK(failed.ErrorValue().domain.Value() == "render.test");
+    CHECK(failed.ErrorValue().code.Value() == "render.test.resource_failed");
+    lifecycleState.failResourceCreation = false;
+    for (std::uint32_t index = 0; index <= Horo::Render::Detail::RenderResourceRegistryLimits{}.maximumOperationResults; ++index) {
+        const auto created = fixture.frontend->CreateBuffer({.byteSize = 16, .usage = RenderBufferUsage::Vertex}, {});
+        REQUIRE(created.HasValue());
+        REQUIRE(fixture.frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(fixture.frontend->ReleaseBuffer(created.Value().handle).HasValue());
+    }
+    const auto evicted = fixture.frontend->ResourceOperationState(sentinel.Value().operation);
+    REQUIRE(evicted.HasError());
+    CHECK(evicted.ErrorValue().code.Value() == "render.frontend.resource.operation_unknown");
+    auto unobserved = sentinel.Value().handle;
+    const auto unknown = Horo::Render::Detail::ObserveUiPaintCreation(*fixture.frontend, sentinel.Value().operation, unobserved);
+    REQUIRE(unknown.HasError());
+    CHECK(unknown.ErrorValue().code.Value() == "render.frontend.resource.operation_unknown");
+    CHECK(unobserved == sentinel.Value().handle);
+    CHECK(fixture.frontend->ReleaseBuffer(unobserved).HasError());
+    REQUIRE(program->Shutdown().HasValue());
+    REQUIRE(program->Shutdown().HasValue());
+    const auto retained = fixture.frontend->ResourceState(fixture.texture->Creation().handle);
+    REQUIRE(retained.HasValue());
+    CHECK(retained.Value() == RenderResourceState::Ready);
+    CHECK(fixture.frontend->UploadSnapshot().pendingRequests == 0);
+}
 
 TEST_CASE("UI prepared program applies fractional ancestor child masks once at nested group boundaries", "[renderer][ui-paint][program]") {
     ProgramFixture fixture;
@@ -254,4 +302,185 @@ TEST_CASE("UI prepared program rejects swapped valid predeclared image realizati
     REQUIRE(program->Submit(frame, accepted, fixture.Submission(*program, original, bindings)).HasValue());
     CHECK(lifecycleState.executeCount == executions + 1);
     REQUIRE(frame.Present().HasValue());
+}
+
+TEST_CASE("UI canvas batch rejects a malformed later source before any native encoding", "[renderer][ui-paint][program][batch]") {
+    ProgramFixture fixture;
+    const auto first = fixture.Extract();
+    const auto second = fixture.Extract();
+    auto firstProgram = fixture.Create(first);
+    auto secondProgram = fixture.Create(second);
+    std::array<UiRenderImageBinding, 1> firstBindings, secondBindings;
+    const auto firstFrame = UiRequire(firstProgram->Prepare(0, fixture.Submission(*firstProgram, first, firstBindings)));
+    const auto secondFrame = UiRequire(secondProgram->Prepare(0, fixture.Submission(*secondProgram, second, secondBindings)));
+    auto frame = UiRequire(fixture.frontend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}}));
+    REQUIRE(frame.Execute({}).HasValue());
+    const auto executed = lifecycleState.executeCount;
+    std::array contributions{UiPaintProgramSubmission{firstProgram.get(), &firstFrame,
+                                                      fixture.Submission(*firstProgram, first, firstBindings)},
+                             UiPaintProgramSubmission{secondProgram.get(), &secondFrame,
+                                                      fixture.Submission(*secondProgram, first, secondBindings)}};
+    REQUIRE(UiPaintProgram::SubmitBatch(frame, contributions).HasError());
+    CHECK(lifecycleState.executeCount == executed);
+    CHECK(lifecycleState.presentCount == 0);
+    // A caller-side correspondence error has not consumed the named stage or the valid first source.
+    contributions[0].source = fixture.Submission(*firstProgram, first, firstBindings);
+    contributions[1].source = fixture.Submission(*secondProgram, second, secondBindings);
+    REQUIRE(UiPaintProgram::SubmitBatch(frame, contributions).HasValue());
+    CHECK(lifecycleState.executeCount == executed + 2);
+    CHECK(firstProgram->Submit(frame, firstFrame, fixture.Submission(*firstProgram, first, firstBindings)).HasError());
+    REQUIRE(frame.Present().HasValue());
+}
+
+TEST_CASE("UI preparation-only snapshots cannot become normal uploaded geometry", "[renderer][ui-paint][program][prototype]") {
+    ProgramFixture fixture;
+    const auto descriptor = Runtime::Ui::Test::SnapshotDescriptor(fixture.tree, UiRequire(UiInteractionRevision::Create(8)),
+                                                                  UiRequire(UiRenderSnapshotRevision::Create(fixture.revision++)),
+                                                                  {UiOwner(), 9, 1}, fixture.limits);
+    const std::array resources{fixture.texture->Source()};
+    const auto prototype = UiRequire(fixture.extractor.ExtractPrototype(fixture.tree, descriptor,
+                                                                        {.commands = fixture.commands,
+                                                                         .masks = fixture.masks,
+                                                                         .transforms = fixture.transforms,
+                                                                         .resources = resources,
+                                                                         .groups = fixture.groups}));
+    const auto copy = prototype;
+    CHECK(copy.IsPreparationOnly());
+    CHECK(fixture.arena.Build(copy, fixture.projection).HasError());
+    const std::array textures{fixture.texture->Creation().handle};
+    auto program = UiRequire(UiPaintProgram::Create(*fixture.frontend, {fixture.projection, {512, 768, 128}, 1, 32}, prototype, textures,
+                                                    CookedUiPaintKernel{}));
+    REQUIRE(fixture.frontend->ProcessResourceRequests().HasValue());
+    const auto actual = fixture.Extract();
+    CHECK_FALSE(actual.SourceSnapshot().IsPreparationOnly());
+    std::array<UiRenderImageBinding, 1> bindings;
+    const auto prepared = UiRequire(program->Prepare(0, fixture.Submission(*program, actual, bindings)));
+    fixture.Encode(*program, actual, prepared);
+}
+
+TEST_CASE("A later native UI failure preserves the single queued frame completion lease", "[renderer][ui-paint][program][batch]") {
+    ProgramFixture fixture;
+    const auto first = fixture.Extract();
+    const auto second = fixture.Extract();
+    auto firstProgram = fixture.Create(first);
+    auto secondProgram = fixture.Create(second);
+    std::array<UiRenderImageBinding, 1> firstBindings, secondBindings;
+    const auto firstFrame = UiRequire(firstProgram->Prepare(0, fixture.Submission(*firstProgram, first, firstBindings)));
+    const auto secondFrame = UiRequire(secondProgram->Prepare(0, fixture.Submission(*secondProgram, second, secondBindings)));
+    auto frame = UiRequire(fixture.frontend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}}));
+    REQUIRE(frame.Execute({}).HasValue());
+    lifecycleState.uiPaint.retainAfterAbort = true;
+    lifecycleState.uiPaint.failGraphCall = 2;
+    std::array contributions{UiPaintProgramSubmission{firstProgram.get(), &firstFrame,
+                                                      fixture.Submission(*firstProgram, first, firstBindings)},
+                             UiPaintProgramSubmission{secondProgram.get(), &secondFrame,
+                                                      fixture.Submission(*secondProgram, second, secondBindings)}};
+    REQUIRE(UiPaintProgram::SubmitBatch(frame, contributions).HasError());
+    CHECK(lifecycleState.uiPaint.graphCalls == 2);
+    CHECK(lifecycleState.graphLease != nullptr);
+    CHECK(lifecycleState.abortCount == 1);
+    CHECK(lifecycleState.presentCount == 0);
+    CHECK(frame.Present().HasError());
+    // Explicit simulated completion, not abort/presentation, discharges the retained native queue debt.
+    lifecycleState.graphLease->Release();
+    lifecycleState.graphLease = nullptr;
+}
+
+TEST_CASE("The complete UI batch fences reentrant UI and GUI stage admission", "[renderer][ui-paint][program][batch]") {
+    class Gui final : public IGuiPassExecutor {
+    public:
+        Result<void> RenderDrawData(const GuiCompositionRequest &) override {
+            ++calls;
+            return Result<void>::Success();
+        }
+
+        int calls{};
+    } gui;
+
+    ProgramFixture fixture;
+    const auto geometry = fixture.Extract();
+    auto program = fixture.Create(geometry);
+    std::array<UiRenderImageBinding, 1> bindings;
+    const auto prepared = UiRequire(program->Prepare(0, fixture.Submission(*program, geometry, bindings)));
+    auto frame = UiRequire(fixture.frontend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}}));
+    REQUIRE(frame.Execute({}).HasValue());
+    bool nestedUiRejected{}, nestedGuiRejected{};
+    lifecycleState.uiPaint.onGraph = [&] {
+        nestedUiRejected = frame.ComposeUi().HasError();
+        nestedGuiRejected = frame.ComposeGui(gui).HasError();
+    };
+    const auto submitted = program->Submit(frame, prepared, fixture.Submission(*program, geometry, bindings));
+    lifecycleState.uiPaint.onGraph = {};
+    REQUIRE(submitted.HasValue());
+    CHECK(nestedUiRejected);
+    CHECK(nestedGuiRejected);
+    CHECK(gui.calls == 0);
+    REQUIRE(frame.ComposeGui(gui).HasValue());
+    CHECK(gui.calls == 1);
+    REQUIRE(frame.Present().HasValue());
+}
+
+TEST_CASE("UI program cold structural preparation releases its source snapshot while pools remain alive",
+          "[renderer][ui-paint][program][lifetime]") {
+    ProgramFixture fixture;
+    std::optional<UiRenderGeometryPlan> source{fixture.Extract()};
+    auto program = fixture.Create(*source);
+    source.reset();
+    CHECK(fixture.arena.IsDrained());
+    CHECK(fixture.extractor.IsDrained());
+    REQUIRE(program->ValidatePreparation().HasValue());
+}
+
+TEST_CASE("UI program replacement retires superseded CPU geometry after exact native completion",
+          "[renderer][ui-paint][program][lifetime]") {
+    ProgramFixture fixture;
+    std::optional<UiRenderGeometryPlan> original{fixture.Extract()};
+    auto program = fixture.Create(*original);
+    std::array<UiRenderImageBinding, 1> bindings;
+    const auto accepted = UiRequire(program->Prepare(0, fixture.Submission(*program, *original, bindings)));
+    lifecycleState.completeGraphOnPresent = false;
+    fixture.Encode(*program, *original, accepted);
+    original.reset();
+    REQUIRE(lifecycleState.graphLease != nullptr);
+    CHECK_FALSE(fixture.arena.IsDrained());
+    lifecycleState.graphLease->Release();
+    lifecycleState.graphLease = nullptr;
+    CHECK_FALSE(fixture.arena.IsDrained());  // Still the valid accepted CPU publication.
+    auto nextArena = UiRequire(UiRenderGeometryArena::Create({{UiOwner(), 9, 1}, {32, 48, 4}, 1}));
+    const auto replacement = fixture.ExtractInto(nextArena);
+    const auto updated = UiRequire(program->Prepare(0, fixture.Submission(*program, replacement, bindings)));
+    CHECK(fixture.arena.IsDrained());
+    CHECK_FALSE(nextArena.IsDrained());
+    lifecycleState.completeGraphOnPresent = true;
+    fixture.Encode(*program, replacement, updated);
+}
+
+TEST_CASE("UI program failed candidate releases only incoming CPU provenance and preserves accepted submission",
+          "[renderer][ui-paint][program][lifetime]") {
+    ProgramFixture fixture;
+    const auto original = fixture.Extract();
+    auto program = fixture.Create(original);
+    std::array<UiRenderImageBinding, 1> bindings;
+    const auto accepted = UiRequire(program->Prepare(0, fixture.Submission(*program, original, bindings)));
+    auto nextArena = UiRequire(UiRenderGeometryArena::Create({{UiOwner(), 9, 1}, {32, 48, 4}, 1}));
+    std::optional<UiRenderGeometryPlan> replacement{fixture.ExtractInto(nextArena)};
+    CancellationSource cancellation;
+    const ErrorCodeDescriptor *expected{};
+    SECTION("cancelled unpublished upload") {
+        cancellation.RequestCancellation();
+        expected = &UiPaintFrameErrors::Cancelled;
+    }
+    SECTION("native update temporarily pending") {
+        lifecycleState.uiPaint.pending = true;
+        expected = &UiPaintFrameErrors::Pending;
+    }
+    REQUIRE(expected != nullptr);
+    const auto failed = program->Prepare(0, fixture.Submission(*program, *replacement, bindings), cancellation.Token());
+    REQUIRE(failed.HasError());
+    CHECK(failed.ErrorValue().domain.Value() == expected->domain.Value());
+    CHECK(failed.ErrorValue().code.Value() == expected->code.Value());
+    replacement.reset();
+    CHECK(nextArena.IsDrained());
+    lifecycleState.uiPaint.pending = false;
+    fixture.Encode(*program, original, accepted);
 }

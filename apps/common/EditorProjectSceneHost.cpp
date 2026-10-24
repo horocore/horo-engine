@@ -4,6 +4,7 @@
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
+#include "RuntimeUiPaintProjectSources.h"
 #include "ScenePhysicsHost.h"
 
 #include <cmath>
@@ -80,6 +81,13 @@ namespace Horo::Application::Internal {
                     return added;
                 if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_)); added.HasError())
                     return added;
+                // Last participant: sealing the UI generation must be followed only by the Scene publication claim.
+                if (policy.uiSources) {
+                    auto ui = policy.uiSources->MakeParticipant(*scenes_, registry_, *uiLoads_,
+                                                                policy.cooked ? std::optional{policy.cooked->target} : std::nullopt);
+                    if (auto added = scenes_->AddActivationParticipant(std::move(ui)); added.HasError())
+                        return added;
+                }
                 if (policy.prefabGranted) {
                     auto limits = Prefab::PrefabLimitProfile::Create({});
                     if (limits.HasError())
@@ -190,6 +198,10 @@ namespace Horo::Application::Internal {
                     scenes_->Shutdown();
                 if (ai_)
                     ai_->BeginShutdown();
+                if (uiLoads_)
+                    uiLoads_->Shutdown();
+                if (uiArtifactLoads_)
+                    uiArtifactLoads_->Shutdown();
                 if (prefabLoads_)
                     prefabLoads_->Shutdown();
                 if (loads_)
@@ -223,6 +235,11 @@ namespace Horo::Application::Internal {
                     assets_ = std::move(captured).Value();
                 }
                 loads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_ ? assets_->Provider() : emptyProvider_);
+                if (policy.uiSources) {
+                    uiArtifactLoads_ =
+                        std::make_unique<Assets::AssetLoadService>(jobs, assets_ ? assets_->ArtifactProvider() : emptyProvider_);
+                    uiLoads_ = std::make_unique<Runtime::Ui::UiRuntimeAssetLoadService>(registry_, *uiArtifactLoads_);
+                }
                 if (policy.prefabGranted)
                     prefabLoads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_->ArtifactProvider());
                 return Result<void>::Success();
@@ -262,6 +279,8 @@ namespace Horo::Application::Internal {
             Assets::MemoryAssetProvider emptyProvider_;
             std::unique_ptr<Assets::AssetLoadService> loads_;
             std::unique_ptr<Assets::AssetLoadService> prefabLoads_;
+            std::unique_ptr<Assets::AssetLoadService> uiArtifactLoads_;
+            std::unique_ptr<Runtime::Ui::UiRuntimeAssetLoadService> uiLoads_;
             std::shared_ptr<const ProjectCollisionSettings> collision_;
             std::unique_ptr<Physics::PhysicsRuntime> physics_;
             Physics::PhysicsSceneActivationAuthority authority_;

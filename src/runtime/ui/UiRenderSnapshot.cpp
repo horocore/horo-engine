@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Ui/UiRenderSnapshot.h"
 
+#include "Horo/Runtime/Ui/UiAnimationOwner.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "UiRenderPaintValidation.h"
 
@@ -267,6 +268,8 @@ namespace Horo::Runtime::Ui {
 
         mutable std::atomic<std::uint64_t> leases{};
         UiRenderSnapshotDescriptor descriptor;
+        bool preparationOnly{};
+        mutable UiAnimationFrameLease sourceFrame;
         std::vector<UiDrawCommand> commands;
         std::vector<UiTextRun> textRuns;
         std::vector<UiPositionedGlyph> glyphs;
@@ -390,7 +393,7 @@ namespace Horo::Runtime::Ui {
         if (!storage_)
             return;
         auto current = storage_->leases.load();
-        while (current != std::numeric_limits<std::uint64_t>::max()) {
+        while (current > 0 && current < std::numeric_limits<std::uint64_t>::max() - 1) {
             if (storage_->leases.compare_exchange_weak(current, current + 1))
                 return;
         }
@@ -401,7 +404,19 @@ namespace Horo::Runtime::Ui {
     void UiRenderSnapshot::Release() noexcept {
         if (!storage_)
             return;
-        storage_->leases.fetch_sub(1);
+        auto current = storage_->leases.load(std::memory_order_acquire);
+        for (;;) {
+            if (current == 1) {
+                // Reserve the slot until its final source pin is gone; publishing zero first permits concurrent reuse.
+                if (!storage_->leases.compare_exchange_weak(current, std::numeric_limits<std::uint64_t>::max(), std::memory_order_acq_rel))
+                    continue;
+                storage_->sourceFrame = {};
+                storage_->leases.store(0, std::memory_order_release);
+                break;
+            }
+            if (storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_acq_rel))
+                break;
+        }
         storage_.reset();
     }
 
@@ -413,6 +428,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderSnapshot::IsValid */
     bool UiRenderSnapshot::IsValid() const noexcept {
         return static_cast<bool>(storage_);
+    }
+
+    /** @copydoc UiRenderSnapshot::IsPreparationOnly */
+    bool UiRenderSnapshot::IsPreparationOnly() const noexcept {
+        return storage_ && storage_->preparationOnly;
     }
 
     /** @copydoc UiRenderSnapshot::Commands */
@@ -495,12 +515,48 @@ namespace Horo::Runtime::Ui {
         UiRenderSnapshot::Storage::PublishLease publishLease{*slot};
         try {
             slot->Publish(descriptor, projection);
+            slot->preparationOnly = false;
         } catch (const std::bad_alloc &) {
             return Failure<UiRenderSnapshot>(UiErrors::CapacityExceeded);
         }
         publishLease.Commit();
         storage_->lastRevision = descriptor.snapshotRevision;
         return Result<UiRenderSnapshot>::Success(UiRenderSnapshot{std::move(slot)});
+    }
+
+    /** @copydoc UiRenderExtractor::Extract */
+    Result<UiRenderSnapshot> UiRenderExtractor::Extract(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
+                                                        const UiRenderProjection &projection, const UiAnimationFrameLease &frame) {
+        if (!frame.MatchesSourceTree(tree))
+            return Failure<UiRenderSnapshot>(UiErrors::HandleOwnerMismatch);
+        const auto &layout = frame.Layout().Descriptor();
+        if (frame.Clocks().updateSequence == 0 || layout.instance != descriptor.instance || layout.canvas != descriptor.canvas ||
+            layout.document != descriptor.document || layout.sources.document != descriptor.documentRevision ||
+            layout.sources.tree != descriptor.treeRevision || layout.interaction != descriptor.interactionRevision)
+            return Failure<UiRenderSnapshot>(UiErrors::RevisionStale);
+        auto extracted = Extract(tree, descriptor, projection);
+        if (extracted.HasValue()) {
+            // The only issued snapshot has not escaped. Installing this noexcept pin cannot introduce a partial publication.
+            const auto slot = std::ranges::find_if(storage_->slots, [&](const auto &entry) {
+                return entry.get() == extracted.Value().storage_.get();
+            });
+            (*slot)->sourceFrame = frame;
+        }
+        return extracted;
+    }
+
+    /** @copydoc UiRenderExtractor::ExtractPrototype */
+    Result<UiRenderSnapshot> UiRenderExtractor::ExtractPrototype(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
+                                                                 const UiRenderProjection &projection) {
+        auto extracted = Extract(tree, descriptor, projection);
+        if (extracted.HasValue()) {
+            // Extract still owns the only issued lease; mark its slot before it can escape to any consumer.
+            const auto slot = std::ranges::find_if(storage_->slots, [&](const auto &entry) {
+                return entry.get() == extracted.Value().storage_.get();
+            });
+            (*slot)->preparationOnly = true;
+        }
+        return extracted;
     }
 
     /** @copydoc UiRenderExtractor::Close */

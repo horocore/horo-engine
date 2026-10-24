@@ -18,6 +18,29 @@ namespace Horo::Render {
                      "Increase explicit host bounds or reduce the source; no mask, group or draw may be silently omitted."};
     }  // namespace UiPaintProgramErrors
 
+    namespace {
+        /** @brief Abandons a private CPU candidate on any failed update without releasing the still-accepted publication. */
+        class CandidateSourceGuard final {
+        public:
+            explicit CandidateSourceGuard(Detail::UiPaintCpuFrame &frame) noexcept : frame_(&frame) {}
+
+            ~CandidateSourceGuard() {
+                if (frame_)
+                    frame_->ReleaseSource();
+            }
+
+            void Commit() noexcept {
+                frame_ = nullptr;
+            }
+
+            CandidateSourceGuard(const CandidateSourceGuard &) = delete;
+            CandidateSourceGuard &operator=(const CandidateSourceGuard &) = delete;
+
+        private:
+            Detail::UiPaintCpuFrame *frame_;
+        };
+    }  // namespace
+
     /** @copydoc UiPaintProgram::UiPaintProgram */
     UiPaintProgram::UiPaintProgram(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
@@ -93,6 +116,42 @@ namespace Horo::Render {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiPaintProgram::Inventory */
+    UiPaintProgramInventory UiPaintProgram::Inventory() const noexcept {
+        if (std::this_thread::get_id() != storage_->owner || storage_->closed || storage_->native.slots.empty() ||
+            !storage_->native.slots.front().graph)
+            return {};
+        const auto &graph = *storage_->native.slots.front().graph;
+        return {graph.Passes().size(), graph.Resources().size(), storage_->descriptor.capacity.parameters};
+    }
+
+    /** @copydoc UiPaintProgram::ValidatePreparation */
+    Result<void> UiPaintProgram::ValidatePreparation() {
+        if (std::this_thread::get_id() != storage_->owner || storage_->closed)
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+        const auto owner = storage_->frontend.lock();
+        if (!owner || !owner->frontend)
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        std::optional<Error> failure;
+        const auto observe = [&](ResourceOperationId operation, auto &handle) {
+            if (const auto ready = Detail::ObserveUiPaintCreation(*owner->frontend, operation, handle); ready.HasError() && !failure)
+                failure = ready.ErrorValue();
+        };
+        for (std::uint32_t slot = 0; slot < storage_->native.slots.size(); ++slot) {
+            auto &pool = *storage_->native.buffers;
+            const std::array handles{&pool.slots_[slot].vertices, &pool.slots_[slot].indices, &pool.slots_[slot].parameters};
+            for (std::size_t index = 0; index < handles.size(); ++index)
+                observe(pool.operations_[slot][index], *handles[index]);
+            auto &resources = storage_->native.slots[slot];
+            for (auto &surface : resources.surfaces)
+                observe(surface.operation, surface.handle);
+            observe(resources.stencil.operation, resources.stencil.handle);
+        }
+        if (failure)
+            return Result<void>::Failure(std::move(*failure));
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiPaintProgram::TextureResource */
     Result<RenderGraphResourceId> UiPaintProgram::TextureResource(std::uint32_t slot, RenderTextureHandle texture) const {
         using Mapping = Result<RenderGraphResourceId>;
@@ -141,6 +200,7 @@ namespace Horo::Render {
                 return Preparation::Failure(MakeError(UiPaintFrameErrors::Pending));
         }
         auto &candidate = slot.frames[1 - slot.accepted];
+        CandidateSourceGuard candidateSource{candidate};
         if (const auto built = state.BuildFrame(slot, candidate, source); built.HasError())
             return Preparation::Failure(built.ErrorValue());
         const auto uploaded =
@@ -150,27 +210,55 @@ namespace Horo::Render {
         slot.accepted = 1 - slot.accepted;
         slot.revision = uploaded.Value().revision;
         state.Publish(slot, candidate, slot.revision);
+        candidateSource.Commit();
+        // The old prepared revision can no longer submit; its queued native captures retain their own exact provenance.
+        slot.frames[1 - slot.accepted].ReleaseSource();
         return Preparation::Success(UiPaintPreparedFrame{state.identity, slotIndex, slot.revision});
     }
 
-    /** @copydoc UiPaintProgram::Submit */
-    Result<void> UiPaintProgram::Submit(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared, UiRenderSubmission source) {
+    /** @copydoc UiPaintProgram::ValidateSubmission */
+    Result<UiPaintGraphComposition> UiPaintProgram::ValidateSubmission(const UiPaintPreparedFrame &prepared, UiRenderSubmission source) {
         auto &state = *storage_;
         if (std::this_thread::get_id() != state.owner || state.closed || prepared.identity_.lock() != state.identity ||
             prepared.slot_ >= state.native.slots.size())
-            return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+            return Result<UiPaintGraphComposition>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
         if (state.frontend.expired())
-            return Result<void>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+            return Result<UiPaintGraphComposition>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
         auto &slot = state.native.slots[prepared.slot_];
         const auto &accepted = slot.frames[slot.accepted];
         if (prepared.revision_ != slot.revision || !source.geometry || !source.geometry->IsValid() || !accepted.geometry ||
             &source.geometry->Descriptor() != &accepted.geometry->Descriptor() || !accepted.evidence.Matches(source))
-            return Result<void>::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
+            return Result<UiPaintGraphComposition>::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
         if (const auto valid = state.ValidateSource(source); valid.HasError())
-            return valid;
+            return Result<UiPaintGraphComposition>::Failure(valid.ErrorValue());
         if (const auto valid = state.validation.Validate(source, slot.graph->Resources()); valid.HasError())
-            return valid;
-        return frame.ComposeUi(*slot.graph, slot.workloads, std::move(source));
+            return Result<UiPaintGraphComposition>::Failure(valid.ErrorValue());
+        return Result<UiPaintGraphComposition>::Success({&*slot.graph, slot.workloads, std::move(source), {}});
+    }
+
+    /** @copydoc UiPaintProgram::Submit */
+    Result<void> UiPaintProgram::Submit(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared, UiRenderSubmission source) {
+        UiPaintProgramSubmission contribution{this, &prepared, std::move(source)};
+        return SubmitBatch(frame, std::span{&contribution, 1});
+    }
+
+    /** @copydoc UiPaintProgram::SubmitBatch */
+    Result<void> UiPaintProgram::SubmitBatch(RenderFrameScope &frame, const std::span<UiPaintProgramSubmission> sources) {
+        if (sources.empty() || sources.size() > 64)
+            return Result<void>::Failure(MakeError(UiPaintProgramErrors::Capacity));
+        std::array<UiPaintGraphComposition, 64> canvases;
+        for (std::size_t index = 0; index < sources.size(); ++index) {
+            auto &source = sources[index];
+            if (!source.program || !source.prepared || std::ranges::any_of(sources.first(index), [&](const auto &previous) {
+                return previous.program == source.program && previous.prepared && previous.prepared->slot_ == source.prepared->slot_;
+            }))
+                return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+            auto validated = source.program->ValidateSubmission(*source.prepared, std::move(source.source));
+            if (validated.HasError())
+                return Result<void>::Failure(validated.ErrorValue());
+            canvases[index] = std::move(validated).Value();
+        }
+        return frame.ComposeUi(std::span{canvases}.first(sources.size()));
     }
 
     /** @copydoc UiPaintProgram::Shutdown */
@@ -185,6 +273,14 @@ namespace Horo::Render {
         closed = true;
         identity.reset();
         const auto state = frontend.lock();
+        if (state && state->frontend)
+            for (auto &slot : native.slots) {
+                for (auto &surface : slot.surfaces)
+                    if (surface.handle.IsValid())
+                        static_cast<void>(Detail::ObserveUiPaintCreation(*state->frontend, surface.operation, surface.handle));
+                if (slot.stencil.handle.IsValid())
+                    static_cast<void>(Detail::ObserveUiPaintCreation(*state->frontend, slot.stencil.operation, slot.stencil.handle));
+            }
         for (auto &slot : native.slots) {
             for (auto &surface : slot.surfaces) {
                 if (!surface.handle.IsValid())

@@ -676,21 +676,28 @@ if(HORO_BUILD_NETWORK_GNS)
     add_library(HoroNetworkTransportGNSFactoryInternal INTERFACE)
     target_include_directories(HoroNetworkTransportGNSFactoryInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/networking/gns/factory>)
-    target_link_libraries(HoroNetworkTransportGNSFactoryInternal INTERFACE HoroEngine::NetworkApi)
+    target_link_libraries(HoroNetworkTransportGNSFactoryInternal INTERFACE HoroEngine::NetworkApi HoroEngine::NetworkRuntime)
     add_library(HoroNetworkTransportGNS STATIC
         runtime/networking/gns/GnsAddressResolution.h
         runtime/networking/gns/GnsAddressResolution.cpp
         runtime/networking/gns/factory/GnsTransportFactory.h
         runtime/networking/gns/GnsTransportInternal.h
         runtime/networking/gns/GnsTransport.cpp
+        runtime/networking/gns/GnsTransportLifecycle.cpp
+        runtime/networking/gns/GnsNativeHost.h
+        runtime/networking/gns/GnsNativeCall.h
         runtime/networking/gns/GnsTransportPackets.cpp
         runtime/networking/gns/GnsTransportDiagnostics.cpp
+        runtime/networking/gns/GnsSecurityInternal.h
+        runtime/networking/gns/GnsSecurity.cpp
+        runtime/networking/gns/GnsSecurityTransport.cpp
     )
     add_library(HoroEngine::NetworkTransportGNS ALIAS HoroNetworkTransportGNS)
     target_compile_features(HoroNetworkTransportGNS PUBLIC cxx_std_20)
     target_compile_definitions(HoroNetworkTransportGNS PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
     target_link_libraries(HoroNetworkTransportGNS PUBLIC HoroNetworkTransportGNSFactoryInternal
         PRIVATE GameNetworkingSockets::static c-ares::cares)
+    target_include_directories(HoroNetworkTransportGNS PRIVATE "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets")
 endif()
 
 add_library(HoroRuntimeUi STATIC
@@ -700,6 +707,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/RuntimeUiService.cpp
         runtime/ui/RuntimeUiAnimatedSource.cpp
     runtime/ui/RuntimeUiTransitions.cpp
+        runtime/ui/RuntimeUiScenePublication.cpp
+        runtime/ui/RuntimeUiSceneRevocation.cpp
         runtime/ui/RuntimeUiCommands.cpp
         runtime/ui/RuntimeUiEvents.cpp
         runtime/ui/UiAssetDependencyInternal.h
@@ -1005,6 +1014,7 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
         runtime/scene/RuntimeSceneServicePublication.cpp
+        runtime/scene/RuntimeSceneServiceRetirement.cpp
         runtime/scene/RuntimeSceneErrors.cpp
 )
 add_library(HoroEngine::RuntimeScene ALIAS HoroRuntimeScene)
@@ -2502,6 +2512,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderShaderResources.cpp
         runtime/renderer/api/RenderShaderResourceErrors.cpp
         runtime/renderer/api/ShaderCompilerPipeline.cpp
+        runtime/renderer/api/ShaderReflectionArtifact.cpp
+        runtime/renderer/api/ShaderReflectionArtifactValues.cpp
         runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
         runtime/renderer/api/ShaderManifest.cpp
         runtime/renderer/api/ShaderManifestErrors.cpp
@@ -2523,13 +2535,12 @@ target_include_directories(HoroRenderApi
         PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation)
+target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation PRIVATE HoroFoundationJsonInternal)
 
-# Portable cooked value contract only; runtime consumers never depend on compiler/process execution.
+# Portable normalization of actual tool evidence; runtime value/identity consumers remain in RenderApi.
 add_library(HoroShaderReflectionCookInternal STATIC
-    runtime/renderer/shader_cook/ShaderReflectionCook.cpp
-    runtime/renderer/shader_cook/ShaderReflectionCookValues.cpp
-    runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp)
+    runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp
+    runtime/renderer/shader_cook/UiPaintMetalReflectionNormalization.cpp)
 target_compile_features(HoroShaderReflectionCookInternal PUBLIC cxx_std_20)
 target_include_directories(HoroShaderReflectionCookInternal PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shader_cook/include>")

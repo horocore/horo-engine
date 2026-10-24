@@ -38,12 +38,35 @@ namespace Horo::Render::Detail {
             return layout;
         }
 
+        /** @brief Cross-checks actual native member types/offsets independently of translated intermediate evidence. */
+        bool NativeUniform(MTLArgument *argument) {
+            struct Member {
+                NSString *name;
+                NSUInteger offset;
+                MTLDataType type;
+            };
+
+            const std::array members{Member{@"Extent", 0, MTLDataTypeFloat2},       Member{@"Opacity", 8, MTLDataTypeFloat},
+                                     Member{@"Sampling", 12, MTLDataTypeUInt},      Member{@"Flags", 16, MTLDataTypeUInt},
+                                     Member{@"Reserved0", 20, MTLDataTypeUInt},     Member{@"Reserved1", 24, MTLDataTypeUInt},
+                                     Member{@"Reserved2", 28, MTLDataTypeUInt},     Member{@"MaskExtent", 32, MTLDataTypeFloat2},
+                                     Member{@"MaskReserved", 40, MTLDataTypeUInt2}, Member{@"CornerRadii", 48, MTLDataTypeFloat4}};
+            if (argument.access != MTLArgumentAccessReadOnly || argument.bufferDataSize != sizeof(UiPaintParameters) ||
+                !argument.bufferStructType || argument.bufferStructType.members.count != members.size())
+                return false;
+            for (const auto &expected : members) {
+                MTLStructMember *member = [argument.bufferStructType memberByName:expected.name];
+                if (!member || member.offset != expected.offset || member.dataType != expected.type)
+                    return false;
+            }
+            return true;
+        }
+
         /** @brief Checks the native compiler's active argument kind and uniform byte layout rather than trusting host metadata. */
         bool NativeArgument(NSArray<MTLArgument *> *arguments, NSUInteger binding, MTLArgumentType type, const bool uniform = false) {
             for (MTLArgument *argument in arguments)
                 if (argument.active && argument.index == binding && argument.type == type)
-                    return !uniform ||
-                           (argument.access == MTLArgumentAccessReadOnly && argument.bufferDataSize == sizeof(UiPaintParameters));
+                    return !uniform || NativeUniform(argument);
             return false;
         }
 

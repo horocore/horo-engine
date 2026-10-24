@@ -180,7 +180,9 @@ namespace Horo::Runtime::Ui {
             return Result<std::size_t>::Failure(MakeError(UiErrors::CapabilityWrongThread));
         if (state_->dispatching)
             return Result<std::size_t>::Failure(MakeError(UiErrors::CapabilityBusy));
-        return state_->registry.CollectRetired();
+        auto collected = state_->registry.CollectRetired();
+        Detail::FinishSceneRevocations(*state_);
+        return collected;
     }
 
     /** @copydoc RuntimeUiService::Shutdown */
@@ -191,7 +193,7 @@ namespace Horo::Runtime::Ui {
             if (auto scope = entry.lock())
                 scope->revoked.store(true);
         state_->shutdownRequested = true;
-        if (state_->dispatching)
+        if (state_->dispatching || state_->scenePublication)
             return;
         Detail::FinishShutdown(*state_);
     }

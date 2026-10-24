@@ -2,36 +2,120 @@
 from pathlib import Path
 import importlib.util
 import json
+import os
+import re
+import sys
 import pytest
+
+pytest_plugins = ("pytester",)
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_sonar_provisions_verified_viewport_assets_before_coverage():
+def test_sonar_cooks_and_verifies_locally_after_build_before_coverage():
     workflow = (ROOT / '.github/workflows/sonar.yml').read_text()
-    assert '  viewport-assets:' in workflow
-    producer, consumer = workflow.split('  sonar:', 1)
-    assert 'runs-on: ubuntu-26.04' in producer
-    assert 'needs: viewport-assets' in consumer
-    assert 'runs-on: ubuntu-24.04' in consumer
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in producer
-    assert 'HoroEditorVulkanShaderCook --parallel 2' in producer
-    assert 'uses: ./.github/actions/cook-vulkan-viewport' in producer
-    assert 'artifact-ids: ${{ needs.viewport-assets.outputs.artifact-id }}' in consumer
-    assert 'run-id:' not in consumer
+    assert '  viewport-assets:' not in workflow
+    consumer = workflow.split('  sonar:', 1)[1]
+    assert 'runs-on: ubuntu-26.04' in consumer
+    assert 'needs:' not in consumer
+    assert 'actions: read' not in consumer
+    assert 'download-artifact' not in consumer
+    assert 'waitForViewportArtifact' not in consumer
+    assert 'cmake --build --preset sonar --target all HoroEditorVulkanShaderCook' in consumer
+    assert 'uses: ./.github/actions/cook-vulkan-viewport' in consumer
+    assert 'build-directory: build/sonar' in consumer
+    assert 'asset-root: ${{ github.workspace }}/build/sonar/native-editor-assets' in consumer
     require_provisioning_order(consumer)
-    assert 'CC: gcc' in producer and 'CXX: g++' in producer
     assert '[[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]' in consumer
     assert "HORO_VIEWPORT_SOURCE_TREE=" in consumer
     assert 'contents: read' in workflow
-    assert 'continue-on-error' not in producer
+    python = consumer.index('uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065')
+    venv = consumer.index('python3 -m venv /tmp/horo-coverage')
+    assert python < venv
+    assert "python-version: '3.12'" in consumer[python:venv]
+    assert 'coverage==7.6.10 fastcov==1.17 pytest==8.3.4 defusedxml==0.7.1' in consumer
+    assert '-DPython3_EXECUTABLE=/tmp/horo-coverage/bin/python' in consumer
+    require_provisioning_failure_policy(consumer)
+
+
+def require_provisioning_failure_policy(consumer):
+    # Only the two optional cache accelerators may fail before coverage starts.
+    prefix = consumer.split('      - name: Run Python coverage tests', 1)[0]
+    header, *steps = re.split(r'^      - ', prefix, flags=re.MULTILINE)
+    assert 'continue-on-error' not in header
+    optional = {
+        'name: Install optional compiler registry client': '        uses: oras-project/setup-oras@',
+        'name: Restore optional public compiler checkpoint':
+            '        run: python3 .github/scripts/compiler_registry.py fetch --key ',
+    }
+    for step in steps:
+        name = step.partition('\n')[0]
+        if name in optional:
+            assert any(line.startswith(optional[name]) for line in step.splitlines())
+        else:
+            assert 'continue-on-error' not in step
+
+
+def test_provisioning_failure_policy_accepts_optional_compiler_checkpoints():
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+
+
+@pytest.mark.parametrize('name', [
+    'Check Sonar authentication', 'Setup build tools', 'Install coverage tools',
+    'Configure instrumented Debug build', 'Build instrumented targets',
+    'Cook canonical viewport assets for coverage',
+    'Verify and select viewport data for coverage', 'Run C++ coverage tests',
+])
+def test_provisioning_failure_policy_rejects_ignored_required_step(name):
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+    marker = f'      - name: {name}\n'
+    mutated = consumer.replace(marker, marker + '        continue-on-error: true\n', 1)
+    assert mutated != consumer
+    with pytest.raises(AssertionError):
+        require_provisioning_failure_policy(mutated)
+
+
+def test_provisioning_failure_policy_rejects_ignored_job():
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+    mutated = consumer.replace('    name: SonarCloud\n',
+                               '    name: SonarCloud\n    continue-on-error: true\n', 1)
+    assert mutated != consumer
+    with pytest.raises(AssertionError):
+        require_provisioning_failure_policy(mutated)
+
+
+def test_provisioning_failure_policy_rejects_unrelated_optional_step():
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+    marker = '      - name: Build instrumented targets\n'
+    extra = ('      - name: Unrelated optional setup\n'
+             '        continue-on-error: true\n        run: echo fixture\n\n')
+    mutated = consumer.replace(marker, extra + marker, 1)
+    assert mutated != consumer
+    with pytest.raises(AssertionError):
+        require_provisioning_failure_policy(mutated)
+
+
+def test_provisioning_failure_policy_rejects_repurposed_optional_step():
+    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    require_provisioning_failure_policy(consumer)
+    mutated = consumer.replace('uses: oras-project/setup-oras@', 'uses: different/action@', 1)
+    assert mutated != consumer
+    with pytest.raises(AssertionError):
+        require_provisioning_failure_policy(mutated)
 
 
 def require_provisioning_order(consumer):
+    build = consumer.index('name: Build instrumented targets')
+    checkpoint = consumer.index('name: Save compiler cache')
+    cook = consumer.index('uses: ./.github/actions/cook-vulkan-viewport')
     verify = consumer.index('viewport_asset_bundle.py verify')
     export = consumer.index('HORO_EDITOR_VULKAN_ASSET_ROOT=')
     coverage = consumer.index('ctest --preset sonar')
-    assert verify < export < coverage
+    assert build < checkpoint < cook < verify < export < coverage
 
 
 @pytest.mark.parametrize('steps', [
@@ -39,8 +123,10 @@ def require_provisioning_order(consumer):
     ['HORO_EDITOR_VULKAN_ASSET_ROOT=', 'viewport_asset_bundle.py verify', 'ctest --preset sonar'],
 ])
 def test_provisioning_contract_rejects_wrong_order(steps):
+    prefix = ['name: Build instrumented targets', 'name: Save compiler cache',
+              'uses: ./.github/actions/cook-vulkan-viewport']
     with pytest.raises(AssertionError):
-        require_provisioning_order('\n'.join(steps))
+        require_provisioning_order('\n'.join(prefix + steps))
 
 
 @pytest.fixture
@@ -110,3 +196,36 @@ def test_bundle_rejects_executable_or_other_extra_files(bundle):
     (root / 'producer-executable').write_bytes(b'not allowed')
     with pytest.raises(ValueError, match='Bundle must contain only'):
         module.verify(root, ROOT, expected)
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Sonar coverage uses POSIX system Bash')
+@pytest.mark.parametrize('invalid', [None, 'payload', 'run'])
+def test_local_verification_exports_root_only_for_current_unmodified_bundle(bundle, tmp_path, invalid, pytester, monkeypatch):
+    module, root, expected = bundle
+    environment = tmp_path / 'github-env'
+    environment.write_text('previous=value\n')
+    if invalid == 'payload':
+        (root / module.PAYLOAD).write_bytes(b'changed after local cook')
+    identity = dict(expected, run_id='foreign') if invalid == 'run' else expected
+    env = {'GITHUB_ENV': str(environment), 'GITHUB_SHA': identity['sha'],
+           'HORO_VIEWPORT_SOURCE_TREE': identity['tree'], 'GITHUB_RUN_ID': identity['run_id'],
+           'GITHUB_RUN_ATTEMPT': identity['run_attempt'], 'GITHUB_REPOSITORY': identity['repository']}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    # Resolve the fixed system tool, never an executable supplied through PATH or bundle contents.
+    bash = Path('/bin/bash').resolve(strict=True)
+    interpreter = Path(sys.executable).resolve(strict=True)
+    assert bash.is_absolute() and os.access(bash, os.X_OK)
+    # Match the workflow's fail-closed verify -> export boundary without invoking any native tool.
+    script = '''set -euo pipefail
+"$1" "$2" verify --root "$3" --source "$4"
+printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$3" >> "$GITHUB_ENV"
+'''
+    result = pytester.run(str(bash), '-c', script, 'local-viewport-fixture', str(interpreter),
+                          str(ROOT / '.github/scripts/viewport_asset_bundle.py'), str(root), str(ROOT), timeout=10)
+    if invalid:
+        assert result.ret != 0
+        assert environment.read_text() == 'previous=value\n'
+    else:
+        assert result.ret == 0, result.stderr.str()
+        assert environment.read_text() == f'previous=value\nHORO_EDITOR_VULKAN_ASSET_ROOT={root}\n'

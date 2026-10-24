@@ -109,6 +109,8 @@ namespace Horo::Render::Detail {
                 capabilities.deviceIncarnation = incarnation.Value();
                 capabilities.implemented.support.deviceIncarnation = incarnation.Value();
                 capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
+                if (SupportsMetalUiPaint(capabilities))
+                    capabilities.implemented.support.features.Enable(RenderCapability::UiPaint);
                 auto acquisition = MetalDrawableAcquisition::Create(layer_, device_, MakeMetalDrawableSource());
                 if (acquisition.HasError()) {
                     CloseUnsubmittedInitialization();

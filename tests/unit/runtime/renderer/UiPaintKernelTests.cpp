@@ -36,12 +36,22 @@ namespace Horo::Render {
             Append(bytes, std::uint32_t{2});
             AppendEntry(bytes, ShaderStage::Vertex, "PaintVertex");
             AppendEntry(bytes, ShaderStage::Fragment, "PaintFragment");
-            kernel.reflection.backend = kernel.target.backend;
-            kernel.reflection.interfaceSchemaVersion = 1;
+            ShaderReflectionCandidate reflection;
+            reflection.backend = kernel.target.backend;
+            reflection.interfaceSchemaVersion = 1;
             for (const auto &binding : kernel.manifest.bindings) {
-                kernel.reflection.bindings.push_back({binding.id, binding.kind, binding.access, 1, binding.stages, true});
-                kernel.reflection.targetBindings.push_back({.id = binding.id, .nativeBinding = binding.id.value - 1});
+                reflection.bindings.push_back({binding.id, binding.kind, binding.access, 1, binding.stages, true});
+                reflection.targetBindings.push_back({.id = binding.id, .nativeBinding = binding.id.value - 1});
             }
+            auto normalized = NormalizeShaderReflection(kernel.manifest, kernel.target, reflection);
+            REQUIRE(normalized.HasValue());
+            Sha256Digest toolDigest;
+            toolDigest.bytes[0] = 1;
+            auto cooked =
+                CookReflectedShaderArtifact(kernel.artifact, {ShaderCompilerTool::SpirvCross, "unit-fixture-not-native", toolDigest},
+                                            std::move(normalized).Value());
+            REQUIRE(cooked.HasValue());
+            kernel.artifact.reflection = std::make_shared<const ReflectedShaderArtifact>(std::move(cooked).Value());
             return kernel;
         }
     }  // namespace
@@ -82,13 +92,32 @@ namespace Horo::Render {
             kernel.manifest.bindings[1].kind = ShaderResourceKind::StorageTexture;
         }
         SECTION("Missing active source") {
-            kernel.reflection.bindings[1].active = false;
+            auto record = std::make_shared<ReflectedShaderArtifact>(*kernel.artifact.reflection);
+            record->reflection.bindings[1].active = false;
+            kernel.artifact.reflection = std::move(record);
         }
         SECTION("No stencil format") {
             kernel.stencilFormat = RenderTextureFormat::Depth32Float;
         }
         SECTION("Wrong payload target") {
             kernel.artifact.backend = ShaderTargetBackend::Vulkan;
+        }
+        SECTION("Missing same-cook reflection") {
+            kernel.artifact.reflection.reset();
+        }
+        SECTION("Valid alternate mapping with stale cooked identity") {
+            auto record = std::make_shared<ReflectedShaderArtifact>(*kernel.artifact.reflection);
+            record->reflection.targetBindings[1].nativeBinding = 8;
+            const auto &value = record->reflection;
+            const ShaderReflectionCandidate alternate{value.backend,        value.interfaceSchemaVersion, value.bindings, value.parameters,
+                                                      value.stageInterface, value.targetBindings,         value.sourceMap};
+            REQUIRE(NormalizeShaderReflection(kernel.manifest, kernel.target, alternate).HasValue());
+            kernel.artifact.reflection = std::move(record);
+        }
+        SECTION("Reflection from another artifact") {
+            auto record = std::make_shared<ReflectedShaderArtifact>(*kernel.artifact.reflection);
+            record->compiledArtifactKey.bytes[0] ^= 1;
+            kernel.artifact.reflection = std::move(record);
         }
         SECTION("Missing key") {
             kernel.artifact.artifactKey = {};

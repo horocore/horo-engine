@@ -7,6 +7,10 @@
 #include "Horo/Runtime/Ui/UiElementCatalog.h"
 #include "Horo/Runtime/Ui/UiTheme.h"
 
+namespace Horo::Runtime {
+    class UiAnimationSourcePresentation;
+}
+
 namespace Horo::Application::Internal {
     /** @brief Actual source-component paint; geometry, ordering, visibility and structural fill are not component overrides. */
     struct RuntimeUiPaintComponent final {
@@ -63,6 +67,13 @@ namespace Horo::Application::Internal {
         [[nodiscard]] static Result<std::unique_ptr<RuntimeUiPaintProjection>> PrepareReload(
             const Runtime::Ui::UiReloadGeneration &candidate, RuntimeUiPaintDeclaration declaration,
             const Runtime::Ui::UiRenderExtractorDescriptor &descriptor);
+        /** @brief Extracts potential roles from exact privately prepared canonical source caches for native preparation only.
+         * @param source Same unpublished generation used by PrepareReload, pinned by the baseline owner.
+         * @param baseline Actual same-owner computed initial presentation, not runtime dispatch evidence.
+         * @return Preparation-only immutable snapshot; geometry upload/submission rejects this issuance.
+         */
+        [[nodiscard]] Result<Runtime::Ui::UiRenderSnapshot> ExtractPrototype(const Runtime::Ui::UiReloadGeneration &source,
+                                                                             const Runtime::UiAnimationSourcePresentation &baseline);
         /** @brief Borrows the immutable authored canvas from the exact source pinned by this projection.
          * @return Canonical descriptor, valid until this projection is replaced or destroyed.
          */

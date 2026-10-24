@@ -80,6 +80,13 @@ TEST_CASE("Application UI coalesces actual resize DPI and insets before new nati
     CHECK(Tests::RenderFrontendTesting::lifecycleState.createBufferCount == residents);
     fixture.Frame();
     REQUIRE(fixture.port.InputEligible(fixture.view));
+    // Keep the original explicit reader across refresh and repeated updates; completion releases each submitted frame.
+    for (unsigned index = 0; index < 4; ++index) {
+        fixture.Frame();
+        CHECK(Tests::RenderFrontendTesting::lifecycleState.graphLease == nullptr);
+        CHECK(fixture.port.InputEligible(fixture.view));
+        CHECK(previous.Layout().Descriptor().interaction == before.interaction);
+    }
     auto current = Take(fixture.port.AcquireFrame());
     CHECK(current.Layout().Descriptor().interaction > before.interaction);
     CHECK(current.Layout().Descriptor().sources.canvas > before.sources.canvas);

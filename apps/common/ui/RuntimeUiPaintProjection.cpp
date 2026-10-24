@@ -1,3 +1,4 @@
+#include "Horo/Runtime/UiAnimationRuntimeParticipant.h"
 #include "RuntimeUiPaintProjectionInternal.h"
 
 #include <algorithm>
@@ -146,6 +147,36 @@ namespace Horo::Application::Internal {
     /** @copydoc RuntimeUiPaintProjection::~RuntimeUiPaintProjection */
     RuntimeUiPaintProjection::~RuntimeUiPaintProjection() = default;
 
+    /** @copydoc RuntimeUiPaintProjection::ExtractPrototype */
+    Result<UiRenderSnapshot> RuntimeUiPaintProjection::ExtractPrototype(const UiReloadGeneration &source,
+                                                                        const Runtime::UiAnimationSourcePresentation &baseline) {
+        if (&source.Instance() != storage_->expectedInstance || storage_->revision == std::numeric_limits<std::uint64_t>::max())
+            return Result<UiRenderSnapshot>::Failure(MakeError(UiErrors::RevisionStale));
+        const auto &layout = baseline.Layout().Descriptor();
+        const auto &tree = storage_->canvas->tree;
+        if (layout.instance != tree.Instance() || layout.canvas != tree.Canvas() || layout.sources.tree != tree.Revision() ||
+            layout.sources.document != tree.SourceDocumentRevision())
+            return Result<UiRenderSnapshot>::Failure(MakeError(UiErrors::RevisionStale));
+        if (auto built = storage_->Build({baseline.Styles(), baseline.Layout(), baseline.Clipping()}); built.HasError())
+            return Result<UiRenderSnapshot>::Failure(built.ErrorValue());
+        const UiRenderSnapshotDescriptor descriptor{layout.instance,
+                                                    layout.canvas,
+                                                    layout.document,
+                                                    layout.sources.document,
+                                                    layout.sources.tree,
+                                                    layout.interaction,
+                                                    UiRenderSnapshotRevision::Create(storage_->revision + 1).Value(),
+                                                    storage_->descriptor.view,
+                                                    storage_->descriptor.limits};
+        const auto &input = storage_->declaration;
+        auto extracted = storage_->extractor.ExtractPrototype(tree, descriptor,
+                                                              {storage_->commands, input.textRuns, input.glyphs, storage_->clips,
+                                                               storage_->masks, storage_->transforms, input.resources, storage_->groups});
+        if (extracted.HasValue())
+            ++storage_->revision;
+        return extracted;
+    }
+
     /** @copydoc RuntimeUiPaintProjection::Extract */
     Result<UiRenderSnapshot> RuntimeUiPaintProjection::Extract(RuntimeUiService &service, const UiAnimationFrameLease &frame) {
         auto current = service.Acquire(storage_->instance);
@@ -160,7 +191,7 @@ namespace Horo::Application::Internal {
         if (layout.instance != tree.Instance() || layout.canvas != tree.Canvas() || layout.sources.tree != tree.Revision() ||
             layout.sources.document != tree.SourceDocumentRevision())
             return Result<UiRenderSnapshot>::Failure(MakeError(UiErrors::RevisionStale));
-        const auto built = storage_->Build(frame);
+        const auto built = storage_->Build({frame.Styles(), frame.Layout(), frame.Clipping()});
         if (built.HasError())
             return Result<UiRenderSnapshot>::Failure(built.ErrorValue());
         UiRenderSnapshotDescriptor descriptor{layout.instance,
@@ -175,7 +206,8 @@ namespace Horo::Application::Internal {
         const auto &input = storage_->declaration;
         auto extracted = storage_->extractor.Extract(tree, descriptor,
                                                      {storage_->commands, input.textRuns, input.glyphs, storage_->clips, storage_->masks,
-                                                      storage_->transforms, input.resources, storage_->groups});
+                                                      storage_->transforms, input.resources, storage_->groups},
+                                                     frame);
         if (extracted.HasValue())
             ++storage_->revision;
         return extracted;

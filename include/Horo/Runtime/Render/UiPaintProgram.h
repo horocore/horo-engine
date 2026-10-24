@@ -26,6 +26,13 @@ namespace Horo::Render {
         std::uint32_t maximumPasses{256};
     };
 
+    /** @brief Immutable whole-program admission bounds; observing them grants no execution or resource authority. */
+    struct UiPaintProgramInventory final {
+        std::size_t passes{};
+        std::size_t resources{};
+        std::uint32_t draws{}; /**< Maximum ordinary frame draw inventory reserved by this program. */
+    };
+
     class UiPaintProgram;
 
     /** @brief Issued immutable observation of one accepted slot; never native ownership or a mutable frame authority. */
@@ -47,6 +54,13 @@ namespace Horo::Render {
         std::weak_ptr<const Detail::UiPaintProgramIdentity> identity_;
         std::uint32_t slot_{};
         std::uint64_t revision_{};
+    };
+
+    /** @brief Exact accepted program/source pair in the one ordered UI composition phase; borrowed program and frame stay live. */
+    struct UiPaintProgramSubmission final {
+        UiPaintProgram *program{};
+        const UiPaintPreparedFrame *prepared{};
+        UiRenderSubmission source;
     };
 
     /**
@@ -71,6 +85,8 @@ namespace Horo::Render {
          * @param kernel Actual offline cooked shader and exact primary output/stencil formats; offscreen linear surfaces are separate.
          * @param cancellation Superseded source/renderer generation fence observed between bounded preparation stages.
          * @return Owned complete preparation or original typed failure; partial residents are released without publication.
+         * @details Copies bounded structural values from prototype during cold preparation; it does not retain prototype's
+         * animation publication. Accepted frame geometry and queued native completion captures retain their own exact leases.
          */
         [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> Create(
             RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
@@ -79,11 +95,23 @@ namespace Horo::Render {
         ~UiPaintProgram();
         UiPaintProgram(const UiPaintProgram &) = delete;
         UiPaintProgram &operator=(const UiPaintProgram &) = delete;
+        /** @brief Returns exact prepared graph counts and admitted dynamic draw capacity without allocation.
+         * @return Whole-program inventory, or zero after close. @pre Caller is the preparation owner thread. */
+        [[nodiscard]] UiPaintProgramInventory Inventory() const noexcept;
+        /** @brief Observes every owned creation after the host's explicit load-time resource pump and records terminal failures.
+         * @return Success only when all exact prepared buffers/surfaces/stencil generations are ready; typed pending/native failure
+         * otherwise.
+         * @details Registry-retired failed creations relinquish only their exact local handle; the first original error is retained.
+         * Unknown or evicted outcomes cannot authorize relinquishment. This owner mutation survives bounded journal eviction.
+         * @pre Preparation owner thread, outside an active frame. This does not wait, encode or publish a source. */
+        [[nodiscard]] Result<void> ValidatePreparation();
         /** @brief Maps an admitted exact texture into the selected slot's immutable graph identity.
          * @param slot Explicit resident frame slot. @param texture Exact prepared source texture handle.
          * @return Graph identity used by existing image/font submission bindings, or typed stale/preparation failure. */
         [[nodiscard]] Result<RenderGraphResourceId> TextureResource(std::uint32_t slot, RenderTextureHandle texture) const;
         /** @brief Projects and uploads a complete exact frame into an inactive reserved CPU/native slot.
+         * @details Success replaces the prior same-slot CPU provenance; failure drops only the unpublished candidate.
+         * Already submitted native captures retain their geometry independently until actual completion.
          * @param slot Explicit finite slot. @param source Actual current geometry/image/font/atlas evidence borrowed synchronously.
          * @param cancellation Checked before upload and publication; atlas ownership remains with the caller until Submit.
          * @return Issued accepted frame or original typed error; failure preserves the prior slot publication. */
@@ -94,11 +122,19 @@ namespace Horo::Render {
          * @param source Exact corresponding submission, transferring its sealed atlas lease on admission.
          * @return Canonical ComposeUi outcome; successful encoding alone does not prove presentation or authorize input. */
         [[nodiscard]] Result<void> Submit(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared, UiRenderSubmission source);
+        /** @brief Validates every exact source/slot before submitting all canvases as one ordered native UI phase.
+         * @param frame Same active scene/GUI frame owner. @param sources Bounded complete paint-order inventory, consumed synchronously.
+         * @return Typed failure before encoding for any malformed entry, or canonical batch/native outcome. Duplicate program-slot
+         * entries reject; native partial failure retains queued leases and produces no presentation acknowledgement.
+         */
+        [[nodiscard]] static Result<void> SubmitBatch(RenderFrameScope &frame, std::span<UiPaintProgramSubmission> sources);
         /** @brief Revokes issued frames and releases finite residents on the owning thread; repeated close is safe.
          * @return Original failure retaining unreleased handles for retry, or success. */
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        /** @brief Requires exact immutable slot/source correspondence before any batch member reaches the native frame. */
+        [[nodiscard]] Result<UiPaintGraphComposition> ValidateSubmission(const UiPaintPreparedFrame &prepared, UiRenderSubmission source);
         /** @brief Realizes finite native residents under the factory candidate's rollback ownership.
          * @param frontend Actual selected owner. @param kernel Exact cooked interface and formats.
          * @param cancellation Source preparation fence. @return Complete native preparation or original failure. */

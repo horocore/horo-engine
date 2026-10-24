@@ -118,11 +118,29 @@ namespace Horo::Render {
             return Validation::Failure(actual.ErrorValue());
         if (expected.Value() != actual.Value())
             return Validation::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
-        auto reflection = NormalizeShaderReflection(kernel.manifest, kernel.target, kernel.reflection);
+        if (!kernel.artifact.reflection)
+            return Validation::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+        const auto &record = *kernel.artifact.reflection;
+        if (const auto valid = ValidateReflectedShaderArtifact(kernel.artifact, record); valid.HasError())
+            return Validation::Failure(valid.ErrorValue());
+        const auto &value = record.reflection;
+        if (value.bindings.size() != 4 || value.targetBindings.size() != 4 || !value.parameters.empty() || !value.sourceMap.empty() ||
+            value.stageInterface.size() > 10 ||
+            std::ranges::any_of(value.targetBindings,
+                                [](const auto &entry) {
+            return entry.nativeName.size() > 256;
+        }) ||
+            std::ranges::any_of(value.stageInterface, [](const auto &entry) {
+            return entry.nativeName.size() > 256;
+        }))
+            return Validation::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+        const ShaderReflectionCandidate candidate{value.backend,        value.interfaceSchemaVersion, value.bindings, value.parameters,
+                                                  value.stageInterface, value.targetBindings,         value.sourceMap};
+        auto reflection = NormalizeShaderReflection(kernel.manifest, kernel.target, candidate);
         if (reflection.HasError())
             return reflection;
-        if (reflection.Value().targetBindings.size() != 4 || !reflection.Value().parameters.empty() ||
-            std::ranges::any_of(reflection.Value().bindings, [](const auto &binding) {
+        if (reflection.Value().interfaceCompatibility != value.interfaceCompatibility || reflection.Value().targetBindings.size() != 4 ||
+            !reflection.Value().parameters.empty() || std::ranges::any_of(reflection.Value().bindings, [](const auto &binding) {
             return !binding.active;
         }))
             return Validation::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));

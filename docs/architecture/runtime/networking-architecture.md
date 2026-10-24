@@ -23,7 +23,7 @@ Character checkpoint.
 - **Strict Layered Architecture**: Networking is separated into target-level tiers: public contracts and types (`HoroEngine::NetworkApi`), session coordination and replication runtime (`HoroEngine::NetworkRuntime`), and private concrete transport backends (`HoroEngine::NetworkTransportNull`, `HoroEngine::NetworkTransportGNS`).
 - **Production Baseline**: ADR-097 selects open-source GameNetworkingSockets (GNS) for production direct-IP real-time transport. Null remains the deterministic/offline backend; ICE/P2P, relay and provider integrations require explicit optional composition.
 - **Transport vs Session Split**: `INetworkTransport` is a packet-transport abstraction. Protocol negotiation, authentication, replication, and `NetworkSession` live in `NetworkRuntime`. Transport backends do not implement application authentication.
-- **Admission Before Gameplay**: Transport `Connected` creates a pre-active session only. The runtime's bounded admission controller is the sole authority that may negotiate, authenticate, activate and publish a session to gameplay.
+- **Admission Before Gameplay**: Transport directional readiness (`Accepted` inbound, `Connected` outbound) creates a pre-active session only. The runtime's bounded admission controller is the sole authority that may negotiate, authenticate, activate and publish a session to gameplay.
 - **Host-Owned Trust**: The composition root supplies an immutable loopback-development, LAN or remote trust-policy snapshot. Project data, peers and transports cannot choose trust roots, weaken authentication or widen bind scope.
 - **Handle-Based Public Transport API**: Public transport operations use `INetworkTransport` plus generation-checked `ConnectionHandle` / `ListenerHandle` values. `ITransportConnection` and `ITransportListener` are not public types.
 - **Complete Native Encapsulation**: Public headers expose zero OS socket descriptors (`SOCKET`, `int fd`), OS socket headers, TLS/OpenSSL contexts (`SSL*`), event loops, or GNS/provider transport structures.
@@ -187,7 +187,7 @@ The network subsystem is organized into four distinct CMake targets with strict 
 - **Construction**: Receives `std::unique_ptr<INetworkTransport>` from the host composition root. The runtime destroys the transport only after `Shutdown()`.
 - **Key Components**:
   - `NetworkRuntimeCoordinator`: Owns the injected transport and active sessions, and ticks during `NetworkPoll` / `NetworkFlush`.
-  - `NetworkSession`: Application-facing session that starts after the transport reports `Connected`.
+  - `NetworkSession`: Application-facing session that starts after inbound `Accepted` or outbound `Connected` readiness.
   - `SessionAdmissionController`: Owns bounded compatibility, peer trust, credential verification and activation before gameplay dispatch.
   - `SessionStateMachine`: Manages session transitions (`Created` -> `Negotiating` -> `Authenticating` -> `Activating` -> `Active` -> `Closing` -> `Closed`).
   - `ReplicationManager`: Pins the validated schema generation and manages explicit dirty hints, immutable captured snapshots, baselines, interest, wire routing and validated apply commands without owning gameplay state.
@@ -414,7 +414,7 @@ NetworkSession
 - **Transport `Created`**: Handle allocated; request validated. `Connect()` has already returned.
 - **Transport `Resolving`**: Asynchronous DNS for a hostname endpoint.
 - **Transport `Connecting`**: Native connect and transport-level handshake. No application token is exchanged here.
-- **Transport `Connected`**: Packets can flow. `NetworkRuntime` now creates a `NetworkSession`.
+- **Transport `Connected` state**: Packets can flow. The owner publishes inbound `Accepted` or outbound `Connected` readiness; `NetworkRuntime` now creates a pre-active `NetworkSession`.
 - **Session `Negotiating`**: Schema/protocol version, compression, and MTU agreement.
 - **Session `Authenticating`**: `NetworkRuntime` validates host/peer trust and application credentials against the immutable listener policy. Tokens are runtime/session data, not `ConnectRequest` fields on the transport.
 - **Session `Activating`**: Both peers validate transcript-bound activation acknowledgements; no gameplay dispatch is permitted yet.
@@ -564,9 +564,22 @@ generation, authoritative tick, schema ID/version and canonical ascending stable
 never protocol identity.
 
 `NetworkRuntime` performs handshake negotiation after the transport reports
-`Connected`. Until the session is `Active`, it accepts only bounded admission
+directional readiness: exactly one `Accepted` for an inbound generation or one
+`Connected` for an outbound generation. Both mean the backend handshake has
+completed and `Send` is available; neither grants authenticated gameplay. Native
+acceptance while still connecting reserves only the existing bounded backend
+slot. The inbound ready event retains its exact accepting listener generation.
+Pending failure, cancellation and timeout remain terminal paths, without a ready
+event or any session authority. Until the session is `Active`, it accepts only bounded admission
 messages on the reserved control channel. Early gameplay, RPC, replication, voice,
 console and extension messages are rejected and never buffered for later dispatch.
+A peer closure before this readiness terminalizes the pending attempt as a
+transport connection failure, rather than an established-session close. The
+application retains the exact accepted outbound handle until canonical session
+preparation or terminal failure. It must observe and roll back a failed attempt
+before world/travel callbacks even when no peer/session generation was created;
+shutdown preserves that first outcome. This pending projection grants no
+principal, authentication or gameplay authority.
 
 `HandshakeNegotiator` is the owner-thread, backend-neutral compatibility seam. Its
 construction copies a host-owned local policy into fixed-capacity storage. One peer
@@ -610,6 +623,37 @@ resolution uses that descriptor's exact revision after equality with the selecte
 transport; peer selection uses the revision carried by its validated immutable
 capability descriptor, never a synthetic revision or a local handle. Neither creating
 policy nor capturing application configuration invokes providers or opens listeners.
+
+The optional GNS secure factory captures an explicit `NetworkTransportConfig` and
+publishes its exact inert selected delivery declaration before initialization.
+This describes the configured candidate, not native socket or authentication
+readiness. Initialization must match all captured limits; successful native
+startup does not invent another descriptor revision. Native provisioning,
+listeners, connections and authority inspection remain separate readiness gates.
+Raw transport construction preserves its existing lifecycle behavior.
+
+GNS secure composition owns an explicit public CA root/app selection and retained
+startup issuer. The issuer signs the native-generated public CSR outside native
+and Horo locks before any listener/connect operation; it does not supply a native
+private key. No credentials, root or issuer are discovered from CLI/project data.
+One backend lease implements the existing certificate, peer, channel and key
+handoff interfaces. It reads the exact verified native certificate and live
+encrypted-key owner under the native lock; no copied session authority exists.
+Its bounded public binding digest is correlation only, not authentication, a MAC,
+signature, exporter or proof of possession. Native CA/identity and the canonical
+credential proof remain authoritative. Terminal state, crypto reset, trust reset
+and detach revoke the lease before keys/native state are destroyed. Failed native
+drain/retirement retains an explicit cleanup token in the same process owner and
+blocks replacement until retry completes.
+
+The maintained exact-pin bridge is compiled in a build-owned native source copy;
+shared FetchContent inputs and immutable compiler generations remain pristine.
+Only the three bridge-owning native translation units enable exception unwinding
+after upstream's disabling options. The effective upstream C++17 compilation
+requirement stays unchanged; the private POD interface uses C++11-compatible types
+and exposes no native header through installed Horo APIs. The private secure GNS
+factory interface deliberately consumes NetworkRuntime's existing authority
+contracts; NetworkRuntime never depends on GNS.
 
 The product reserves four distinct mandatory identities in its existing protocol
 inventory, in `AdmissionControlKind` order. There are no global reserved message

@@ -87,6 +87,35 @@ namespace Horo::Runtime {
         UiAnimationClockController controller;
     };
 
+    /** @brief Load-time derived caches of one exact source; this is neither a host frame nor presentation/input authority.
+     * @details A retained prototype pins its canonical generation. It exposes only immutable computed presentation values;
+     * real Acquire/ApplyPresentation remain unavailable until a successful actual scheduler publication.
+     */
+    class UiAnimationSourcePresentation final {
+    public:
+        /** @brief Borrows the canonical computed style baseline. @return Pinned immutable style snapshot. */
+        [[nodiscard]] const Ui::UiComputedStyleSnapshot &Styles() const noexcept {
+            return baseline_.Styles();
+        }
+
+        /** @brief Borrows the canonical layout baseline. @return Pinned immutable layout snapshot. */
+        [[nodiscard]] const Ui::UiLayoutSnapshot &Layout() const noexcept {
+            return baseline_.Layout();
+        }
+
+        /** @brief Borrows optional canonical clipping. @return Pinned clipping or null. */
+        [[nodiscard]] const Ui::UiLayoutClipSnapshot *Clipping() const noexcept {
+            return baseline_.Clipping();
+        }
+
+    private:
+        friend class UiAnimationRuntimeParticipant;
+
+        explicit UiAnimationSourcePresentation(Ui::UiAnimationFrameLease baseline) noexcept : baseline_(std::move(baseline)) {}
+
+        Ui::UiAnimationFrameLease baseline_;
+    };
+
     /**
      * @brief Real ordered lifecycle participant binding one actual scheduler issuer and privately owned UI canvas aggregate.
      * @details Register before consumers that extract this canvas. VariableUpdate stages an inactive frame; RenderExtraction
@@ -98,6 +127,12 @@ namespace Horo::Runtime {
         struct Storage;
 
     public:
+        /** @brief Prepares initial source presentation before activation without a RuntimeHost dispatch or time advancement.
+         * @return Immutable prototype for native resource/program preparation, or typed lifecycle/source failure.
+         * @pre Owner-thread load-time operation before Startup, commands and the first actual runtime frame; exactly once.
+         * @post Acquire and presentation/input admission remain closed until actual VariableUpdate/RenderExtraction succeeds.
+         */
+        [[nodiscard]] Result<UiAnimationSourcePresentation> PrepareSourcePresentation();
         /** @brief Creates actual application-boundary ownership before host registration.
          * @param owner Complete uniquely owned admitted UI animation canvas.
          * @param source Exact actual host/scheduler DispatchSource; default-invalid capabilities reject.

@@ -15,6 +15,16 @@ namespace Horo::Runtime::Ui {
         return storage_ && storage_->styles.has_value() && storage_->layout.has_value();
     }
 
+    /** @copydoc UiAnimationFrameLease::MatchesSourceTree */
+    bool UiAnimationFrameLease::MatchesSourceTree(const UiElementTree &tree) const noexcept {
+        if (!IsValid() || !storage_->generation.Get())
+            return false;
+        for (const auto &canvas : storage_->generation.Get()->Canvases())
+            if (&canvas.tree == &tree)
+                return true;
+        return false;
+    }
+
     /** @copydoc UiAnimationFrameLease::Clocks */
     const UiClockSnapshot &UiAnimationFrameLease::Clocks() const noexcept {
         return storage_->clocks;

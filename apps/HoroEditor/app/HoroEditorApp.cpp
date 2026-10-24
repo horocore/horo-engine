@@ -75,6 +75,7 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "HostModuleComposition.h"
 #include "RuntimeUiPaintHost.h"
+#include "RuntimeUiPaintProjectSources.h"
 #include "editor/EditorServiceErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
@@ -1141,6 +1142,7 @@ namespace Horo::Editor {
             BuildOutputStore &buildOutputStore;
             OperationStore &operationStore;
             Application::ShaderBuildService &shaderBuild;
+            std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
         };
 
         struct EditorBackgroundServices {
@@ -1663,7 +1665,8 @@ namespace Horo::Editor {
                 }
                 if (observed.Value().snapshot.state == Render::RenderSurfaceState::Ready &&
                     SurfaceAdmission() == EditorSurfaceAdmission::Idle && !nativePresentationPending_ &&
-                    authorities_.ui.Phase() == Application::Internal::RuntimeUiPaintHostPhase::Active) {
+                    (authorities_.ui.Phase() == Application::Internal::RuntimeUiPaintHostPhase::Active ||
+                     authorities_.ui.Phase() == Application::Internal::RuntimeUiPaintHostPhase::NoSource)) {
                     const auto output = CaptureRuntimeUiOutput(*p_->presentation.window, pacing_.committedOutputExtent);
                     if (output.HasError())
                         return Result<void>::Failure(output.ErrorValue());
@@ -1953,23 +1956,12 @@ namespace Horo::Editor {
          */
         Result<Application::Internal::RuntimeUiPaintPort> RegisterEditorRuntimeSources(
             Runtime::RuntimeHost &runtime, std::unique_ptr<Runtime::RuntimeLifecycleParticipant> scene,
-            EditorPresentationPorts &presentation) {
+            EditorPresentationPorts &presentation, Application::Internal::RuntimeUiPaintComposition ui) {
             using Preparation = Result<Application::Internal::RuntimeUiPaintPort>;
             if (const Result<void> addedScene = runtime.AddParticipant(std::move(scene)); addedScene.HasError()) {
                 LOG_ERROR("editor.runtime", "Runtime scene service registration failed: %s", addedScene.ErrorValue().message.c_str());
                 return Preparation::Failure(addedScene.ErrorValue());
             }
-            auto composition =
-                Application::Internal::RuntimeUiPaintHost::Compose(presentation.renderFrontend, runtime.DispatchSource(),
-                                                                   {.ownership = Runtime::Ui::UiOwnershipGeneration::Create(1).Value(),
-                                                                    .maximumInstances = 8,
-                                                                    .maximumRetiredInstances = 8,
-                                                                    .maximumPreparedTransitions = 2});
-            if (composition.HasError()) {
-                LOG_ERROR("editor.runtime", "Runtime UI composition failed: %s", composition.ErrorValue().message.c_str());
-                return Preparation::Failure(composition.ErrorValue());
-            }
-            auto ui = std::move(composition).Value();
             const auto port = ui.port;
             // Presentation owns revoked UI storage until its same native completion generation has drained.
             presentation.uiRetirement = port;
@@ -2024,10 +2016,50 @@ namespace Horo::Editor {
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
             const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
+            SteadyClock clock;
+            auto createdRuntime = Runtime::RuntimeHost::Create(clock);
+            if (createdRuntime.HasError())
+                return std::nullopt;
+            auto uiComposition =
+                Application::Internal::RuntimeUiPaintHost::Compose(p.presentation.renderFrontend, createdRuntime.Value()->DispatchSource(),
+                                                                   {.ownership = Runtime::Ui::UiOwnershipGeneration::Create(1).Value(),
+                                                                    .maximumInstances = 8,
+                                                                    .maximumRetiredInstances = 8,
+                                                                    .maximumPreparedTransitions = 2});
+            if (uiComposition.HasError())
+                return std::nullopt;
+            auto allocator = Runtime::Ui::UiElementSlotAllocator::Create(Runtime::Ui::UiOwnershipGeneration::Create(1).Value());
+            if (allocator.HasError())
+                return std::nullopt;
+            Application::Internal::RuntimeUiPaintProjectPolicy uiPolicy;
+            if (p.presentation.renderFrontend.Capabilities().backend == Render::RenderBackendId{"metal"})
+                uiPolicy.source =
+                    Application::Internal::RuntimeUiPaintPackagedAssets{EditorAssetRoot(), Render::ShaderTargetBackend::Metal};
+            if (p.operationServices.uiPaintTarget)
+                uiPolicy.source = Application::Internal::RuntimeUiPaintProjectCompiler{p.background.jobs, p.operationServices.shaderBuild,
+                                                                                       AssetPath("shaders/runtime/ui_paint.hlsl"),
+                                                                                       *p.operationServices.uiPaintTarget};
+            int uiWidth{}, uiHeight{};
+            if (!SDL_GetWindowSizeInPixels(p.presentation.window, &uiWidth, &uiHeight))
+                return std::nullopt;
+            if (uiWidth > 0 && uiHeight > 0) {
+                const auto output = CaptureRuntimeUiOutput(*p.presentation.window,
+                                                           {static_cast<std::uint32_t>(uiWidth), static_cast<std::uint32_t>(uiHeight)});
+                if (output.HasError() || uiComposition.Value().port.UpdateOutput(output.Value()).HasError())
+                    return std::nullopt;
+            }
+            auto projectUi =
+                Application::Internal::RuntimeUiPaintProjectSources::Create(uiComposition.Value().port,
+                                                                            std::make_shared<Runtime::Ui::UiElementSlotAllocator>(
+                                                                                std::move(allocator).Value()),
+                                                                            std::move(uiPolicy));
+            if (projectUi.HasError())
+                return std::nullopt;
             auto capturedPolicy = CaptureEditorScenePolicy(p.options);
             if (capturedPolicy.HasError())
                 return std::nullopt;
             auto scenePolicy = std::move(capturedPolicy).Value();
+            scenePolicy.uiSources = std::move(projectUi).Value();
             std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
             if (scenePolicy.cooked)
                 worldBakeDependencies.emplace(scenePolicy.cooked->targetRoot, scenePolicy.cooked->target,
@@ -2192,24 +2224,17 @@ namespace Horo::Editor {
             screenHost.Services().Register<Application::NetworkDebuggerService>(networkDebugger);
             screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(networkDebugger);
             screenHost.Services().Register<Application::INetworkDebuggerControl>(networkDebugger);
+            std::optional<EditorRendererRestartRequest> rendererRestart;
+            std::unique_ptr<Runtime::RuntimeHost> runtime = std::move(createdRuntime).Value();
+            auto runtimeSources =
+                RegisterEditorRuntimeSources(*runtime, std::move(runtimeScene), p.presentation, std::move(uiComposition).Value());
+            if (runtimeSources.HasError()) {
+                screenHost.RequestFatalShutdown();
+                screenHost.Shutdown();
+                return std::nullopt;
+            }
             if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
                 LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
-                screenHost.RequestFatalShutdown();
-                screenHost.Shutdown();
-                return std::nullopt;
-            }
-            std::optional<EditorRendererRestartRequest> rendererRestart;
-            SteadyClock clock;
-            auto createdRuntime = Runtime::RuntimeHost::Create(clock);
-            if (createdRuntime.HasError()) {
-                LOG_ERROR("editor.runtime", "Runtime host creation failed: %s", createdRuntime.ErrorValue().message.c_str());
-                screenHost.RequestFatalShutdown();
-                screenHost.Shutdown();
-                return std::nullopt;
-            }
-            std::unique_ptr<Runtime::RuntimeHost> runtime = std::move(createdRuntime).Value();
-            auto runtimeSources = RegisterEditorRuntimeSources(*runtime, std::move(runtimeScene), p.presentation);
-            if (runtimeSources.HasError()) {
                 screenHost.RequestFatalShutdown();
                 screenHost.Shutdown();
                 return std::nullopt;
@@ -2393,6 +2418,7 @@ namespace Horo::Editor {
         OperationStore &operations;
         const EditorUpdateHostServices *updateHost;
         std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler;
+        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
     };
 
     struct EditorSessionResult final {
@@ -2441,7 +2467,7 @@ namespace Horo::Editor {
                                            inputBackend,
                                            inputRouter,
                                            launch.logs,
-                                           {launch.buildOutput, launch.operations, shaderBuild}};
+                                           {launch.buildOutput, launch.operations, shaderBuild, launch.uiPaintTarget}};
         auto rendererRestart = RunEditorMainLoop(loopParams);
         return {std::move(rendererRestart), loopParams.healthy};
     }
@@ -2645,7 +2671,8 @@ namespace Horo::Editor {
 
     /** @copydoc RunEditorGuiApp */
     int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost,
-                        std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler) {
+                        std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler,
+                        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget) {
         // ── Bootstrap logging before any subsystem ───────────────────────
         auto observabilitySession = InitializeEditorObservability();
         auto saveTelemetryResult = Runtime::SaveTelemetryRegistration::Create();
@@ -2695,9 +2722,10 @@ namespace Horo::Editor {
 
         LOG_INFO("editor.startup", "Editor initialised with renderer '%s' — entering main loop", prepared->options.rendererBackend.c_str());
 
-        EditorSessionResult session = RunEditorSession(
-            {*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures, presentation->composition,
-             editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost, std::move(shaderCompiler)});
+        EditorSessionResult session =
+            RunEditorSession({*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures,
+                              presentation->composition, editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost,
+                              std::move(shaderCompiler), std::move(uiPaintTarget)});
 
         RetireEditorSessionPresentation(*presentation, session);
         saveTelemetry.reset();

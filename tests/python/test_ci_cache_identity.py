@@ -118,3 +118,21 @@ def test_missing_output_parent_reports_failure(tmp_path: Path) -> None:
     arguments = identity_arguments(tmp_path / "missing" / "outputs.txt")
     with pytest.raises(FileNotFoundError):
         cache.ci_cache_main(arguments)
+
+
+def test_source_editor_pin_participates_in_dependency_identity(source_root: Path) -> None:
+    helper = source_root / "cmake/SourceEditorWidgetDependency.cmake"
+    helper.write_text('set(HORO_ZEP_REVISION "first")\n')
+    initial = cache.dependency_fingerprint(source_root)
+    helper.write_text('set(HORO_ZEP_REVISION "second")\n')
+    assert cache.dependency_fingerprint(source_root) != initial
+
+
+def test_sonar_dependency_restore_requires_exact_inputs() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/sonar.yml").read_text()
+    restore = workflow.split("- name: Restore FetchContent dependencies", 1)[1].split("- name: Restore compiler cache", 1)[0]
+    assert "restore-keys:" not in restore
+    for pattern in ("CMakeLists.txt", "cmake/Dependencies.cmake", "cmake/*Dependency.cmake",
+                    "cmake/Horo*DependencyPolicy.cmake", "cmake/HoroGnsProtobufConfig.cmake"):
+        assert f"'{pattern}'" in restore

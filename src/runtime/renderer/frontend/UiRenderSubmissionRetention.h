@@ -23,6 +23,13 @@ namespace Horo::Render::Detail {
          * @param submission Synchronously borrowed exact source evidence. @param resources Complete immutable graph resources.
          * @return Original validation error or success; temporary retained prefixes are released before return. */
         [[nodiscard]] Result<void> Validate(const UiRenderSubmission &submission, std::span<const RenderGraphResource> resources);
+
+        /** @brief Compares exact already-captured geometry issuance, without numeric revision or caller nonce equivalence. */
+        [[nodiscard]] bool HasGeometry(const UiRenderSubmission &submission) const noexcept {
+            return geometry_ && geometry_->IsValid() && submission.geometry && submission.geometry->IsValid() &&
+                   &geometry_->Descriptor() == &submission.geometry->Descriptor();
+        }
+
         /** @brief Releases all retained source generations and sealed atlas pins exactly once. */
         void Release() noexcept;
 

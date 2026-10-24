@@ -19,6 +19,7 @@
 #include <variant>
 
 namespace Horo::Runtime::Ui {
+    class UiAnimationFrameLease;
     /** @brief Sentinel for an absent optional table reference. */
     inline constexpr std::uint32_t NoUiRenderIndex = std::numeric_limits<std::uint32_t>::max();
     inline constexpr std::uint32_t MaximumUiRenderCommands = 16'384;
@@ -259,6 +260,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiRenderSnapshotDescriptor &Descriptor() const noexcept;
         /** @brief Reports whether this object still owns a live immutable snapshot lease. @return True for a live snapshot. */
         [[nodiscard]] bool IsValid() const noexcept;
+        /** @brief Observes immutable load-time purpose; prototypes cannot become uploadable geometry or presentation evidence.
+         * @return True only for an exact ExtractPrototype issuance, including its retained copies.
+         */
+        [[nodiscard]] bool IsPreparationOnly() const noexcept;
         /** @brief Returns stable paint-order commands. @return Borrowed span owned by this snapshot. */
         [[nodiscard]] std::span<const UiDrawCommand> Commands() const noexcept;
         /** @brief Returns positioned text runs. @return Borrowed span owned by this snapshot. */
@@ -321,6 +326,26 @@ namespace Horo::Runtime::Ui {
          */
         [[nodiscard]] Result<UiRenderSnapshot> Extract(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
                                                        const UiRenderProjection &projection);
+        /**
+         * @brief Extracts a real animation publication and retains its exact canonical generation through every snapshot reader.
+         * @param tree Exact tree retained by frame; numerically equal independent trees are rejected.
+         * @param descriptor Exact source and interaction revisions matching frame.
+         * @param projection Complete ordered projection copied into preallocated storage.
+         * @param frame Committed VariableUpdate publication; load-time baselines are rejected.
+         * @return Snapshot or typed lineage, lifecycle, validation or capacity failure.
+         * @details Geometry and queued native readers transitively retain this frame. The last reader releases its pin even
+         *          while extractor and geometry pools remain alive. Admission is owner-thread serialized; successful extraction does not
+         * allocate.
+         */
+        [[nodiscard]] Result<UiRenderSnapshot> Extract(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
+                                                       const UiRenderProjection &projection, const UiAnimationFrameLease &frame);
+        /** @brief Copies a fully validated potential-role projection for load-time native program preparation only.
+         * @param tree Exact private canonical source. @param descriptor Complete identity and bounded table policy.
+         * @param projection Actual baseline presentation. @return Immutable prototype or the same typed extraction failure.
+         * @details Geometry upload and normal render submission reject this issuance; Extract remains the real-frame route.
+         */
+        [[nodiscard]] Result<UiRenderSnapshot> ExtractPrototype(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
+                                                                const UiRenderProjection &projection);
         /** @brief Idempotently stops new extraction without invalidating live snapshot leases. */
         void Close() noexcept;
         /** @brief Reports whether no snapshot slot is currently leased. @return True after every snapshot copy retires. */

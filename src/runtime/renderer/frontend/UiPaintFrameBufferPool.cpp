@@ -5,6 +5,7 @@
 
 #include <limits>
 #include <new>
+#include <optional>
 
 namespace Horo::Render {
     /** @copydoc UiPaintFrameBudget::IsValid */
@@ -74,9 +75,14 @@ namespace Horo::Render {
         const auto state = frontendState_.lock();
         if (!state || !state->frontend)
             return Upload::Failure(MakeError(UiPaintFrameErrors::Unavailable));
-        for (const auto operation : operations_[slot])
-            if (const auto ready = state->frontend->ResourceOperationResult(operation); ready.HasError())
-                return Upload::Failure(ready.ErrorValue());
+        const std::array handles{&slots_[slot].vertices, &slots_[slot].indices, &slots_[slot].parameters};
+        std::optional<Error> failure;
+        for (std::size_t index = 0; index < handles.size(); ++index)
+            if (const auto ready = Detail::ObserveUiPaintCreation(*state->frontend, operations_[slot][index], *handles[index]);
+                ready.HasError() && !failure)
+                failure = ready.ErrorValue();
+        if (failure)
+            return Upload::Failure(std::move(*failure));
         const auto revision = revisions_[slot] + 1;
         const UiPaintFrameUpdate update{revision, vertices, indices, parameters, cancellation};
         if (const auto uploaded = state->frontend->UpdateUiPaintFrame(slots_[slot], update); uploaded.HasError())
@@ -94,6 +100,13 @@ namespace Horo::Render {
         if (!state || !state->frontend) {
             slots_ = {};
             return Result<void>::Success();
+        }
+        for (std::size_t slot = 0; slot < count_; ++slot) {
+            auto &buffers = slots_[slot];
+            const std::array handles{&buffers.vertices, &buffers.indices, &buffers.parameters};
+            for (std::size_t index = 0; index < handles.size(); ++index)
+                if (handles[index]->IsValid())
+                    static_cast<void>(Detail::ObserveUiPaintCreation(*state->frontend, operations_[slot][index], *handles[index]));
         }
         for (auto &buffers : slots_)
             for (auto *handle : {&buffers.vertices, &buffers.indices, &buffers.parameters}) {

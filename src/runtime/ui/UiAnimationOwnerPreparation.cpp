@@ -4,6 +4,37 @@
 #include <utility>
 
 namespace Horo::Runtime::Ui {
+    /** @copydoc UiAnimationOwner::PrepareSourcePresentation */
+    Result<UiAnimationFrameLease> UiAnimationOwner::PrepareSourcePresentation(const UiAnimationViewport &viewport) {
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
+            storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching ||
+            storage_->currentFrame || !storage_->binding.bound || storage_->binding.clocks.updateSequence != 0 ||
+            storage_->pendingCommands != 0 || storage_->route.gate || std::ranges::any_of(storage_->timelines, [](const auto &timeline) {
+            return timeline.occupied;
+        }))
+            return Result<UiAnimationFrameLease>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        auto source = storage_->publisher.Acquire();
+        if (source.HasError())
+            return Result<UiAnimationFrameLease>::Failure(source.ErrorValue());
+        auto &candidate = storage_->candidate;
+        candidate.frameSlot = 0;
+        candidate.commandRevision = storage_->commandRevision;
+        candidate.sourceFrame = 0;
+        candidate.source = std::move(source).Value();
+        candidate.admitted = true;
+        Prepared reservation{storage_.PublisherPin(), candidate.frameSlot, candidate.commandRevision};
+        auto &inactive = *storage_->frames.front();
+        inactive.clocks = storage_->binding.clocks;
+        // No host clock read is fabricated, no timeline/route command is consumed, and no receipt is produced.
+        if (auto timelines = PrepareTimelines(*storage_); timelines.HasError())
+            return Result<UiAnimationFrameLease>::Failure(timelines.ErrorValue());
+        if (auto presentation = PreparePresentation(*storage_, viewport); presentation.HasError())
+            return Result<UiAnimationFrameLease>::Failure(presentation.ErrorValue());
+        if (auto committed = Commit(reservation); committed.HasError())
+            return Result<UiAnimationFrameLease>::Failure(committed.ErrorValue());
+        return Acquire();
+    }
+
     /** @copydoc UiAnimationOwner::Prepare */
     Result<UiAnimationOwner::Prepared> UiAnimationOwner::Prepare(const UiAnimationHostRead &read, const UiAnimationViewport &viewport) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||

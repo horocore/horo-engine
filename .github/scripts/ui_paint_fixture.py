@@ -254,6 +254,11 @@ def apple(args):
     manifest["apple_libraries"] = {entry: digest(bounded(args.output / (entry + ".metallib"))) for entry, _, _ in STAGES}
     for entry, _, _ in STAGES:
         (args.output / (entry + ".sha256")).write_text("sha256:" + manifest["apple_libraries"][entry] + "\n")
+    for entry, _, _ in STAGES:
+        for suffix in (".metal", ".reflection.json"):
+            (args.output / (entry + suffix)).write_bytes(bounded(args.root / (entry + suffix)))
+    cross = manifest["tools"]["SpirvCross"]
+    (args.output / "reflection-tool.txt").write_text(cross["release"] + "\n" + cross["archive"] + "\n")
     (args.output / "bindings.txt").write_text(" ".join(map(str, bindings)) + "\n")
     (args.output / "qualification.json").write_text(json.dumps(manifest, indent=2) + "\n")
 

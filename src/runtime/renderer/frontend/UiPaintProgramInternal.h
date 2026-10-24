@@ -48,6 +48,41 @@ namespace Horo::Render {
             [[nodiscard]] bool Matches(const UiRenderSubmission &source) const noexcept;
         };
 
+        /** @brief Cold copied structural values; never retain an animation publication merely to compare future topology. */
+        struct UiPaintSourceShape final {
+            Runtime::Ui::UiRenderSnapshotDescriptor descriptor;
+            std::vector<Runtime::Ui::UiDrawCommand> commands;
+            std::vector<Runtime::Ui::UiMask> masks;
+            std::vector<Runtime::Ui::UiOpacityGroup> groups;
+            std::vector<Runtime::Ui::UiRenderResourceReference> resources;
+
+            /** @brief Copies already admitted bounded tables once during cold preparation; failure abandons the new program. */
+            explicit UiPaintSourceShape(const Runtime::Ui::UiRenderSnapshot &source)
+                : descriptor(source.Descriptor()), commands(source.Commands().begin(), source.Commands().end()),
+                  masks(source.Masks().begin(), source.Masks().end()), groups(source.Groups().begin(), source.Groups().end()),
+                  resources(source.Resources().begin(), source.Resources().end()) {}
+
+            [[nodiscard]] const Runtime::Ui::UiRenderSnapshotDescriptor &Descriptor() const noexcept {
+                return descriptor;
+            }
+
+            [[nodiscard]] std::span<const Runtime::Ui::UiDrawCommand> Commands() const noexcept {
+                return commands;
+            }
+
+            [[nodiscard]] std::span<const Runtime::Ui::UiMask> Masks() const noexcept {
+                return masks;
+            }
+
+            [[nodiscard]] std::span<const Runtime::Ui::UiOpacityGroup> Groups() const noexcept {
+                return groups;
+            }
+
+            [[nodiscard]] std::span<const Runtime::Ui::UiRenderResourceReference> Resources() const noexcept {
+                return resources;
+            }
+        };
+
         /** @brief Reserved inactive CPU candidate; swapping the accepted index publishes all arrays together. */
         struct UiPaintCpuFrame final {
             std::vector<UiPaintVertex> vertices;
@@ -57,6 +92,12 @@ namespace Horo::Render {
             std::vector<UiPaintPassRange> ranges;
             std::optional<Runtime::Ui::UiRenderGeometryPlan> geometry;
             UiPaintSubmissionEvidence evidence;
+
+            /** @brief Releases only obsolete CPU provenance; native completion captures own their independent exact leases. */
+            void ReleaseSource() noexcept {
+                geometry.reset();
+                evidence = {};
+            }
         };
 
         struct UiPaintSlotProgram final {
@@ -74,7 +115,7 @@ namespace Horo::Render {
 
     struct UiPaintProgram::Storage final {
         struct SourceRoles final {
-            Runtime::Ui::UiRenderSnapshot prototype;
+            Detail::UiPaintSourceShape prototype;
             std::vector<RenderTextureHandle> external;
             std::vector<Detail::UiPaintMaskScope> masks;
             std::vector<std::uint32_t> commandScopes, groupScopes;
@@ -94,7 +135,7 @@ namespace Horo::Render {
         Detail::UiRenderSubmissionRetention validation;
 
         Storage(const Runtime::Ui::UiRenderSnapshot &prototype, const UiPaintProgramDescriptor &policy)
-            : source{.prototype = prototype}, descriptor(policy), owner(std::this_thread::get_id()) {}
+            : source{.prototype = Detail::UiPaintSourceShape{prototype}}, descriptor(policy), owner(std::this_thread::get_id()) {}
 
         [[nodiscard]] Result<void> BuildRoles();
         [[nodiscard]] Result<std::uint32_t> MaskScope(std::uint32_t leaf, std::uint32_t group);

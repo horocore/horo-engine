@@ -40,6 +40,18 @@ namespace Horo::Runtime::Ui {
                                    limits);
     }
 
+    /** @copydoc RuntimeUiService::PrepareAnimation */
+    Result<UiAnimationOwner> RuntimeUiService::PrepareAnimation(UiSceneReconciliation::Prepared &prepared,
+                                                                const RuntimeUiInstanceId instance, UiElementSlotAllocator &allocator,
+                                                                RuntimeStyleRegistry registry, UiStyleResolver styles,
+                                                                UiAnimationCanvasDefinition definition, const UiAnimationLimits limits) {
+        auto publisher = Detail::UiAnimationPublisher::AttachPrepared(state_, prepared, instance, definition.canvas);
+        if (publisher.HasError())
+            return Result<UiAnimationOwner>::Failure(publisher.ErrorValue());
+        return UiAnimationOwner::CreateFromPublisher(std::move(publisher).Value(), allocator, std::move(registry), std::move(styles),
+                                                     std::move(definition), limits);
+    }
+
     /** @copydoc UiAnimationOwner::CreateFromPublisher */
     Result<UiAnimationOwner> UiAnimationOwner::CreateFromPublisher(Detail::UiAnimationPublisher publisher,
                                                                    UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
@@ -140,7 +152,7 @@ namespace Horo::Runtime::Ui {
             storage.work.layoutDescriptors[index] = {target.Value(), element.layout, element.intrinsic};
         }
         for (const auto &binding : storage.definition.layoutBindings)
-            storage.work.layoutBindings.emplace_back(tree.Find(binding.target).Value(), binding.property, binding.field);
+            storage.work.layoutBindings.emplace_back(tree.Find(binding.target).Value(), binding.property, binding.field, binding.values);
         const UiStyleSourceRevisions sources{tree.SourceDocumentRevision(),     tree.Revision(),
                                              storage.registry.Generation(),     storage.definition.content,
                                              storage.definition.resolvedPolicy, canvas->layoutEngine->PublishedInteraction()};

@@ -39,10 +39,12 @@ work does not allocate, compile, block on I/O or wait for GPU idle. Source, mask
 shader, buffer and transient target generations remain pinned until native
 completion, terminal device loss or unsent abandonment.
 
-Native execution requires separate OpenGL, Metal and Vulkan encoder integration
-and pixel evidence. Null/model tests qualify admission and lifetime only. During
-staged development no backend capability or ticket closure is claimed before the
-complete encoder/host/presentation path has executed.
+Every advertised native paint profile requires its actual encoder, format admission
+and pixel/lifecycle evidence. This change targets the selected Metal profile;
+OpenGL and Vulkan explicitly deny the optional paint capability while their ordinary
+editor GUI/preview remains available. No peer or renderer fallback is selected.
+Null/model tests qualify admission and lifetime only. Native availability and ticket
+closure remain unqualified until the actual source/encoder/presentation path executes.
 
 ## Explicit empty startup and source admission
 
@@ -153,6 +155,15 @@ and the complete prepared program path are tested.
 
 
 ### Immutable prepared program and ordinary frame changes
+
+`UiPaintProgram::ValidatePreparation` is an owner mutation and is no longer const:
+it observes the complete bounded creation inventory and records only exact failed
+creation generations already retired by the canonical resource registry. The
+first native error remains the result. Clearing those local failed handles keeps
+cleanup deterministic after bounded operation-history eviction; unknown outcomes
+and stale successful generations still preserve normal release errors. Rebuild
+member-pointer consumers with the non-const signature. This changes no resource
+publication, runtime source or shader artifact format.
 
 `UiPaintProgram` is owned by RenderFrontend; its public header is staged only by
 that target. Its actual consumers supply canonical `UiRenderGeometryPlan` leases
@@ -291,3 +302,291 @@ that option and conflict with the fixed C++ ABI. Qualification requires actual
 compiler member offsets; neither expected metadata nor a successful package parse
 can stand in for that evidence. Missing tools or devices leave native qualification
 incomplete. A private fixture never permits an unsigned production host catalog.
+
+## Scene publication candidate migration
+
+The application-owned service remains the only semantic registry and authored
+`UiHotReload` publisher. The existing generic Scene activation participant does
+not gain a UI, renderer or platform dependency. Scene-owned registrations prepare
+against its exact reserved `SceneRuntimeId`; they never retain component-pool pointers.
+
+`UiSceneTransitionRequest::previous` is now optional: absence means a real initial
+activation, while an absent `next` means unload. Existing replacements continue to
+supply their exact outgoing identity. An empty pair, invalid identity or duplicate
+initial Scene admission fails; no fabricated outgoing identity is needed. This is
+an in-process host API change, not a serialized source format change.
+
+`RuntimeUiService::PrepareAnimation` can attach to an incoming publisher or provider
+replacement inside the same private `UiSceneReconciliation::Prepared` candidate.
+The derived owner retains an exact generation lease and the shared service state,
+not a facade or component pointer. Its candidate identity is weak: abandonment
+revokes mutation, even if a lease keeps bytes readable. Publication promotes that
+same publisher and reservation without a second tree or postcommit acquisition.
+
+The coordinated transition overload resolves every requested instance to its actual
+live derived reservation and exact outgoing semantic/provider scope. A persistent
+provider rebind must also have its replacement derived owner privately prepared;
+it cannot silently preserve an old derived frame over a new source generation.
+Game, player, viewport and other Scene scopes remain owned by the same service.
+Only the matching outgoing scope is retired.
+
+`PreparePublication` allocates a one-use transaction before aggregate validation.
+Its owner-thread `Seal` revalidates source/Scene stamps and temporarily fences all
+conflicting service/registry commands. Abandoning it restores admission without
+publishing. The generic Scene service retains its existing final commit claim as
+the sole linearization point. Only after that claim may `Publish()` perform the
+already-reserved, noexcept source/derived promotion, with no allocation, source
+acquisition, cancellation check or foreign callback. Late cancellation cannot split
+that aggregate. Native completion remains separate from successful publication.
+
+Shutdown immediately revokes callers and defers canonical teardown while a sealed
+transaction pins the service. The owner consumes or abandons that token before
+collection. Old generation and GPU leases still fence reclamation. Prepared
+transaction storage is retired at explicit application quiescence; publishing does
+not execute cleanup callbacks or destroy a retained old renderer/source owner.
+The new initial/private-candidate/seal/rollback/shutdown regressions and the owning
+public consumers qualify this contract separately from native effect execution.
+
+### Private source baseline and complete canvas batches
+
+Scene activation must finish native program/resource preparation before the generic Scene publication claim. A newly composed
+`UiAnimationRuntimeParticipant::PrepareSourcePresentation` performs the same canonical computed style/layout/clipping transaction
+at its explicit load-time boundary, before Startup and before any command or timeline. It returns only immutable baseline values;
+clock sequence, source frame, elapsed time and host dispatch cursors remain zero. The participant's ordinary `Acquire` and
+`ApplyPresentation` stay closed until real VariableUpdate/RenderExtraction succeeds. No host dispatch evidence is manufactured.
+The retained baseline pins its exact source generation and remains readable after candidate abandonment, without preserving mutation
+or input authority.
+
+The application projection extracts potential paint roles through `UiRenderExtractor::ExtractPrototype`. Its immutable issuance is
+marked preparation-only, including retained copies. `UiPaintProgram::Create` may consume these potential roles, while the geometry
+arena rejects them, so a baseline cannot be uploaded or submitted as a normal frame. Actual source extraction continues through
+`Extract` after the canonical scheduler publication. This is an additive host preparation route, not a second style/layout owner.
+
+A Scene containing several authored canvases supplies the complete ordered inventory to `UiPaintProgram::SubmitBatch`. The former
+single-program Submit delegates to a batch of one. The named frontend UI phase validates every source/slot/binding and all bounded
+pass/draw/resource totals before the first native encoding. It admits no generic Execute reopening. A malformed later canvas cannot
+encode an earlier prefix. Reentrant UI and GUI composition is fenced until the whole ordered phase finishes. A later native failure
+aborts presentation, but all already queued source/image/font/atlas/kernel/transient generations remain attached to the same native
+completion lease as Scene and GUI.
+
+`RenderResourceRetirementLimits::maximumUiCapturesPerFrame` is the explicit product bound (default 8, hard limit 64). Each of the
+existing finite completion slots reserves its source-retention inventory once at frontend construction. Frame work cannot grow it;
+capacity failure rejects the complete composition before encoding. This does not advertise a native capability on an unsupported
+backend or qualify pixels, compiler artifacts, presentation, or device restart.
+## Transactional normal Scene retirement
+
+`SceneActivationParticipant` contract revision 3 adds optional
+`PrepareRetirement(RuntimeSceneView)` for owners whose normal unload requires a
+fallible detached transaction. Rebuild every host participant and consumer against
+the new virtual contract. Existing owners inherit a no-op result; no second Scene
+or UI publication authority is introduced.
+
+`RuntimeSceneService` prepares every retirement candidate against the actual active
+Scene, validates all candidates, then invokes their allocation-free, noexcept
+`Publish` operations before shutting down the old activation roots or releasing
+Scene storage. Preparation, cancellation and validation failures abandon only the
+new candidates and remain observable through `TakeOperationError`; the active
+Scene and its owners remain unchanged. Reentrant queue admission is closed across
+the transaction. Deferred shutdown before publication abandons preparation and
+then uses the existing forced-shutdown path.
+
+The application UI adapter must prepare removal of only the outgoing Scene scope;
+game-instance and player-owned UI survive. Its activation candidate still owns
+forced revocation and GPU/snapshot draining: `Shutdown` never calls this fallible
+retirement hook. Borrowed component storage cannot be retained by a candidate.
+
+
+
+## Same-boundary compiler reflection output
+
+The application compiler used to discard final-artifact reflection before returning
+`ShaderCompilationBatch`. The host could therefore not supply a strict paint kernel
+without downcasting the selected compiler adapter or authoring a second native map.
+`ShaderCompilationRequest::reflection` now explicitly supplies the admitted Cross
+identity and authored logical names. The same adapter operation returns one immutable
+`CompiledShaderArtifact::reflection` record, binding actual payload bytes, compilation
+key, reflection tool and normalized layout/map into the existing cooked identity.
+`ShaderBuildService` retains this record with its ordinary atomic batch result.
+
+Unreflected requests preserve their previous artifact keys and optional absence;
+callers requiring a reflected result must request it and reject missing metadata.
+Reflection inputs participate in the artifact key. Existing Vulkan cook normalization
+is reused; no feature-level adapter cast or parallel reflector is introduced. The
+closed Metal UI route additionally validates actual Cross JSON, every fixed member
+and stage interface, and the generated MSL constant struct and resource attributes.
+Only the actual translated native placements are published. Native Metal pipeline
+reflection independently checks the resource stages and all ten 64-byte block members.
+
+`CookedUiPaintKernel` consumes this exact artifact-owned record. Its old separately
+supplied `reflection` candidate is removed; hosts and private qualification fixtures
+must migrate to the same cook output. Missing, mismatched, malformed or unsupported
+route evidence fails with a typed error. No signed catalog trust, tool installation,
+backend discovery or runtime shader compilation is added by this migration. Scripted
+normalization tests qualify rejection/ownership only; real locked-tool translation,
+Apple offline compilation and native pixels remain separate required evidence.
+
+
+## Host automatic layout bindings
+
+Existing explicit `UiAnimationLayoutBinding` values keep `AllComputedValues` by
+default. A host automatically binding the core width/height/padding vocabulary uses
+`ExplicitOriginsOnly`: only `RegisteredDefault` is skipped, every explicit zero,
+class/state/accessibility/animation value remains authoritative. The owner starts
+from the authored/responsive layout on every update, so removal of an override
+restores percentages and authored padding rather than retaining previous pixels.
+The closed `Padding` field maps the validated Dimension to all four edges and
+rejects negative padding. No timeline sample bypasses the sole computed-style owner.
+
+
+The existing reflected-record canonical codec and identity calculation now belong
+to RenderApi as pure portable value operations, with Foundation JSON implementation
+private. Private tool normalization depends on that value owner; runtime admission
+never depends on compiler/process targets. `ValidateReflectedShaderArtifact`
+recomputes the same existing cooked identity directly and binds exact payload,
+compiled key, backend and payload format. A structurally valid alternate binding
+map with a stale cooked key is rejected by both pipeline and strict kernel
+admission. Canonical encoding/hash bytes are unchanged; no second hash scheme or
+encode/decode admission round trip is introduced.
+
+### Project Scene composition and retirement
+
+`HoroEditorApp` now creates the application-owned UI service/port from the same
+RuntimeHost dispatch source before preparing project preview resources or starting
+ScreenHost. The actual `EditorProjectScenePolicy::uiSources` is captured by the
+existing Play and preview factories. `ProjectPlaySceneHost` constructs its UI
+loader over the same committed cook envelopes and registry as its other project
+assets, and registers the generic UI activation/retirement participant last.
+Scene retains its sole publication claim. No component-pool pointer, second UI
+service, backend discovery, default document or mutable document copy is retained.
+
+The application source factory enumerates every authored `uiCanvas` component in
+Scene order, with eight submitted sources and sixteen retained retirement slots.
+The complete batch (including an independently attached manual source) is checked
+against the frontend's configured capture capacity. Exact prepared graph counts
+and potential frame draw capacities are also checked before the Scene claim.
+All private canonical source generations, derived baselines, shader pipelines,
+queued buffers and attachments must finish preparation and report readiness before
+publication. Publication only moves already-owned bounded entries. Failure leaves
+the old Scene, UI grants and frame owners unchanged. Old candidate shutdown revokes
+only its exact SceneRuntimeId, so replacing the same logical Scene cannot detach
+the promoted generation. Retained canonical/native leases drain through the same
+application port and renderer completion owner before storage is released.
+
+The source path projects authored structural elements through the canonical core
+catalog, computed style and responsive layout owners. `RegisteredDefault` sizing
+never overrides authored responsive dimensions; explicit zero and padding retain
+their normal meaning. No durable clip/transform/group schema is added: absent
+runtime policies remain Visible, identity and ungrouped. Required text, image or
+control components without their actual resource/intrinsic owner are rejected with
+a typed unsupported/intrinsic failure; they are never rendered as substitute solid
+rectangles. This boundary is an explicit remaining component integration limit.
+
+Normal `apps/HoroEditor/main.cpp` calls `RunEditorGuiApp` without a compiler or
+catalog. Its application composition now selects `RuntimeUiPaintPackagedAssets`
+from the explicit `EditorAssetRoot()` only for the already selected Metal backend.
+A real authored Scene canvas requests the fixed pair
+`shaders/runtime/ui-paint-metal.horoshdr` and
+`shaders/runtime/ui-paint-metal.reflection.json` during candidate preparation.
+NoSource and ordinary GUI/document preview startup need neither file. Unsupported
+paint backends remain a typed capability denial, without selecting another backend.
+
+`HoroUiPaintShaderPackage` is a noninstalled, RenderApi-only value owner shared by
+runtime loading and offline production. It admits the exact Metal profile through
+the single canonical reflected-record decoder, recomputed cooked identity and
+strict `ValidateCookedUiPaintKernel`; Metal independently checks native reflection.
+The loader bounds both reads before allocation and rejects missing, nonregular,
+symlinked, escaping, truncated, oversized or mismatched pairs. The application
+keeps its explicit asset root quiescent during preparation. Only a completely
+admitted immutable kernel enters the source policy cache; a failed attempt cannot
+publish Scene/UI state. Loaded bytes own their lifetime across source reload and
+queued renderer retirement, with no frame-hot file access or compiler processes.
+An explicitly injected admitted compiler/target remains an alternative host policy
+using the same ShaderBuildService and reflected record, rather than another source
+publisher.
+
+### Authenticated offline Metal package production
+
+`HoroEditorUiPaintShaderCook` is an explicit offline application executable. It
+accepts absolute source, new package root, scratch, catalog, detached signature,
+independent host trust, DXC, validator, Cross and xcrun paths, in that order. The
+host exclusively owns the output parent; an existing destination is rejected.
+All output is written into one bounded, exclusively claimed private directory and
+published by one directory rename after complete pair validation. Failures remove
+only that invocation's claimed directory. Runtime Editor code never invokes this
+executable or links its process/security/compiler host target.
+
+`HoroEditorShaderCookHostInternal` authenticates at most 64 KiB of immutable catalog
+bytes with the existing `HoroSecurity::ArtifactVerifier` over independently supplied
+host-approved roots **before** parsing tool approvals. The shared seeded
+`HoroHostSignatureDocuments` decoder parses the trust/envelope documents and grants
+no trust itself. A catalog cannot supply its own roots. Schema 1 has exactly
+`version`, `host`, and `tools`; each tool has exactly `role`, `release`,
+`archive_sha256`, and `executable_sha256`. Both digest fields use the existing
+Foundation canonical text form, `sha256:` followed by 64 lowercase hex digits.
+Duplicate/unknown fields, duplicate roles,
+zero digests, wrong actual host and excessive bounds fail closed. The existing
+external compiler adapter independently hashes each selected absolute executable
+and matches the complete authenticated host/role/release/archive/executable tuple.
+No catalog field becomes a path, shell fragment, or arbitrary process option.
+
+The producer uses the same `CompileShaderTargets` Metal route and explicit Cross
+logical names for the canonical `ui_paint.hlsl`. Its immutable same-cook reflection
+record is encoded by the sole RenderApi codec; runtime admission does not fabricate
+reflection or approve tools. ECDSA test roots and metadata-only package fixtures
+are regression inputs, never a production installation approval or native shader
+qualification. A reviewed signed Apple installation snapshot, actual approved
+tools, real offline compilation, complete application linking and selected-Metal
+pixel/presentation/reload/drain evidence remain release qualification requirements;
+they have not been established by CPU package tests or fixture discovery.
+
+Metal advertises paint only when its implemented upload/encoding path and queried
+primary, linear offscreen and stencil format profile are all available. The two
+additional one-pixel format probes run during cold device discovery and retain no
+resource. Format admission is not shader, pixel or application qualification.
+OpenGL/Vulkan keep explicit capability-denied paint behavior while their ordinary
+editor GUI/document preview paths remain available.
+
+
+### Unassigned authored style namespaces
+
+Canonical document elements may omit `styleAsset` while retaining typed inline
+values. A property-only `RuntimeStyleRegistry` now accepts a nonempty validated
+property schema with no authored namespaces. The same resolver supplies registered
+defaults, permitted inheritance, typed inline values and host presentation policy;
+no synthetic asset, font, image or theme is created. Independently qualified class
+and token references still resolve only through actual admitted namespaces.
+
+`UiStyleElementInput::asset` and `UiAnimationElementDefinition::asset` use their
+existing unassigned identity to select no base asset chain. Explicit unknown asset,
+class and token references remain errors. `HasAsset({})` remains false. This aligns
+runtime registry/resolver/animation admission with `ProjectUiElementStyle` and
+ADR-076 precedence; signatures and authored/cooked formats are unchanged. Existing
+callers with assigned assets retain their current cascade and validation. The real
+project Scene loader uses this path for default/inline-only canonical documents.
+
+
+### Animated extraction retention
+
+Real animation callers pass the exact committed `UiAnimationFrameLease` to the
+four-argument `UiRenderExtractor::Extract`. The extractor privately checks the
+retained tree issuance as well as layout lineage; equal numeric revisions from a
+different publisher do not authorize extraction. Static extraction and load-time
+prototype preparation retain their original contracts. The application projection
+uses this route, and the public integration consumer checks its typed signature.
+
+Snapshot storage pins that frame, geometry pins the snapshot, and the existing
+native completion capture pins geometry. Actual last-reader release reserves the
+pool slot while clearing its upstream pin before making the slot reusable. Pools
+may remain alive after completion without retaining a retired source. Failed
+geometry preparation clears its new source pin before returning the slot. No new
+renderer lifetime authority or frame allocation is introduced.
+
+
+The prepared program copies bounded structural command/mask/group/resource values
+at cold creation, including safe-point refresh. It does not retain the real
+animation publication used to derive those values. Successful slot replacement
+releases the superseded CPU geometry and binding evidence; failed or cancelled
+preparation releases only its unpublished candidate. The accepted revision and
+all independently captured native completion leases retain their original exact
+geometry/binding checks and lifetimes. No frame or resource capacity increases
+are needed to retire these obsolete cache references.

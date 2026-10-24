@@ -2,7 +2,7 @@
   "version": 6,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 25,
+    "minor": 29,
     "patch": 0
   },
   "configurePresets": [
@@ -12,6 +12,7 @@
       "generator": "Ninja",
       "cacheVariables": {
         "BUILD_TESTING": "ON",
+        "CMAKE_DISABLE_PRECOMPILE_HEADERS": "ON",
         "FETCHCONTENT_BASE_DIR": "${sourceDir}/.cmake/fetchcontent",
         "CMAKE_C_COMPILER_LAUNCHER": "$env{HORO_COMPILER_LAUNCHER}",
         "CMAKE_CXX_COMPILER_LAUNCHER": "$env{HORO_COMPILER_LAUNCHER}",
@@ -37,10 +38,13 @@
       "binaryDir": "${sourceDir}/build/ci",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS_DEBUG": "-g1",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g1",
         "HORO_BUILD_EDITOR_GUI": "ON",
         "HORO_BUILD_RENDER_OPENGL": "ON",
         "HORO_ENABLE_TELEMETRY": "ON",
-        "HORO_ENABLE_OPENTELEMETRY": "ON"
+        "HORO_ENABLE_OPENTELEMETRY": "ON",
+        "HORO_CI_ISOLATE_TEST_EXECUTABLES": "ON"
       }
     },
     {
@@ -52,7 +56,11 @@
         "rhs": "Linux"
       },
       "cacheVariables": {
-        "HORO_BUILD_RENDER_METAL": "OFF"
+        "HORO_BUILD_RENDER_METAL": "OFF",
+        "CMAKE_LINKER_TYPE": "LLD",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,--threads=2",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--threads=2",
+        "CMAKE_MODULE_LINKER_FLAGS": "-Wl,--threads=2"
       }
     },
     {
@@ -258,7 +266,7 @@
       "targets": [
         "HoroCiWindowsChecks"
       ],
-      "jobs": 2
+      "jobs": 4
     },
     {
       "name": "ci-audio-release",
@@ -266,7 +274,7 @@
       "targets": [
         "HoroCiAudioRealtimeChecks"
       ],
-      "jobs": 1
+      "jobs": 2
     },
     {
       "name": "ci-navigation-null",
@@ -368,6 +376,9 @@
         "exclude": {
           "label": "gui|tooling"
         }
+      },
+      "execution": {
+        "jobs": 2
       }
     },
     {
@@ -381,6 +392,9 @@
         "exclude": {
           "label": "gui|tooling"
         }
+      },
+      "execution": {
+        "jobs": 2
       }
     },
     {
@@ -508,6 +522,9 @@
         "include": {
           "label": "^sonar-coverage$"
         }
+      },
+      "execution": {
+        "jobs": 4
       }
     }
   ]

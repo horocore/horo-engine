@@ -119,8 +119,11 @@ namespace Horo::Application::Internal::Detail {
             return Result<void>::Failure(current.ErrorValue());
         frame.animation = std::move(current).Value();
         auto extracted = projection->Extract(service, frame.animation);
-        if (extracted.HasError())
-            return Result<void>::Failure(extracted.ErrorValue());
+        if (extracted.HasError()) {
+            auto error = extracted.ErrorValue();
+            error.message = "Runtime UI source extraction: " + error.message;
+            return Result<void>::Failure(std::move(error));
+        }
         frame.snapshot.emplace(std::move(extracted).Value());
         if (!program || refresh)
             return Result<void>::Success();  // The explicit next owner safe point consumes this actual prototype.
@@ -147,22 +150,70 @@ namespace Horo::Application::Internal::Detail {
         return Result<void>::Success();
     }
 
-    /** @copydoc RuntimeUiPaintHostState::Retire */
-    Result<void> RuntimeUiPaintHostState::Retire() {
-        if (!source) {
-            phase = RuntimeUiPaintHostPhase::NoSource;
-            return Result<void>::Success();
-        }
-        phase = RuntimeUiPaintHostPhase::Retiring;
-        source->animation->Shutdown();
-        source->ReleaseFrame();
-        source->projection.reset();
-        if (source->program) {
-            const auto closed = source->program->Shutdown();
+    /** @copydoc RuntimeUiPaintSource::Retire */
+    Result<void> RuntimeUiPaintSource::Retire() {
+        retiring = true;
+        animation->Shutdown();
+        ReleaseFrame();
+        projection.reset();
+        if (program) {
+            const auto closed = program->Shutdown();
             if (closed.HasError())
                 return closed;
-            source->program.reset();
+            program.reset();
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeUiPaintSource::OnPhase */
+    Result<void> RuntimeUiPaintSource::OnPhase(RuntimeUiService &service, Render::RenderFrontend &frontend,
+                                               const Runtime::RuntimePhase phase, const Runtime::FrameContext &context,
+                                               const CancellationToken &cancellation) {
+        if (phase == Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands) {
+            if (const auto applied = ApplyOutput(); applied.HasError())
+                return applied;
+            if (refresh)
+                if (const auto refreshed = Refresh(frontend, cancellation); refreshed.HasError())
+                    return refreshed;
+        }
+        if (const auto forwarded = animation->OnPhase(phase, context); forwarded.HasError()) {
+            auto error = forwarded.ErrorValue();
+            error.message = "Runtime UI animation phase " + std::to_string(static_cast<unsigned>(phase)) + ": " + error.message;
+            return Result<void>::Failure(std::move(error));
+        }
+        return phase == Runtime::RuntimePhase::RenderExtraction ? Extract(service, context.frameNumber, cancellation)
+                                                                : Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeUiPaintHostState::Sources */
+    std::array<RuntimeUiPaintSource *, 1 + MaximumSceneUiSources + MaximumRetiredSceneUiSources> RuntimeUiPaintHostState::Sources(
+        const bool includeRetired) noexcept {
+        std::array<RuntimeUiPaintSource *, 1 + MaximumSceneUiSources + MaximumRetiredSceneUiSources> result{};
+        std::size_t index = 0;
+        const auto append = [&](const auto &entry) {
+            if (entry && (includeRetired || !entry->retiring))
+                result[index++] = entry.get();
+        };
+        append(source);
+        for (const auto &entry : sceneSources)
+            append(entry);
+        if (includeRetired)
+            for (const auto &entry : retiredSources)
+                append(entry);
+        return result;
+    }
+
+    /** @copydoc RuntimeUiPaintHostState::Retire */
+    Result<void> RuntimeUiPaintHostState::Retire() {
+        phase = RuntimeUiPaintHostPhase::Retiring;
+        for (auto *entry : Sources(true))
+            if (entry)
+                if (const auto retired = entry->Retire(); retired.HasError())
+                    return retired;
+        if (std::ranges::none_of(Sources(true), [](const auto *entry) {
+            return entry != nullptr;
+        }))
+            phase = RuntimeUiPaintHostPhase::NoSource;
         return Result<void>::Success();
     }
 }  // namespace Horo::Application::Internal::Detail

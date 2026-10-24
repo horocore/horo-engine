@@ -10,12 +10,11 @@
 #include <memory>
 
 namespace Horo::Render {
-    /** @brief Exact two-stage artifact prepared outside frame execution through the existing locked shader cook route. */
+    /** @brief Exact two-stage artifact with its same-boundary immutable reflection, prepared through the existing locked cook route. */
     struct CookedUiPaintKernel final {
         ShaderManifest manifest;
         ShaderTargetRequirement target;
         CompiledShaderArtifact artifact;
-        ShaderReflectionCandidate reflection;
         RenderTextureFormat colorFormat{RenderTextureFormat::Rgba8Unorm};
         RenderTextureFormat stencilFormat{RenderTextureFormat::Depth24Stencil8};
     };

@@ -315,3 +315,34 @@ TEST_CASE("Actual async reload commits cancellation once while rejected reload p
     CHECK(handler.producer->Cancellation().IsCancellationRequested());
     CHECK(handler.producer->Complete().HasError());
 }
+
+TEST_CASE("Real host explicit style origins restore responsive authored layout after busy override",
+          "[runtime_ui][animation][integration][layout]") {
+    HostFixture fixture{{.actions = true, .busyStyle = true, .explicitLayoutOrigins = true}};
+    auto &participant = *fixture.participant;
+    RetainedAnimationHandler handler;
+    const auto key = StartHostAction(fixture, *fixture.attachedActions, handler);
+    const auto check = [&](const UiAnimationFrameLease &frame, const std::int32_t width, const std::int32_t padding) {
+        const auto source = frame.Controls().front().source;
+        const auto records = frame.Layout().Records();
+        const auto child = std::ranges::find(records, source.element, &UiLayoutRecord::element);
+        REQUIRE(child != records.end());
+        CHECK(child->arrangement.contentBox.extent.width == width);
+        CHECK(child->arrangement.contentBox.origin.x - child->arrangement.paddingBox.origin.x == padding);
+        CHECK(child->arrangement.contentBox.origin.y - child->arrangement.paddingBox.origin.y == padding);
+    };
+    auto initial = Frame(participant);
+    check(initial, 50, 3);
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto busy = Frame(participant);
+    check(busy, 0, 4);  // Explicit visual-state zero remains authoritative.
+    REQUIRE(handler.producer->Complete().HasValue());
+    initial = {};
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto restored = Frame(participant);
+    check(restored, 50, 3);  // The new RegisteredDefault restores this update's authored percentage/padding.
+    REQUIRE(restored.Controls().front().asyncAction);
+    CHECK(restored.Controls().front().asyncAction->source == key.source);
+    CHECK(restored.Controls().front().asyncAction->operation == key.operation);
+    fixture.host->Shutdown();
+}

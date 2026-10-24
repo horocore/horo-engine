@@ -27,7 +27,11 @@ namespace Horo::Render::Detail {
     class RenderGraphResourceLeasePool final {
     public:
         /** @brief Reserves all pin storage before the first frame. */
-        RenderGraphResourceLeasePool(RenderResourceRegistry &registry, std::size_t maximumPins);
+        RenderGraphResourceLeasePool(RenderResourceRegistry &registry, std::size_t maximumPins, std::size_t maximumUiCaptures = 8);
+        /** @brief Observes actual preallocated UI capture bytes across every native completion slot; does not allocate or mutate. */
+        [[nodiscard]] std::size_t UiRetentionStorageBytes() const noexcept;
+        /** @brief Observes the actual configured capture inventory in one canonical completion lease. */
+        [[nodiscard]] std::size_t MaximumUiCaptures() const noexcept;
         /** @brief Acquires a bounded lease, rolling back every acquired pin on failure. */
         [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources,
                                                                   UiRenderSubmission *ui = nullptr,
@@ -39,7 +43,8 @@ namespace Horo::Render::Detail {
          * @param existing Exact active frame lease or null before the frame's first native contribution.
          * @return Same completion lease with bounded added pins, or a typed failure preserving existing ownership.
          * @details Only the frame owner calls this before presentation. Partial added pins roll back; no old source,
-         * scene transient set or completion authority is replaced. One lease accepts one canonical UI capture.
+         * scene transient set or completion authority is replaced. One lease accepts its preallocated bounded canonical canvas captures,
+         * preserving ordered contributions.
          */
         [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireUi(std::span<const RenderGraphResource> resources, UiRenderSubmission &ui,
                                                                     RenderGraphTransientResourceSet *transient,
@@ -83,11 +88,16 @@ namespace Horo::Render::Detail {
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;
-            UiRenderSubmissionRetention ui;
-            bool uiCaptured{};
-            std::array<std::shared_ptr<IResidentUiPaintKernel>, 8> uiKernels; /**< Distinct selected-native pipelines survive completion. */
+
+            struct UiCapture final {
+                UiRenderSubmissionRetention source;
+                std::array<std::shared_ptr<IResidentUiPaintKernel>, 8> kernels;
+                RenderGraphTransientResourceSet *transient{};
+            };
+
+            std::vector<UiCapture> ui; /**< Product-admitted capacity allocated once before frame admission. */
+            std::size_t uiCount{};
             RenderGraphTransientResourceSet *transient{nullptr};
-            RenderGraphTransientResourceSet *uiTransient{nullptr};
             std::array<std::shared_ptr<const ResidentMaterialBinding>, RenderMaterialPass::MaximumDraws> materials;
             std::size_t materialCount{0};
         };

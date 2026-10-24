@@ -9,7 +9,7 @@ namespace Horo::Render {
         const auto &geometry = *submission.geometry;
         if (geometry.Vertices().size() > descriptor.capacity.vertices || geometry.Indices().size() > descriptor.capacity.indices)
             return Result<void>::Failure(MakeError(UiPaintProgramErrors::Capacity));
-        frame.geometry.reset();
+        frame.ReleaseSource();
         frame.vertices.clear();
         frame.indices.clear();
         frame.draws.clear();

@@ -8,6 +8,7 @@ add_test(NAME HoroSaveObservabilityDependencyPolicyTest
     "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"
     -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveObservabilityDependencyPolicyTest.cmake")
 set_tests_properties(HoroSaveObservabilityDependencyPolicyTest PROPERTIES LABELS "unit;save;architecture")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroProtobufCoverageTests.cmake")
 include(Catch)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroCiSuites.cmake")
 
@@ -210,7 +211,8 @@ add_executable(HoroPackageValidationTests
     unit/packages/PackageFileManifestTests.cpp
     unit/packages/PackageRestoreTests.cpp
     unit/packages/PackagePublisherVerificationTests.cpp)
-target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::PackageSecurity HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+target_sources(HoroPackageValidationTests PRIVATE unit/packages/HostSignatureDocumentTests.cpp)
+target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::PackageSecurity HoroEngine::Platform HoroHostSignatureDocuments nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPackageValidationTests LABELS "packages;headless")
 
 if (HORO_ENABLE_IMGUI_UI_TESTS)
@@ -395,9 +397,12 @@ if(HORO_BUILD_NETWORK_GNS)
             support/AllocationProbe.cpp
             unit/runtime/networking/GnsTransportTests.cpp
             unit/runtime/networking/GnsTransportQualificationTests.cpp
+            unit/runtime/networking/GnsPendingCloseTests.cpp
+            unit/runtime/networking/GnsNativeSecurityTests.cpp
     )
     target_compile_features(HoroNetworkTransportGnsTests PRIVATE cxx_std_20)
     target_include_directories(HoroNetworkTransportGnsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/networking/gns ${PROJECT_SOURCE_DIR}/tests/support)
+    target_include_directories(HoroNetworkTransportGnsTests PRIVATE "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets")
     target_compile_definitions(HoroNetworkTransportGnsTests PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE GameNetworkingSockets::static c-ares::cares)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
@@ -485,6 +490,7 @@ set_tests_properties(HoroNetworkModePublicHeaderConsumer PROPERTIES LABELS "unit
 add_executable(HoroNetworkModeHostIntegrationTests
         integration/network/NetworkModeHostIntegrationTests.cpp
         integration/network/NetworkProductSessionTests.cpp
+        integration/network/NetworkPendingConnectionTests.cpp
         integration/network/NetworkProductAdmissionTests.cpp
         integration/network/NetworkAdmissionBoundaryTests.cpp
     integration/network/NetworkAdmissionObserverTests.cpp
@@ -494,6 +500,34 @@ target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_TEST
 target_include_directories(HoroNetworkModeHostIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
 target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroNetworkProductHost HoroEngine::NetworkTransportNull
     HoroEngine::Platform MbedTLS::mbedcrypto)
+if(HORO_BUILD_NETWORK_GNS)
+    target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/NetworkGnsProductProvisioningTests.cpp)
+    target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroEngine::NetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
+    # Private qualification-only PKI: no native header or secret provisioning API is installed or exported by Horo.
+    add_library(HoroGnsNativeQualificationSupport STATIC integration/network/gns/GnsQualificationIssuer.cpp)
+    target_compile_features(HoroGnsNativeQualificationSupport PUBLIC cxx_std_20)
+    target_include_directories(HoroGnsNativeQualificationSupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/integration/network/gns)
+    target_include_directories(HoroGnsNativeQualificationSupport PRIVATE
+        "${HORO_GNS_SELECTED_SOURCE_DIR}/src/common" "${HORO_GNS_SELECTED_SOURCE_DIR}/src/public"
+        "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets" "${horo_gns_BINARY_DIR}/src")
+    target_compile_definitions(HoroGnsNativeQualificationSupport PRIVATE VALVE_CRYPTO_ENABLE_25519 VALVE_CRYPTO_OPENSSL VALVE_CRYPTO_25519_OPENSSLEVP)
+    target_link_libraries(HoroGnsNativeQualificationSupport PUBLIC HoroNetworkTransportGNSFactoryInternal
+        PRIVATE HoroEngine::Platform GameNetworkingSockets::static protobuf::libprotobuf MbedTLS::mbedcrypto)
+    add_executable(HoroGnsSecureProductChild integration/network/gns/GnsSecureProductChild.cpp)
+    target_compile_features(HoroGnsSecureProductChild PRIVATE cxx_std_20)
+    target_compile_definitions(HoroGnsSecureProductChild PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+    target_include_directories(HoroGnsSecureProductChild PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
+    target_link_libraries(HoroGnsSecureProductChild PRIVATE HoroGnsNativeQualificationSupport HoroNetworkProductHost
+        HoroEngine::NetworkTransportGNS HoroEngine::NetworkTransportNull HoroEngine::Platform MbedTLS::mbedcrypto Catch2::Catch2)
+    if(UNIX AND HORO_BUILD_PHYSICS_NATIVE)
+        target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/gns/GnsNativeProductPairTests.cpp)
+        target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroGnsNativeQualificationSupport)
+        target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_GNS_PRODUCT_CHILD="$<TARGET_FILE:HoroGnsSecureProductChild>")
+        add_dependencies(HoroNetworkModeHostIntegrationTests HoroGnsSecureProductChild)
+    else()
+        message(STATUS "Native secure pair runtime qualification requires native Physics and provable owner-only POSIX fixture files")
+    endif()
+endif()
 horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
 add_test(NAME HoroNetworkStandaloneProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product standalone 2)
 set_tests_properties(HoroNetworkStandaloneProductLaunch PROPERTIES LABELS "integration;network;headless;product")
@@ -2045,16 +2079,27 @@ add_test(NAME HoroGameplayRuntimeUiSdkContract COMMAND ${CMAKE_COMMAND}
     "-DBUILD_CONFIG=$<CONFIG>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayRuntimeUiSdkContract.cmake")
 set_tests_properties(HoroGameplayRuntimeUiSdkContract PROPERTIES LABELS "gameplay;runtime_ui;sdk;headless" RUN_SERIAL TRUE TIMEOUT 120)
+add_executable(HoroEditorShaderHostCatalogTests unit/application/VerifiedShaderHostCatalogTests.cpp)
+target_compile_features(HoroEditorShaderHostCatalogTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorShaderHostCatalogTests PRIVATE HoroEditorShaderCookHostInternal MbedTLS::mbedcrypto)
+horo_register_catch_test(HoroEditorShaderHostCatalogTests LABELS "unit;application;shader;security;headless")
+add_test(NAME HoroEditorUiPaintShaderCookContract
+    COMMAND ${CMAKE_COMMAND} "-DCOOK=$<TARGET_FILE:HoroEditorUiPaintShaderCook>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/ui-paint-cook-contract" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/UiPaintCookContract.cmake")
+set_tests_properties(HoroEditorUiPaintShaderCookContract PROPERTIES LABELS "application;shader;headless" RUN_SERIAL TRUE TIMEOUT 15)
+
 add_executable(HoroRuntimeUiPaintHostTests
         unit/application/RuntimeUiPaintHostTests.cpp
         unit/application/RuntimeUiPaintHostOutputTests.cpp
+        unit/application/RuntimeUiPaintProjectSourceTests.cpp
+        unit/application/RuntimeUiPaintShaderPackageTests.cpp
         unit/runtime/ui/UiHotReloadTestFixture.cpp
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         support/AllocationProbe.cpp)
 target_compile_features(HoroRuntimeUiPaintHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiPaintHostTests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/helpers" "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ui")
-target_link_libraries(HoroRuntimeUiPaintHostTests PRIVATE HoroRuntimeUiPaintHost HoroEngine::RenderNull HoroEngine::Platform)
+target_link_libraries(HoroRuntimeUiPaintHostTests PRIVATE HoroRuntimeUiPaintHost HoroUiPaintShaderPackage HoroEditorSceneProductHost HoroEngine::RenderNull HoroEngine::Platform)
 horo_register_catch_test(HoroRuntimeUiPaintHostTests LABELS "unit;application;runtime_ui;headless")
 add_executable(HoroLuaReplicationPublicHeaderConsumer support/LuaReplicationPublicHeaderConsumer.cpp)
 target_compile_features(HoroLuaReplicationPublicHeaderConsumer PRIVATE cxx_std_20)
@@ -3593,7 +3638,8 @@ add_executable(HoroShaderCompilerPipelineTests
 target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform)
-add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp)
+add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp
+    unit/runtime/renderer/UiPaintReflectionCookTests.cpp)
 target_compile_features(HoroShaderReflectionCookTests PRIVATE cxx_std_20)
 target_link_libraries(HoroShaderReflectionCookTests PRIVATE HoroEditorVulkanShaderInternal)
 horo_register_catch_test(HoroShaderReflectionCookTests LABELS "unit;renderer;shader;headless")
@@ -4008,7 +4054,9 @@ target_include_directories(HoroRuntimeUiAnimationTests PRIVATE ${PROJECT_SOURCE_
 target_link_libraries(HoroRuntimeUiAnimationTests PRIVATE HoroEngine::RuntimeUi HoroRationalDurationInternal)
 add_executable(HoroRuntimeUiAnimationIntegrationTests
         unit/runtime/ui/UiAnimationOwnerIntegrationTests.cpp
+        unit/runtime/ui/UiAnimationUnassignedStyleTests.cpp
         unit/runtime/ui/UiAnimationServiceSourceTests.cpp
+        unit/runtime/ui/UiScenePublicationIntegrationTests.cpp
         unit/runtime/ui/UiAnimationOwnerAsyncIntegrationTests.cpp
         unit/runtime/ui/UiPresentationProfilesTests.cpp
         unit/runtime/ui/UiPresentationProfileDocumentTests.cpp
@@ -4033,6 +4081,7 @@ add_test(NAME HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer COMMAND Horo
 set_tests_properties(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PROPERTIES LABELS "unit;runtime;headless;public_headers;ci-windows")
 add_executable(HoroRuntimeUiStyleTests
         unit/runtime/ui/UiStyleTests.cpp
+        unit/runtime/ui/UiStyleUnassignedTests.cpp
 )
 target_compile_features(HoroRuntimeUiStyleTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiStyleTests PRIVATE HoroEngine::RuntimeUi)
@@ -4372,12 +4421,14 @@ add_executable(HoroRuntimeSceneTests
         unit/runtime/scene/NavigationSceneLinkCaptureTests.cpp
         unit/runtime/scene/PhysicsSceneComponentsTests.cpp
         unit/runtime/scene/RuntimeSceneLifecycleTests.cpp
+        unit/runtime/scene/RuntimeSceneRetirementTests.cpp
         unit/runtime/scene/RuntimeSceneTests.cpp
         unit/runtime/scene/RuntimeSceneConstructionTests.cpp
         unit/runtime/scene/RuntimeScenePublicationReceiptTests.cpp
         unit/runtime/scene/RuntimeSceneGroupReferenceTests.cpp
 )
 target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/AudioScenePublicContract.cpp)
+target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/SceneRetirementPublicContract.cpp)
 target_compile_features(HoroRuntimeSceneTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSceneTests PRIVATE HoroEngine::NavigationSceneIntegration HoroEngine::RuntimeScene)
@@ -5102,7 +5153,7 @@ if (HORO_BUILD_RENDER_METAL)
     target_compile_options(HoroMetalGraphExecutionSmoke PRIVATE -fobjc-arc)
     target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
-    target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
+    target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal HoroShaderReflectionCookInternal "-framework Metal")
     if (HORO_ENABLE_GPU_SMOKE_TESTS)
         add_test(NAME HoroMetalGraphExecutionSmoke COMMAND HoroMetalGraphExecutionSmoke)
         set_tests_properties(HoroMetalGraphExecutionSmoke PROPERTIES LABELS "gpu;metal;renderer")
@@ -5122,7 +5173,7 @@ if (HORO_BUILD_RENDER_METAL)
         target_compile_options(HoroMetalShaderPreparationSmoke PRIVATE -fobjc-arc)
         target_compile_definitions(HoroMetalShaderPreparationSmoke PRIVATE HORO_METAL_PREPARATION_FIXTURE="${metal_preparation_fixture}")
         target_include_directories(HoroMetalShaderPreparationSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/support)
-        target_link_libraries(HoroMetalShaderPreparationSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
+        target_link_libraries(HoroMetalShaderPreparationSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal HoroShaderReflectionCookInternal "-framework Metal")
         add_test(NAME HoroMetalShaderPreparationSmoke COMMAND HoroMetalShaderPreparationSmoke)
         set_tests_properties(HoroMetalShaderPreparationSmoke PROPERTIES LABELS "gpu;metal;shader;material" TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 4)
     endif ()

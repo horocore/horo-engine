@@ -14,6 +14,7 @@ namespace Horo::Network {
             std::size_t closes{};
             bool polling{};
             bool stopped{};
+            ConnectionHandle acceptedConnect{};  // Explicit opt-in pending-attempt fixture; never grants ready/authentication.
             std::function<void()> duringPoll;
 
             Result<void> Initialize(const NetworkTransportConfig &) override {
@@ -25,6 +26,8 @@ namespace Horo::Network {
             }
 
             Result<ConnectionHandle> Connect(const NetworkConnectRequest &) override {
+                if (acceptedConnect.IsValid())
+                    return Result<ConnectionHandle>::Success(acceptedConnect);
                 return Result<ConnectionHandle>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
             }
 
@@ -185,7 +188,12 @@ namespace Horo::Network {
             }
 
             Result<void> Activate() override {
-                return Result<void>::Success();
+                if (!ingress_->transport.acceptedConnect.IsValid())
+                    return Result<void>::Success();
+                auto connected = ingress_->transport.Connect({});
+                if (connected.HasError())
+                    return Result<void>::Failure(connected.ErrorValue());
+                return ingress_->sessions->BeginConnectionAttempt(connected.Value());
             }
 
             Result<void> RunPhase(const Runtime::RuntimePhase phase) override {

@@ -26,7 +26,7 @@ namespace Horo::Runtime::Ui::Detail {
             return Result<void>::Failure(MakeError(UiErrors::CapabilityWrongThread));
         if (!owner.active || owner.shutdownRequested)
             return Result<void>::Failure(MakeError(UiErrors::CapabilityRevoked));
-        if (owner.dispatching)
+        if (owner.dispatching || owner.scenePublication)
             return Result<void>::Failure(MakeError(UiErrors::CapabilityBusy));
         return Result<void>::Success();
     }

@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
+#include "ShaderReflectionCook.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -41,19 +42,6 @@ namespace Horo::Tests {
             return {stage, entry, std::move(bytes)};
         }
 
-        /** @brief Loads only the finite map derived from generated MSL, never arbitrary caller-selected bindings. */
-        std::array<std::uint32_t, 4> Bindings(const std::filesystem::path &root) {
-            const auto bytes = Read(root / "bindings.txt", 64);
-            std::istringstream input(std::string(bytes.begin(), bytes.end()));
-            std::array<std::uint32_t, 4> bindings{};
-            for (auto &binding : bindings) {
-                REQUIRE(static_cast<bool>(input >> binding));
-                REQUIRE(binding <= 30);
-            }
-            input >> std::ws;
-            REQUIRE(input.eof());
-            return bindings;
-        }
     }  // namespace
 
     /** @copydoc LoadMetalUiPaintFixture */
@@ -71,13 +59,29 @@ namespace Horo::Tests {
         kernel.artifact.payloadFormat = kernel.target.payloadFormat;
         kernel.artifact.payload = std::move(package).Value();
         kernel.artifact.artifactKey = ComputeSha256(std::as_bytes(std::span{kernel.artifact.payload}));
-        const auto bindings = Bindings(root);
-        kernel.reflection.backend = kernel.target.backend;
-        kernel.reflection.interfaceSchemaVersion = 1;
-        for (const auto &binding : kernel.manifest.bindings) {
-            kernel.reflection.bindings.push_back({binding.id, binding.kind, binding.access, 1, binding.stages, true});
-            kernel.reflection.targetBindings.push_back({.id = binding.id, .nativeBinding = bindings[binding.id.value - 1]});
+        std::array<SpirvReflectionStage, 2> reflected;
+        std::array<std::string, 2> translations;
+        for (std::size_t index = 0; index < stages.size(); ++index) {
+            const auto &entry = stages[index].entryPoint;
+            const auto json = Read(root / (entry + ".reflection.json"), 1024U * 1024U);
+            const auto msl = Read(root / (entry + ".metal"), 1024U * 1024U);
+            reflected[index] = {stages[index].stage, entry, {json.begin(), json.end()}};
+            translations[index] = {msl.begin(), msl.end()};
         }
+        auto normalized = NormalizeUiPaintMetalReflection(kernel.manifest, kernel.target, reflected, translations);
+        REQUIRE(normalized.HasValue());
+        const auto identity = Read(root / "reflection-tool.txt", 328);
+        std::istringstream input(std::string{identity.begin(), identity.end()});
+        std::string release, digest;
+        REQUIRE(static_cast<bool>(std::getline(input, release)));
+        REQUIRE(static_cast<bool>(std::getline(input, digest)));
+        REQUIRE(input.peek() == std::char_traits<char>::eof());
+        auto toolDigest = ParseSha256(digest);
+        REQUIRE(toolDigest.HasValue());
+        auto record = CookReflectedShaderArtifact(kernel.artifact, {ShaderCompilerTool::SpirvCross, release, toolDigest.Value()},
+                                                  std::move(normalized).Value());
+        REQUIRE(record.HasValue());
+        kernel.artifact.reflection = std::make_shared<const ReflectedShaderArtifact>(std::move(record).Value());
         REQUIRE(ValidateCookedUiPaintKernel(kernel, ShaderTargetBackend::Metal).HasValue());
         return kernel;
     }

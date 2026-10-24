@@ -1,0 +1,512 @@
+--- a/src/steamnetworkingsockets/steamnetworkingsockets_certstore.cpp
++++ b/src/steamnetworkingsockets/steamnetworkingsockets_certstore.cpp
+@@ -7,6 +7,8 @@
+ #endif
+ 
+ #include <time.h>
++#include "horo_security_bridge.h"
++#include "clientlib/steamnetworkingsockets_lowlevel.h"
+ #include <ostream>
+ #include <memory>
+ #include <crypto.h>
+@@ -271,6 +273,69 @@
+ };
+ static CUtlHashMap<uint64,std::unique_ptr<PublicKey>,std::equal_to<uint64>,std::hash<uint64> > s_mapPublicKeys;
+ static bool s_bTrustValid = false;
++// Only a host-selected key is trusted in selected mode. Prepare the complete
++// replacement off to the side before publishing it under the native global lock.
++static std::uint64_t s_horoLastRootGeneration = 0;
++static HoroNativeChannel s_horoRoot = {};
++static bool s_horoRootReady = false;
++
++bool CertStore_HoroSelectedMode()
++{
++    SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
++    return s_horoRoot.rootGeneration != 0;
++}
++
++bool CertStore_HoroRoot(HoroNativeChannel &out)
++{
++    SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
++    if (!s_horoRootReady)
++        return false;
++    out = s_horoRoot;
++    return true;
++}
++
++bool CertStore_HoroInstallRoot(const std::uint8_t *key32, std::uint32_t appId, std::uint64_t *generation)
++{
++    SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
++    if (!key32 || !generation || !appId || s_horoRoot.rootGeneration ||
++        s_horoLastRootGeneration == UINT64_MAX)
++        return false;
++    std::unique_ptr<PublicKey> selected(new PublicKey);
++    if (!selected->m_keyPublic.SetRawDataWithoutWipingInput(key32, 32))
++        return false;
++    selected->m_eTrust = k_ETrust_Hardcoded;
++    selected->m_effectiveAuthScope.SetAll();
++    const AppId_t selectedApp = appId;
++    selected->m_effectiveAuthScope.m_apps.Setup(&selectedApp, 1);
++    const uint64 id = selected->CalculateKeyID();
++    decltype(s_mapPublicKeys) replacement;
++    replacement.Insert(id, std::move(selected));
++    HoroNativeChannel root = {};
++    root.appId = appId;
++    SHA256Digest_t digest;
++    CCrypto::GenerateSHA256Digest(key32, 32, &digest);
++    V_memcpy(root.rootDigest, &digest, sizeof(digest));
++    root.rootGeneration = s_horoLastRootGeneration + 1;
++    // Native Swap exchanges storage without allocation; publication cannot fail.
++    s_mapPublicKeys.Swap(replacement);
++    s_bTrustValid = false;
++    s_horoRoot = root;
++    s_horoRootReady = true;
++    s_horoLastRootGeneration = root.rootGeneration;
++    *generation = root.rootGeneration;
++    return true;
++}
++
++bool CertStore_HoroRetireRoot(std::uint64_t generation)
++{
++    SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
++    if (!generation || generation != s_horoRoot.rootGeneration)
++        return false;
++    CertStore_Reset();
++    s_horoRoot = HoroNativeChannel{};
++    return true;
++}
++
+ 
+ static PublicKey *FindPublicKey( uint64 nKeyID )
+ {
+@@ -282,6 +347,9 @@
+ 
+ static void CertStore_OneTimeInit()
+ {
++    if (s_horoRoot.rootGeneration)
++        return; // Never restore Valve/default trust inside selected mode.
++
+ 	#ifdef STEAMNETWORKINGSOCKETS_HARDCODED_ROOT_CA_KEY
+ 		if ( s_mapPublicKeys.Count() == 0 )
+ 		{
+@@ -301,6 +369,9 @@
+ 
+ void CertStore_Reset()
+ {
++    // An internal reset revokes every retained channel projection. Keep selected
++    // mode latched until explicit retirement so lazy init cannot restore a root.
++    s_horoRootReady = false;
+ 	s_mapPublicKeys.RemoveAll();
+ 	s_bTrustValid = false;
+ }
+@@ -456,6 +527,12 @@
+ 		// Self-signed (root cert)?
+ 		if ( pSignerKey == pKey )
+ 		{
++            if (s_horoRoot.rootGeneration)
++            {
++                cert.m_status_msg = "Self-signed root is not the selected root";
++                continue;
++            }
++
+ 			#ifdef STEAMNETWORKINGSOCKETS_HARDCODED_ROOT_CA_KEY
+ 				// If hardcoded root cert is in use, only trust the
+ 				// one hardcoded root key.  (We've already tagged it
+--- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.h
++++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.h
+@@ -5,6 +5,7 @@
+ #pragma once
+ 
+ #include "../steamnetworkingsockets_internal.h"
++#include "../horo_security_bridge.h"
+ #ifdef  STEAMNETWORKINGSOCKETS_ENABLE_SDR
+ #include "../sdr/steamdatagram_internal.h"
+ #include <steam/steamdatagram_tickets.h>
+@@ -356,6 +357,8 @@
+ /// etc is implemented here.
+ class CSteamNetworkConnectionBase : public ILockableThinker< ConnectionLock >
+ {
++    friend struct HoroNativeBridge;
++
+ public:
+ 
+ //
+@@ -810,6 +813,9 @@
+ 
+ 	// Encryption/decryption contexts.  This has the negotiated key
+ 	bool m_bCryptKeysValid;
++    std::uint64_t m_horoIncarnation = 0;
++    HoroNativeChannel m_horoVerifiedChannel = {};
++
+ 	std::unique_ptr<ISymmetricEncryptContext> m_pCryptContextSend;
+ 	std::unique_ptr<ISymmetricDecryptContext> m_pCryptContextRecv;
+ 
+--- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.cpp
++++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.cpp
+@@ -41,6 +41,170 @@
+ 
+ const int k_nMaxRecentLocalConnectionIDs = 256;
+ static CUtlVectorFixed<uint16,k_nMaxRecentLocalConnectionIDs> s_vecRecentLocalConnectionIDs;
++// Native global lock protects allocation serials, root selection and retirement.
++// Exhaustion disables attestation; raw transport semantics remain unchanged.
++static std::uint64_t s_horoLastIncarnation = 0;
++
++struct HoroNativeBridge {
++    static bool Capture(CSteamNetworkConnectionBase &connection);
++    static HoroBridgeStatus Read(CSteamNetworkConnectionBase &connection, HoroNativeChannel &out);
++};
++
++bool HoroNativeBridge::Capture(CSteamNetworkConnectionBase &connection)
++{
++    connection.AssertLocksHeldByCurrentThread();
++    connection.m_horoVerifiedChannel = HoroNativeChannel{};
++    HoroNativeChannel selected = {};
++    if (!CertStore_HoroRoot(selected))
++        return !CertStore_HoroSelectedMode(); // Reset selected mode never becomes raw.
++    if (!connection.m_horoIncarnation || !connection.m_bRemoteCertHasTrustedCASignature ||
++        connection.m_eNegotiatedCipher != k_ESteamNetworkingSocketsCipher_AES_256_GCM ||
++        !connection.m_pCryptContextSend || !connection.m_pCryptContextRecv || connection.m_sCertRemote.empty())
++        return false;
++    SteamNetworkingIdentity certifiedIdentity;
++    SteamNetworkingErrMsg error;
++    if (SteamNetworkingIdentityFromCert(certifiedIdentity, connection.m_msgCertRemote, error) <= 0 ||
++        !(certifiedIdentity == connection.m_identityRemote))
++        return false;
++    const std::uint64_t steamId = certifiedIdentity.GetSteamID64();
++    if (steamId)
++    {
++        selected.identityKind = 1;
++        selected.identityBytes = 8;
++        for (unsigned i = 0; i < 8; ++i)
++            selected.identity[i] = static_cast<std::uint8_t>(steamId >> (i * 8));
++    }
++    else
++    {
++        int count = 0;
++        const uint8 *bytes = certifiedIdentity.GetGenericBytes(count);
++        if (!bytes || count <= 0 || count > 32)
++            return false;
++        selected.identityKind = 2;
++        selected.identityBytes = static_cast<std::uint8_t>(count);
++        V_memcpy(selected.identity, bytes, count);
++    }
++    SHA256Digest_t digest;
++    CCrypto::GenerateSHA256Digest(connection.m_sCertRemote.data(), connection.m_sCertRemote.size(), &digest);
++    V_memcpy(selected.certificateDigest, &digest, sizeof(digest));
++    selected.incarnation = connection.m_horoIncarnation;
++    selected.certificateExpiry = connection.m_msgCertRemote.time_expiry();
++    connection.m_horoVerifiedChannel = selected;
++    return true;
++}
++
++HoroBridgeStatus HoroNativeBridge::Read(CSteamNetworkConnectionBase &connection, HoroNativeChannel &out)
++{
++    connection.AssertLocksHeldByCurrentThread();
++    HoroNativeChannel selected = {};
++    if (!CertStore_HoroRoot(selected))
++        return HoroBridgeStatus::Unavailable;
++    const HoroNativeChannel &verified = connection.m_horoVerifiedChannel;
++    if (connection.m_pSteamNetworkingSocketsInterface->m_pSteamNetworkingUtils->GetAppID() != verified.appId)
++        return HoroBridgeStatus::Stale;
++    if (!verified.rootGeneration || selected.rootGeneration != verified.rootGeneration ||
++        V_memcmp(selected.rootDigest, verified.rootDigest, 32) != 0)
++        return HoroBridgeStatus::Untrusted;
++    if (connection.GetState() != k_ESteamNetworkingConnectionState_Connected ||
++        !connection.m_bCryptKeysValid || !connection.m_bRemoteCertHasTrustedCASignature ||
++        connection.m_eNegotiatedCipher != k_ESteamNetworkingSocketsCipher_AES_256_GCM ||
++        !connection.m_pCryptContextSend || !connection.m_pCryptContextRecv)
++        return HoroBridgeStatus::Unavailable;
++    const time_t now = connection.m_pSteamNetworkingSocketsInterface->m_pSteamNetworkingUtils->GetTimeSecure();
++    if (now < 0 || verified.certificateExpiry <= static_cast<std::uint64_t>(now))
++        return HoroBridgeStatus::Expired;
++    out = verified;
++    return HoroBridgeStatus::Ok;
++}
++
++HoroBridgeStatus HoroInstallSelectedRoot(const std::uint8_t *key32, std::uint32_t appId,
++                                        std::uint64_t *generation) noexcept
++{
++    if (generation) *generation = 0;
++    if (!key32 || !appId || !generation)
++        return HoroBridgeStatus::Invalid;
++    try
++    {
++        SteamNetworkingGlobalLock global("HoroInstallSelectedRoot");
++        { TableScopeLock tables(g_tables_lock);
++          if (g_mapConnections.Count() || g_mapListenSockets.Count()) return HoroBridgeStatus::Unavailable; }
++        auto *utils = static_cast<CSteamNetworkingUtils *>(SteamNetworkingUtils());
++        if (!utils) return HoroBridgeStatus::Unavailable;
++        const AppId_t oldApp = utils->GetAppID();
++        if (oldApp && oldApp != appId) return HoroBridgeStatus::Invalid;
++        if (!CertStore_HoroInstallRoot(key32, appId, generation)) return HoroBridgeStatus::Invalid;
++        utils->SetAppID(appId); // Explicit host value; never infer the selected app.
++        return HoroBridgeStatus::Ok;
++    }
++    catch (...) { return HoroBridgeStatus::Unavailable; }
++}
++
++HoroBridgeStatus HoroInspectNativeChannel(std::uint32_t nativeHandle, HoroNativeChannel *out) noexcept
++{
++    if (!out) return HoroBridgeStatus::Invalid;
++    *out = HoroNativeChannel{};
++    try
++    {
++        SteamNetworkingGlobalLock global("HoroInspectNativeChannel");
++        ConnectionScopeLock lock;
++        auto *connection = GetConnectionByHandle(nativeHandle, lock);
++        return connection ? HoroNativeBridge::Read(*connection, *out) : HoroBridgeStatus::Stale;
++    }
++    catch (...) { return HoroBridgeStatus::Unavailable; }
++}
++
++HoroBridgeStatus HoroAttestNativeKeyOwner(std::uint32_t nativeHandle, const HoroNativeChannel *expected,
++                                         const std::uint8_t *context, std::size_t bytes,
++                                         std::uint8_t *correlationDigest32) noexcept
++{
++    if (correlationDigest32) V_memset(correlationDigest32, 0, 32);
++    if (!expected || !context || !bytes || bytes > 512 || !correlationDigest32)
++        return HoroBridgeStatus::Invalid;
++    try
++    {
++        SteamNetworkingGlobalLock global("HoroAttestNativeKeyOwner");
++        ConnectionScopeLock lock;
++        auto *connection = GetConnectionByHandle(nativeHandle, lock);
++        if (!connection) return HoroBridgeStatus::Stale;
++        HoroNativeChannel actual = {};
++        const HoroBridgeStatus status = HoroNativeBridge::Read(*connection, actual);
++        if (status != HoroBridgeStatus::Ok) return status;
++        if (actual.rootGeneration != expected->rootGeneration || actual.incarnation != expected->incarnation ||
++            actual.appId != expected->appId || actual.certificateExpiry != expected->certificateExpiry ||
++            actual.identityKind != expected->identityKind || actual.identityBytes != expected->identityBytes ||
++            V_memcmp(actual.rootDigest, expected->rootDigest, 32) ||
++            V_memcmp(actual.certificateDigest, expected->certificateDigest, 32) ||
++            V_memcmp(actual.identity, expected->identity, 32)) return HoroBridgeStatus::Stale;
++        // Fixed canonical public encoding; do not hash struct padding or native keys.
++        std::uint8_t buffer[704] = {}; std::size_t count = 0;
++        const char domain[] = "HoroNativeChannelCorrelation/v1";
++        V_memcpy(buffer, domain, sizeof(domain)-1); count += sizeof(domain)-1;
++        const std::uint64_t fields[] = {actual.rootGeneration, actual.incarnation, actual.certificateExpiry, actual.appId, bytes};
++        for (const auto field : fields) for (unsigned i = 0; i < 8; ++i) buffer[count++] = static_cast<std::uint8_t>(field >> (i*8));
++        V_memcpy(buffer+count, actual.rootDigest, 32); count += 32;
++        V_memcpy(buffer+count, actual.certificateDigest, 32); count += 32;
++        buffer[count++] = actual.identityKind; buffer[count++] = actual.identityBytes;
++        V_memcpy(buffer+count, actual.identity, 32); count += 32;
++        V_memcpy(buffer+count, context, bytes); count += bytes;
++        SHA256Digest_t digest; CCrypto::GenerateSHA256Digest(buffer, count, &digest);
++        V_memcpy(correlationDigest32, &digest, sizeof(digest));
++        return HoroBridgeStatus::Ok;
++    }
++    catch (...) { return HoroBridgeStatus::Unavailable; }
++}
++
++HoroBridgeStatus HoroRetireSelectedRoot(std::uint64_t generation) noexcept
++{
++    try
++    {
++        SteamNetworkingGlobalLock global("HoroRetireSelectedRoot");
++        { TableScopeLock tables(g_tables_lock);
++          if (g_mapConnections.Count() || g_mapListenSockets.Count()) return HoroBridgeStatus::Unavailable; }
++        return CertStore_HoroRetireRoot(generation) ? HoroBridgeStatus::Ok : HoroBridgeStatus::Stale;
++    }
++    catch (...) { return HoroBridgeStatus::Unavailable; }
++}
++
+ 
+ /// Check if we've sent a "spam reply", meaning a reply to an incoming
+ /// message that could be random spoofed garbage.  Returns false if we've
+@@ -586,6 +750,9 @@
+ 	// We should always hold the lock while initializing a connection
+ 	m_pLock = &m_defaultLock;
+ 	scopeLock.Lock( *m_pLock );
++    SteamNetworkingGlobalLock::AssertHeldByCurrentThread();
++    if (s_horoLastIncarnation != UINT64_MAX)
++        m_horoIncarnation = ++s_horoLastIncarnation;
+ }
+ 
+ CSteamNetworkConnectionBase::~CSteamNetworkConnectionBase()
+@@ -1055,6 +1222,8 @@
+ void CSteamNetworkConnectionBase::ClearLocalCrypto()
+ {
+ 	AssertLocksHeldByCurrentThread();
++    m_horoVerifiedChannel = HoroNativeChannel{};
++
+ 	m_eNegotiatedCipher = k_ESteamNetworkingSocketsCipher_INVALID;
+ 	m_cbEncryptionOverhead = k_cbAESGCMTagSize;
+ 	m_keyExchangePrivateKeyLocal.Wipe();
+@@ -1779,6 +1948,14 @@
+ 	//
+ 	SecureZeroMemory( bufContext.Base(), bufContext.SizeAllocated() );
+ 	SecureZeroMemory( expandTemp, sizeof(expandTemp) );
++
++    // Capture the exact received cert only after native CA/identity/DH/AES
++    // setup succeeded. This is public evidence, never a retained key/exporter.
++    if (!HoroNativeBridge::Capture(*this))
++    {
++        V_strcpy_safe(errMsg, "Selected-root protected channel verification failed");
++        return k_ESteamNetConnectionEnd_Remote_BadCert;
++    }
+ 
+ 	// This isn't sensitive info, but we don't need it any more, so go ahead and free up memory
+ 	m_sCertRemote.clear();
+@@ -2447,6 +2624,13 @@
+ 		return;
+ 	const ESteamNetworkingConnectionState eOldState = m_eConnectionState;
+ 	m_eConnectionState = eNewState;
++	if ( eNewState != k_ESteamNetworkingConnectionState_Connecting &&
++		eNewState != k_ESteamNetworkingConnectionState_FindingRoute &&
++		eNewState != k_ESteamNetworkingConnectionState_Connected )
++	{
++		m_horoVerifiedChannel = HoroNativeChannel{};
++	}
++
+ 
+ 	// Remember when we entered this state
+ 	m_usecWhenEnteredConnectionState = usecNow;
+--- a/src/steamnetworkingsockets/clientlib/csteamnetworkingsockets.cpp
++++ b/src/steamnetworkingsockets/clientlib/csteamnetworkingsockets.cpp
+@@ -1,11 +1,13 @@
+ //====== Copyright Valve Corporation, All rights reserved. ====================
+ 
+ #include "csteamnetworkingsockets.h"
++#include "../horo_security_bridge.h"
+ #include "steamnetworkingsockets_lowlevel.h"
+ #include "steamnetworkingsockets_connections.h"
+ #include "steamnetworkingsockets_udp.h"
+ #include "../steamnetworkingsockets_certstore.h"
+ #include "crypto.h"
++#include <memory>
+ 
+ #ifdef STEAMNETWORKINGSOCKETS_STANDALONELIB
+ #include <steam/steamnetworkingsockets.h>
+@@ -496,11 +498,11 @@
+ 	if ( !BSteamNetworkingSocketsLowLevelAddRef( errMsg) )
+ 		return false;
+ 
+-	// Add us to list of extant instances only after we have done some initialization
++	// Own the successful low-level ref before the allocating instance-list push.
++	// Destroy must release it even if insertion throws during unpublished init.
++	m_bHaveLowLevelRef = true;
+ 	if ( !has_element( s_vecSteamNetworkingSocketsInstances, this ) )
+ 		s_vecSteamNetworkingSocketsInstances.push_back( this );
+-
+-	m_bHaveLowLevelRef = true;
+ 	return true;
+ }
+ 
+@@ -708,13 +710,35 @@
+ {
+  	SteamNetworkingGlobalLock::AssertHeldByCurrentThread( "InternalSetCertificate" );
+ 
+-	// Crack the blob
++    HoroNativeChannel selected = {};
++    const bool selectedMode = CertStore_HoroSelectedMode();
++    if (selectedMode && !CertStore_HoroRoot(selected))
++    {
++        V_strcpy_safe(errMsg, "Selected-root trust was reset");
++        return false;
++    }
++    if (selectedMode && (cbCertificate <= 0 || cbCertificate > 16384))
++    {
++        V_strcpy_safe(errMsg, "Selected-root certificate exceeds its bound");
++        return false;
++    }
++	// Crack the blob. Wipe an imported private-key field even when parsing failed
++    // after recognizing it; selected provisioning never imports that secret.
+ 	CMsgSteamDatagramCertificateSigned msgCertSigned;
+-	if ( !msgCertSigned.ParseFromArray( pCertificate, cbCertificate ) )
+-	{
+-		V_strcpy_safe( errMsg, "CMsgSteamDatagramCertificateSigned failed protobuf parse" );
+-		return false;
+-	}
++    const bool parsed = msgCertSigned.ParseFromArray(pCertificate, cbCertificate);
++    if (selectedMode && msgCertSigned.has_private_key_data())
++    {
++        std::string *key = msgCertSigned.mutable_private_key_data();
++        if (!key->empty()) SecureZeroMemory(&(*key)[0], key->size());
++        msgCertSigned.clear_private_key_data();
++        V_strcpy_safe(errMsg, "Selected-root provisioning cannot import a private key");
++        return false;
++    }
++    if (!parsed)
++    {
++        V_strcpy_safe(errMsg, "CMsgSteamDatagramCertificateSigned failed protobuf parse");
++        return false;
++    }
+ 
+ 	// Crack the cert, and check the signature.  If *we* aren't even willing
+ 	// to trust it, assume that our peers won't either
+@@ -723,6 +747,7 @@
+ 	const CertAuthScope *pAuthScope = CertStore_CheckCert( msgCertSigned, msgCert, authTime, errMsg );
+ 	if ( !pAuthScope )
+ 	{
++        if (selectedMode) return false;
+ 		SpewWarning( "SetCertificate: We are not currently able to verify our own cert!  %s.  Continuing anyway!", errMsg );
+ 	}
+ 
+@@ -2510,14 +2535,15 @@
+ 	}
+ 
+ 	// Init basic functionality
+-	CSteamNetworkingSockets *pSteamNetworkingSockets = new CSteamNetworkingSockets( ( CSteamNetworkingUtils *)SteamNetworkingUtils() );
+-	if ( !pSteamNetworkingSockets->BInitGameNetworkingSockets( pIdentity, errMsg ) )
+-	{
+-		pSteamNetworkingSockets->Destroy();
+-		return false;
+-	}
+-
+-	s_pSteamNetworkingSockets = pSteamNetworkingSockets;
++	// Candidate retires before the existing global lock releases. Use the same
++	// partial-init Destroy path as failed BInit, never the protected destructor.
++	const auto destroyCandidate = []( CSteamNetworkingSockets *candidate ) noexcept { candidate->Destroy(); };
++	std::unique_ptr<CSteamNetworkingSockets, decltype(destroyCandidate)> candidate(
++		new CSteamNetworkingSockets( ( CSteamNetworkingUtils *)SteamNetworkingUtils() ), destroyCandidate );
++	if ( !candidate->BInitGameNetworkingSockets( pIdentity, errMsg ) )
++		return false;
++
++	s_pSteamNetworkingSockets = candidate.release();
+ 	return true;
+ }
+ 
+--- /dev/null
++++ b/src/steamnetworkingsockets/horo_security_bridge.h
+@@ -0,0 +1,40 @@
++// Horo private extension to pinned GameNetworkingSockets v1.6.0.
++// Upstream BSD-3-Clause license is retained. Not an installed GNS/Horo API.
++#pragma once
++#include <cstddef>
++#include <cstdint>
++namespace SteamNetworkingSocketsLib {
++enum class HoroBridgeStatus : std::uint8_t { Ok, Unavailable, Stale, Untrusted, Expired, Invalid };
++// Public evidence copied from a live native owner. No key material is exported.
++// Identity kinds: 1=SteamID little-endian eight bytes, 2=generic bytes (1..32).
++struct HoroNativeChannel {
++    std::uint64_t rootGeneration;
++    std::uint64_t incarnation;
++    std::uint64_t certificateExpiry;
++    std::uint32_t appId;
++    std::uint8_t rootDigest[32];
++    std::uint8_t certificateDigest[32];
++    std::uint8_t identity[32];
++    std::uint8_t identityBytes;
++    std::uint8_t identityKind;
++};
++// Root selection is exclusive, before any listeners/connections. Failed installs
++// leave prior state intact. No live rotation. Generation counters never wrap.
++HoroBridgeStatus HoroInstallSelectedRoot(const std::uint8_t *key32, std::uint32_t appId,
++                                        std::uint64_t *generation) noexcept;
++HoroBridgeStatus HoroInspectNativeChannel(std::uint32_t nativeHandle, HoroNativeChannel *out) noexcept;
++// Expected evidence is revalidated under the SAME native connection lock.
++// Context is synchronous, public, 1..512 bytes. Result is NON-AUTHENTICATING
++// correlation only: not a signature, MAC, exporter, credential or possession proof.
++HoroBridgeStatus HoroAttestNativeKeyOwner(std::uint32_t nativeHandle, const HoroNativeChannel *expected,
++                                         const std::uint8_t *context, std::size_t bytes,
++                                         std::uint8_t *correlationDigest32) noexcept;
++// After all native listeners/connections drain (normally after native Kill).
++HoroBridgeStatus HoroRetireSelectedRoot(std::uint64_t generation) noexcept;
++// Cert-store helpers require SteamNetworkingGlobalLock; no provider callbacks.
++bool CertStore_HoroInstallRoot(const std::uint8_t *key32, std::uint32_t appId, std::uint64_t *generation);
++bool CertStore_HoroRoot(HoroNativeChannel &out);
++bool CertStore_HoroSelectedMode();
++bool CertStore_HoroRetireRoot(std::uint64_t generation);
++struct HoroNativeBridge;
++}

@@ -17,53 +17,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  viewport-assets:
-    name: Canonical Vulkan viewport assets
-    runs-on: ubuntu-26.04
-    timeout-minutes: 90
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    outputs:
-      artifact-id: ${{ steps.assets.outputs.artifact-id }}
-    env:
-      CC: gcc
-      CXX: g++
-      HORO_COMPILER_LAUNCHER: ccache
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-build-tools
-      - uses: ./.github/actions/restore-native-cache
-        with:
-          profile: native-tests-v1
-          mode: Debug
-          max-size: 2G
-      - name: Configure the qualified offline cook
-        run: >-
-          cmake --preset ci-linux-debug
-          -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON
-          -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=ON
-          -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
-          -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
-          -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
-      - name: Build only the owning canonical cook
-        run: cmake --build build/ci --target HoroEditorVulkanShaderCook --parallel 2
-      - uses: ./.github/actions/cook-vulkan-viewport
-        with:
-          asset-root: ${{ github.workspace }}/build/ci/native-editor-assets
-      - name: Upload data-only same-run viewport assets
-        id: assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: sonar-viewport-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 7
-          if-no-files-found: error
-          path: build/ci/native-editor-assets/
-
   sonar:
     name: SonarCloud
-    needs: viewport-assets
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
@@ -99,10 +55,8 @@ jobs:
             .cmake/fetchcontent/*-src
             .cmake/fetchcontent/*-subbuild
           # Cache fetched sources and download metadata, never coverage objects or build trees.
-          key: sonar-v3-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/Horo*Dependency.cmake') }}
-          restore-keys: |
-            sonar-v3-deps-${{ runner.os }}-${{ runner.arch }}-
-            sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-
+          # Disconnected FetchContent cannot safely update an arbitrary old pin.
+          key: sonar-v4-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'cmake/Dependencies.cmake', 'cmake/*Dependency.cmake', 'cmake/Horo*DependencyPolicy.cmake', 'cmake/HoroGnsProtobufConfig.cmake') }}
 
       - name: Restore compiler cache
         id: compiler
@@ -113,6 +67,21 @@ jobs:
           key: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
+
+      - name: Install optional compiler registry client
+        if: steps.compiler.outputs.cache-matched-key == ''
+        continue-on-error: true
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
+        with:
+          version: 1.3.0
+
+      - name: Restore optional public compiler checkpoint
+        if: steps.compiler.outputs.cache-matched-key == ''
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          COMPILER_NAMESPACE: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
+        run: python3 .github/scripts/compiler_registry.py fetch --key "$COMPILER_NAMESPACE"
 
       - name: Restore Sonar scanner downloads
         id: scanner_cache
@@ -125,6 +94,12 @@ jobs:
 
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
+
+      # Ubuntu 26 defaults to Python 3.14; keep the existing coverage/pytest pins on their qualified interpreter.
+      - name: Select coverage Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
 
       - name: Install coverage tools
         run: |
@@ -139,7 +114,7 @@ jobs:
         id: build
         run: |
           ccache --zero-stats
-          cmake --build --preset sonar
+          cmake --build --preset sonar --target all HoroEditorVulkanShaderCook
           ccache --show-stats
 
       # Checkpoint build inputs before coverage and analysis. A later scan timeout
@@ -161,19 +136,15 @@ jobs:
             ${{ github.workspace }}/.sonar/ccache
           key: ${{ steps.compiler.outputs.cache-primary-key }}
 
-      - name: Require the producer artifact identity
-        env:
-          VIEWPORT_ARTIFACT_ID: ${{ needs.viewport-assets.outputs.artifact-id }}
-        run: '[[ "$VIEWPORT_ARTIFACT_ID" =~ ^[0-9]+$ ]]'
-
-      - name: Download this run's viewport data
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      # The build explicitly includes the EXCLUDE_FROM_ALL cook target. Run its
+      # pinned tools on their supported host before coverage, without another job.
+      - name: Cook canonical viewport assets for coverage
+        uses: ./.github/actions/cook-vulkan-viewport
         with:
-          artifact-ids: ${{ needs.viewport-assets.outputs.artifact-id }}
-          path: build/sonar/native-editor-assets
-          merge-multiple: true
+          build-directory: build/sonar
+          asset-root: ${{ github.workspace }}/build/sonar/native-editor-assets
 
-      - name: Verify viewport source run catalog and data digests
+      - name: Verify and select viewport data for coverage
         run: |
           set -euo pipefail
           asset_root="$GITHUB_WORKSPACE/build/sonar/native-editor-assets"
@@ -213,6 +184,9 @@ jobs:
         id: scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # The default ~4-GB heap stopped taint analysis early. Leave room
+          # within the 16-GB runner for CFamily native workers and Node.js.
+          SONAR_SCANNER_JAVA_OPTS: -Xmx6g
         run: |
           "$SONAR_USER_HOME/sonar-scanner-$SONAR_SCANNER_VERSION-linux-x64/bin/sonar-scanner" \
             -Dsonar.organization=horocore \

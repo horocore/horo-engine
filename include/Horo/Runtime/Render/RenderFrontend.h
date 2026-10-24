@@ -33,6 +33,7 @@ namespace Horo::Render {
     class UiPaintProgram;
     struct RenderGraphPassWorkload;
     struct UiRenderSubmission;
+    struct UiPaintGraphComposition;
     class UiRenderImageTexture;
     class UiRenderAtlasTexture;
 
@@ -111,10 +112,12 @@ namespace Horo::Render {
             128}; /**< Maximum timeline-pin records inspected per drain; complete graph leases use maximumSubmissionPins. */
         std::uint32_t maximumRetirementsPerDrain{64}; /**< Maximum native instances destroyed at one safe point. */
 
+        std::uint32_t maximumUiCapturesPerFrame{8}; /**< Explicit product canvas bound; native leases reserve this once, hard ceiling 64. */
+
         /** @brief Reports whether every completion and destruction bound is finite and non-zero. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return maximumSubmissionPins > 0 && maximumTrackedQueues > 0 && maximumCompletionsPerDrain > 0 &&
-                   maximumRetirementsPerDrain > 0;
+                   maximumRetirementsPerDrain > 0 && maximumUiCapturesPerFrame > 0 && maximumUiCapturesPerFrame <= 64;
         }
     };
 
@@ -213,6 +216,14 @@ namespace Horo::Render {
          * @details This named stage does not reopen general Execute/ExecuteGraph admission or allow repeated scene execution. */
         [[nodiscard]] Result<void> ComposeUi(const CompiledRenderGraphExecution &graph, std::span<const RenderGraphPassWorkload> workloads,
                                              UiRenderSubmission ui, RenderGraphTransientResourcesHandle transientResources = {});
+
+        /** @brief Encodes one bounded ordered UI phase containing every admitted canvas before GUI composition.
+         * @param canvases Complete borrowed mutable handoff, transferring source leases after whole-batch validation.
+         * @return Original typed failure or success; malformed later entries issue no native work and partial native failure
+         * aborts presentation while already queued source/resource leases remain with the same frame completion owner.
+         * @details At most 64 entries and the configured capture bound; no allocation, waits or generic Execute reopening.
+         */
+        [[nodiscard]] Result<void> ComposeUi(std::span<UiPaintGraphComposition> canvases);
 
         /**
          * @brief Resolves resident resources and executes one compiled graph exactly once.
@@ -348,6 +359,10 @@ namespace Horo::Render {
                                                        RenderGraphExecutionRole role);
         /** @brief Requires the unique UI stage between successful scene execution and GUI encoding. */
         [[nodiscard]] Result<void> ValidateUiCompositionAdmission() const;
+        struct UiCompositionState;
+        [[nodiscard]] Result<void> PrepareUiComposition(std::span<UiPaintGraphComposition> canvases, UiCompositionState &state);
+        [[nodiscard]] Result<void> PrepareUiCompositionEntry(UiPaintGraphComposition &canvas, UiCompositionState &state, std::size_t index);
+        [[nodiscard]] Result<void> EncodeUiComposition(std::span<UiPaintGraphComposition> canvases, UiCompositionState &state);
         /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
         [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
         struct MaterialExecutionOutcome;
@@ -384,6 +399,7 @@ namespace Horo::Render {
         bool guiComposed_{false};
         IRenderGraphResourceLease *completionLease_{nullptr}; /**< Borrowed exact active frame lease; backend owns retirement. */
         bool uiComposed_{false};
+        bool uiComposing_{false}; /**< Owner-thread reentry fence spanning the complete ordered UI batch. */
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
     };
@@ -448,6 +464,10 @@ namespace Horo::Render {
          * @return Reference valid until frontend destruction; safe to query during an active frame.
          */
         [[nodiscard]] const RenderBackendCapabilities &Capabilities() const noexcept;
+        /** @brief Observes the actual preallocated per-frame UI capture bound for whole-product source admission.
+         * @return Configured capture capacity, or zero after renderer ownership has moved/revoked.
+         */
+        [[nodiscard]] std::size_t MaximumUiCapturesPerFrame() const noexcept;
 
         /** @brief Consumes retained live-effect instances into actual typed passes of the host's recipe graph.
          * @param builder Open host-owned recipe graph. @param snapshot Immutable scene extraction lease.

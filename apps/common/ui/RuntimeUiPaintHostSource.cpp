@@ -1,6 +1,7 @@
 #include "RuntimeUiPaintHostInternal.h"
 
 #include <algorithm>
+#include <limits>
 
 namespace Horo::Application::Internal {
     using namespace Runtime::Ui;
@@ -36,9 +37,12 @@ namespace Horo::Application::Internal {
     Result<void> RuntimeUiPaintPort::AttachSource(RuntimeUiPaintSourcePreparation preparation) const {
         if (!state_ || !state_->Available() || state_->dispatching || state_->source || state_->phase != RuntimeUiPaintHostPhase::NoSource)
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        if (state_->sourceRevision == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
         if (!state_->frontend->Capabilities().support.features.Supports(Render::RenderCapability::UiPaint))
             return Result<void>::Failure(MakeError(Render::UiPaintFrameErrors::Unavailable));
-        if (preparation.extraction.view != preparation.geometry.view || preparation.program.frameSlots == 0)
+        if ((preparation.allocatorLifetime && preparation.allocatorLifetime.get() != &preparation.allocator) ||
+            preparation.extraction.view != preparation.geometry.view || preparation.program.frameSlots == 0)
             return Result<void>::Failure(MakeError(UiErrors::HandleMalformed));
         auto projection = RuntimeUiPaintProjection::Create(state_->service, preparation.instance, std::move(preparation.declaration),
                                                            preparation.extraction);
@@ -60,7 +64,8 @@ namespace Horo::Application::Internal {
                                                            Detail::RuntimeUiPaintSourcePolicy{preparation.extraction, preparation.geometry,
                                                                                               preparation.program,
                                                                                               std::move(preparation.kernel),
-                                                                                              preparation.runtime.viewport});
+                                                                                              preparation.runtime.viewport},
+                                                           std::move(preparation.allocatorLifetime));
         const auto resources = candidate->AdmitResources();
         if (resources.HasError())
             return resources;
@@ -68,9 +73,11 @@ namespace Horo::Application::Internal {
             const auto started = candidate->animation->Startup(state_->cancellation.Token());
             if (started.HasError())
                 return started;
+            candidate->started = true;
         }
         state_->source = std::move(candidate);
         state_->phase = RuntimeUiPaintHostPhase::Active;
+        ++state_->sourceRevision;
         return Result<void>::Success();
     }
 
@@ -83,6 +90,8 @@ namespace Horo::Application::Internal {
         if (!state_ || !state_->Available() || state_->dispatching || !state_->source || state_->phase != RuntimeUiPaintHostPhase::Active ||
             state_->source->retiredProgram)
             return Reloaded::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        if (state_->sourceRevision == std::numeric_limits<std::uint64_t>::max())
+            return Reloaded::Failure(MakeError(UiErrors::CapacityExceeded));
         auto &source = *state_->source;
         auto projected = RuntimeUiPaintProjection::PrepareReload(preparation.generation, std::move(declaration), source.extraction);
         if (projected.HasError())
@@ -113,6 +122,7 @@ namespace Horo::Application::Internal {
         source.output.pending = source.output.current;
         source.output.awaitingPresentation = true;
         source.refresh = true;
+        ++state_->sourceRevision;
         return result;
     }
 }  // namespace Horo::Application::Internal

@@ -15,6 +15,12 @@
 #include <utility>
 
 namespace Horo::Runtime {
+    /** @copydoc SceneActivationParticipant::PrepareRetirement */
+    Result<std::unique_ptr<SceneActivationCandidate>> SceneActivationParticipant::PrepareRetirement(RuntimeSceneView scene) {
+        (void)scene;
+        return Result<std::unique_ptr<SceneActivationCandidate>>::Success({});
+    }
+
     /** @copydoc RuntimeScene::~RuntimeScene */
     RuntimeScene::~RuntimeScene() = default;
 

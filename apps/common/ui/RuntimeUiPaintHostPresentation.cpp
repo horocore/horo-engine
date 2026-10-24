@@ -12,31 +12,50 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintPort::InputEligible */
     bool RuntimeUiPaintPort::InputEligible(const UiRenderViewId view) const noexcept {
-        return state_ && state_->Available() && state_->source && state_->phase == RuntimeUiPaintHostPhase::Active &&
-               !state_->source->output.pending && !state_->source->output.awaitingPresentation &&
-               state_->source->animation->InputEligible(view);
+        if (!state_ || !state_->Available())
+            return false;
+        for (auto *source : state_->Sources())
+            if (source && !source->output.pending && !source->output.awaitingPresentation && source->animation->InputEligible(view))
+                return true;
+        return false;
     }
 
     /** @copydoc RuntimeUiPaintPort::ComposeUi */
     Result<void> RuntimeUiPaintPort::ComposeUi(Render::RenderFrameScope &frame, const std::uint64_t frameNumber) const {
         if (!state_ || !state_->Available())
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (!state_->source || state_->phase != RuntimeUiPaintHostPhase::Active)
+        const auto sources = state_->Sources();
+        std::array<Render::UiPaintProgramSubmission, Detail::MaximumSceneUiSources> batch;
+        std::size_t count = 0;
+        for (auto *source : sources) {
+            if (!source)
+                continue;
+            if (count == batch.size())
+                return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
+            if (source->output.pending || !source->frame.prepared || !source->program || !source->frame.geometry)
+                return Result<void>::Success();
+            ++count;
+        }
+        if (count == 0)
             return Result<void>::Success();
-        auto &source = *state_->source;
-        if (source.output.pending || !source.frame.prepared || !source.program || !source.frame.geometry)
-            return Result<void>::Success();
-        const auto &descriptor = source.frame.geometry->SourceSnapshot().Descriptor();
-        const auto submitted = source.program->Submit(frame, *source.frame.prepared, std::move(source.frame.submission));
-        if (submitted.HasError())
+        count = 0;
+        for (auto *source : sources)
+            if (source)
+                batch[count++] = {source->program.get(), &*source->frame.prepared, std::move(source->frame.submission)};
+        if (const auto submitted = Render::UiPaintProgram::SubmitBatch(frame, {batch.data(), count}); submitted.HasError())
             return submitted;
-        source.frame.encoded = UiPresentationReceipt{descriptor.view,
-                                                     descriptor.canvas,
-                                                     descriptor.interactionRevision,
-                                                     descriptor.snapshotRevision,
-                                                     UiPresentationOutcome::Skipped,
-                                                     UiPresentationReason::Suppressed};
-        source.frame.encodedFrame = frameNumber;
+        for (auto *source : sources) {
+            if (!source)
+                continue;
+            const auto &descriptor = source->frame.geometry->SourceSnapshot().Descriptor();
+            source->frame.encoded = UiPresentationReceipt{descriptor.view,
+                                                          descriptor.canvas,
+                                                          descriptor.interactionRevision,
+                                                          descriptor.snapshotRevision,
+                                                          UiPresentationOutcome::Skipped,
+                                                          UiPresentationReason::Suppressed};
+            source->frame.encodedFrame = frameNumber;
+        }
         return Result<void>::Success();
     }
 
@@ -44,20 +63,23 @@ namespace Horo::Application::Internal {
     Result<void> RuntimeUiPaintPort::Presented(const std::uint64_t frameNumber, const bool nativePresentSucceeded) const {
         if (!state_ || !state_->Available())
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (!state_->source || !state_->source->frame.encoded)
-            return Result<void>::Success();
-        auto &source = *state_->source;
-        if (source.frame.encodedFrame != frameNumber)
-            return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
-        auto receipt = *source.frame.encoded;
-        receipt.outcome = nativePresentSucceeded ? UiPresentationOutcome::Presented : UiPresentationOutcome::Failed;
-        receipt.reason = nativePresentSucceeded ? UiPresentationReason::None : UiPresentationReason::ExecutionFailure;
-        const auto applied = source.animation->ApplyPresentation(receipt);
-        if (applied.HasError())
-            return Result<void>::Failure(applied.ErrorValue());
-        if (nativePresentSucceeded)
-            source.output.awaitingPresentation = false;
-        source.frame.encoded.reset();
+        const auto sources = state_->Sources();
+        for (auto *source : sources)
+            if (source && source->frame.encoded && source->frame.encodedFrame != frameNumber)
+                return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
+        for (auto *source : sources) {
+            if (!source || !source->frame.encoded)
+                continue;
+            auto receipt = *source->frame.encoded;
+            receipt.outcome = nativePresentSucceeded ? UiPresentationOutcome::Presented : UiPresentationOutcome::Failed;
+            receipt.reason = nativePresentSucceeded ? UiPresentationReason::None : UiPresentationReason::ExecutionFailure;
+            const auto applied = source->animation->ApplyPresentation(receipt);
+            if (applied.HasError())
+                return Result<void>::Failure(applied.ErrorValue());
+            if (nativePresentSucceeded)
+                source->output.awaitingPresentation = false;
+            source->frame.encoded.reset();
+        }
         return Result<void>::Success();
     }
 }  // namespace Horo::Application::Internal
