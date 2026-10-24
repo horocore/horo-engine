@@ -3,8 +3,9 @@
 /** @file VulkanGraphRuntime.h
  * @brief Device-private translation of canonical graph submissions and resource states.
  */
-#include "VulkanEditorGraphicsBridge.h"
 #include "VulkanResourceRuntime.h"
+
+#include <VulkanEditorGraphicsBridge.h>
 
 namespace Horo::Render::Detail {
     /** @brief Acquired WSI output, borrowed until this same frame submits or aborts. */

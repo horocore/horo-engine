@@ -2,8 +2,7 @@
 /** @file EditorVulkanGuiFunctionLoader.h
  * @brief Private exact dispatch-domain routing for the pinned native GUI function table.
  */
-#include "runtime/renderer/modules/vulkan/VulkanEditorGraphicsBridge.h"
-
+#include <VulkanEditorGraphicsBridge.h>
 #include <algorithm>
 #include <array>
 #include <string_view>

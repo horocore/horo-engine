@@ -4,8 +4,8 @@
  */
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
-#include "VulkanBackendModule.h"
 
+#include <VulkanBackendModule.h>
 #include <functional>
 #include <memory>
 

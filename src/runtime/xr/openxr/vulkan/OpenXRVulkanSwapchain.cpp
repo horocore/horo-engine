@@ -90,12 +90,12 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Creates the exact immutable array/eye views cold, before acquisition publication. */
         Result<void> PrepareViews() {
             const bool depth = request.role == NativeSwapchainRole::Depth;
+            const VkImageAspectFlags aspects = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
             VkImageViewCreateInfo info{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                        .image = native,
                                        .viewType = request.texture.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
                                        .format = static_cast<VkFormat>(*NativeFormat(request.texture.format)),
-                                       .subresourceRange = {depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
-                                                            request.texture.layerCount}};
+                                       .subresourceRange = {aspects, 0, 1, 0, request.texture.layerCount}};
             auto result = viewDispatch.create(device, &info, nullptr, &views.attachment);
             if (result != VK_SUCCESS || views.attachment == VK_NULL_HANDLE) {
                 views.attachment = VK_NULL_HANDLE;

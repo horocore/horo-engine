@@ -2941,7 +2941,7 @@ if (HORO_BUILD_RENDER_VULKAN)
     target_compile_features(HoroRenderVulkan PUBLIC cxx_std_20)
     target_link_libraries(HoroRenderVulkan
             PUBLIC HoroEngine::RenderBackendRegistry
-            PRIVATE Vulkan::Headers HoroRenderVulkanExternalImagesInterface
+            PRIVATE Vulkan::Headers HoroRenderVulkanExternalImagesInterface HoroRenderVulkanHostInterface
     )
 endif ()
 

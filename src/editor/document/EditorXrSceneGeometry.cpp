@@ -71,7 +71,7 @@ namespace Horo::Editor {
             for (auto &node : nodes) {
                 if (!node.parent)
                     continue;
-                const auto parent = std::ranges::find(nodes, *node.parent, &PreparedEditorXrGeometry::Impl::Node::entity);
+                const auto parent = std::ranges::find(nodes, *node.parent, &Node::entity);
                 if (parent == nodes.end())
                     return Result<void>::Failure(GeometryError("XR geometry parent is outside the candidate Scene."));
                 node.parentIndex = static_cast<std::size_t>(parent - nodes.begin());
@@ -104,7 +104,7 @@ namespace Horo::Editor {
                 const auto entity = candidate.Find(Runtime::SceneObjectId{object.value});
                 if (!entity)
                     return Result<void>::Failure(GeometryError("XR geometry authored object is absent from the candidate Scene."));
-                const auto node = std::ranges::find(nodes, *entity, &PreparedEditorXrGeometry::Impl::Node::entity);
+                const auto node = std::ranges::find(nodes, *entity, &Node::entity);
                 if (node == nodes.end())
                     return Result<void>::Failure(GeometryError("XR geometry candidate mapping is stale."));
                 instances.push_back(static_cast<std::size_t>(node - nodes.begin()));

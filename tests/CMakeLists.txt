@@ -1500,6 +1500,7 @@ target_link_libraries(HoroXRRuntimeTests PRIVATE HoroEngine::XRRuntime HoroXRRun
 horo_register_catch_test(HoroXRRuntimeTests LABELS "unit;xr;headless;lifecycle")
 
 target_sources(HoroXRInputBindingsPublicHeaderConsumer PRIVATE public_headers/XRInputBindingsConsumer.cpp)
+target_sources(HoroXRRuntimePublicHeaderConsumer PRIVATE public_headers/XRProjectSettingsConsumer.cpp)
 
 add_executable(HoroXRActionBindingTests unit/runtime/xr/XRActionBindingsTests.cpp unit/runtime/xr/XRInputProjectionTests.cpp)
 target_include_directories(HoroXRActionBindingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -2100,7 +2101,7 @@ target_compile_features(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/helpers" "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ui")
 target_link_libraries(HoroGameplayRuntimeUiSdkHostConsumer PRIVATE HoroEngine::RuntimeUi HoroEngine::GameplayModuleHost
-        HoroRuntimeUiPaintHost HoroEngine::RenderNull HoroEngine::Platform Catch2::Catch2)
+        HoroRuntimeUiPaintHost HoroRenderExternalImagesInterface HoroEngine::RenderNull HoroEngine::Platform Catch2::Catch2)
 add_test(NAME HoroGameplayRuntimeUiSdkContract COMMAND ${CMAKE_COMMAND}
     "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
     "-DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_runtime_ui_sdk"
@@ -2137,7 +2138,8 @@ add_executable(HoroRuntimeUiPaintHostTests
 target_compile_features(HoroRuntimeUiPaintHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiPaintHostTests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/helpers" "${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ui")
-target_link_libraries(HoroRuntimeUiPaintHostTests PRIVATE HoroRuntimeUiPaintHost HoroUiPaintShaderPackage HoroEditorSceneProductHost HoroEngine::RenderNull HoroEngine::Platform)
+target_link_libraries(HoroRuntimeUiPaintHostTests PRIVATE HoroRuntimeUiPaintHost HoroUiPaintShaderPackage HoroEditorSceneProductHost
+        HoroRenderExternalImagesInterface HoroEngine::RenderNull HoroEngine::Platform)
 horo_register_catch_test(HoroRuntimeUiPaintHostTests LABELS "unit;application;runtime_ui;headless")
 add_executable(HoroLuaReplicationPublicHeaderConsumer support/LuaReplicationPublicHeaderConsumer.cpp)
 target_compile_features(HoroLuaReplicationPublicHeaderConsumer PRIVATE cxx_std_20)
@@ -5340,6 +5342,7 @@ if (HORO_BUILD_RENDER_VULKAN)
     )
     target_link_libraries(HoroRenderVulkanTests PRIVATE
             Catch2::Catch2WithMain
+            HoroRenderVulkanHostInterface
             HoroEngine::RenderFrontend
             HoroEngine::RenderVulkan
             HoroRenderVulkanExternalImagesInterface
@@ -5364,7 +5367,7 @@ if (HORO_BUILD_RENDER_VULKAN)
         target_compile_features(HoroVulkanCommandExecutionSmoke PRIVATE cxx_std_20)
         target_include_directories(HoroVulkanCommandExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src)
         target_link_libraries(HoroVulkanCommandExecutionSmoke PRIVATE Catch2::Catch2WithMain
-                HoroEngine::RenderFrontend HoroEngine::RenderVulkan Vulkan::Headers ${CMAKE_DL_LIBS})
+                HoroEngine::RenderFrontend HoroEngine::RenderVulkan HoroRenderVulkanHostInterface Vulkan::Headers ${CMAKE_DL_LIBS})
         add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)
         set_tests_properties(HoroVulkanCommandExecutionSmoke PROPERTIES
                 LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE

@@ -1,5 +1,4 @@
 #include "Horo/XR/XRInputProjection.h"
-#include "Horo/XR/XRSessionLifecycle.h"
 
 #include <concepts>
 #include <type_traits>
@@ -17,6 +16,3 @@ static_assert(requires(const Horo::Input::InputActionCollection &port, const Hor
     { projection.Bind(candidate, issuedRevision) } -> std::same_as<Horo::Result<void>>;
     { XRInputProjection::Create(port, candidate, plan, issuedRevision) } -> std::same_as<Horo::Result<XRInputProjection>>;
 });
-
-static_assert(static_cast<std::uint8_t>(Horo::XR::XRSessionEvent::InstanceLost) == 8);
-static_assert(static_cast<std::uint8_t>(Horo::XR::XRSessionEvent::Ready) == 9);

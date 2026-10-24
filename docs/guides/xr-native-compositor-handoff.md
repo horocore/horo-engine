@@ -84,6 +84,24 @@ The stricter [swapchain destruction contract](https://registry.khronos.org/OpenX
 still requires completion of every submitted graphics command referring to it.
 Resetting an engine gate or observing a lost event does not meet either obligation.
 
+## Private header and consumer boundaries
+
+The existing non-installed `HoroRenderVulkanHostInterface` is the canonical
+configured header set for Vulkan host types. Backend implementation and whitebox
+test composition link it privately. Their private implementation headers use angle
+includes for `VulkanBackendModule.h`, `VulkanEditorGraphicsBridge.h` and
+`VulkanHostGraphicsRequirements.h`, so a translation unit cannot combine the staged
+host contract with a second physical source-tree copy. The source declarations
+still own those types; no installed header, native ABI or public dependency changes.
+
+Tests that compile the shared renderer backend fixture explicitly link the existing
+non-installed `HoroRenderExternalImagesInterface`; Runtime UI gains no production
+dependency on backend-private contracts. Lifecycle enum representation checks
+belong to the XR Runtime public-header consumer. The XR Input Bindings consumer
+retains its input-only dependency closure instead of gaining Runtime visibility
+solely for those unrelated checks. These consumer builds qualify the corrected
+header edges; they do not replace native Vulkan App or physical-device evidence.
+
 ## Timing and color/depth policy
 
 `ObservePacing` takes an explicitly converted timestamp in the runtime prediction
