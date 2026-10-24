@@ -266,8 +266,10 @@ horo_ci_catch_properties(HoroPhysicsTests)
         assert len(documents) == 1
         reports.append(json.loads(gzip.decompress(documents[0].read_bytes()))["files"])
         counters = list(build.rglob("*.gcda"))
-        assert len(counters) == 1 and not counters[0].is_symlink()
+        assert len(counters) == 1
+        assert not counters[0].is_symlink()
         counters[0].unlink()
     assert reports[0] == reports[1]
     counts = [line["count"] for file in reports[1] for line in file["lines"]]
-    assert 0 in counts and any(count > 0 for count in counts)
+    assert 0 in counts
+    assert any(count > 0 for count in counts)
