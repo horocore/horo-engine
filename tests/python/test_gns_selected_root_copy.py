@@ -7,8 +7,28 @@ import shutil
 import pytest
 
 
+def _prepare_patch_repository(project: Path, patch_path: Path, git: str,
+                              pytester: pytest.Pytester, autocrlf_checkout: bool) -> None:
+    """Keep checkout conversion inside an isolated index using the real attribute."""
+    initialized = pytester.run(git, "init", "-q", str(project), timeout=15)
+    assert initialized.ret == 0, initialized.stdout.str() + initialized.stderr.str()
+    if not autocrlf_checkout:
+        return
+    shutil.copyfile(Path(__file__).resolve().parents[2] / ".gitattributes", project / ".gitattributes")
+    patch_relative = patch_path.relative_to(project).as_posix()
+    expected = patch_path.read_bytes()
+    staged = pytester.run(git, "-c", "core.autocrlf=false", "add", "--",
+                          ".gitattributes", patch_relative, timeout=15)
+    assert staged.ret == 0, staged.stdout.str() + staged.stderr.str()
+    patch_path.unlink()
+    checked_out = pytester.run(git, "-c", "core.autocrlf=true", "checkout", "--", patch_relative, timeout=15)
+    assert checked_out.ret == 0, checked_out.stdout.str() + checked_out.stderr.str()
+    assert patch_path.read_bytes() == expected
+
+
 @pytest.mark.parametrize("inside_repository", [True, False])
-def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool,
+@pytest.mark.parametrize("autocrlf_checkout", [False, True])
+def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, autocrlf_checkout: bool,
                                       pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch):
     project = tmp_path / "project with space ü"
     project.mkdir()
@@ -18,8 +38,6 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool,
     assert cmake is not None
     git, cmake = [str(Path(tool).resolve(strict=True)) for tool in (git, cmake)]
     monkeypatch.chdir(project)
-    initialized = pytester.run(git, "init", "-q", str(project), timeout=15)
-    assert initialized.ret == 0, initialized.stdout.str() + initialized.stderr.str()
     parent_source = project / "src/sentinel.cpp"
     parent_source.parent.mkdir()
     parent_source.write_text("original\n", encoding="utf-8")
@@ -33,12 +51,14 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool,
     patch_dir = helper.parent / "patches/gns"
     patch_dir.mkdir(parents=True)
     patch = "--- a/src/sentinel.cpp\n+++ b/src/sentinel.cpp\n@@ -1 +1 @@\n-original\n+patched\n"
-    (patch_dir / "horo-gns-selected-root-v1.patch").write_text(patch, encoding="utf-8")
+    patch_path = patch_dir / "horo-gns-selected-root-v1.patch"
+    patch_path.write_bytes(patch.encode())
     digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
     manifest = {"patchSha256": digest(patch), "licenseSha256": digest("fixture license\n"),
                 "paths": [{"path": "src/sentinel.cpp", "pristineSha256": digest("original\n"),
                            "candidateSha256": digest("patched\n")} ]}
     (patch_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    _prepare_patch_repository(project, patch_path, git, pytester, autocrlf_checkout)
     build = project / "build" if inside_repository else tmp_path / "external build"
     script = tmp_path / "run.cmake"
     result_path = tmp_path / "result.txt"
