@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 180
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
+      CC: gcc
+      CXX: g++
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.sonar/ccache
       CCACHE_COMPRESS: 'true'
@@ -58,14 +60,23 @@ jobs:
           # Disconnected FetchContent cannot safely update an arbitrary old pin.
           key: sonar-v4-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'cmake/Dependencies.cmake', 'cmake/*Dependency.cmake', 'cmake/Horo*DependencyPolicy.cmake', 'cmake/HoroGnsProtobufConfig.cmake') }}
 
+      - name: Identify instrumented compilers
+        id: compiler_identity
+        run: |
+          python3 scripts/dev.py ci-cache-identity --github-output "$GITHUB_OUTPUT" \
+            --cc gcc --cxx g++ --cc-version "$(gcc -dumpfullversion -dumpversion)" \
+            --cxx-version "$(g++ -dumpfullversion -dumpversion)" --cmake-version "$(cmake --version)"
+
       - name: Restore compiler cache
         id: compiler
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
             ${{ github.workspace }}/.sonar/ccache
-          key: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-${{ github.run_id }}-${{ github.run_attempt }}
+          key: sonar-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler_identity.outputs.c-compiler }}-${{ steps.compiler_identity.outputs.compiler }}-main-${{ github.run_id }}-${{ github.run_attempt }}
+          # Bootstrap only until a versioned main checkpoint exists.
           restore-keys: |
+            sonar-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler_identity.outputs.c-compiler }}-${{ steps.compiler_identity.outputs.compiler }}-main-
             sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
 
       - name: Install optional compiler registry client
@@ -80,7 +91,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 3
         env:
-          COMPILER_NAMESPACE: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
+          COMPILER_NAMESPACE: sonar-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler_identity.outputs.c-compiler }}-${{ steps.compiler_identity.outputs.compiler }}-main-
         run: python3 .github/scripts/compiler_registry.py fetch --key "$COMPILER_NAMESPACE"
 
       - name: Restore Sonar scanner downloads

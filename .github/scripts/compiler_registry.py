@@ -22,12 +22,15 @@ import dependency_registry as transport
 ARTIFACT_TYPE = "application/vnd.horo.compiler-cache.v1"
 LAYER_TYPE = ARTIFACT_TYPE + ".tar+gzip"
 MANIFEST = "horo-compiler.json"
+LEGACY_SONAR_NAMESPACE = "sonar-v2-gcc-Linux-X64-main-"
 MAX_ARCHIVE_BYTES = 3 * 1024 ** 3
 MAX_EXPANDED_BYTES = 4 * 1024 ** 3
 KEY_PATTERN = re.compile(
     r"(native-v1-(?:Linux|Windows|macOS)-(?:X64|ARM64)-"
     r"[a-z0-9.-]+-[a-z0-9.-]+-(?:native-tests-v1-Debug|native-variants-v1-Mixed)-main-|"
-    r"sonar-v2-gcc-Linux-X64-main-)([1-9][0-9]*)-([1-9][0-9]*)")
+    r"sonar-v2-gcc-Linux-X64-main-|"
+    r"sonar-v3-Linux-X64-gcc-[0-9]+(?:\.[0-9]+)+-gcc-[0-9]+(?:\.[0-9]+)+-main-)"
+    r"([1-9][0-9]*)-([1-9][0-9]*)")
 # Never import remote configuration, operational locks, or per-run counters.
 LOCAL_FILES = {"ccache.conf", "stats", "stats.log", "cachedir.tag", MANIFEST}
 
@@ -167,15 +170,31 @@ def descriptor(manifest: str, namespace: str) -> tuple[dict, str]:
     return layer, key
 
 
+def fetch_descriptor(registry: transport.Registry, namespace: str) -> tuple[dict, str, str]:
+    """Bootstrap a missing versioned Sonar snapshot without masking invalid ones."""
+    try:
+        layer, key = descriptor(registry.run("manifest", "fetch", reference(namespace)), namespace)
+        return layer, key, namespace
+    except transport.MissingManifest:
+        if not namespace.startswith("sonar-v3-"):
+            raise
+    print("No versioned Sonar checkpoint; try legacy entries with compiler hash checks intact")
+    layer, key = descriptor(
+        registry.run("manifest", "fetch", reference(LEGACY_SONAR_NAMESPACE)),
+        LEGACY_SONAR_NAMESPACE,
+    )
+    return layer, key, LEGACY_SONAR_NAMESPACE
+
+
 def fetch(namespace: str) -> None:
     """Restore anonymously by blob digest; a failed fetch leaves compilation usable."""
-    ref = reference(namespace)
+    reference(namespace)
     destination = cache_root(namespace)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
         root = Path(temporary)
         registry = transport.Registry(root, seconds=90)
-        layer, expected = descriptor(registry.run("manifest", "fetch", ref), namespace)
+        layer, expected, selected_namespace = fetch_descriptor(registry, namespace)
         payload = root / "compiler.tar.gz"
         registry.run("blob", "fetch", f"{transport.REGISTRY}@{layer['digest']}",
                      "--output", str(payload))
@@ -184,7 +203,7 @@ def fetch(namespace: str) -> None:
             raise ValueError("Compiler OCI digest mismatch")
         staging = root / "verified"
         staging.mkdir()
-        if unpack(payload, namespace, staging) != expected:
+        if unpack(payload, selected_namespace, staging) != expected:
             raise ValueError("Compiler OCI and payload checkpoint differ")
         merge_entries(staging, destination)
         print(f"Verified public compiler checkpoint: {expected}")

@@ -89,12 +89,12 @@ def test_invalid_archive_never_reaches_live_cache(snapshot, tmp_path, attack, mo
     assert not (tmp_path / "outside").exists()
 
 
-def install_fake_registry(archive, monkeypatch, *, existing=None, outage=False):
+def install_fake_registry(archive, monkeypatch, *, existing=None, outage=False, key=KEY):
     """Use a valid typed OCI manifest and one digest-addressed local blob."""
     layer = {"mediaType": compiler.LAYER_TYPE, "size": archive.stat().st_size,
              "digest": "sha256:" + compiler.package.digest_file(archive)}
     document = {"schemaVersion": 2, "artifactType": compiler.ARTIFACT_TYPE,
-                "layers": [layer], "annotations": {"io.horo.compiler.source-key": KEY}}
+                "layers": [layer], "annotations": {"io.horo.compiler.source-key": key}}
     calls = []
 
     class Client:
@@ -325,3 +325,56 @@ def test_variant_restore_happens_after_debug_checkpoint_before_auxiliary_builds(
     assert "profile: native-variants-v1" in restore_step
     assert "mode: Mixed" in restore_step
     assert "compiler-only: 'true'" in restore_step
+
+
+@pytest.mark.parametrize("version", ["13.3.0", "15.2.0"])
+def test_versioned_sonar_archive_roundtrip_and_compiler_boundary(tmp_path, monkeypatch, version):
+    monkeypatch.chdir(tmp_path)
+    namespace = f"sonar-v3-Linux-X64-gcc-{version}-gcc-{version}-main-"
+    key = namespace + "400-1"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "entryR").write_bytes(b"compiler object")
+    archive = tmp_path / "snapshot.tar.gz"
+    compiler.pack(source, key, archive)
+    calls, _ = install_fake_registry(archive, monkeypatch, key=key)
+    compiler.fetch(namespace)
+    assert (compiler.cache_root(namespace) / "entryR").read_bytes() == b"compiler object"
+    assert calls[0][2] == compiler.reference(namespace)
+    other = "15.2.0" if version == "13.3.0" else "13.3.0"
+    other_namespace = f"sonar-v3-Linux-X64-gcc-{other}-gcc-{other}-main-"
+    assert compiler.reference(namespace) != compiler.reference(other_namespace)
+    assert compiler.reference(namespace) != compiler.reference(NAMESPACE)
+    with pytest.raises(ValueError, match="Incompatible"):
+        compiler.unpack(archive, other_namespace, tmp_path / "rejected")
+
+
+def test_missing_versioned_sonar_bootstraps_legacy_in_the_same_client(snapshot, monkeypatch):
+    namespace = "sonar-v3-Linux-X64-gcc-15.2.0-gcc-15.2.0-main-"
+    calls, _ = install_fake_registry(snapshot, monkeypatch)
+    original = transport.Registry.run
+
+    def missing_versioned(client, *args, **kwargs):
+        if args == ("manifest", "fetch", compiler.reference(namespace)):
+            calls.append(args)
+            raise transport.MissingManifest("fixture missing versioned checkpoint")
+        return original(client, *args, **kwargs)
+
+    monkeypatch.setattr(transport.Registry, "run", missing_versioned)
+    compiler.fetch(namespace)
+    assert [call[2] for call in calls if call[:2] == ("manifest", "fetch")] == [
+        compiler.reference(namespace), compiler.reference(NAMESPACE),
+    ]
+    assert (compiler.cache_root(namespace) / "a/b/entryR").read_bytes() == b"compiler object"
+    assert all(call[0] != "login" for call in calls)
+
+
+@pytest.mark.parametrize("outage", [True, False])
+def test_versioned_outage_or_invalid_manifest_never_tries_legacy(snapshot, monkeypatch, outage):
+    namespace = "sonar-v3-Linux-X64-gcc-15.2.0-gcc-15.2.0-main-"
+    # A v2 annotation presented as v3 is invalid, not a missing manifest.
+    calls, _ = install_fake_registry(snapshot, monkeypatch, outage=outage)
+    with pytest.raises(ValueError):
+        compiler.fetch(namespace)
+    assert calls == [("manifest", "fetch", compiler.reference(namespace))]
+    assert not compiler.cache_root(namespace).exists()

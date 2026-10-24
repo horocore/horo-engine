@@ -136,3 +136,26 @@ def test_sonar_dependency_restore_requires_exact_inputs() -> None:
     for pattern in ("CMakeLists.txt", "cmake/Dependencies.cmake", "cmake/*Dependency.cmake",
                     "cmake/Horo*DependencyPolicy.cmake", "cmake/HoroGnsProtobufConfig.cmake"):
         assert f"'{pattern}'" in restore
+
+
+def test_sonar_consumer_and_exporter_share_actual_compiler_identity() -> None:
+    root = Path(__file__).resolve().parents[2]
+    sonar = (root / ".github/workflows/sonar.yml").read_text(encoding="utf-8")
+    exporter = (root / ".github/workflows/compiler-checkpoints.yml").read_text(encoding="utf-8")
+    namespace = ("sonar-v3-${{ runner.os }}-${{ runner.arch }}-"
+                 "${{ steps.compiler_identity.outputs.c-compiler }}-"
+                 "${{ steps.compiler_identity.outputs.compiler }}-main-")
+    for workflow in (sonar, exporter):
+        assert "id: compiler_identity" in workflow
+        assert '--cc gcc --cxx g++ --cc-version "$(gcc -dumpfullversion -dumpversion)"' in workflow
+        assert '--cxx-version "$(g++ -dumpfullversion -dumpversion)"' in workflow
+        assert f"key: {namespace}${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}" in workflow
+        assert f"            {namespace}\n" in workflow
+    assert f"COMPILER_NAMESPACE: {namespace}" in sonar
+    assert sonar.index("name: Identify instrumented compilers") < sonar.index("name: Restore compiler cache")
+    assert "runs-on: ubuntu-26.04" in sonar
+    assert "runner: ubuntu-26.04\n            profile: sonar" in exporter
+    assert "      CC: gcc\n      CXX: g++" in sonar
+    # Legacy data can bootstrap reads, but the exporter must not republish it as v3.
+    assert "sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-" in sonar
+    assert "sonar-v2" not in exporter

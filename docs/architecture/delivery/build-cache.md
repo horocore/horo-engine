@@ -739,6 +739,25 @@ anonymous cross-platform restores still require qualification before claiming
 the 10–15 minute target. Large transfers and warm linking/analysis remain part
 of each job's measured duration.
 
+### Sonar compiler version namespaces
+
+Sonar's `sonar-v3` compiler namespace includes the full active C and C++ GCC
+versions, using the same validated `ci-cache-identity` helper as native CI. The
+coverage job explicitly selects gcc/g++ and the serial Sonar exporter uses the
+same Ubuntu 26 runner. Updating a runner's default GCC therefore starts a
+distinct namespace rather than replacing an older toolchain's latest snapshot.
+Compiler entry content/flag checks and coverage instrumentation remain unchanged.
+
+During migration, an absent versioned Actions snapshot can restore the legacy
+`sonar-v2` prefix after trying its exact compiler namespace. The public reader
+similarly tries the legacy artifact only after an explicit missing versioned
+manifest, within the same anonymous client/network budget. Invalid manifests or
+registry outages do not trigger this fallback. Legacy entries may miss with a
+new compiler, but never bypass ccache's own compiler checks. Once a versioned
+snapshot exists, it wins; only versioned keys are saved/exported by the new main
+workflow. Retention treats each compiler pair and legacy prefix independently.
+The exporter never relabels a legacy checkpoint as compiler-qualified.
+
 ### Auxiliary native compiler working set
 
 Native qualification switches to a separate `native-variants-v1-Mixed` compiler
