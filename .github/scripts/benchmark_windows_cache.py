@@ -18,13 +18,25 @@ GROUPS = ("src/foundation/", "src/runtime/ui/", "src/physics/", "src/runtime/nav
 
 def run(arguments, output, environment):
     """Execute only fixed toolchain commands; generated target names stay argv data."""
-    assert arguments[0] in {"cmake", "sccache"}
+    assert arguments[0] in {"cmake", "sccache", "ccache"}
     executable = shutil.which(arguments[0])
     if executable is None:
         raise RuntimeError("Required benchmark tool is missing")
     with output.open("w", encoding="utf-8") as log:
         subprocess.run(arguments, executable=executable, cwd=ROOT, env=environment, stdout=log,
-                       stderr=subprocess.STDOUT, check=True, timeout=180, shell=False)
+                       stderr=subprocess.STDOUT, check=True, timeout=240, shell=False)
+
+
+def configure_launcher(index, launcher, environment):
+    """Change only the launcher and prove every real compiler input is retained."""
+    path = BUILD / "compile_commands.json"
+    before = json.loads(path.read_text(encoding="utf-8"))
+    run(["cmake", "--preset", "ci-audio-release", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+         f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}", f"-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}"],
+        RESULTS / f"{index}-{launcher}.configure.log", environment)
+    after = json.loads(path.read_text(encoding="utf-8"))
+    # CMake compile databases describe the actual compiler, omitting launchers.
+    assert before == after, "Changing a launcher changed compiler commands"
 
 
 def select_objects():
@@ -66,42 +78,52 @@ def measure(index, mode, workers, targets, environment):
     selected = dict(environment)
     selected.pop("SCCACHE_ERROR_LOG", None)
     selected.pop("SCCACHE_LOG", None)
-    selected["SCCACHE_CLIENT_SIDE"] = "1" if mode == "client" else "0"
+    selected["SCCACHE_CLIENT_SIDE"] = "0"
+    launcher = "ccache" if mode == "ccache" else "sccache"
+    configure_launcher(index, launcher, selected)
     for target in targets:
         output = BUILD / target
         assert not output.is_symlink()
         output.unlink(missing_ok=True)
     prefix = RESULTS / f"{index}-{mode}-{workers}"
-    run(["sccache", "--zero-stats"], prefix.with_suffix(".reset.log"), selected)
+    run([launcher, "--zero-stats"], prefix.with_suffix(".reset.log"), selected)
     started = time.monotonic()
     run(["cmake", "--build", str(BUILD), "--parallel", str(workers), "--target", *targets],
         prefix.with_suffix(".build.log"), selected)
     elapsed = time.monotonic() - started
-    run(["sccache", "--show-stats"], prefix.with_suffix(".stats.log"), selected)
+    run([launcher, "--show-stats"], prefix.with_suffix(".stats.log"), selected)
     return {"mode": mode, "workers": workers, "seconds": elapsed}, digests(targets)
 
 
 def main():
     RESULTS.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
-    order = [("server", 2), ("server", 4), ("client", 2), ("client", 4)]
-    summary = {"scope": "48 real Release objects on one runner, unchanged flags/cache; no full-job or runtime claim",
+    environment["CCACHE_DIR"] = str(ROOT / "build/windows-ccache-benchmark-store")
+    environment["CCACHE_MAXSIZE"] = "256M"
+    environment["CCACHE_COMPILERCHECK"] = "content"
+    environment["CCACHE_SLOPPINESS"] = ""
+    order = [("server", 4), ("ccache", 4)]
+    summary = {"scope": "48 real Release objects on one runner, unchanged MSVC commands; no full-job or runtime claim",
                "samples": []}
     try:
         targets = select_objects()
         summary["targets"] = targets
         _, reference = measure("warm", "server", 4, targets, environment)
-        for index, (mode, workers) in enumerate(order + list(reversed(order))):
+        _, candidate = measure("warm", "ccache", 4, targets, environment)
+        summary["coldCacheObjectHashesIdentical"] = candidate == reference
+        summary["coldCacheObjectDifferences"] = [target for target in targets if candidate[target] != reference[target]]
+        for index, (mode, workers) in enumerate(order + list(reversed(order)) + order + list(reversed(order))):
             sample, actual = measure(index, mode, workers, targets, environment)
-            assert actual == reference
+            assert actual == (candidate if mode == "ccache" else reference)
             summary["samples"].append(sample)
             print(json.dumps(sample), flush=True)
         summary["mediansSeconds"] = {
             f"{mode}-{workers}": statistics.median(sample["seconds"] for sample in summary["samples"]
                                                    if sample["mode"] == mode and sample["workers"] == workers)
             for mode, workers in order}
-        summary["objectsIdentical"] = True
+        summary["objectsIdenticalWithinEachCache"] = True
         summary["objectSha256"] = reference
+        summary["ccacheObjectSha256"] = candidate
     finally:
         (RESULTS / "result.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary), flush=True)

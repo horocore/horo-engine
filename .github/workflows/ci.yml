@@ -34,9 +34,20 @@ jobs:
           mode: Mixed
           max-size: 2G
           compiler-storage: registry
+      - name: Install pinned MSVC-compatible ccache
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'ccache-4.14.2-windows-x86_64.zip'
+          Invoke-WebRequest 'https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-windows-x86_64.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84') {
+            throw 'Pinned ccache archive digest mismatch'
+          }
+          $destination = Join-Path $env:RUNNER_TEMP 'horo-ccache-benchmark-tool'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          Join-Path $destination 'ccache-4.14.2-windows-x86_64' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Configure actual Release object commands
         run: cmake --preset ci-audio-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-      - name: Compare cache modes and bounded compiler workers
+      - name: Compare compiler caches with unchanged MSVC inputs
         timeout-minutes: 8
         run: python3 .github/scripts/benchmark_windows_cache.py
       - name: Preserve benchmark evidence
