@@ -802,7 +802,7 @@ PRs restore native Debug, shader, auxiliary variants and instrumented Sonar dire
 from GHCR. These stores neither read nor write Actions compiler snapshots, so
 source/scanner caches no longer compete with their multi-gigabyte copies.
 Other focused compiler profiles can retain Actions storage. The public client
-uses an empty credential store and a 90-second
+uses an empty credential store and a shared 180-second
 network budget. A fixed digest selects the blob, capped at 3 GiB compressed and
 4 GiB expanded. A bounded manifest requires the independently selected namespace,
 source key, regular portable paths, sizes and per-file SHA-256. Every file is
@@ -811,6 +811,14 @@ are excluded; local entries/settings are preserved. Restore runs before compiler
 activity, with the Windows cache server stopped. A failed fetch retains normal
 compilation. The CLI chooses only fixed primary, auxiliary and Sonar cache paths, rather
 than accepting an arbitrary destination.
+
+The shared deadline covers manifest and blob operations together; it is not
+reset for each request. Sonar's restore step allows four minutes for transfer
+and verification. This gives multi-gigabyte snapshots more room before falling
+back to a cold build. A simulated 150-second restore must succeed, while a
+transfer exceeding the total budget must preserve the existing cache. Failure
+diagnostics include only the exception type, never client arguments, output or
+credentials. No retry or weaker validation is introduced.
 
 This is independent storage against Actions quota eviction, not a latency
 measurement or a replacement for dependency packages. Hosted publication and

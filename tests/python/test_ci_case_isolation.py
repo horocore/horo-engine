@@ -160,15 +160,16 @@ def test_case_windows_runner_temp_preserves_build_identity_and_rejects_collision
     identity = build.resolve().as_posix() + "\nHoroPhysicsTests"
     namespace = runner_temp / "hci" / hashlib.sha256(identity.encode()).hexdigest()[:16]
     identity_file = namespace / "identity.txt"
-    assert identity_file.read_text() == identity
+    assert identity_file.read_text(encoding="utf-8") == identity
     for test in manifest(build)["tests"]:
         properties = {item["name"]: item["value"] for item in test["properties"]}
         assert Path(properties["WORKING_DIRECTORY"]).is_relative_to(namespace)
     run("ctest", "--test-dir", str(build), "--parallel", "4", "--output-on-failure")
     assert peak_overlap(evidence) == 4
-    identity_file.write_text("different build")
-    with pytest.raises(CalledProcessError, match="non-zero exit status"):
+    identity_file.write_text("different build", encoding="utf-8")
+    with pytest.raises(CalledProcessError) as collision:
         run("cmake", "-S", str(tmp_path / "source ü"), "-B", str(build))
+    assert "CI temporary build namespace collision" in collision.value.stdout + collision.value.stderr
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Native Windows classic file-I/O path budget")
