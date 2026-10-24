@@ -24,6 +24,7 @@ namespace Horo::Network {
         std::uint32_t maximumConnections{64};    /**< Includes inbound and outbound handles. */
         std::uint32_t maximumEventsPerPoll{64};  /**< Maximum owner callbacks per poll. */
         std::uint32_t maximumMessageBytes{1200}; /**< Exact per-message admission ceiling. */
+        std::uint32_t maximumChannels{1};        /**< Exact exclusive lane bound; GNS supports one through three native lanes. */
     };
 
     /** @brief Validated local bind and inbound admission bounds. */
@@ -54,7 +55,7 @@ namespace Horo::Network {
         NetworkTransportEventKind kind{NetworkTransportEventKind::Failed}; /**< Exact event kind. */
         ListenerHandle listener{};                                         /**< Populated for listener events and acceptance. */
         ConnectionHandle connection{};                                     /**< Populated for connection events. */
-        ChannelId channel{};                                          /**< Exact zero-based packet channel; zero for the GNS baseline. */
+        ChannelId channel{}; /**< Exact zero-based native lane, below the configured exclusive bound. */
         DeliveryPolicy delivery{DeliveryPolicy::UnreliableUnordered}; /**< Packet delivery class. */
         std::vector<std::byte> payload;                               /**< Owned packet bytes for PacketReceived only. */
         const ErrorCodeDescriptor *failure{};                         /**< Stable typed descriptor for Failed only. */
@@ -98,7 +99,7 @@ namespace Horo::Network {
          */
         [[nodiscard]] virtual Result<ConnectionHandle> Connect(const NetworkConnectRequest &request) = 0;
         /** @brief Copies and sends exact admitted bytes; no policy fallback. @param connection Ready live handle. @param channel Channel
-         * zero.
+         * below the configured exclusive bound.
          * @param payload Borrowed bytes copied before return. @param delivery Exact mode. @return Typed status.
          * @pre One Accepted (inbound) or Connected (outbound) event was observed for this generation; no session authentication is implied.
          */

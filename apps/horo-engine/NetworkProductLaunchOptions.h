@@ -15,6 +15,7 @@ namespace Horo::Application::Internal {
     struct ProductLaunch final {
         Network::NetworkProjectRole role{Network::NetworkProjectRole::Count};
         std::uint32_t frames{};
+        Network::NetworkWorldCompositionPurpose purpose{Network::NetworkWorldCompositionPurpose::Gameplay};
         Network::NetworkAddress bind;
         Network::NetworkAddress connect;
         std::optional<GameplayWorldSelection> gameplay;

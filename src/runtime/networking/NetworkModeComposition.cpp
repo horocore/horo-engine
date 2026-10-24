@@ -1,6 +1,7 @@
 #include "Horo/Network/NetworkModeComposition.h"
 
 #include "Horo/Network/NetworkErrors.h"
+#include "NetworkModeHostAccess.h"
 
 #include <algorithm>
 #include <utility>
@@ -96,10 +97,9 @@ namespace Horo::Network {
         }
         for (std::size_t index = 0; index < worlds.size(); ++index) {
             const auto &world = worlds[index];
-            if (!world.scene.IsValid() || (world.kind == NetworkModeWorldKind::AuthorityServer) != world.authority.IsValid() ||
-                (index != 0 && worlds[0].scene == world.scene)) {
+            if (!world.scene.IsValid() || (index != 0 && worlds[0].scene == world.scene)) {
                 return Result<NetworkModePlan>::Failure(
-                    MakeError(NetworkErrors::NetworkModeInvalid, "World identities or authority epochs do not match the selected mode."));
+                    MakeError(NetworkErrors::NetworkModeInvalid, "World identities do not match the selected mode."));
             }
         }
         NetworkModePlan plan{.mode = selection.role,
@@ -116,12 +116,26 @@ namespace Horo::Network {
         return Result<NetworkModePlan>::Success(plan);
     }
 
-    NetworkModeComposition::NetworkModeComposition(NetworkModePlan plan, NetworkModeFactories factories) noexcept
-        : plan_(std::move(plan)), factories_(std::move(factories)) {}
+    bool NetworkModeComposition::WorldShapeMatches(const NetworkProjectRole mode, const std::span<const NetworkModeWorld> worlds) noexcept {
+        return Horo::Network::WorldShapeMatches(mode, worlds);
+    }
+
+    NetworkModeServiceRequest NetworkModeComposition::Request(const NetworkModePlan &plan, const NetworkModeServiceKind service,
+                                                              const NetworkModeWorld *world) noexcept {
+        return Horo::Network::Request(plan, service, world);
+    }
+
+    NetworkModeComposition::NetworkModeComposition(NetworkModePlan plan, NetworkModeFactories factories,
+                                                   const NetworkWorldCompositionPurpose purpose,
+                                                   std::shared_ptr<NetworkWorldBindingController> binding) noexcept
+        : plan_(std::move(plan)), factories_(std::move(factories)), purpose_(purpose), binding_(std::move(binding)) {}
 
     NetworkModeComposition::NetworkModeComposition(NetworkModeComposition &&other) noexcept
-        : plan_(std::move(other.plan_)), factories_(std::move(other.factories_)), entries_(std::move(other.entries_)),
-          entryCount_(std::exchange(other.entryCount_, 0)), sessions_(std::move(other.sessions_)),
+        : plan_(std::move(other.plan_)), factories_(std::move(other.factories_)), purpose_(other.purpose_),
+          binding_(std::move(other.binding_)), entries_(std::move(other.entries_)), entryCount_(std::exchange(other.entryCount_, 0)),
+          travelEntries_(std::move(other.travelEntries_)), travelWorlds_(other.travelWorlds_),
+          travelEntryCount_(std::exchange(other.travelEntryCount_, 0)), travelFailure_(std::move(other.travelFailure_)),
+          travelPending_(std::exchange(other.travelPending_, false)), sessions_(std::move(other.sessions_)),
           lastSessions_(std::move(other.lastSessions_)), started_(std::exchange(other.started_, false)),
           stopped_(std::exchange(other.stopped_, true)) {}
 
@@ -130,7 +144,9 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkModeComposition::Create */
-    Result<NetworkModeComposition> NetworkModeComposition::Create(NetworkModePlan plan, NetworkModeFactories factories) {
+    Result<NetworkModeComposition> NetworkModeComposition::Create(NetworkModePlan plan, NetworkModeFactories factories,
+                                                                  const NetworkWorldCompositionPurpose purpose,
+                                                                  std::optional<NetworkWorldBindingSetup> binding) {
         if (plan.hostGeneration == 0 || plan.worldCount == 0 || plan.worldCount > plan.worlds.size() || !plan.build.IsValid() ||
             !plan.productRevision.IsValid() || !plan.hostRevision.IsValid() || !plan.projectRevision.IsValid() ||
             !WorldShapeMatches(plan.mode, {plan.worlds.data(), plan.worldCount}) ||
@@ -145,8 +161,7 @@ namespace Horo::Network {
         }
         for (std::size_t index = 0; index < plan.worldCount; ++index) {
             const auto &world = plan.worlds[index];
-            if (!world.scene.IsValid() || (world.kind == NetworkModeWorldKind::AuthorityServer) != world.authority.IsValid() ||
-                (index != 0 && plan.worlds[0].scene == world.scene)) {
+            if (!world.scene.IsValid() || (index != 0 && plan.worlds[0].scene == world.scene)) {
                 return Result<NetworkModeComposition>::Failure(MakeError(NetworkErrors::NetworkModeInvalid, "Invalid world identity."));
             }
         }
@@ -157,7 +172,20 @@ namespace Horo::Network {
                     MakeError(NetworkErrors::NetworkModeUnavailable, "A selected mode service has no host factory."));
             }
         }
-        return Result<NetworkModeComposition>::Success(NetworkModeComposition(std::move(plan), std::move(factories)));
+        if (purpose >= NetworkWorldCompositionPurpose::Count ||
+            (plan.mode != NetworkProjectRole::Standalone && purpose == NetworkWorldCompositionPurpose::Gameplay && !binding))
+            return Result<NetworkModeComposition>::Failure(
+                MakeError(NetworkErrors::AdmissionPolicyInvalid,
+                          "Requested gameplay requires explicit authenticated world-binding policy."));
+        std::shared_ptr<NetworkWorldBindingController> owner;
+        if (plan.mode != NetworkProjectRole::Standalone && purpose == NetworkWorldCompositionPurpose::Gameplay) {
+            auto created = NetworkWorldBindingController::Create(plan, std::move(*binding));
+            if (created.HasError())
+                return Result<NetworkModeComposition>::Failure(created.ErrorValue());
+            owner = std::move(created).Value();
+        }
+        return Result<NetworkModeComposition>::Success(
+            NetworkModeComposition(std::move(plan), std::move(factories), purpose, std::move(owner)));
     }
 
     Result<void> NetworkModeComposition::BuildEntries() {
@@ -218,21 +246,25 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeShuttingDown, "Mode composition has stopped."));
         if (started_)
             return Invalid("Mode composition has already started.");
+        if (binding_) {
+            if (auto staged = binding_->Prepare(); staged.HasError())
+                return staged;
+        }
         if (auto built = BuildEntries(); built.HasError()) {
-            ReleaseEntries();
+            Shutdown();
             return built;
         }
         for (std::size_t index = 0; index < entryCount_; ++index) {
             auto prepared = entries_[index].service->Prepare();
             if (prepared.HasError()) {
-                ReleaseEntries();
+                Shutdown();
                 return prepared;
             }
         }
         for (std::size_t index = 0; index < entryCount_; ++index) {
             auto activated = entries_[index].service->Activate();
             if (activated.HasError()) {
-                ReleaseEntries();
+                Shutdown();
                 return activated;
             }
         }
@@ -250,6 +282,18 @@ namespace Horo::Network {
             auto advanced = entries_[index].service->RunPhase(phase);
             if (advanced.HasError())
                 return advanced;
+        }
+        if (binding_ && phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges) {
+            auto advanced = travelPending_ ? AdvanceTravel(phase) : binding_->Commit(phase);
+            if (advanced.HasError() && travelPending_) {
+                travelFailure_ = advanced.ErrorValue();
+                (void)binding_->CancelTravel();
+                DiscardTravelEntries(travelEntries_, travelEntryCount_);
+                travelEntryCount_ = 0;
+                travelPending_ = false;
+                return Result<void>::Success();
+            }
+            return advanced;
         }
         return Result<void>::Success();
     }
@@ -275,7 +319,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkModeComposition::AdmitClientSession */
-    Result<void> NetworkModeComposition::AdmitClientSession(const NetworkModeWorldKind world, const PeerSessionLifecycle &session,
+    Result<void> NetworkModeComposition::AdmitClientSession(const NetworkModeWorldKind world, std::shared_ptr<PeerSessionLifecycle> session,
                                                             const ConnectionHandle connection, const NetworkOperationGeneration generation,
                                                             const std::uint64_t nowTick) {
         if (!started_ || stopped_)
@@ -283,12 +327,19 @@ namespace Horo::Network {
         const auto index = WorldIndex(world);
         if (world != NetworkModeWorldKind::Client || index == plan_.worldCount)
             return Invalid("Only the selected client world may receive an admitted gameplay session.");
-        if (auto admitted = session.AdmitGameplay(connection, generation, nowTick); admitted.HasError())
+        if (!session)
+            return Invalid("Client admission requires the same owned canonical peer lifecycle.");
+        if (auto admitted = session->AdmitGameplay(connection, generation, nowTick); admitted.HasError())
             return admitted;
         if (sessions_[index].has_value() && sessions_[index] == generation)
-            return Result<void>::Success();
+            return binding_ ? binding_->BindPeer(AdmissionEndpoint::Client, std::move(session), generation, nowTick)
+                            : Result<void>::Success();
         if (lastSessions_[index].has_value() && generation <= *lastSessions_[index])
             return Stale("The admitted session generation does not advance the current owner.");
+        if (binding_) {
+            if (auto bound = binding_->BindPeer(AdmissionEndpoint::Client, std::move(session), generation, nowTick); bound.HasError())
+                return bound;
+        }
         sessions_[index] = generation;
         lastSessions_[index] = generation;
         return Result<void>::Success();
@@ -303,110 +354,11 @@ namespace Horo::Network {
             return Invalid("Only a client world may disconnect a gameplay session.");
         if (!sessions_[index].has_value() || sessions_[index] != generation)
             return Stale("The disconnected session is not current.");
+        if (binding_) {
+            if (auto revoked = binding_->UnbindClient(generation); revoked.HasError())
+                return revoked;
+        }
         sessions_[index].reset();
-        return Result<void>::Success();
-    }
-
-    Result<void> NetworkModeComposition::AppendTravelEntry(std::array<Entry, 5> &prepared, std::size_t &count,
-                                                           const NetworkModeServiceRequest &request) {
-        auto created = factories_.services[static_cast<std::size_t>(request.service)](request);
-        if (created.HasError())
-            return Result<void>::Failure(created.ErrorValue());
-        if (created.Value() == nullptr)
-            return Unavailable("A travel factory returned no world service.");
-        prepared[count++] = {.request = request, .service = std::move(created).Value()};
-        return Result<void>::Success();
-    }
-
-    void NetworkModeComposition::DiscardTravelEntries(std::array<Entry, 5> &prepared, std::size_t count) noexcept {
-        while (count != 0) {
-            auto &entry = prepared[--count];
-            if (entry.service != nullptr)
-                entry.service->Shutdown();
-        }
-    }
-
-    Result<std::size_t> NetworkModeComposition::PrepareTravelEntries(const std::span<const NetworkModeWorld> replacements,
-                                                                     std::array<Entry, 5> &prepared) {
-        std::size_t count = 0;
-        for (std::size_t index = 0; index < plan_.worldCount; ++index) {
-            for (const auto service : {NetworkModeServiceKind::Scene, NetworkModeServiceKind::Physics}) {
-                auto added = AppendTravelEntry(prepared, count, Request(plan_, service, &replacements[index]));
-                if (added.HasError()) {
-                    DiscardTravelEntries(prepared, count);
-                    return Result<std::size_t>::Failure(added.ErrorValue());
-                }
-            }
-        }
-        if (Needs(plan_, NetworkModeServiceKind::LocalPlayer)) {
-            auto added = AppendTravelEntry(prepared, count,
-                                           Request(plan_, NetworkModeServiceKind::LocalPlayer, &replacements[plan_.worldCount - 1]));
-            if (added.HasError()) {
-                DiscardTravelEntries(prepared, count);
-                return Result<std::size_t>::Failure(added.ErrorValue());
-            }
-        }
-        for (std::size_t index = 0; index < count; ++index) {
-            auto result = prepared[index].service->Prepare();
-            if (result.HasError()) {
-                DiscardTravelEntries(prepared, count);
-                return Result<std::size_t>::Failure(result.ErrorValue());
-            }
-        }
-        for (std::size_t index = 0; index < count; ++index) {
-            auto result = prepared[index].service->Activate();
-            if (result.HasError()) {
-                DiscardTravelEntries(prepared, count);
-                return Result<std::size_t>::Failure(result.ErrorValue());
-            }
-        }
-        return Result<std::size_t>::Success(count);
-    }
-
-    void NetworkModeComposition::CommitTravelEntries(const std::span<const NetworkModeWorld> replacements, std::array<Entry, 5> &prepared,
-                                                     const std::size_t count) noexcept {
-        // Owner-thread safe-point publication has no failing step after preparation.
-        // Hide the old role views before swapping either member of a listen pair.
-        started_ = false;
-        std::array<std::unique_ptr<INetworkModeService>, 5> oldServices{};
-        for (std::size_t replacement = 0; replacement < count; ++replacement) {
-            for (std::size_t current = 0; current < entryCount_; ++current) {
-                if (entries_[current].request.service == prepared[replacement].request.service &&
-                    entries_[current].request.world == prepared[replacement].request.world) {
-                    oldServices[replacement] = std::move(entries_[current].service);
-                    entries_[current] = std::move(prepared[replacement]);
-                    break;
-                }
-            }
-        }
-        std::ranges::copy(replacements, plan_.worlds.begin());
-        for (std::size_t index = count; index != 0; --index)
-            oldServices[index - 1]->Shutdown();
-        started_ = true;
-    }
-
-    /** @copydoc NetworkModeComposition::Travel */
-    Result<void> NetworkModeComposition::Travel(const std::span<const NetworkModeWorld> replacements, const Runtime::RuntimePhase phase,
-                                                const std::optional<NetworkOperationGeneration> admittedClientSession) {
-        if (!started_ || stopped_)
-            return Unavailable("Mode worlds are not published.");
-        if (phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges || !WorldShapeMatches(plan_.mode, replacements))
-            return Invalid("Travel must replace the entire mode world set at the canonical lifecycle safe point.");
-        for (std::size_t index = 0; index < plan_.worldCount; ++index) {
-            if (!replacements[index].scene.IsValid() || replacements[index].scene.value <= plan_.worlds[index].scene.value ||
-                (replacements[index].kind == NetworkModeWorldKind::AuthorityServer) != replacements[index].authority.IsValid() ||
-                (replacements[index].authority.IsValid() && replacements[index].authority <= plan_.worlds[index].authority) ||
-                (index != 0 && replacements[0].scene == replacements[index].scene))
-                return Invalid("Travel must supply fresh distinct Scene and authority generations.");
-        }
-        if (const auto clientIndex = WorldIndex(NetworkModeWorldKind::Client);
-            clientIndex != plan_.worldCount && (!admittedClientSession.has_value() || sessions_[clientIndex] != admittedClientSession))
-            return Stale("Client travel requires the current admitted session generation.");
-        std::array<Entry, 5> prepared{};
-        auto ready = PrepareTravelEntries(replacements, prepared);
-        if (ready.HasError())
-            return Result<void>::Failure(ready.ErrorValue());
-        CommitTravelEntries(replacements, prepared, ready.Value());
         return Result<void>::Success();
     }
 
@@ -414,6 +366,11 @@ namespace Horo::Network {
     Result<NetworkModeRoleView> NetworkModeComposition::Role(const NetworkModeWorldKind world, const Runtime::SceneRuntimeId scene) const {
         if (!started_ || stopped_)
             return Result<NetworkModeRoleView>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable, "Mode worlds are not published."));
+        if (binding_)
+            return binding_->Role(world, scene);
+        if (plan_.mode != NetworkProjectRole::Standalone)
+            return Result<NetworkModeRoleView>::Failure(
+                MakeError(NetworkErrors::NetworkModeUnavailable, "Transport qualification does not publish gameplay world roles."));
         const auto index = WorldIndex(world);
         if (index == plan_.worldCount || plan_.worlds[index].scene != scene)
             return Result<NetworkModeRoleView>::Failure(MakeError(NetworkErrors::NetworkModeStale, "World role identity is stale."));
@@ -430,7 +387,21 @@ namespace Horo::Network {
             }
             return ReplicationExecutionRole::Count;
         }();
-        return Result<NetworkModeRoleView>::Success({plan_.hostGeneration, scene, role, sessions_[index], plan_.worlds[index].authority});
+        return Result<NetworkModeRoleView>::Success({plan_.hostGeneration, scene, role, sessions_[index], {}});
+    }
+
+    /** @copydoc NetworkModeHostAccess::Binding */
+    std::weak_ptr<NetworkWorldBindingController> NetworkModeHostAccess::Binding(NetworkModeComposition &mode) noexcept {
+        return mode.binding_;
+    }
+
+    /** @copydoc NetworkModeComposition::AcquireReplication */
+    Result<ReplicationWorldReadLease> NetworkModeComposition::AcquireReplication(const NetworkModeWorldKind world,
+                                                                                 const ReplicationWorldWorkRequest &request,
+                                                                                 const ReplicationWorldCapability capability) const {
+        if (!started_ || stopped_ || !binding_)
+            return Result<ReplicationWorldReadLease>::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        return binding_->Acquire(world, request, capability);
     }
 
     /** @copydoc NetworkModeComposition::ValidateRole */
@@ -442,10 +413,13 @@ namespace Horo::Network {
         for (std::size_t index = 0; index < plan_.worldCount; ++index) {
             if (plan_.worlds[index].scene != view.scene)
                 continue;
+            if (sessions_[index] != view.session)
+                return Stale("The role view belongs to a retired peer generation.");
             const auto current = Role(plan_.worlds[index].kind, view.scene);
             if (current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
-            if (current.Value().role != view.role || current.Value().session != view.session || current.Value().authority != view.authority)
+            if (current.Value().role != view.role || current.Value().session != view.session ||
+                current.Value().authority != view.authority || current.Value().worldSession != view.worldSession)
                 return Stale("The role view was replaced by travel, reconnect or disconnect.");
             return Result<void>::Success();
         }
@@ -460,11 +434,27 @@ namespace Horo::Network {
         sessions_ = {};
         lastSessions_ = {};
         stopped_ = true;
+        if (binding_)
+            binding_->Shutdown();
+        DiscardTravelEntries(travelEntries_, travelEntryCount_);
+        travelEntryCount_ = 0;
+        travelPending_ = false;
         ReleaseEntries();
+    }
+
+    /** @copydoc NetworkModeComposition::ServicesStarted */
+    bool NetworkModeComposition::ServicesStarted() const noexcept {
+        return started_ && !stopped_;
     }
 
     /** @copydoc NetworkModeComposition::Active */
     bool NetworkModeComposition::Active() const noexcept {
-        return started_ && !stopped_;
+        if (!started_ || stopped_)
+            return false;
+        if (binding_)
+            for (std::size_t index = 0; index < plan_.worldCount; ++index)
+                if (!binding_->Ready(plan_.worlds[index].kind, plan_.worlds[index].scene))
+                    return false;
+        return true;
     }
 }  // namespace Horo::Network

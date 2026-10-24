@@ -73,7 +73,7 @@ namespace Horo::Application::Internal {
             if (!mode_.Active())
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeUnavailable, "A stopped product cannot request travel."));
-            if (pending_ || travelFailure_ || worlds.empty() || worlds.size() > nextWorlds_.size())
+            if (mode_.TravelInProgress() || pending_ || travelFailure_ || worlds.empty() || worlds.size() > nextWorlds_.size())
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Invalid or overlapping travel request."));
             std::ranges::copy(worlds, nextWorlds_.begin());
@@ -102,6 +102,8 @@ namespace Horo::Application::Internal {
             }
             if (auto advanced = mode_.RunPhase(phase); advanced.HasError())
                 return FailPhase(advanced.ErrorValue());
+            if (auto failed = mode_.TakeTravelFailure(); failed && !travelFailure_)
+                travelFailure_ = std::move(failed);
             if (phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges || !pending_)
                 return Result<void>::Success();
             pending_ = false;
@@ -202,7 +204,8 @@ namespace Horo::Application::Internal {
         auto sessions = PrepareSessionOwner(inputs, factories);
         if (sessions.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(sessions.ErrorValue());
-        auto composition = Network::NetworkModeComposition::Create(std::move(plan).Value(), std::move(factories));
+        auto composition =
+            Network::NetworkModeComposition::Create(std::move(plan).Value(), std::move(factories), inputs.purpose, inputs.worldBinding);
         if (composition.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(composition.ErrorValue());
         auto runtime = Runtime::RuntimeHost::Create(clock);
@@ -270,6 +273,13 @@ namespace Horo::Application::Internal {
     Result<Network::NetworkModeRoleView> NetworkProductHost::Role(const Network::NetworkModeWorldKind world,
                                                                   const Runtime::SceneRuntimeId scene) const {
         return mode_->Mode().Role(world, scene);
+    }
+
+    /** @copydoc NetworkProductHost::AcquireReplication */
+    Result<Network::ReplicationWorldReadLease> NetworkProductHost::AcquireReplication(
+        const Network::NetworkModeWorldKind world, const Network::ReplicationWorldWorkRequest &request,
+        const Network::ReplicationWorldCapability capability) const {
+        return mode_->Mode().AcquireReplication(world, request, capability);
     }
 
     void NetworkProductHost::Shutdown() noexcept {
