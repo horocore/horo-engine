@@ -15,7 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(not shutil.which("cmake") or not shutil.which("ctest"), reason="CMake/CTest required")
 
-PROBE = '''import json, os, pathlib, sys, time
+PROBE = '''import hashlib, json, os, pathlib, sys, time
 group, name, output, peers = sys.argv[1:]
 output = pathlib.Path(output)
 work = pathlib.Path.cwd()
@@ -24,7 +24,14 @@ assert temporary == pathlib.Path(os.environ["TMP"]) == pathlib.Path(os.environ["
 assert pathlib.Path(os.environ["HOME"]) == pathlib.Path(os.environ["USERPROFILE"])
 assert os.environ["PRESERVED_SETTING"] == "present"
 assert os.environ["EXISTING"] == "retained"
-assert work.name == "work" and work.parent.name == group
+assert work.name == "work"
+identity_file = work.parent / "identity.txt"
+if identity_file.exists():
+    identity = identity_file.read_text(encoding="utf-8")
+    assert identity.endswith("\\n" + group)
+    assert work.parent.name == hashlib.sha256(identity.encode()).hexdigest()[:16]
+else:
+    assert work.parent.name == group
 assert temporary.parent == work.parent
 marker = work / "shared-fixture"
 assert not marker.exists(), "cases within one executable overlapped"
@@ -51,7 +58,7 @@ def run(tool: str, *args: str, cwd: Path | None = None) -> subprocess.CompletedP
     command = [str(Path(executable).resolve(strict=True)), *args]
     # All arguments originate in this fixture; no shell or external command input.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=True, shell=False, timeout=30)  # nosec B603
+    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", check=True, shell=False, timeout=30)  # nosec B603
 
 
 def prepare_isolation_project(tmp_path: Path, isolate: bool, workers: int = 2) -> tuple[Path, Path]:

@@ -730,7 +730,8 @@ def test_windows_parallel_tests_require_native_fixture_isolation_qualification()
     qualification = native.split(marker, 1)[1].split("\n      - name:", 1)[0]
     assert "if: runner.os == 'Windows'" in qualification
     assert "pytest==8.3.4" in qualification
-    assert "-k test_generated_suite_properties_preserve_contracts_and_control_concurrency -q" in qualification
+    assert "tests/python/test_ci_case_isolation.py" in qualification
+    assert "-k 'test_generated_suite_properties_preserve_contracts_and_control_concurrency or test_case_' -q" in qualification
     assert "timeout-minutes: 2" in qualification
     assert "continue-on-error" not in qualification
     assert native.index(marker) < native.index("- name: Configure Debug") < native.index("- name: Test Debug")

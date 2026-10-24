@@ -284,15 +284,35 @@ These are processes inside the existing platform job; matrix widths and runner
 job counts do not increase. Build worker budgets, test filters, assertions,
 timeouts and JUnit paths remain unchanged.
 
-All three native Debug configurations enable executable-suite isolation. Cases
-within one executable retain their resource lock and private work/temp/home
-directories; independent executables can overlap. Direct integration contracts,
+All three native Debug configurations enable executable-suite isolation. Suites
+retain their resource lock and private work/temp/home directories unless they
+have been audited for case isolation. The Physics suite uses a SHA-256 namespace
+per exact discovered test name for its working, temporary and home directories;
+its process-local state and temporary collision-cooker projects can therefore
+overlap within the same CTest worker budget. Explicit resource locks remain in
+force. Other suites keep their executable lock. Direct integration contracts,
 GPU/display and realtime suites retain their serial execution requirements.
 Windows verifies the actual generated CTest properties, environment and overlap
 with small two-, three- and four-worker fixtures before the native build. A
 failed isolation check fails the job. Sonar keeps its existing four-worker
 coverage configuration. Hosted duration and failure results must be recorded
 separately from the small fixture's concurrency proof.
+
+Windows runner fixtures use a shorter directory under `RUNNER_TEMP`, separated
+by build identity and target name. Keeping the repository/build prefix out of
+these paths preserves classic Win32 file I/O in deep Save namespaces. The build
+identity is recorded and a shortened-key collision fails configuration. The
+Windows qualification step exercises both case isolation and explicit-lock
+serialization before compiling the engine. Linux tooling also compares all GCC
+coverage counters for one versus four concurrent instances of an instrumented
+fixture; collection still waits for CTest completion. New case-isolated suites
+require a filesystem/state audit and hosted qualification, not just membership
+in the allowlist.
+
+The Metal host probe reports architecture and every device's selected state,
+Apple7 and Mac2 family predicates before native tests. A non-null device is
+insufficient for the renderer baseline. These diagnostics preserve the existing
+test execution and do not qualify an unsupported host or lower the device floor.
 
 Sonar's fastcov collection uses up to four gcov workers on its four-CPU Linux
 runner. Batches remain capped at 64 inputs and execute sequentially; increasing
