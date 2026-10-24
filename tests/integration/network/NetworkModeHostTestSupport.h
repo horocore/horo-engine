@@ -392,6 +392,23 @@ namespace Horo::Network {
             REQUIRE(owners->remotePublisher->BindPeer(AdmissionEndpoint::Server, owners->remoteWire->server, Session(8), 22).HasValue());
         }
 
+        inline void DeliverRemoteProductControl(Application::Internal::NetworkProductHost &host,
+                                                const std::shared_ptr<ProductOwners> &owners, const ConnectionHandle connection) {
+            REQUIRE(owners->remotePublisher->Flush(22).HasValue());
+            const auto &wire = owners->remoteWire->transport;
+            auto &local = owners->binding->transport;
+            local.event = {.kind = NetworkTransportEventKind::PacketReceived,
+                           .connection = connection,
+                           .channel = {},
+                           .delivery = DeliveryPolicy::ReliableOrdered,
+                           .payload = std::vector<std::byte>(wire.sent.begin(), wire.sent.begin() + wire.size)};
+            local.queued = true;
+            const auto delivered = owners->binding->dispatcher->RunNetworkPoll(22);
+            REQUIRE(delivered.HasValue());
+            REQUIRE(delivered.Value().rejectedPackets == 0);
+            REQUIRE(host.RunFrame().HasValue());
+        }
+
         inline void PublishProductClient(Application::Internal::NetworkProductHost &host, const std::shared_ptr<ProductOwners> &owners,
                                          const std::shared_ptr<PeerSessionLifecycle> &client) {
             owners->binding->setup = owners->worldSetup;
@@ -407,36 +424,9 @@ namespace Horo::Network {
                 owners->binding->Deliver();
             } else {
                 PrepareRemotePublisher(owners);
-                REQUIRE(owners->remotePublisher->Flush(22).HasValue());
-                const auto &wire = owners->remoteWire->transport;
-                auto &local = owners->binding->transport;
-                local.event = {.kind = NetworkTransportEventKind::PacketReceived,
-                               .connection = client->Connection(),
-                               .channel = {},
-                               .delivery = DeliveryPolicy::ReliableOrdered,
-                               .payload = std::vector<std::byte>(wire.sent.begin(), wire.sent.begin() + wire.size)};
-                local.queued = true;
-                const auto delivered = owners->binding->dispatcher->RunNetworkPoll(22);
-                REQUIRE(delivered.HasValue());
-                REQUIRE(delivered.Value().rejectedPackets == 0);
+                DeliverRemoteProductControl(host, owners, client->Connection());
+                return;  // The same helper already advances the actual commit safe point exactly once.
             }
-            REQUIRE(host.RunFrame().HasValue());
-        }
-
-        inline void DeliverRemoteProductControl(Application::Internal::NetworkProductHost &host,
-                                                const std::shared_ptr<ProductOwners> &owners, const ConnectionHandle connection) {
-            REQUIRE(owners->remotePublisher->Flush(22).HasValue());
-            const auto &wire = owners->remoteWire->transport;
-            auto &local = owners->binding->transport;
-            local.event = {.kind = NetworkTransportEventKind::PacketReceived,
-                           .connection = connection,
-                           .channel = {},
-                           .delivery = DeliveryPolicy::ReliableOrdered,
-                           .payload = std::vector<std::byte>(wire.sent.begin(), wire.sent.begin() + wire.size)};
-            local.queued = true;
-            const auto delivered = owners->binding->dispatcher->RunNetworkPoll(22);
-            REQUIRE(delivered.HasValue());
-            REQUIRE(delivered.Value().rejectedPackets == 0);
             REQUIRE(host.RunFrame().HasValue());
         }
 

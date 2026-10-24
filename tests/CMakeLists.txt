@@ -533,6 +533,10 @@ endif()
 horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
 add_test(NAME HoroNetworkStandaloneProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product standalone 2)
 set_tests_properties(HoroNetworkStandaloneProductLaunch PROPERTIES LABELS "integration;network;headless;product")
+add_test(NAME HoroNetworkGameplayPurposeRequiresAuthority
+    COMMAND "${CMAKE_COMMAND}" "-DENGINE=$<TARGET_FILE:horo-engine>"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/NetworkProductPurposeContract.cmake")
+set_tests_properties(HoroNetworkGameplayPurposeRequiresAuthority PROPERTIES LABELS "integration;network;headless;product" TIMEOUT 30)
 if(HORO_BUILD_NETWORK_GNS)
     add_test(NAME HoroNetworkDedicatedProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product dedicated 1 127.0.0.1:38981 --transport-qualification)
     set_tests_properties(HoroNetworkDedicatedProductLaunch PROPERTIES LABELS "integration;network;headless;product")

@@ -414,6 +414,27 @@ namespace Horo::Application::Internal {
                                               std::move(configured).Value(), &diagnostic, debugger);
         }
 
+        /** @brief Enforce the selected purpose without manufacturing a gameplay role for transport qualification. */
+        [[nodiscard]] Result<void> ValidateProductRolePurpose(const ProductLaunch &launch, const Result<Net::NetworkModeRoleView> &role) {
+            if (launch.role != Net::NetworkProjectRole::Standalone &&
+                launch.purpose == Net::NetworkWorldCompositionPurpose::TransportQualification) {
+                if (role.HasValue())
+                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                           "Transport qualification unexpectedly published a gameplay role."));
+                const auto &error = role.ErrorValue();
+                if (error.domain.Value() == Net::NetworkErrors::NetworkModeUnavailable.domain.Value() &&
+                    error.code.Value() == Net::NetworkErrors::NetworkModeUnavailable.code.Value())
+                    return Result<void>::Success();
+                return Result<void>::Failure(error);
+            }
+            if (role.HasError())
+                return Result<void>::Failure(role.ErrorValue());
+            if (launch.role != Net::NetworkProjectRole::Standalone && !role.Value().worldSession.has_value())
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeUnavailable, "Network gameplay has no canonical published world occurrence."));
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] int RunProductFrames(NetworkProductHost &runtime, const ProductLaunch &launch, const ProductWorlds &worlds) {
             if (auto started = runtime.Startup(); started.HasError()) {
                 std::cerr << "horo-engine: product startup failed: " << started.ErrorValue().message << '\n';
@@ -427,8 +448,10 @@ namespace Horo::Application::Internal {
                 }
             }
             for (std::size_t index = 0; index < worlds.count; ++index) {
-                if (runtime.Role(worlds.values[index].kind, worlds.values[index].scene).HasError()) {
-                    std::cerr << "horo-engine: product Scene role was not published\n";
+                const auto role = runtime.Role(worlds.values[index].kind, worlds.values[index].scene);
+                if (auto valid = ValidateProductRolePurpose(launch, role); valid.HasError()) {
+                    std::cerr << "horo-engine: product world purpose failed (" << valid.ErrorValue().code.Value()
+                              << "): " << valid.ErrorValue().message << '\n';
                     return 3;
                 }
             }
@@ -462,8 +485,9 @@ namespace Horo::Application::Internal {
         auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic,
                                       {resources.get(), std::move(admission), std::move(nativeSecurity)});
         if (runtime.HasError()) {
-            std::cerr << "horo-engine: network product admission failed (capability " << static_cast<int>(diagnostic.capability)
-                      << ", reason " << static_cast<int>(diagnostic.reason) << ")\n";
+            std::cerr << "horo-engine: network product admission failed (" << runtime.ErrorValue().code.Value() << ", capability "
+                      << static_cast<int>(diagnostic.capability) << ", reason " << static_cast<int>(diagnostic.reason)
+                      << "): " << runtime.ErrorValue().message << '\n';
             return 3;
         }
         auto outcome = RunProductFrames(*runtime.Value(), launch.Value(), worlds);
