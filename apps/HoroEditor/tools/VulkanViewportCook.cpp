@@ -82,6 +82,20 @@ namespace {
         return Result<void>::Success();
     }
 
+    /** @brief Admits the same compiled payload and immutable reflection through its actual selected runtime consumer. */
+    Result<void> ValidateCookedConsumer(const CompiledShaderArtifact &artifact, std::span<const std::uint8_t> metadata, bool multiview) {
+        if (multiview) {
+            const auto consumer = Editor::LoadEditorVulkanMultiviewCook(artifact.payload, metadata);
+            if (consumer.HasError())
+                return Result<void>::Failure(consumer.ErrorValue());
+        } else {
+            const auto consumer = Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata);
+            if (consumer.HasError())
+                return Result<void>::Failure(consumer.ErrorValue());
+        }
+        return Result<void>::Success();
+    }
+
     Result<void> Cook(char **argv, const bool multiview) {
         auto configuration = Configuration(argv);
         if (configuration.HasError())
@@ -118,15 +132,8 @@ namespace {
         const auto metadata = EncodeReflectedShaderArtifact(*artifact.reflection);
         if (metadata.HasError())
             return Result<void>::Failure(metadata.ErrorValue());
-        if (multiview) {
-            const auto consumer = Editor::LoadEditorVulkanMultiviewCook(artifact.payload, metadata.Value());
-            if (consumer.HasError())
-                return Result<void>::Failure(consumer.ErrorValue());
-        } else {
-            const auto consumer = Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata.Value());
-            if (consumer.HasError())
-                return Result<void>::Failure(consumer.ErrorValue());
-        }
+        if (auto admitted = ValidateCookedConsumer(artifact, metadata.Value(), multiview); admitted.HasError())
+            return admitted;
         const std::filesystem::path prefix{argv[2]};
         if (const auto payload = Write(prefix.string() + ".horoshdr", compiled.Value().artifacts[0].payload); payload.HasError())
             return payload;

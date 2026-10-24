@@ -3,6 +3,7 @@
 /** @file EditorWorkspaceScreen.h
  * @brief Target-private workspace host composition, frame routing and leave lifecycle.
  */
+#include "EditorPlayXrHost.h"
 #include "EditorWorkspaceView.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/NetworkDebugger.h"
@@ -21,7 +22,6 @@
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
-#include "editor/gameplay/host/EditorPlayXrHost.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorViewportRenderer.h"

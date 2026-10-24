@@ -54,8 +54,15 @@ worker execution or an authoritative domain commit was rolled back.
 
 ## Projection and retention
 
-After owner-command handoff and before input/default actions in VariableUpdate,
-call `UiControlStateMachine::ObserveAsyncActions` with the exact router store.
+The production `UiAnimationRuntimeParticipant` VariableUpdate path stages operation
+projection from the actual canvas router or exact route incarnation before style
+preparation. Its inactive control, computed Busy style and immutable frame copies
+commit together with layout. A failed candidate keeps the prior control/frame;
+late progress or terminal changes keep this frame's copied cutoff and become
+visible at the next VariableUpdate, without stopping the host. Publication still
+fences actual store/source/tree/document/route lifecycle authority.
+Direct non-animation control compositions may still call
+`UiControlStateMachine::ObserveAsyncActions` with the exact current router store.
 It copies the latest source-matching state; it neither polls jobs nor invokes
 provider callbacks. Pending state clears transient activation and supplies
 `Busy` effective availability. A terminal projection restores separately
@@ -66,7 +73,12 @@ style tokens and bounded progress presentation without owning the operation.
 
 Operation queries, cancellation and release use `UiAsyncActionKey`, which includes
 the exact source/revision context, request and operation. An operation sequence
-alone cannot authorize a query against another router/canvas/tree. Reload must
+alone cannot authorize a query against another router/canvas/tree. Layout-only
+interaction publications advance exact input/admission evidence while preserving
+the router-owned preallocated operation store and the original issued key. Current
+projection and duplicate suppression match the same semantic element within that
+exact document/tree/route incarnation; old presented input and forged keys remain
+stale. Document/tree replacement still retires the operation authority. Reload must
 create a new owner/revision context, as required by the existing router contract.
 Each admitted request sequence is consumed once within that router generation.
 
@@ -75,7 +87,11 @@ router's configured finite command capacity. Busy or capacity refusal preserves
 the queue head. Terminal state remains until explicit `Release(key)`. Releasing
 retention does not invalidate a completion lease or cancellation observer: those
 references continue to pin their old slot, and admission reports backpressure
-until all references retire. Slot reuse never resets a cancellation signal still
+until all references retire. Released failed records additionally wait for copied
+error projections to drain and explicit `CollectReleased` (or the animation
+owner's `DrainRetired`) at application quiescence. Retired route routers remain
+retained while copied errors exist. Unleased inactive frame copies and control
+copies are reclaimed there, so normal frames never release the last error owner. Slot reuse never resets a cancellation signal still
 visible to a worker. Dropping an unfinished producer cancels once.
 
 Progress is indeterminate or in [0, 1000] permille and monotonic within a numbered
@@ -99,3 +115,33 @@ reload and self-closing routes. It also runs cancellation through a provider-own
 Foundation task group and checks successful frame operations with the allocation
 probe. `HoroRuntimeUiFeedbackPublicHeaderConsumer` compiles the additive surface
 using only the owning RuntimeUi target.
+
+## Key migration and route ABA
+
+`UiAsyncActionKey` and its copied snapshot add the actual `UiRouteInstanceId` as
+an ownership fence. `AttachActions` binds a fresh router once before an operation
+is issued; already issued canvas keys cannot be retagged and an attached router
+cannot bind to another activation. Non-route keys deliberately retain an invalid
+route field and use their existing exact instance/document/tree authority.
+
+Consumers must preserve the full key returned by `UiAsyncActionProducer::Key`.
+Code manually reconstructing a routed key from three fields must migrate to that
+returned value (or retain its route field); an unbound or old-incarnation query
+is stale. This is an intentional runtime C++ contract extension, not a cooked
+asset format change. Existing synchronous handlers are unaffected. Store swaps
+preserve the bound incarnation and every previously issued key verbatim. Actual
+close/reopen tests use identical source/request/operation values and prove that
+only the real route incarnation distinguishes their authority. Public consumers
+compile the additive field and non-const quiescent collection method.
+
+## Integrated regression coverage
+
+The actual RuntimeHost animation integration target exercises canvas and route
+busy styles, animated layout/source changes, original-key stability, stale input,
+duplicate queue backpressure, owner-command progress, terminal restoration,
+successful late-data cutoff publications and real lifecycle invalidation and animated route-close cancellation. Warmed Unicode/paste
+state, busy/progress frames and deferred error reclamation use the allocation
+probe. These are production VariableUpdate consumers, not a test-only call to the
+leaf observation helper. The additive `CollectReleased` API preserves direct
+store compositions while making final immutable-error destruction explicitly
+quiescent; existing synchronous dispatch callers are unchanged.

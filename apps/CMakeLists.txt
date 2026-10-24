@@ -90,6 +90,53 @@ target_include_directories(HoroHostModuleComposition PUBLIC
 )
 target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation HoroEngine::PlatformServices)
 
+# Pure App-owned package admission is shared by runtime loading and offline production.
+set(HORO_UI_PAINT_PACKAGE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/ui_paint_package_headers")
+file(MAKE_DIRECTORY "${HORO_UI_PAINT_PACKAGE_HEADERS}")
+configure_file(common/ui/RuntimeUiPaintShaderPackage.h "${HORO_UI_PAINT_PACKAGE_HEADERS}/RuntimeUiPaintShaderPackage.h" COPYONLY)
+add_library(HoroUiPaintShaderPackage STATIC common/ui/RuntimeUiPaintShaderPackage.cpp)
+target_compile_features(HoroUiPaintShaderPackage PUBLIC cxx_std_20)
+target_include_directories(HoroUiPaintShaderPackage PUBLIC "${HORO_UI_PAINT_PACKAGE_HEADERS}")
+target_link_libraries(HoroUiPaintShaderPackage PUBLIC HoroEngine::RenderApi)
+
+# Signed tool approvals remain an explicit offline host composition, never a runtime dependency.
+set(HORO_EDITOR_SHADER_COOK_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_shader_cook_host_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_SHADER_COOK_HOST_HEADERS}")
+configure_file(common/shader_cook/VerifiedShaderHostCatalog.h "${HORO_EDITOR_SHADER_COOK_HOST_HEADERS}/VerifiedShaderHostCatalog.h" COPYONLY)
+add_library(HoroEditorShaderCookHostInternal STATIC common/shader_cook/VerifiedShaderHostCatalog.cpp)
+target_compile_features(HoroEditorShaderCookHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorShaderCookHostInternal PUBLIC "${HORO_EDITOR_SHADER_COOK_HOST_HEADERS}")
+target_link_libraries(HoroEditorShaderCookHostInternal PUBLIC HoroEngine::ShaderCompilerToolchain HoroEngine::Security
+    PRIVATE HoroFoundationJsonInternal)
+add_executable(HoroEditorUiPaintShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/UiPaintCook.cpp)
+target_compile_features(HoroEditorUiPaintShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorUiPaintShaderCook PRIVATE HoroEditorShaderCookHostInternal HoroHostSignatureDocuments
+    HoroUiPaintShaderPackage HoroEngine::Platform)
+
+# Fixed application UI lifecycle composition; stage only its non-installed owning contracts.
+set(HORO_RUNTIME_UI_PAINT_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/runtime_ui_paint_host_headers")
+file(MAKE_DIRECTORY "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}")
+configure_file(common/ui/RuntimeUiPaintHost.h "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}/RuntimeUiPaintHost.h" COPYONLY)
+configure_file(common/ui/RuntimeUiPaintProjectSources.h "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}/RuntimeUiPaintProjectSources.h" COPYONLY)
+configure_file(common/ui/RuntimeUiPaintPackagedKernel.h "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}/RuntimeUiPaintPackagedKernel.h" COPYONLY)
+configure_file(common/ui/RuntimeUiPaintProjection.h "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}/RuntimeUiPaintProjection.h" COPYONLY)
+add_library(HoroRuntimeUiPaintHost STATIC
+    common/ui/RuntimeUiPaintHost.cpp
+    common/ui/RuntimeUiPaintHostFrames.cpp
+    common/ui/RuntimeUiPaintHostSource.cpp
+    common/ui/RuntimeUiPaintHostOutput.cpp
+    common/ui/RuntimeUiPaintHostPresentation.cpp
+    common/ui/RuntimeUiPaintSceneTransaction.cpp
+    common/ui/RuntimeUiPaintProjectSources.cpp
+    common/ui/RuntimeUiPaintProjectKernel.cpp
+    common/ui/RuntimeUiPaintPackagedKernel.cpp
+    common/ui/RuntimeUiPaintProjection.cpp
+    common/ui/RuntimeUiPaintProjectionFrames.cpp)
+target_compile_features(HoroRuntimeUiPaintHost PUBLIC cxx_std_20)
+target_include_directories(HoroRuntimeUiPaintHost PUBLIC "${HORO_RUNTIME_UI_PAINT_HOST_HEADERS}")
+target_link_libraries(HoroRuntimeUiPaintHost PUBLIC HoroEngine::UiAnimationRuntimeIntegration HoroEngine::RenderFrontend
+    HoroEngine::RuntimeScene HoroEngine::ShaderBuild PRIVATE HoroUiPaintShaderPackage)
+
 # Application-only observer; Scene remains the sole native candidate owner. Only
 # this header and its declared non-installed Physics boundary reach consumers.
 set(HORO_SCENE_PHYSICS_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_physics_host_headers")
@@ -110,7 +157,7 @@ target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlayXrHostInterface HoroEditorPlaySceneHostInternal HoroScenePhysicsHost
         HoroEngine::Application HoroEngine::ProjectCollisionSettings HoroEngine::AISceneIntegration
-        HoroEngine::PrefabRuntime HoroEngine::SceneRuntimeConversion)
+        HoroEngine::PrefabRuntime HoroEngine::SceneRuntimeConversion HoroRuntimeUiPaintHost)
 
 add_library(HoroNetworkProductHost STATIC
     common/NetworkProductHost.cpp
@@ -452,6 +499,7 @@ if(HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditor
         PRIVATE
             HoroPackageProjectHost
+            HoroRuntimeUiPaintHost
             HoroEditorUiStyleHostInternal
             HoroEngine::ShaderBuild
             HoroEngine::Gui

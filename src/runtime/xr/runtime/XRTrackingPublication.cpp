@@ -58,6 +58,34 @@ namespace Horo::XR::RuntimeInternal {
             }
             return Result<void>::Success();
         }
+
+        struct DeviceUpdate final {
+            XRTrackedDeviceRole role;
+            XRTrackedDeviceState state;
+            XRTrackedDeviceCapabilities capabilities;
+        };
+
+        /** @brief Collects one role's normalized observation without mutating device generations or committed snapshots. */
+        std::optional<DeviceUpdate> CollectDeviceUpdate(std::span<const TrackingSourceEvidence> sources, XRTrackedDeviceRole role,
+                                                        const XRTrackedDeviceRecord *prior) {
+            auto capabilities = prior == nullptr ? XRTrackedDeviceCapabilities{} : prior->capabilities;
+            bool observed = false;
+            bool located = false;
+            for (const auto &source : sources) {
+                if (source.role != role || !source.active)
+                    continue;
+                capabilities.values[static_cast<std::size_t>(*SourceCapability(source))] = true;
+                observed = true;
+                located |= source.pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
+                           source.pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
+            }
+            if (!observed && prior == nullptr)
+                return std::nullopt;
+            auto state = located ? XRTrackedDeviceState::Tracked : XRTrackedDeviceState::TrackingLost;
+            if (!observed && prior != nullptr && prior->state == XRTrackedDeviceState::Disconnected)
+                state = XRTrackedDeviceState::Disconnected;
+            return DeviceUpdate{role, state, capabilities};
+        }
     }  // namespace
 
     /** @copydoc XRTrackingPublication::XRTrackingPublication */
@@ -131,12 +159,6 @@ namespace Horo::XR::RuntimeInternal {
         if (auto valid = ValidateSourceEvidence(sources, session_, origin_); valid.HasError())
             return valid;
 
-        struct DeviceUpdate final {
-            XRTrackedDeviceRole role;
-            XRTrackedDeviceState state;
-            XRTrackedDeviceCapabilities capabilities;
-        };
-
         std::array<DeviceUpdate, 3> updates{};
         std::size_t updateCount = 0;
         std::size_t newCount = 0;
@@ -144,30 +166,17 @@ namespace Horo::XR::RuntimeInternal {
         constexpr std::array roles{XRTrackedDeviceRole::Head, XRTrackedDeviceRole::LeftController, XRTrackedDeviceRole::RightController};
         for (const auto role : roles) {
             const auto prior = std::ranges::find(existing, role, &XRTrackedDeviceRecord::role);
-            auto capabilities = prior == existing.end() ? XRTrackedDeviceCapabilities{} : prior->capabilities;
-            bool observed = false;
-            bool located = false;
-            for (const auto &source : sources) {
-                if (source.role != role || !source.active)
-                    continue;
-                capabilities.values[static_cast<std::size_t>(*SourceCapability(source))] = true;
-                observed = true;
-                located |= source.pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
-                           source.pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
-            }
-            if (!observed && prior == existing.end())
+            const auto update = CollectDeviceUpdate(sources, role, prior == existing.end() ? nullptr : &*prior);
+            if (!update)
                 continue;
-            auto state = located ? XRTrackedDeviceState::Tracked : XRTrackedDeviceState::TrackingLost;
-            if (!observed && prior != existing.end() && prior->state == XRTrackedDeviceState::Disconnected)
-                state = XRTrackedDeviceState::Disconnected;
             if (prior == existing.end()) {
                 ++newCount;
-            } else if ((prior->capabilities != capabilities ||
-                        (prior->state == XRTrackedDeviceState::Disconnected && state != XRTrackedDeviceState::Disconnected)) &&
+            } else if ((prior->capabilities != update->capabilities ||
+                        (prior->state == XRTrackedDeviceState::Disconnected && update->state != XRTrackedDeviceState::Disconnected)) &&
                        prior->id.slot.generation == std::numeric_limits<std::uint32_t>::max()) {
                 return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
             }
-            updates[updateCount++] = {role, state, capabilities};
+            updates[updateCount++] = *update;
         }
         if (deviceCount_ > limits_.maximumDevices || newCount > limits_.maximumDevices - deviceCount_)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));

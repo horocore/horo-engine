@@ -95,6 +95,187 @@ namespace Horo::Editor {
         const CompiledRenderGraphExecution *bound{};
         EditorVulkanXrMirrorProjection mirror;
         RenderTimelinePoint submitted;
+
+        /** @brief Cold-creates depth storage and views, retaining every successful prefix for owner teardown. */
+        Result<void> PrepareDepth(RenderFrontend &frontend, const RenderTextureDescriptor &color) {
+            auto createdDepth =
+                frontend.CreateTexture(RenderMemoryScopes::ViewportResources, {.extent = color.extent,
+                                                                               .format = RenderTextureFormat::Depth32Float,
+                                                                               .layerCount = 2,
+                                                                               .usage = RenderTextureUsage::RenderAttachment});
+            if (createdDepth.HasError())
+                return Result<void>::Failure(createdDepth.ErrorValue());
+            depthTexture = createdDepth.Value().handle;
+            if (auto processed = frontend.ProcessResourceRequests(); processed.HasError())
+                return Result<void>::Failure(processed.ErrorValue());
+            if (auto ready = frontend.ResourceOperationResult(createdDepth.Value().operation); ready.HasError())
+                return ready;
+            for (std::uint32_t layer = 0; layer < depthViews.size(); ++layer) {
+                auto view = frontend.CreateTextureView({.texture = depthTexture,
+                                                        .format = RenderTextureFormat::Depth32Float,
+                                                        .aspect = RenderTextureAspect::Depth,
+                                                        .baseLayer = layer,
+                                                        .layerCount = 1});
+                if (view.HasError())
+                    return Result<void>::Failure(view.ErrorValue());
+                depthViews[layer] = view.Value().handle;
+                if (auto processed = frontend.ProcessResourceRequests(); processed.HasError())
+                    return Result<void>::Failure(processed.ErrorValue());
+                if (auto ready = frontend.ResourceOperationResult(view.Value().operation); ready.HasError())
+                    return ready;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Declares the fixed external/depth attachment topology before any acquisition. */
+        Result<RenderGraphBuilder> PrepareAttachments(const RenderTextureDescriptor &color, const RenderGraphLogicalState &acquired,
+                                                      const RenderGraphLogicalState &requiredFinal, std::uint64_t deviceIncarnation) {
+            constexpr auto maximumReads = RenderMaterialPass::MaximumDraws * 3;
+            auto created = RenderGraphBuilder::Create(
+                {.maxPasses = 1, .maxResources = maximumReads + 2, .maxUsages = maximumReads + 2, .maxDependencies = 1});
+            if (created.HasError())
+                return Result<RenderGraphBuilder>::Failure(created.ErrorValue());
+            auto builder = std::move(created).Value();
+            auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
+            if (pass.HasError())
+                return Result<RenderGraphBuilder>::Failure(pass.ErrorValue());
+            this->pass = pass.Value();
+            auto external = Detail::PreparedRenderGraphTemplate::DeclareTexture(builder, color, acquired, requiredFinal, deviceIncarnation);
+            if (external.HasError())
+                return Result<RenderGraphBuilder>::Failure(external.ErrorValue());
+            this->color = external.Value();
+            auto depth = builder.ImportTexture(depthTexture, RenderGraphResourceClass::Persistent);
+            if (depth.HasError())
+                return Result<RenderGraphBuilder>::Failure(depth.ErrorValue());
+            this->depth = depth.Value();
+            if (auto use =
+                    builder.AddUsage({this->pass, this->color.resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+                use.HasError())
+                return Result<RenderGraphBuilder>::Failure(use.ErrorValue());
+            if (auto use =
+                    builder.AddUsage({this->pass, this->depth, RenderGraphAccess::Write, RenderGraphUsageKind::DepthStencilAttachment});
+                use.HasError())
+                return Result<RenderGraphBuilder>::Failure(use.ErrorValue());
+            return Result<RenderGraphBuilder>::Success(std::move(builder));
+        }
+
+        struct Input final {
+            RenderBufferHandle handle;
+            RenderGraphResourceId resource;
+            RenderGraphUsageKind role;
+        };
+
+        /** @brief Imports one deduplicated immutable read into the same cold graph and retention superset. */
+        Result<RenderGraphResourceId> ImportRead(RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
+                                                 std::vector<Input> &inputs, RenderQueueId queue, RenderBufferHandle handle,
+                                                 RenderGraphUsageKind role) {
+            for (const auto &existing : inputs)
+                if (existing.handle == handle)
+                    return existing.role == role ? Result<RenderGraphResourceId>::Success(existing.resource)
+                                                 : Result<RenderGraphResourceId>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+            auto imported = builder.ImportBuffer(handle, RenderGraphResourceClass::Persistent);
+            if (imported.HasError())
+                return imported;
+            if (auto use = builder.AddUsage({pass, imported.Value(), RenderGraphAccess::Read, role}); use.HasError())
+                return Result<RenderGraphResourceId>::Failure(use.ErrorValue());
+            initial.push_back({imported.Value(),
+                               {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
+                                RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue}});
+            inputs.push_back({handle, imported.Value(), role});
+            reads.push_back({imported.Value(), role});
+            return imported;
+        }
+
+        /** @brief Cold-captures the canonical resident meshes and material slots without another geometry owner. */
+        Result<void> PrepareReads(RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
+                                  std::span<const EditorViewportMeshResourceView> meshes, EditorViewportResources &resources,
+                                  std::span<const DrawSlot> slots, RenderQueueId queue) {
+            std::vector<Input> inputs;
+            inputs.reserve(RenderMaterialPass::MaximumDraws * 3);
+            for (const auto &source : meshes) {
+                const auto mesh = resources.FindMesh(source.handle.id.value);
+                if (!mesh)
+                    return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
+                auto vertices =
+                    ImportRead(builder, initial, inputs, queue, mesh->descriptor.vertexBuffer, RenderGraphUsageKind::VertexBuffer);
+                if (vertices.HasError())
+                    return Result<void>::Failure(vertices.ErrorValue());
+                auto indices = ImportRead(builder, initial, inputs, queue, mesh->descriptor.indexBuffer, RenderGraphUsageKind::IndexBuffer);
+                if (indices.HasError())
+                    return Result<void>::Failure(indices.ErrorValue());
+                geometry.push_back({source.handle.id.value, source.handle, mesh->mesh, vertices.Value(), indices.Value()});
+            }
+            std::ranges::sort(geometry, {}, &XrGraph::Geometry::source);
+            for (std::size_t draw = 0; draw < parameters.size(); ++draw) {
+                auto parameters = ImportRead(builder, initial, inputs, queue, slots[draw].buffer, RenderGraphUsageKind::UniformBuffer);
+                if (parameters.HasError())
+                    return Result<void>::Failure(parameters.ErrorValue());
+                this->parameters[draw] = parameters.Value();
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves exact immutable mesh generations and extracts fixed multiview values without allocation. */
+        Result<MultiviewSceneSnapshot> ExtractScene(const MultiviewPublication &publication, std::span<const MultiviewSceneView> views,
+                                                    std::span<const RenderStaticMeshInstance> instances, const RenderFrontend &frontend,
+                                                    std::span<const DrawSlot> slots,
+                                                    std::array<const Geometry *, RenderMaterialPass::MaximumDraws> &meshes) const {
+            std::array<MultiviewSceneInstance, RenderMaterialPass::MaximumDraws> values{};
+            for (std::size_t index = 0; index < instances.size(); ++index) {
+                const auto &source = instances[index];
+                auto mesh = std::ranges::lower_bound(geometry, source.mesh.id.value, {}, &XrGraph::Geometry::source);
+                if (!source.IsValid() || source.material != CoreDefaultMaterial || mesh == geometry.end() ||
+                    mesh->sourceGeneration != source.mesh || !slots[index].material)
+                    return Result<MultiviewSceneSnapshot>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
+                meshes[index] = &*mesh;
+                values[index] = {mesh->mesh, slots[index].material->Id(), source.localToWorld, source.localBounds};
+            }
+            return MultiviewSceneSnapshot::Extract(publication, publication, views, std::span{values}.first(instances.size()),
+                                                   ResolveMultiviewCapabilities(frontend.Capabilities().support),
+                                                   MultiviewExecutionPolicy::Multipass);
+        }
+
+        /** @brief Binds exact selected read IDs through the canonical retired-instance gate and immutable superset. */
+        Result<const CompiledRenderGraphExecution *> BindReads(
+            RenderFrontend &frontend, RenderTextureHandle colorTexture, const MultiviewSceneSnapshot &scene,
+            const std::array<const Geometry *, RenderMaterialPass::MaximumDraws> &meshes) {
+            constexpr std::size_t maximumReads = RenderMaterialPass::MaximumDraws * 3;
+            std::array<Detail::RenderGraphOptionalRead, maximumReads> reads{};
+            std::array<bool, maximumReads + 2> selected{};
+            std::size_t readCount{};
+            const auto select = [&](RenderGraphResourceId resource, RenderGraphUsageKind role) {
+                // Every ID comes from this immutable cold superset, not from the caller's scene.
+                const auto index = resource.value - 1;
+                if (!selected[index]) {
+                    selected[index] = true;
+                    reads[readCount++] = {resource, role};
+                }
+            };
+            for (const auto &draw : scene.Draws()) {
+                const auto index = draw.instanceIndex;
+                select(meshes[index]->vertices, RenderGraphUsageKind::VertexBuffer);
+                select(meshes[index]->indices, RenderGraphUsageKind::IndexBuffer);
+                select(parameters[index], RenderGraphUsageKind::UniformBuffer);
+            }
+            const std::array bindings{Detail::RenderGraphExternalTextureBinding{this->color.resource, colorTexture}};
+            auto bound = topology->Bind(frontend, 0, bindings, std::span{reads}.first(readCount));
+            return bound;
+        }
+
+        /** @brief Stores fixed scene/draw values only after canonical Bind proved the previous queue lease retired. */
+        void PublishScene(MultiviewSceneSnapshot &&extracted, const std::array<RenderTextureViewHandle, 2> &eyeViews,
+                          std::span<const DrawSlot> slots, const std::array<const Geometry *, RenderMaterialPass::MaximumDraws> &meshes) {
+            payload->value.emplace(std::move(extracted));
+            scene = std::shared_ptr<const MultiviewSceneSnapshot>{payload, &*payload->value};
+            drawCount = scene->Draws().size();
+            for (std::size_t draw = 0; draw < drawCount; ++draw) {
+                const auto instance = scene->Draws()[draw].instanceIndex;
+                draws[draw] = {instance, meshes[instance]->vertices, meshes[instance]->indices, parameters[instance],
+                               slots[instance].material};
+            }
+            for (std::uint32_t view = 0; view < targets.size(); ++view)
+                targets[view] = {color.resource, depth, eyeViews[view], depthViews[view], {0, 0, extent.width, extent.height}, view, view};
+        }
     };
 
     /** @copydoc EditorViewportRendererVulkan::BorrowXrDevice */
@@ -137,108 +318,22 @@ namespace Horo::Editor {
         xrGraph_ = std::make_shared<XrGraph>();
         auto &storage = *xrGraph_;
         storage.extent = color.extent;
-        auto createdDepth = frontend_.CreateTexture(RenderMemoryScopes::ViewportResources, {.extent = color.extent,
-                                                                                            .format = RenderTextureFormat::Depth32Float,
-                                                                                            .layerCount = 2,
-                                                                                            .usage = RenderTextureUsage::RenderAttachment});
-        if (createdDepth.HasError())
-            return Result<void>::Failure(createdDepth.ErrorValue());
-        storage.depthTexture = createdDepth.Value().handle;
-        if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
-            return Result<void>::Failure(processed.ErrorValue());
-        if (auto ready = frontend_.ResourceOperationResult(createdDepth.Value().operation); ready.HasError())
-            return ready;
-        for (std::uint32_t layer = 0; layer < storage.depthViews.size(); ++layer) {
-            auto view = frontend_.CreateTextureView({.texture = storage.depthTexture,
-                                                     .format = RenderTextureFormat::Depth32Float,
-                                                     .aspect = RenderTextureAspect::Depth,
-                                                     .baseLayer = layer,
-                                                     .layerCount = 1});
-            if (view.HasError())
-                return Result<void>::Failure(view.ErrorValue());
-            storage.depthViews[layer] = view.Value().handle;
-            if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
-                return Result<void>::Failure(processed.ErrorValue());
-            if (auto ready = frontend_.ResourceOperationResult(view.Value().operation); ready.HasError())
-                return ready;
-        }
+        if (auto depth = storage.PrepareDepth(frontend_, color); depth.HasError())
+            return depth;
         constexpr auto maximumReads = RenderMaterialPass::MaximumDraws * 3;
-        auto created = RenderGraphBuilder::Create(
-            {.maxPasses = 1, .maxResources = maximumReads + 2, .maxUsages = maximumReads + 2, .maxDependencies = 1});
+        auto created = storage.PrepareAttachments(color, acquired, requiredFinal, frontend_.Capabilities().support.deviceIncarnation);
         if (created.HasError())
             return Result<void>::Failure(created.ErrorValue());
         auto builder = std::move(created).Value();
-        auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
-        if (pass.HasError())
-            return Result<void>::Failure(pass.ErrorValue());
-        storage.pass = pass.Value();
-        auto external = Detail::PreparedRenderGraphTemplate::DeclareTexture(builder, color, acquired, requiredFinal,
-                                                                            frontend_.Capabilities().support.deviceIncarnation);
-        if (external.HasError())
-            return Result<void>::Failure(external.ErrorValue());
-        storage.color = external.Value();
-        auto depth = builder.ImportTexture(storage.depthTexture, RenderGraphResourceClass::Persistent);
-        if (depth.HasError())
-            return Result<void>::Failure(depth.ErrorValue());
-        storage.depth = depth.Value();
-        if (auto use =
-                builder.AddUsage({storage.pass, storage.color.resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
-            use.HasError())
-            return use;
-        if (auto use =
-                builder.AddUsage({storage.pass, storage.depth, RenderGraphAccess::Write, RenderGraphUsageKind::DepthStencilAttachment});
-            use.HasError())
-            return use;
         std::vector<RenderGraphImportedState> initial;
         initial.reserve(maximumReads + 1);
         initial.push_back({storage.depth, {}, RenderGraphInitialContents::Discarded});
         storage.reads.reserve(maximumReads);
         storage.geometry.reserve(meshes.size());
 
-        struct Input final {
-            RenderBufferHandle handle;
-            RenderGraphResourceId resource;
-            RenderGraphUsageKind role;
-        };
-
-        std::vector<Input> inputs;
-        inputs.reserve(maximumReads);
-        const auto input = [&](RenderBufferHandle handle, RenderGraphUsageKind role) -> Result<RenderGraphResourceId> {
-            for (const auto &existing : inputs)
-                if (existing.handle == handle)
-                    return existing.role == role ? Result<RenderGraphResourceId>::Success(existing.resource)
-                                                 : Result<RenderGraphResourceId>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-            auto imported = builder.ImportBuffer(handle, RenderGraphResourceClass::Persistent);
-            if (imported.HasError())
-                return imported;
-            if (auto use = builder.AddUsage({storage.pass, imported.Value(), RenderGraphAccess::Read, role}); use.HasError())
-                return Result<RenderGraphResourceId>::Failure(use.ErrorValue());
-            initial.push_back({imported.Value(),
-                               {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
-                                RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, device_.graphicsIdentity}});
-            inputs.push_back({handle, imported.Value(), role});
-            storage.reads.push_back({imported.Value(), role});
-            return imported;
-        };
-        for (const auto &source : meshes) {
-            const auto mesh = resources_.FindMesh(source.handle.id.value);
-            if (!mesh)
-                return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
-            auto vertices = input(mesh->descriptor.vertexBuffer, RenderGraphUsageKind::VertexBuffer);
-            if (vertices.HasError())
-                return Result<void>::Failure(vertices.ErrorValue());
-            auto indices = input(mesh->descriptor.indexBuffer, RenderGraphUsageKind::IndexBuffer);
-            if (indices.HasError())
-                return Result<void>::Failure(indices.ErrorValue());
-            storage.geometry.push_back({source.handle.id.value, source.handle, mesh->mesh, vertices.Value(), indices.Value()});
-        }
-        std::ranges::sort(storage.geometry, {}, &XrGraph::Geometry::source);
-        for (std::size_t draw = 0; draw < storage.parameters.size(); ++draw) {
-            auto parameters = input(xrDrawSlots_[0][draw].buffer, RenderGraphUsageKind::UniformBuffer);
-            if (parameters.HasError())
-                return Result<void>::Failure(parameters.ErrorValue());
-            storage.parameters[draw] = parameters.Value();
-        }
+        if (auto reads = storage.PrepareReads(builder, initial, meshes, resources_, xrDrawSlots_[0], device_.graphicsIdentity);
+            reads.HasError())
+            return reads;
         auto graph = builder.Finalize();
         if (graph.HasError())
             return Result<void>::Failure(graph.ErrorValue());
@@ -271,41 +366,11 @@ namespace Horo::Editor {
 
         // Temporary fixed values do not touch a potentially queued slot. Only successful canonical Bind
         // below proves the sole instance has retired, permitting mutation of its retained payload storage.
-        std::array<MultiviewSceneInstance, RenderMaterialPass::MaximumDraws> values{};
         std::array<const XrGraph::Geometry *, RenderMaterialPass::MaximumDraws> meshes{};
-        for (std::size_t index = 0; index < instances.size(); ++index) {
-            const auto &source = instances[index];
-            auto mesh = std::ranges::lower_bound(storage.geometry, source.mesh.id.value, {}, &XrGraph::Geometry::source);
-            if (!source.IsValid() || source.material != CoreDefaultMaterial || mesh == storage.geometry.end() ||
-                mesh->sourceGeneration != source.mesh || !xrDrawSlots_[0][index].material)
-                return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
-            meshes[index] = &*mesh;
-            values[index] = {mesh->mesh, xrDrawSlots_[0][index].material->Id(), source.localToWorld, source.localBounds};
-        }
-        auto extracted = MultiviewSceneSnapshot::Extract(publication, publication, views, std::span{values}.first(instances.size()),
-                                                         ResolveMultiviewCapabilities(support), MultiviewExecutionPolicy::Multipass);
+        auto extracted = storage.ExtractScene(publication, views, instances, frontend_, xrDrawSlots_[0], meshes);
         if (extracted.HasError())
             return Result<void>::Failure(extracted.ErrorValue());
-        constexpr std::size_t maximumReads = RenderMaterialPass::MaximumDraws * 3;
-        std::array<Detail::RenderGraphOptionalRead, maximumReads> reads{};
-        std::array<bool, maximumReads + 2> selected{};
-        std::size_t readCount{};
-        const auto select = [&](RenderGraphResourceId resource, RenderGraphUsageKind role) {
-            // Every ID comes from this immutable cold superset, not from the caller's scene.
-            const auto index = resource.value - 1;
-            if (!selected[index]) {
-                selected[index] = true;
-                reads[readCount++] = {resource, role};
-            }
-        };
-        for (const auto &draw : extracted.Value().Draws()) {
-            const auto index = draw.instanceIndex;
-            select(meshes[index]->vertices, RenderGraphUsageKind::VertexBuffer);
-            select(meshes[index]->indices, RenderGraphUsageKind::IndexBuffer);
-            select(storage.parameters[index], RenderGraphUsageKind::UniformBuffer);
-        }
-        const std::array bindings{Detail::RenderGraphExternalTextureBinding{storage.color.resource, color}};
-        auto bound = storage.topology->Bind(frontend_, 0, bindings, std::span{reads}.first(readCount));
+        auto bound = storage.BindReads(frontend_, color, extracted.Value(), meshes);
         if (bound.HasError())
             return Result<void>::Failure(bound.ErrorValue());
         storage.bound = nullptr;
@@ -316,22 +381,7 @@ namespace Horo::Editor {
             if (state.Value() != RenderResourceState::Ready)
                 return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
         }
-        storage.payload->value.emplace(std::move(extracted).Value());
-        storage.scene = std::shared_ptr<const MultiviewSceneSnapshot>{storage.payload, &*storage.payload->value};
-        storage.drawCount = storage.scene->Draws().size();
-        for (std::size_t draw = 0; draw < storage.drawCount; ++draw) {
-            const auto instance = storage.scene->Draws()[draw].instanceIndex;
-            storage.draws[draw] = {instance, meshes[instance]->vertices, meshes[instance]->indices, storage.parameters[instance],
-                                   xrDrawSlots_[0][instance].material};
-        }
-        for (std::uint32_t view = 0; view < storage.targets.size(); ++view)
-            storage.targets[view] = {storage.color.resource,
-                                     storage.depth,
-                                     eyeViews[view],
-                                     storage.depthViews[view],
-                                     {0, 0, storage.extent.width, storage.extent.height},
-                                     view,
-                                     view};
+        storage.PublishScene(std::move(extracted).Value(), eyeViews, xrDrawSlots_[0], meshes);
         storage.bound = bound.Value();
         if (!storage.mirror.Bind(publication.frame, eyeViews[0])) {
             storage.bound = nullptr;

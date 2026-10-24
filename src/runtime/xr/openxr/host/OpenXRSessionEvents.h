@@ -47,6 +47,13 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<NativeSessionBorrow> Current() const;
         [[nodiscard]] Result<void> StateChanged(const XrEventDataSessionStateChanged &event);
         [[nodiscard]] Result<void> Progress(bool wantsPlay);
+        /** @brief Applies one fenced native event through the same canonical lifecycle and accumulates value-only notices.
+         * @param buffer Actual native event. @param session Same current native session. @param observation Bounded poll result.
+         * @return Original lifecycle/event-loss error, retaining native cleanup debt.
+         */
+        [[nodiscard]] Result<void> ProcessEvent(const XrEventDataBuffer &buffer, XrSession session,
+                                                NativeSessionEventObservation &observation);
+
         [[nodiscard]] bool ImagesRetired() const noexcept;
         [[nodiscard]] static Error Failure(const char *operation, XrResult result);
 

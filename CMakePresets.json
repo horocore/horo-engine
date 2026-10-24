@@ -254,11 +254,19 @@
   "buildPresets": [
     {
       "name": "ci-linux-debug",
-      "configurePreset": "ci-linux-debug"
+      "configurePreset": "ci-linux-debug",
+      "targets": [
+        "all",
+        "HoroEditorUiPaintShaderCook"
+      ]
     },
     {
       "name": "ci-macos-debug",
-      "configurePreset": "ci-macos-debug"
+      "configurePreset": "ci-macos-debug",
+      "targets": [
+        "all",
+        "HoroEditorUiPaintShaderCook"
+      ]
     },
     {
       "name": "ci-windows-debug",

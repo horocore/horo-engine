@@ -174,6 +174,36 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRSessionEvents::ProcessEvent */
+    Result<void> OpenXRSessionEvents::ProcessEvent(const XrEventDataBuffer &buffer, XrSession session,
+                                                   NativeSessionEventObservation &observation) {
+        if (buffer.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+            XrEventDataSessionStateChanged state;
+            std::memcpy(&state, &buffer, sizeof(state));
+            if (auto changed = StateChanged(state); changed.HasError())
+                return Result<void>::Failure(changed.ErrorValue());
+            observation.exitRequested |= state.session == session && state.state == XR_SESSION_STATE_EXITING;
+        } else if (buffer.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
+            if (auto lost = sessions_->ApplyEvent(session_, XRSessionEvent::InstanceLost); lost.HasError())
+                return Result<void>::Failure(lost.ErrorValue());
+        } else if (buffer.type == XR_TYPE_EVENT_DATA_EVENTS_LOST) {
+            // Missing state transitions cannot authorize continued frames or a later Ready restart.
+            // Logical loss retains native frame/image debt; it does not manufacture end/release success.
+            if (auto lost = sessions_->ApplyEvent(session_, XRSessionEvent::SessionLost); lost.HasError())
+                return Result<void>::Failure(lost.ErrorValue());
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "OpenXR event loss revoked session admission"));
+        } else if (buffer.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
+            XrEventDataInteractionProfileChanged event;
+            std::memcpy(&event, &buffer, sizeof(event));
+            observation.bindingsChanged |= event.session == session;
+        } else if (buffer.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            XrEventDataReferenceSpaceChangePending event;
+            std::memcpy(&event, &buffer, sizeof(event));
+            observation.originChanged |= event.session == session;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRSessionEvents::Poll */
     Result<NativeSessionEventObservation> OpenXRSessionEvents::Poll(const bool wantsPlay) {
         using Outcome = Result<NativeSessionEventObservation>;
@@ -198,30 +228,8 @@ namespace Horo::XR::OpenXRInternal {
                     return Outcome::Failure(progressed.ErrorValue());
                 return Outcome::Success(observation);
             }
-            if (buffer.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
-                XrEventDataSessionStateChanged state;
-                std::memcpy(&state, &buffer, sizeof(state));
-                if (auto changed = StateChanged(state); changed.HasError())
-                    return Outcome::Failure(changed.ErrorValue());
-                observation.exitRequested |= state.session == current.Value().session && state.state == XR_SESSION_STATE_EXITING;
-            } else if (buffer.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
-                if (auto lost = sessions_->ApplyEvent(session_, XRSessionEvent::InstanceLost); lost.HasError())
-                    return Outcome::Failure(lost.ErrorValue());
-            } else if (buffer.type == XR_TYPE_EVENT_DATA_EVENTS_LOST) {
-                // Missing state transitions cannot authorize continued frames or a later Ready restart.
-                // Logical loss retains native frame/image debt; it does not manufacture end/release success.
-                if (auto lost = sessions_->ApplyEvent(session_, XRSessionEvent::SessionLost); lost.HasError())
-                    return Outcome::Failure(lost.ErrorValue());
-                return Outcome::Failure(MakeError(XRErrors::OperationUnavailable, "OpenXR event loss revoked session admission"));
-            } else if (buffer.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
-                XrEventDataInteractionProfileChanged event;
-                std::memcpy(&event, &buffer, sizeof(event));
-                observation.bindingsChanged |= event.session == current.Value().session;
-            } else if (buffer.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
-                XrEventDataReferenceSpaceChangePending event;
-                std::memcpy(&event, &buffer, sizeof(event));
-                observation.originChanged |= event.session == current.Value().session;
-            }
+            if (auto applied = ProcessEvent(buffer, current.Value().session, observation); applied.HasError())
+                return Outcome::Failure(applied.ErrorValue());
             // Begin promptly after the actual READY event before consuming later native running-state events.
             if (auto progressed = Progress(wantsPlay); progressed.HasError())
                 return Outcome::Failure(progressed.ErrorValue());

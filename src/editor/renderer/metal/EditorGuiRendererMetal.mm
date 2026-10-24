@@ -83,13 +83,11 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeGuiRendererError("editor.gui.metal.not_initialized", "Metal GUI renderer is not initialized."));
         }
-        MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)impl_->graphicsBridge->CurrentRenderPassDescriptor();
-        if (pass == nil) {
-            return Result<void>::Failure(
-                MakeGuiRendererError("editor.gui.metal.no_active_frame", "Metal GUI frame requires an active renderer frame."));
-        }
         impl_->composition.Reset();
-        ImGui_ImplMetal_NewFrame(pass);
+        // Fonts have been configured by the application; realize their actual device objects once, outside native frame admission.
+        if (impl_->nativeFontIdentity == 0 && !ImGui_ImplMetal_CreateDeviceObjects(impl_->device))
+            return Result<void>::Failure(
+                MakeGuiRendererError("editor.gui.metal.device_objects_failed", "Metal GUI device/font preparation failed."));
         if (impl_->nativeFontIdentity == 0)
             impl_->nativeFontIdentity = static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID);
         if (impl_->nativeFontIdentity == 0 || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != impl_->nativeFontIdentity)
@@ -128,6 +126,11 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeGuiRendererError("editor.gui.metal.no_primary_encoder", "Metal GUI rendering requires an active primary encoder."));
         }
+        MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)impl_->graphicsBridge->CurrentRenderPassDescriptor();
+        if (pass == nil)
+            return Result<void>::Failure(
+                MakeGuiRendererError("editor.gui.metal.no_active_frame", "Metal GUI rendering requires the actual active render pass."));
+        ImGui_ImplMetal_NewFrame(pass);
         ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), commandBuffer, encoder);
         return Result<void>::Success();
     }

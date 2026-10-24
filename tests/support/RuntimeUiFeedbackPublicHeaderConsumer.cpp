@@ -12,6 +12,9 @@ namespace {
     static_assert(!std::is_invocable_v<decltype(&UiAsyncActionProducer::Complete), const UiAsyncActionProducer &, UiActionPayload>);
     static_assert(!std::is_invocable_v<decltype(&UiAsyncActionStore::Cancel), const UiAsyncActionStore &, const UiAsyncActionKey &,
                                        UiActionCancellationReason>);
+    static_assert(std::is_same_v<decltype(UiAsyncActionKey{}.route), UiRouteInstanceId>);
+    static_assert(std::is_invocable_v<decltype(&UiAsyncActionStore::CollectReleased), UiAsyncActionStore &>);
+    static_assert(!std::is_invocable_v<decltype(&UiAsyncActionStore::CollectReleased), const UiAsyncActionStore &>);
     static_assert(std::is_invocable_v<decltype(&UiAsyncActionStore::Snapshot), const UiAsyncActionStore &, const UiAsyncActionKey &>);
     static_assert(std::is_same_v<decltype(&UiFocusGraph::UpdateLayout), Horo::Result<void> (UiFocusGraph::*)(const UiLayoutSnapshot &)>);
 }  // namespace

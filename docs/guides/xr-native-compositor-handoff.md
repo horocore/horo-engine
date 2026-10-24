@@ -336,11 +336,29 @@ leases retain the native image through the exact post-GUI state restoration and
 completion tail. The GUI resolver still requires the captured logical identity
 and a valid sampled generation; it cannot resolve the CPU-only projection.
 
-The real App and Game panel joins remain pending the coordinated UI-parent
-adoption. In particular, a selected-XR caller must reject an empty acquired mirror
-rather than substitute the desktop camera, and must not reinterpret the logical
-CPU projection as physical readiness. These source contracts do not establish
-native headset, GUI pixel, full-App or hardware qualification.
+The real App now joins this contract after the ordinary UI-parent adoption:
+CPU GUI/Update/Draw and cold Scene preparation precede the sole native Begin;
+selected-XR preparation and graph execution use that same scope, followed by the
+existing UI/GUI/Present tail. The Game panel projects the unchanged private
+`EditorPlayViewSource` values, now declared alongside `EditorPlayState` in its
+existing non-installed host interface. Ordinary authored-camera callers keep the
+same defaults. A selected-XR image has a localized left-eye mirror label and does
+not weaken physical `IsReady()` or reinterpret the logical CPU projection as
+readiness. An empty acquired binding fails explicitly instead of selecting a
+desktop camera. These new caller joins remain uncompiled/unrun; they do not
+establish native headset, GUI pixels, full-App or hardware qualification.
+
+The app-selected XR startup negotiates Immediate output before any image
+acquisition. The canonical native wait supplies pacing only when the same session
+admits frames and the same frame gate is idle; pending native/queue debt keeps
+selection but uses the existing desktop event-loop cap. `FinishGui(false)` and
+same-scope reset run on native-Begin/scene/UI/GUI failure, preserving the triggering
+error. `RuntimeHost` immediately shuts down after phase failure, so normal
+`EndFrame` alone is not a cleanup guarantee. The retained presentation teardown
+owner keeps device/session/image parents and polls actual retirement after such
+failure. On the success path `EndFrame` polls the same compositor tail after
+presentation resets the scope; desktop Present success is never an XR release or
+compositor receipt.
 
 
 The fixed private `EditorVulkanXrMirrorProjection` is the viewport graph's actual
@@ -352,3 +370,12 @@ binding, revocation without desktop fallback, and irreversible retirement. They
 are registered with `HoroRenderVulkanTests` only when the actual editor Vulkan XR
 interface exists; no native or GPU execution is inferred from these value tests.
 This tranche's new tests and production changes have not yet been compiled or run.
+
+
+A minimized or unavailable desktop mirror does not starve a running native
+session: the same RenderExecution phase still services selected-XR prediction,
+then explicitly cancels that prepared acquisition and finishes the existing
+zero-layer tail when no CPU mirror extraction was admitted. It creates no desktop
+frame scope, replacement camera or successful projection receipt in that path.
+The native pacing and acquisition calls are the same owners as the visible path;
+no second counter or presentation clock is introduced.

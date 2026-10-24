@@ -1,6 +1,7 @@
 #include "UiHotReloadTestFixture.h"
 
 #include "Horo/Foundation/Sha256.h"
+#include "Horo/Runtime/Ui/UiElementCatalog.h"
 
 #include <array>
 
@@ -16,12 +17,25 @@ namespace Horo::Runtime::Ui::ReloadTests {
             return Assets::AssetTypeId::Parse(value).Value();
         }
 
-        /** @brief Uses real encode/provider/async-load/decode contracts rather than manufacturing a terminal closure. */
-        UiRuntimeAssetLoadResult Load(std::uint64_t version, bool secondCanvas, const LayerOptions &layer) {
-            UiDocumentBuilder builder{Stable<UiDocumentId>(1), Revision<UiDocumentRevision>(version)};
-            const std::uint8_t count = secondCanvas ? 2 : 1;
-            for (std::uint8_t i = 0; i < count; ++i) {
-                REQUIRE(builder.AddCanvas({Stable<UiCanvasId>(2 + i), Stable<UiElementId>(10 + i * 2)}).HasValue());
+        /** @brief Authors the requested canonical or legacy canvas through the same validated builder. */
+        void AuthorCanvas(UiDocumentBuilder &builder, std::uint8_t i, const LayerOptions &layer) {
+            UiCanvasDescriptor canvas{Stable<UiCanvasId>(2 + i), Stable<UiElementId>(10 + i * 2)};
+            if (layer.canonicalElements) {
+                canvas.referenceResolution = {100, 100};
+                canvas.scaleMode = UiScaleMode::ConstantPhysicalSize;
+                canvas.presentation.safeArea = UiSafeAreaMode::Inset;
+            }
+            REQUIRE(builder.AddCanvas(canvas).HasValue());
+            if (layer.canonicalElements) {
+                auto root = CreateUiElement(UiElementKind::Canvas, Stable<UiElementId>(10 + i * 2), {}).Value();
+                auto child = CreateUiElement(UiElementKind::TextInput, Stable<UiElementId>(layer.childMarker + i * 2), root.id).Value();
+                root.presentation->layout.width = child.presentation->layout.width = UiLength::Dip(100);
+                root.presentation->layout.height = UiLength::Dip(100);
+                child.presentation->layout.height = UiLength::Dip(300);
+                child.presentation->state.initial = std::string{"base"};
+                REQUIRE(builder.AddElement(std::move(root)).HasValue());
+                REQUIRE(builder.AddElement(std::move(child)).HasValue());
+            } else {
                 REQUIRE(builder.AddElement({Stable<UiElementId>(10 + i * 2), {}, Type("core.panel"), {}, {}}).HasValue());
                 REQUIRE(builder
                             .AddElement({Stable<UiElementId>(layer.childMarker + i * 2),
@@ -31,6 +45,14 @@ namespace Horo::Runtime::Ui::ReloadTests {
                                          {}})
                             .HasValue());
             }
+        }
+
+        /** @brief Uses real encode/provider/async-load/decode contracts rather than manufacturing a terminal closure. */
+        UiRuntimeAssetLoadResult Load(std::uint64_t version, bool secondCanvas, const LayerOptions &layer) {
+            UiDocumentBuilder builder{Stable<UiDocumentId>(1), Revision<UiDocumentRevision>(version)};
+            const std::uint8_t count = secondCanvas ? 2 : 1;
+            for (std::uint8_t i = 0; i < count; ++i)
+                AuthorCanvas(builder, i, layer);
             REQUIRE(builder.AddRoute(layer.route).HasValue());
             for (const auto &profiles : layer.profiles)
                 REQUIRE(builder.AddPresentationProfiles(profiles).HasValue());

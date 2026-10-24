@@ -1,3 +1,4 @@
+#include "UiAnimationPublisher.h"
 #include "UiSceneReconciliationInternal.h"
 
 #include <limits>
@@ -65,7 +66,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiSceneReconciliation::Admit */
     Result<void> UiSceneReconciliation::Admit(const UiSceneInstanceDescriptor &descriptor, UiHotReload &&publisher,
                                               const UiStructuralCommitPoint point) {
-        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || !UiSceneDetail::Cutoff(point))
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || storage_.Get()->publicationSeal ||
+            !UiSceneDetail::Cutoff(point))
             return Failure(UiErrors::InstanceStateInvalid);
         if (storage_.Get()->revision == std::numeric_limits<std::uint64_t>::max())
             return Failure(UiErrors::GenerationExhausted);
@@ -88,28 +90,53 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiSceneReconciliation::Publisher */
     UiHotReload *UiSceneReconciliation::Publisher(const RuntimeUiInstanceId instance) noexcept {
-        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || storage_.Get()->publicationSeal)
             return nullptr;
         const auto slot = storage_.Get()->Find(instance);
-        return slot == storage_.Get()->active.size() ? nullptr : &storage_.Get()->active[slot]->publisher;
+        return slot == storage_.Get()->active.size() || storage_.Get()->active[slot]->sceneRevoked ||
+                       storage_.Get()->active[slot]->providerRevoked
+                   ? nullptr
+                   : &storage_.Get()->active[slot]->publisher;
     }
 
     /** @copydoc UiSceneReconciliation::Describe */
     Result<UiSceneInstanceDescriptor> UiSceneReconciliation::Describe(const RuntimeUiInstanceId instance) const {
-        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || storage_.Get()->publicationSeal)
             return Failure<UiSceneInstanceDescriptor>(UiErrors::InstanceStateInvalid);
         const auto slot = storage_.Get()->Find(instance);
+        if (slot != storage_.Get()->active.size() &&
+            (storage_.Get()->active[slot]->sceneRevoked || storage_.Get()->active[slot]->providerRevoked))
+            return Failure<UiSceneInstanceDescriptor>(UiErrors::BindingProviderUnknown);
         return slot == storage_.Get()->active.size() ? Failure<UiSceneInstanceDescriptor>(UiErrors::HandleStale)
                                                      : Result<UiSceneInstanceDescriptor>::Success(storage_.Get()->active[slot]->descriptor);
     }
 
     /** @copydoc UiSceneReconciliation::Acquire */
     Result<UiReloadLease> UiSceneReconciliation::Acquire(const RuntimeUiInstanceId instance) const {
-        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || storage_.Get()->publicationSeal)
             return Failure<UiReloadLease>(UiErrors::InstanceStateInvalid);
         const auto slot = storage_.Get()->Find(instance);
+        if (slot != storage_.Get()->active.size() &&
+            (storage_.Get()->active[slot]->sceneRevoked || storage_.Get()->active[slot]->providerRevoked))
+            return Failure<UiReloadLease>(UiErrors::BindingProviderUnknown);
         return slot == storage_.Get()->active.size() ? Failure<UiReloadLease>(UiErrors::HandleStale)
                                                      : storage_.Get()->active[slot]->publisher.Acquire();
+    }
+
+    /** @copydoc UiSceneReconciliation::AcquirePrepared */
+    Result<UiReloadLease> UiSceneReconciliation::AcquirePrepared(const Prepared &prepared, const RuntimeUiInstanceId instance) const {
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || storage_.Get()->publicationSeal || !prepared.storage_ ||
+            !storage_.Matches(prepared.storage_->owner) || prepared.storage_->consumed || prepared.storage_->abandoned)
+            return Failure<UiReloadLease>(UiErrors::InstanceStateInvalid);
+        for (const auto &incoming : prepared.storage_->incoming)
+            if (incoming.descriptor.instance == instance)
+                return incoming.publisher.Acquire();
+        for (const auto &rebound : prepared.storage_->rebinding) {
+            auto &entry = prepared.storage_->owner->active[rebound.slot];
+            if (entry && entry->descriptor.instance == instance)
+                return Result<UiReloadLease>::Success(entry->publisher.AnimationReplacementLease(rebound.candidate));
+        }
+        return Failure<UiReloadLease>(UiErrors::HandleStale);
     }
 
     /** @copydoc UiSceneReconciliation::UiSceneReconciliation */
@@ -138,14 +165,34 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiSceneReconciliation::Prepared::Prepared */
-    UiSceneReconciliation::Prepared::Prepared(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    UiSceneReconciliation::Prepared::Prepared(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc UiSceneReconciliation::Prepared::~Prepared */
-    UiSceneReconciliation::Prepared::~Prepared() = default;
+    UiSceneReconciliation::Prepared::~Prepared() {
+        Abandon();
+    }
+
+    /** @copydoc UiSceneReconciliation::Prepared::Abandon */
+    void UiSceneReconciliation::Prepared::Abandon() noexcept {
+        if (storage_ && !storage_->consumed) {
+            storage_->abandoned = true;
+            for (const auto &entry : storage_->preparedAnimations)
+                if (const auto source = entry.lock())
+                    source->retiring = true;
+        }
+    }
+
     /** @copydoc UiSceneReconciliation::Prepared::Prepared */
     UiSceneReconciliation::Prepared::Prepared(Prepared &&) noexcept = default;
+
     /** @copydoc UiSceneReconciliation::Prepared::operator= */
-    UiSceneReconciliation::Prepared &UiSceneReconciliation::Prepared::operator=(Prepared &&) noexcept = default;
+    UiSceneReconciliation::Prepared &UiSceneReconciliation::Prepared::operator=(Prepared &&other) noexcept {
+        if (this != &other) {
+            Abandon();
+            storage_ = std::move(other.storage_);
+        }
+        return *this;
+    }
 
     /** @copydoc UiSceneReconciliation::Prepared::Result */
     const UiSceneReconciliationResult &UiSceneReconciliation::Prepared::Result() const noexcept {

@@ -39,7 +39,7 @@ namespace Horo::Runtime::Ui {
             const auto *current = entry.publisher.Current();
             if (!current)
                 return Failure(UiErrors::InstanceStateInvalid);
-            if (entry.descriptor.owner.scene == request.previous) {
+            if (request.previous && entry.descriptor.owner.scene == request.previous) {
                 if (const auto valid = PrepareRetirement(slot); valid.HasError())
                     return valid;
                 continue;
@@ -51,7 +51,7 @@ namespace Horo::Runtime::Ui {
                 return canvas.bindings && canvas.bindings->HasSceneProviders();
             });
             if (const bool detachedReattach = detachedSources && request.next && replacement != bindings.end();
-                entry.descriptor.providerScene != request.previous && !detachedReattach)
+                (!request.previous || entry.descriptor.providerScene != request.previous) && !detachedReattach)
                 continue;
             if (replacement == bindings.end())
                 return Failure(UiErrors::BindingProviderUnknown);
@@ -98,17 +98,22 @@ namespace Horo::Runtime::Ui {
                                                                            std::vector<UiSceneBindingReplacement> bindings,
                                                                            std::vector<UiSceneActivation> incoming,
                                                                            const CancellationToken &cancellation) {
-        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || storage_.Get()->publicationSeal)
             return Failure<Prepared>(UiErrors::InstanceStateInvalid);
-        if (!request.previous.IsValid() || (request.next && (!request.next->IsValid() || request.next == request.previous)))
+        if ((!request.previous && !request.next) || (request.previous && !request.previous->IsValid()) ||
+            (request.next && (!request.next->IsValid() || request.next == request.previous)))
             return Failure<Prepared>(UiErrors::IdentityInvalid);
+        if (!request.previous && std::ranges::any_of(storage_.Get()->active, [&](const auto &entry) {
+            return entry && entry->descriptor.owner.scene == request.next;
+        }))
+            return Failure<Prepared>(UiErrors::HandleOwnerMismatch);
         if (bindings.size() > storage_.Get()->limits.maximumInstances || incoming.size() > storage_.Get()->limits.maximumInstances ||
             storage_.Get()->preparedCount == storage_.Get()->limits.maximumPreparedTransitions)
             return Failure<Prepared>(UiErrors::CapacityExceeded);
         if (cancellation.IsCancellationRequested())
             return Failure<Prepared>(UiErrors::AssetLoadCancelled);
         try {
-            auto prepared = std::make_unique<Prepared::Storage>();
+            auto prepared = std::make_shared<Prepared::Storage>();
             prepared->owner = storage_.OwnerPin();
             prepared->request = request;
             prepared->revision = storage_.Get()->revision;
@@ -128,6 +133,13 @@ namespace Horo::Runtime::Ui {
             prepared->result.activatedSceneInstances = static_cast<std::uint32_t>(prepared->incoming.size());
             ++storage_.Get()->preparedCount;
             prepared->admitted = true;
+            const auto slot = std::ranges::find_if(storage_.Get()->preparations, [](const auto &entry) {
+                const auto previous = entry.lock();
+                return !previous || previous->consumed || previous->abandoned;
+            });
+            if (slot == storage_.Get()->preparations.end())
+                return Failure<Prepared>(UiErrors::CapacityExceeded);
+            *slot = prepared;
             return Result<Prepared>::Success(Prepared{std::move(prepared)});
         } catch (const std::bad_alloc &) {
             return Failure<Prepared>(UiErrors::CapacityExceeded);

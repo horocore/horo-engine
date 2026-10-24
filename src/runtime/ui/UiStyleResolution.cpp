@@ -340,7 +340,7 @@ namespace Horo::Runtime::Ui::StyleInternal {
 
     Result<void> ValidateElementInput(const RuntimeStyleRegistry &registry, const UiStyleElementInput &input,
                                       const std::uint32_t propertyCapacity) {
-        if (!input.element.IsValid() || !input.asset.IsValid() || !registry.HasAsset(input.asset) || !input.state.IsValid() ||
+        if (!input.element.IsValid() || (input.asset.IsValid() && !registry.HasAsset(input.asset)) || !input.state.IsValid() ||
             input.classes.size() > MaximumUiStyleClasses)
             return Failure(UiErrors::StyleInvalid);
         if (input.typeClass.IsValid() && !registry.HasClass(input.typeClass))

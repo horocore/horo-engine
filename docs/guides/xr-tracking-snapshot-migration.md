@@ -82,3 +82,19 @@ unsupported/unavailable distinctions, replacement, origin change, and shutdown.
 - [XR Architecture](../architecture/runtime/vr-ar-architecture.md)
 - [XR Coordinate and Pose Migration](xr-coordinate-pose-migration.md)
 - [ADR-159: XR Action, Tracking and Input Projection Ownership](../adr/159-xr-action-tracking-and-input-projection-ownership.md)
+
+
+### Private Play view-policy declaration migration
+
+`EditorPlayViewSource` is now declared beside `EditorPlayState` in the existing
+non-installed `EditorPlayState.h` host interface, rather than solely in
+`EditorPlaySessionController.h`. Its existing integer values remain
+`AuthoredCamera=0` and `SelectedXr=1`; no installed public header, serialization
+schema or object layout changes. The controller selects this same value from the
+actual attached XR host, the workspace model projects it to the Game panel, and
+Play preparation still validates the matching real factory/participant before
+Scene publication. A selected logical mirror image does not prove native frame
+availability or change the renderer's physical `IsReady()` contract. Desktop
+callers retain the authored-camera default. Consumers include the Play controller,
+workspace controller/model, Game panel and staged OpenXR application-host consumer;
+new CPU panel cases exercise the actual Draw path without a native acquisition.

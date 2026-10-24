@@ -23,6 +23,13 @@ namespace Horo::Render {
 }  // namespace Horo::Render
 
 namespace Horo::Application::Internal {
+    /** @brief Read-only projection of existing Scene/debt and canonical session admission, never another lifecycle. */
+    enum class OpenXRPlayPresentation {
+        Inactive,
+        Pending,
+        FrameAdmitted
+    };
+
     /** @brief Same startup authorities, retained until native frame/image debt is actually drained.
      * @details This composition is selected only for explicit XR+Vulkan. The ordinary desktop has no host.
      * The same RuntimeHost source/fixedStep and same canonical InputRouter are mandatory; no clock, tick,
@@ -70,6 +77,13 @@ namespace Horo::Application::Internal {
         void RevokeInput() noexcept override;
         /** @brief Observes only the exact published selected-XR Scene; no readiness or camera fallback is implied. */
         [[nodiscard]] bool UsesXrScene() const noexcept;
+        /** @brief Projects selected Scene/retirement ownership and canonical frame admission on the owner lane.
+         * @return Inactive only after all owned Scene/render state is absent; Pending while preparing/retiring
+         * or native admission is closed; FrameAdmitted only from the same canonical session snapshot
+         * and idle frame gate. Pending GPU tail debt uses the existing desktop event-loop cap, never a GPU wait.
+         * @details Pending forbids desktop-camera fallback. This query never issues a frame or native readiness.
+         */
+        [[nodiscard]] OpenXRPlayPresentation PresentationState() const noexcept;
         /** @brief Prepares one actual native prediction/acquisition and binds cold graph storage before the SAME App scope.
          * @param frameNumber SAME RuntimeHost frame number, never a second counter.
          * @return True for a complete bound acquisition, false while actual retirement/wait is pending; original errors persist.
@@ -119,6 +133,12 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override;
 
     private:
+        /** @brief Prepares native/Input/renderer resources and activates the same canonical Scene candidate inside its rollback scope.
+         * @param tracking Actual calibrated tracking-root request. @return Original native/resource/activation error.
+         * @pre Owner operation and candidate-owned rollback remain active in PrepareScene; no Scene publication occurs here.
+         */
+        [[nodiscard]] Result<void> PrepareSceneResources(const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
+
         OpenXRPlayHost(OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation);
         [[nodiscard]] Result<void> Prepare(XR::XRSessionPreparation stage, const XR::XRSessionId &candidate,
                                            const XR::XRFeaturePlan &plan) override;

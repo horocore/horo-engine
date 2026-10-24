@@ -1,8 +1,10 @@
 #include "EditorVulkanViewportShader.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace {
     using namespace Horo;
@@ -32,6 +34,19 @@ namespace {
                       std::string{Members} + "}"},
                  {ShaderStage::Fragment, "PSMain",
                   "{\"entryPoints\":[{\"name\":\"PSMain\",\"mode\":\"frag\"}]," + std::string{Members} + "}"}}};
+    }
+
+    /** @brief Builds scripted final multiview reflection with the exact canonical matrix/layer uniform ABI. */
+    std::array<SpirvReflectionStage, 2> MultiviewEvidence() {
+        return {{{ShaderStage::Vertex, "VSMain", R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
+          "inputs":[{"name":"position","type":"vec3","location":0}],
+          "types":{"_1":{"members":[
+            {"name":"WorldToClip","type":"mat4","offset":0,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64},
+            {"name":"LocalToWorld","type":"mat4","offset":2048,"matrix_stride":16},
+            {"name":"ViewLayers","type":"uint","offset":2112,"array":[32],"array_size_is_literal":[true],"array_stride":16}]}},
+          "ubos":[{"type":"_1","name":"type.MultiviewParameters","block_size":2624,"set":0,"binding":0}]})"},
+                 {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}],
+          "outputs":[{"name":"color","type":"vec4","location":0}]})"}}};
     }
 
     void ReplaceEvidence(std::string &json, const std::string_view before, const std::string_view after) {
@@ -183,28 +198,28 @@ TEST_CASE("Viewport reflection requires the exact admitted DXC block type identi
 
 TEST_CASE("Canonical multiview consumer requires actual bound reflection and closed position/uniform ABI", "[renderer][shader-cook][xr]") {
     // Scripted Cross schema tests the production admission/codec, not actual compiler/native execution.
-    std::array<SpirvReflectionStage, 2> stages{{{ShaderStage::Vertex, "VSMain", R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
-          "inputs":[{"name":"position","type":"vec3","location":0}],
-          "types":{"_1":{"members":[
-            {"name":"WorldToClip","type":"mat4","offset":0,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64},
-            {"name":"LocalToWorld","type":"mat4","offset":2048,"matrix_stride":16},
-            {"name":"ViewLayers","type":"uint","offset":2112,"array":[32],"array_size_is_literal":[true],"array_stride":16}]}},
-          "ubos":[{"type":"_1","name":"type.MultiviewParameters","block_size":2624,"set":0,"binding":0}]})"},
-                                                {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}],
-          "outputs":[{"name":"color","type":"vec4","location":0}]})"}}};
-    bool invalidAttributes{};
-    bool alteredPayload{};
-    SECTION("exact position-only optimized interface") {}
-    SECTION("foreign attribute width") {
+    auto stages = MultiviewEvidence();
+    enum class Evidence {
+        Exact,
+        ForeignAttributeWidth,
+        AlteredPayload
+    };
+    const auto evidence = GENERATE(Evidence::Exact, Evidence::ForeignAttributeWidth, Evidence::AlteredPayload);
+    const bool invalidAttributes = evidence == Evidence::ForeignAttributeWidth;
+    const bool alteredPayload = evidence == Evidence::AlteredPayload;
+    if (invalidAttributes) {
         ReplaceEvidence(stages[0].json, "\"type\":\"vec3\"", "\"type\":\"vec2\"");
-        invalidAttributes = true;
-    }
-    SECTION("altered compiled payload") {
-        alteredPayload = true;
     }
     const auto normalized = NormalizeVulkanReflection(EditorVulkanMultiviewShaderManifest(), EditorVulkanViewportShaderTarget(), stages,
                                                       EditorVulkanMultiviewReflectionNames());
     REQUIRE(normalized.HasValue());
+    const auto layer = std::ranges::find(normalized.Value().parameters, ShaderParameterId{3}, &ShaderReflectedParameter::id);
+    REQUIRE(layer != normalized.Value().parameters.end());
+    CHECK(layer->type == ShaderValueType::Uint32);
+    CHECK(layer->rows == 1);
+    CHECK(layer->columns == 1);
+    CHECK(layer->arrayCount == 32);
+    CHECK(layer->arrayStride == 16);
     const std::array packageStages{ShaderArtifactStage{ShaderStage::Vertex, "VSMain", {1}},
                                    ShaderArtifactStage{ShaderStage::Fragment, "PSMain", {2}}};
     const auto payload = PackageShaderArtifactStages(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, packageStages, 1024);

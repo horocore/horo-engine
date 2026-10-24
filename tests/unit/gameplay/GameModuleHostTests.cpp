@@ -281,7 +281,7 @@ TEST_CASE("generated gameplay bundle validation rejects incompatible identity be
     REQUIRE(mismatch.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
 }
 
-TEST_CASE("combined SDK21 boundary rejects previous native capability layouts before activation", "[unit][gameplay][sdk]") {
+TEST_CASE("combined SDK22 boundary rejects previous native capability layouts before activation", "[unit][gameplay][sdk]") {
     ValidBundleStorage storage;
     const GameModuleLoadExpectation expected{
         .moduleId = "game.tests",
@@ -294,7 +294,7 @@ TEST_CASE("combined SDK21 boundary rejects previous native capability layouts be
     };
     REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
     REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
-    for (const std::uint32_t previousLayout : {6U, 7U, 10U, 11U, 15U, 16U, 17U, 18U, 19U, 20U}) {
+    for (const std::uint32_t previousLayout : {6U, 7U, 10U, 11U, 15U, 16U, 17U, 18U, 19U, 20U, 21U}) {
         descriptor.sdkBoundaryVersion = previousLayout;
         storage.bundle.sdkBoundaryVersion = previousLayout;
         const auto oldModule = ValidateGameModuleDescriptor(descriptor, expected);
@@ -304,6 +304,16 @@ TEST_CASE("combined SDK21 boundary rejects previous native capability layouts be
         CHECK(oldModule.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
         CHECK(oldBundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
     }
+    // A stale SDK21 build fingerprint remains incompatible even if a descriptor reports the current boundary.
+    auto oldFingerprint = std::string{CurrentGameplayBuildFingerprint()};
+    const auto generation = oldFingerprint.find("gameplay-sdk22");
+    REQUIRE(generation != std::string::npos);
+    oldFingerprint.replace(generation, std::string_view{"gameplay-sdk22"}.size(), "gameplay-sdk21");
+    descriptor.sdkBoundaryVersion = GameplaySdkBoundaryVersion;
+    descriptor.buildFingerprint = oldFingerprint.c_str();
+    const auto oldBuild = ValidateGameModuleDescriptor(descriptor, expected);
+    REQUIRE(oldBuild.HasError());
+    CHECK(oldBuild.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
 }
 
 TEST_CASE("generated gameplay bundle validation rejects incomplete bindings and bounded diagnostics") {

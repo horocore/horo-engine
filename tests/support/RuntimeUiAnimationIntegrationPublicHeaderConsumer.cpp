@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiRenderSnapshot.h"
 #include "Horo/Runtime/UiAnimationRuntimeParticipant.h"
 
 #include <type_traits>
@@ -42,7 +43,14 @@ using ReloadSignature = Horo::Result<UiAnimationRuntimeReload> (UiAnimationRunti
     Horo::Runtime::Ui::UiReloadGeneration, Horo::Runtime::Ui::UiElementSlotAllocator &, Horo::Runtime::Ui::RuntimeStyleRegistry,
     Horo::Runtime::Ui::UiStyleResolver, Horo::Runtime::Ui::UiAnimationCanvasDefinition,
     const Horo::Runtime::Ui::UiAnimationReloadAdmission &, const Horo::CancellationToken &);
-static_assert(std::is_same_v<decltype(&UiAnimationRuntimeParticipant::Reload), ReloadSignature>);
+static_assert(std::is_same_v<decltype(static_cast<ReloadSignature>(&UiAnimationRuntimeParticipant::Reload)), ReloadSignature>);
+using CoordinatedReloadSignature = Horo::Result<UiAnimationRuntimeReload> (UiAnimationRuntimeParticipant::*)(
+    Horo::Runtime::Ui::RuntimeUiService &, Horo::Runtime::Ui::RuntimeUiInstanceId, Horo::Runtime::Ui::UiAnimationReloadPreparation,
+    const Horo::CancellationToken &);
+static_assert(
+    std::is_same_v<decltype(static_cast<CoordinatedReloadSignature>(&UiAnimationRuntimeParticipant::Reload)), CoordinatedReloadSignature>);
+static_assert(!std::is_copy_constructible_v<Horo::Runtime::Ui::UiAnimationReloadPreparation>);
+static_assert(std::is_move_constructible_v<Horo::Runtime::Ui::UiAnimationReloadPreparation>);
 
 using NavigateSignature = Horo::Result<Horo::Runtime::Ui::UiRouteOperationId> (UiAnimationRuntimeParticipant::*)(
     const Horo::Runtime::Ui::UiRouteOperationRequest &);
@@ -54,6 +62,15 @@ static_assert(std::is_same_v<decltype(std::declval<const UiAnimationClockControl
 using StepSignature = Horo::Result<void> (UiAnimationClockController::*)(Horo::Runtime::Ui::UiAnimationClockId,
                                                                          Horo::Runtime::Ui::UiDuration) const;
 static_assert(std::is_same_v<decltype(&UiAnimationClockController::Step), StepSignature>);
+static_assert(std::is_same_v<decltype(std::declval<const UiAnimationRuntimeParticipant &>().CanReclaim()), bool>);
+static_assert(noexcept(std::declval<const UiAnimationRuntimeParticipant &>().CanReclaim()));
+
+using SourcePresentation = Horo::Runtime::UiAnimationSourcePresentation;
+static_assert(!std::is_default_constructible_v<SourcePresentation>);
+static_assert(!std::is_convertible_v<SourcePresentation, Horo::Runtime::Ui::UiAnimationFrameLease>);
+using PrepareSourceSignature = Horo::Result<SourcePresentation> (UiAnimationRuntimeParticipant::*)();
+static_assert(std::is_same_v<decltype(&UiAnimationRuntimeParticipant::PrepareSourcePresentation), PrepareSourceSignature>);
+static_assert(!std::is_invocable_v<PrepareSourceSignature, const UiAnimationRuntimeParticipant &>);
 
 int main() {
     const RuntimeDispatchSource absent;
@@ -62,3 +79,11 @@ int main() {
     UiAnimationClockController absentController;
     return absentController.Clock(Horo::Runtime::Ui::UiTimeDomain::Manual).HasError() ? 0 : 2;
 }
+
+static_assert(Horo::Runtime::Ui::UiAnimationLayoutBinding{}.values == Horo::Runtime::Ui::UiAnimationLayoutValuePolicy::AllComputedValues);
+
+using AnimatedExtractSignature = Horo::Result<Horo::Runtime::Ui::UiRenderSnapshot> (Horo::Runtime::Ui::UiRenderExtractor::*)(
+    const Horo::Runtime::Ui::UiElementTree &, const Horo::Runtime::Ui::UiRenderSnapshotDescriptor &,
+    const Horo::Runtime::Ui::UiRenderProjection &, const Horo::Runtime::Ui::UiAnimationFrameLease &);
+static_assert(std::is_same_v<decltype(static_cast<AnimatedExtractSignature>(&Horo::Runtime::Ui::UiRenderExtractor::Extract)),
+                             AnimatedExtractSignature>);

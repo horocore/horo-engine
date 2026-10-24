@@ -44,6 +44,18 @@ namespace Horo::Render::Detail {
             return revision == 0 ? 1 : revision;
         }
 
+        /** @brief Cold exact native format/usage admission; temporary one-pixel objects never enter frame ownership. */
+        [[nodiscard]] bool CanCreatePaintTexture(id<MTLDevice> device, const MTLPixelFormat format, const MTLTextureUsage usage) noexcept {
+            MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
+                                                                                                  width:1
+                                                                                                 height:1
+                                                                                              mipmapped:NO];
+            descriptor.usage = usage;
+            descriptor.storageMode = MTLStorageModePrivate;
+            id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+            return texture != nil;
+        }
+
         [[nodiscard]] MetalFormatCapabilities QueryFormats(id<MTLDevice> device) noexcept {
             MetalFormatCapabilities formats;
             const auto sampledAttachment = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
@@ -51,11 +63,17 @@ namespace Horo::Render::Detail {
                 formats.usages[static_cast<std::size_t>(format)] = usage;
             };
             enableUsage(RenderTextureFormat::Rgba8Unorm, sampledAttachment);
+            if (CanCreatePaintTexture(device, MTLPixelFormatRGBA8Unorm, MTLTextureUsageShaderRead))
+                enableUsage(RenderTextureFormat::Rgba8Unorm, sampledAttachment | RenderTextureUsage::CopyDestination);
             enableUsage(RenderTextureFormat::Bgra8Unorm, sampledAttachment);
             enableUsage(RenderTextureFormat::Depth32Float, RenderTextureUsage::RenderAttachment);
             if (device.depth24Stencil8PixelFormatSupported) {
                 enableUsage(RenderTextureFormat::Depth24Stencil8, RenderTextureUsage::RenderAttachment);
             }
+            if (CanCreatePaintTexture(device, MTLPixelFormatRGBA16Float, MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget))
+                enableUsage(RenderTextureFormat::Rgba16Float, sampledAttachment);
+            if (CanCreatePaintTexture(device, MTLPixelFormatDepth32Float_Stencil8, MTLTextureUsageRenderTarget))
+                enableUsage(RenderTextureFormat::Depth32FloatStencil8, RenderTextureUsage::RenderAttachment);
             constexpr std::array sampleCounts{1U, 2U, 4U, 8U};
             for (const std::uint32_t sampleCount : sampleCounts) {
                 if ([device supportsTextureSampleCount:sampleCount]) {

@@ -1,8 +1,10 @@
 #include "OpenXRSessionEvents.h"
 #include "support/OpenXRNativeTestSupport.h"
 
+#include <algorithm>
 #include <bit>
-#include <cstring>
+#include <span>
+#include <type_traits>
 
 namespace Horo::Tests::OpenXR {
     namespace {
@@ -20,6 +22,13 @@ namespace Horo::Tests::OpenXR {
             bool reentryRejected{};
             bool loseEvents{};
 
+            template <typename Event> static void CopyEvent(XrEventDataBuffer &buffer, const Event &event) {
+                static_assert(std::is_trivially_copyable_v<Event> && sizeof(Event) <= sizeof(XrEventDataBuffer));
+                const auto source = std::as_bytes(std::span{&event, 1});
+                const auto destination = std::as_writable_bytes(std::span{&buffer, 1});
+                std::ranges::copy(source, destination.begin());
+            }
+
             void Push(XrSessionState state) {
                 REQUIRE(count < states.size());
                 states[count++] = state;
@@ -29,7 +38,7 @@ namespace Horo::Tests::OpenXR {
                 if (active->loseEvents) {
                     active->loseEvents = false;
                     const XrEventDataEventsLost event{XR_TYPE_EVENT_DATA_EVENTS_LOST, nullptr, 1};
-                    std::memcpy(buffer, &event, sizeof(event));
+                    CopyEvent(*buffer, event);
                     return XR_SUCCESS;
                 }
                 if (active->reenter) {
@@ -41,7 +50,7 @@ namespace Horo::Tests::OpenXR {
                     return XR_EVENT_UNAVAILABLE;
                 const XrEventDataSessionStateChanged event{XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED, nullptr, active->session,
                                                            active->states[active->cursor++], 1};
-                std::memcpy(buffer, &event, sizeof(event));
+                CopyEvent(*buffer, event);
                 return XR_SUCCESS;
             }
 

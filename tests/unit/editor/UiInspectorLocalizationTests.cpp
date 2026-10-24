@@ -6,6 +6,21 @@
 
 namespace {
     constexpr std::array InspectorKeys{
+        "workspace.ui_canvas.preview.clear_guides",
+        "workspace.ui_canvas.preview.desktop",
+        "workspace.ui_canvas.preview.phone",
+        "workspace.ui_canvas.preview.tablet",
+        "workspace.ui_canvas.preview.rotate",
+        "workspace.ui_canvas.preview.select",
+        "workspace.ui_canvas.preview.move",
+        "workspace.ui_canvas.preview.resize",
+        "workspace.ui_canvas.preview.anchors",
+        "workspace.ui_canvas.preview.snap",
+        "workspace.ui_canvas.preview.zoom_out",
+        "workspace.ui_canvas.preview.zoom_in",
+        "workspace.ui_canvas.preview.unavailable",
+        "workspace.ui_canvas.preview.hint",
+
         "workspace.ui_inspector.absolute",
         "workspace.ui_inspector.accent",
         "workspace.ui_inspector.accessibility_description",

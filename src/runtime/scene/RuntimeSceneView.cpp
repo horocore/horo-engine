@@ -7,11 +7,14 @@
 namespace Horo::Runtime {
     /** @copydoc RuntimeSceneView::RuntimeSceneView */
     RuntimeSceneView::RuntimeSceneView(const RuntimeScene &scene) noexcept
-        : scene_(&scene), structuralRevision_(scene.structuralRevision_) {}
+        : scene_(&scene), lifetime_(scene.viewLifetime_), ownerThread_(scene.ownerThread_), runtimeId_(scene.runtimeId_),
+          definitionId_(scene.definitionId_), definitionRevision_(scene.definitionRevision_),
+          assetRegistryRevision_(scene.assetRegistryRevision_), structuralRevision_(scene.structuralRevision_) {}
 
     /** @copydoc RuntimeSceneView::IsCurrent */
     bool RuntimeSceneView::IsCurrent() const noexcept {
-        return scene_ != nullptr && structuralRevision_ == scene_->structuralRevision_;
+        return scene_ != nullptr && ownerThread_ == std::this_thread::get_id() && !lifetime_.expired() &&
+               structuralRevision_ == scene_->structuralRevision_;
     }
 
     /** @copydoc RuntimeSceneView::StructuralRevision */
@@ -21,22 +24,22 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneView::RuntimeId */
     SceneRuntimeId RuntimeSceneView::RuntimeId() const noexcept {
-        return scene_ ? scene_->runtimeId_ : SceneRuntimeId{};
+        return runtimeId_;
     }
 
     /** @copydoc RuntimeSceneView::DefinitionId */
     SceneDefinitionId RuntimeSceneView::DefinitionId() const noexcept {
-        return scene_ ? scene_->definitionId_ : SceneDefinitionId{};
+        return definitionId_;
     }
 
     /** @copydoc RuntimeSceneView::DefinitionRevision */
     SceneDefinitionRevision RuntimeSceneView::DefinitionRevision() const noexcept {
-        return scene_ ? scene_->definitionRevision_ : SceneDefinitionRevision{};
+        return definitionRevision_;
     }
 
     /** @copydoc RuntimeSceneView::AssetRegistryRevision */
     Assets::AssetRegistryRevision RuntimeSceneView::AssetRegistryRevision() const noexcept {
-        return scene_ ? scene_->assetRegistryRevision_ : Assets::AssetRegistryRevision{};
+        return assetRegistryRevision_;
     }
 
     /** @copydoc RuntimeSceneView::SlotCount */
@@ -113,7 +116,7 @@ namespace Horo::Runtime {
     Result<RuntimeEntityView> RuntimeSceneView::Get(const EntityRef entity) const {
         if (!IsCurrent())
             return Result<RuntimeEntityView>::Failure(
-                MakeError(SceneErrors::StaleView, "Scene view was invalidated by a structural commit."));
+                MakeError(SceneErrors::StaleView, "Scene view is expired, structurally stale or accessed from a foreign owner thread."));
         if (!scene_->IsValid(scene_->storage_, entity))
             return Result<RuntimeEntityView>::Failure(
                 MakeError(SceneErrors::StaleEntity, "Entity reference is stale or belongs to another runtime scene."));

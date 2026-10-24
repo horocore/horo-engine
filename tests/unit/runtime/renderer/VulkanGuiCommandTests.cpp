@@ -276,48 +276,17 @@ namespace {
         CHECK(source.retired);  // No submitted sample changed the initial native attachment state.
     }
 
-    TEST_CASE("Vulkan rejected mixed font upload and XR mirror preparation retries without publishing or retaining scratch",
-              "[vulkan][gui][xr][retry]") {
-        MirrorSource source;
-        MirrorLease nativeLease;
-        GuiFixture f;
-        const auto texture =
-            SubmissionTest::Take(f.frame.resources.ImportExternalTexture(source, RenderResourceNativeLifetime{nativeLease}));
-        const auto mirror = SubmissionTest::Take(f.frame.resources.CreateTextureView({.texture = {{41}, 1, 1}}, texture));
-        const std::array samples{f.samples[0], GuiSampledResourceInstance{mirror, f.sampler, 0}};
-        auto packet = VulkanExternalTest::ExternalGraph({{41}, 1, 1}, source.descriptor, source.RequiredFinalState(), texture);
-        REQUIRE(f.frame.graph.BeginFrame({1}).HasValue());
-        RenderGraphLeaseTransfer scene;
-        REQUIRE(
-            f.frame.graph
-                .ExecuteGraph({{1}, packet.graph, packet.workloads, packet.instances, &f.frame.lease, false, &scene, packet.submissions})
-                .HasValue());
-        const std::array waits{RenderTimelinePoint{{1}, 1}};
-        f.submission = {{1}, {2}, waits, {{1}, 2}};
-        auto request = f.Request();
-        request.resources = samples;
-        request.extendsExistingLease = true;
+    struct MixedEncoder final : Detail::IVulkanGuiEncoder {
+        Result<void> Record(VkCommandBuffer, Detail::VulkanFrameRetentionSlot, std::span<const Detail::VulkanGuiSampleBinding> images,
+                            std::span<const Detail::VulkanGuiBufferBinding>) override {
+            REQUIRE(images.size() == 2);
+            encodedGraph->operations.emplace_back("gui-draw");
+            return Result<void>::Success();
+        }
+    };
 
-        struct MixedEncoder final : Detail::IVulkanGuiEncoder {
-            Result<void> Record(VkCommandBuffer, Detail::VulkanFrameRetentionSlot, std::span<const Detail::VulkanGuiSampleBinding> images,
-                                std::span<const Detail::VulkanGuiBufferBinding>) override {
-                REQUIRE(images.size() == 2);
-                encodedGraph->operations.emplace_back("gui-draw");
-                return Result<void>::Success();
-            }
-        } encoder;
-
-        f.output.legacyUnmanagedOutput = true;
-        SECTION("later output policy rejects the prepared font upload") {
-            f.output.legacyUnmanagedOutput = false;
-        }
-        SECTION("later resource rejects the prepared font upload") {
-            source.current = false;
-        }
-        SECTION("native ticket admission rejects the prepared font upload") {
-            f.frame.commandState.state.beginResult = VK_ERROR_OUT_OF_HOST_MEMORY;
-        }
-        REQUIRE(f.frame.graph.PrepareGuiComposition(request).HasValue());
+    /** @brief Proves every unsent mixed attempt restores exactly the scene-owned prefix before a successful retry. */
+    void RequireRejectedMixedAttempts(GuiFixture &f, const GuiCompositionRequest &request, MirrorSource &source, MixedEncoder &encoder) {
         const auto priorFont = f.State();
         const auto priorOperations = f.frame.encoded.operations;
         const auto priorEnds = f.frame.commandState.state.endCalls;
@@ -340,10 +309,10 @@ namespace {
             CHECK(afterFont.hasNativeState == priorFont.hasNativeState);
             CHECK(afterFont.contentsDefined == priorFont.contentsDefined);
         }
-        f.output.legacyUnmanagedOutput = true;
-        source.current = true;
-        f.frame.commandState.state.beginResult = VK_SUCCESS;
-        REQUIRE(f.frame.graph.ExecuteGui(request, f.output, encoder).HasValue());
+    }
+
+    /** @brief Verifies upload-before-draw and actual scene/GUI completion before external-native retirement. */
+    void RequireCompletedMixedTail(GuiFixture &f, std::uint64_t texture, MirrorSource &source, const MirrorLease &nativeLease) {
         const auto &operations = f.frame.encoded.operations;
         const auto upload = std::ranges::find(operations, "upload-image");
         const auto draw = std::ranges::find(operations, "gui-draw");
@@ -363,6 +332,49 @@ namespace {
         CHECK(source.retired);
         CHECK(f.frame.lease.releases == 1);
         CHECK(f.frame.commandState.state.waitCalls == 0);
+    }
+
+    TEST_CASE("Vulkan rejected mixed font upload and XR mirror preparation retries without publishing or retaining scratch",
+              "[vulkan][gui][xr][retry]") {
+        MirrorSource source;
+        MirrorLease nativeLease;
+        GuiFixture f;
+        const auto texture =
+            SubmissionTest::Take(f.frame.resources.ImportExternalTexture(source, RenderResourceNativeLifetime{nativeLease}));
+        const auto mirror = SubmissionTest::Take(f.frame.resources.CreateTextureView({.texture = {{41}, 1, 1}}, texture));
+        const std::array samples{f.samples[0], GuiSampledResourceInstance{mirror, f.sampler, 0}};
+        auto packet = VulkanExternalTest::ExternalGraph({{41}, 1, 1}, source.descriptor, source.RequiredFinalState(), texture);
+        REQUIRE(f.frame.graph.BeginFrame({1}).HasValue());
+        RenderGraphLeaseTransfer scene;
+        REQUIRE(
+            f.frame.graph
+                .ExecuteGraph({{1}, packet.graph, packet.workloads, packet.instances, &f.frame.lease, false, &scene, packet.submissions})
+                .HasValue());
+        const std::array waits{RenderTimelinePoint{{1}, 1}};
+        f.submission = {{1}, {2}, waits, {{1}, 2}};
+        auto request = f.Request();
+        request.resources = samples;
+        request.extendsExistingLease = true;
+
+        MixedEncoder encoder;
+
+        f.output.legacyUnmanagedOutput = true;
+        SECTION("later output policy rejects the prepared font upload") {
+            f.output.legacyUnmanagedOutput = false;
+        }
+        SECTION("later resource rejects the prepared font upload") {
+            source.current = false;
+        }
+        SECTION("native ticket admission rejects the prepared font upload") {
+            f.frame.commandState.state.beginResult = VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+        REQUIRE(f.frame.graph.PrepareGuiComposition(request).HasValue());
+        RequireRejectedMixedAttempts(f, request, source, encoder);
+        f.output.legacyUnmanagedOutput = true;
+        source.current = true;
+        f.frame.commandState.state.beginResult = VK_SUCCESS;
+        REQUIRE(f.frame.graph.ExecuteGui(request, f.output, encoder).HasValue());
+        RequireCompletedMixedTail(f, texture, source, nativeLease);
     }
 
     TEST_CASE("Vulkan GUI uploads before sampling and publishes contents only after canonical submit", "[vulkan][gui][upload]") {

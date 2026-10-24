@@ -12,13 +12,16 @@
 #include <optional>
 
 namespace Horo::Application::Internal {
+    class RuntimeUiPaintProjectSources;
+
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */
     struct EditorProjectScenePolicy final {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
         std::optional<SceneCookSelection> cooked;
         Editor::IEditorPlayXrHost *xrHost{}; /**< Explicit borrowed actual Play XR host; preview/prefab policies leave it absent. */
         bool prefabGranted{};                /**< Independent explicit host permission; committed file presence never grants access. */
-        std::vector<AI::AiControllerDescriptor> aiControllers; /**< Owned inert catalog copied with the app policy. */
+        std::shared_ptr<RuntimeUiPaintProjectSources> uiSources; /**< App-owned optional canonical UI source composition. */
+        std::vector<AI::AiControllerDescriptor> aiControllers;   /**< Owned inert catalog copied with the app policy. */
     };
 
     /** @brief Keeps captured resources alive while RuntimeHost owns and schedules the sole preview Scene service.

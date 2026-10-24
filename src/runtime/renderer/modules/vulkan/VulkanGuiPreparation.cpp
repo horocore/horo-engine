@@ -126,6 +126,12 @@ namespace Horo::Render::Detail {
                 return state;
             plan.after.count = barriers.size() - plan.after.offset;
         }
+        return PrepareGuiFinalStates(request);
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::PrepareGuiFinalStates */
+    Result<void> VulkanGraphRuntime::Impl::PrepareGuiFinalStates(const GuiCompositionRequest &request) {
+        const auto &submission = *request.submission;
         // SYNC: Restore every sampled runtime image only AFTER all GUI draws, in this same canonical tail submission.
         guiExternalFinalBarriers = {barriers.size(), 0};
         for (std::size_t index = 0; index < request.resources.size(); ++index) {

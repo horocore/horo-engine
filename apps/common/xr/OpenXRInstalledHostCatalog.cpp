@@ -43,6 +43,65 @@ namespace Horo::Application::Internal {
         bool Limit(const Foundation::Json &value, const std::uint32_t maximum) {
             return value.is_number_unsigned() && value.get<std::uint64_t>() > 0 && value.get<std::uint64_t>() <= maximum;
         }
+
+        /** @brief Checks the closed signed schema and bounded budgets before policy construction; parse errors stay with Verify. */
+        bool CatalogFields(const Foundation::Json &root, std::uint64_t nowUnixSeconds) {
+            if (!Foundation::HasAllowedFields(root, {"schemaVersion", "backend", "package", "component", "deployment",
+                                                     "deploymentSignature", "loaderSignature", "bindings", "deploymentContract",
+                                                     "platformBridge", "rendererBridge", "expiresAt", "profile", "limits"}) ||
+                !root.at("schemaVersion").is_number_unsigned() || root.at("schemaVersion") != 1 ||
+                !root.at("backend").is_number_unsigned() || !root.at("package").is_string() || !root.at("component").is_string() ||
+                !root.at("deployment").is_string() || !root.at("bindings").is_string() || !Contract(root.at("deploymentContract")) ||
+                !root.at("platformBridge").is_number_unsigned() || root.at("platformBridge") != 1 ||
+                !root.at("rendererBridge").is_number_unsigned() || root.at("rendererBridge") != 1 ||
+                !root.at("expiresAt").is_number_unsigned() || root.at("expiresAt").get<std::uint64_t>() <= nowUnixSeconds ||
+                !root.at("profile").is_number_unsigned() ||
+                root.at("profile").get<std::uint64_t>() >= static_cast<std::uint64_t>(XR::XRFeatureProfile::Count) ||
+                !Foundation::HasAllowedFields(root.at("limits"), {"views", "spaces", "actions", "devices"}))
+                return false;
+            const auto &limits = root.at("limits");
+            if (!Limit(limits.at("views"), XR::XRHardLimits::MaximumViews) ||
+                !Limit(limits.at("spaces"), XR::XRHardLimits::MaximumSpaces) ||
+                !Limit(limits.at("actions"), XR::XRHardLimits::MaximumActions) ||
+                !Limit(limits.at("devices"), XR::XRHardLimits::MaximumDevices))
+                return false;
+            return true;
+        }
+
+        /** @brief Forms signed install policy only after the catalog schema and publisher evidence have been admitted.
+         * @param root Closed validated catalog. @param evidence Independent signature result.
+         * @param verifier Retained signature authority. @param platform Exact selected native platform.
+         * @param temporaryParent Canonical owned installation parent. @return Typed policy or original catalog failure.
+         */
+        Result<OpenXRInstalledProductPolicy> CatalogPolicy(const Foundation::Json &root, const Security::VerifiedArtifactEvidence &evidence,
+                                                           std::shared_ptr<const Security::ArtifactVerifier> verifier,
+                                                           const Packages::PackagePlatform &platform,
+                                                           const std::filesystem::path &temporaryParent) {
+            auto backend = XR::XRBackendId::Create(root.at("backend").get<std::uint64_t>());
+            auto package = Packages::HoroPackageId::Parse(root.at("package").get<std::string>());
+            auto component = Packages::PackagePath::Parse(root.at("component").get<std::string>());
+            auto deployment = Packages::PackagePath::Parse(root.at("deployment").get<std::string>());
+            auto publisher = Packages::PackagePublisherId::Parse(evidence.PublisherId());
+            auto deploymentSignature = Envelope(root.at("deploymentSignature"), evidence);
+            auto loaderSignature = Envelope(root.at("loaderSignature"), evidence);
+            if (backend.HasError() || package.HasError() || component.HasError() || deployment.HasError() || publisher.HasError() ||
+                deploymentSignature.HasError() || loaderSignature.HasError())
+                return Result<OpenXRInstalledProductPolicy>::Failure(InvalidCatalog());
+            const auto loaderEnvelope = std::move(loaderSignature).Value();
+            auto gate = std::make_shared<Security::DetachedFileArtifactGate>(verifier, [loaderEnvelope](const std::filesystem::path &) {
+                return Result<Security::DetachedSignatureEnvelope>::Success(loaderEnvelope);
+            });
+            OpenXRInstalledProductPolicy policy{std::move(package).Value(),
+                                                std::move(component).Value(),
+                                                std::move(deployment).Value(),
+                                                {platform, backend.Value(), XR::CurrentXRContractVersion, std::move(publisher).Value(),
+                                                 std::string(evidence.KeyId()), root.at("deploymentContract").get<std::string>(), 1, 1},
+                                                std::move(deploymentSignature).Value(),
+                                                std::move(verifier),
+                                                std::move(gate),
+                                                temporaryParent};
+            return Result<OpenXRInstalledProductPolicy>::Success(std::move(policy));
+        }
     }  // namespace
 
     /** @copydoc OpenXRInstalledHostCatalog::Verify */
@@ -63,53 +122,17 @@ namespace Horo::Application::Internal {
             Foundation::JsonParseGuard guard{6};
             const auto first = reinterpret_cast<const char *>(bytes.data());
             const auto root = guard.Parse(first, first + bytes.size());
-            if (guard.HasDuplicate() || guard.IsTooDeep() ||
-                !Foundation::HasAllowedFields(root, {"schemaVersion", "backend", "package", "component", "deployment",
-                                                     "deploymentSignature", "loaderSignature", "bindings", "deploymentContract",
-                                                     "platformBridge", "rendererBridge", "expiresAt", "profile", "limits"}) ||
-                !root.at("schemaVersion").is_number_unsigned() || root.at("schemaVersion") != 1 ||
-                !root.at("backend").is_number_unsigned() || !root.at("package").is_string() || !root.at("component").is_string() ||
-                !root.at("deployment").is_string() || !root.at("bindings").is_string() || !Contract(root.at("deploymentContract")) ||
-                !root.at("platformBridge").is_number_unsigned() || root.at("platformBridge") != 1 ||
-                !root.at("rendererBridge").is_number_unsigned() || root.at("rendererBridge") != 1 ||
-                !root.at("expiresAt").is_number_unsigned() || root.at("expiresAt").get<std::uint64_t>() <= nowUnixSeconds ||
-                !root.at("profile").is_number_unsigned() ||
-                root.at("profile").get<std::uint64_t>() >= static_cast<std::uint64_t>(XR::XRFeatureProfile::Count) ||
-                !Foundation::HasAllowedFields(root.at("limits"), {"views", "spaces", "actions", "devices"}))
+            if (guard.HasDuplicate() || guard.IsTooDeep() || !CatalogFields(root, nowUnixSeconds))
                 return Outcome::Failure(InvalidCatalog());
             const auto &limits = root.at("limits");
-            if (!Limit(limits.at("views"), XR::XRHardLimits::MaximumViews) ||
-                !Limit(limits.at("spaces"), XR::XRHardLimits::MaximumSpaces) ||
-                !Limit(limits.at("actions"), XR::XRHardLimits::MaximumActions) ||
-                !Limit(limits.at("devices"), XR::XRHardLimits::MaximumDevices))
-                return Outcome::Failure(InvalidCatalog());
-            auto backend = XR::XRBackendId::Create(root.at("backend").get<std::uint64_t>());
-            auto package = Packages::HoroPackageId::Parse(root.at("package").get<std::string>());
-            auto component = Packages::PackagePath::Parse(root.at("component").get<std::string>());
-            auto deployment = Packages::PackagePath::Parse(root.at("deployment").get<std::string>());
             auto bindings = Packages::PackagePath::Parse(root.at("bindings").get<std::string>());
-            auto publisher = Packages::PackagePublisherId::Parse(evidence.Value().PublisherId());
-            auto deploymentSignature = Envelope(root.at("deploymentSignature"), evidence.Value());
-            auto loaderSignature = Envelope(root.at("loaderSignature"), evidence.Value());
-            if (backend.HasError() || package.HasError() || component.HasError() || deployment.HasError() || bindings.HasError() ||
-                publisher.HasError() || deploymentSignature.HasError() || loaderSignature.HasError())
+            if (bindings.HasError())
                 return Outcome::Failure(InvalidCatalog());
-            const auto loaderEnvelope = std::move(loaderSignature).Value();
-            auto gate = std::make_shared<Security::DetachedFileArtifactGate>(verifier, [loaderEnvelope](const std::filesystem::path &) {
-                return Result<Security::DetachedSignatureEnvelope>::Success(loaderEnvelope);
-            });
-            OpenXRInstalledProductPolicy policy{std::move(package).Value(),
-                                                std::move(component).Value(),
-                                                std::move(deployment).Value(),
-                                                {platform, backend.Value(), XR::CurrentXRContractVersion, std::move(publisher).Value(),
-                                                 std::string(evidence.Value().KeyId()), root.at("deploymentContract").get<std::string>(), 1,
-                                                 1},
-                                                std::move(deploymentSignature).Value(),
-                                                std::move(verifier),
-                                                std::move(gate),
-                                                temporaryParent};
+            auto policy = CatalogPolicy(root, evidence.Value(), verifier, platform, temporaryParent);
+            if (policy.HasError())
+                return Outcome::Failure(policy.ErrorValue());
             return Outcome::Success(
-                OpenXRInstalledHostCatalog{std::move(policy),
+                OpenXRInstalledHostCatalog{std::move(policy).Value(),
                                            std::move(bindings).Value(),
                                            std::move(evidence).Value(),
                                            root.at("expiresAt").get<std::uint64_t>(),

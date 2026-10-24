@@ -20,4 +20,13 @@ namespace Horo::Render {
                                                                                const ShaderTargetRequirement &target,
                                                                                std::span<const SpirvReflectionStage> stages,
                                                                                std::span<const ShaderReflectionBindingName> names);
+    /** @brief Validates the closed canonical UI interface against actual Cross JSON and exact generated MSL.
+     * @param manifest Exact canonical UI manifest. @param target Selected Metal target.
+     * @param stages Official reflection documents for the same validated SPIR-V stages.
+     * @param translations Actual generated MSL, in the same stage order; never authored native maps.
+     * @return Normalized actual target placements or typed malformed, unsupported or ambiguous evidence failure. */
+    [[nodiscard]] Result<NormalizedShaderReflection> NormalizeUiPaintMetalReflection(const ShaderManifest &manifest,
+                                                                                     const ShaderTargetRequirement &target,
+                                                                                     std::span<const SpirvReflectionStage> stages,
+                                                                                     std::span<const std::string> translations);
 }  // namespace Horo::Render

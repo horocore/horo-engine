@@ -1585,6 +1585,7 @@
     "workspace.panel.game": {"text": "Game"},
     "workspace.panel.global_dock": {"text": "Bottom Dock"},
     "workspace.game.idle": {"text": "Press Play to start the game."},
+    "workspace.game.xr_mirror": {"text": "XR left-eye mirror"},
     "workspace.play.pause": {"text": "Pause"},
     "workspace.play.resume": {"text": "Resume"},
     "workspace.play.step": {"text": "Step"},
@@ -3594,6 +3595,20 @@
     "workspace.navigation_inspector.rejected": {
       "text": "Navigation edits were rejected. Drafts are retained for repair."
     },
+    "workspace.ui_canvas.preview.clear_guides": {"text": "Clear guides"},
+    "workspace.ui_canvas.preview.desktop": {"text": "Desktop 1920 x 1080, 1x"},
+    "workspace.ui_canvas.preview.phone": {"text": "Phone 1170 x 2532, 3x"},
+    "workspace.ui_canvas.preview.tablet": {"text": "Tablet 2048 x 2732, 2x"},
+    "workspace.ui_canvas.preview.rotate": {"text": "Rotate device"},
+    "workspace.ui_canvas.preview.select": {"text": "Select"},
+    "workspace.ui_canvas.preview.move": {"text": "Move"},
+    "workspace.ui_canvas.preview.resize": {"text": "Resize"},
+    "workspace.ui_canvas.preview.anchors": {"text": "Anchors"},
+    "workspace.ui_canvas.preview.snap": {"text": "Snap to grid and guides"},
+    "workspace.ui_canvas.preview.zoom_out": {"text": "Zoom out"},
+    "workspace.ui_canvas.preview.zoom_in": {"text": "Zoom in"},
+    "workspace.ui_canvas.preview.unavailable": {"text": "Layout preview unavailable for these source or device inputs"},
+    "workspace.ui_canvas.preview.hint": {"text": "Layout bounds preview. Shift-click adds a vertical guide; Ctrl-Shift-click adds a horizontal guide. Middle-drag pans. Escape cancels a drag."},
     "workspace.ui_canvas.undo": {
       "text": "Undo"
     },

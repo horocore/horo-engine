@@ -1585,6 +1585,7 @@
     "workspace.panel.game": {"text": "Oyun"},
     "workspace.panel.global_dock": {"text": "Alt Panel"},
     "workspace.game.idle": {"text": "Oyunu başlatmak için Oynat'a basın."},
+    "workspace.game.xr_mirror": {"text": "XR sol göz yansıtması"},
     "workspace.play.pause": {"text": "Duraklat"},
     "workspace.play.resume": {"text": "Sürdür"},
     "workspace.play.step": {"text": "Adım"},
@@ -3594,6 +3595,20 @@
     "workspace.navigation_inspector.rejected": {
       "text": "Gezinme düzenlemeleri reddedildi. Taslaklar düzeltme için korunuyor."
     },
+    "workspace.ui_canvas.preview.clear_guides": {"text": "Kılavuzları temizle"},
+    "workspace.ui_canvas.preview.desktop": {"text": "Masaüstü 1920 x 1080, 1x"},
+    "workspace.ui_canvas.preview.phone": {"text": "Telefon 1170 x 2532, 3x"},
+    "workspace.ui_canvas.preview.tablet": {"text": "Tablet 2048 x 2732, 2x"},
+    "workspace.ui_canvas.preview.rotate": {"text": "Cihazı döndür"},
+    "workspace.ui_canvas.preview.select": {"text": "Seç"},
+    "workspace.ui_canvas.preview.move": {"text": "Taşı"},
+    "workspace.ui_canvas.preview.resize": {"text": "Boyutlandır"},
+    "workspace.ui_canvas.preview.anchors": {"text": "Çapalar"},
+    "workspace.ui_canvas.preview.snap": {"text": "Izgaraya ve kılavuzlara yapıştır"},
+    "workspace.ui_canvas.preview.zoom_out": {"text": "Uzaklaştır"},
+    "workspace.ui_canvas.preview.zoom_in": {"text": "Yakınlaştır"},
+    "workspace.ui_canvas.preview.unavailable": {"text": "Bu kaynak veya cihaz girdileri için yerleşim önizlemesi kullanılamıyor"},
+    "workspace.ui_canvas.preview.hint": {"text": "Yerleşim sınırları önizlemesi. Shift-tıklama dikey, Ctrl-Shift-tıklama yatay kılavuz ekler. Orta tuşla sürükleme kaydırır. Escape sürüklemeyi iptal eder."},
     "workspace.ui_canvas.undo": {
       "text": "Geri al"
     },

@@ -64,7 +64,9 @@ namespace Horo::Tests::RenderFrontendTesting {
                 auto imported = RenderExternalTextureAccess::Import(*frontend, source);
                 REQUIRE(imported.HasValue());
                 texture = imported.Value();
-                auto builder = Render::Test::RequireBuilder();
+                auto limits = Render::Test::SmallLimits();
+                limits.maxResources = static_cast<std::uint32_t>(1 + reads.size());
+                auto builder = Render::Test::RequireBuilder(limits);
                 const auto pass = Render::Test::RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
                 auto declared = PreparedRenderGraphTemplate::DeclareTexture(builder, source->Descriptor(), source->AcquiredState(),
                                                                             source->RequiredFinalState(), source->DeviceIncarnation());

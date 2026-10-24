@@ -19,6 +19,17 @@ namespace Horo::Render::Detail {
          * @return Success or an original typed stale, lifecycle, capacity or provenance failure.
          */
         [[nodiscard]] Result<void> Capture(UiRenderSubmission &submission, std::span<const RenderGraphResource> resources);
+        /** @brief Runs the same canonical current-source/provenance checks before mapped frame writes, without consuming atlas pins.
+         * @param submission Synchronously borrowed exact source evidence. @param resources Complete immutable graph resources.
+         * @return Original validation error or success; temporary retained prefixes are released before return. */
+        [[nodiscard]] Result<void> Validate(const UiRenderSubmission &submission, std::span<const RenderGraphResource> resources);
+
+        /** @brief Compares exact already-captured geometry issuance, without numeric revision or caller nonce equivalence. */
+        [[nodiscard]] bool HasGeometry(const UiRenderSubmission &submission) const noexcept {
+            return geometry_ && geometry_->IsValid() && submission.geometry && submission.geometry->IsValid() &&
+                   &geometry_->Descriptor() == &submission.geometry->Descriptor();
+        }
+
         /** @brief Releases all retained source generations and sealed atlas pins exactly once. */
         void Release() noexcept;
 
@@ -47,6 +58,7 @@ namespace Horo::Render::Detail {
         std::optional<Runtime::Ui::UiRenderGeometryPlan> geometry_;
         std::array<std::optional<Runtime::Ui::UiImageResourceSnapshot>, MaximumUiSubmissionImages> images_;
         std::array<std::uint32_t, MaximumUiSubmissionImages> pages_{};
+        std::array<Runtime::Ui::UiRenderResourceRole, MaximumUiSubmissionImages> roles_{};
         std::array<std::optional<Runtime::Ui::UiFontFace>, MaximumUiSubmissionFonts> fonts_;
         std::array<Runtime::Ui::UiGlyphAtlasPageId, MaximumUiSubmissionFonts> fontPages_{};
         Runtime::Ui::UiGlyphAtlas::FrameLease atlas_;

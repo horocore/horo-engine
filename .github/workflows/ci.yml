@@ -29,11 +29,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # PR commits supersede their ref; main is bounded by the job lanes below.
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tooling:
+    concurrency:
+      group: ${{ github.workflow }}-tooling-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Format & Tooling Check
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -77,6 +81,9 @@ jobs:
         run: node --test tests/javascript/cache-retention.test.js tests/javascript/external-cache-policy.test.js
 
   android-storage:
+    concurrency:
+      group: ${{ github.workflow }}-android-storage-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Android Storage · NDK arm64 API 29
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -106,6 +113,9 @@ jobs:
           CPP
 
   shaders:
+    concurrency:
+      group: ${{ github.workflow }}-shaders-${{ matrix.os }}-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Shaders · ${{ matrix.os }}
     needs: tooling
     runs-on: ${{ matrix.os }}
@@ -144,6 +154,7 @@ jobs:
       - name: Restore compatible main dependency and compiler caches
         uses: ./.github/actions/restore-native-cache
         with:
+          compiler-storage: registry
           profile: native-tests-v1
           mode: Debug
           max-size: 2G
@@ -188,6 +199,20 @@ jobs:
         uses: ./.github/actions/cook-vulkan-viewport
         with:
           asset-root: ${{ github.workspace }}/build/ci/native-editor-assets
+      - name: Produce private canonical UI Metal qualification handoff
+        if: runner.os == 'Linux'
+        run: >-
+          python3 .github/scripts/ui_paint_fixture.py produce
+          --root "$RUNNER_TEMP/ui-paint-msl"
+          --tools-root "$RUNNER_TEMP/viewport-cook-tools"
+      - name: Retain same-run UI Metal qualification inputs
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ui-paint-metal-msl-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-paint-msl/
+          if-no-files-found: error
+          retention-days: 3
       - name: Stage the canonical viewport assets for the editor
         if: runner.os == 'Linux'
         run: |
@@ -256,6 +281,9 @@ jobs:
           if-no-files-found: warn
 
   directx-resources:
+    concurrency:
+      group: ${{ github.workflow }}-directx-resources-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: D3D12 · Windows WARP resources
     needs: tooling
     runs-on: windows-2022
@@ -275,6 +303,7 @@ jobs:
       - name: Restore dependency and compiler caches
         uses: ./.github/actions/restore-native-cache
         with:
+          compiler-storage: registry
           profile: native-tests-v1
           mode: Debug
           max-size: 2G
@@ -307,18 +336,25 @@ jobs:
 
   test:
     name: Test · ${{ matrix.name }}
-    needs: tooling
+    # Same-run Linux MSL production is an explicit dependency. This intentionally
+    # waits the complete shader matrix; unrelated Windows shader failure must
+    # not skip native validation. Missing Linux data fails the Mac consumer.
+    needs: [tooling, shaders]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' && !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+    permissions:
+      contents: read
+      packages: read
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
-    defaults:
+    defaults: &native_defaults
       run:
         shell: bash
-    env:
+    env: &native_environment
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
       HORO_COMPILER_LAUNCHER: ${{ matrix.launcher }}
       HORO_LOG_LEVEL: debug
-    strategy:
+    strategy: &native_strategy
       fail-fast: false
       max-parallel: 2
       matrix:
@@ -343,7 +379,7 @@ jobs:
             cxx: cl
             launcher: sccache
             preset: ci-windows-debug
-    steps:
+    steps: &native_steps
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
@@ -379,6 +415,7 @@ jobs:
         id: cache
         uses: ./.github/actions/restore-native-cache
         with:
+          compiler-storage: registry
           # Preserve the existing main Debug checkpoint and build directory.
           # Compiler entries also validate the flags of auxiliary builds.
           profile: native-tests-v1
@@ -406,6 +443,14 @@ jobs:
       # Preserve Debug's working set before Release/Metal/provider variants
       # compete for the bounded compiler cache. Later failures retain this
       # completed checkpoint; only main may publish it.
+      - name: Publish main Debug compiler checkpoint
+        if: ${{ !cancelled() && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && steps.debug_build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: ./.github/actions/publish-compiler-checkpoint
+        with:
+          key: ${{ steps.cache.outputs.compiler-key }}
+
       - name: Checkpoint main Debug compiler cache
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         continue-on-error: true
@@ -415,6 +460,7 @@ jobs:
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
           dependency-ready: 'false'
+          compiler-ready: 'false'
 
       - name: Qualify OpenGL editor GUI composition with Mesa
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.debug_build.outcome == 'success' }}
@@ -427,6 +473,18 @@ jobs:
           build/ci/tests/HoroEditorViewportOpenGLSmoke
           --reporter junit --out build/ci/opengl-editor-composition.xml
 
+      - name: Receive exact same-run UI Metal qualification data
+        if: runner.os == 'macOS'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ui-paint-metal-msl-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-paint-msl
+      - name: Compile validated canonical UI shader with installed Apple offline tools
+        if: runner.os == 'macOS'
+        run: |
+          python3 .github/scripts/ui_paint_fixture.py apple \
+            --root "$RUNNER_TEMP/ui-paint-msl" --output "$RUNNER_TEMP/ui-paint-offline"
+          printf 'HORO_UI_PAINT_METAL_FIXTURE=%s\n' "$RUNNER_TEMP/ui-paint-offline" >> "$GITHUB_ENV"
       # Switch after Debug's checkpoint so auxiliary configurations never evict
       # its primary working set. This uses the existing platform job and tools.
       - name: Restore auxiliary compiler variants
@@ -434,6 +492,7 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         uses: ./.github/actions/restore-native-cache
         with:
+          compiler-storage: registry
           profile: native-variants-v1
           mode: Mixed
           max-size: 2G
@@ -559,6 +618,14 @@ jobs:
 
       # Compiler entries remain individually content checked even if a later
       # test fails. Preserve successful auxiliary compilation before testing.
+      - name: Publish main auxiliary compiler checkpoint
+        if: ${{ !cancelled() && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && steps.variants_cache.outcome == 'success' && (steps.release_build.outcome == 'success' || steps.network_build.outcome == 'success' || steps.xr_build.outcome == 'success') }}
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: ./.github/actions/publish-compiler-checkpoint
+        with:
+          key: ${{ steps.variants_cache.outputs.compiler-key }}
+
       - name: Checkpoint auxiliary compiler variants
         if: ${{ !cancelled() && steps.variants_cache.outcome == 'success' && (steps.release_build.outcome == 'success' || steps.network_build.outcome == 'success' || steps.xr_build.outcome == 'success') }}
         continue-on-error: true
@@ -569,6 +636,7 @@ jobs:
           dependency-key: ''
           dependency-hit: 'true'
           dependency-ready: 'false'
+          compiler-ready: 'false'
 
       - name: Checkpoint complete dependency sources
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
@@ -881,6 +949,8 @@ jobs:
           path: |
             build/ci*/ctest.xml
             build/ci-metal/tests/MetalPreparationFixture.metallib
+            ${{ runner.temp }}/ui-paint-msl/
+            ${{ runner.temp }}/ui-paint-offline/
             build/ci-metal/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
@@ -896,3 +966,22 @@ jobs:
             build/ci-audio-release/navigation-allocation-regex.txt
           if-no-files-found: warn
           retention-days: 14
+
+  # Identical build/test steps, but only trusted main receives a write token.
+  # Exactly one matrix is selected per run; PR check names stay unchanged.
+  test-main:
+    concurrency:
+      group: ${{ github.workflow }}-native-${{ matrix.name }}-${{ github.ref }}
+      cancel-in-progress: false
+    name: Test · ${{ matrix.name }} (main)
+    needs: [tooling, shaders]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    defaults: *native_defaults
+    env: *native_environment
+    strategy: *native_strategy
+    steps: *native_steps

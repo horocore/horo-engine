@@ -23,6 +23,10 @@
 #include <vector>
 
 namespace Horo::Runtime::Ui {
+    namespace Detail {
+        class UiAnimationPublisher;
+    }
+
     /** @brief One actual value-control owner associated with its durable authored element. */
     struct UiReloadControl final {
         UiElementId id;
@@ -240,6 +244,7 @@ namespace Horo::Runtime::Ui {
         friend class UiAnimationOwner;
         friend class UiOverlayLifecycle;
         friend class UiSceneReconciliation;
+        friend class Detail::UiAnimationPublisher;
         /** @brief Shares bounded preparation after asset/publication lineage has been qualified. */
         [[nodiscard]] Result<Prepared> PrepareQualified(UiReloadGeneration replacement, const CancellationToken &cancellation);
         /** @brief Publishes immediately after CanCommit without fallible work or outside callbacks. */
@@ -250,6 +255,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiReloadGeneration *OverlayReplacement(const Prepared &prepared) noexcept;
         /** @brief Borrows a solely owned inactive replacement for animation composition before structural publication. */
         [[nodiscard]] UiReloadGeneration *AnimationReplacement(const Prepared &prepared) noexcept;
+        /** @brief Pins this exact inactive candidate before coordinated source/derived commit without allocation. */
+        [[nodiscard]] UiReloadLease AnimationReplacementLease(const Prepared &prepared) noexcept;
 
         /**
          * @brief Const-propagating facade ownership of the existing pinned publisher state.

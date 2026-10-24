@@ -114,10 +114,20 @@ namespace Horo::Application::Internal {
             return current;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        return AppendPreparedInput(poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision, publication, frame);
+    }
+
+    /** @copydoc OpenXRApplicationSession::AppendPreparedInput */
+    Result<void> OpenXRApplicationSession::AppendPreparedInput(const NativePoseObservations &poses,
+                                                               const NativeScalarActionSamples &actions, const XRSessionSnapshot &state,
+                                                               const XRTimeEvidence &time, const XRWorldOriginRevision origin,
+                                                               const std::uint64_t bindingRevision,
+                                                               RuntimeInternal::XRTrackingPublication &publication,
+                                                               Input::InputCollectionFrame &frame) {
         std::array<RuntimeInternal::TrackingPoseEvidence, 5> normalized{};
         std::size_t poseCount = 0;
         bool tracked = false;
-        for (const auto &pose : poses.Value().Poses()) {
+        for (const auto &pose : poses.Poses()) {
             const auto devices = publication.Devices();
             const auto device = std::ranges::find(devices, pose.role, &XRTrackedDeviceRecord::role);
             const auto capability = pose.kind == XRTrackedPoseKind::Head   ? XRTrackedDeviceCapability::HeadPose
@@ -129,12 +139,12 @@ namespace Horo::Application::Internal {
             tracked |= pose.pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
                        pose.pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
         }
-        const auto candidate = publication.Publish({time.Value(), origin, XRTrackingFocusState::Focused,
+        const auto candidate = publication.Publish({time, origin, XRTrackingFocusState::Focused,
                                                     state.state == XRSessionState::Focused || state.state == XRSessionState::Visible
                                                         ? XRTrackingVisibilityState::Visible
                                                         : XRTrackingVisibilityState::Hidden,
                                                     tracked ? XRTrackingState::Active : XRTrackingState::TrackingLost, bindingRevision,
-                                                    std::span{normalized}.first(poseCount), actions.Value().Actions()});
+                                                    std::span{normalized}.first(poseCount), actions.Actions()});
         if (candidate.HasError())
             return candidate;
         const auto *snapshot = publication.Current();

@@ -9,6 +9,7 @@
 
 namespace Horo::Runtime::Ui {
     class UiReloadGeneration;
+    class UiDocument;
 
     inline constexpr std::uint32_t MaximumUiPresentationProfiles = 32;
     inline constexpr std::uint32_t MaximumUiPresentationOverrides = 4096;
@@ -164,6 +165,15 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<UiPresentationProfileTable> Create(const UiReloadGeneration &generation, UiCanvasId canvas,
                                                                        UiPresentationProfileRevision revision,
                                                                        std::span<const UiPresentationProfile> rows);
+        /** @brief Creates a source-authoring preview table without manufacturing cooked asset provenance.
+         * @param document Exact canonical source document. @param tree Isolated authoring tree for the same document revision and canvas.
+         * @param canvas Source canvas whose authored alternatives are previewed.
+         * @return Shared canonical selector or typed stale, foreign, malformed or capacity failure.
+         * @details Existing runtime Create remains the cooked-generation ingress. The editor owns this tree and never shares its handles
+         * with gameplay.
+         */
+        [[nodiscard]] static Result<UiPresentationProfileTable> CreateForAuthoring(const UiDocument &document, const UiElementTree &tree,
+                                                                                   UiCanvasId canvas);
         /** @brief Borrows canonical rows in ascending unique priority. @return Rows valid for this table lifetime. */
         [[nodiscard]] std::span<const UiPresentationProfile> Rows() const noexcept;
         /** @brief Selects the first complete match, or neutral base, without allocation or previous-selection bias.
@@ -193,6 +203,10 @@ namespace Horo::Runtime::Ui {
         /** @brief Copies admitted owner identity and adopts validated canonical immutable rows. */
         UiPresentationProfileTable(const UiElementTree &tree, UiCanvasId canvas, UiPresentationProfileRevision revision,
                                    std::vector<UiPresentationProfile> rows) noexcept;
+        /** @brief Canonical bounded row validation shared by cooked and authoring ingress. */
+        [[nodiscard]] static Result<UiPresentationProfileTable> CreateValidated(const UiElementTree &tree, UiCanvasId canvas,
+                                                                                UiPresentationProfileRevision revision,
+                                                                                std::span<const UiPresentationProfile> rows);
         /** @brief Checks actual current owner identity while permitting ordinary same-issuer tree revision advances. */
         [[nodiscard]] bool MatchesTree(const UiElementTree &tree, const UiPresentationProfileEvidence &evidence) const noexcept;
         UiDocumentId document_;

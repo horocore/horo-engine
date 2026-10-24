@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/XR/XRMultiviewScene.h"
 #include "OpenXRFrameCompositor.h"
+#include "OpenXRPlayFrameState.h"
 #include "OpenXRPlayHost.h"
 #include "OpenXRVulkanSwapchain.h"
 #include "editor/renderer/EditorViewportRenderer.h"
@@ -14,39 +15,63 @@ namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
 
-    /** @brief Candidate-owned physical image/compositor children of the SAME selected native and render owners.
-     * @details Native failures keep this storage retained by the App. Scene Shutdown may revoke its typed
-     * publication, but cannot drop these children, outgoing native dependencies or queued image leases.
-     * No Scene/component/Input borrow is retained here; all such handoffs are owned typed values.
-     */
-    struct OpenXRPlayHost::FrameState final : IOpenXRCompositionSpace {
-        OpenXRPlayHost &host;
-        const XRSessionId session;
-        OpenXRVulkanSwapchainImages images;
-        OpenXRSwapchain color;
-        OpenXRFrameCompositor compositor;
-        Render::RenderTextureDescriptor allocation;
-        std::optional<NativeSwapchainAcquisition> acquisition;
-        std::array<Render::RenderTextureViewHandle, 2> eyeViews{};
-        std::optional<XRViewRenderPlan> plan;
-        std::optional<NativePresentationViews> views;
-        std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
-        bool guiFinished{};
-        bool submitted{};
-        bool acquisitionRecorded{};
-        bool rendered{};
-        bool clockBound{};
-
-        FrameState(OpenXRPlayHost &owner, const XRSessionId &candidate, OpenXRSelectedVulkanBinding &graphics,
-                   const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
-                   Render::Detail::VulkanExternalViewDispatch views, const Render::RenderTextureDescriptor &descriptor)
-            : host(owner), session(candidate), images(owner.composition_.frontend, graphics, binding, device.graphicsIdentity, views),
-              color(owner.native_, images), compositor(owner.native_, owner.frames_, *this), allocation(descriptor) {}
-
-        Result<XrSpace> Borrow(const XRCoordinateSpace &space) const override {
-            return host.composition_.session.BorrowWorldSpace(space);
+    namespace {
+        /** @brief Maps one actual ordered native eye observation into existing typed view evidence; no identity is issued. */
+        XRViewDescriptor DescribeEye(const NativePresentationViews &observed, const XRSessionId &session, std::uint32_t eye,
+                                     const OpenXRApplicationProjection &projection) {
+            const auto &native = observed.views[eye];
+            XRViewDescriptor view;
+            view.id = {session, {.index = eye, .generation = observed.eyes[eye].id.slot.generation}};
+            view.order = eye;
+            view.role = eye == 0 ? XRViewRole::PrimaryLeft : XRViewRole::PrimaryRight;
+            view.pose = {session,
+                         observed.eyes[eye],
+                         observed.reference,
+                         XRPosePurpose::PresentationPrediction,
+                         observed.referenceToWorld.time,
+                         {}};
+            auto &components = view.pose.components;
+            const bool position = (observed.flags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
+            const bool orientation = (observed.flags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
+            const bool trackedPosition = (observed.flags & XR_VIEW_STATE_POSITION_TRACKED_BIT) != 0;
+            const bool trackedOrientation = (observed.flags & XR_VIEW_STATE_ORIENTATION_TRACKED_BIT) != 0;
+            if (position)
+                components.positionMeters = {{Math::Vec3{native.pose.position.x, native.pose.position.y, native.pose.position.z}},
+                                             trackedPosition ? XRPoseComponentValidity::Tracked : XRPoseComponentValidity::Inferred};
+            if (orientation)
+                components.orientation = {{Math::Quaternion{native.pose.orientation.x, native.pose.orientation.y, native.pose.orientation.z,
+                                                            native.pose.orientation.w}},
+                                          trackedOrientation ? XRPoseComponentValidity::Tracked : XRPoseComponentValidity::Inferred};
+            components.confidence = !position && !orientation               ? XRTrackingConfidence::None
+                                    : trackedPosition && trackedOrientation ? XRTrackingConfidence::High
+                                                                            : XRTrackingConfidence::Low;
+            components.loss = position && orientation ? XRTrackingLossState::None
+                              : position              ? XRTrackingLossState::OrientationLost
+                              : orientation           ? XRTrackingLossState::PositionLost
+                                                      : XRTrackingLossState::FullyLost;
+            view.projection = {std::tan(native.fov.angleLeft), std::tan(native.fov.angleRight), std::tan(native.fov.angleDown),
+                               std::tan(native.fov.angleUp)};
+            view.recommendedExtent = projection.recommended[eye];
+            view.maximumExtent = projection.maximum[eye];
+            return view;
         }
-    };
+
+        /** @brief Describes the exact acquired color subresource for one ordered eye without issuing another target. */
+        XRExternalRenderTargetDescriptor DescribeEyeTarget(const XRViewDescriptor &view, const NativeSwapchainAcquisition &acquisition,
+                                                           const Render::RenderTextureDescriptor &allocation, std::uint32_t eye) {
+            return {view.id,
+                    XRExternalRenderTargetRole::ProjectionColor,
+                    acquisition.image.target,
+                    acquisition.image,
+                    allocation.format,
+                    allocation.usage,
+                    allocation.extent,
+                    {0, 0, allocation.extent.width, allocation.extent.height},
+                    eye,
+                    2,
+                    1};
+        }
+    }  // namespace
 
     /** @copydoc OpenXRPlayHost::PrepareFrameResources */
     Result<void> OpenXRPlayHost::PrepareFrameResources(const XRSessionId &candidate, const Render::RenderTextureDescriptor &color) {
@@ -106,6 +131,17 @@ namespace Horo::Application::Internal {
         return scene_ && scene_->published && !scene_->retiring;
     }
 
+    /** @copydoc OpenXRPlayHost::PresentationState */
+    OpenXRPlayPresentation OpenXRPlayHost::PresentationState() const noexcept {
+        if (std::this_thread::get_id() != lane_ || busy_)
+            return OpenXRPlayPresentation::Pending;
+        if (!scene_ && !render_)
+            return OpenXRPlayPresentation::Inactive;
+        return UsesXrScene() && sessions_.Snapshot().admitsFrames && frames_.Snapshot().phase == XRFramePhase::Idle
+                   ? OpenXRPlayPresentation::FrameAdmitted
+                   : OpenXRPlayPresentation::Pending;
+    }
+
     /** @copydoc OpenXRPlayHost::AbortRenderFrame */
     Result<void> OpenXRPlayHost::AbortRenderFrame() {
         if (!render_ || frames_.Snapshot().phase == XRFramePhase::Idle)
@@ -136,95 +172,24 @@ namespace Horo::Application::Internal {
         if (state.phase != XRFramePhase::Idle && (render_->submitted || render_->guiFinished))
             return Output::Success(false);
         if (state.phase == XRFramePhase::Idle) {
-            if (!sessions_.Snapshot().admitsFrames)
-                return Output::Success(false);  // Real native Ready/Running events, never Scene publication, admit waits.
-            render_->rendered = false;
-            render_->submitted = false;
-            render_->acquisitionRecorded = false;
-            render_->guiFinished = false;
-            render_->views.reset();
-            render_->plan.reset();
-            const auto waited = render_->compositor.Wait();
-            if (waited.HasError())
-                return Output::Failure(waited.ErrorValue());
-            if (!waited.Value().frame.IsValid())
-                return Output::Failure(MakeError(XRErrors::OperationUnavailable));
-            if (auto begun = render_->compositor.Begin(waited.Value().frame); begun.HasError())
-                return Output::Failure(begun.ErrorValue());
-            state = frames_.Snapshot();
-            if (waited.Value().status != XRFrameStatus::Ok || !state.renderAdmitted) {
-                render_->guiFinished = true;
-                if (state.renderAdmitted) {
-                    if (auto aborted = AbortRenderFrame(); aborted.HasError())
-                        return Output::Failure(aborted.ErrorValue());
-                }
-                if (auto ended = render_->compositor.EndEmpty(state.frame); ended.HasError())
-                    return Output::Failure(ended.ErrorValue());
-                return Output::Success(false);
-            }
+            const auto started = render_->StartPrediction();
+            if (started.HasError() || !started.Value())
+                return started;
         }
-        const auto fail = [&](const Error &error) -> Output {
-            const auto aborted = AbortRenderFrame();
-            (void)aborted;  // Preserve the original failure; any failed abort still leaves debt retained in the canonical gate.
-            return Output::Failure(error);
-        };
-        const auto now = clock_.PresentationNow();
-        if (now.HasError())
-            return fail(now.ErrorValue());
-        const auto pacing = render_->compositor.ObservePacing(state.frame, now.Value());
-        if (pacing.HasError())
-            return fail(pacing.ErrorValue());
-        if (pacing.Value().deadline != NativeFrameDeadline::WithinBudget) {
-            if (auto aborted = AbortRenderFrame(); aborted.HasError())
-                return Output::Failure(aborted.ErrorValue());
-            if (auto tail = ProgressTail(); tail.HasError())
-                return Output::Failure(tail.ErrorValue());
-            return Output::Success(false);  // Actual missed prediction: finish zero-layer debt, never wait or render another camera.
+        const auto pacing = render_->CheckDeadline();
+        if (pacing.HasError() || !pacing.Value())
+            return pacing;
+        if (frames_.Snapshot().phase == XRFramePhase::Begun) {
+            if (auto located = render_->LocateViews(); located.HasError())
+                return render_->Fail(located.ErrorValue());
         }
-        if (state.phase == XRFramePhase::Begun) {
-            const auto time = clock_.PresentationTime(state.predictedDisplayTime);
-            if (time.HasError())
-                return fail(time.ErrorValue());
-            auto views = composition_.session.LocatePresentation(render_->session, time.Value());
-            if (views.HasError())
-                return fail(views.ErrorValue());
-            if (frames_.LocateViews(state.frame, views.Value().count) != XRFrameStatus::Ok)
-                return fail(MakeError(XRErrors::OperationIncompatible));
-            render_->views.emplace(std::move(views).Value());
-        }
-        if (render_->color.Phase() == NativeSwapchainPhase::Available) {
-            if (auto acquired = render_->color.Acquire(); acquired.HasError())
-                return fail(acquired.ErrorValue());
-        }
-        if (render_->color.Phase() == NativeSwapchainPhase::Acquired) {
-            const auto ready = render_->color.Wait(0);
-            if (ready.HasError())
-                return fail(ready.ErrorValue());
-            if (!ready.Value())
-                return Output::Success(false);  // Zero-time native readiness; retain exact wait/frame/acquisition for next event loop.
-        }
-        if (render_->color.Phase() == NativeSwapchainPhase::Ready) {
-            auto imported = render_->color.Import();
-            if (imported.HasError())
-                return fail(imported.ErrorValue());
-            render_->acquisition.emplace(std::move(imported).Value());
-            if (frames_.Acquire(state.frame, render_->acquisition->image) != XRFrameStatus::Ok)
-                return fail(MakeError(XRErrors::OperationIncompatible));
-            render_->acquisitionRecorded = true;
-            for (std::uint32_t eye = 0; eye < render_->eyeViews.size(); ++eye) {
-                auto view = composition_.frontend.CreateTextureView(
-                    {.texture = render_->acquisition->texture, .format = render_->allocation.format, .baseLayer = eye, .layerCount = 1});
-                if (view.HasError())
-                    return fail(view.ErrorValue());
-                render_->eyeViews[eye] = view.Value().handle;
-                if (auto processed = composition_.frontend.ProcessResourceRequests(); processed.HasError())
-                    return fail(processed.ErrorValue());
-                if (auto ready = composition_.frontend.ResourceOperationResult(view.Value().operation); ready.HasError())
-                    return fail(ready.ErrorValue());
-            }
-        }
+        const auto acquired = render_->AcquireEyeImages();
+        if (acquired.HasError())
+            return render_->Fail(acquired.ErrorValue());
+        if (!acquired.Value())
+            return Output::Success(false);
         if (auto bound = BindRenderFrame(frameNumber); bound.HasError())
-            return fail(bound.ErrorValue());
+            return render_->Fail(bound.ErrorValue());
         return Output::Success(true);
     }
 
@@ -242,51 +207,9 @@ namespace Horo::Application::Internal {
         std::array<XRViewDescriptor, 2> views{};
         std::array<XRExternalRenderTargetDescriptor, 2> targets{};
         for (std::uint32_t eye = 0; eye < views.size(); ++eye) {
-            const auto &native = observed.views[eye];
-            auto &view = views[eye];
-            view.id = {render_->session, {.index = eye, .generation = observed.eyes[eye].id.slot.generation}};
-            view.order = eye;
-            view.role = eye == 0 ? XRViewRole::PrimaryLeft : XRViewRole::PrimaryRight;
-            view.pose = {render_->session,
-                         observed.eyes[eye],
-                         observed.reference,
-                         XRPosePurpose::PresentationPrediction,
-                         observed.referenceToWorld.time,
-                         {}};
-            auto &components = view.pose.components;
-            const bool position = (observed.flags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
-            const bool orientation = (observed.flags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
-            const bool trackedPosition = (observed.flags & XR_VIEW_STATE_POSITION_TRACKED_BIT) != 0;
-            const bool trackedOrientation = (observed.flags & XR_VIEW_STATE_ORIENTATION_TRACKED_BIT) != 0;
-            if (position)
-                components.positionMeters = {{Math::Vec3{native.pose.position.x, native.pose.position.y, native.pose.position.z}},
-                                             trackedPosition ? XRPoseComponentValidity::Tracked : XRPoseComponentValidity::Inferred};
-            if (orientation)
-                components.orientation = {{Math::Quaternion{native.pose.orientation.x, native.pose.orientation.y, native.pose.orientation.z,
-                                                            native.pose.orientation.w}},
-                                          trackedOrientation ? XRPoseComponentValidity::Tracked : XRPoseComponentValidity::Inferred};
-            components.confidence = !position && !orientation               ? XRTrackingConfidence::None
-                                    : trackedPosition && trackedOrientation ? XRTrackingConfidence::High
-                                                                            : XRTrackingConfidence::Low;
-            components.loss = position && orientation ? XRTrackingLossState::None
-                              : position              ? XRTrackingLossState::OrientationLost
-                              : orientation           ? XRTrackingLossState::PositionLost
-                                                      : XRTrackingLossState::FullyLost;
-            view.projection = {std::tan(native.fov.angleLeft), std::tan(native.fov.angleRight), std::tan(native.fov.angleDown),
-                               std::tan(native.fov.angleUp)};
-            view.recommendedExtent = scene_->projection->recommended[eye];
-            view.maximumExtent = scene_->projection->maximum[eye];
-            targets[eye] = {view.id,
-                            XRExternalRenderTargetRole::ProjectionColor,
-                            render_->acquisition->image.target,
-                            render_->acquisition->image,
-                            render_->allocation.format,
-                            render_->allocation.usage,
-                            render_->allocation.extent,
-                            {0, 0, render_->allocation.extent.width, render_->allocation.extent.height},
-                            eye,
-                            2,
-                            1};
+            views[eye] = DescribeEye(observed, render_->session, eye, *scene_->projection);
+            const auto &view = views[eye];
+            targets[eye] = DescribeEyeTarget(view, *render_->acquisition, render_->allocation, eye);
         }
         const std::array images{render_->acquisition->image};
         const XRViewConfigurationDescriptor config{CurrentXRContractVersion,
@@ -300,30 +223,10 @@ namespace Horo::Application::Internal {
                                              revision.Value(), input_.origin, 2, {});
         if (plan.HasError())
             return Result<void>::Failure(plan.ErrorValue());
-        auto reference = XRPoseSample::Create(observed.referenceToWorld, render_->session, input_.origin);
-        if (reference.HasError())
-            return Result<void>::Failure(reference.ErrorValue());
-        const std::array references{reference.Value(), reference.Value()};
         const Render::MultiviewPublication publication{scene_->scene.value,       frameNumber,
                                                        input_.origin.Value(),     revision.Value().Value(),
                                                        support.deviceIncarnation, support.capabilityRevision};
-        const XRMultiviewOwnerState owner{render_->session,
-                                          configuration,
-                                          revision.Value(),
-                                          input_.origin,
-                                          images,
-                                          publication,
-                                          Render::ResolveMultiviewCapabilities(support)};
-        auto converted = XRMultiviewScene::Create({plan.Value(),
-                                                   references,
-                                                   {},
-                                                   publication,
-                                                   Math::ClipDepthRange::ZeroToOne,
-                                                   0.1F,
-                                                   1000.0F,
-                                                   Render::MultiviewExecutionPolicy::Multipass,
-                                                   {}},
-                                                  owner);
+        auto converted = render_->ConvertScene(plan.Value(), configuration, revision.Value(), input_.origin, publication);
         if (converted.HasError())
             return Result<void>::Failure(converted.ErrorValue());
         auto bound =
@@ -406,28 +309,11 @@ namespace Horo::Application::Internal {
             if (polled.HasError())
                 return polled;
         }
-        for (auto &view : render_->eyeViews) {
-            if (!view.IsValid())
-                continue;
-            auto released = composition_.frontend.ReleaseTextureView(view);
-            if (released.HasError())
-                return released;
-            view = {};
-        }
-        if (render_->color.Phase() == NativeSwapchainPhase::Acquired) {
-            auto ready = render_->color.Wait(0);
-            if (ready.HasError())
-                return Result<void>::Failure(ready.ErrorValue());
-            if (!ready.Value())
-                return Result<void>::Success();
-        }
-        if (render_->color.Phase() != NativeSwapchainPhase::Available) {
-            const auto released = render_->color.PollRelease();
-            if (released.HasError())
-                return Result<void>::Failure(released.ErrorValue());
-            if (!released.Value())
-                return Result<void>::Success();
-        }
+        const auto retired = render_->RetireImageReferences();
+        if (retired.HasError())
+            return Result<void>::Failure(retired.ErrorValue());
+        if (!retired.Value())
+            return Result<void>::Success();
         if (render_->acquisitionRecorded && render_->acquisition && state.phase != XRFramePhase::ImagesReleased) {
             if (frames_.Release(state.frame, render_->acquisition->image) != XRFrameStatus::Ok)
                 return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));

@@ -401,6 +401,18 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<XRPoseDescriptor> Locate(XrSpace source, const XRCoordinateSpace &identity, const XRTimeEvidence &time) const;
         /** @brief Queries one action's activity then locates independently valid components, or publishes exact loss. */
         [[nodiscard]] Result<NativePoseObservation> LocateAction(const PoseAction &action, const XRTimeEvidence &time) const;
+        /** @brief Appends actual head evidence to the same fixed packet under the existing sampling operation.
+         * @param time Validated simulation cutoff. @param samples Candidate packet, never a committed snapshot.
+         * @return Original native/pose failure without issuing device or session identity.
+         */
+        [[nodiscard]] Result<void> AppendHeadObservation(const XRTimeEvidence &time, NativePoseObservations &samples) const;
+
+        /** @brief Locates and validates the current native base-to-World presentation transform.
+         * @param time Exact validated presentation prediction. @return Actual independent-validity pose or native failure.
+         * @pre Called within the existing sampling operation between canonical currentness fences.
+         */
+        [[nodiscard]] Result<XRPoseDescriptor> PresentationReference(const XRTimeEvidence &time) const;
+
         /** @brief One native sampling implementation; an explicit existing-device selection preserves legacy query filtering.
          * @param session Exact current native owner. @param time Current simulation-cutoff evidence.
          * @param origin Prepared origin. @param devices Existing runtime-owned records, or no selection for native discovery.

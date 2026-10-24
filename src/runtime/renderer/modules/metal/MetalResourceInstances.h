@@ -21,6 +21,8 @@ namespace Horo::Render::Detail {
         MetalResidentUse use;
         std::uint64_t lightTableRevision{};
         LightCullingDispatch lightTableDispatch;
+        std::uint64_t uiPaintRevision{};
+        std::uint32_t uiPaintVertices{}, uiPaintIndices{}, uiPaintParameters{};
     };
 
     struct MetalMeshInstance {

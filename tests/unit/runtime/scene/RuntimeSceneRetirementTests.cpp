@@ -1,7 +1,10 @@
 #include "RuntimeSceneTestSupport.h"
 
+#include <array>
 #include <functional>
 #include <memory>
+#include <new>
+#include <thread>
 #include <vector>
 
 std::size_t RuntimeSceneAllocationCount() noexcept;
@@ -147,6 +150,61 @@ namespace {
         CHECK_FALSE(audit.retainedView.IsCurrent());
         CHECK_FALSE(service.ActiveScene());
         CHECK_FALSE(service.TakeOperationError());
+    }
+
+    TEST_CASE("Scene views reject retired owner storage even when its address is reused", "[unit][runtime][scene][lifetime]") {
+        alignas(RuntimeScene) std::array<std::byte, sizeof(RuntimeScene)> storage;
+        const auto destroy = [](RuntimeScene *scene) {
+            std::destroy_at(scene);
+        };
+        const auto construct = [&] {
+            return std::unique_ptr<RuntimeScene, decltype(destroy)>{std::construct_at(reinterpret_cast<RuntimeScene *>(storage.data()),
+                                                                                      SceneRuntimeId{73}, SceneDefinitionId{7},
+                                                                                      SceneDefinitionRevision{1}, RuntimeSceneConfig{},
+                                                                                      Assets::AssetRegistryRevision{},
+                                                                                      std::vector<RuntimeScene::ResolvedAsset>{}),
+                                                                    destroy};
+        };
+        auto first = construct();
+        const auto old = first->View();
+        REQUIRE(old.IsCurrent());
+        first.reset();
+        CHECK_FALSE(old.IsCurrent());
+        CHECK(old.StructuralRevision() == 0);
+        CHECK(old.SlotCount() == 0);
+        CHECK_FALSE(old.EntityAt(0));
+        CHECK(old.RuntimeId() == SceneRuntimeId{73});
+        auto replacement = construct();
+        CHECK(replacement->View().IsCurrent());
+        CHECK_FALSE(old.IsCurrent());
+        CHECK(old.Get({{73}, {0, 1}}).HasError());
+    }
+
+    TEST_CASE("Scene view storage access is owner-thread bound and allocation free", "[unit][runtime][scene][lifetime]") {
+        auto created = RuntimeScene::Create(Definition(), SceneRuntimeId{91});
+        REQUIRE(created.HasValue());
+        auto scene = std::move(created).Value();
+        const auto before = RuntimeSceneAllocationCount();
+        const auto view = scene->View();
+        const bool live = view.IsCurrent();
+        const auto revision = view.StructuralRevision();
+        const auto after = RuntimeSceneAllocationCount();
+        CHECK(live);
+        CHECK(revision != 0);
+        CHECK(after == before);
+        bool current{};
+        bool empty{};
+        bool freshBorrow{};
+        std::thread foreign{[&] {
+            current = view.IsCurrent();
+            empty = view.SlotCount() == 0 && !view.EntityAt(0);
+            freshBorrow = scene->View().IsCurrent();
+        }};
+        foreign.join();
+        CHECK_FALSE(current);
+        CHECK(empty);
+        CHECK_FALSE(freshBorrow);
+        CHECK(view.IsCurrent());
     }
 
     TEST_CASE("Failed Scene retirement preparation and validation preserve the active aggregate", "[unit][runtime][scene][activation]") {

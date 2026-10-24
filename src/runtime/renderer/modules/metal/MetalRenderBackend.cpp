@@ -123,6 +123,20 @@ namespace Horo::Render {
                 return runtime_->RealizeLightCullingKernel(kernel);
             }
 
+            /** @copydoc IRenderBackend::RealizeUiPaintKernel */
+            Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel) override {
+                if (!initialized_ || shutdownBegun_)
+                    return Result<std::shared_ptr<IResidentUiPaintKernel>>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->RealizeUiPaintKernel(kernel);
+            }
+
+            /** @copydoc IRenderBackend::UpdateUiPaintFrame */
+            Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
+                if (!initialized_ || shutdownBegun_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->UpdateUiPaintFrame(update);
+            }
+
             /** @copydoc IRenderBackend::UpdateLightFrame */
             Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update) override {
                 if (!capabilities_.support.features.Supports(RenderCapability::LightCulling))

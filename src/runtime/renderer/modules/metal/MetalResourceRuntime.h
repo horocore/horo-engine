@@ -25,6 +25,10 @@ namespace Horo::Render::Detail {
         /** @brief Loads an exact cooked Metal library and validates the fixed culling compute ABI before native publication. */
         [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
+        /** @brief Realizes exact cooked raster/stencil states at a preparation safe point; no runtime source compilation. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel);
+        /** @brief Atomically updates an admitted mapped UI slot after complete native-use validation. */
+        [[nodiscard]] Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update);
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const;
         [[nodiscard]] Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> initialData,
@@ -74,6 +78,12 @@ namespace Horo::Render::Detail {
         void DestroyTexture(std::uint64_t backendInstance) noexcept;
         void DestroyTextureView(std::uint64_t backendInstance) noexcept;
         void DestroyRenderTarget(std::uint64_t backendInstance) noexcept;
+        /** @brief Validates exact UI slot publication, kernel epoch, texture policy and primary target before encoding. */
+        [[nodiscard]] Result<void> ValidateUiPaint(const RenderGraphUiPaint &paint, std::span<const RenderGraphResourceInstance> resources,
+                                                   void *primary) const;
+        /** @brief Encodes admitted UI paint into the current retained command buffer and tracks every resident use. */
+        [[nodiscard]] Result<void> ExecuteUiPaint(void *commands, const RenderGraphUiPaint &paint,
+                                                  std::span<const RenderGraphResourceInstance> resources, void *primary);
         /** @brief Validates exact native instances, resource policy and copy/attachment bounds. */
         [[nodiscard]] Result<void> ValidateGraphWorkload(const RenderGraphWorkload &workload,
                                                          std::span<const RenderGraphResourceInstance> resources) const;

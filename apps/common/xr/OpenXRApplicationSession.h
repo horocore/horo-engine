@@ -215,6 +215,26 @@ namespace Horo::Application::Internal {
     private:
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
+        /** @brief Normalizes same-cutoff native values, publishes through the sole tracking owner, then appends without committing.
+         * @param poses Complete observed packet. @param actions Same synced scalar packet. @param state Same admitted session snapshot.
+         * @param time Actual converted cutoff. @param origin Current origin. @param bindingRevision Already validated binding revision.
+         * @param publication Canonical tracking owner. @param frame Same Input transaction.
+         * @return Original publication/projection error; a rejected append revokes the candidate publication.
+         * @pre Owner lane and all currentness fences validated after native sampling; fixed-capacity frame work only.
+         */
+        [[nodiscard]] Result<void> AppendPreparedInput(const XR::OpenXRInternal::NativePoseObservations &poses,
+                                                       const XR::OpenXRInternal::NativeScalarActionSamples &actions,
+                                                       const XR::XRSessionSnapshot &state, const XR::XRTimeEvidence &time,
+                                                       XR::XRWorldOriginRevision origin, std::uint64_t bindingRevision,
+                                                       XR::RuntimeInternal::XRTrackingPublication &publication,
+                                                       Input::InputCollectionFrame &frame);
+
+        /** @brief Validates the same owner/attempt/device and complete native projection protocol before capability construction.
+         * @param viewport Same selected renderer owner. @return Actual observed system or the original admission/stale/native error.
+         * @pre Owner lane; no candidate or Ready is issued and no native borrow escapes this synchronous validation.
+         */
+        [[nodiscard]] Result<XR::XRSystemId> ValidateProjectionPreparation(const Editor::EditorViewportRendererVulkan &viewport) const;
+
         OpenXRApplicationAuthorities authorities_;
         XR::XRProjectSettings settings_;
         std::optional<OpenXRInstalledProductCandidate> product_;

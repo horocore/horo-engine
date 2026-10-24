@@ -1,0 +1,24 @@
+name: Publish compiler checkpoint directly from main
+description: Publish an idle compiled store without depending on Actions cache retention
+inputs:
+  key:
+    description: Immutable compiler key from the owning successful build
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install registry client
+      uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
+      with:
+        version: 1.3.0
+    - name: Publish the idle compiler store
+      shell: bash
+      env:
+        SOURCE_KEY: ${{ inputs.key }}
+        HORO_PACKAGE_TOKEN: ${{ github.token }}
+        RUNNER_PLATFORM: ${{ runner.os }}
+      run: |
+        if [[ "$RUNNER_PLATFORM" == Windows ]]; then
+          sccache --stop-server
+        fi
+        python3 .github/scripts/compiler_registry.py publish --key "$SOURCE_KEY"

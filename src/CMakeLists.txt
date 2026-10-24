@@ -705,7 +705,10 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/RuntimeUiAccessState.h
         runtime/ui/RuntimeUiClient.cpp
         runtime/ui/RuntimeUiService.cpp
+        runtime/ui/RuntimeUiAnimatedSource.cpp
     runtime/ui/RuntimeUiTransitions.cpp
+        runtime/ui/RuntimeUiScenePublication.cpp
+        runtime/ui/RuntimeUiSceneRevocation.cpp
         runtime/ui/RuntimeUiCommands.cpp
         runtime/ui/RuntimeUiEvents.cpp
         runtime/ui/UiAssetDependencyInternal.h
@@ -822,6 +825,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAnimationOwnerInput.cpp
         runtime/ui/UiAnimationOwnerLifecycle.cpp
         runtime/ui/UiAnimationOwnerAdmission.cpp
+        runtime/ui/UiAnimationPublisher.cpp
         runtime/ui/UiAnimationOwnerReload.cpp
         runtime/ui/UiAnimationOwnerControlSources.cpp
         runtime/ui/UiAnimationOwnerRoutes.cpp
@@ -849,6 +853,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiStyleValidation.cpp
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
+        runtime/ui/UiRenderPaintValidation.cpp
         runtime/ui/UiRenderGeometry.cpp
         runtime/ui/UiRenderGeometryInternal.cpp
         runtime/ui/UiPresentationReceipt.cpp
@@ -2514,6 +2519,9 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
         runtime/renderer/api/RenderGraphLifetime.cpp
         runtime/renderer/api/RenderGraphWorkload.cpp
+        runtime/renderer/api/UiPaintWorkload.cpp
+        runtime/renderer/api/UiPaintKernel.cpp
+        runtime/renderer/api/UiPaintFrameUpload.cpp
         runtime/renderer/api/RenderDeviceIncarnation.cpp
         runtime/renderer/api/LightCulling.cpp
         runtime/renderer/api/LightCullingKernel.cpp
@@ -2555,7 +2563,8 @@ target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation PRIVATE HoroFo
 
 # Portable normalization of actual tool evidence; runtime value/identity consumers remain in RenderApi.
 add_library(HoroShaderReflectionCookInternal STATIC
-    runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp)
+    runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp
+    runtime/renderer/shader_cook/UiPaintMetalReflectionNormalization.cpp)
 target_compile_features(HoroShaderReflectionCookInternal PUBLIC cxx_std_20)
 target_include_directories(HoroShaderReflectionCookInternal PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shader_cook/include>")
@@ -2621,6 +2630,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/BoundedRenderQueueCore.h
         runtime/renderer/frontend/RenderTransferErrorDescriptor.h
         runtime/renderer/frontend/RenderGraphResourceLeasePool.cpp
+    runtime/renderer/frontend/RenderGraphUiLease.cpp
         runtime/renderer/frontend/RenderFrameInputInternal.cpp
         runtime/renderer/frontend/RenderFrameParallelExecution.cpp
         runtime/renderer/frontend/RenderFrameGraphResources.cpp
@@ -2638,6 +2648,15 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontendVfx.cpp
         runtime/renderer/frontend/LightCullingPreparation.cpp
         runtime/renderer/frontend/LightFrameBufferPool.cpp
+        runtime/renderer/frontend/UiPaintFrameBufferPool.cpp
+        runtime/renderer/frontend/UiPaintProgram.cpp
+        runtime/renderer/frontend/UiPaintProgramEvidence.cpp
+        runtime/renderer/frontend/UiPaintProgramFrames.cpp
+        runtime/renderer/frontend/UiPaintProgramGeometry.cpp
+        runtime/renderer/frontend/UiPaintProgramGraph.cpp
+        runtime/renderer/frontend/UiPaintProgramMasks.cpp
+        runtime/renderer/frontend/UiPaintProgramPaint.cpp
+        runtime/renderer/frontend/UiPaintProgramRoles.cpp
         runtime/renderer/frontend/RenderFrontendInspection.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
         runtime/renderer/frontend/RenderFrontendExternalTextures.cpp
@@ -2660,6 +2679,8 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderResourceReservationGuard.cpp
         runtime/renderer/frontend/RenderResourceSubmissionPins.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
+        runtime/renderer/frontend/UiPaintComposition.cpp
+    runtime/renderer/frontend/UiPaintPreparation.cpp
         runtime/renderer/frontend/UiRenderSubmission.cpp
         runtime/renderer/frontend/UiRenderSubmissionRetention.cpp
         runtime/renderer/frontend/UiRenderTextureRealization.cpp
@@ -2807,6 +2828,9 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
             runtime/renderer/modules/metal/MetalResourceGraphRuntime.mm
             runtime/renderer/modules/metal/MetalLightCullingKernel.mm
+            runtime/renderer/modules/metal/MetalUiPaintKernel.mm
+            runtime/renderer/modules/metal/MetalUiPaintUpload.mm
+            runtime/renderer/modules/metal/MetalUiPaintCommands.mm
             runtime/renderer/modules/metal/MetalLightFrameUpload.mm
             runtime/renderer/modules/metal/MetalRuntime.mm
     )
@@ -3264,6 +3288,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
+        editor/ui/UiCanvasPreview.cpp
         editor/ui/UiInspectorDraft.cpp
         editor/ui/UiInspectorResources.cpp
         editor/UiCanvasDocumentCommands.cpp
@@ -3330,6 +3355,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEditorPlayXrHostInterface
         HoroEngine::ProjectReadFilesApi
         HoroEngine::WorldBakeApplication
         HoroPrefabHierarchyInternal

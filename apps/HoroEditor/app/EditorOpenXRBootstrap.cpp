@@ -78,6 +78,45 @@ namespace Horo::Editor {
             }
             return Outcome::Success(std::move(roots));
         }
+
+        /** @brief Reads and verifies the explicitly selected catalog with the independently constructed host verifier. */
+        Result<OpenXRInstalledHostCatalog> ReadSignedCatalog(NativeDurableFileSystem &files, const HostArguments &arguments,
+                                                             std::shared_ptr<const Security::ArtifactVerifier> verifier,
+                                                             const std::filesystem::path &cacheRoot, std::uint64_t now) {
+            auto signatureBytes = files.ReadFileBounded(*arguments.paths[2], MaximumHostSignatureDocumentBytes);
+            if (signatureBytes.HasError())
+                return Result<OpenXRInstalledHostCatalog>::Failure(signatureBytes.ErrorValue());
+            auto signature = DecodeDetachedSignatureDocument(std::as_bytes(std::span{signatureBytes.Value()}));
+            if (signature.HasError())
+                return Result<OpenXRInstalledHostCatalog>::Failure(signature.ErrorValue());
+            auto catalogBytes = files.ReadFileBounded(*arguments.paths[1], 64U * 1024U);
+            if (catalogBytes.HasError())
+                return Result<OpenXRInstalledHostCatalog>::Failure(catalogBytes.ErrorValue());
+            auto platform = NativePackagePlatform();
+            if (platform.HasError())
+                return Result<OpenXRInstalledHostCatalog>::Failure(platform.ErrorValue());
+            auto catalog = OpenXRInstalledHostCatalog::Verify(std::as_bytes(std::span{catalogBytes.Value()}), signature.Value(), verifier,
+                                                              platform.Value(), cacheRoot / "xr-native", now);
+            return catalog;
+        }
+
+        /** @brief Retains only the active independently approved signer expiry; the catalog cannot add trust records. */
+        Result<std::uint64_t> ActiveSignerExpiry(const Packages::PackagePublisherVerificationPolicy &policy,
+                                                 const OpenXRInstalledHostCatalog &catalog, std::uint64_t now) {
+            std::optional<std::uint64_t> rootExpiry;
+            for (const auto &entry : policy.publishers) {
+                const auto expiry = entry.expiresAtUnixMilliseconds / 1000;
+                if (!entry.publisherRevoked && (entry.expiresAtUnixMilliseconds == 0 || expiry > now) &&
+                    entry.publisher.Value() == catalog.Evidence().PublisherId() && entry.keyId == catalog.Evidence().KeyId()) {
+                    rootExpiry = expiry;
+                    break;
+                }
+            }
+            if (!rootExpiry)
+                return Result<std::uint64_t>::Failure(
+                    BootstrapError("Verified XR catalog signer no longer matches the active approved host policy."));
+            return Result<std::uint64_t>::Success(*rootExpiry);
+        }
     }  // namespace
 
     /** @brief Retains every canonical package dependency through startup failure, cancellation and final native drain. */
@@ -251,37 +290,16 @@ namespace Horo::Editor {
             return Outcome::Failure(roots.ErrorValue());
         auto provider = Security::CreateMbedTlsSignatureProvider();
         auto verifier = std::make_shared<Security::ArtifactVerifier>(provider, std::move(roots).Value());
-        auto signatureBytes = files.ReadFileBounded(*parsed.Value().paths[2], MaximumHostSignatureDocumentBytes);
-        if (signatureBytes.HasError())
-            return Outcome::Failure(signatureBytes.ErrorValue());
-        auto signature = DecodeDetachedSignatureDocument(std::as_bytes(std::span{signatureBytes.Value()}));
-        if (signature.HasError())
-            return Outcome::Failure(signature.ErrorValue());
-        auto catalogBytes = files.ReadFileBounded(*parsed.Value().paths[1], 64U * 1024U);
-        if (catalogBytes.HasError())
-            return Outcome::Failure(catalogBytes.ErrorValue());
-        auto platform = NativePackagePlatform();
-        if (platform.HasError())
-            return Outcome::Failure(platform.ErrorValue());
-        auto catalog = OpenXRInstalledHostCatalog::Verify(std::as_bytes(std::span{catalogBytes.Value()}), signature.Value(), verifier,
-                                                          platform.Value(), cacheRoot / "xr-native", now.Value());
+        auto catalog = ReadSignedCatalog(files, parsed.Value(), verifier, cacheRoot, now.Value());
         if (catalog.HasError())
             return Outcome::Failure(catalog.ErrorValue());
-        std::optional<std::uint64_t> rootExpiry;
-        for (const auto &entry : policy.Value().publishers) {
-            const auto expiry = entry.expiresAtUnixMilliseconds / 1000;
-            if (!entry.publisherRevoked && (entry.expiresAtUnixMilliseconds == 0 || expiry > now.Value()) &&
-                entry.publisher.Value() == catalog.Value().Evidence().PublisherId() && entry.keyId == catalog.Value().Evidence().KeyId()) {
-                rootExpiry = expiry;
-                break;
-            }
-        }
-        if (!rootExpiry)
-            return Outcome::Failure(BootstrapError("Verified XR catalog signer no longer matches the active approved host policy."));
+        const auto rootExpiry = ActiveSignerExpiry(policy.Value(), catalog.Value(), now.Value());
+        if (rootExpiry.HasError())
+            return Outcome::Failure(rootExpiry.ErrorValue());
         auto publishers = Packages::PackagePublisherVerificationService::Create(std::move(policy).Value(), std::move(provider));
         if (publishers.HasError())
             return Outcome::Failure(publishers.ErrorValue());
-        auto impl = std::make_unique<Impl>(std::move(publishers).Value(), std::move(catalog).Value(), now.Value(), *rootExpiry);
+        auto impl = std::make_unique<Impl>(std::move(publishers).Value(), std::move(catalog).Value(), now.Value(), rootExpiry.Value());
         if (auto initialized = impl->Initialize(projectRoot, cacheRoot, trackingRoot); initialized.HasError())
             return Outcome::Failure(initialized.ErrorValue());
         return Outcome::Success(std::unique_ptr<EditorOpenXRBootstrap>{new EditorOpenXRBootstrap{std::move(impl)}});

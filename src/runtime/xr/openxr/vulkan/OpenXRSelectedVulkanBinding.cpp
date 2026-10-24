@@ -37,7 +37,7 @@ namespace Horo::XR::OpenXRInternal {
             result = query(owner.instance, owner.system, static_cast<std::uint32_t>(storage.size()), &count, storage.data());
             if (XR_FAILED(result))
                 return Outcome::Failure(NativeFailure(name, result));
-            if (count != expected || count > storage.size() || storage[count - 1] != '\0' ||
+            if (count != expected || storage[count - 1] != '\0' ||
                 std::find(storage.begin(), storage.begin() + count - 1, '\0') != storage.begin() + count - 1)
                 return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Changed or malformed Vulkan extension publication"));
             std::vector<std::string> names;

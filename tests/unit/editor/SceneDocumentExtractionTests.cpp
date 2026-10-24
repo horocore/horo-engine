@@ -1,34 +1,9 @@
+#include "SceneDocumentHierarchyFixture.h"
 #include "SceneDocumentTestSupport.h"
-#include "editor/renderer/xr/EditorXrSceneGeometry.h"
 #include "editor/renderer/xr/EditorXrTrackingRoot.h"
-
-#include <thread>
 
 namespace {
     using namespace Horo::Editor::SceneDocumentTestSupport;
-
-    struct HierarchySceneObjects {
-        Horo::Editor::SceneObjectId parent;
-        Horo::Editor::SceneObjectId child;
-    };
-
-    [[nodiscard]] HierarchySceneObjects MakeHierarchyScene(Horo::Editor::SceneDocument &document) {
-        Horo::Editor::EditorHistory history;
-        Horo::Editor::SceneDocumentCommandExecutor commands{document, history};
-        const auto parent = commands.Execute(Horo::Editor::CreateSceneObjectCommand{
-            .name = "Parent",
-            .localTransform = Horo::Math::Transform{.translation = {2.0F, 0.0F, 0.0F}},
-        });
-        REQUIRE((parent.HasValue()));
-        const auto child = commands.Execute(Horo::Editor::CreateSceneObjectCommand{
-            .name = "Box",
-            .parent = parent.Value().object,
-            .localTransform = Horo::Math::Transform{.translation = {0.0F, 3.0F, 0.0F}},
-            .primitiveMesh = Horo::Runtime::PrimitiveMeshDescriptor{},
-        });
-        REQUIRE((child.HasValue()));
-        return {parent.Value().object, child.Value().object};
-    }
 
     struct LightSceneObjects {
         Horo::Editor::SceneObjectId parent;
@@ -65,116 +40,6 @@ namespace {
         });
         REQUIRE((lightObject.HasValue()));
         return {parent.Value().object, lightObject.Value().object, *components.light};
-    }
-
-    TEST_CASE("XR camera-free geometry pins the canonical meshes and rejects stale workspace or candidate mappings", "[unit][editor][xr]") {
-        using namespace Horo;
-        using namespace Horo::Editor;
-        SceneDocument document;
-        const auto objects = MakeHierarchyScene(document);
-        Runtime::PrimitiveMeshCache primitives;
-        EditorAssetMeshCache assets;
-        auto owner = std::make_unique<EditorXrSceneSourceOwner>(document, primitives, assets);
-        const auto port = owner->Port();
-        auto scene = MakeRuntimeScene(document);
-        const auto revision = scene->View().DefinitionRevision();
-        REQUIRE(revision.value == document.State().value);
-        REQUIRE(revision.value != document.Revision().value);
-        REQUIRE(port.Capture({document.Revision().value}, scene->View()).HasError());
-        REQUIRE(port.Capture({revision.value + 1}, scene->View()).HasError());
-        auto captured = port.Capture(revision, scene->View());
-        REQUIRE(captured.HasValue());
-        auto prepared = std::move(captured).Value();
-        REQUIRE(prepared->Resources().size() == 1);
-        auto instances = prepared->Update(scene->View());
-        REQUIRE(instances.HasValue());
-        REQUIRE(instances.Value().size() == 1);
-        const auto origin = Math::TransformPoint(instances.Value()[0].localToWorld, {});
-        CHECK(NearlyEqual(origin.x, 2.0F));
-        CHECK(NearlyEqual(origin.y, 3.0F));
-        const auto desktop = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, primitives);
-        REQUIRE(desktop.HasValue());
-        CHECK(desktop.Value().instances[0].mesh == instances.Value()[0].mesh);
-        CHECK(desktop.Value().instanceObjects[0] == objects.child);
-        CHECK(prepared->Resources()[0].vertices.data() == desktop.Value().meshResources[0].vertices.data());
-        SECTION("foreign Scene occurrence cannot reuse the authored IDs") {
-            auto definition = ConvertSceneDocumentToRuntime(document.Snapshot(), Runtime::SceneDefinitionId{1});
-            REQUIRE(definition.HasValue());
-            auto other = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{2});
-            REQUIRE(other.HasValue());
-            CHECK(prepared->Update(other.Value()->View()).HasError());
-        }
-        SECTION("source edit revokes before candidate access") {
-            EditorHistory history;
-            SceneDocumentCommandExecutor commands(document, history);
-            REQUIRE(commands.Execute(CreateSceneObjectCommand{.name = "New source revision"}).HasValue());
-            CHECK(prepared->ValidateSource().HasError());
-            CHECK(prepared->Update(scene->View()).HasError());
-        }
-        SECTION("cache reload retires the prior source incarnation without dropping its owned payload") {
-            const auto *vertices = prepared->Resources()[0].vertices.data();
-            assets.Clear();
-            CHECK(prepared->ValidateSource().HasError());
-            CHECK(prepared->Resources()[0].vertices.data() == vertices);
-        }
-        SECTION("explicit cancellation does not discard queued mesh leases") {
-            prepared->Revoke();
-            CHECK(prepared->Update(scene->View()).HasError());
-            CHECK(prepared->Resources()[0].IsValid());
-        }
-        SECTION("wrong lane rejects without borrowing document or caches") {
-            bool rejected = false;
-            std::thread worker([&] {
-                rejected = prepared->ValidateSource().HasError();
-            });
-            worker.join();
-            CHECK(rejected);
-        }
-        SECTION("retired workspace cannot be revived by its weak port") {
-            owner.reset();
-            CHECK(prepared->ValidateSource().HasError());
-            CHECK(port.Capture(revision, scene->View()).HasError());
-            CHECK(prepared->Resources()[0].IsValid());
-        }
-    }
-
-    TEST_CASE("XR strict geometry admission keeps the original desktop instance capacity", "[unit][editor][xr]") {
-        using namespace Horo;
-        using namespace Horo::Editor;
-        SceneDocument document;
-        EditorHistory history;
-        SceneDocumentCommandExecutor commands(document, history);
-        for (std::size_t index = 0; index <= PreparedEditorXrGeometry::MaximumInstances; ++index)
-            REQUIRE(
-                commands.Execute(CreateSceneObjectCommand{.name = "Box", .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}}).HasValue());
-        Runtime::PrimitiveMeshCache primitives;
-        EditorAssetMeshCache assets;
-        EditorXrSceneSourceOwner owner(document, primitives, assets);
-        auto scene = MakeRuntimeScene(document);
-        CHECK(owner.Port().Capture(scene->View().DefinitionRevision(), scene->View()).HasError());
-        const auto desktop = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, primitives);
-        REQUIRE(desktop.HasValue());
-        CHECK(desktop.Value().instances.size() == PreparedEditorXrGeometry::MaximumInstances + 1);
-    }
-
-    TEST_CASE("XR imported geometry absence is a strict error while desktop retains its prior omission policy", "[unit][editor][xr]") {
-        using namespace Horo;
-        using namespace Horo::Editor;
-        SceneDocument document;
-        EditorHistory history;
-        SceneDocumentCommandExecutor commands(document, history);
-        const auto asset = Assets::AssetId::Parse("00112233-4455-6677-8899-aabbccddeeff");
-        REQUIRE(asset.HasValue());
-        REQUIRE(commands.Execute(CreateSceneObjectCommand{.name = "Imported", .meshAsset = asset.Value()}).HasValue());
-        Runtime::PrimitiveMeshCache primitives;
-        EditorAssetMeshCache assets;
-        EditorXrSceneSourceOwner owner(document, primitives, assets);
-        auto scene = MakeRuntimeScene(document);
-        CHECK(owner.Port().Capture(scene->View().DefinitionRevision(), scene->View()).HasError());
-        const auto snapshot = document.Snapshot();
-        const auto desktop = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, primitives, &snapshot, &assets);
-        REQUIRE(desktop.HasValue());
-        CHECK(desktop.Value().instances.empty());
     }
 
     TEST_CASE("Extraction Resolves Hierarchy Into World Matrices", "[unit][editor]") {

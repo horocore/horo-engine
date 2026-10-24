@@ -254,26 +254,36 @@ namespace {
                 std::make_unique<ObservedPlaySceneHost>(identity, observations));
         };
     }
+
+    /** @brief Owns the complete selected-Play source/factory lifetime through each independent admission/Stop scenario. */
+    struct SelectedXrPlayFixture {
+        Editor::SceneDocument document;
+        Editor::EditorHistory history;
+        Editor::SceneDocumentCommandExecutor commands{document, history};
+        Runtime::PrimitiveMeshCache primitives;
+        Editor::EditorAssetMeshCache assets;
+        Editor::EditorXrSceneSourceOwner source{document, primitives, assets};
+        CpuSelectedXrHost xr{source.Port()}, foreign{source.Port()};
+        Gameplay::BehaviorRegistry registry;
+        std::shared_ptr<PlayOwnerObservations> observations{std::make_shared<PlayOwnerObservations>()};
+        Editor::EditorPlaySceneFactory factory;
+        Editor::EditorPlaySessionController play;  // Dies before every authority captured by the factory.
+
+        SelectedXrPlayFixture() {
+            REQUIRE(commands.Execute(Editor::CreateSceneObjectCommand{.name = "Box", .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}})
+                        .HasValue());
+            REQUIRE(registry.Freeze().HasValue());
+            factory = [this](Runtime::SceneRuntimeId identity, const Runtime::RuntimeSceneDefinition &) {
+                return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Success(
+                    std::make_unique<ObservedPlaySceneHost>(identity, observations, &xr));
+            };
+        }
+    };
 }  // namespace
 
-TEST_CASE("selected XR camera-free Play requires the exact real Scene participant and preserves repeat Play ownership") {
+TEST_CASE_METHOD(SelectedXrPlayFixture,
+                 "selected XR camera-free Play requires the exact real Scene participant and preserves repeat Play ownership") {
     using namespace Editor;
-    SceneDocument document;
-    EditorHistory history;
-    SceneDocumentCommandExecutor commands(document, history);
-    REQUIRE(commands.Execute(CreateSceneObjectCommand{.name = "Box", .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}}).HasValue());
-    Runtime::PrimitiveMeshCache primitives;
-    EditorAssetMeshCache assets;
-    EditorXrSceneSourceOwner source(document, primitives, assets);
-    CpuSelectedXrHost xr(source.Port());
-    CpuSelectedXrHost foreign(source.Port());
-    Gameplay::BehaviorRegistry registry;
-    REQUIRE(registry.Freeze().HasValue());
-    const auto observations = std::make_shared<PlayOwnerObservations>();
-    EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId identity, const Runtime::RuntimeSceneDefinition &) {
-        return Result<std::unique_ptr<EditorPlaySceneHost>>::Success(std::make_unique<ObservedPlaySceneHost>(identity, observations, &xr));
-    };
-    EditorPlaySessionController play;
     SECTION("ordinary desktop still requires its authored camera") {
         REQUIRE(play.Start(document.Snapshot(), registry, factory).HasError());
         CHECK_FALSE(xr.published);

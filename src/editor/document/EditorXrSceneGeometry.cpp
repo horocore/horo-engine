@@ -56,6 +56,61 @@ namespace Horo::Editor {
         std::vector<std::size_t> instances;
         std::vector<Math::Mat4> worlds;
         bool active{true};
+
+        /** @brief Captures and orders bounded candidate topology cold, rejecting parents and cycles before publication. */
+        Result<void> CaptureHierarchy(const Runtime::RuntimeSceneView candidate) {
+            slots.resize(candidate.SlotCount());
+            nodes.reserve(candidate.SlotCount());
+            for (std::size_t slot = 0; slot < candidate.SlotCount(); ++slot) {
+                auto entity = candidate.EntityAt(slot);
+                if (!entity)
+                    continue;
+                slots[slot] = entity->entity;
+                nodes.push_back({entity->entity, entity->parent, entity->authoredObject, *entity->primitiveMesh});
+            }
+            for (auto &node : nodes) {
+                if (!node.parent)
+                    continue;
+                const auto parent = std::ranges::find(nodes, *node.parent, &PreparedEditorXrGeometry::Impl::Node::entity);
+                if (parent == nodes.end())
+                    return Result<void>::Failure(GeometryError("XR geometry parent is outside the candidate Scene."));
+                node.parentIndex = static_cast<std::size_t>(parent - nodes.begin());
+            }
+            std::vector<bool> ordered(nodes.size());
+            order.reserve(nodes.size());
+            while (order.size() != nodes.size()) {
+                const auto previous = order.size();
+                for (std::size_t index = 0; index < nodes.size(); ++index) {
+                    if (!ordered[index] && (nodes[index].parentIndex == NoParent || ordered[nodes[index].parentIndex])) {
+                        ordered[index] = true;
+                        order.push_back(index);
+                    }
+                }
+                if (order.size() == previous)
+                    return Result<void>::Failure(GeometryError("XR geometry candidate hierarchy contains a cycle."));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Maps exact authored draw IDs to retained candidate generations without retaining component borrows. */
+        Result<void> MapInstances(const Runtime::RuntimeSceneView candidate) {
+            worlds.resize(nodes.size());
+            instances.reserve(snapshot.instanceObjects.size());
+            for (std::size_t index = 0; index < snapshot.instanceObjects.size(); ++index) {
+                const auto object = snapshot.instanceObjects[index];
+                if (std::ranges::find(std::span(snapshot.instanceObjects).first(index), object) !=
+                    std::span(snapshot.instanceObjects).first(index).end())
+                    return Result<void>::Failure(GeometryError("XR geometry has duplicate authored draw identities."));
+                const auto entity = candidate.Find(Runtime::SceneObjectId{object.value});
+                if (!entity)
+                    return Result<void>::Failure(GeometryError("XR geometry authored object is absent from the candidate Scene."));
+                const auto node = std::ranges::find(nodes, *entity, &PreparedEditorXrGeometry::Impl::Node::entity);
+                if (node == nodes.end())
+                    return Result<void>::Failure(GeometryError("XR geometry candidate mapping is stale."));
+                instances.push_back(static_cast<std::size_t>(node - nodes.begin()));
+            }
+            return Result<void>::Success();
+        }
     };
 
     PreparedEditorXrGeometry::PreparedEditorXrGeometry(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -146,51 +201,10 @@ namespace Horo::Editor {
         impl->state = document.state;
         impl->assetGeneration = owner.assets->Generation();
         impl->snapshot = std::move(extracted).Value();
-        impl->slots.resize(candidate.SlotCount());
-        impl->nodes.reserve(candidate.SlotCount());
-        for (std::size_t slot = 0; slot < candidate.SlotCount(); ++slot) {
-            auto entity = candidate.EntityAt(slot);
-            if (!entity)
-                continue;
-            impl->slots[slot] = entity->entity;
-            impl->nodes.push_back({entity->entity, entity->parent, entity->authoredObject, *entity->primitiveMesh});
-        }
-        for (auto &node : impl->nodes) {
-            if (!node.parent)
-                continue;
-            const auto parent = std::ranges::find(impl->nodes, *node.parent, &PreparedEditorXrGeometry::Impl::Node::entity);
-            if (parent == impl->nodes.end())
-                return Output::Failure(GeometryError("XR geometry parent is outside the candidate Scene."));
-            node.parentIndex = static_cast<std::size_t>(parent - impl->nodes.begin());
-        }
-        std::vector<bool> ordered(impl->nodes.size());
-        impl->order.reserve(impl->nodes.size());
-        while (impl->order.size() != impl->nodes.size()) {
-            const auto previous = impl->order.size();
-            for (std::size_t index = 0; index < impl->nodes.size(); ++index) {
-                if (!ordered[index] && (impl->nodes[index].parentIndex == NoParent || ordered[impl->nodes[index].parentIndex])) {
-                    ordered[index] = true;
-                    impl->order.push_back(index);
-                }
-            }
-            if (impl->order.size() == previous)
-                return Output::Failure(GeometryError("XR geometry candidate hierarchy contains a cycle."));
-        }
-        impl->worlds.resize(impl->nodes.size());
-        impl->instances.reserve(impl->snapshot.instanceObjects.size());
-        for (std::size_t index = 0; index < impl->snapshot.instanceObjects.size(); ++index) {
-            const auto object = impl->snapshot.instanceObjects[index];
-            if (std::ranges::find(std::span(impl->snapshot.instanceObjects).first(index), object) !=
-                std::span(impl->snapshot.instanceObjects).first(index).end())
-                return Output::Failure(GeometryError("XR geometry has duplicate authored draw identities."));
-            const auto entity = candidate.Find(Runtime::SceneObjectId{object.value});
-            if (!entity)
-                return Output::Failure(GeometryError("XR geometry authored object is absent from the candidate Scene."));
-            const auto node = std::ranges::find(impl->nodes, *entity, &PreparedEditorXrGeometry::Impl::Node::entity);
-            if (node == impl->nodes.end())
-                return Output::Failure(GeometryError("XR geometry candidate mapping is stale."));
-            impl->instances.push_back(static_cast<std::size_t>(node - impl->nodes.begin()));
-        }
+        if (auto hierarchy = impl->CaptureHierarchy(candidate); hierarchy.HasError())
+            return Output::Failure(hierarchy.ErrorValue());
+        if (auto mapped = impl->MapInstances(candidate); mapped.HasError())
+            return Output::Failure(mapped.ErrorValue());
         auto prepared = std::unique_ptr<PreparedEditorXrGeometry>(new PreparedEditorXrGeometry(std::move(impl)));
         const auto valid = prepared->Update(candidate);
         if (valid.HasError())

@@ -103,6 +103,28 @@ namespace Horo::XR {
             return result.Value();
         }
 
+        /** @brief Completes actual fixture cleanup, verifies the next generation, then checks permanent shutdown. */
+        void RequireRetiredAndNextGeneration(RecordingResources &resources, XRSessionLifecycle &lifecycle, XRFrameLifecycle &frames,
+                                             XRSessionId session, const XRCapabilitySnapshot &capabilities, std::size_t prepared) {
+            using RuntimeInternal::XRSessionHostControl;
+            resources.drained = true;
+            REQUIRE(XRSessionHostControl::Retire(lifecycle, frames, resources, session).HasValue());
+            REQUIRE(resources.calls.size() == prepared + 7);
+            REQUIRE(lifecycle.Snapshot().state == XRSessionState::Inactive);
+            REQUIRE_FALSE(lifecycle.AcceptedPlan());
+            RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, resources, session), XRErrors::IdentityStale);
+            const auto next = Activate(lifecycle, capabilities);
+            REQUIRE(next.slot.generation > session.slot.generation);
+            resources.retiring = next;
+            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Started).HasValue());
+            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Stopping).HasValue());
+            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Idle).HasValue());
+            REQUIRE(XRSessionHostControl::Retire(lifecycle, frames, resources, next).HasValue());
+            REQUIRE_FALSE(lifecycle.Snapshot().session.IsValid());
+            lifecycle.Shutdown();
+            REQUIRE(TryActivate(lifecycle, capabilities).HasError());
+        }
+
         TEST_CASE("XR host retirement preserves debt and the sole generation issuer", "[unit][xr][lifecycle][host]") {
             using RuntimeInternal::XRSessionHostControl;
             RecordingResources resources;
@@ -151,22 +173,7 @@ namespace Horo::XR {
                 RequireFailureIdentity(lifecycle.ApplyEvent(session, XRSessionEvent::Ready), XRSessionErrors::TransitionInvalid);
             }
 
-            resources.drained = true;
-            REQUIRE(XRSessionHostControl::Retire(lifecycle, frames, resources, session).HasValue());
-            REQUIRE(resources.calls.size() == prepared + 7);
-            REQUIRE(lifecycle.Snapshot().state == XRSessionState::Inactive);
-            REQUIRE_FALSE(lifecycle.AcceptedPlan());
-            RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, resources, session), XRErrors::IdentityStale);
-            const auto next = Activate(lifecycle, capabilities);
-            REQUIRE(next.slot.generation > session.slot.generation);
-            resources.retiring = next;
-            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Started).HasValue());
-            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Stopping).HasValue());
-            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Idle).HasValue());
-            REQUIRE(XRSessionHostControl::Retire(lifecycle, frames, resources, next).HasValue());
-            REQUIRE_FALSE(lifecycle.Snapshot().session.IsValid());
-            lifecycle.Shutdown();
-            REQUIRE(TryActivate(lifecycle, capabilities).HasError());
+            RequireRetiredAndNextGeneration(resources, lifecycle, frames, session, capabilities, prepared);
         }
 
         TEST_CASE("XRRuntime contributes unique actionable session errors", "[unit][xr][lifecycle]") {

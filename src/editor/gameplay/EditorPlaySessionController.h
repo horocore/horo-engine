@@ -6,6 +6,7 @@
  */
 
 #include "EditorPlaySceneHost.h"
+#include "EditorPlayState.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
@@ -32,11 +33,6 @@ namespace Horo::Editor {
         EditorPlaySessionState priorState{EditorPlaySessionState::Playing};
     };
 
-    /** @brief Explicit private Play view policy; selected XR must match the real factory participant. */
-    enum class EditorPlayViewSource {
-        AuthoredCamera,
-        SelectedXr
-    };
     class IEditorPlayXrHost;
 
     /** @brief Owns one isolated Scene service host and gameplay runner without mutating the authoring document. */

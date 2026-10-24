@@ -5,11 +5,13 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderMemoryBudgetErrors.h"
+#include "Horo/Runtime/Render/UiPaintFrameUpload.h"
 #include "RenderGraphTestUtils.h"
 #include "RenderMemoryTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -34,7 +36,27 @@ namespace Horo::Tests::RenderFrontendTesting {
         TypedError
     };
 
+    /** @brief Copied CPU encoding admission, without native raster or pixel emulation. */
+    struct UiPaintPassAudit final {
+        RenderGraphResourceId color;
+        std::vector<RenderGraphResourceId> sampled;
+        std::vector<UiPaintDraw> draws;
+    };
+
+    /** @brief CPU admission ledger only; never native completion or pixel evidence. */
+    struct UiPaintUploadAudit final {
+        bool enabled{}, pending{};
+        std::size_t updates{}, kernels{};
+        std::vector<UiPaintPassAudit> passes;
+        std::size_t graphCalls{}, failGraphCall{};
+        bool retainAfterAbort{};
+        std::function<void()> onGraph; /**< Test-only reentry probe; cleared before its borrowed frame leaves scope. */
+        std::uint64_t revision{};
+        std::array<std::uint64_t, 3> instances{};
+    };
+
     struct BackendLifecycleState {  // NOSONAR(cpp:S1820) Flat assertion ledger keeps injected backend transitions directly observable.
+        UiPaintUploadAudit uiPaint;
         int initializeCount{0};
         int shutdownCount{0};
         int abortCount{0};

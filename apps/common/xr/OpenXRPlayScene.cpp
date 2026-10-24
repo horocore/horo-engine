@@ -142,27 +142,33 @@ namespace Horo::Application::Internal {
             RetireScene(scene_);
             return Output::Failure(error);
         };
-        if (auto prepared = composition_.session.PrepareInput(*input_.port, *input_.router, *composition_.bindings,
-                                                              {input_.origin, XRSpaceKind::Local, root.Value()});
-            prepared.HasError())
+        if (auto prepared = PrepareSceneResources({input_.origin, XRSpaceKind::Local, root.Value()}); prepared.HasError())
             return fail(prepared.ErrorValue());
+        rollback.accepted = true;
+        return Output::Success(scene_);
+    }
+
+    /** @copydoc OpenXRPlayHost::PrepareSceneResources */
+    Result<void> OpenXRPlayHost::PrepareSceneResources(const NativeTrackingSpaceRequest &tracking) {
+        if (auto prepared = composition_.session.PrepareInput(*input_.port, *input_.router, *composition_.bindings, tracking);
+            prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
         auto projection = composition_.session.PrepareProjection(composition_.frontend, composition_.viewport, *composition_.bindings);
         if (projection.HasError())
-            return fail(projection.ErrorValue());
+            return Result<void>::Failure(projection.ErrorValue());
         scene_->projection.emplace(std::move(projection).Value());
         const auto &facts = *scene_->projection;
         auto activated = sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(), facts.plan);
         if (activated.HasError())
-            return fail(activated.ErrorValue());
+            return Result<void>::Failure(activated.ErrorValue());
         scene_->activated = true;
         if (scene_->session != activated.Value())
-            return fail(MakeError(XRErrors::IdentityStale));
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (auto finished = FinishFrameResources(activated.Value(), facts.capabilities); finished.HasError())
-            return fail(finished.ErrorValue());
+            return Result<void>::Failure(finished.ErrorValue());
         if (auto valid = ValidateScene(*scene_); valid.HasError())
-            return fail(valid.ErrorValue());
-        rollback.accepted = true;
-        return Output::Success(scene_);
+            return Result<void>::Failure(valid.ErrorValue());
+        return Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::ValidateScene */
