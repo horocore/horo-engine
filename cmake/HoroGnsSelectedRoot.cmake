@@ -50,9 +50,10 @@ function(horo_prepare_gns_selected_root pristine out_source)
         find_package(Git REQUIRED)
         # An in-repository build directory must not let git discover the parent
         # Horo checkout and interpret patch paths relative to that worktree.
+        # Keep reviewed candidate bytes independent of the caller's checkout conversion.
         execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_INDEX_FILE
                         "GIT_CEILING_DIRECTORIES=${owned}"
-                        "${GIT_EXECUTABLE}" apply "${patch_dir}/horo-gns-selected-root-v1.patch"
+                        "${GIT_EXECUTABLE}" -c core.autocrlf=false apply "${patch_dir}/horo-gns-selected-root-v1.patch"
                         WORKING_DIRECTORY "${owned}" RESULT_VARIABLE applied ERROR_VARIABLE reason)
         if(NOT applied EQUAL 0)
             message(FATAL_ERROR "GNS build-owned selected-root patch failed: ${reason}")

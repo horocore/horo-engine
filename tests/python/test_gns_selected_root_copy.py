@@ -1,4 +1,5 @@
 """Exercise the actual owned-copy helper without configuring or compiling GNS."""
+from collections.abc import Iterator
 import hashlib
 import json
 from pathlib import Path
@@ -26,6 +27,21 @@ def _prepare_patch_repository(project: Path, patch_path: Path, git: str,
     assert patch_path.read_bytes() == expected
 
 
+@pytest.fixture(params=[False, True])
+def isolated_git_config(tmp_path: Path, request: pytest.FixtureRequest,
+                        monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep inherited checkout conversion independent of caller configuration."""
+    git_config = tmp_path / "isolated.gitconfig"
+    config_text = f"[core]\n    autocrlf = {str(request.param).lower()}\n"
+    git_config.write_text(config_text, encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(git_config))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    yield
+    assert git_config.read_text(encoding="utf-8") == config_text
+
+
+@pytest.mark.usefixtures("isolated_git_config")
 @pytest.mark.parametrize("inside_repository", [True, False])
 @pytest.mark.parametrize("autocrlf_checkout", [False, True])
 def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, autocrlf_checkout: bool,
@@ -69,7 +85,7 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, 
         result = pytester.run(cmake, "-P", str(script), timeout=15)
         assert result.ret == 0, result.stdout.str() + result.stderr.str()
         owned = Path(result_path.read_text())
-        assert (owned / "src/sentinel.cpp").read_text() == "patched\n"
+        assert (owned / "src/sentinel.cpp").read_bytes() == b"patched\n"
         assert parent_source.read_text() == "original\n"
         assert (pristine / "src/sentinel.cpp").read_text() == "original\n"
     (owned / "src/sentinel.cpp").write_text("corrupted\n", encoding="utf-8")
