@@ -230,9 +230,11 @@ Their test steps and JUnit reports remain separate, and every suite must pass.
 The SDL input composition remains independent. These grouped checkpoints use
 the same main-only writer policy and never store test results or build trees.
 
-The active `ci.yml` native-test and Audio Real-Time Safety jobs restore caches
-through `.github/actions/restore-native-cache` and checkpoint them through
-`.github/actions/save-native-cache`. This bounded rollout uses the existing
+The active `ci.yml` native-test job restores primary and auxiliary compiler
+stores through `.github/actions/restore-native-cache` with registry storage.
+Successful main builds publish them directly through
+`.github/actions/publish-compiler-checkpoint`; no Actions compiler copy is saved.
+Focused profiles retain Actions storage. This rollout uses the existing
 explicit CMake compositions; it does not assume the target preset/profile tools
 described below already exist.
 
@@ -510,22 +512,29 @@ change or an intentional clean-build run.
 
 ### Concurrency
 
-CI workflows use:
+PR workflow groups use the workflow name and ref, with cancellation enabled only
+for `pull_request`. A newer commit cancels obsolete work for that PR; different
+PRs never share a group. Cache reads use the last verified checkpoint.
 
-```yaml
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-```
+Native CI main runs have independent workflow admission and bounded job lanes.
+Tooling, Android storage and D3D12 each have one lane; shader and native lanes
+include the matrix platform. Each lane permits one active job and the default
+single pending job. New pending work replaces older pending work, while active
+main builds finish publication and qualification. A slow Windows job therefore
+does not hold the next Linux cache producer behind the entire old workflow.
+The existing per-run native width of two and shader width of one are preserved.
+Across overlapping main runs, native work is bounded to one job per platform;
+this is not a global limit on PR jobs. Supporting lanes are unique per PR run,
+so they cannot replace jobs in unrelated PRs. No additional jobs are created.
 
-This means a new push cancels the in-progress run for the same ref.
-Cancelled runs do not corrupt cache entries — GitHub's cache restore
-is always from the last successful save.
-
-`ci.yml` and Sonar use `cancel-in-progress` only for pull requests. An active
-main run may finish its cache checkpoints; newer main pushes replace a pending
-run rather than repeatedly interrupting the canonical cache producer. Stale PR
-runs remain cancellable.
+Sonar retains one workflow-level main lane because its analysis cache has one
+canonical writer. Native publisher lanes serialize both Debug and auxiliary
+publication for each platform. GitHub organization runner limits still apply:
+the Free plan allows 20 concurrent jobs including at most five macOS jobs.
+Ten simultaneous PRs can therefore wait for macOS capacity even when execution
+fits the target duration. Measure admission delay and runner duration separately.
+See [Actions limits](https://docs.github.com/en/actions/reference/limits#job-concurrency-limits-for-github-hosted-runners)
+and [concurrency semantics](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency).
 
 ### Scheduled Cold Builds
 
@@ -692,12 +701,12 @@ on Linux, macOS and Windows, and Linux job `120596826395` verified a published
 package and configured without recompiling Unicode. Other dependency recipes,
 full platform consumers and stable hosted timing still require qualification.
 The earlier bucket capacity planner remains an offline alternative, not a
-configured R2 service. Compiler checkpoints remain in Actions storage and can
-still be evicted. The 10–15 minute target is not yet achieved.
+configured R2 service. Core compiler checkpoints use GHCR directly, independently
+of Actions storage. The 10–15 minute target is not yet achieved.
 
-### Compiler checkpoint fallback in public GHCR
+### Direct compiler checkpoints in public GHCR
 
-The compiler exporter uses the existing public SDK package with distinct
+The owning main builds use the existing public SDK package with distinct
 `compiler-v1-<namespace-sha256>` tags and the
 `application/vnd.horo.compiler-cache.v1` artifact type. It does not reuse the
 SDK compatibility schema. Its namespace is the existing native OS, architecture,
@@ -705,32 +714,44 @@ compiler/version, profile and configuration cache prefix, or the separate
 instrumented Sonar prefix. Compiler entry hashes remain authoritative; no flags,
 header checks, quality scope or instrumentation are relaxed.
 
-`compiler-checkpoints.yml` runs only on reviewed main code, on a completed
-canonical main push, a schedule, or manual dispatch. Its four platform/profile
-exports run serially, use existing main Actions snapshots, and never compile.
-Missing snapshots skip publication. Triggering workflow conclusions do not grant
-trust: repository, branch and push event must match. A successful checkpoint
-means compilation completed, not that tests or quality gates passed.
+Publication runs immediately after successful compilation, before tests. This
+eliminates the interval in which Actions quota eviction could remove the only
+new checkpoint before a separate exporter restored it. The delayed exporter
+workflow is removed. A successful checkpoint records compilation, not passing
+tests or quality gates. Publication failures remain optional and do not suppress
+the original tests, coverage or analysis.
 
-The exporter checks the public package's source checkpoint before packing and
+Main and read-only jobs share their complete steps, environment and strategy
+through GitHub-supported YAML anchors. Their event predicates are mutually
+exclusive: only canonical main pushes/manual main runs receive `packages: write`;
+PRs, feature refs and forks receive `packages: read`. Existing PR check names,
+native matrix width and one active Sonar job are preserved. The unused definition
+is skipped without allocating a runner. No PAT or PR write secret is introduced.
+
+The publisher checks the public package's source checkpoint before packing and
 skips the same or newer run/attempt. Publication replaces one namespace tag only
 after its blob upload completes. Only an explicit missing manifest permits a
 first publication; outages and incompatible manifests fail without overwriting.
-A single workflow concurrency group prevents competing latest-tag writers. New
+CI owns native namespaces and SonarCloud owns instrumented namespaces. Their
+native platform lanes and the Sonar main concurrency group serialize writes; platforms/profiles
+have distinct tags. The CLI rejects delayed exporter events and wrong workflow
+owners, including old exporter runs that check out the new main code. New
 compiler/toolchain namespaces get distinct tags; old namespace/tag cleanup is
 not automated in this first rollout. GHCR version storage must be monitored;
 Actions duplicate retention remains independent.
 
-PRs retain their existing jobs and read-only package permissions. They first
-restore Actions storage, then try the anonymous public fallback on a miss for
-native Debug or Sonar. The client uses an empty credential store and a 90-second
+PRs restore native Debug, auxiliary variants and instrumented Sonar directly
+from GHCR. These stores neither read nor write Actions compiler snapshots, so
+source/scanner caches no longer compete with their multi-gigabyte copies.
+Other focused compiler profiles can retain Actions storage. The public client
+uses an empty credential store and a 90-second
 network budget. A fixed digest selects the blob, capped at 3 GiB compressed and
 4 GiB expanded. A bounded manifest requires the independently selected namespace,
 source key, regular portable paths, sizes and per-file SHA-256. Every file is
 verified privately before installing any entry. Configuration, locks and counters
 are excluded; local entries/settings are preserved. Restore runs before compiler
 activity, with the Windows cache server stopped. A failed fetch retains normal
-compilation. The CLI chooses only the two fixed workspace cache paths, rather
+compilation. The CLI chooses only fixed primary, auxiliary and Sonar cache paths, rather
 than accepting an arbitrary destination.
 
 This is independent storage against Actions quota eviction, not a latency
@@ -738,6 +759,24 @@ measurement or a replacement for dependency packages. Hosted publication and
 anonymous cross-platform restores still require qualification before claiming
 the 10–15 minute target. Large transfers and warm linking/analysis remain part
 of each job's measured duration.
+
+### Sonar compiler version namespaces
+
+Sonar's `sonar-v3` compiler namespace includes the full active C and C++ GCC
+versions, using the same validated `ci-cache-identity` helper as native CI. The
+coverage job explicitly selects gcc/g++ on Ubuntu 26. Publication uses the same
+job and actual compiler identity. Updating a runner's default GCC starts a
+distinct namespace rather than replacing an older toolchain's latest snapshot.
+Compiler entry content/flag checks and coverage instrumentation remain unchanged.
+
+During migration, the public reader tries the legacy `sonar-v2` artifact only
+after an explicit missing versioned
+manifest, within the same anonymous client/network budget. Invalid manifests or
+registry outages do not trigger this fallback. Legacy entries may miss with a
+new compiler, but never bypass ccache's own compiler checks. Once a versioned
+snapshot exists, it wins; only versioned keys are saved/exported by the new main
+workflow. Old Actions retention treats each compiler pair and legacy prefix
+independently. The publisher never relabels legacy data as compiler-qualified.
 
 ### Auxiliary native compiler working set
 
@@ -749,15 +788,14 @@ remain authoritative; Mixed describes the collection, not binary compatibility
 between build configurations. The main checkpoint before tests preserves entries
 from successful auxiliary compilation even if a later test fails.
 
-The existing serial native exporter publishes both primary and auxiliary
-namespaces in one job per platform. PRs restore each store only at its owning
+The existing native build publishes both primary and auxiliary namespaces at
+their respective compile boundaries. PRs restore each store only at its owning
 phase, without uploading. The temporary runner may hold up to 4G of native
 compiler entries across these two stores; the Debug working set cannot be
 evicted by later Release/provider compilation. This does not prove all variants
 fit the auxiliary budget. Per-phase hit rates and pressure still require hosted
-measurement. Actions storage remains a best-effort staging layer: it may evict a
-new checkpoint before the periodic exporter reads it. GHCR preserves previously
-published checkpoints independently; a missing publication builds normally.
+measurement. Publication does not depend on an Actions staging entry or another
+runner becoming available. A missing publication still builds normally.
 
 ### Symptoms of a stale build
 

@@ -22,12 +22,15 @@ import dependency_registry as transport
 ARTIFACT_TYPE = "application/vnd.horo.compiler-cache.v1"
 LAYER_TYPE = ARTIFACT_TYPE + ".tar+gzip"
 MANIFEST = "horo-compiler.json"
+LEGACY_SONAR_NAMESPACE = "sonar-v2-gcc-Linux-X64-main-"
 MAX_ARCHIVE_BYTES = 3 * 1024 ** 3
 MAX_EXPANDED_BYTES = 4 * 1024 ** 3
 KEY_PATTERN = re.compile(
     r"(native-v1-(?:Linux|Windows|macOS)-(?:X64|ARM64)-"
     r"[a-z0-9.-]+-[a-z0-9.-]+-(?:native-tests-v1-Debug|native-variants-v1-Mixed)-main-|"
-    r"sonar-v2-gcc-Linux-X64-main-)([1-9][0-9]*)-([1-9][0-9]*)")
+    r"sonar-v2-gcc-Linux-X64-main-|"
+    r"sonar-v3-Linux-X64-gcc-[0-9]+(?:\.[0-9]+)+-gcc-[0-9]+(?:\.[0-9]+)+-main-)"
+    r"([1-9][0-9]*)-([1-9][0-9]*)")
 # Never import remote configuration, operational locks, or per-run counters.
 LOCAL_FILES = {"ccache.conf", "stats", "stats.log", "cachedir.tag", MANIFEST}
 
@@ -167,15 +170,31 @@ def descriptor(manifest: str, namespace: str) -> tuple[dict, str]:
     return layer, key
 
 
+def fetch_descriptor(registry: transport.Registry, namespace: str) -> tuple[dict, str, str]:
+    """Bootstrap a missing versioned Sonar snapshot without masking invalid ones."""
+    try:
+        layer, key = descriptor(registry.run("manifest", "fetch", reference(namespace)), namespace)
+        return layer, key, namespace
+    except transport.MissingManifest:
+        if not namespace.startswith("sonar-v3-"):
+            raise
+    print("No versioned Sonar checkpoint; try legacy entries with compiler hash checks intact")
+    layer, key = descriptor(
+        registry.run("manifest", "fetch", reference(LEGACY_SONAR_NAMESPACE)),
+        LEGACY_SONAR_NAMESPACE,
+    )
+    return layer, key, LEGACY_SONAR_NAMESPACE
+
+
 def fetch(namespace: str) -> None:
     """Restore anonymously by blob digest; a failed fetch leaves compilation usable."""
-    ref = reference(namespace)
+    reference(namespace)
     destination = cache_root(namespace)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
         root = Path(temporary)
         registry = transport.Registry(root, seconds=90)
-        layer, expected = descriptor(registry.run("manifest", "fetch", ref), namespace)
+        layer, expected, selected_namespace = fetch_descriptor(registry, namespace)
         payload = root / "compiler.tar.gz"
         registry.run("blob", "fetch", f"{transport.REGISTRY}@{layer['digest']}",
                      "--output", str(payload))
@@ -184,33 +203,26 @@ def fetch(namespace: str) -> None:
             raise ValueError("Compiler OCI digest mismatch")
         staging = root / "verified"
         staging.mkdir()
-        if unpack(payload, namespace, staging) != expected:
+        if unpack(payload, selected_namespace, staging) != expected:
             raise ValueError("Compiler OCI and payload checkpoint differ")
         merge_entries(staging, destination)
         print(f"Verified public compiler checkpoint: {expected}")
 
 
-def trusted_publisher(environment: dict) -> bool:
-    """Require canonical main; workflow_run additionally verifies triggering provenance."""
-    if (environment.get("GITHUB_REPOSITORY") != "horocore/horo-engine"
-            or environment.get("GITHUB_REF") != "refs/heads/main"):
-        return False
-    event = environment.get("GITHUB_EVENT_NAME")
-    if event in {"schedule", "workflow_dispatch"}:
-        return True
-    if event != "workflow_run":
-        return False
-    document = json.loads(Path(environment["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-    run = document["workflow_run"]
-    return (run["head_repository"]["full_name"] == "horocore/horo-engine"
-            and run["head_branch"] == "main" and run["event"] == "push")
+def trusted_publisher(environment: dict, namespace: str) -> bool:
+    """Allow only the owning build workflow on canonical main, never a delayed exporter."""
+    owner = {"native": "CI", "sonar": "SonarCloud"}.get(namespace.split("-", 1)[0])
+    return (owner is not None and environment.get("GITHUB_WORKFLOW") == owner
+            and environment.get("GITHUB_REPOSITORY") == "horocore/horo-engine"
+            and environment.get("GITHUB_REF") == "refs/heads/main"
+            and environment.get("GITHUB_EVENT_NAME") in {"push", "workflow_dispatch"})
 
 
 def publish(key: str) -> None:
     """Single-writer latest checkpoint; never replace it with an older main run."""
-    if not trusted_publisher(os.environ):
-        raise ValueError("Only the trusted main exporter may publish compiler entries")
     namespace, order = split_key(key)
+    if not trusted_publisher(os.environ, namespace):
+        raise ValueError("Only the owning main build may publish compiler entries")
     ref = reference(namespace)
     source = cache_root(namespace)
     with tempfile.TemporaryDirectory(dir=source.parent) as temporary:
@@ -232,6 +244,7 @@ def publish(key: str) -> None:
                      "--annotation", f"io.horo.compiler.source-key={key}",
                      "--annotation", "org.opencontainers.image.source=https://github.com/horocore/horo-engine",
                      cwd=root)
+        print(f"Published compiler checkpoint: {key}")
 
 
 def main() -> int:

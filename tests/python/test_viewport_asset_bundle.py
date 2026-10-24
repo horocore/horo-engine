@@ -16,7 +16,7 @@ def test_sonar_cooks_and_verifies_locally_after_build_before_coverage():
     workflow = (ROOT / '.github/workflows/sonar.yml').read_text()
     assert '  viewport-assets:' not in workflow
     consumer = workflow.split('  sonar:', 1)[1]
-    assert 'runs-on: ubuntu-26.04' in consumer
+    assert re.search(r'^    runs-on: (?:&sonar_runner )?ubuntu-26\.04$', consumer, re.MULTILINE)
     assert 'needs:' not in consumer
     assert 'actions: read' not in consumer
     assert 'download-artifact' not in consumer
@@ -39,7 +39,7 @@ def test_sonar_cooks_and_verifies_locally_after_build_before_coverage():
 
 
 def require_provisioning_failure_policy(consumer):
-    # Only the two optional cache accelerators may fail before coverage starts.
+    # Only these cache accelerators may fail before coverage starts.
     prefix = consumer.split('      - name: Run Python coverage tests', 1)[0]
     header, *steps = re.split(r'^      - ', prefix, flags=re.MULTILINE)
     assert 'continue-on-error' not in header
@@ -47,6 +47,8 @@ def require_provisioning_failure_policy(consumer):
         'name: Install optional compiler registry client': '        uses: oras-project/setup-oras@',
         'name: Restore optional public compiler checkpoint':
             '        run: python3 .github/scripts/compiler_registry.py fetch --key ',
+        'name: Publish main instrumented compiler checkpoint':
+            '        uses: ./.github/actions/publish-compiler-checkpoint',
     }
     for step in steps:
         name = step.partition('\n')[0]
@@ -99,10 +101,15 @@ def test_provisioning_failure_policy_rejects_unrelated_optional_step():
         require_provisioning_failure_policy(mutated)
 
 
-def test_provisioning_failure_policy_rejects_repurposed_optional_step():
+@pytest.mark.parametrize('original,replacement', [
+    ('uses: oras-project/setup-oras@', 'uses: different/action@'),
+    ('run: python3 .github/scripts/compiler_registry.py fetch --key ', 'run: echo '),
+    ('uses: ./.github/actions/publish-compiler-checkpoint', 'uses: different/action'),
+])
+def test_provisioning_failure_policy_rejects_repurposed_optional_step(original, replacement):
     consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
     require_provisioning_failure_policy(consumer)
-    mutated = consumer.replace('uses: oras-project/setup-oras@', 'uses: different/action@', 1)
+    mutated = consumer.replace(original, replacement, 1)
     assert mutated != consumer
     with pytest.raises(AssertionError):
         require_provisioning_failure_policy(mutated)
@@ -110,7 +117,7 @@ def test_provisioning_failure_policy_rejects_repurposed_optional_step():
 
 def require_provisioning_order(consumer):
     build = consumer.index('name: Build instrumented targets')
-    checkpoint = consumer.index('name: Save compiler cache')
+    checkpoint = consumer.index('name: Publish main instrumented compiler checkpoint')
     cook = consumer.index('uses: ./.github/actions/cook-vulkan-viewport')
     verify = consumer.index('viewport_asset_bundle.py verify')
     export = consumer.index('HORO_EDITOR_VULKAN_ASSET_ROOT=')
@@ -123,7 +130,7 @@ def require_provisioning_order(consumer):
     ['HORO_EDITOR_VULKAN_ASSET_ROOT=', 'viewport_asset_bundle.py verify', 'ctest --preset sonar'],
 ])
 def test_provisioning_contract_rejects_wrong_order(steps):
-    prefix = ['name: Build instrumented targets', 'name: Save compiler cache',
+    prefix = ['name: Build instrumented targets', 'name: Publish main instrumented compiler checkpoint',
               'uses: ./.github/actions/cook-vulkan-viewport']
     with pytest.raises(AssertionError):
         require_provisioning_order('\n'.join(prefix + steps))

@@ -83,3 +83,11 @@ test('auxiliary generations retire only their own superseded checkpoints', () =>
     snapshot(3, { key: `${primary}3-1` })];
   assert.deepEqual(supersededSnapshots(caches).map(item => [item.cache.id, item.replacement.id]), [[1, 2]]);
 });
+
+test('Sonar compiler versions and legacy snapshots cannot retire each other', () => {
+  const prefix = version => `sonar-v3-Linux-X64-gcc-${version}-gcc-${version}-main-`;
+  const caches = [snapshot(1, { key: `${prefix('13.3.0')}1-1` }),
+    snapshot(2, { key: `${prefix('13.3.0')}2-1` }),
+    snapshot(3, { key: `${prefix('15.2.0')}3-1` }), snapshot(4)];
+  assert.deepEqual(supersededSnapshots(caches).map(item => [item.cache.id, item.replacement.id]), [[1, 2]]);
+});
