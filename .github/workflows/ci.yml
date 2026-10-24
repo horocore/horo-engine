@@ -515,14 +515,14 @@ jobs:
 
       - name: Build Release audio checks
         id: release_build
-        run: cmake --build --preset ci-audio-release
+        run: cmake --build --preset ci-audio-release --parallel ${{ runner.os == 'Windows' && 4 || 2 }}
 
       # MSVC Debug container moves may allocate iterator proxies inside noexcept.
       # Keep the complete admission/callback allocation sweep mandatory in Release.
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
