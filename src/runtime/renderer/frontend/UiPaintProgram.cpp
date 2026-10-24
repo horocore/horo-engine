@@ -64,7 +64,8 @@ namespace Horo::Render {
             auto storage = std::make_unique<Storage>(prototype, descriptor);
             storage->source.external.assign(textures.begin(), textures.end());
             for (std::size_t index = 0; index < textures.size(); ++index) {
-                if (!textures[index].IsValid() || std::ranges::find(textures.first(index), textures[index]) != textures.begin() + index)
+                const auto prefix = textures.first(index);
+                if (!textures[index].IsValid() || std::ranges::find(prefix, textures[index]) != prefix.end())
                     return Creation::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
                 if (const auto state = renderer.ResourceState(textures[index]); state.HasError())
                     return Creation::Failure(state.ErrorValue());

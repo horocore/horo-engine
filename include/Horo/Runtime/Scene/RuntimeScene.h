@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -678,23 +679,28 @@ namespace Horo::Runtime {
                                                                                         std::span<const EntityRef> destroyed) = 0;
     };
 
-    /** @brief Borrowed immutable view of one runtime scene; invalidated by structural commit or transition. */
+    /** @brief Allocation-free owner-thread Scene borrow; invalidated by structural commit or owner retirement.
+     * @details A weak lifetime observation never retains Scene/component storage. Cached identity values remain
+     * available after retirement; storage queries reject expired or foreign-thread borrows before accessing the owner.
+     */
     class RuntimeSceneView final {
     public:
         RuntimeSceneView() = default;
-        /** @brief Reports whether this borrow still observes the structural revision captured at acquisition. */
+        /** @brief Checks owner-thread access, owner lifetime and the structural revision captured at acquisition.
+         * @return False for empty, retired, structurally stale or foreign-thread views, without dereferencing a retired owner.
+         */
         [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Returns the exact committed structural revision captured by this current view.
-         * @return Non-zero revision when current, or zero for an empty/stale view; the scene owner must remain alive.
+         * @return Non-zero revision when current, or zero for an empty, expired, foreign-thread or structurally stale view.
          */
         [[nodiscard]] std::uint64_t StructuralRevision() const noexcept;
-        /** @brief Returns the owning runtime identity. */
+        /** @brief Returns the copied owning runtime identity, including after retirement. */
         [[nodiscard]] SceneRuntimeId RuntimeId() const noexcept;
-        /** @brief Returns the logical definition identity. */
+        /** @brief Returns the copied logical definition identity, including after retirement. */
         [[nodiscard]] SceneDefinitionId DefinitionId() const noexcept;
-        /** @brief Returns the activated authored revision. */
+        /** @brief Returns the copied activated authored revision, including after retirement. */
         [[nodiscard]] SceneDefinitionRevision DefinitionRevision() const noexcept;
-        /** @brief Returns the asset-registry revision used to prepare this scene. */
+        /** @brief Returns the copied preparation registry revision, including after retirement. */
         [[nodiscard]] Assets::AssetRegistryRevision AssetRegistryRevision() const noexcept;
         /** @brief Returns the number of allocated slots, including inactive and retired slots. */
         [[nodiscard]] std::size_t SlotCount() const noexcept;
@@ -720,6 +726,12 @@ namespace Horo::Runtime {
         friend class RuntimeScene;
         explicit RuntimeSceneView(const RuntimeScene &scene) noexcept;
         const RuntimeScene *scene_{};
+        std::weak_ptr<const std::uint8_t> lifetime_;
+        std::thread::id ownerThread_;
+        SceneRuntimeId runtimeId_;
+        SceneDefinitionId definitionId_;
+        SceneDefinitionRevision definitionRevision_;
+        Assets::AssetRegistryRevision assetRegistryRevision_;
         std::uint64_t structuralRevision_{};
     };
 
@@ -758,13 +770,20 @@ namespace Horo::Runtime {
             std::shared_ptr<const std::vector<std::uint8_t>> payload;
         };
 
+        /** @brief Constructs one cold Scene owner and its non-owning view lifetime observation.
+         * @param runtimeId Exact runtime incarnation. @param definitionId Logical definition.
+         * @param revision Authored revision. @param config Generation policy.
+         * @param assetRevision Registry revision used for preparation. @param assets Owned resolved payloads.
+         * @throws std::bad_alloc When the cold lifetime observation cannot be allocated.
+         * @pre Construction, storage queries, mutation and destruction occur on the same owner thread.
+         */
         RuntimeScene(SceneRuntimeId runtimeId, SceneDefinitionId definitionId, SceneDefinitionRevision revision, RuntimeSceneConfig config,
-                     Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> assets) noexcept;
+                     Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> assets);
         RuntimeScene(const RuntimeScene &) = delete;
         RuntimeScene &operator=(const RuntimeScene &) = delete;
         RuntimeScene(RuntimeScene &&) = delete;
         RuntimeScene &operator=(RuntimeScene &&) = delete;
-        /** @brief Returns an immutable borrowed scene view. */
+        /** @brief Returns an allocation-free immutable borrow, or an empty view on a foreign thread. */
         [[nodiscard]] RuntimeSceneView View() const noexcept;
         /** @brief Applies a structural batch atomically, leaving the scene unchanged on failure. @param commands
          * Owner-thread command batch consumed by the operation. @return Created-token resolutions and destroy count, or the
@@ -839,6 +858,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> DestroyEntity(RuntimeSceneStorage &storage, EntityRef entity) const;
         [[nodiscard]] bool IsValid(const RuntimeSceneStorage &storage, EntityRef entity) const noexcept;
 
+        std::shared_ptr<const std::uint8_t> viewLifetime_; /**< Cold liveness only; views never pin Scene/component storage. */
+        const std::thread::id ownerThread_{std::this_thread::get_id()};
         std::unique_ptr<Vfx::VfxWorld> vfxWorld_;
         Math::WorldCoordinate64 vfxOrigin_{};
         std::uint64_t vfxOriginRevision_{};

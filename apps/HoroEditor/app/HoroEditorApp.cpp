@@ -1317,6 +1317,11 @@ namespace Horo::Editor {
                 p_->background.jobs.StopAccepting();
                 static_cast<void>(pacing_.pacer.Stop());
                 frame_.reset();
+                if (guiFrameStarted_) {
+                    ImGui::EndFrame();
+                    guiFrameStarted_ = false;
+                }
+                extractedFrameReady_ = false;
                 if (pacing_.surface) {
                     const auto closed = pacing_.surface->Close();
                     surfaceClosed_ = closed.HasValue();
@@ -1474,17 +1479,21 @@ namespace Horo::Editor {
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
-                auto renderBegun = BeginRenderFrame(context);
-                if (renderBegun.HasError())
-                    return Result<void>::Failure(renderBegun.ErrorValue());
-
+                if (const auto updated = UpdatePacingSurface(); updated.HasError())
+                    return updated;
+                const auto snapshot = pacing_.surface->Snapshot();
+                if (snapshot.HasError())
+                    return Result<void>::Failure(snapshot.ErrorValue());
+                extractedFrameReady_ = false;
                 focusedWidgetInputContext_.Reset();
-                if (renderBegun.Value()) {
+                if (!nativePresentationPending_ && snapshot.Value().state == Render::RenderSurfaceState::Ready) {
+                    // Consume the preceding viewport request before Draw captures its current image identity.
+                    if (const auto prepared = PrepareViewportResources(); prepared.HasError())
+                        return prepared;
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                     qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiBegin);
 #endif
                     if (const Result<void> guiBegun = p_->presentation.guiRenderer.BeginFrame(); guiBegun.HasError()) {
-                        frame_.reset();
                         return guiBegun;
                     }
                     if (const EditorScrollDelta scrollDelta = scrollSmoother_.Consume(ImGui::GetIO().DeltaTime); !scrollDelta.IsEmpty()) {
@@ -1492,6 +1501,7 @@ namespace Horo::Editor {
                         ImGui::GetIO().AddMouseWheelEvent(scrollDelta.horizontal, scrollDelta.vertical);
                     }
                     ImGui::NewFrame();
+                    guiFrameStarted_ = true;
 
                     if (p_->presentation.io.WantTextInput) {
                         focusedWidgetInputContext_ = p_->inputRouter.PushContext(Input::InputContextId{"editor.focused_widget"},
@@ -1528,17 +1538,18 @@ namespace Horo::Editor {
             }
 
             Result<void> ExtractFrame() {
-                if (!frame_.has_value())
+                if (!guiFrameStarted_)
                     return Result<void>::Success();
-#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
-                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Extraction);
-#endif
 
                 screenHost_->Draw();
                 DrawModalBackdrop();
                 p_->modalHost.Draw();
                 ImGui::Render();
-
+                guiFrameStarted_ = false;
+                // Draw may synchronously start Play; its cold Scene/UI preparation still precedes native admission.
+#if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
+                qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Extraction);
+#endif
                 preparedPasses_.count = 0;
                 const EditorViewportSceneView viewportScene = viewportSceneState_->View();
                 if (const EditorViewportExtent viewportExtent = p_->presentation.viewportRenderer.RequestedExtent();
@@ -1574,6 +1585,7 @@ namespace Horo::Editor {
                                                                                      .clearColor =
                                                                                          Render::ClearColor{Theme::Bg0().x, Theme::Bg0().y,
                                                                                                             Theme::Bg0().z, 1.0F}}};
+                extractedFrameReady_ = true;
                 return Result<void>::Success();
             }
 
@@ -1678,16 +1690,17 @@ namespace Horo::Editor {
             }
 
             Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
-                if (auto updated = UpdatePacingSurface(); updated.HasError())
-                    return Result<bool>::Failure(updated.ErrorValue());
-                const auto snapshot = pacing_.surface->Snapshot();
-                if (snapshot.HasError())
-                    return Result<bool>::Failure(snapshot.ErrorValue());
-                if (nativePresentationPending_ || snapshot.Value().state != Render::RenderSurfaceState::Ready)
+                // The output was frozen before GUI CPU work. Recheck only availability, never resize/reproject after extraction.
+                const auto available = p_->presentation.renderFrontend.PollPresentationAvailability(pacing_.committedOutputExtent);
+                if (available.HasError()) {
+                    const auto &error = available.ErrorValue();
+                    if (error.domain.Value() == Render::RenderPresentationErrors::DrawableUnavailable.domain.Value() &&
+                        error.code.Value() == Render::RenderPresentationErrors::DrawableUnavailable.code.Value())
+                        return Result<bool>::Success(false);
+                    return Result<bool>::Failure(error);
+                }
+                if (!available.Value())
                     return Result<bool>::Success(false);
-                // Retain pending viewport work while the native surface cannot admit rendering.
-                if (const Result<void> prepared = PrepareViewportResources(); prepared.HasError())
-                    return Result<bool>::Failure(prepared.ErrorValue());
                 const Render::FramebufferExtent outputExtent = pacing_.committedOutputExtent;
                 pacing_.presentingFrameNumber = context.frameNumber;
 
@@ -1734,7 +1747,12 @@ namespace Horo::Editor {
             }
 
             Result<void> ExecuteFrame(const Runtime::FrameContext &context) {
-                if (!frame_.has_value())
+                if (!std::exchange(extractedFrameReady_, false))
+                    return Result<void>::Success();
+                auto begun = BeginRenderFrame(context);
+                if (begun.HasError())
+                    return Result<void>::Failure(begun.ErrorValue());
+                if (!begun.Value())
                     return Result<void>::Success();
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Execution);
@@ -1812,6 +1830,8 @@ namespace Horo::Editor {
 #endif
             EditorSurfaceRecovery surfaceRecovery_{EditorSurfaceRecovery::Defer};
             bool nativePresentationPending_{false};
+            bool guiFrameStarted_{};     /**< ImGui CPU frame requiring Render or EndFrame, independent of native scope. */
+            bool extractedFrameReady_{}; /**< Completed GUI/cold-source extraction eligible for one native admission. */
             Input::FrameNumber inputFrameNumber_{1};
             Input::InputContextToken focusedWidgetInputContext_;
             EditorPreparedPasses preparedPasses_;

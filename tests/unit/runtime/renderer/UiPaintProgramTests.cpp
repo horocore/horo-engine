@@ -102,6 +102,44 @@ namespace {
     };
 }  // namespace
 
+TEST_CASE("UI program sampled table accepts unique prefix ranges and rejects duplicate or invalid handles",
+          "[renderer][ui-paint][program]") {
+    ProgramFixture fixture;
+    const auto geometry = fixture.Extract();
+    std::array<std::byte, 64> bytes{};
+    const auto alternate = UiRequire(fixture.frontend->CreateUiMaskTexture(fixture.images, fixture.image, 0, bytes));
+    const auto first = fixture.texture->Creation().handle;
+    std::array textures{first, alternate.Creation().handle};
+    bool valid = true;
+    SECTION("distinct entries retain their own sampled resource") {}
+    SECTION("duplicate entry is rejected before native preparation") {
+        textures[1] = first;
+        valid = false;
+    }
+    SECTION("invalid entry is rejected before native preparation") {
+        textures[1] = {};
+        valid = false;
+    }
+    const auto kernels = lifecycleState.uiPaint.kernels;
+    const auto creations = lifecycleState.createTextureCount;
+    auto created = UiPaintProgram::Create(*fixture.frontend, {fixture.projection, {512, 768, 128}, 1, 32}, geometry.SourceSnapshot(),
+                                          textures, CookedUiPaintKernel{});
+    if (valid) {
+        REQUIRE(created.HasValue());
+        auto program = std::move(created).Value();
+        REQUIRE(fixture.frontend->ProcessResourceRequests().HasValue());
+        const auto originalResource = UiRequire(program->TextureResource(0, first));
+        const auto alternateResource = UiRequire(program->TextureResource(0, alternate.Creation().handle));
+        CHECK(originalResource != alternateResource);
+        REQUIRE(program->Shutdown().HasValue());
+    } else {
+        REQUIRE(created.HasError());
+        CHECK(created.ErrorValue().code.Value() == UiPaintFrameErrors::InvalidInput.code.Value());
+        CHECK(lifecycleState.uiPaint.kernels == kernels);
+        CHECK(lifecycleState.createTextureCount == creations);
+    }
+}
+
 TEST_CASE("UI program retains every failed creation outcome through operation history eviction", "[renderer][ui-paint][program]") {
     ProgramFixture fixture;
     REQUIRE(fixture.frontend->ProcessResourceRequests().HasValue());

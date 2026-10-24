@@ -22,7 +22,10 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeScene::~RuntimeScene */
-    RuntimeScene::~RuntimeScene() = default;
+    RuntimeScene::~RuntimeScene() {
+        // Revoke borrows before any owned storage or subsystem teardown can release/reuse this address.
+        viewLifetime_.reset();
+    }
 
     /** @copydoc RuntimeScene::AttachVfxWorld */
     Result<void> RuntimeScene::AttachVfxWorld(std::unique_ptr<Vfx::VfxWorld> world, const Math::WorldCoordinate64 &origin,
@@ -174,9 +177,9 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeScene::RuntimeScene */
     RuntimeScene::RuntimeScene(const SceneRuntimeId runtimeId, const SceneDefinitionId definitionId, const SceneDefinitionRevision revision,
                                const RuntimeSceneConfig config, const Assets::AssetRegistryRevision assetRevision,
-                               std::vector<ResolvedAsset> assets) noexcept
-        : runtimeId_(runtimeId), definitionId_(definitionId), definitionRevision_(revision), assetRegistryRevision_(assetRevision),
-          assets_(std::move(assets)), config_(config) {}
+                               std::vector<ResolvedAsset> assets)
+        : viewLifetime_(std::make_shared<const std::uint8_t>(0)), runtimeId_(runtimeId), definitionId_(definitionId),
+          definitionRevision_(revision), assetRegistryRevision_(assetRevision), assets_(std::move(assets)), config_(config) {}
 
     /** @copydoc RuntimeScene::Create */
     Result<std::unique_ptr<RuntimeScene>> RuntimeScene::Create(const RuntimeSceneDefinition &definition, const SceneRuntimeId runtimeId,
@@ -197,8 +200,14 @@ namespace Horo::Runtime {
         if (assets.size() != definition.AssetDependencies().size())
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Resolved asset set does not match the definition.");
-        auto scene =
-            std::make_unique<RuntimeScene>(runtimeId, definition.Id(), definition.Revision(), config, assetRevision, std::move(assets));
+        std::unique_ptr<RuntimeScene> scene;
+        try {
+            scene =
+                std::make_unique<RuntimeScene>(runtimeId, definition.Id(), definition.Revision(), config, assetRevision, std::move(assets));
+        } catch (const std::bad_alloc &) {
+            return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
+                                                          "Unable to allocate Scene owner lifetime evidence.");
+        }
         scene->storage_.slots.reserve(definition.Entities().size());
         scene->storage_.authoredIndex.reserve(definition.Entities().size());
 
@@ -238,8 +247,14 @@ namespace Horo::Runtime {
                                                           "An active scene and a distinct runtime identity are required.");
         if (active_.scene->vfxWorld_)
             return Result<std::unique_ptr<RuntimeScene>>::Failure(MakeError(Vfx::VfxErrors::SceneCloneUnavailable));
-        auto clone = std::make_unique<RuntimeScene>(runtimeId, active_.scene->definitionId_, active_.scene->definitionRevision_,
-                                                    active_.scene->config_, active_.scene->assetRegistryRevision_, active_.scene->assets_);
+        std::unique_ptr<RuntimeScene> clone;
+        try {
+            clone = std::make_unique<RuntimeScene>(runtimeId, active_.scene->definitionId_, active_.scene->definitionRevision_,
+                                                   active_.scene->config_, active_.scene->assetRegistryRevision_, active_.scene->assets_);
+        } catch (const std::bad_alloc &) {
+            return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
+                                                          "Unable to allocate cloned Scene lifetime evidence.");
+        }
         clone->storage_ = active_.scene->storage_;
         for (auto &slot : clone->storage_.slots) {
             if (!slot.groupPhysicsReferences)
@@ -254,7 +269,7 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeScene::View */
     RuntimeSceneView RuntimeScene::View() const noexcept {
-        return RuntimeSceneView{*this};
+        return ownerThread_ == std::this_thread::get_id() ? RuntimeSceneView{*this} : RuntimeSceneView{};
     }
 
     Result<EntityRef> RuntimeScene::CreateEntity(RuntimeSceneStorage &storage, const RuntimeEntityCreateInfo &info) const {

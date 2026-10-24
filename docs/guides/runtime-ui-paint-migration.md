@@ -590,3 +590,65 @@ preparation releases only its unpublished candidate. The accepted revision and
 all independently captured native completion leases retain their original exact
 geometry/binding checks and lifetimes. No frame or resource capacity increases
 are needed to retire these obsolete cache references.
+
+
+### Cold project preparation precedes native admission
+
+The application keeps GUI CPU preparation and `ImGui::NewFrame` before screen
+updates, then draws/extracts the screen before opening the one canonical native
+frame. Both the synchronous Play command from `Draw` and later asynchronous
+Scene preparation pumps can therefore admit their real UI resources at a
+structural safe point. The preceding viewport request is prepared before GUI CPU
+Begin/Draw: publishing a resized viewport after Draw could release the image view
+already captured by ImGui. Newly activated viewport mesh generations remain
+ineligible until the next prepared frame, using the existing generation guard.
+Native execution still orders Scene, UI, GUI and Present
+within that same scope/completion lease. An unavailable drawable discards CPU draw
+data without manufacturing a native frame, input eligibility or Present receipt.
+An open CPU GUI frame is balanced explicitly during abort/shutdown.
+
+The non-installed `IEditorGuiRenderer::BeginFrame` contract now prepares CPU GUI
+state independently of a native frame. OpenGL restores its own existing context
+on the creating thread before any stock lazy device/font operations; this does
+not select a backend or issue a render frame. Metal prepares its existing device
+and font objects after application font setup and checks the retained font
+identity. Its stock `ImGui_ImplMetal_NewFrame` receives only the actual active
+render-pass descriptor immediately before native draw encoding. Vulkan retains
+its CPU-only preparation. No synthetic render-pass descriptor or second frame
+scheduler is introduced. The real surface-lifecycle qualification additionally
+observes completed GUI CPU extraction before native admission and rejects repeat
+phase admission.
+
+### Scene view retirement observation
+
+`RuntimeSceneView` now carries a weak cold-owner observation and copied identity
+values. Its public value layout changes; rebuild Scene consumers and SDK modules
+together. `View`, `IsCurrent` and storage queries allocate nothing, reject foreign
+owner-thread storage access and never dereference an expired Scene. Identity
+queries preserve the captured values after retirement. A view still does not pin
+Scene/component storage or authorize a stale entity; callers must keep returned
+component borrows within the current owner-thread phase.
+
+The direct `RuntimeScene` constructor is no longer `noexcept`: allocating its one
+cold liveness observation can report `std::bad_alloc`, as other cold Scene
+construction allocations already can. The two actual factory callers,
+`RuntimeScene::CreateResolved` and `RuntimeSceneService::CloneActive`, translate
+owner/lifetime allocation failure to the existing typed invalid-candidate error. Public
+consumer compilation and destruction/address-reuse regressions cover migration.
+This corrects retained-view checks after replacement/unload without extending
+Scene storage or GPU resource lifetimes.
+
+The Unix native CI build presets explicitly retain `all` and add the actual
+`HoroEditorUiPaintShaderCook` target, which remains excluded from ordinary default
+builds. Sonar's instrumented build explicitly includes the same target alongside
+the Vulkan cook. Their registered CLI contract therefore runs the built canonical
+producer, rather than failing because only its test registration was available.
+
+## Native SDK22 Scene-view migration
+
+The Scene liveness repair changes `RuntimeScene`/`RuntimeSceneView` C++ layouts.
+Gameplay hosts, native modules, generated bundles and public consumers must rebuild
+against the paired boundary22 / `gameplay-sdk22` fingerprint. The canonical loader
+rejects SDK21 before activation; a stale native module cannot acquire or consume
+these new value layouts. Cached view identity remains readable after retirement,
+but storage queries require the original live Scene and owner thread.

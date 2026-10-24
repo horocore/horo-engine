@@ -1,4 +1,5 @@
 #include "EditorProjectSceneHost.h"
+#include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Runtime/Ui/UiDocumentSerialization.h"
 #include "Horo/Runtime/Ui/UiStyleAsset.h"
 #include "RuntimeUiPaintHostTestFixture.h"
@@ -30,6 +31,8 @@ namespace {
             bytes.back() = 31;
             return Assets::AssetId::FromBytes(bytes);
         }()};
+        std::string sourceJson;
+        std::vector<std::uint8_t> encodedArtifact;
         UiCanvasAssetReference reference{asset, Source::Stable<UiDocumentId>(1), Source::Stable<UiCanvasId>(2),
                                          Source::Revision<UiDocumentRevision>(1)};
 
@@ -52,14 +55,17 @@ namespace {
             panel.presentation->inlineStyle.push_back(
                 {CoreUiStylePropertyId(UiCoreStyleProperty::Fill), UiStyleValueSource::Literal(UiStyleColor{1, 0, 0, 0.5F}), false});
             REQUIRE(builder.AddElement(std::move(panel)).HasValue());
-            const auto cooked = Take(CookedUiDocument::Cook(Take(std::move(builder).Build())));
+            const auto document = Take(std::move(builder).Build());
+            sourceJson = Take(SerializeUiDocument(document));
+            const auto cooked = Take(CookedUiDocument::Cook(document));
             Assets::AssetCookArtifact envelope;
             envelope.id = asset;
             envelope.type = type;
             envelope.target = target;
             envelope.payload.assign(cooked.Payload().begin(), cooked.Payload().end());
             envelope.payloadDigest = ComputeSha256(std::as_bytes(std::span{envelope.payload}));
-            provider.Insert(asset, Take(Assets::EncodeCookedArtifact(envelope)));
+            encodedArtifact = Take(Assets::EncodeCookedArtifact(envelope));
+            provider.Insert(asset, encodedArtifact);
             auto composition =
                 Take(RuntimeUiPaintHost::Compose(*frontend, host->DispatchSource(), UiSceneReconciliationLimits{Source::Owner()}));
             port = composition.port;
@@ -117,6 +123,33 @@ namespace {
                                                             << failure->message);
             }
             return failure;
+        }
+
+        /** @brief Publishes this actual authored source through the production registry and immutable cook format for the real factory. */
+        Application::Internal::SceneCookSelection PublishProject(const std::filesystem::path &root) const {
+            std::filesystem::create_directories(root / "assets");
+            REQUIRE(root == std::filesystem::canonical(root));
+            const auto cookedRoot = root / "derived/cooked";
+            std::filesystem::create_directories(cookedRoot);
+            NativeDurableFileSystem files;
+            REQUIRE(files.WriteDurable(root / "assets/project.horoasset", std::as_bytes(std::span{sourceJson})).HasValue());
+            const auto sidecar =
+                std::string{R"({"schemaVersion":1,"assetId":")"} + asset.ToString() + R"(","assetType":"runtime.ui.document"})";
+            REQUIRE(files.WriteDurable(root / "assets/project.horoasset.horo", std::as_bytes(std::span{sidecar})).HasValue());
+            auto lease = Take(files.TryAcquireExclusive(cookedRoot / ".cook-writer.lock", "project UI ordering test"));
+            const std::array entries{Assets::AssetCookManifestEntry{asset, Take(Assets::AssetTypeId::Parse("runtime.ui.document")),
+                                                                    asset.ToString() + ".cooked",
+                                                                    ComputeSha256(std::as_bytes(std::span{encodedArtifact}))}};
+            const std::array payloads{encodedArtifact};
+            const Assets::AssetCookPublicationPolicy policy{.files = &files, .operationId = asset.ToString(), .writerLease = &lease};
+            const auto published = Assets::PublishCookGeneration(cookedRoot, target, entries, payloads, {}, policy);
+            if (published.HasError()) {
+                const auto &error = published.ErrorValue();
+                UNSCOPED_INFO("Project fixture cook publication: " << error.domain.Value() << '/' << error.code.Value() << ": "
+                                                                   << error.message);
+            }
+            REQUIRE(published.HasValue());
+            return {cookedRoot, target};
         }
 
         std::shared_ptr<const RuntimeUiClient> Client(const std::uint32_t slot) {
@@ -292,4 +325,64 @@ TEST_CASE("Project missing packaged kernel cannot partially publish authored UI 
     fixture.Frame();
     fixture.Frame();
     CHECK(fixture.port.InputEligible({Source::Owner(), 1, 1}));
+}
+
+TEST_CASE("Actual project Play UI preparation stays outside native admission through queued publication",
+          "[application][runtime_ui][project][play][safe_point]") {
+    ProjectUi fixture;
+    Tests::UiPaintPackageTesting::PackageDirectory directory;
+    const auto projectRoot = std::filesystem::canonical(directory.root);
+    const auto cooked = fixture.PublishProject(projectRoot);
+    auto create = Application::Internal::MakeEditorProjectSceneFactory(fixture.jobs, {.cooked = cooked, .uiSources = fixture.sources});
+    auto result = create(projectRoot, Editor::EditorFirstPlayScene, fixture.Definition(1, 1));
+    REQUIRE(result.HasValue());
+    auto play = std::move(result).Value();
+    REQUIRE(play->Scenes().Startup({}).HasValue());
+    REQUIRE(play->Scenes().QueuePreparation(fixture.Definition(1, 1)).HasValue());
+    CHECK_FALSE(Tests::RenderFrontendTesting::lifecycleState.frameActive);
+    REQUIRE(play->CommitSceneChanges({.frameNumber = 1, .cancellation = fixture.cancellation}).HasValue());
+    const auto error = play->Scenes().TakeOperationError();
+    INFO((error ? error->message : "Project preparation succeeded"));
+    REQUIRE_FALSE(error);
+    REQUIRE(play->Scenes().ActiveScene());
+    CHECK_FALSE(Tests::RenderFrontendTesting::lifecycleState.frameActive);
+    // One source prepares both the primary output and isolated RGBA16F effect pipeline.
+    CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.kernels == 2);
+    CHECK_FALSE(fixture.port.InputEligible({Source::Owner(), 1, 1}));
+    fixture.Frame();
+    fixture.Frame();
+    CHECK(fixture.port.InputEligible({Source::Owner(), 1, 1}));
+    CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.graphCalls == 2);
+    CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.kernels == 2);
+    play->Shutdown();
+    REQUIRE(Take(fixture.port.CollectRetired()));
+}
+
+TEST_CASE("Early native admission cannot publish actual project Play UI resources",
+          "[application][runtime_ui][project][play][safe_point]") {
+    ProjectUi fixture;
+    Tests::UiPaintPackageTesting::PackageDirectory directory;
+    const auto projectRoot = std::filesystem::canonical(directory.root);
+    const auto cooked = fixture.PublishProject(projectRoot);
+    auto create = Application::Internal::MakeEditorProjectSceneFactory(fixture.jobs, {.cooked = cooked, .uiSources = fixture.sources});
+    auto result = create(projectRoot, Editor::EditorFirstPlayScene, fixture.Definition(1, 1));
+    REQUIRE(result.HasValue());
+    auto play = std::move(result).Value();
+    REQUIRE(play->Scenes().Startup({}).HasValue());
+    {
+        auto frame = Take(fixture.frontend->BeginFrame({.frameNumber = 1, .outputExtent = fixture.output}));
+        REQUIRE(Tests::RenderFrontendTesting::lifecycleState.frameActive);
+        // With no Scene asset dependencies, QueuePreparation synchronously prepares the UI participant.
+        const auto queued = play->Scenes().QueuePreparation(fixture.Definition(1, 1));
+        REQUIRE(queued.HasError());
+        const auto &error = queued.ErrorValue();
+        UNSCOPED_INFO(error.domain.Value() << '/' << error.code.Value() << ": " << error.message);
+        CHECK(error.domain.Value() == "render.frontend");
+        CHECK(error.code.Value() == "render.frontend.resource.change_during_frame");
+        CHECK_FALSE(play->Scenes().ActiveScene());
+        CHECK_FALSE(fixture.port.InputEligible({Source::Owner(), 1, 1}));
+    }
+    CHECK_FALSE(Tests::RenderFrontendTesting::lifecycleState.frameActive);
+    play->Shutdown();
+    REQUIRE(Take(fixture.port.CollectRetired()));
 }

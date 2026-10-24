@@ -56,16 +56,16 @@ float4 PaintFragment(PaintOutput input) : SV_Target0 {
     float alpha = input.color.a * Opacity * coverage;
     if (Sampling == 4u) {
         // UV remains local to the exact mask quad even under rotation/shear.
-        float2 point = input.uv * MaskExtent;
-        float distance = max(max(-point.x, point.x - MaskExtent.x), max(-point.y, point.y - MaskExtent.y));
-        if (point.x < CornerRadii.x && point.y < CornerRadii.x)
-            distance = max(distance, length(point - CornerRadii.xx) - CornerRadii.x);
-        if (point.x > MaskExtent.x - CornerRadii.y && point.y < CornerRadii.y)
-            distance = max(distance, length(point - float2(MaskExtent.x - CornerRadii.y, CornerRadii.y)) - CornerRadii.y);
-        if (point.x > MaskExtent.x - CornerRadii.z && point.y > MaskExtent.y - CornerRadii.z)
-            distance = max(distance, length(point - (MaskExtent - CornerRadii.zz)) - CornerRadii.z);
-        if (point.x < CornerRadii.w && point.y > MaskExtent.y - CornerRadii.w)
-            distance = max(distance, length(point - float2(CornerRadii.w, MaskExtent.y - CornerRadii.w)) - CornerRadii.w);
+        float2 maskPoint = input.uv * MaskExtent;
+        float distance = max(max(-maskPoint.x, maskPoint.x - MaskExtent.x), max(-maskPoint.y, maskPoint.y - MaskExtent.y));
+        if (maskPoint.x < CornerRadii.x && maskPoint.y < CornerRadii.x)
+            distance = max(distance, length(maskPoint - CornerRadii.xx) - CornerRadii.x);
+        if (maskPoint.x > MaskExtent.x - CornerRadii.y && maskPoint.y < CornerRadii.y)
+            distance = max(distance, length(maskPoint - float2(MaskExtent.x - CornerRadii.y, CornerRadii.y)) - CornerRadii.y);
+        if (maskPoint.x > MaskExtent.x - CornerRadii.z && maskPoint.y > MaskExtent.y - CornerRadii.z)
+            distance = max(distance, length(maskPoint - (MaskExtent - CornerRadii.zz)) - CornerRadii.z);
+        if (maskPoint.x < CornerRadii.w && maskPoint.y > MaskExtent.y - CornerRadii.w)
+            distance = max(distance, length(maskPoint - float2(CornerRadii.w, MaskExtent.y - CornerRadii.w)) - CornerRadii.w);
         float edge = max(fwidth(distance) * 0.5, 0.00001);
         alpha *= 1.0 - smoothstep(-edge, edge, distance);
         return float4(input.color.rgb * alpha, alpha);

@@ -71,6 +71,17 @@ revision and existing views. Scene replacement creates a new runtime identity,
 so every `EntityRef` from the replaced scene is rejected even if slot and
 generation values coincide.
 
+A Scene allocates one small liveness observation at cold construction. Borrowed
+views retain only a weak observation and copied identity values, never Scene or
+component storage. Before any storage read, the view checks its owner thread,
+observation lifetime and captured structural revision. Destruction revokes the
+observation before subsystem/storage teardown; reused owner addresses cannot
+make an old view current. `View` and view queries allocate nothing. Copied runtime,
+definition and preparation identities remain inspectable after retirement.
+This C++ value-layout change requires the paired native gameplay boundary22 /
+`gameplay-sdk22` fingerprint. Rebuild hosts, native modules and consumers together;
+the canonical module loader rejects SDK21 before activation.
+
 Entity generations start at one. Destroyed slots are reused in deterministic
 LIFO order after incrementing the generation. A slot at the configured maximum
 generation is retired permanently; generations never wrap and therefore cannot
