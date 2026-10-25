@@ -47,8 +47,15 @@ namespace {
         for (std::size_t attempt = 0; attempt < 4; ++attempt) {
             viewport.RequestExtent(extent);
             auto prepared = viewport.PrepareResources(frontend, renderScene);
+            if (prepared.HasError()) {
+                std::fprintf(stderr, "Metal viewport resource preparation failed: %s\n", prepared.ErrorValue().message.c_str());
+            }
             Check(prepared.HasValue());
-            Check(frontend.ProcessResourceRequests().HasValue());
+            const auto processed = frontend.ProcessResourceRequests();
+            if (processed.HasError()) {
+                std::fprintf(stderr, "Metal viewport resource processing failed: %s\n", processed.ErrorValue().message.c_str());
+            }
+            Check(processed.HasValue());
             if (prepared.Value().has_value())
                 return *prepared.Value();
         }
