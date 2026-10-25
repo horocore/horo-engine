@@ -39,6 +39,76 @@ def test_exact_same_run_qualification_data_is_accepted(handoff):
     assert FIXTURE.verify(root, ROOT) == expected
 
 
+@pytest.mark.parametrize("target", ["private/var", "/private/var"])
+def test_only_fixed_macos_system_alias_is_translated(monkeypatch, target):
+    monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(FIXTURE.os, "readlink", lambda path: target)
+    for name in ("handoff/manifest.json", "offline/PaintVertex.metallib", "installed/usr/bin/metal"):
+        assert FIXTURE.absolute_data_path(Path("/var/folders/fixture") / name) == Path("/private/var/folders/fixture") / name
+
+
+@pytest.mark.parametrize("path", ["/private/var/folders/input", "/unrelated/input", "/various/input"])
+def test_alias_translation_does_not_resolve_other_path_prefixes(monkeypatch, path):
+    monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
+    assert FIXTURE.absolute_data_path(Path(path)) == Path(path)
+
+
+@pytest.mark.parametrize("target", ["/unexpected-root", "private/var/../../unexpected-root", "/private/var/other"])
+def test_unexpected_macos_system_alias_is_rejected(monkeypatch, target):
+    monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(FIXTURE.os, "readlink", lambda path: target)
+    with pytest.raises(ValueError, match="Unexpected macOS temporary-root alias"):
+        FIXTURE.absolute_data_path(Path("/var/folders/fixture/manifest.json"))
+
+
+def test_missing_macos_system_alias_is_rejected(monkeypatch):
+    monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
+
+    def missing(path):
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(FIXTURE.os, "readlink", missing)
+    with pytest.raises(ValueError, match="Unexpected macOS temporary-root alias"):
+        FIXTURE.absolute_data_path(Path("/var/folders/fixture/manifest.json"))
+
+
+@pytest.mark.skipif(FIXTURE.platform.system() != "Darwin", reason="Actual macOS /var system alias required")
+def test_bounded_reads_actual_macos_temporary_root_alias(tmp_path):
+    physical = tmp_path.resolve()
+    if physical.parts[:3] != ("/", "private", "var"):
+        pytest.skip("Temporary root is not beneath the macOS /var alias")
+    (physical / "input").write_bytes(b"same physical input")
+    alias = Path("/var").joinpath(*physical.parts[3:]) / "input"
+    assert FIXTURE.bounded(alias) == FIXTURE.bounded(physical / "input") == b"same physical input"
+    assert FIXTURE.absolute_data_path(alias.parent / "offline") == physical / "offline"
+    (physical / "escape").symlink_to(physical / "input")
+    with pytest.raises(ValueError, match="confined regular file"):
+        FIXTURE.bounded(alias.parent / "escape")
+
+
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_bounded_rejects_caller_controlled_symlink_components(tmp_path, kind):
+    physical = tmp_path.resolve()
+    outside = physical / "outside"
+    outside.mkdir()
+    (outside / "input").write_bytes(b"must not follow")
+    if kind == "directory":
+        link = physical / "alias"
+        link.symlink_to(outside, target_is_directory=True)
+        path = link / "input"
+    else:
+        path = physical / "input"
+        path.symlink_to(outside / "input")
+    with pytest.raises(ValueError, match="confined regular file"):
+        FIXTURE.bounded(path)
+
+
+def test_parent_traversal_is_rejected_before_alias_translation(monkeypatch):
+    monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
+    with pytest.raises(ValueError, match="Parent traversal forbidden"):
+        FIXTURE.absolute_data_path(Path("/var/folders/../escape"))
+
+
 @pytest.mark.parametrize("field", ["identity", "source", "tools", "dxc_options", "cross_options", "reflect_options", "apple_options", "target", "entries"])
 def test_stale_or_modified_provenance_rejected_before_tools(handoff, field):
     root, manifest = handoff

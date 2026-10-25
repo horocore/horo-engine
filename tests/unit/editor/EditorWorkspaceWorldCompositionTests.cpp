@@ -9,6 +9,37 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
+#include <future>
+
+namespace Horo::Editor {
+    namespace {
+        /** @brief Holds the sole worker until release; the caller's entry promise must outlive the job system join. */
+        Result<JobHandle> HoldWorldBakeWorker(JobSystem &jobs, std::promise<void> &entered, std::shared_future<void> released) {
+            return jobs.SubmitResult({}, [&entered, released = std::move(released)](const CancellationToken &) {
+                entered.set_value();
+                released.wait();
+                return Result<void>::Success();
+            });
+        }
+
+        /** @brief Observes real command admission while its producer is queued; release also occurs on assertion unwinding. */
+        void RequireQueuedWorldBakeCommand(EditorWorkspaceController &controller, JobSystem &jobs, std::promise<void> &entered,
+                                           const WorldDocumentFence &fence) {
+            std::promise<void> releaseWorker;
+            const auto blocker = HoldWorldBakeWorker(jobs, entered, releaseWorker.get_future().share());
+            REQUIRE(blocker.HasValue());
+            REQUIRE(entered.get_future().wait_for(std::chrono::seconds{5}) == std::future_status::ready);
+            EditorWorkspaceViewCommandData command;
+            command.command = EditorWorkspaceViewCommand::BakeWorldCells;
+            command.worldDocumentFence = fence;
+            controller.ProcessCommand(command);
+            const auto admissionError = controller.ViewModel().worldDocumentError;
+            REQUIRE_FALSE(admissionError);
+            REQUIRE(controller.ViewModel().worldBakeOperation);
+            releaseWorker.set_value();
+        }
+    }  // namespace
+}  // namespace Horo::Editor
 
 namespace Horo::Editor::WorldCompositionTests {
     namespace {
@@ -262,6 +293,7 @@ namespace Horo::Editor {
               "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake controller"};
         Tests::WriteReplicationProject(project.Path());
+        std::promise<void> workerEntered;
         JobSystem jobs{{.workerCount = 1}};
         OperationStore operations{8, 16};
         BuildOutputStore diagnostics{32};
@@ -276,11 +308,10 @@ namespace Horo::Editor {
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)
             REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        RequireQueuedWorldBakeCommand(controller, jobs, workerEntered, WorldResidencyTests::Current(world)->fence);
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::BakeWorldCells;
         command.worldDocumentFence = WorldResidencyTests::Current(world)->fence;
-        controller.ProcessCommand(command);
-        REQUIRE(controller.ViewModel().worldBakeOperation);
         auto marker = jobs.SubmitResult({}, [](const CancellationToken &) {
             return Result<void>::Success();
         });
@@ -354,6 +385,7 @@ namespace Horo::Editor {
               "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake registry fence"};
         Tests::WriteReplicationProject(project.Path());
+        std::promise<void> workerEntered;
         JobSystem jobs{{.workerCount = 1}};
         OperationStore operations{8, 16};
         BuildOutputStore output{32};
@@ -368,8 +400,17 @@ namespace Horo::Editor {
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)
             REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        // StartWorldBake pumps once before returning. Hold its worker so that
+        // initial pump cannot publish before this test advances the registry.
+        // Promise destruction also releases the worker on assertion unwinding;
+        // the borrowed entry promise outlives the job system's final join.
+        std::promise<void> releaseWorker;
+        const auto blocker = HoldWorldBakeWorker(jobs, workerEntered, releaseWorker.get_future().share());
+        REQUIRE(blocker.HasValue());
+        REQUIRE(workerEntered.get_future().wait_for(std::chrono::seconds{5}) == std::future_status::ready);
         const auto accepted = controller.StartWorldBake(Application::WorldBakeMode::Bake, world.Snapshot().Value()->fence);
         REQUIRE(accepted.HasValue());
+        releaseWorker.set_value();
         auto marker = jobs.SubmitResult({}, [](const CancellationToken &) {
             return Result<void>::Success();
         });

@@ -183,6 +183,7 @@ namespace Horo::Render {
         [[nodiscard]] RenderMemoryPlacement DescribePlacement(const Block &block, const Region &region) const {
             const Pool *pool = FindPool(block.pool);
             return {.pool = block.pool,
+                    .block = {renderer_, block.id},
                     .scope = pool->scope,
                     .attempt = region.attempt,
                     .memoryClass = pool->memoryClass,

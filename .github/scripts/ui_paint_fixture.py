@@ -22,11 +22,25 @@ PARAMETER_OFFSETS = {"Extent": 0, "Opacity": 8, "Sampling": 12, "Flags": 16,
                      "MaskExtent": 32, "MaskReserved": 40, "CornerRadii": 48}
 
 
-def bounded(path, maximum=LIMIT):
-    """Anchor every component with no-follow descriptors, including during concurrent replacement."""
+def absolute_data_path(path):
+    """Translate only macOS's fixed system /var alias; never resolve caller-controlled descendants."""
     path = path.absolute()
     if ".." in path.parts:
         raise ValueError("Parent traversal forbidden")
+    if platform.system() == "Darwin" and path.parts[:2] == ("/", "var"):
+        try:
+            target = os.readlink("/var")
+        except OSError as error:
+            raise ValueError("Unexpected macOS temporary-root alias") from error
+        if target not in ("private/var", "/private/var"):
+            raise ValueError("Unexpected macOS temporary-root alias")
+        path = Path("/private/var").joinpath(*path.parts[2:])
+    return path
+
+
+def bounded(path, maximum=LIMIT):
+    """Anchor every physical component with no-follow descriptors, including during concurrent replacement."""
+    path = absolute_data_path(path)
     directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
         for component in path.parts[1:-1]:
@@ -225,6 +239,7 @@ def produce(args):
 def apple(args):
     manifest = verify(args.root, args.source)  # Complete validation before tooling or output publication.
     bindings = native_bindings(args.root)
+    args.output = absolute_data_path(args.output)
     if args.xcrun != Path("/usr/bin/xcrun"):
         raise ValueError("Only the selected installed Apple tool dispatcher is admitted")
     bounded(args.xcrun)
@@ -275,8 +290,8 @@ def main():
     parser.add_argument("--tools-root", type=Path)
     parser.add_argument("--xcrun", type=Path, default=Path("/usr/bin/xcrun"))
     args = parser.parse_args()
-    args.source = args.source.absolute()
-    args.root = args.root.absolute()
+    args.source = absolute_data_path(args.source)
+    args.root = absolute_data_path(args.root)
     if args.operation == "apple" and args.output is None:
         parser.error("apple requires --output")
     {"produce": produce, "verify": lambda value: verify(value.root, value.source), "apple": apple}[args.operation](args)
