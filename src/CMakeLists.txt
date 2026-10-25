@@ -2512,6 +2512,7 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderShaderResources.cpp
         runtime/renderer/api/RenderShaderResourceErrors.cpp
         runtime/renderer/api/ShaderCompilerPipeline.cpp
+        runtime/renderer/api/ShaderCompilerArtifactKey.cpp
         runtime/renderer/api/ShaderReflectionArtifact.cpp
         runtime/renderer/api/ShaderReflectionArtifactValues.cpp
         runtime/renderer/api/ShaderCompilerPipelineErrors.cpp

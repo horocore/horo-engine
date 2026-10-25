@@ -3,7 +3,9 @@
 #include "ShaderCompilerToolchainSupport.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
+#include <string_view>
 
 namespace Horo::Render::ShaderCompilerToolchainDetail {
     namespace {
@@ -33,6 +35,23 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc ValidateUiPaintMetalReflection */
+    Result<void> ValidateUiPaintMetalReflection(const ShaderCompilerReflectionRequest &request,
+                                                const ShaderCompilerToolInstallation *cross) {
+        constexpr std::array<std::string_view, 4> names{"PaintParameters", "PaintTexture", "CoverageTexture", "PaintSampler"};
+        if (request.names.size() != names.size())
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        for (std::size_t binding = 0; binding < names.size(); ++binding) {
+            const auto &declared = request.names[binding];
+            if (declared.id.value != binding + 1 || declared.name != names[binding] || !declared.parameters.empty())
+                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        }
+        const auto &identity = request.tool;
+        if (!cross || cross->identity.release != identity.release || cross->identity.buildDigest != identity.buildDigest)
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+        return Result<void>::Success();
+    }
 
     /** @copydoc ReflectVulkanRoute */
     Result<std::vector<SpirvReflectionStage>> ReflectVulkanRoute(const ShaderCompilerToolchainConfiguration &configuration,

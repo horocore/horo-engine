@@ -45,9 +45,18 @@ namespace Horo::Tests::UiAccess {
             return Take(UiBindingProviderSchema::Create(descriptor));
         }
 
-        explicit Fixture(bool sceneOwned = false, bool bindings = false, bool catalogElements = false)
+        /** @brief Admits the actual initial owner, optionally starting its real scroll state before publication. */
+        explicit Fixture(bool sceneOwned = false, bool bindings = false, bool catalogElements = false, UiLogicalPoint initialScroll = {})
             : bindingsEnabled(bindings), canonicalElements(catalogElements) {
             auto generation = Make(1);
+            if (initialScroll != UiLogicalPoint{}) {
+                auto &canvas = *generation.Canvas(Stable<UiCanvasId>(2));
+                const auto root = Take(canvas.tree.Root()).handle;
+                for (auto &policy : canvas.clipPolicies)
+                    if (policy.element == root && policy.overflow == UiLayoutOverflowPolicy::Scroll)
+                        policy.scrollOffset = initialScroll;
+                canvas.clipped = Take(canvas.clipping->Update(canvas.tree, *canvas.layout, {canvas.clipPolicies, {}}));
+            }
             auto publisher = Take(UiHotReload::Create(std::move(generation)));
             UiSceneInstanceDescriptor descriptor{Instance(), {}};
             if (sceneOwned) {

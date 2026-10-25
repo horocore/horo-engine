@@ -91,16 +91,24 @@ namespace Horo::Render {
         SECTION("Wrong binding role") {
             kernel.manifest.bindings[1].kind = ShaderResourceKind::StorageTexture;
         }
-        SECTION("Missing active source") {
-            auto record = std::make_shared<ReflectedShaderArtifact>(*kernel.artifact.reflection);
-            record->reflection.bindings[1].active = false;
-            kernel.artifact.reflection = std::move(record);
-        }
         SECTION("No stencil format") {
             kernel.stencilFormat = RenderTextureFormat::Depth32Float;
         }
         SECTION("Wrong payload target") {
             kernel.artifact.backend = ShaderTargetBackend::Vulkan;
+        }
+        SECTION("Missing key") {
+            kernel.artifact.artifactKey = {};
+        }
+        REQUIRE(ValidateCookedUiPaintKernel(kernel, ShaderTargetBackend::Metal).HasError());
+    }
+
+    TEST_CASE("UI paint shader admission rejects missing stale or mismatched reflection", "[runtime][renderer][ui-paint]") {
+        auto kernel = Kernel();
+        SECTION("Missing active source") {
+            auto record = std::make_shared<ReflectedShaderArtifact>(*kernel.artifact.reflection);
+            record->reflection.bindings[1].active = false;
+            kernel.artifact.reflection = std::move(record);
         }
         SECTION("Missing same-cook reflection") {
             kernel.artifact.reflection.reset();
@@ -118,9 +126,6 @@ namespace Horo::Render {
             auto record = std::make_shared<ReflectedShaderArtifact>(*kernel.artifact.reflection);
             record->compiledArtifactKey.bytes[0] ^= 1;
             kernel.artifact.reflection = std::move(record);
-        }
-        SECTION("Missing key") {
-            kernel.artifact.artifactKey = {};
         }
         REQUIRE(ValidateCookedUiPaintKernel(kernel, ShaderTargetBackend::Metal).HasError());
     }

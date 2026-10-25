@@ -44,6 +44,15 @@ namespace Horo::Runtime::Ui {
             }));
         }
 
+        /** @brief Validates transition admission before allocating or changing prepared-owner accounting.
+         * @param request Exact previous and next Scene identities supplied by the host.
+         * @param bindingCount Number of explicitly supplied persistent binding replacements.
+         * @param incomingCount Number of incoming Scene-owned publishers.
+         * @param cancellation Cooperative cancellation token retained by the caller.
+         * @return Success or the first state, identity, capacity or cancellation rejection.
+         */
+        [[nodiscard]] Result<void> ValidatePreparation(const UiSceneTransitionRequest &request, std::size_t bindingCount,
+                                                       std::size_t incomingCount, const CancellationToken &cancellation) const;
         [[nodiscard]] Result<void> Validate(const UiSceneInstanceDescriptor &descriptor, const UiReloadGeneration &generation) const;
         [[nodiscard]] Result<void> Issue(const UiSceneInstanceDescriptor &descriptor);
     };

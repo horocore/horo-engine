@@ -342,18 +342,9 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                               const std::filesystem::path &nativePath) {
                 if (!invocation_.reflection)
                     return Result<void>::Success();
-                constexpr std::array<std::string_view, 4> names{"PaintParameters", "PaintTexture", "CoverageTexture", "PaintSampler"};
-                if (invocation_.reflection->names.size() != names.size())
-                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                for (std::size_t binding = 0; binding < names.size(); ++binding) {
-                    const auto &declared = invocation_.reflection->names[binding];
-                    if (declared.id.value != binding + 1 || declared.name != names[binding] || !declared.parameters.empty())
-                        return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                }
                 const auto *cross = Lookup(ShaderCompilerTool::SpirvCross);
-                const auto &identity = invocation_.reflection->tool;
-                if (!cross || cross->identity.release != identity.release || cross->identity.buildDigest != identity.buildDigest)
-                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+                if (const auto valid = ValidateUiPaintMetalReflection(*invocation_.reflection, cross); valid.HasError())
+                    return valid;
                 const auto reflectionPath = scratch_ / (stem + ".reflection.json");
                 if (auto reflected = Run(*cross, {spirvPath.string(), "--reflect", "--output", reflectionPath.string()},
                                          ShaderCompilerPhase::Translation, entry);

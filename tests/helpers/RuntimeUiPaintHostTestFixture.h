@@ -11,6 +11,8 @@ namespace Horo::Tests::UiPaintHostTesting {
     using namespace Runtime::Ui;
     using UiAccess::Take;
     namespace Source = Runtime::Ui::ReloadTests;
+    inline constexpr UiLogicalPoint NestedEffectScroll{0, 30};
+    inline constexpr UiScalar NestedEffectChildOffset = 40;
 
     /** @brief Uses the real selected frontend contract while retaining explicit CPU-only tracking classification. */
     inline std::unique_ptr<Render::RenderFrontend> Frontend(const bool paintAvailable = true) {
@@ -94,7 +96,8 @@ namespace Horo::Tests::UiPaintHostTesting {
             return result;
         }
 
-        explicit Fixture(const bool paintAvailable = true) : frontend(Frontend(paintAvailable)) {
+        explicit Fixture(const bool paintAvailable = true, const UiLogicalPoint initialScroll = {})
+            : frontend(Frontend(paintAvailable)), source(false, false, true, initialScroll) {
             std::array<std::byte, 64> pixels;
             pixels.fill(std::byte{128});
             texture.emplace(Take(frontend->CreateUiImageTexture(*images, image, 0, pixels)));
@@ -102,6 +105,12 @@ namespace Horo::Tests::UiPaintHostTesting {
             const auto admitted = Take(source.service.Acquire(Source::Instance()));
             authoredCanvas = admitted.Get()->Instance().Canvases().front();
             auto resources = Runtime::Ui::AnimationTests::Resources(admitted.Get()->Canvases().front());
+            if (initialScroll != UiLogicalPoint{})
+                for (auto &element : resources.definition.elements)
+                    if (element.element == Source::Stable<UiElementId>(11)) {
+                        element.layout.positioning = UiLayoutPositioning::Absolute;
+                        element.layout.offsets.top = NestedEffectChildOffset;
+                    }
             auto composition = Take(RuntimeUiPaintHost::Compose(*frontend, host->DispatchSource(), std::move(source.service)));
             port = composition.port;
             const UiRenderExtractorDescriptor extraction{view, {8, 2, 16, 8, 4, 8, 4, 4}, 8};

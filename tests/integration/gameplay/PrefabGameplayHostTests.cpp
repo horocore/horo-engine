@@ -158,9 +158,10 @@ namespace {
         Assets::AssetLoadService loads{jobs, bytes};
         Assets::AssetRegistry registry;
         CancellationSource cancellation;
+        const CancellationToken cancellationToken{cancellation.Token()};
         GameplayWorldComposition *activeGameplay{};
         Runtime::RuntimeSceneService scenes{registry, loads};
-        Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellation.Token()};
+        Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellationToken};
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates;
         std::unique_ptr<GameplayWorldComposition> gameplay;
 

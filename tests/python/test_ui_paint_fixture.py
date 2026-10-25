@@ -1,6 +1,7 @@
 """Private shader data admission tests; no native compiler or GPU substitution."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -130,11 +131,40 @@ def test_actual_compiler_reflection_must_match_exact_uniform_abi(handoff, mutati
         FIXTURE.validate_reflection(path)
 
 
+MAIN_PUBLICATION = ("github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && "
+                    "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')")
+NATIVE_PARTITIONS = ("", " && !(" + MAIN_PUBLICATION + ")", " && " + MAIN_PUBLICATION)
+
+
+def assert_native_guard(block):
+    """Accept only required gates with the explicit canonical main/PR partition."""
+    match = re.search(r"^    if: \$\{\{ (.*?) \}\}$", block, re.MULTILINE)
+    assert match is not None
+    prefix = "!cancelled() && needs.tooling.result == 'success'"
+    assert match[1] in tuple(prefix + partition for partition in NATIVE_PARTITIONS)
+
+
+@pytest.mark.parametrize("partition", NATIVE_PARTITIONS)
+def test_native_guard_accepts_explicit_main_pr_partitions(partition):
+    assert_native_guard("    if: ${{ !cancelled() && needs.tooling.result == 'success'" + partition + " }}")
+
+
+@pytest.mark.parametrize("guard", ["needs.tooling.result == 'success'", "!cancelled()",
+                                   "cancelled() && needs.tooling.result == 'success'",
+                                   "!cancelled() || needs.tooling.result == 'success'",
+                                   "!cancelled() && needs.tooling.result != 'success'",
+                                   "!cancelled() && needs.tooling.result == 'success' || true"])
+def test_native_guard_rejects_missing_or_weakened_required_gates(guard):
+    with pytest.raises(AssertionError):
+        assert_native_guard("    if: ${{ " + guard + " }}")
+
+
 def test_workflow_keeps_same_run_metal_handoff_and_independent_native_checks():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     native = workflow.split("\n  test:\n", 1)[1]
     assert "needs: [tooling, shaders]" in native
-    assert "if: ${{ !cancelled() && needs.tooling.result == 'success' }}" in native
+    assert_native_guard(native)
+    assert_native_guard(workflow.split("\n  test-main:\n", 1)[1])
     artifact = "ui-paint-metal-msl-${{ github.sha }}-${{ github.run_attempt }}"
     assert workflow.count("name: " + artifact) == 2
     assert workflow.index("uses: ./.github/actions/cook-vulkan-viewport") < workflow.index("ui_paint_fixture.py produce")
