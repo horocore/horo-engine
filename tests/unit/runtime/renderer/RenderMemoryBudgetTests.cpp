@@ -151,10 +151,11 @@ namespace {
         auto placement = budget->Placement(reservation.Value());
         REQUIRE(placement.HasValue());
         CHECK(placement.Value().IsValid());
-        placement.Value().block = {OtherRenderer, 1};
-        CHECK_FALSE(placement.Value().IsValid());
-        placement.Value().block = {};
-        CHECK_FALSE(placement.Value().IsValid());
+        RenderMemoryPlacement invalidPlacement = placement.Value();
+        invalidPlacement.block = {OtherRenderer, 1};
+        CHECK_FALSE(invalidPlacement.IsValid());
+        invalidPlacement.block = {};
+        CHECK_FALSE(invalidPlacement.IsValid());
     }
 
     TEST_CASE("Render memory sibling blocks retain distinct identities in one logical pool", "[unit][runtime][renderer][memory]") {
