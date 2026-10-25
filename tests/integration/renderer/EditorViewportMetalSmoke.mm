@@ -47,8 +47,15 @@ namespace {
         for (std::size_t attempt = 0; attempt < 4; ++attempt) {
             viewport.RequestExtent(extent);
             auto prepared = viewport.PrepareResources(frontend, renderScene);
+            if (prepared.HasError()) {
+                std::fprintf(stderr, "Metal viewport resource preparation failed: %s\n", prepared.ErrorValue().message.c_str());
+            }
             Check(prepared.HasValue());
-            Check(frontend.ProcessResourceRequests().HasValue());
+            const auto processed = frontend.ProcessResourceRequests();
+            if (processed.HasError()) {
+                std::fprintf(stderr, "Metal viewport resource processing failed: %s\n", processed.ErrorValue().message.c_str());
+            }
+            Check(processed.HasValue());
             if (prepared.Value().has_value())
                 return *prepared.Value();
         }
@@ -128,6 +135,12 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     }
     Check(frontendResult.HasValue());
     std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
+    RenderTextureDescriptor shadowDepth{.extent = {2048, 2048},
+                                        .format = RenderTextureFormat::Depth32Float,
+                                        .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+    REQUIRE(frontend->Capabilities().support.Supports(shadowDepth));
+    shadowDepth.usage = shadowDepth.usage | RenderTextureUsage::Storage;
+    CHECK_FALSE(frontend->Capabilities().support.Supports(shadowDepth));
 
     EditorViewportRendererMetal viewport{*frontend, graphicsBridge};
     Check(viewport.Initialize().HasValue());

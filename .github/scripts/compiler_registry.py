@@ -25,9 +25,12 @@ MANIFEST = "horo-compiler.json"
 LEGACY_SONAR_NAMESPACE = "sonar-v2-gcc-Linux-X64-main-"
 MAX_ARCHIVE_BYTES = 3 * 1024 ** 3
 MAX_EXPANDED_BYTES = 4 * 1024 ** 3
+# Multi-gigabyte checkpoints can outlast a 90-second transfer window. Keep one
+# shared network deadline, with room for a slower successful download.
+RESTORE_TIMEOUT_SECONDS = 180
 KEY_PATTERN = re.compile(
     r"(native-v1-(?:Linux|Windows|macOS)-(?:X64|ARM64)-"
-    r"[a-z0-9.-]+-[a-z0-9.-]+-(?:native-tests-v1-Debug|native-variants-v1-Mixed)-main-|"
+    r"[a-z0-9.-]+-[a-z0-9.-]+-(?:native-tests-v1-Debug|native-shaders-v1-Debug|native-variants-v1-Mixed)-main-|"
     r"sonar-v2-gcc-Linux-X64-main-|"
     r"sonar-v3-Linux-X64-gcc-[0-9]+(?:\.[0-9]+)+-gcc-[0-9]+(?:\.[0-9]+)+-main-)"
     r"([1-9][0-9]*)-([1-9][0-9]*)")
@@ -193,7 +196,7 @@ def fetch(namespace: str) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
         root = Path(temporary)
-        registry = transport.Registry(root, seconds=90)
+        registry = transport.Registry(root, seconds=RESTORE_TIMEOUT_SECONDS)
         layer, expected, selected_namespace = fetch_descriptor(registry, namespace)
         payload = root / "compiler.tar.gz"
         registry.run("blob", "fetch", f"{transport.REGISTRY}@{layer['digest']}",
@@ -256,8 +259,9 @@ def main() -> int:
     try:
         {"fetch": fetch, "publish": publish}[args.operation](args.key)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, TimeoutError,
-            subprocess.SubprocessError, tarfile.TarError):
-        print("Public compiler checkpoint unavailable; retain ordinary compilation")
+            subprocess.SubprocessError, tarfile.TarError) as error:
+        # Exception messages/arguments may contain client credentials or output.
+        print(f"Public compiler checkpoint unavailable ({type(error).__name__}); retain ordinary compilation")
         return 1
     return 0
 

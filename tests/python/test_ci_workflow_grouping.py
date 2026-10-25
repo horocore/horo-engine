@@ -20,6 +20,14 @@ def workflow_job(name: str) -> str:
     return match.group(1)
 
 
+def shader_qualification_steps(shader_job: str) -> str:
+    publisher = re.search(r"      - name: Publish main shader compiler checkpoint\n.*?(?=\n      - name:)",
+                          shader_job, re.S)
+    assert publisher is not None
+    assert "uses: ./.github/actions/publish-compiler-checkpoint" in publisher.group()
+    return shader_job.replace(publisher.group(), "")
+
+
 def preset(kind: str, name: str) -> dict:
     return next(item for item in PRESETS[kind] if item["name"] == name)
 
@@ -461,7 +469,7 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
         assert not selected.search(f"{target}Unrelated::case")
     assert "-R '^HoroVulkanCommandExecutionSmoke$'" in native_job
     assert not selected.search("UnrelatedTests::case")
-    assert "continue-on-error" not in native_job
+    assert "continue-on-error" not in shader_qualification_steps(native_job)
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
     assert 'FAIL_REGULAR_EXPRESSION "Validation Error;VUID-"' in tests_cmake
@@ -577,7 +585,7 @@ def test_windows_save_timeout_diagnostics_preserve_the_original_gate_and_artifac
     assert not any(option in debug for option in ("--timeout", "--repeat", "continue-on-error"))
     windows = preset("testPresets", "ci-windows-debug")
     assert preset("configurePresets", windows["configurePreset"])["binaryDir"] == "${sourceDir}/build/ci"
-    assert windows["execution"] == {"jobs": 1, "timeout": 90}
+    assert windows["execution"] == {"jobs": 4, "timeout": 90}
     assert windows["output"]["outputJUnitFile"] == "${sourceDir}/build/ci/ctest.xml"
     assert "build/ci/ctest.xml" in artifact
     assert "build/ci/Testing/Temporary/LastTest.log" in artifact
@@ -666,7 +674,7 @@ def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform
     assert "VulkanTransform.frag" in shader_workflow
     assert "HORO_VULKAN_TRANSFORM_VERTEX" in shader_workflow
     assert "'[native-smoke]'" in shader_workflow
-    assert "continue-on-error" not in shader_workflow
+    assert "continue-on-error" not in shader_qualification_steps(shader_workflow)
 
 
 def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composition() -> None:
@@ -706,12 +714,27 @@ def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -
 
 def test_parallel_ctest_preserves_suite_selection_and_bounds_runner_work() -> None:
     assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
-    for name in ("ci-linux-debug", "ci-macos-debug"):
-        assert preset("testPresets", name)["execution"]["jobs"] == 2
+    assert preset("configurePresets", "ci-windows-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
+    for name, workers in (("ci-linux-debug", 4), ("ci-macos-debug", 3), ("ci-windows-debug", 4)):
+        assert preset("testPresets", name)["execution"]["jobs"] == workers
     assert preset("testPresets", "sonar")["execution"]["jobs"] == 4
     assert preset("testPresets", "ci-linux-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
     assert preset("testPresets", "ci-macos-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
+    assert preset("testPresets", "ci-windows-debug")["filter"] == {"include": {"label": "^ci-windows$"}}
     assert preset("testPresets", "sonar")["filter"] == {"include": {"label": "^sonar-coverage$"}}
+
+
+def test_windows_parallel_tests_require_native_fixture_isolation_qualification() -> None:
+    native = workflow_job("test")
+    marker = "- name: Verify Windows CTest fixture isolation"
+    qualification = native.split(marker, 1)[1].split("\n      - name:", 1)[0]
+    assert "if: runner.os == 'Windows'" in qualification
+    assert "pytest==8.3.4" in qualification
+    assert "tests/python/test_ci_case_isolation.py" in qualification
+    assert "-k 'test_generated_suite_properties_preserve_contracts_and_control_concurrency or test_case_' -q" in qualification
+    assert "timeout-minutes: 2" in qualification
+    assert "continue-on-error" not in qualification
+    assert native.index(marker) < native.index("- name: Configure Debug") < native.index("- name: Test Debug")
 
 
 def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:

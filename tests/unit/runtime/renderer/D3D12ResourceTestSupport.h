@@ -73,7 +73,9 @@ namespace Horo::Render::D3D12Tests {
         }
 
         RenderMemoryPlacement Placement(const RenderMemoryCostPlan &plan) {
-            return {.pool = {{1}, nextPool++},
+            const auto identity = nextPool++;
+            return {.pool = {{1}, identity},
+                    .block = {{1}, identity},
                     .scope = {1, 1},
                     .attempt = {nextPool},
                     .memoryClass = plan.memoryClass,

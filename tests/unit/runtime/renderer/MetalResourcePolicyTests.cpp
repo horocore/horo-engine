@@ -26,6 +26,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] RenderMemoryPlacement Placement(const RenderMemoryCostPlan &plan, const std::size_t offset,
                                                       const std::size_t backing) {
             return {.pool = {.renderer = RenderResourceOwnerId{9}, .value = 7},
+                    .block = {.renderer = RenderResourceOwnerId{9}, .value = 1},
                     .scope = {.owner = 3, .incarnation = 2},
                     .attempt = ResourceOperationId{4},
                     .memoryClass = plan.memoryClass,
@@ -195,6 +196,11 @@ namespace Horo::Render::Detail {
         CHECK(ValidateMetalResourcePlacement(plan.Value(), Placement(plan.Value(), 16, 128)).HasValue());
         CHECK(ValidateMetalResourcePlacement(plan.Value(), Placement(plan.Value(), 8, 128)).HasError());
         CHECK(ValidateMetalResourcePlacement(plan.Value(), Placement(plan.Value(), 80, 128)).HasError());
+        auto invalidBlock = Placement(plan.Value(), 16, 128);
+        invalidBlock.block = {};
+        CHECK(ValidateMetalResourcePlacement(plan.Value(), invalidBlock).HasError());
+        invalidBlock.block = {{99}, 1};
+        CHECK(ValidateMetalResourcePlacement(plan.Value(), invalidBlock).HasError());
     }
 
     TEST_CASE("Metal heap lifecycle validates reuse and reports final retirement") {
@@ -207,6 +213,9 @@ namespace Horo::Render::Detail {
         CHECK(ValidateMetalHeapReuse(heap, placement, MetalResourceStorage::Shared).HasError());
         RenderMemoryPlacement incompatible = placement;
         incompatible.compatibility = RenderMemoryCompatibilityId{99};
+        CHECK(ValidateMetalHeapReuse(heap, incompatible, MetalResourceStorage::Private).HasError());
+        incompatible = placement;
+        incompatible.backingBytes = 256;
         CHECK(ValidateMetalHeapReuse(heap, incompatible, MetalResourceStorage::Private).HasError());
         REQUIRE(RetainMetalHeapResource(heap).HasValue());
         REQUIRE(RetainMetalHeapResource(heap).HasValue());

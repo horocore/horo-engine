@@ -181,7 +181,8 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to allocate a resident buffer."));
         }
-        auto *instance = new (std::nothrow) MetalBufferInstance{.buffer = buffer, .usage = descriptor.usage, .pool = placement.pool};
+        auto *instance = new (std::nothrow)
+            MetalBufferInstance{.buffer = buffer, .usage = descriptor.usage, .pool = placement.pool, .block = placement.block};
         if (instance == nullptr) {
             [buffer makeAliasable];
             impl_->DiscardEmptyHeap(placement);
@@ -236,7 +237,8 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to allocate a resident texture."));
         }
-        auto *instance = new (std::nothrow) MetalTextureInstance{.texture = texture, .descriptor = descriptor, .pool = placement.pool};
+        auto *instance = new (std::nothrow)
+            MetalTextureInstance{.texture = texture, .descriptor = descriptor, .pool = placement.pool, .block = placement.block};
         if (instance == nullptr) {
             [texture makeAliasable];
             impl_->DiscardEmptyHeap(placement);

@@ -78,7 +78,7 @@ jobs:
 
       - name: Restore optional public compiler checkpoint
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 4
         env:
           COMPILER_NAMESPACE: sonar-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler_identity.outputs.c-compiler }}-${{ steps.compiler_identity.outputs.compiler }}-main-
         run: python3 .github/scripts/compiler_registry.py fetch --key "$COMPILER_NAMESPACE"
