@@ -9,6 +9,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
+#include <future>
 
 namespace Horo::Editor::WorldCompositionTests {
     namespace {
@@ -350,10 +351,22 @@ namespace Horo::Editor {
 }  // namespace Horo::Editor
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Holds the sole worker until release; the caller's entry promise must outlive the job system join. */
+        Result<JobHandle> HoldWorldBakeWorker(JobSystem &jobs, std::promise<void> &entered, std::shared_future<void> released) {
+            return jobs.SubmitResult({}, [&entered, released = std::move(released)](const CancellationToken &) {
+                entered.set_value();
+                released.wait();
+                return Result<void>::Success();
+            });
+        }
+    }  // namespace
+
     TEST_CASE("World bake publication fences the registry owner before a presentation snapshot refresh",
               "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake registry fence"};
         Tests::WriteReplicationProject(project.Path());
+        std::promise<void> workerEntered;
         JobSystem jobs{{.workerCount = 1}};
         OperationStore operations{8, 16};
         BuildOutputStore output{32};
@@ -368,8 +381,17 @@ namespace Horo::Editor {
         REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
         for (const auto &page : WorldResidencyTests::Document().pages)
             REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        // StartWorldBake pumps once before returning. Hold its worker so that
+        // initial pump cannot publish before this test advances the registry.
+        // Promise destruction also releases the worker on assertion unwinding;
+        // the borrowed entry promise outlives the job system's final join.
+        std::promise<void> releaseWorker;
+        const auto blocker = HoldWorldBakeWorker(jobs, workerEntered, releaseWorker.get_future().share());
+        REQUIRE(blocker.HasValue());
+        REQUIRE(workerEntered.get_future().wait_for(std::chrono::seconds{5}) == std::future_status::ready);
         const auto accepted = controller.StartWorldBake(Application::WorldBakeMode::Bake, world.Snapshot().Value()->fence);
         REQUIRE(accepted.HasValue());
+        releaseWorker.set_value();
         auto marker = jobs.SubmitResult({}, [](const CancellationToken &) {
             return Result<void>::Success();
         });

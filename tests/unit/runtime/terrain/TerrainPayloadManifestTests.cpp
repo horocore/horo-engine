@@ -423,8 +423,9 @@ namespace Horo::Terrain {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 cancellation.RequestCancellation();
             });
-            started.arrive_and_wait();
+            // Check the initial state before releasing the canceller; either thread may run first afterward.
             CHECK_FALSE(cancellation.Token().IsCancellationRequested());
+            started.arrive_and_wait();
             if (assembly) {
                 ErrorIs(GenerateTerrainPayloadManifest(request, cancellation.Token()), TerrainPayloadManifestErrors::Cancelled);
             } else {

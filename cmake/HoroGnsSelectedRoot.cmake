@@ -4,7 +4,11 @@ function(horo_prepare_gns_selected_root pristine out_source)
     set(patch_dir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/gns")
     file(READ "${patch_dir}/manifest.json" manifest)
     string(JSON expected_patch GET "${manifest}" patchSha256)
-    file(SHA256 "${patch_dir}/horo-gns-selected-root-v1.patch" actual_patch)
+    # Git may check text out as CRLF. Hash and apply the same canonical text,
+    # just as the reviewed pristine contexts below use canonical LF text.
+    file(READ "${patch_dir}/horo-gns-selected-root-v1.patch" patch_text)
+    string(REPLACE "\r\n" "\n" patch_text "${patch_text}")
+    string(SHA256 actual_patch "${patch_text}")
     if(NOT actual_patch STREQUAL expected_patch)
         message(FATAL_ERROR "GNS selected-root patch differs from its reviewed manifest")
     endif()
@@ -57,12 +61,15 @@ function(horo_prepare_gns_selected_root pristine out_source)
             endif()
         endforeach()
         find_package(Git REQUIRED)
+        set(owned_patch "${owned}.patch")
+        string(REGEX REPLACE "\n$" "" patch_text "${patch_text}")
+        file(CONFIGURE OUTPUT "${owned_patch}" CONTENT [=[@patch_text@]=] @ONLY NEWLINE_STYLE UNIX)
         # An in-repository build directory must not let git discover the parent
         # Horo checkout and interpret patch paths relative to that worktree.
         # Keep reviewed candidate bytes independent of the caller's checkout conversion.
         execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_INDEX_FILE
                         "GIT_CEILING_DIRECTORIES=${owned}"
-                        "${GIT_EXECUTABLE}" -c core.autocrlf=false apply "${patch_dir}/horo-gns-selected-root-v1.patch"
+                        "${GIT_EXECUTABLE}" -c core.autocrlf=false apply "${owned_patch}"
                         WORKING_DIRECTORY "${owned}" RESULT_VARIABLE applied ERROR_VARIABLE reason)
         if(NOT applied EQUAL 0)
             message(FATAL_ERROR "GNS build-owned selected-root patch failed: ${reason}")

@@ -1,5 +1,7 @@
 #include "D3D12ResourceTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 TEST_CASE("D3D12 resource service rejects invalid finite host bounds", "[renderer][d3d12][resources]") {
     Horo::Render::D3D12ResourceLimits limits;
     REQUIRE(limits.IsValid());
@@ -88,6 +90,34 @@ TEST_CASE("D3D12 WARP validates placement and exact queue ownership before nativ
     REQUIRE(SUCCEEDED(fixture.device->CreateCommandQueue(&computeDescription, IID_PPV_ARGS(&compute))));
     REQUIRE(CreateD3D12Resources(fixture.device.Get(), compute.Get(), {}).HasError());
     REQUIRE(CreateD3D12Resources(nullptr, fixture.queue.Get(), {}).HasError());
+}
+
+TEST_CASE("D3D12 WARP sibling blocks in one pool own separate native heaps", "[renderer][d3d12][resources][warp]") {
+    Fixture fixture;
+    const RenderBufferDescriptor descriptor{1024, CopyUsage};
+    const auto plan = fixture.resources->QueryBufferMemoryCost(descriptor);
+    REQUIRE(plan.HasValue());
+    auto firstPlacement = fixture.Placement(plan.Value());
+    const auto first = fixture.resources->CreateBuffer(descriptor, {}, firstPlacement);
+    REQUIRE(first.HasValue());
+    CHECK(fixture.resources->CreateBuffer(descriptor, {}, firstPlacement).HasError());
+    auto sibling = firstPlacement;
+    if (GENERATE(false, true))
+        sibling.backingBytes += plan.Value().alignment;
+    ++sibling.block.value;
+    ++sibling.attempt.value;
+    const auto second = fixture.resources->CreateBuffer(descriptor, {}, sibling);
+    REQUIRE(second.HasValue());
+    CHECK(fixture.resources->Snapshot().committedBytes == firstPlacement.backingBytes + sibling.backingBytes);
+    fixture.resources->DestroyBuffer(first.Value());
+    REQUIRE(fixture.resources->Poll().HasValue());
+    CHECK(fixture.resources->Snapshot().committedBytes == sibling.backingBytes);
+    const auto readback = fixture.resources->Readback(second.Value(), 0, descriptor.byteSize);
+    REQUIRE(readback.HasValue());
+    CHECK(fixture.Read(readback.Value()).size() == descriptor.byteSize);
+    fixture.resources->DestroyBuffer(second.Value());
+    REQUIRE(fixture.resources->Poll().HasValue());
+    CHECK(fixture.resources->Snapshot().committedBytes == 0);
 }
 
 TEST_CASE("D3D12 WARP descriptor reuse waits for dependency retirement", "[renderer][d3d12][resources][warp]") {

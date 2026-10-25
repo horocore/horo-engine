@@ -45,12 +45,14 @@ def isolated_git_config(tmp_path: Path, request: pytest.FixtureRequest,
     assert git_config.read_text(encoding="utf-8") == config_text
 
 
+@pytest.mark.parametrize("patch_newline", [b"\n", b"\r\n"])
 @pytest.mark.parametrize("pristine_newline", [b"\n", b"\r\n"])
 @pytest.mark.usefixtures("isolated_git_config")
 @pytest.mark.parametrize("inside_repository", [True, False])
 @pytest.mark.parametrize("autocrlf_checkout", [False, True])
 def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, autocrlf_checkout: bool,
-                                      pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, pristine_newline: bytes):
+                                      pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, pristine_newline: bytes,
+                                      patch_newline: bytes):
     project = tmp_path / "project with space ü"
     project.mkdir()
     git = shutil.which("git")
@@ -73,7 +75,8 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, 
     patch_dir.mkdir(parents=True)
     patch = f"--- a/src/sentinel.cpp\n+++ b/src/sentinel.cpp\n@@ -1 +1 @@\n-{ORIGINAL_SOURCE}+{PATCHED_SOURCE}"
     patch_path = patch_dir / "horo-gns-selected-root-v1.patch"
-    patch_path.write_bytes(patch.encode())
+    patch_bytes = patch.encode().replace(b"\n", patch_newline)
+    patch_path.write_bytes(patch_bytes)
     digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
     manifest = {"patchSha256": digest(patch), "licenseSha256": digest("fixture license\n"),
                 "paths": [{"path": "src/sentinel.cpp", "pristineSha256": digest(ORIGINAL_SOURCE),
@@ -89,10 +92,17 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, 
     for _ in range(2):
         result = pytester.run(cmake, "-P", str(script), timeout=15)
         assert result.ret == 0, result.stdout.str() + result.stderr.str()
-        owned = Path(result_path.read_text())
+        owned = Path(result_path.read_text(encoding="utf-8"))
         assert (owned / "src/sentinel.cpp").read_bytes() == PATCHED_SOURCE.encode()
         assert parent_source.read_text() == ORIGINAL_SOURCE
         assert (pristine / "src/sentinel.cpp").read_text() == ORIGINAL_SOURCE
+        assert patch_path.read_bytes() == patch_bytes
+    patch_path.write_bytes(patch_bytes.replace(b"+patched", b"+tampered"))
+    rejected_patch = pytester.run(cmake, "-P", str(script), timeout=15)
+    assert rejected_patch.ret != 0
+    assert "patch differs from its reviewed manifest" in rejected_patch.stderr.str()
+    assert (owned / "src/sentinel.cpp").read_bytes() == PATCHED_SOURCE.encode()
+    patch_path.write_bytes(patch_bytes)
     (owned / "src/sentinel.cpp").write_text("corrupted\n", encoding="utf-8")
     rejected = pytester.run(cmake, "-P", str(script), timeout=15)
     assert rejected.ret != 0
