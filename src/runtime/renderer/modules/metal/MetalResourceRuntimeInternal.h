@@ -77,16 +77,18 @@ namespace Horo::Render::Detail {
             }
         }
 
-        struct PoolKey {
+        struct BackingKey {
             std::uint64_t renderer{0};
             std::uint64_t pool{0};
+            std::uint64_t block{0};
 
-            [[nodiscard]] bool operator==(const PoolKey &) const noexcept = default;
+            [[nodiscard]] bool operator==(const BackingKey &) const noexcept = default;
         };
 
-        struct PoolKeyHash {
-            [[nodiscard]] std::size_t operator()(const PoolKey &key) const noexcept {
-                return std::hash<std::uint64_t>{}(key.renderer) ^ (std::hash<std::uint64_t>{}(key.pool) << 1U);
+        struct BackingKeyHash {
+            [[nodiscard]] std::size_t operator()(const BackingKey &key) const noexcept {
+                return std::hash<std::uint64_t>{}(key.renderer) ^ (std::hash<std::uint64_t>{}(key.pool) << 1U) ^
+                       (std::hash<std::uint64_t>{}(key.block) << 2U);
             }
         };
 
@@ -114,7 +116,7 @@ namespace Horo::Render::Detail {
         __strong id<MTLCommandBuffer> lastSubmittedUpload{nil}; /**< Final staging submission drained during teardown. */
         __strong NSMutableArray<id<MTLCommandBuffer>> *submittedUploads{
             [[NSMutableArray alloc] initWithCapacity:MetalRecordingBudget::MaximumUploads]};
-        std::unordered_map<PoolKey, HeapRecord, PoolKeyHash> heaps;
+        std::unordered_map<BackingKey, HeapRecord, BackingKeyHash> heaps;
         std::unordered_set<MetalShaderModule *> shaderModules;
         std::unordered_set<MetalGraphicsPipeline *> graphicsPipelines;
         std::unordered_set<MetalSamplerInstance *> samplers;
@@ -128,15 +130,15 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialResource(ShaderResourceKind kind, const MaterialResidentResource &resident,
                                                                         std::size_t requiredBufferBytes) const;
 
-        [[nodiscard]] PoolKey Key(const RenderMemoryPoolId pool) const noexcept {
-            return {.renderer = pool.renderer.value, .pool = pool.value};
+        [[nodiscard]] BackingKey Key(const RenderMemoryPoolId pool, const RenderMemoryBlockId block) const noexcept {
+            return {.renderer = pool.renderer.value, .pool = pool.value, .block = block.value};
         }
 
-        [[nodiscard]] PoolKey Key(const RenderMemoryPlacement &placement) const noexcept {
-            return Key(placement.pool);
+        [[nodiscard]] BackingKey Key(const RenderMemoryPlacement &placement) const noexcept {
+            return Key(placement.pool, placement.block);
         }
 
-        [[nodiscard]] Result<HeapRecord *> CreateHeap(const PoolKey key, const RenderMemoryPlacement &placement,
+        [[nodiscard]] Result<HeapRecord *> CreateHeap(const BackingKey key, const RenderMemoryPlacement &placement,
                                                       const MetalResourceStorage storage) {
             MTLHeapDescriptor *descriptor = [[MTLHeapDescriptor alloc] init];
             descriptor.size = placement.backingBytes;
@@ -160,7 +162,7 @@ namespace Horo::Render::Detail {
             DrainRetired(MaxResidentInstances);
             for (const auto &entry : retired) {
                 if (std::visit([&](const auto *instance) {
-                    return instance->pool == placement.pool;
+                    return instance->pool == placement.pool && instance->block == placement.block;
                 }, entry)) {
                     return false;
                 }
@@ -169,7 +171,7 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] Result<HeapRecord *> AcquireHeap(const RenderMemoryPlacement &placement, const MetalResourceStorage storage) {
-            const PoolKey key = Key(placement);
+            const BackingKey key = Key(placement);
             auto found = heaps.find(key);
             Result<HeapRecord *> acquired =
                 found == heaps.end() ? CreateHeap(key, placement, storage) : Result<HeapRecord *>::Success(&found->second);
@@ -351,7 +353,7 @@ namespace Horo::Render::Detail {
                 retired.emplace_back(instance);  // Capacity is fixed before native initialization.
                 return;
             }
-            const PoolKey key = Key(instance->pool);
+            const BackingKey key = Key(instance->pool, instance->block);
             instances.erase(instance);
             [(instance->*resource) makeAliasable];
             delete instance;

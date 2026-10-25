@@ -249,7 +249,7 @@ namespace Horo::Render::D3D12Detail {
             if (placement.offsetBytes != 0 || placement.backingBytes != plan.requiredBytes)
                 return false;
         return std::ranges::none_of(resources_, [&](const auto &entry) {
-            if (entry->pool != placement.pool)
+            if (entry->pool != placement.pool || entry->block != placement.block)
                 return false;
             if (plan.allocationClass == RenderMemoryAllocationClass::Dedicated || !entry->heap)
                 return true;
@@ -263,7 +263,7 @@ namespace Horo::Render::D3D12Detail {
     Result<std::shared_ptr<HeapAllocation>> Resources::AcquireHeap(const D3D12_RESOURCE_DESC &shape, const RenderMemoryCostPlan &plan,
                                                                    const RenderMemoryPlacement &placement) {
         const auto found = std::ranges::find_if(heapAllocations_, [&](const auto &heap) {
-            return heap->pool == placement.pool;
+            return heap->pool == placement.pool && heap->block == placement.block;
         });
         const auto flags = HeapFlags(shape);
         if (found != heapAllocations_.end()) {
@@ -277,6 +277,7 @@ namespace Horo::Render::D3D12Detail {
         }
         auto heap = std::make_shared<HeapAllocation>();
         heap->pool = placement.pool;
+        heap->block = placement.block;
         heap->scope = placement.scope;
         heap->memoryClass = placement.memoryClass;
         heap->compatibility = placement.compatibility;
@@ -324,6 +325,7 @@ namespace Horo::Render::D3D12Detail {
             return Result<std::shared_ptr<Resource>>::Failure(
                 ResourceError("render.d3d12.allocation_failed", "Create the resource inside its admitted heap region.", status));
         resource->pool = placement.pool;
+        resource->block = placement.block;
         resource->offsetBytes = placement.offsetBytes;
         resource->requiredBytes = placement.requiredBytes;
         ++resource->heap->allocationCount;

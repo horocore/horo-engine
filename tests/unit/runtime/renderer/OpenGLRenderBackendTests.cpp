@@ -297,6 +297,7 @@ namespace Horo::Render::OpenGLBackendTests {
             backend->CreateBuffer({.byteSize = bytes.size(), .usage = RenderBufferUsage::Vertex, .access = RenderBufferAccess::DeviceLocal},
                                   bytes,
                                   {.pool = {{1}, 1},
+                                   .block = {{1}, 1},
                                    .scope = {1, 1},
                                    .attempt = {1},
                                    .compatibility = {1},

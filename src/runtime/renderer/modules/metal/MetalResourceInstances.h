@@ -18,6 +18,7 @@ namespace Horo::Render::Detail {
         __strong id<MTLBuffer> buffer{nil};
         RenderBufferUsage usage{RenderBufferUsage::None};
         RenderMemoryPoolId pool;
+        RenderMemoryBlockId block;
         MetalResidentUse use;
         std::uint64_t lightTableRevision{};
         LightCullingDispatch lightTableDispatch;
@@ -34,6 +35,7 @@ namespace Horo::Render::Detail {
         __strong id<MTLTexture> texture{nil};
         RenderTextureDescriptor descriptor;
         RenderMemoryPoolId pool;
+        RenderMemoryBlockId block;
         MetalResidentUse use;
     };
 
