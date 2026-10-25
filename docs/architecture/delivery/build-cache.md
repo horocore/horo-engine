@@ -1054,3 +1054,72 @@ rm -rf .cmake/fetchcontent
 - Compiler-cache capacity must grow with measured object volume. The configured
   maximum and warning thresholds are operational settings reviewed from CI
   statistics, not fixed assumptions about project size.
+
+## Metal build and hardware handoff
+
+The macOS producer uses the standard hosted ARM64 image and retains the complete
+Debug, audio, navigation, network and XR qualifications. It compiles the same Metal
+selection with the existing options, then publishes one immutable runtime bundle.
+The physical Mac executes that full selection after the producer succeeds. Linux
+and Windows remain a two-entry native matrix; the hardware consumer depends only
+on its macOS producer. This adds one job per run, without per-test fanout.
+
+The required `Test · macOS / Clang` context belongs to the final hardware
+qualification. A producer failure fails that context on a small hosted runner;
+it does not produce a skipped-success check or occupy the physical Mac. Existing
+same-repository admission and fork routing remain mandatory. This design does not
+authorize permanent listener operation or fork execution on a personal computer.
+
+For the first controlled experiment, manual dispatch exposes the optional boolean
+`isolated_metal_qualification`, defaulting to false. Only an explicit true value
+on a manual dispatch selects the fixed `horo-macos-metal-qualification` label.
+It cannot supply an arbitrary runner label or bypass producer failure. Normal
+push/PR routing stays unchanged. Operational admission replaces the offline
+runner's general custom label temporarily with only the qualification label;
+after the exact job finishes and all children stop, the runner goes offline and
+its original custom label is restored. Existing queued jobs keep their labels
+and are left intact. This source option alone grants no label/service change.
+
+Both hosts use an owner-private logical source alias under
+`/private/tmp/horo-metal-ci`. Only executable paths, build-local working directories
+and the existing private HOME/TMP settings are relocated. Arguments, test names,
+labels, locks, serial requirements, failure patterns, skip codes and timeouts are
+preserved. Fresh consumer CTest discovery must equal the complete producer
+selection before execution. Hardware success requires complete JUnit evidence
+with no failed or skipped cases.
+
+The consumer checks the successful producer, run, attempt, head and immutable
+artifact through the GitHub API, including the server artifact digest. It then
+checks the producer payload digest and every file in private quarantine. Bounded
+USTAR parsing rejects links, special members, PAX/sparse extensions, traversal,
+duplicates, case collisions, undeclared files and excessive sizes before
+installation. Mach-O architecture, SDK/deployment identity and system-library
+closure are checked before execution. Source identity and installed bytes remain
+checked across the test run. A manifest cannot replace independent provenance.
+
+The producer publishes its immutable attempt number with the artifact outputs.
+A hardware-only retry may consume that earlier successful attempt from the same
+run, provided the commit, source head, tree and verified artifact still match.
+Provenance checks query the explicit producer attempt's jobs; they never search
+the latest jobs or another run for a convenient successful build. The consumer's
+own attempt remains unchanged in its source guards. Future attempts and missing
+outputs fail closed. If GitHub does not retain the producer outputs for a retry,
+rerun all jobs to create a new verified bundle. Actual GitHub retry behavior must
+be qualified alongside the first cross-host experiment.
+
+Runtime bundles expire after one day and do not use the Actions cache namespace.
+Shared dependency/compiler checkpoints remain public GHCR data with trusted-main
+publishers and ordinary source-build fallback. Producer package write permissions
+are restricted to canonical main; the consumer has content and Actions read
+permissions. See [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [runner limits](https://docs.github.com/en/actions/reference/limits) for the
+public standard-runner policy and current limits. The free standard plan has five
+concurrent macOS jobs; one physical runner supplies one hardware slot. A global
+PR concurrency group must not cancel another PR's pending required check.
+
+An actual hosted-producer-to-physical-Mac experiment is required. Local archive
+fixtures and source-alias probes do not prove runtime asset completeness, cache
+reuse, portability or the 10–15 minute target. Record cold/warm producer time,
+transfer size/time, actual hardware execution and multi-PR queue behavior before
+claiming the target. Until delivery and validation finish, source preparation is
+not operational qualification.
