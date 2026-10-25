@@ -200,7 +200,12 @@ The native macOS matrix entry can use a repository runner selected by the
 `HORO_MACOS_METAL_RUNNER` repository variable. Leave it unset to use
 `macos-latest`. Set it to a unique custom label only after verifying a native
 Mac against the rendering architecture's device-family baseline and providing
-an interactive user session for presentation tests. A successful device query
+an interactive user session for presentation tests. Install Xcode's optional
+Metal Toolchain once during host provisioning with
+`xcodebuild -downloadComponent MetalToolchain`. Verify execution with
+`xcrun --sdk macosx metal --version`; `xcrun --find metal` can find a stub even
+when the component is missing. CI checks execution before restoring caches or
+building Debug, so an incomplete Xcode installation fails immediately. A successful device query
 alone does not qualify the engine's GPU tests.
 
 Only pushes, manual dispatches and same-repository pull requests can select

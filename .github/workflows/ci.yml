@@ -401,6 +401,7 @@ jobs:
             echo '::error::The macOS qualification runner must be a native Mac.'
             exit 1
           fi
+          xcrun --sdk macosx metal --version
           python3 - <<'PYTHON'
           import os
           import pathlib
