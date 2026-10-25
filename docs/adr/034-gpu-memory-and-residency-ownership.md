@@ -344,6 +344,28 @@ Implementation acceptance must cover:
   fragmentation/slack and native estimates, with owner/provenance and failure
   reason. RND-010.10 records workloads and backend measurements before tuning.
 
+### Physical backing identity migration
+
+A compatible logical pool can contain multiple physical blocks. Every admitted
+`RenderMemoryPlacement` therefore carries both its `RenderMemoryPoolId` and a
+`RenderMemoryBlockId`. The existing renderer ledger issues the block identity
+from its monotonic block sequence and renderer incarnation; native backends do
+not introduce a second allocator authority. Suballocations within one block share
+that identity. Sibling blocks, including equal-sized and dedicated blocks, have
+distinct identities even when both placements start at offset zero.
+
+Native heap lookup, overlap checks and retirement use the pool and block pair.
+Capacity, storage, compatibility, scope and lifetime checks remain mandatory.
+Reclaiming one block must not release a sibling's backing or remove a nonempty
+logical pool. Pool grouping, pool limits and whole-block accounting are unchanged.
+
+This adds a required field to the in-process C++ placement layout. Rebuild the
+frontend, all first-party backends, SDK consumers and direct placement factories
+as one source cohort; do not mix old and new C++ objects or binaries. Missing,
+zero or foreign-renderer block identities are rejected, without a legacy pool-only
+fallback. These identities are runtime values, not persisted project data; this
+change adds no project-file format or native handles to the public contract.
+
 ## Consequences
 
 Owners can reject work before allocating and explain where memory remains charged.

@@ -1,0 +1,13 @@
+# Evaluate after Catch discovery so each exact case name gets a private namespace.
+# Hashes keep separators, Unicode and CMake punctuation out of filesystem paths.
+foreach(horo_ci_case IN LISTS @target@_TESTS)
+    string(SHA256 horo_ci_case_key "${horo_ci_case}")
+    set(horo_ci_case_root "@runtime_root@/${horo_ci_case_key}")
+    file(MAKE_DIRECTORY "${horo_ci_case_root}/work" "${horo_ci_case_root}/tmp" "${horo_ci_case_root}/home")
+    set_tests_properties("${horo_ci_case}" PROPERTIES
+        WORKING_DIRECTORY "${horo_ci_case_root}/work"
+        ENVIRONMENT_MODIFICATION "TMPDIR=set:${horo_ci_case_root}/tmp;TMP=set:${horo_ci_case_root}/tmp;TEMP=set:${horo_ci_case_root}/tmp;HOME=set:${horo_ci_case_root}/home;USERPROFILE=set:${horo_ci_case_root}/home")
+endforeach()
+unset(horo_ci_case)
+unset(horo_ci_case_key)
+unset(horo_ci_case_root)
