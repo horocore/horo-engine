@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <thread>
 
@@ -92,6 +93,50 @@ namespace {
         }
         REQUIRE(next == std::array<std::uint8_t, 3>{4, 4, 4});
     }
+
+    struct Payload;
+
+    /** @brief Callback observations borrowed for the lifetime of the native message owner. */
+    struct Verification {
+        const Payload *allocation{};
+        const GnsLaneOperations *lanes{};
+        std::size_t frees{};
+        bool restored{true};
+        std::thread::id freedOn{};
+    };
+
+    /** @brief Native allocation contents used to verify callback restoration before release. */
+    struct Payload {
+        Verification *verification;
+        void (*nativeFree)(SteamNetworkingMessage_t *);
+        std::uint64_t marker;
+    };
+
+    /** @brief Verify restored payload metadata and permit a nested rejected release before native cleanup. */
+    void VerifyAndFreePayload(SteamNetworkingMessage_t *value) {
+        auto *payload = static_cast<Payload *>(value->m_pData);
+        auto &observed = *payload->verification;
+        observed.restored = observed.restored && value->m_pData == observed.allocation &&
+                            value->m_cbSize == static_cast<int>(sizeof(Payload)) && value->m_nUserData == 123 &&
+                            payload->marker == 0x12345678;
+        observed.freedOn = std::this_thread::get_id();
+        ++observed.frees;
+        const auto nativeFree = payload->nativeFree;
+        // A nested empty rejection has no data free of its own. It must retire
+        // its borrow without corrupting this outer callback's restored payload.
+        auto *nested = SteamNetworkingUtils()->AllocateMessage(0);
+        if (nested) {
+            int64 nestedResult{};
+            observed.lanes->SendMessage(*SteamNetworkingSockets(), &nested, &nestedResult);
+            observed.restored = observed.restored && nestedResult == -static_cast<int64>(k_EResultLimitExceeded);
+            nested->Release();
+        } else {
+            observed.restored = false;
+        }
+        observed.restored = observed.restored && value->m_pData == payload && payload->marker == 0x12345678;
+        std::destroy_at(payload);
+        nativeFree(value);  // Free the original AllocateMessage allocation through its exact callback.
+    }
 }  // namespace
 
 TEST_CASE("GNS lane configuration failure never publishes readiness and retires exact generations once", "[network][gns][lanes]") {
@@ -143,17 +188,61 @@ TEST_CASE("GNS rejected native lane send releases the real caller-owned payload 
     const auto connection = Loopback(transport, events, NetworkTransportEventKind::Connected, 1);
     REQUIRE(Wait(transport, events, NetworkTransportEventKind::Accepted, 1));
     const std::array payload{std::byte{1}, std::byte{2}};
-    const auto rejected = transport.Send(connection, ChannelId::Create(1, 2).Value(), payload, DeliveryPolicy::ReliableOrdered);
-    REQUIRE(rejected.HasError());
-    REQUIRE(rejected.ErrorValue().domain.Value() == NetworkErrors::TransportReliableBackpressure.domain.Value());
-    REQUIRE(rejected.ErrorValue().code.Value() == NetworkErrors::TransportReliableBackpressure.code.Value());
-    REQUIRE(operations.sends == 1);
-    REQUIRE(operations.freedPayloads == 1);  // Native Release actually invoked the documented data callback.
-    REQUIRE(operations.freedOn == std::this_thread::get_id());
-    REQUIRE(transport.Stats().sentMessages == 0);
-    REQUIRE(transport.Stats().sentBytes == 0);
+    for (std::size_t rejectedCount = 1; rejectedCount <= 3; ++rejectedCount) {
+        const auto rejected = transport.Send(connection, ChannelId::Create(1, 2).Value(), payload, DeliveryPolicy::ReliableOrdered);
+        REQUIRE(rejected.HasError());
+        REQUIRE(rejected.ErrorValue().domain.Value() == NetworkErrors::TransportReliableBackpressure.domain.Value());
+        REQUIRE(rejected.ErrorValue().code.Value() == NetworkErrors::TransportReliableBackpressure.code.Value());
+        REQUIRE(operations.sends == rejectedCount);
+        REQUIRE(operations.freedPayloads == rejectedCount);  // Actual native Release callback, not an inferred RAII count.
+        REQUIRE(operations.freedOn == std::this_thread::get_id());
+        REQUIRE(operations.originalPayload == nullptr);
+        REQUIRE(operations.originalFree == nullptr);
+        REQUIRE(transport.Stats().sentMessages == 0);
+        REQUIRE(transport.Stats().sentBytes == 0);
+    }
     transport.Shutdown();
-    REQUIRE(operations.freedPayloads == 1);
+    REQUIRE(operations.freedPayloads == 3);
+}
+
+TEST_CASE("GNS rejected callback restores the exact native payload before freeing it", "[network][gns][lanes]") {
+    Verification verification;
+    GnsLaneFailureInjection failure{GnsLaneFailure::SendRejected};
+    GnsTransport transport;
+    REQUIRE(transport.Initialize({}).HasValue());
+    const GnsLaneOperations lanes{&failure};
+    verification.lanes = &lanes;
+    for (std::size_t count = 1; count <= 3; ++count) {
+        auto *message = SteamNetworkingUtils()->AllocateMessage(static_cast<int>(sizeof(Payload)));
+        REQUIRE(message != nullptr);
+        const std::unique_ptr<SteamNetworkingMessage_t, void (*)(SteamNetworkingMessage_t *)> owner{message,
+                                                                                                    [](SteamNetworkingMessage_t *value) {
+            value->Release();
+        }};
+        REQUIRE(message->m_pData != nullptr);
+        REQUIRE(message->m_pfnFreeData != nullptr);
+        verification.allocation = static_cast<Payload *>(message->m_pData);
+        std::construct_at(static_cast<Payload *>(message->m_pData), Payload{&verification, message->m_pfnFreeData, 0x12345678});
+        message->m_nUserData = 123;
+        message->m_pfnFreeData = &VerifyAndFreePayload;
+        int64 result{};
+        auto *originalMessage = message;
+        lanes.SendMessage(*SteamNetworkingSockets(), &message, &result);
+        REQUIRE(result == -static_cast<int64>(k_EResultLimitExceeded));
+        REQUIRE(message == originalMessage);
+        REQUIRE(message->m_cbSize == static_cast<int>(sizeof(Payload)));
+        REQUIRE(message->m_nUserData == 123);
+        // owner destruction invokes the real pinned ReleaseFunc and our data callback.
+    }
+    REQUIRE(verification.restored);
+    REQUIRE(verification.frees == 3);
+    REQUIRE(verification.freedOn == std::this_thread::get_id());
+    REQUIRE(failure.sends == 6);
+    REQUIRE(failure.freedPayloads == 6);  // Three payload releases plus three nested empty-message releases.
+    REQUIRE(failure.originalPayload == nullptr);
+    REQUIRE(failure.originalFree == nullptr);
+    transport.Shutdown();
+    REQUIRE(verification.frees == 3);
 }
 
 TEST_CASE("GNS native lanes preserve exact routing and independent reliable order", "[network][gns][lanes]") {

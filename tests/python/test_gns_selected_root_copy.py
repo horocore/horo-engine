@@ -45,6 +45,25 @@ def isolated_git_config(tmp_path: Path, request: pytest.FixtureRequest,
     assert git_config.read_text(encoding="utf-8") == config_text
 
 
+def _reviewed_patch_fixture(project: Path, patch_newline: bytes) -> tuple[Path, Path, bytes]:
+    """Install the literal-preserving patch fixture and its reviewed hashes."""
+    helper = project / "cmake/HoroGnsSelectedRoot.cmake"
+    helper.parent.mkdir()
+    shutil.copyfile(Path(__file__).resolve().parents[2] / "cmake/HoroGnsSelectedRoot.cmake", helper)
+    patch_dir = helper.parent / "patches/gns"
+    patch_dir.mkdir(parents=True)
+    patch = f"--- a/src/sentinel.cpp\n+++ b/src/sentinel.cpp\n@@ -1 +1 @@\n-{ORIGINAL_SOURCE}+{PATCHED_SOURCE}"
+    patch_path = patch_dir / "horo-gns-selected-root-v1.patch"
+    patch_bytes = patch.encode().replace(b"\n", patch_newline)
+    patch_path.write_bytes(patch_bytes)
+    digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
+    manifest = {"patchSha256": digest(patch), "licenseSha256": digest("fixture license\n"),
+                "paths": [{"path": "src/sentinel.cpp", "pristineSha256": digest(ORIGINAL_SOURCE),
+                           "candidateSha256": digest(PATCHED_SOURCE)} ]}
+    (patch_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return helper, patch_path, patch_bytes
+
+
 @pytest.mark.parametrize("patch_newline", [b"\n", b"\r\n"])
 @pytest.mark.parametrize("pristine_newline", [b"\n", b"\r\n"])
 @pytest.mark.usefixtures("isolated_git_config")
@@ -68,20 +87,7 @@ def test_gns_patch_stays_in_owned_copy(tmp_path: Path, inside_repository: bool, 
     (pristine / "src").mkdir(parents=True)
     (pristine / "src/sentinel.cpp").write_bytes(ORIGINAL_SOURCE.encode().replace(b"\n", pristine_newline))
     (pristine / "LICENSE").write_text("fixture license\n", encoding="utf-8")
-    helper = project / "cmake/HoroGnsSelectedRoot.cmake"
-    helper.parent.mkdir()
-    shutil.copyfile(Path(__file__).resolve().parents[2] / "cmake/HoroGnsSelectedRoot.cmake", helper)
-    patch_dir = helper.parent / "patches/gns"
-    patch_dir.mkdir(parents=True)
-    patch = f"--- a/src/sentinel.cpp\n+++ b/src/sentinel.cpp\n@@ -1 +1 @@\n-{ORIGINAL_SOURCE}+{PATCHED_SOURCE}"
-    patch_path = patch_dir / "horo-gns-selected-root-v1.patch"
-    patch_bytes = patch.encode().replace(b"\n", patch_newline)
-    patch_path.write_bytes(patch_bytes)
-    digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
-    manifest = {"patchSha256": digest(patch), "licenseSha256": digest("fixture license\n"),
-                "paths": [{"path": "src/sentinel.cpp", "pristineSha256": digest(ORIGINAL_SOURCE),
-                           "candidateSha256": digest(PATCHED_SOURCE)} ]}
-    (patch_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    helper, patch_path, patch_bytes = _reviewed_patch_fixture(project, patch_newline)
     _prepare_patch_repository(project, patch_path, git, pytester, autocrlf_checkout)
     build = project / "build" if inside_repository else tmp_path / "external build"
     script = tmp_path / "run.cmake"

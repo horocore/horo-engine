@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -52,7 +53,10 @@ namespace Horo::Network {
      * SendRejected never submits its message to the SDK. The caller's existing RAII owner
      * synchronously invokes Release -> ReleaseFunc -> m_pfnFreeData before Send returns.
      * Therefore no SDK worker retains this state or callback; Shutdown cannot leave a
-     * queued reference. Declare this nonmoving state before the borrowing transport and
+     * queued reference. Each rejected Send releases its message before another Send.
+     * The original payload/free pair is retired before invoking native cleanup; the
+     * pinned DefaultFreeData only calls free and cannot reenter engine code.
+     * Declare this nonmoving state before the borrowing transport and
      * retain it through transport destruction and callback drain.
      */
     struct GnsLaneFailureInjection final {
@@ -69,7 +73,7 @@ namespace Horo::Network {
         std::size_t freedPayloads{};
         std::thread::id freedOn{};
         void (*originalFree)(SteamNetworkingMessage_t *){};
-        int64 originalUserData{};
+        std::byte *originalPayload{};
     };
 
     /** @brief Native lane operations with an optional typed, owner-thread qualification fault. */
@@ -93,8 +97,12 @@ namespace Horo::Network {
             }
             ++failure_->sends;
             failure_->originalFree = (*message)->m_pfnFreeData;
-            failure_->originalUserData = (*message)->m_nUserData;
-            (*message)->m_nUserData = static_cast<int64>(reinterpret_cast<std::uintptr_t>(failure_));
+            failure_->originalPayload = static_cast<std::byte *>((*message)->m_pData);
+            // Qualification-only rejected messages never enter the SDK. The pinned
+            // ReleaseFunc only checks m_pData for null before invoking this callback;
+            // it does not inspect payload bytes. Temporarily lend this pointer slot
+            // to the stable context, retaining the exact native payload separately.
+            (*message)->m_pData = failure_;
             (*message)->m_pfnFreeData = &RecordFreedPayload;
             *result = -static_cast<int64>(k_EResultLimitExceeded);
             // Leave the exact native allocation caller-owned. No SDK queue sees the probe.
@@ -103,13 +111,20 @@ namespace Horo::Network {
     private:
         /** @brief Observe the pinned native Release callback, then restore and invoke its real data free. */
         static void RecordFreedPayload(SteamNetworkingMessage_t *message) {
-            auto &failure = *reinterpret_cast<GnsLaneFailureInjection *>(static_cast<std::uintptr_t>(message->m_nUserData));
+            auto &failure = *static_cast<GnsLaneFailureInjection *>(message->m_pData);
+            const auto originalFree = failure.originalFree;
+            message->m_pData = failure.originalPayload;
+            message->m_pfnFreeData = originalFree;
+            // Restore the native payload and free function before invoking user code.
+            // Retire this frame's borrow first, so a repeated or nested rejected send
+            // cannot overwrite anything this callback still needs. Size, bytes and
+            // m_nUserData have never changed; no queued message observes the context.
+            failure.originalPayload = nullptr;
+            failure.originalFree = nullptr;
             ++failure.freedPayloads;
             failure.freedOn = std::this_thread::get_id();
-            message->m_nUserData = failure.originalUserData;
-            message->m_pfnFreeData = failure.originalFree;
-            if (failure.originalFree)
-                failure.originalFree(message);
+            if (originalFree)
+                originalFree(message);
         }
 
         GnsLaneFailureInjection *failure_{};
