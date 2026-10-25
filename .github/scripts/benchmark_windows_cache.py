@@ -18,7 +18,7 @@ GROUPS = ("src/foundation/", "src/runtime/ui/", "src/physics/", "src/runtime/nav
 
 def run(arguments, output, environment):
     """Execute only fixed toolchain commands; generated target names stay argv data."""
-    assert arguments[0] in {"cmake", "sccache", "ccache"}
+    assert arguments[0] in {"cmake", "sccache", "ccache", "dumpbin"}
     executable = shutil.which(arguments[0])
     if executable is None:
         raise RuntimeError("Required benchmark tool is missing")
@@ -85,6 +85,60 @@ def digests(targets):
     return result
 
 
+def preserve_object_evidence(mode, targets, environment):
+    """Keep four representative objects and native COFF diagnostics for inspection."""
+    for index, group in enumerate(GROUPS):
+        target = next(target for target, source in targets.items() if source.startswith(group))
+        snapshot = RESULTS / f"{mode}-group-{index}.obj"
+        shutil.copyfile(BUILD / target, snapshot)
+        run(["dumpbin", "/all", str(snapshot)], snapshot.with_suffix(".dumpbin.log"), environment)
+
+
+def invalidation_guard(environment):
+    """Require direct-cache invalidation after same-length header changes with preserved mtime."""
+    fixture = RESULTS / "invalidation"
+    fixture.mkdir(exist_ok=True)
+    header = fixture / "value.h"
+    source = fixture / "main.cpp"
+    source.write_text('#include "value.h"\nint main() { return fixture_value; }\n', encoding="utf-8")
+    object_file = fixture / "main.obj"
+    executable = fixture / "guard.exe"
+    compiler = shutil.which("cl")
+    assert compiler is not None
+    rows = []
+    header.write_text("inline constexpr int fixture_value = 17;\n", encoding="utf-8")
+    # Let the initial filesystem timestamp tick pass so the warm lookup can
+    # actually use direct mode with its default fresh-include race protection.
+    time.sleep(1.1)
+    run(["ccache", "--zero-stats"], fixture / "reset.log", environment)
+    for index, value in enumerate((17, 17, 29, 17)):
+        original = header.stat()
+        contents = f"inline constexpr int fixture_value = {value};\n"
+        if header.read_text(encoding="utf-8") != contents:
+            header.write_text(contents, encoding="utf-8")
+        if index >= 2:
+            os.utime(header, ns=(original.st_atime_ns, original.st_mtime_ns))
+        object_file.unlink(missing_ok=True)
+        with (fixture / f"{index}.compile.log").open("w", encoding="utf-8") as log:
+            subprocess.run(["ccache", compiler, "/nologo", "/std:c++20", "/EHsc", "/O2", "/Z7", "/c",
+                            str(source), f"/Fo{object_file}"], cwd=fixture, env=environment, stdout=log,
+                           stderr=subprocess.STDOUT, timeout=60, check=True, shell=False)
+        with (fixture / f"{index}.link.log").open("w", encoding="utf-8") as log:
+            subprocess.run([compiler, "/nologo", str(object_file), f"/Fe{executable}"], cwd=fixture,
+                           env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=60,
+                           check=True, shell=False)
+        actual = subprocess.run([str(executable)], cwd=fixture, env=environment, timeout=30,
+                                check=False, shell=False).returncode
+        assert actual == value, "Cache reused stale header contents"
+        statistics_path = fixture / f"{index}.stats.log"
+        run(["ccache", "--print-stats"], statistics_path, environment)
+        if index == 1:
+            counters = dict(line.split() for line in statistics_path.read_text(encoding="utf-8").splitlines())
+            assert int(counters["direct_cache_hit"]) >= 1, "Warm direct-mode guard was not exercised"
+        rows.append({"expected": value, "actual": actual, "mtimePreserved": index >= 2})
+    return rows
+
+
 def measure(index, mode, workers, targets, environment):
     """Rebuild only selected objects; leave compiler storage and flags unchanged."""
     selected = dict(environment)
@@ -121,7 +175,10 @@ def main():
         targets = select_objects()
         summary["targets"] = targets
         _, reference = measure("warm", "server", 4, targets, environment)
+        preserve_object_evidence("server", targets, environment)
         _, candidate = measure("warm", "ccache", 4, targets, environment)
+        preserve_object_evidence("ccache", targets, environment)
+        summary["headerInvalidation"] = invalidation_guard(environment)
         summary["coldCacheObjectHashesIdentical"] = candidate == reference
         summary["coldCacheObjectDifferences"] = [target for target in targets if candidate[target] != reference[target]]
         for index, (mode, workers) in enumerate(order + list(reversed(order)) + order + list(reversed(order))):
