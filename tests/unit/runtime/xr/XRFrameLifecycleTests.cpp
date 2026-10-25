@@ -102,8 +102,15 @@ namespace Horo::XR {
             REQUIRE(frames.Acquire(frame, second) == XRFrameStatus::Ok);
             const std::array images{first, second};
             REQUIRE(frames.Submit(frame, images) == XRFrameStatus::Ok);
+            REQUIRE(frames.ValidateEnd(frame, 1) == XRFrameStatus::ImageNotReleased);
+            REQUIRE(frames.ValidateReleasedImage(frame, first) == XRFrameStatus::ImageNotReleased);
             REQUIRE(frames.Release(frame, second) == XRFrameStatus::Ok);
             REQUIRE(frames.Release(frame, first) == XRFrameStatus::Ok);
+            REQUIRE(frames.ValidateReleasedImage(frame, first) == XRFrameStatus::Ok);
+            REQUIRE(frames.ValidateReleasedImage(frame, Image(session, 9)) == XRFrameStatus::ImageNotAcquired);
+            REQUIRE(frames.ValidateEnd(frame, 1) == XRFrameStatus::Ok);
+            REQUIRE(frames.ValidateEnd(frame, 1) == XRFrameStatus::Ok);
+            REQUIRE(frames.Snapshot().phase == XRFramePhase::ImagesReleased);
             REQUIRE(frames.End(frame, 1) == XRFrameStatus::Ok);
             REQUIRE(frames.Snapshot().phase == XRFramePhase::Idle);
             REQUIRE(Horo::Tests::AllocationProbe::Count() == allocations);

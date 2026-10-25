@@ -87,6 +87,7 @@ namespace Horo::Render::D3D12Detail {
     /** @brief Owner-thread native heap lifetime, never a second reservation ledger. */
     struct HeapAllocation {
         RenderMemoryPoolId pool;
+        RenderMemoryBlockId block;
         RenderMemoryScopeId scope;
         RenderMemoryClass memoryClass;
         RenderMemoryCompatibilityId compatibility;
@@ -134,6 +135,7 @@ namespace Horo::Render::D3D12Detail {
         std::size_t offsetBytes{0};
         std::size_t requiredBytes{0};
         RenderMemoryPoolId pool;
+        RenderMemoryBlockId block;
         std::array<std::optional<UINT>, 5> descriptors;
         std::vector<std::shared_ptr<Resource>> dependencies;
     };

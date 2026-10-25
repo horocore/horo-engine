@@ -385,3 +385,27 @@ caches; it does not move the compiler caches out of the shared 10-GB Actions
 budget. Native and instrumented builds, test coverage, analysis scope and
 quality gates remain unchanged. Cross-platform hosted timings are still
 required before claiming a speedup.
+
+### Four-worker Sonar test candidate
+
+Main Sonar job `120569320947` completed the selected C++ coverage tests in
+6m35s with two CTest workers; Python coverage took 23s. Its cold instrumented
+build took 53m28s and saved a main compiler checkpoint. PR #3531 job
+`120599140454` subsequently restored that checkpoint and completed the
+instrumented build in 4m30s. The PR was merged and its test step cancelled
+before completion, so this is build-stage evidence, not a successful full
+Sonar run or a 15-minute qualification.
+
+The next candidate uses four CTest workers only for the Sonar preset on the
+standard four-CPU Linux runner. Native Linux/macOS presets retain two workers
+and Windows retains its existing serial selection. Filters, coverage labels
+and timeouts are unchanged. Cases within one executable still share a suite
+lock and private working/temp/home directories; GPU, display and realtime
+safety suites retain their existing serial properties. No hosted job is added.
+
+The isolation fixture now requires all four independent suites to overlap
+while proving cases within each suite remain serialized. GCC coverage probes
+exercise both two and four processes against a shared instrumented object
+with BFD and LLD, checking the exact accumulated execution count. Actual
+hosted test duration, peak memory and the full quality gate still require
+qualification before adopting the four-worker result as a measured speedup.

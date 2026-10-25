@@ -1,0 +1,70 @@
+{
+  "upstream": "https://github.com/ValveSoftware/GameNetworkingSockets",
+  "pin": "2cb93a06350bb065db53abdb0d87cf297e0bfd34",
+  "archiveSha256": "826a55aba46b421d1198851f1a70ef63dca27f0bf91db23730321ae2f92d6294",
+  "archiveBytes": 11085541,
+  "archiveSource": "https://codeload.github.com/ValveSoftware/GameNetworkingSockets/tar.gz/2cb93a06350bb065db53abdb0d87cf297e0bfd34",
+  "licenseSha256": "6fedd796d51d7f996e0b3dc7c1c9f6a67603bec7a2cfb9f418e0c6607a1ca647",
+  "license": "BSD-3-Clause; original license retained unchanged",
+  "patchSha256": "37faddc6f95b24464871ebc6b2522a0417fd164254969cef59d30da4939f6c64",
+  "paths": [
+    {
+      "path": "src/steamnetworkingsockets/steamnetworkingsockets_certstore.cpp",
+      "pristineSha256": "c8374b522db7a63462c80e7a24ce0370b1f575de025d41b8d0539c340e12efce",
+      "candidateSha256": "1e2a675053fb611b58c7c82c26dfe2611dcf782ac2486625bdb55f8101237221",
+      "changedLines": 77
+    },
+    {
+      "path": "src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.h",
+      "pristineSha256": "9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef",
+      "candidateSha256": "6f4c51370c08d1f19927cfb936e37fcd0bc80d787867c71f2a29b9c1f5f50317",
+      "changedLines": 6
+    },
+    {
+      "path": "src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.cpp",
+      "pristineSha256": "724eb5215fd2ed66e691c4ac798405531b973e499f3aee26c8d9f101f6bd0ae9",
+      "candidateSha256": "e782d539f4db5fe0b30cac45a194167b35b5166a45ee9b9c448b2fc80df27c77",
+      "changedLines": 184
+    },
+    {
+      "path": "src/steamnetworkingsockets/clientlib/csteamnetworkingsockets.cpp",
+      "pristineSha256": "2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451",
+      "candidateSha256": "49ad6a52de7a6dfdf30d2fe287715af5d921b37f6f759ea90b5748ddd07a48a6",
+      "changedLines": 60
+    },
+    {
+      "path": "src/steamnetworkingsockets/horo_security_bridge.h",
+      "pristineSha256": null,
+      "candidateSha256": "570205d49b4e4519ae65581191646eadeeba934d2bcbefc9af2fdaccc9ce2f40",
+      "changedLines": 40
+    }
+  ],
+  "applyCheck": "PASS on exact pristine extracted source; no apply mutation",
+  "qualification": "Patched native static target/private consumer and actual two-child ProductHost native PKI/canonical credential proof/registered gameplay PASS on macOS arm64 POSIX; effective gnu++17. Historical binary revision b8679 is retained, not relabeled after source-identical reconciliation to8e5f.",
+  "excludedArchiveSymlinks": "Five .github/vcpkg links excluded on extraction; production sources/license exact archive bytes",
+  "defaultRawBehavior": "Root selection is opt-in; no selected mode leaves existing default/raw policy paths unchanged",
+  "secretHandling": "No new cryptography or native key export; correlation digest explicitly non-authenticating",
+  "remaining": "Current added native576-byte fragmentation and distinct-root negative regressions require execution; Windows secure-pair/file-protection qualification and full current-source/platform/quality gates remain incomplete. No exhaustive security or five-ticket closure claim.",
+  "supersedesPatchSha256": "ed7027de25fa12498b4e15f1a8785dce5cb1943fb2d642561af8a2b5cca32080",
+  "partialInitCleanup": "Unpublished concrete candidate owns successful low-level ref before allocating instance push; existing failed-BInit Destroy path under native global lock; no claim arbitrary live Destroy is noexcept.",
+  "nativeCheckpoint": {
+    "freeze": "a96de5761b4ef9cc1e6f8dbe935baeca660b165450bc9f76ed0d04eb659f3c83",
+    "buildSeconds": 3.9663879579748027,
+    "consumerSeconds": 0.6989846249925904,
+    "consumerExit": 0,
+    "binarySha256": "5d20056d8b0bb2ce03275351133b86a954993dd2394f7eacd9140091602bce92"
+  },
+  "productCheckpoint": {
+    "sourceFreeze": "760043282bfafb53689a725b140b86d0a9c9057c1b94bdbe5aea41777d87fc36",
+    "binaryRevision": "b8679a78040c6b945b50deb5dcb66de09443f2a2",
+    "sourceIdenticalReconciledHead": "8e5f0fa43b0fad94fda182daa9630630bbf327cc",
+    "platform": "macOS arm64; POSIX owner-only fixture; GNS ON; native Physics ON",
+    "uniqueCases": 56,
+    "passed": 56,
+    "failed": 0,
+    "skipped": 0,
+    "realProductPair": "Both native child processes exited0 after their own canonical Active registered handlers, shutdown and native-owner reuse; native CA/identity/AES and separate Horo credential proof remained distinct authorities.",
+    "pairJUnitSha256": "5a7f46f79675c6264bea916cb03788a739ec607c2d1ba4818ece4007dfb0f9bf",
+    "disjointRawAndModeJUnitSha256": "ad2be6d214624f7ebdc70abf5a99683c13e782ab96b499024220914bdb168217"
+  }
+}

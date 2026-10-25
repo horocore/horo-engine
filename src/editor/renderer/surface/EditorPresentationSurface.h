@@ -34,7 +34,9 @@ namespace Horo::Editor {
         virtual ~EditorSurfaceRealizer() = default;
         /** @brief Realizes an extent at the host's frozen idle safe point.
          * @param extent Validated nonzero output extent.
-         * @return Exact native operation result; no context ownership is transferred.
+         * @return Success only after realization. Exact RenderPresentationErrors::DrawableUnavailable
+         * domain/code retains the frozen candidate for retry; all other errors publish Lost.
+         * No context ownership is transferred. Cancellation/replacement keeps native cleanup with the backend.
          */
         [[nodiscard]] virtual Result<void> Resize(Render::FramebufferExtent extent) = 0;
     };
@@ -95,9 +97,14 @@ namespace Horo::Editor {
                                                                Render::RenderSurfaceState state);
         /** @brief Rejects host state and unnegotiated mode changes before native work. */
         [[nodiscard]] Result<void> ValidateAdmission(Render::ResolvedPresentMode mode, EditorSurfaceAdmission admission) const;
+        /** @brief Retries the exact retained native candidate without issuing another logical transition. */
+        [[nodiscard]] Result<EditorSurfaceObservation> CompletePending();
+        /** @brief Cancels a frozen logical candidate as Lost; native debt remains with its backend owner. */
+        [[nodiscard]] Result<void> CancelPending();
         Render::RenderSurfaceLifecycle surface_;
         EditorSurfaceRealizer *realizer_; /**< Borrowed typed operation; never deleted by the surface authority. */
         std::optional<Render::ResolvedPresentMode> admittedMode_;
+        std::optional<Render::RenderSurfaceTransition> pending_;
         std::uint64_t sequence_{};
         bool closed_{};
     };

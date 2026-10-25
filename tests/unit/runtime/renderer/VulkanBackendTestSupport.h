@@ -46,7 +46,8 @@ namespace Horo::Render::VulkanBackendTest {
         FailureStage failure{FailureStage::None};
         VulkanLoaderCapabilities loader{
             .apiVersion = {1, 3, 280},
-            .instanceExtensions = {"VK_EXT_debug_utils", "VK_KHR_surface", PresentationExtension},
+            .instanceExtensions = {"VK_EXT_debug_utils", "VK_KHR_surface", PresentationExtension,
+                                   VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME},
             .layers = {"VK_LAYER_KHRONOS_validation"},
             .hasInstanceVersionQuery = true,
             .standardApiVariant = true,
@@ -70,8 +71,9 @@ namespace Horo::Render::VulkanBackendTest {
             .dedicatedVideoMemoryBytes = 4ULL * 1024ULL * 1024ULL * 1024ULL,
             .apiVersion = {1, 3, 0},
             .requiredFeatures = {.dynamicRendering = true, .synchronization2 = true, .timelineSemaphore = true},
-            .deviceExtensions = {"VK_KHR_swapchain"},
+            .deviceExtensions = {"VK_KHR_swapchain", VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME},
             .queueFamilies = std::move(queues),
+            .swapchainMaintenance = true,
         };
     }
 
@@ -155,7 +157,7 @@ namespace Horo::Render::VulkanBackendTest {
         RuntimeState *state_;
     };
 
-    class FakeRuntimePort final : public IVulkanRuntimePort, public IVulkanResourcePort {
+    class FakeRuntimePort : public IVulkanRuntimePort, public IVulkanResourcePort {
     public:
         explicit FakeRuntimePort(RuntimeState &state) noexcept : state_(&state), resources_(state) {}
 

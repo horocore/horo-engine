@@ -57,6 +57,10 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime H
     HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
+if(HORO_BUILD_NETWORK_GNS)
+    target_sources(HoroNetworkProductHost PRIVATE common/NetworkProductGnsSelection.cpp)
+    target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::NetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
+endif()
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
@@ -73,6 +77,10 @@ add_executable(horo-engine
     horo-engine/NetworkProductLaunchOptions.cpp
 )
 target_compile_features(horo-engine PRIVATE cxx_std_20)
+# Only identity consumers depend on the changing Git revision. Keep unrelated
+# application units reusable by compiler and analysis caches across commits.
+set_property(SOURCE horo-engine/main.cpp horo-engine/NetworkProductLaunch.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
 
 # Conservative provider closure: any first-party navigation implementation or
 # public contract change invalidates native bake compatibility. Configure again
@@ -114,7 +122,6 @@ endif()
 target_compile_definitions(horo-engine PRIVATE
     HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     HORO_BUILD_CONFIGURATION="$<CONFIG>"
-    HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}"
     HORO_PRODUCT_HAS_GNS=$<BOOL:${HORO_BUILD_NETWORK_GNS}>
     HORO_NAVIGATION_BUILD_FINGERPRINT="${HORO_NAVIGATION_BUILD_FINGERPRINT}-$<CONFIG>"
 )
@@ -271,6 +278,10 @@ if(HORO_BUILD_EDITOR_GUI)
         set(HORO_EDITOR_BUILD_ASSET_ROOT "$<TARGET_FILE_DIR:HoroEditor>/${HORO_EDITOR_PACKAGED_ASSET_ROOT_RELATIVE}")
     endif()
 
+    # Offline qualification stages generated cook output beside the same assets consumed by the real host.
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroEditorAssetRoot-$<CONFIG>.txt"
+        CONTENT "${HORO_EDITOR_BUILD_ASSET_ROOT}\n")
+
     add_custom_command(TARGET HoroEditor POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${PROJECT_SOURCE_DIR}/assets"
@@ -342,6 +353,8 @@ if(HORO_BUILD_EDITOR_GUI)
     endif()
 
     target_compile_features(HoroEditor PRIVATE cxx_std_20)
+    set_property(SOURCE HoroEditor/app/HoroEditorApp.cpp
+        APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
     target_link_libraries(HoroEditor PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo)
 
     if(BUILD_TESTING AND HORO_ENABLE_GPU_SMOKE_TESTS AND HORO_BUILD_RENDER_OPENGL)
@@ -365,7 +378,6 @@ if(HORO_BUILD_EDITOR_GUI)
             HORO_EDITOR_PACKAGED_ASSET_ROOT_RELATIVE="${HORO_EDITOR_PACKAGED_ASSET_ROOT_RELATIVE}"
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
             HORO_BUILD_CONFIGURATION="$<CONFIG>"
-            HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}"
             HORO_GAMEPLAY_SDK_PACKAGE_DIR="${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
             HORO_GAMEPLAY_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
     )
@@ -419,8 +431,20 @@ if(HORO_BUILD_EDITOR_GUI)
         target_link_libraries(HoroEditor PRIVATE HoroEngine::EditorViewportOpenGL)
     endif()
 
+    if(HORO_BUILD_RENDER_VULKAN)
+        target_compile_definitions(HoroEditor PRIVATE HORO_HAS_RENDER_VULKAN=1)
+        target_sources(HoroEditor PRIVATE HoroEditor/app/EditorVulkanShaderAssets.cpp)
+        target_link_libraries(HoroEditor PRIVATE HoroEditorVulkanGuiInternal)
+    endif()
+
     if(HORO_BUILD_RENDER_METAL)
         target_compile_definitions(HoroEditor PRIVATE HORO_HAS_RENDER_METAL=1)
         target_link_libraries(HoroEditor PRIVATE HoroEngine::EditorViewportMetal)
     endif()
 endif()
+
+# Offline preparation tool, never linked into HoroEditor or a runtime renderer.
+add_executable(HoroEditorVulkanShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VulkanViewportCook.cpp)
+target_compile_features(HoroEditorVulkanShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorVulkanShaderCook PRIVATE HoroEditorVulkanShaderInternal
+    HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)

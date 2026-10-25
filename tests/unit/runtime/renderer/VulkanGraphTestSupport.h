@@ -50,6 +50,12 @@ namespace Horo::Render::VulkanGraphTest {
             encodedGraph->copies.push_back({info->srcBuffer, info->dstBuffer, info->pRegions[index]});
     }
 
+    inline VKAPI_ATTR void VKAPI_CALL CaptureImageCopy(VkCommandBuffer, const VkCopyBufferToImageInfo2 *info) {
+        REQUIRE(info->regionCount == 1);
+        CHECK(info->dstImageLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        encodedGraph->operations.emplace_back("upload-image");
+    }
+
     inline VKAPI_ATTR void VKAPI_CALL CaptureBeginRendering(VkCommandBuffer, const VkRenderingInfo *info) {
         encodedGraph->operations.emplace_back("begin-rendering");
         encodedGraph->layers = info->layerCount;
@@ -103,6 +109,8 @@ namespace Horo::Render::VulkanGraphTest {
             return EraseFunction(PFN_vkCmdPipelineBarrier2{CaptureBarrier});
         if (symbol == "vkCmdCopyBuffer2")
             return EraseFunction(PFN_vkCmdCopyBuffer2{CaptureCopy});
+        if (symbol == "vkCmdCopyBufferToImage2")
+            return EraseFunction(PFN_vkCmdCopyBufferToImage2{CaptureImageCopy});
         if (symbol == "vkCmdBeginRendering")
             return EraseFunction(PFN_vkCmdBeginRendering{CaptureBeginRendering});
         if (symbol == "vkCmdEndRendering")

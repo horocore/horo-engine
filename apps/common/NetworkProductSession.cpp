@@ -83,10 +83,36 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc ClientSessionOwner::BeginConnectionAttempt */
+    Result<void> ClientSessionOwner::BeginConnectionAttempt(const Network::ConnectionHandle connection) {
+        if (stopped_ || transportRetired_ || !transport_ || !clock_ || !connection.IsValid() || pendingConnection_.IsValid() ||
+            connectionTerminal_ || peer_)
+            return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkLifecycleOperationStale));
+        if (auto valid = clock_->Validate(); valid.HasError())
+            return valid;
+        pendingConnection_ = connection;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ClientSessionOwner::ConnectionAttemptTerminal */
+    const ClientConnectionAttemptTerminal *ClientSessionOwner::ConnectionAttemptTerminal() const noexcept {
+        return connectionTerminal_ ? &*connectionTerminal_ : nullptr;
+    }
+
+    /** @copydoc ClientSessionOwner::EndConnectionAttempt */
+    void ClientSessionOwner::EndConnectionAttempt(const ErrorCodeDescriptor &failure) noexcept {
+        if (!pendingConnection_.IsValid())
+            return;
+        if (!connectionTerminal_)
+            connectionTerminal_ = ClientConnectionAttemptTerminal{pendingConnection_, &failure};
+        pendingConnection_ = {};
+    }
+
     /** @copydoc ClientSessionOwner::DetachTransport */
     void ClientSessionOwner::DetachTransport(const Network::INetworkTransport &transport) noexcept {
         if (transport_ != &transport)
             return;
+        EndConnectionAttempt(Network::NetworkErrors::TransportCapabilityUnavailable);
         TransportEnded();
         transport_ = nullptr;
         transportRetired_ = true;
@@ -120,6 +146,8 @@ namespace Horo::Application::Internal {
             return;
         using enum Network::NetworkTransportEventKind;
         if (event.kind == Closed || event.kind == Failed) {
+            if (event.connection == pendingConnection_)
+                EndConnectionAttempt(event.failure ? *event.failure : Network::NetworkErrors::TransportConnectionFailed);
             if (peer_ && event.connection == connection_) {
                 auto failure = Network::NetworkFailureKind::TransportUnavailable;
                 if (Matches(event.failure, Network::NetworkErrors::NameResolutionFailed))
@@ -146,8 +174,10 @@ namespace Horo::Application::Internal {
         if (endpoint == Network::AdmissionEndpoint::Server)
             return Result<void>::Success();
         if (endpoint != Network::AdmissionEndpoint::Client || !lifecycle || !mode_ || !mode_->Active() || stopped_ || transportRetired_ ||
-            !clock_ || admitted_ || (peer_ && !peer_->Terminal()) || !generation.IsValid() ||
+            !clock_ || admitted_ || connectionTerminal_ || (peer_ && !peer_->Terminal()) || !generation.IsValid() ||
             (generation_.IsValid() && generation <= generation_) || lifecycle->State() != Network::PeerSessionState::Negotiating)
+            return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
+        if (pendingConnection_.IsValid() && pendingConnection_ != lifecycle->Connection())
             return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
         const auto tick = clock_->PollTick();
         if (tick.HasError())
@@ -155,6 +185,7 @@ namespace Horo::Application::Internal {
         if (tick.Value() != nowTick)
             return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
         lastTick_ = nowTick;
+        pendingConnection_ = {};
         peer_ = lifecycle;
         connection_ = lifecycle->Connection();
         generation_ = generation;
@@ -183,6 +214,8 @@ namespace Horo::Application::Internal {
                                            const std::optional<std::uint64_t> publishedTick) {
         if (stopped_ || transportRetired_ || !mode_ || !mode_->Active())
             return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeUnavailable));
+        if (pendingConnection_.IsValid() || connectionTerminal_)
+            return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
         if (!peer || !clock_)
             return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkLifecycleInvalid));
         // Native terminal events carry a connection generation, not a session generation.
@@ -224,6 +257,8 @@ namespace Horo::Application::Internal {
     Result<void> ClientSessionOwner::Reconcile() {
         if (clock_ && std::this_thread::get_id() != clock_->owner_)
             return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkIoWrongThread));
+        if (connectionTerminal_)
+            return Result<void>::Failure(MakeError(*connectionTerminal_->failure));
         if (clock_ && clock_->failure_)
             return Result<void>::Failure(*clock_->failure_);
         if (ingressFailed_) {
@@ -261,6 +296,7 @@ namespace Horo::Application::Internal {
     void ClientSessionOwner::Shutdown() noexcept {
         if (stopped_)
             return;
+        EndConnectionAttempt(Network::NetworkErrors::SessionShuttingDown);
         if (admitted_)
             (void)Revoke();
         // Observers borrowed by the canonical lifecycle still exist before service teardown.

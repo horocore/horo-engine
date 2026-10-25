@@ -39,6 +39,16 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireMaterial(std::span<const RenderGraphResidentIdentity> pins,
                                                                           std::span<const RenderMaterialDraw> draws);
 
+        /** @brief Extends this exact active frame lease, or acquires its first lease, with GUI sampled generations.
+         * @param pins Bounded resolved view/sampler generations; duplicate identities are pinned once.
+         * @param existing Exact lease already transferred by this frame, or null for its first completion lease.
+         * @return Same active lease, or a typed identity/capacity error with every newly added pin rolled back.
+         * @details Only the render owner may extend an active, not-yet-presented frame. Existing pins and
+         * completion ownership remain unchanged on failure; this operation never submits or releases the old lease.
+         */
+        [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireGui(std::span<const RenderGraphResidentIdentity> pins,
+                                                                     IRenderGraphResourceLease *existing);
+
     private:
         using Pin = RenderGraphResidentIdentity;
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import sys
 import tarfile
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -89,12 +90,12 @@ def test_invalid_archive_never_reaches_live_cache(snapshot, tmp_path, attack, mo
     assert not (tmp_path / "outside").exists()
 
 
-def install_fake_registry(archive, monkeypatch, *, existing=None, outage=False):
+def install_fake_registry(archive, monkeypatch, *, existing=None, outage=False, key=KEY):
     """Use a valid typed OCI manifest and one digest-addressed local blob."""
     layer = {"mediaType": compiler.LAYER_TYPE, "size": archive.stat().st_size,
              "digest": "sha256:" + compiler.package.digest_file(archive)}
     document = {"schemaVersion": 2, "artifactType": compiler.ARTIFACT_TYPE,
-                "layers": [layer], "annotations": {"io.horo.compiler.source-key": KEY}}
+                "layers": [layer], "annotations": {"io.horo.compiler.source-key": key}}
     calls = []
 
     class Client:
@@ -131,6 +132,67 @@ def test_fetch_uses_anonymous_digest_and_preserves_existing_entry(snapshot, monk
     assert calls[1][2].startswith(transport.REGISTRY + "@sha256:")
 
 
+def install_timed_registry(archive, monkeypatch, blob_seconds):
+    """Exercise the real shared-deadline client without sleeping or networking."""
+    layer = {"mediaType": compiler.LAYER_TYPE, "size": archive.stat().st_size,
+             "digest": "sha256:" + compiler.package.digest_file(archive)}
+    document = {"schemaVersion": 2, "artifactType": compiler.ARTIFACT_TYPE,
+                "layers": [layer], "annotations": {"io.horo.compiler.source-key": KEY}}
+    clock = [0]
+    budgets = []
+    monkeypatch.setattr(transport, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(transport.shutil, "which", lambda _name: "fixture-oras")
+
+    def client(arguments, **kwargs):
+        manifest = arguments[1:3] == ["manifest", "fetch"]
+        duration = 5 if manifest else blob_seconds
+        budgets.append(kwargs["timeout"])
+        if kwargs["timeout"] < duration:
+            Path(arguments[arguments.index("--output") + 1]).write_bytes(b"partial transfer")
+            raise compiler.subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+        clock[0] += duration
+        if not manifest:
+            shutil.copyfile(archive, arguments[arguments.index("--output") + 1])
+        return compiler.subprocess.CompletedProcess(arguments, 0, json.dumps(document) if manifest else "", "")
+
+    monkeypatch.setattr(transport.subprocess, "run", client)
+    return clock, budgets
+
+
+@pytest.mark.parametrize("blob_seconds,succeeds", [(145, True), (181, False)])
+def test_slow_restore_remains_bounded_and_preserves_live_cache(snapshot, monkeypatch, blob_seconds, succeeds):
+    clock, budgets = install_timed_registry(snapshot, monkeypatch, blob_seconds)
+    destination = compiler.cache_root(NAMESPACE)
+    destination.mkdir(parents=True)
+    settings = destination / "ccache.conf"
+    settings.write_text("local settings", encoding="utf-8")
+    if succeeds:
+        compiler.fetch(NAMESPACE)
+        assert (destination / "a/b/entryR").read_bytes() == b"compiler object"
+        assert clock[0] == 150
+    else:
+        with pytest.raises(compiler.subprocess.TimeoutExpired):
+            compiler.fetch(NAMESPACE)
+        assert sorted(path.name for path in destination.iterdir()) == ["ccache.conf"]
+    assert settings.read_text(encoding="utf-8") == "local settings"
+    assert budgets == [180, 175]
+
+
+@pytest.mark.parametrize("error", [TimeoutError("private client output"),
+                                  compiler.subprocess.TimeoutExpired("private client output", 180),
+                                  ValueError("private client output")])
+def test_optional_failure_reports_type_without_client_output(monkeypatch, capsys, error):
+    def fail(_key):
+        raise error
+
+    monkeypatch.setattr(compiler, "fetch", fail)
+    monkeypatch.setattr(sys, "argv", ["compiler_registry.py", "fetch", "--key", NAMESPACE])
+    assert compiler.main() == 1
+    captured = capsys.readouterr()
+    assert type(error).__name__ in captured.out
+    assert "private client output" not in captured.out + captured.err
+
+
 @pytest.mark.parametrize("field,value", [
     ("size", True), ("size", compiler.MAX_ARCHIVE_BYTES + 1),
     ("mediaType", transport.LAYER_TYPE), ("digest", "sha256:invalid"),
@@ -147,6 +209,8 @@ def test_invalid_oci_layer_prevents_blob_download(snapshot, monkeypatch, field, 
     "native-v1-Linux-X64-gcc-13.3.0-gcc-13.3.0-native-tests-v1-Debug-main-400-1",
     "native-v1-macOS-ARM64-appleclang-21.0.0-appleclang-21.0.0-native-tests-v1-Debug-main-400-1",
     "native-v1-Windows-X64-msvc-19.44.35229-msvc-19.44.35229-native-tests-v1-Debug-main-400-1",
+    "native-v1-Linux-X64-gcc-15.2.0-gcc-15.2.0-native-shaders-v1-Debug-main-400-1",
+    "native-v1-Windows-X64-msvc-19.44.35229-msvc-19.44.35229-native-shaders-v1-Debug-main-400-1",
     KEY,
 ])
 def test_real_checkpoint_names(key):
@@ -155,43 +219,95 @@ def test_real_checkpoint_names(key):
     assert compiler.reference(namespace).startswith(transport.REGISTRY + ":compiler-v1-")
 
 
+def test_shader_profile_restores_its_own_checkpoint_without_importing_native_entries(snapshot, monkeypatch, tmp_path):
+    namespace = "native-v1-Linux-X64-gcc-15.2.0-gcc-15.2.0-native-shaders-v1-Debug-main-"
+    key = namespace + "400-1"
+    compiler.pack(tmp_path / "source", key, snapshot)
+    install_fake_registry(snapshot, monkeypatch, key=key)
+    compiler.fetch(namespace)
+    destination = compiler.cache_root(namespace)
+    assert (destination / "a/b/entryR").read_bytes() == b"compiler object"
+    assert not (destination / "ccache.conf").exists()
+    staging = tmp_path / "rejected"
+    staging.mkdir()
+    native = namespace.replace("native-shaders-v1", "native-tests-v1")
+    with pytest.raises(ValueError):
+        compiler.unpack(snapshot, native, staging)
+
+
 @pytest.mark.parametrize("key", [KEY + "/../x", KEY.replace("main", "pr"), KEY + "\n", "unknown-1-1"])
 def test_unowned_checkpoint_names_rejected(key):
     with pytest.raises(ValueError):
         compiler.split_key(key)
 
 
-@pytest.mark.parametrize("event,ref,repo,allowed", [
-    ("pull_request", "refs/heads/main", "horocore/horo-engine", False),
-    ("schedule", "refs/heads/main", "horocore/horo-engine", True),
-    ("workflow_dispatch", "refs/heads/topic", "horocore/horo-engine", False),
-    ("workflow_dispatch", "refs/heads/main", "fork/horo-engine", False),
+@pytest.mark.parametrize("event,ref,repo,workflow,allowed", [
+    ("push", "refs/heads/main", "horocore/horo-engine", "SonarCloud", True),
+    ("workflow_dispatch", "refs/heads/main", "horocore/horo-engine", "SonarCloud", True),
+    ("pull_request", "refs/heads/main", "horocore/horo-engine", "SonarCloud", False),
+    ("schedule", "refs/heads/main", "horocore/horo-engine", "SonarCloud", False),
+    ("workflow_dispatch", "refs/heads/topic", "horocore/horo-engine", "SonarCloud", False),
+    ("workflow_dispatch", "refs/heads/main", "fork/horo-engine", "SonarCloud", False),
+    ("push", "refs/heads/main", "horocore/horo-engine", "CI", False),
+    ("workflow_dispatch", "refs/heads/main", "horocore/horo-engine", "Public compiler checkpoints", False),
 ])
-def test_publication_authority(event, ref, repo, allowed):
-    environment = {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref, "GITHUB_REPOSITORY": repo}
-    assert compiler.trusted_publisher(environment) is allowed
+def test_publication_authority(event, ref, repo, workflow, allowed):
+    environment = {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref,
+                   "GITHUB_REPOSITORY": repo, "GITHUB_WORKFLOW": workflow}
+    assert compiler.trusted_publisher(environment, NAMESPACE) is allowed
 
 
 @pytest.mark.parametrize("branch,event,repository,allowed", [
-    ("main", "push", "horocore/horo-engine", True),
+    ("main", "push", "horocore/horo-engine", False),
     ("topic", "push", "horocore/horo-engine", False),
     ("main", "pull_request", "horocore/horo-engine", False),
     ("main", "push", "fork/horo-engine", False),
 ])
-def test_workflow_run_provenance(tmp_path, branch, event, repository, allowed):
+def test_delayed_exporter_cannot_race_the_owning_build(tmp_path, branch, event, repository, allowed):
     payload = tmp_path / "event.json"
     payload.write_text(json.dumps({"workflow_run": {
         "head_branch": branch, "event": event, "head_repository": {"full_name": repository}}}),
         encoding="utf-8")
     environment = {"GITHUB_EVENT_NAME": "workflow_run", "GITHUB_REF": "refs/heads/main",
                    "GITHUB_REPOSITORY": "horocore/horo-engine", "GITHUB_EVENT_PATH": str(payload)}
-    assert compiler.trusted_publisher(environment) is allowed
+    assert compiler.trusted_publisher(environment, NAMESPACE) is allowed
+
+
+@pytest.mark.parametrize("workflow,allowed", [("CI", True), ("SonarCloud", False),
+                                            ("Public compiler checkpoints", False)])
+def test_native_publication_requires_its_owning_main_workflow(workflow, allowed):
+    namespace = "native-v1-Linux-X64-gcc-13.3.0-gcc-13.3.0-native-tests-v1-Debug-main-"
+    environment = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_REPOSITORY": "horocore/horo-engine", "GITHUB_WORKFLOW": workflow}
+    assert compiler.trusted_publisher(environment, namespace) is allowed
+
+
+@pytest.mark.parametrize("event,repository,workflow", [
+    ("pull_request", "horocore/horo-engine", "SonarCloud"),
+    ("workflow_run", "horocore/horo-engine", "Public compiler checkpoints"),
+    ("schedule", "horocore/horo-engine", "SonarCloud"),
+    ("push", "fork/horo-engine", "SonarCloud"),
+])
+def test_untrusted_publication_cannot_even_open_the_compiler_store(
+    monkeypatch, event, repository, workflow,
+):
+    for name, value in {"GITHUB_EVENT_NAME": event, "GITHUB_REF": "refs/heads/main",
+                        "GITHUB_REPOSITORY": repository, "GITHUB_WORKFLOW": workflow}.items():
+        monkeypatch.setenv(name, value)
+
+    def forbidden_store(_namespace):
+        pytest.fail("Untrusted publication reached the local cache")
+
+    monkeypatch.setattr(compiler, "cache_root", forbidden_store)
+    with pytest.raises(ValueError, match="owning main build"):
+        compiler.publish(KEY)
 
 
 @pytest.mark.parametrize("existing,uploads", [(KEY, 0), (NAMESPACE + "500-1", 0), (False, 1)])
 def test_publish_skips_same_or_newer_checkpoint(snapshot, monkeypatch, existing, uploads):
     for name, value in {"GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main",
                         "GITHUB_REPOSITORY": "horocore/horo-engine", "GITHUB_ACTOR": "fixture",
+                        "GITHUB_WORKFLOW": "SonarCloud",
                         "HORO_PACKAGE_TOKEN": uuid.uuid4().hex}.items():
         monkeypatch.setenv(name, value)
     source = compiler.cache_root(NAMESPACE)
@@ -203,7 +319,7 @@ def test_publish_skips_same_or_newer_checkpoint(snapshot, monkeypatch, existing,
 
 
 def test_publisher_outage_never_overwrites(snapshot, monkeypatch):
-    monkeypatch.setattr(compiler, "trusted_publisher", lambda _env: True)
+    monkeypatch.setattr(compiler, "trusted_publisher", lambda _env, _namespace: True)
     monkeypatch.setenv("GITHUB_ACTOR", "fixture")
     monkeypatch.setenv("HORO_PACKAGE_TOKEN", uuid.uuid4().hex)
     source = compiler.cache_root(NAMESPACE)
@@ -228,21 +344,27 @@ def test_workspace_symlink_rejected(tmp_path, monkeypatch):
 
 def test_workflow_keeps_publisher_out_of_pr_capacity():
     root = Path(__file__).resolve().parents[2]
-    workflow = (root / ".github/workflows/compiler-checkpoints.yml").read_text(encoding="utf-8")
-    triggers = workflow.split("permissions:", 1)[0]
-    assert "pull_request:" not in triggers
-    assert "workflow_run:" in triggers
-    assert "schedule:" in triggers
-    assert "workflow_dispatch:" in triggers
-    assert "max-parallel: 1" in workflow
-    assert workflow.count("- runner:") == 4
-    assert "packages: write" in workflow
-    assert "cancel-in-progress: false" in workflow
-    assert "ref: main" in workflow
-    assert "persist-credentials: false" in workflow
-    assert "compiler-only: 'true'" in workflow
-    assert "external-cache: 'false'" in workflow
-    assert "cmake --build" not in workflow
+    assert not (root / ".github/workflows/compiler-checkpoints.yml").exists()
+    for name in ("ci", "sonar"):
+        workflow = (root / f".github/workflows/{name}.yml").read_text(encoding="utf-8")
+        assert "uses: ./.github/actions/publish-compiler-checkpoint" in workflow
+        assert "packages: write" in workflow
+    action = (root / ".github/actions/publish-compiler-checkpoint/action.yml").read_text(encoding="utf-8")
+    assert "cmake --build" not in action
+    assert "sccache --stop-server" in action
+
+
+@pytest.mark.parametrize("workflow,namespace", [
+    ("sonar", NAMESPACE),
+    ("ci", "native-v1-Linux-X64-gcc-13.3.0-gcc-13.3.0-native-tests-v1-Debug-main-"),
+])
+def test_actual_workflow_names_match_the_publisher_owner(workflow, namespace):
+    root = Path(__file__).resolve().parents[2]
+    source = (root / f".github/workflows/{workflow}.yml").read_text(encoding="utf-8")
+    owner = source.splitlines()[0].removeprefix("name: ")
+    environment = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_REPOSITORY": "horocore/horo-engine", "GITHUB_WORKFLOW": owner}
+    assert compiler.trusted_publisher(environment, namespace) is True
 
 
 def test_archive_expanded_limit_prevents_restore(snapshot, monkeypatch, tmp_path):
@@ -274,9 +396,10 @@ def test_windows_operational_names_rejected(name):
         compiler.entry_name(name)
 
 
-def test_composite_step_schema_excludes_workflow_only_properties():
+@pytest.mark.parametrize("name", ["restore-native-cache", "publish-compiler-checkpoint"])
+def test_composite_step_schema_excludes_workflow_only_properties(name):
     root = Path(__file__).resolve().parents[2]
-    action = (root / ".github/actions/restore-native-cache/action.yml").read_text(encoding="utf-8")
+    action = (root / f".github/actions/{name}/action.yml").read_text(encoding="utf-8")
     # GitHub validates composite metadata before any step condition is evaluated.
     # These are step properties; nested env/with keys have deeper indentation.
     properties = set(re.findall(r"^    (?:- |  )([a-z-]+):", action, re.MULTILINE))
@@ -325,3 +448,56 @@ def test_variant_restore_happens_after_debug_checkpoint_before_auxiliary_builds(
     assert "profile: native-variants-v1" in restore_step
     assert "mode: Mixed" in restore_step
     assert "compiler-only: 'true'" in restore_step
+
+
+@pytest.mark.parametrize("version", ["13.3.0", "15.2.0"])
+def test_versioned_sonar_archive_roundtrip_and_compiler_boundary(tmp_path, monkeypatch, version):
+    monkeypatch.chdir(tmp_path)
+    namespace = f"sonar-v3-Linux-X64-gcc-{version}-gcc-{version}-main-"
+    key = namespace + "400-1"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "entryR").write_bytes(b"compiler object")
+    archive = tmp_path / "snapshot.tar.gz"
+    compiler.pack(source, key, archive)
+    calls, _ = install_fake_registry(archive, monkeypatch, key=key)
+    compiler.fetch(namespace)
+    assert (compiler.cache_root(namespace) / "entryR").read_bytes() == b"compiler object"
+    assert calls[0][2] == compiler.reference(namespace)
+    other = "15.2.0" if version == "13.3.0" else "13.3.0"
+    other_namespace = f"sonar-v3-Linux-X64-gcc-{other}-gcc-{other}-main-"
+    assert compiler.reference(namespace) != compiler.reference(other_namespace)
+    assert compiler.reference(namespace) != compiler.reference(NAMESPACE)
+    with pytest.raises(ValueError, match="Incompatible"):
+        compiler.unpack(archive, other_namespace, tmp_path / "rejected")
+
+
+def test_missing_versioned_sonar_bootstraps_legacy_in_the_same_client(snapshot, monkeypatch):
+    namespace = "sonar-v3-Linux-X64-gcc-15.2.0-gcc-15.2.0-main-"
+    calls, _ = install_fake_registry(snapshot, monkeypatch)
+    original = transport.Registry.run
+
+    def missing_versioned(client, *args, **kwargs):
+        if args == ("manifest", "fetch", compiler.reference(namespace)):
+            calls.append(args)
+            raise transport.MissingManifest("fixture missing versioned checkpoint")
+        return original(client, *args, **kwargs)
+
+    monkeypatch.setattr(transport.Registry, "run", missing_versioned)
+    compiler.fetch(namespace)
+    assert [call[2] for call in calls if call[:2] == ("manifest", "fetch")] == [
+        compiler.reference(namespace), compiler.reference(NAMESPACE),
+    ]
+    assert (compiler.cache_root(namespace) / "a/b/entryR").read_bytes() == b"compiler object"
+    assert all(call[0] != "login" for call in calls)
+
+
+@pytest.mark.parametrize("outage", [True, False])
+def test_versioned_outage_or_invalid_manifest_never_tries_legacy(snapshot, monkeypatch, outage):
+    namespace = "sonar-v3-Linux-X64-gcc-15.2.0-gcc-15.2.0-main-"
+    # A v2 annotation presented as v3 is invalid, not a missing manifest.
+    calls, _ = install_fake_registry(snapshot, monkeypatch, outage=outage)
+    with pytest.raises(ValueError):
+        compiler.fetch(namespace)
+    assert calls == [("manifest", "fetch", compiler.reference(namespace))]
+    assert not compiler.cache_root(namespace).exists()

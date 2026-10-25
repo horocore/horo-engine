@@ -86,7 +86,8 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "HORO_BUILD_INPUT_SDL3": "ON"
+        "HORO_BUILD_INPUT_SDL3": "ON",
+        "HORO_CI_ISOLATE_TEST_EXECUTABLES": "ON"
       }
     },
     {
@@ -378,7 +379,7 @@
         }
       },
       "execution": {
-        "jobs": 2
+        "jobs": 4
       }
     },
     {
@@ -394,7 +395,7 @@
         }
       },
       "execution": {
-        "jobs": 2
+        "jobs": 3
       }
     },
     {
@@ -410,7 +411,7 @@
         }
       },
       "execution": {
-        "jobs": 1,
+        "jobs": 4,
         "timeout": 90
       }
     },
@@ -524,7 +525,7 @@
         }
       },
       "execution": {
-        "jobs": 2
+        "jobs": 4
       }
     }
   ]

@@ -22,4 +22,11 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                                    const CancellationToken &cancellation,
                                                                    const std::filesystem::path &scratch,
                                                                    const std::filesystem::path &sourcePath);
+    /** @brief Executes a distinct bounded reflection route inside the existing adapter-owned scratch lifetime. */
+    [[nodiscard]] Result<std::vector<SpirvReflectionStage>> ReflectVulkanRoute(const ShaderCompilerToolchainConfiguration &configuration,
+                                                                               IExternalProcessRunner &processes,
+                                                                               const CompiledShaderArtifact &compiled,
+                                                                               const ShaderCompilerToolIdentity &tool,
+                                                                               const CancellationToken &cancellation,
+                                                                               const std::filesystem::path &scratch);
 }  // namespace Horo::Render::ShaderCompilerToolchainDetail

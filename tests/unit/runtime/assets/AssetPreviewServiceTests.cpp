@@ -182,6 +182,8 @@ TEST_CASE("Asset preview cancellation retains the provider through terminal comp
 
     handle = {};
     service.Shutdown();
+    // Terminal publication precedes callback-capture destruction; drain the test-owned scheduler before checking its last lease.
+    jobs.Shutdown(ShutdownPolicy::Drain);
     REQUIRE(lifetime.expired());
 }
 

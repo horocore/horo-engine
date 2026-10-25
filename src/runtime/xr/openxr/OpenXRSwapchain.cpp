@@ -147,6 +147,7 @@ namespace Horo::XR::OpenXRInternal {
             return sessionState;
         if (auto device = images_->Validate(request_); device.HasError())
             return device;
+        releasedImage_ = {};
         phase_ = NativeSwapchainPhase::Available;
         return Result<void>::Success();
     }
@@ -184,6 +185,7 @@ namespace Horo::XR::OpenXRInternal {
             lost_ = result == XR_ERROR_SESSION_LOST;
             return Result<void>::Failure(NativeFailure("acquire swapchain image", result));
         }
+        releasedImage_ = {};
         phase_ = NativeSwapchainPhase::Acquired;
         ++generation_;
         malformedAcquisition_ = index_ >= count_;
@@ -251,6 +253,7 @@ namespace Horo::XR::OpenXRInternal {
                 return Result<bool>::Failure(NativeFailure("release swapchain image", result));
             }
         }
+        releasedImage_ = lost_ ? XRSwapchainImageId{} : acquisition_.image;
         acquisition_ = {};
         retireRequested_ = false;
         phase_ = NativeSwapchainPhase::Available;
@@ -333,6 +336,16 @@ namespace Horo::XR::OpenXRInternal {
             image != acquisition_.image)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRSwapchain::BorrowReleased */
+    Result<NativeReleasedSwapchainImage> OpenXRSwapchain::BorrowReleased(const XRSwapchainImageId &image) const {
+        using Outcome = Result<NativeReleasedSwapchainImage>;
+        if (auto current = CheckCurrent(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!image.IsValid() || image != releasedImage_ || phase_ != NativeSwapchainPhase::Available)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        return Outcome::Success({native_, request_});
     }
 
     /** @copydoc OpenXRSwapchain::Phase */

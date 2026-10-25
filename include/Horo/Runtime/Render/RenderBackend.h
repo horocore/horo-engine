@@ -31,6 +31,8 @@
 
 namespace Horo::Render {
     struct RenderGraphExecutionRequest;
+    class IRenderGraphResourceLease;
+    struct RenderGraphLeaseTransfer;
     struct RenderShaderModuleDescriptor;
     struct RenderGraphicsPipelineDescriptor;
     struct RenderPipelineDeviceIdentity;
@@ -304,20 +306,67 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<void> ExecuteStaticMeshPass(const StaticMeshPassDescriptor &descriptor) = 0;
     };
 
-    /**
-     * @brief Host-selected, native-free GUI encoder borrowed synchronously by a frame scope.
-     * @details The matching editor integration owns draw data and sampled image lifetimes through
-     * presentation/cancellation. Encoding runs once on the render-capable owner thread, without
-     * selecting a backend, presenting, waiting for GPU completion, or retaining the frame scope.
-     */
+    /** @brief Explicit ownership mode for the selected backend's existing GUI frame. */
+    enum class GuiCompositionMode : std::uint8_t {
+        BorrowedActiveRecording,
+        ExplicitGraphicsSubmission
+    };
+
+    /** @brief Exact frontend-owned sampled generations; native-owned font atlases remain private to the matching executor. */
+    struct GuiSampledResource {
+        RenderTextureViewHandle view;
+        RenderSamplerHandle sampler; /**< Optional for adapters with a private native sampler. */
+        RenderBufferHandle
+            uploadSource; /**< Optional complete base-level staging source, copied before sampling in this same submission. */
+    };
+
+    /** @brief Bounded synchronous sampled-resource declaration prepared before any GUI command is recorded. */
+    struct GuiCompositionPreparation {
+        static constexpr std::size_t MaximumResources = 64;
+        FrameToken frame;
+        GuiCompositionMode mode{GuiCompositionMode::BorrowedActiveRecording};
+        std::span<const GuiSampledResource> resources;
+        std::span<const RenderBufferHandle> buffers; /**< Bounded native encoder inputs retained by the same completion lease. */
+    };
+
+    /** @brief Opaque selected-backend instances resolved from exact sampled generations by the frontend. */
+    struct GuiSampledResourceInstance {
+        std::uint64_t view{};
+        std::uint64_t sampler{};
+        std::uint64_t uploadSource{};
+    };
+
+    /** @brief One canonical GUI request bound to the current frame and its existing completion lease.
+     * @details Borrowed synchronously on the frame owner. Explicit submission identity is issued only by the frontend.
+     * Retention is established before encoding. Executors may not submit, present, wait or change backend selection. */
+    struct GuiCompositionRequest {
+        FrameToken frame;
+        GuiCompositionMode mode{GuiCompositionMode::BorrowedActiveRecording};
+        std::optional<RenderQueueSubmission> submission;
+        std::span<const GuiSampledResourceInstance> resources;
+        IRenderGraphResourceLease *lease{};
+        RenderGraphLeaseTransfer *transfer{};
+        bool extendsExistingLease{false};
+        std::span<const std::uint64_t> buffers; /**< Exact resolved encoder input generations, never inferred from native handles. */
+    };
+
+    /** @brief Host-selected GUI encoder; the matching integration owns draw data and sampled identities. */
     class IGuiPassExecutor {
     public:
         virtual ~IGuiPassExecutor() = default;
-        /**
-         * @brief Encodes current GUI draw data into the selected backend's primary output.
-         * @return Success or the original typed initialization, unsupported, or encoding failure.
-         */
-        [[nodiscard]] virtual Result<void> RenderDrawData() = 0;
+
+        /** @brief Declares bounded sampled resources before recording; declarations remain valid through this composition call.
+         * @param frame Exact frame being composed. @return Typed declaration or validation failure.
+         * @details The default describes a borrowed encoder with no frontend sampled images, suitable for native-only/fake executors.
+         * Real image adapters override this to reject unknown IDs and report every drawn frontend generation. */
+        [[nodiscard]] virtual Result<GuiCompositionPreparation> PrepareComposition(FrameToken frame) {
+            return Result<GuiCompositionPreparation>::Success({frame});
+        }
+
+        /** @brief Records the exact prepared GUI snapshot into the selected backend's active primary output.
+         * @param request Current frame, resolved sampled instances, and canonical submission/completion ownership.
+         * @return Original typed initialization, stale, unsupported or encoding failure. */
+        [[nodiscard]] virtual Result<void> RenderDrawData(const GuiCompositionRequest &request) = 0;
     };
 
     /** @brief Minimal compiled pass metadata consumed in deterministic order. */
@@ -587,6 +636,10 @@ namespace Horo::Render {
          * @details Validate all inputs before encoding. Immediate backends transfer ownership before the first queued command;
          * a later error or cancellation retains submitted resources until completion or context teardown. */
         [[nodiscard]] virtual Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request);
+        /** @brief Establishes GUI retention in this backend's existing active frame before the executor records.
+         * @param request Exact current frame, typed recording mode and the existing frontend completion lease.
+         * @return Success with lease-transfer proof or typed rejection; no GUI command may precede success. */
+        [[nodiscard]] virtual Result<void> PrepareGuiComposition(const GuiCompositionRequest &request);
 
         /** @brief Returns explicit worker-native support; unsupported backends return zero bounds. */
         [[nodiscard]] virtual RenderParallelRecordingCapabilities ParallelRecordingCapabilities() const noexcept;

@@ -134,7 +134,8 @@ namespace Horo::Render::Detail {
 
     /** @copydoc OpenGLExecutionAdapter::RetainFrameLease */
     bool OpenGLExecutionAdapter::RetainFrameLease(const std::size_t slot, IRenderGraphResourceLease &lease) noexcept {
-        if (slot >= frameLeases_.size() || frameLeases_[slot] != nullptr || frameFences_[slot] != 0 || synchronizationFailed_)
+        if (slot >= frameLeases_.size() || (frameLeases_[slot] != nullptr && frameLeases_[slot] != &lease) || frameFences_[slot] != 0 ||
+            synchronizationFailed_)
             return false;
         frameLeases_[slot] = &lease;
         return true;

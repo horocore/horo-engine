@@ -8,6 +8,7 @@ add_test(NAME HoroSaveObservabilityDependencyPolicyTest
     "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"
     -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveObservabilityDependencyPolicyTest.cmake")
 set_tests_properties(HoroSaveObservabilityDependencyPolicyTest PROPERTIES LABELS "unit;save;architecture")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroProtobufCoverageTests.cmake")
 include(Catch)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroCiSuites.cmake")
 
@@ -392,9 +393,12 @@ if(HORO_BUILD_NETWORK_GNS)
             support/AllocationProbe.cpp
             unit/runtime/networking/GnsTransportTests.cpp
             unit/runtime/networking/GnsTransportQualificationTests.cpp
+            unit/runtime/networking/GnsPendingCloseTests.cpp
+            unit/runtime/networking/GnsNativeSecurityTests.cpp
     )
     target_compile_features(HoroNetworkTransportGnsTests PRIVATE cxx_std_20)
     target_include_directories(HoroNetworkTransportGnsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/networking/gns ${PROJECT_SOURCE_DIR}/tests/support)
+    target_include_directories(HoroNetworkTransportGnsTests PRIVATE "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets")
     target_compile_definitions(HoroNetworkTransportGnsTests PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE GameNetworkingSockets::static c-ares::cares)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
@@ -482,6 +486,7 @@ set_tests_properties(HoroNetworkModePublicHeaderConsumer PROPERTIES LABELS "unit
 add_executable(HoroNetworkModeHostIntegrationTests
         integration/network/NetworkModeHostIntegrationTests.cpp
         integration/network/NetworkProductSessionTests.cpp
+        integration/network/NetworkPendingConnectionTests.cpp
         integration/network/NetworkProductAdmissionTests.cpp
         integration/network/NetworkAdmissionBoundaryTests.cpp
     integration/network/NetworkAdmissionObserverTests.cpp
@@ -491,6 +496,34 @@ target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_TEST
 target_include_directories(HoroNetworkModeHostIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
 target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroNetworkProductHost HoroEngine::NetworkTransportNull
     HoroEngine::Platform MbedTLS::mbedcrypto)
+if(HORO_BUILD_NETWORK_GNS)
+    target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/NetworkGnsProductProvisioningTests.cpp)
+    target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroEngine::NetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
+    # Private qualification-only PKI: no native header or secret provisioning API is installed or exported by Horo.
+    add_library(HoroGnsNativeQualificationSupport STATIC integration/network/gns/GnsQualificationIssuer.cpp)
+    target_compile_features(HoroGnsNativeQualificationSupport PUBLIC cxx_std_20)
+    target_include_directories(HoroGnsNativeQualificationSupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/integration/network/gns)
+    target_include_directories(HoroGnsNativeQualificationSupport PRIVATE
+        "${HORO_GNS_SELECTED_SOURCE_DIR}/src/common" "${HORO_GNS_SELECTED_SOURCE_DIR}/src/public"
+        "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets" "${horo_gns_BINARY_DIR}/src")
+    target_compile_definitions(HoroGnsNativeQualificationSupport PRIVATE VALVE_CRYPTO_ENABLE_25519 VALVE_CRYPTO_OPENSSL VALVE_CRYPTO_25519_OPENSSLEVP)
+    target_link_libraries(HoroGnsNativeQualificationSupport PUBLIC HoroNetworkTransportGNSFactoryInternal
+        PRIVATE HoroEngine::Platform GameNetworkingSockets::static protobuf::libprotobuf MbedTLS::mbedcrypto)
+    add_executable(HoroGnsSecureProductChild integration/network/gns/GnsSecureProductChild.cpp)
+    target_compile_features(HoroGnsSecureProductChild PRIVATE cxx_std_20)
+    target_compile_definitions(HoroGnsSecureProductChild PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+    target_include_directories(HoroGnsSecureProductChild PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
+    target_link_libraries(HoroGnsSecureProductChild PRIVATE HoroGnsNativeQualificationSupport HoroNetworkProductHost
+        HoroEngine::NetworkTransportGNS HoroEngine::NetworkTransportNull HoroEngine::Platform MbedTLS::mbedcrypto Catch2::Catch2)
+    if(UNIX AND HORO_BUILD_PHYSICS_NATIVE)
+        target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/gns/GnsNativeProductPairTests.cpp)
+        target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroGnsNativeQualificationSupport)
+        target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE HORO_GNS_PRODUCT_CHILD="$<TARGET_FILE:HoroGnsSecureProductChild>")
+        add_dependencies(HoroNetworkModeHostIntegrationTests HoroGnsSecureProductChild)
+    else()
+        message(STATUS "Native secure pair runtime qualification requires native Physics and provable owner-only POSIX fixture files")
+    endif()
+endif()
 horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
 add_test(NAME HoroNetworkStandaloneProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product standalone 2)
 set_tests_properties(HoroNetworkStandaloneProductLaunch PROPERTIES LABELS "integration;network;headless;product")
@@ -1464,7 +1497,7 @@ horo_register_catch_test(HoroXRActionBindingTests LABELS "unit;xr;input;headless
 
 if(HORO_BUILD_XR_OPENXR)
     add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRActionBindingsTests.cpp
-        unit/runtime/xr/OpenXRSwapchainTests.cpp)
+        unit/runtime/xr/OpenXRSwapchainTests.cpp unit/runtime/xr/OpenXRFrameCompositorTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
@@ -2235,6 +2268,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/AssetImportSourcePreviewTests.cpp
             unit/editor/ScreenViewPresentationTests.cpp
             unit/editor/EditorThemeBehaviorTests.cpp
+            unit/editor/EditorGuiCompositionTests.cpp
     )
     target_compile_features(HoroEditorPresentationTests PRIVATE cxx_std_20)
     target_include_directories(HoroEditorPresentationTests PRIVATE
@@ -2901,7 +2935,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroGlobalDockPanelRenderTests PRIVATE cxx_std_20)
     target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp
         ../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)
-    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::RenderApi)
+    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::RenderApi HoroEngine::RenderFrontend)
     target_include_directories(HoroGlobalDockPanelRenderTests PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
@@ -2969,6 +3003,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     target_link_libraries(HoroViewportPanelRenderTests
             PRIVATE
+            HoroEngine::RenderFrontend
             HoroEngine::Gui
             HoroThirdParty::ImGui
     )
@@ -3350,6 +3385,10 @@ target_link_libraries(HoroEditorViewportResourceTests
         HoroEngine::RenderNull
 )
 
+add_executable(HoroViewportOverlayTriangleTests unit/editor/ViewportOverlayTriangleTests.cpp)
+target_link_libraries(HoroViewportOverlayTriangleTests PRIVATE HoroEngine::EditorViewportScene HoroEditorTestInternals)
+horo_register_catch_test(HoroViewportOverlayTriangleTests LABELS "unit;editor;renderer;headless")
+
 # White-box editor tests opt into implementation headers explicitly. Keep this
 # non-installed test interface separate from every production usage requirement;
 # legacy editor/... include spellings require the source root until those tests
@@ -3568,6 +3607,11 @@ add_executable(HoroShaderCompilerPipelineTests
 target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform)
+add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp)
+target_compile_features(HoroShaderReflectionCookTests PRIVATE cxx_std_20)
+target_link_libraries(HoroShaderReflectionCookTests PRIVATE HoroEditorVulkanShaderInternal)
+horo_register_catch_test(HoroShaderReflectionCookTests LABELS "unit;renderer;shader;headless")
+
 add_executable(HoroRenderFrontendTests
         support/AllocationProbe.cpp
         unit/runtime/renderer/RenderParallelWorkTests.cpp
@@ -3576,9 +3620,11 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderGraphTransientResourceTests.cpp
         unit/runtime/renderer/RenderGraphTransientReservationTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
+        unit/runtime/renderer/RenderSubmissionAllocatorTests.cpp
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
         unit/runtime/renderer/RenderFrontendLifecycleTests.cpp
+            unit/runtime/renderer/RenderFrontendGuiCompositionTests.cpp
         unit/runtime/renderer/RenderFrontendPresentationTests.cpp
         unit/runtime/renderer/RenderFrontendRecoveryTests.cpp
         unit/runtime/renderer/RenderFrontendTerrainGraphTests.cpp
@@ -5178,11 +5224,14 @@ horo_register_catch_test(HoroD3D12InitializationTests LABELS "native;renderer;d3
 
 if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests
+        unit/runtime/renderer/VulkanPresentationRuntimeTests.cpp
+        unit/runtime/renderer/VulkanPresentationBackendTests.cpp
             unit/runtime/renderer/VulkanRenderBackendTests.cpp
             unit/runtime/renderer/VulkanResourceRuntimeTests.cpp
             unit/runtime/renderer/VulkanShaderRuntimeTests.cpp
             unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
             unit/runtime/renderer/VulkanGraphRuntimeTests.cpp
+            unit/runtime/renderer/VulkanGuiCommandTests.cpp
             unit/runtime/renderer/VulkanExternalImageTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
@@ -5222,6 +5271,19 @@ if (HORO_BUILD_RENDER_VULKAN)
                 LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE
                 FAIL_REGULAR_EXPRESSION "Validation Error;VUID-")
     endif ()
+endif ()
+
+# Native editor qualification consumes the same host-owned Vulkan GUI/viewport pair.
+# Platform admission remains intact; macOS cannot qualify this backend via a guard bypass.
+if (HORO_ENABLE_GPU_SMOKE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET HoroEditorVulkanGuiInternal)
+    add_executable(HoroEditorVulkanPresentationSmoke
+        integration/renderer/EditorVulkanPresentationSmoke.cpp
+        ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorVulkanShaderAssets.cpp)
+    target_include_directories(HoroEditorVulkanPresentationSmoke PRIVATE
+        ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app)
+    target_link_libraries(HoroEditorVulkanPresentationSmoke PRIVATE
+        HoroEditorVulkanGuiInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+    horo_register_catch_test(HoroEditorVulkanPresentationSmoke LABELS "native;renderer;vulkan;gui;qualification")
 endif ()
 
 set(HORO_CATCH_TEST_TARGETS

@@ -193,6 +193,16 @@ namespace {
         REQUIRE(unreliableReceived == 1);
         REQUIRE(emptyReceived == 1);
     }
+
+    [[nodiscard]] NetworkTransportStats RequireLoopbackStats(INetworkTransport &transport, ConnectionHandle outgoing) {
+        const auto stats = transport.Stats();
+        REQUIRE(transport.ConnectionStats(outgoing).HasValue());
+        REQUIRE(stats.sentMessages == 3);
+        REQUIRE(stats.receivedMessages == 3);
+        REQUIRE(stats.sentBytes == 5);
+        REQUIRE(stats.receivedBytes == 5);
+        return stats;
+    }
 }  // namespace
 
 TEST_CASE("GNS explicit factory initializes exact bounded capabilities and rejects malformed input", "[network][gns]") {
@@ -248,7 +258,9 @@ TEST_CASE("GNS loopback connects, exchanges exact delivery modes, and closes wit
     auto outgoing = transport->Connect({.endpoint = address, .timeout = 5s});
     REQUIRE(outgoing.HasValue());
     Collector collector;
-    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Connected, 2));
+    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Accepted, 1));
+    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Connected, 1));
+    REQUIRE(Count(collector, NetworkTransportEventKind::Connected) == 1);
     REQUIRE(collector.events.front().kind == NetworkTransportEventKind::ListenerReady);
     REQUIRE(Count(collector, NetworkTransportEventKind::Accepted) == 1);
     ConnectionHandle incoming{};
@@ -268,12 +280,7 @@ TEST_CASE("GNS loopback connects, exchanges exact delivery modes, and closes wit
     const auto tooLarge = transport->Send(outgoing.Value(), channel.Value(), oversized, DeliveryPolicy::ReliableOrdered);
     REQUIRE(tooLarge.HasError());
     REQUIRE(tooLarge.ErrorValue().code.Value() == NetworkErrors::TransportLimitExceeded.code.Value());
-    const auto stats = transport->Stats();
-    REQUIRE(transport->ConnectionStats(outgoing.Value()).HasValue());
-    REQUIRE(stats.sentMessages == 3);
-    REQUIRE(stats.receivedMessages == 3);
-    REQUIRE(stats.sentBytes == 5);
-    REQUIRE(stats.receivedBytes == 5);
+    const auto stats = RequireLoopbackStats(*transport, outgoing.Value());
     REQUIRE(transport->Close(outgoing.Value()).HasValue());
     REQUIRE(transport->Close(outgoing.Value()).HasValue());
     REQUIRE(transport->Close(incoming).HasValue());
@@ -340,7 +347,9 @@ TEST_CASE("GNS resolves a DNS endpoint asynchronously without exposing resolver 
     auto connecting = transport->Connect({.endpoint = hostname.Value(), .timeout = 5s});
     REQUIRE(connecting.HasValue());
     Collector collector;
-    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Connected, 2));
+    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Accepted, 1));
+    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Connected, 1));
+    REQUIRE(Count(collector, NetworkTransportEventKind::Connected) == 1);
     REQUIRE(Count(collector, NetworkTransportEventKind::Accepted) == 1);
     transport->Shutdown();
     REQUIRE_FALSE(transport->PollEvents(collector).HasValue());
@@ -389,7 +398,9 @@ TEST_CASE("GNS IPv6 loopback listens, connects, and closes when host IPv6 is ava
     auto outgoing = transport->Connect({.endpoint = bind, .timeout = 5s});
     REQUIRE(outgoing.HasValue());
     Collector collector;
-    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Connected, 2));
+    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Accepted, 1));
+    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::Connected, 1));
+    REQUIRE(Count(collector, NetworkTransportEventKind::Connected) == 1);
     REQUIRE(transport->Close(outgoing.Value()).HasValue());
     REQUIRE(transport->CloseListener(listener.Value()).HasValue());
     transport->Shutdown();

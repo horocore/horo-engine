@@ -439,6 +439,14 @@ namespace Horo::Render::Detail {
         impl_->pipelines.erase(id);
     }
 
+    /** @copydoc VulkanShaderRuntime::CaptureGuiSampler */
+    Result<VulkanSamplerSnapshot> VulkanShaderRuntime::CaptureGuiSampler(const std::uint64_t identity) const {
+        const auto found = impl_->samplers.find(identity);
+        if (found == impl_->samplers.end() || found->second->descriptor.compareEnabled)
+            return Result<VulkanSamplerSnapshot>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        return Result<VulkanSamplerSnapshot>::Success({found->second->handle, found->second});
+    }
+
     /** @copydoc VulkanShaderRuntime::DestroySampler */
     void VulkanShaderRuntime::DestroySampler(std::uint64_t id) noexcept {
         impl_->samplers.erase(id);

@@ -350,6 +350,19 @@ namespace Horo::XR::OpenXRInternal {
         return frame.ExecuteSubmittedGraph(*impl_->graph, workloads, submissions);
     }
 
+    /** @copydoc OpenXRMultiviewGraph::ExecuteReserved */
+    Result<void> OpenXRMultiviewGraph::ExecuteReserved(RenderFrameScope &frame, const XRMultiviewOwnerState &active,
+                                                       const std::span<const RenderTimelinePoint> waits) {
+        if (!impl_)
+            return Result<void>::Failure(Invalid());
+        if (auto live = impl_->Validate(active); live.HasError())
+            return live;
+        const auto reserved = frame.ReserveSubmission(RenderQueueRole::Graphics, waits);
+        if (reserved.HasError())
+            return Result<void>::Failure(reserved.ErrorValue());
+        return Execute(frame, active, reserved.Value());
+    }
+
     /** @copydoc OpenXRMultiviewGraph::Graph */
     const CompiledRenderGraphExecution &OpenXRMultiviewGraph::Graph() const noexcept {
         return *impl_->graph;

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Render/RenderBackend.h"
+#include "editor/renderer/EditorViewportRenderer.h"
 
 #include <span>
 
@@ -33,6 +34,11 @@ namespace Horo::Editor {
     public:
         virtual ~IEditorGuiRenderer() = default;
 
+        /** @brief Borrows the viewport's exact current generation for this composition; an empty view removes the previous registration. */
+        void BindViewportTexture(const EditorViewportTextureView view) noexcept {
+            viewportBinding_ = view;
+        }
+
         /** @brief Initializes Dear ImGui platform and renderer bridges. */
         [[nodiscard]] virtual Result<void> Initialize() = 0;
 
@@ -40,7 +46,7 @@ namespace Horo::Editor {
         [[nodiscard]] virtual Result<void> BeginFrame() = 0;
 
         /** @brief Encodes current Dear ImGui draw data into the active backend frame. */
-        [[nodiscard]] Result<void> RenderDrawData() override = 0;
+        [[nodiscard]] Result<void> RenderDrawData(const Render::GuiCompositionRequest &request) override = 0;
 
         /** @brief Uploads one immutable tightly packed RGBA8 UI texture. */
         [[nodiscard]] virtual Result<std::uintptr_t> CreateTexture(const EditorRgba8ImageView &image) = 0;
@@ -50,5 +56,14 @@ namespace Horo::Editor {
 
         /** @brief Releases all GUI backend and texture resources; repeated calls are safe. */
         virtual void Shutdown() noexcept = 0;
+
+    protected:
+        /** @brief Generation-bound borrowed viewport registration; never a second resource owner. */
+        [[nodiscard]] const EditorViewportTextureView &ViewportBinding() const noexcept {
+            return viewportBinding_;
+        }
+
+    private:
+        EditorViewportTextureView viewportBinding_;
     };
 }  // namespace Horo::Editor

@@ -48,6 +48,7 @@ if(HORO_BUILD_NETWORK_GNS)
     # Upstream protobuf's CMake target names are fixed to `protobuf`; adding it
     # directly avoids requiring a system protoc or a preinstalled package.
     add_subdirectory("${horo_protobuf_SOURCE_DIR}" "${horo_protobuf_BINARY_DIR}")
+    include(HoroProtobufCoverage)
 
     # GNS calls find_package(Protobuf CONFIG) to obtain protobuf_generate_cpp.
     # Give it only the already-created in-tree target and an in-tree protoc rule.
@@ -75,8 +76,21 @@ if(HORO_BUILD_NETWORK_GNS)
     FetchContent_Declare(horo_gns
         GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
         GIT_TAG "${HORO_GNS_REVISION}"
-        GIT_SHALLOW FALSE)
+        GIT_SHALLOW FALSE
+        SOURCE_SUBDIR .horo-pristine-source-only)
     FetchContent_MakeAvailable(horo_gns)
+    include(HoroGnsSelectedRoot)
+    horo_prepare_gns_selected_root("${horo_gns_SOURCE_DIR}" HORO_GNS_SELECTED_SOURCE_DIR)
+    add_subdirectory("${HORO_GNS_SELECTED_SOURCE_DIR}" "${horo_gns_BINARY_DIR}")
+    # Upstream disables exceptions. Only the three reviewed bridge-owning native
+    # TUs need unwinding for private barriers and temporary trust-map rollback.
+    # Source options follow target options; preserve the effective upstream standard and unrelated TUs.
+    foreach(native_tu steamnetworkingsockets_certstore.cpp clientlib/steamnetworkingsockets_connections.cpp clientlib/csteamnetworkingsockets.cpp)
+        set_property(SOURCE "${HORO_GNS_SELECTED_SOURCE_DIR}/src/steamnetworkingsockets/${native_tu}"
+            DIRECTORY "${HORO_GNS_SELECTED_SOURCE_DIR}/src" APPEND PROPERTY COMPILE_OPTIONS
+            $<$<CXX_COMPILER_ID:MSVC>:/EHsc>
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fexceptions>)
+    endforeach()
     # GNS installs an export even when embedded as a source-only private
     # dependency. Its export must not claim our non-installed protobuf target;
     # the in-tree link still receives protobuf through BUILD_INTERFACE.
@@ -538,6 +552,31 @@ if(HORO_BUILD_EDITOR_GUI)
         )
         target_compile_definitions(HoroThirdPartyImGuiOpenGL PUBLIC GL_SILENCE_DEPRECATION)
         target_link_libraries(HoroThirdPartyImGuiOpenGL PUBLIC HoroThirdPartyImGui OpenGL::GL)
+    endif()
+
+    # The native encoder borrows Horo's command buffer and exact retired frame slot.
+    # Transform a pinned copy in BUILD; never patch FetchContent's shared source.
+    if(HORO_BUILD_RENDER_VULKAN AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        set(_horo_imgui_vulkan_slots
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/imgui-vulkan/imgui_impl_vulkan_horo.cpp")
+        add_custom_command(
+            OUTPUT "${_horo_imgui_vulkan_slots}"
+            COMMAND "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/scripts/project.py" imgui-vulkan-slots
+                --source "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
+                --output "${_horo_imgui_vulkan_slots}"
+            DEPENDS
+                "${PROJECT_SOURCE_DIR}/scripts/project.py"
+                "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
+            COMMENT "Prepare pinned ImGui Vulkan encoder for canonical Horo slots"
+            VERBATIM
+        )
+        add_library(HoroThirdPartyImGuiVulkan STATIC "${_horo_imgui_vulkan_slots}")
+        add_library(HoroThirdParty::ImGuiVulkan ALIAS HoroThirdPartyImGuiVulkan)
+        target_compile_features(HoroThirdPartyImGuiVulkan PUBLIC cxx_std_20)
+        target_compile_definitions(HoroThirdPartyImGuiVulkan PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
+        target_link_libraries(HoroThirdPartyImGuiVulkan PUBLIC HoroThirdPartyImGui Vulkan::Headers)
     endif()
 
     if(HORO_BUILD_RENDER_METAL)

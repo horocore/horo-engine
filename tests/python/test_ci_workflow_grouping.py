@@ -20,6 +20,14 @@ def workflow_job(name: str) -> str:
     return match.group(1)
 
 
+def shader_qualification_steps(shader_job: str) -> str:
+    publisher = re.search(r"      - name: Publish main shader compiler checkpoint\n.*?(?=\n      - name:)",
+                          shader_job, re.S)
+    assert publisher is not None
+    assert "uses: ./.github/actions/publish-compiler-checkpoint" in publisher.group()
+    return shader_job.replace(publisher.group(), "")
+
+
 def preset(kind: str, name: str) -> dict:
     return next(item for item in PRESETS[kind] if item["name"] == name)
 
@@ -427,11 +435,11 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
 
 def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     native_job = workflow_job("shaders")
-    assert "os: ubuntu-24.04" in native_job
+    assert "os: ubuntu-26.04" in native_job
     assert "os: windows-2022" in native_job
     assert "timeout-minutes: 90" in native_job
     assert "-DHORO_BUILD_RENDER_VULKAN=ON" in native_job
-    assert "-DHORO_BUILD_EDITOR_GUI=OFF" in native_job
+    assert "-DHORO_BUILD_EDITOR_GUI=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}" in native_job
     assert "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON" in native_job
     assert "cmake --build build/ci" in native_job
     assert "ctest --test-dir build/ci" in native_job
@@ -446,7 +454,7 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     setup = (ROOT / ".github/actions/setup-build-tools/action.yml").read_text(encoding="utf-8")
     assert "bash .github/scripts/install_linux_build_dependencies.sh" in setup
     installer = (ROOT / ".github/scripts/install_linux_build_dependencies.sh").read_text(encoding="utf-8")
-    for dependency in ("vulkan-validationlayers", "mesa-vulkan-drivers", "glslang-tools"):
+    for dependency in ("vulkan-validationlayers", "mesa-vulkan-drivers", "vulkan-tools", "glslang-tools"):
         assert dependency in installer
     assert "scripts/dev.py select-lavapipe-icd" in native_job
     assert "VK_DRIVER_FILES=%s" in native_job
@@ -461,7 +469,7 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
         assert not selected.search(f"{target}Unrelated::case")
     assert "-R '^HoroVulkanCommandExecutionSmoke$'" in native_job
     assert not selected.search("UnrelatedTests::case")
-    assert "continue-on-error" not in native_job
+    assert "continue-on-error" not in shader_qualification_steps(native_job)
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
     assert 'FAIL_REGULAR_EXPRESSION "Validation Error;VUID-"' in tests_cmake
@@ -577,7 +585,7 @@ def test_windows_save_timeout_diagnostics_preserve_the_original_gate_and_artifac
     assert not any(option in debug for option in ("--timeout", "--repeat", "continue-on-error"))
     windows = preset("testPresets", "ci-windows-debug")
     assert preset("configurePresets", windows["configurePreset"])["binaryDir"] == "${sourceDir}/build/ci"
-    assert windows["execution"] == {"jobs": 1, "timeout": 90}
+    assert windows["execution"] == {"jobs": 4, "timeout": 90}
     assert windows["output"]["outputJUnitFile"] == "${sourceDir}/build/ci/ctest.xml"
     assert "build/ci/ctest.xml" in artifact
     assert "build/ci/Testing/Temporary/LastTest.log" in artifact
@@ -641,7 +649,7 @@ def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> Non
 def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform_draws() -> None:
     shader_workflow = workflow_job("shaders")
     assert not (ROOT / ".github/workflows/vulkan-shader.yml").exists()
-    assert "ubuntu-24.04" in shader_workflow
+    assert "ubuntu-26.04" in shader_workflow
     assert "windows-2022" in shader_workflow
     flat_targets = {"HoroMaterialBindingPublicHeaderConsumer", "HoroMultiviewSceneExtractionPublicHeaderConsumer"}
     expected_targets = {"HoroRenderVulkanTests", "HoroMaterialBindingTests", "HoroPipelineCacheTests",
@@ -666,7 +674,27 @@ def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform
     assert "VulkanTransform.frag" in shader_workflow
     assert "HORO_VULKAN_TRANSFORM_VERTEX" in shader_workflow
     assert "'[native-smoke]'" in shader_workflow
-    assert "continue-on-error" not in shader_workflow
+    assert "continue-on-error" not in shader_qualification_steps(shader_workflow)
+
+
+def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composition() -> None:
+    job = workflow_job("shaders")
+    job += (ROOT / ".github/actions/cook-vulkan-viewport/action.yml").read_text(encoding="utf-8")
+    assert 'HoroEditorVulkanShaderCook" --describe-tools' in job
+    assert "${archive_digest#sha256:}" in job
+    assert "verify-shader-tool" in job
+    assert '--relative-path "$executable_relative_path" --sha256 "$executable_digest"' in job
+    assert "sha256sum --check" in job
+    assert "HORO_EDITOR_VULKAN_ASSET_ROOT" in job
+    assert "assets/shaders/editor/viewport.hlsl" in job
+    assert "HoroEditorVulkanPresentationSmoke::" in job
+    assert "xvfb-run -a ctest" in job
+    assert "Vulkan translation units missing from the actual compile database" in job
+    assert "Validation (Error|Warning)|VUID-" in job
+    assert "catalog.tsv" in job
+    assert "HoroEditorAssetRoot-Debug.txt" in job
+    apps = (ROOT / "apps/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "HoroEditorAssetRoot-$<CONFIG>.txt" in apps
 
 
 def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -> None:
@@ -686,11 +714,27 @@ def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -
 
 def test_parallel_ctest_preserves_suite_selection_and_bounds_runner_work() -> None:
     assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
-    for name in ("ci-linux-debug", "ci-macos-debug", "sonar"):
-        assert preset("testPresets", name)["execution"]["jobs"] == 2
+    assert preset("configurePresets", "ci-windows-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
+    for name, workers in (("ci-linux-debug", 4), ("ci-macos-debug", 3), ("ci-windows-debug", 4)):
+        assert preset("testPresets", name)["execution"]["jobs"] == workers
+    assert preset("testPresets", "sonar")["execution"]["jobs"] == 4
     assert preset("testPresets", "ci-linux-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
     assert preset("testPresets", "ci-macos-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
+    assert preset("testPresets", "ci-windows-debug")["filter"] == {"include": {"label": "^ci-windows$"}}
     assert preset("testPresets", "sonar")["filter"] == {"include": {"label": "^sonar-coverage$"}}
+
+
+def test_windows_parallel_tests_require_native_fixture_isolation_qualification() -> None:
+    native = workflow_job("test")
+    marker = "- name: Verify Windows CTest fixture isolation"
+    qualification = native.split(marker, 1)[1].split("\n      - name:", 1)[0]
+    assert "if: runner.os == 'Windows'" in qualification
+    assert "pytest==8.3.4" in qualification
+    assert "tests/python/test_ci_case_isolation.py" in qualification
+    assert "-k 'test_generated_suite_properties_preserve_contracts_and_control_concurrency or test_case_' -q" in qualification
+    assert "timeout-minutes: 2" in qualification
+    assert "continue-on-error" not in qualification
+    assert native.index(marker) < native.index("- name: Configure Debug") < native.index("- name: Test Debug")
 
 
 def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:

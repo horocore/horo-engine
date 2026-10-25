@@ -55,6 +55,12 @@ namespace Horo::Application::Internal {
         std::thread::id owner_{std::this_thread::get_id()};
     };
 
+    /** @brief Original terminal of an actual outbound transport attempt; never a peer, principal or session generation. */
+    struct ClientConnectionAttemptTerminal final {
+        Network::ConnectionHandle connection{};
+        const ErrorCodeDescriptor *failure{}; /**< Stable transport error descriptor; no borrowed native text or allocated payload. */
+    };
+
     /**
      * @brief One application-owned client lifecycle lease and transport terminal observer.
      * @details All methods run on the simulation thread. The owner retains the exact admitted
@@ -82,6 +88,16 @@ namespace Horo::Application::Internal {
          * @return Success for the exact live binding; typed stale-owner error on conflicting/reused binding.
          */
         [[nodiscard]] Result<void> AttachTransport(Network::INetworkTransport &transport);
+        /**
+         * @brief Retain the exact successful Connect result before the first owner PollEvents.
+         * @param connection Actual accepted transport handle, including its generation.
+         * @return Success once, or typed overlap/lifecycle error. No peer/session is created.
+         * @details Connect queues events; only PollEvents may deliver them. Service activation hands off
+         * synchronously before polling. A failed handoff rolls back through normal service shutdown.
+         */
+        [[nodiscard]] Result<void> BeginConnectionAttempt(Network::ConnectionHandle connection);
+        /** @brief Borrow the first original attempt terminal through Shutdown, ending at owner destruction; null before termination. */
+        [[nodiscard]] const ClientConnectionAttemptTerminal *ConnectionAttemptTerminal() const noexcept;
         /**
          * @brief Terminalize and detach the exact binding before transport destruction.
          * @param transport Exact borrowed transport; other or already detached bindings are ignored.
@@ -133,6 +149,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Revoke();
         /** @brief Record a canonical transport failure while preserving any previously pinned close reason. */
         void TransportEnded(Network::NetworkFailureKind failure = Network::NetworkFailureKind::TransportUnavailable) noexcept;
+        /** @brief Consume one exact pending attempt without allocating or changing a peer lifecycle. */
+        void EndConnectionAttempt(const ErrorCodeDescriptor &failure) noexcept;
         /** @brief Sample the shared domain and fail closed on owner-thread clock rollback. */
         [[nodiscard]] Result<std::uint64_t> Sample(bool poll);
         std::shared_ptr<NetworkProductSessionClock> clock_;
@@ -140,6 +158,8 @@ namespace Horo::Application::Internal {
         Network::NetworkModeComposition *mode_{};
         Network::INetworkTransport *transport_{};  // Borrow ends explicitly before transport shutdown/destruction.
         Network::ConnectionHandle connection_{};
+        Network::ConnectionHandle pendingConnection_{};
+        std::optional<ClientConnectionAttemptTerminal> connectionTerminal_;
         Network::NetworkOperationGeneration generation_{};
         std::uint64_t lastTick_{};
         bool admitted_{};

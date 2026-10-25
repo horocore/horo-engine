@@ -97,6 +97,9 @@ namespace Horo::Application::Internal {
                     auto connecting = transport_->Connect({.endpoint = connect_});
                     if (connecting.HasError())
                         return Result<void>::Failure(connecting.ErrorValue());
+                    // No consumer is called by Connect. Retain its exact handle before the first owner poll.
+                    if (auto pending = sessions_->BeginConnectionAttempt(connecting.Value()); pending.HasError())
+                        return pending;  // Normal startup rollback still owns and closes the accepted native attempt.
                 }
                 return Result<void>::Success();
             }

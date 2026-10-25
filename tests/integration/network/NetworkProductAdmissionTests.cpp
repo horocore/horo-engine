@@ -200,10 +200,17 @@ namespace Horo::Network {
             SKIP("Canonical Physics is required for the actual product worlds.");
         ProductPair pair;
         pair.Start(false);
-        pair.Frames();
+        REQUIRE(pair.hosts[0]->RunFrame().HasValue());
+        const auto failed = pair.hosts[1]->RunFrame();
+        REQUIRE(failed.HasError());
+        REQUIRE(failed.ErrorValue().domain.Value() == NetworkErrors::TransportConnectionFailed.domain.Value());
+        REQUIRE(failed.ErrorValue().code.Value() == NetworkErrors::TransportConnectionFailed.code.Value());
         CHECK(pair.authorities[0]->issuerCalls == 0);
         CHECK(pair.authorities[1]->issuerCalls == 0);
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
+        REQUIRE(pair.hosts[1]->ClientConnectionTerminal());
+        CHECK(pair.hosts[1]->ClientConnectionTerminal()->failure == &NetworkErrors::TransportConnectionFailed);
+        CHECK_FALSE(pair.hosts[1]->ClientSessionTerminal());
         CHECK_FALSE(pair.link->ends[0].open);
     }
 

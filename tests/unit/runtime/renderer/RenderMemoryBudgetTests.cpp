@@ -3,6 +3,7 @@
 #include "support/AllocationProbe.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstddef>
 #include <limits>
 #include <utility>
@@ -116,6 +117,7 @@ namespace {
         const auto secondPlacement = budget->Placement(secondReservation.Value());
         REQUIRE(secondPlacement.HasValue());
         CHECK(secondPlacement.Value().pool == placement.Value().pool);
+        CHECK(secondPlacement.Value().block == placement.Value().block);
         CHECK(secondPlacement.Value().offsetBytes == 32);
         const auto reserved = budget->Snapshot();
         CHECK(reserved.reservedUnallocatedBytes == 64);
@@ -136,9 +138,72 @@ namespace {
         auto second = budget->Commit(secondReservation.Value());
         REQUIRE(second.HasValue());
         CHECK(second.Value().pool == first.Value().pool);
+        CHECK(second.Value().block == first.Value().block);
         CHECK(second.Value().offsetBytes == 32);
 
         VerifySharedBlockSnapshot(*budget, first.Value().pool);
+    }
+
+    TEST_CASE("Render memory placements require a block from the owning renderer", "[unit][runtime][renderer][memory]") {
+        auto budget = CreateBudget();
+        const auto reservation = budget->Reserve(FirstScope, ResourceOperationId{71}, Suballocated(8, 8));
+        REQUIRE(reservation.HasValue());
+        auto placement = budget->Placement(reservation.Value());
+        REQUIRE(placement.HasValue());
+        CHECK(placement.Value().IsValid());
+        RenderMemoryPlacement invalidPlacement = placement.Value();
+        invalidPlacement.block = {OtherRenderer, 1};
+        CHECK_FALSE(invalidPlacement.IsValid());
+        invalidPlacement.block = {};
+        CHECK_FALSE(invalidPlacement.IsValid());
+    }
+
+    TEST_CASE("Render memory sibling blocks retain distinct identities in one logical pool", "[unit][runtime][renderer][memory]") {
+        auto config = Config();
+        config.hardCapBytes = 256;
+        config.maximumBlockBytes = 128;
+        auto budget = CreateBudget(config);
+        const bool dedicated = GENERATE(false, true);
+        const std::size_t firstBytes = GENERATE(std::size_t{64}, std::size_t{80});
+        const auto firstReservation =
+            budget->Reserve(FirstScope, ResourceOperationId{72}, dedicated ? Dedicated(firstBytes) : Suballocated(firstBytes, firstBytes));
+        REQUIRE(firstReservation.HasValue());
+        const auto first = budget->Commit(firstReservation.Value());
+        REQUIRE(first.HasValue());
+        const auto secondReservation =
+            budget->Reserve(FirstScope, ResourceOperationId{73}, dedicated ? Dedicated(64) : Suballocated(64, 64));
+        REQUIRE(secondReservation.HasValue());
+        const auto second = budget->Commit(secondReservation.Value());
+        REQUIRE(second.HasValue());
+        CHECK(first.Value().pool == second.Value().pool);
+        CHECK(first.Value().block != second.Value().block);
+        CHECK(first.Value().block.renderer == Renderer);
+        CHECK(second.Value().block.renderer == Renderer);
+        CHECK(first.Value().offsetBytes == 0);
+        CHECK(second.Value().offsetBytes == 0);
+        CHECK(first.Value().backingBytes == firstBytes);
+        CHECK(second.Value().backingBytes == 64);
+        CHECK(budget->Snapshot().poolCount == 1);
+        CHECK(budget->Snapshot().blockCount == 2);
+        CHECK(budget->Snapshot().committedBackingBytes == firstBytes + 64);
+        REQUIRE(budget->BeginRetire(first.Value().id).HasValue());
+        REQUIRE(budget->AcknowledgeRetirement(first.Value().id).HasValue());
+        CHECK(budget->ReclaimEmptyBlocks(1) == firstBytes);
+        CHECK(budget->Snapshot().committedBackingBytes == 64);
+        const auto pool = budget->PoolSnapshot(second.Value().pool);
+        REQUIRE(pool.HasValue());
+        CHECK(pool.Value().blockCount == 1);
+        const auto replacementReservation =
+            budget->Reserve(FirstScope, ResourceOperationId{74}, dedicated ? Dedicated(firstBytes) : Suballocated(firstBytes, firstBytes));
+        REQUIRE(replacementReservation.HasValue());
+        const auto replacement = budget->Placement(replacementReservation.Value());
+        REQUIRE(replacement.HasValue());
+        CHECK(replacement.Value().pool == second.Value().pool);
+        CHECK(replacement.Value().block != first.Value().block);
+        CHECK(replacement.Value().block != second.Value().block);
+        REQUIRE(budget->Cancel(replacementReservation.Value()).HasValue());
+        CHECK(budget->Snapshot().blockCount == 1);
+        CHECK(budget->Snapshot().committedBackingBytes == 64);
     }
 
     TEST_CASE("Render memory ledger separates compatible pools and excludes dedicated backing from reusable slack",

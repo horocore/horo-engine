@@ -19,10 +19,15 @@ concurrency:
 jobs:
   sonar:
     name: SonarCloud
-    runs-on: ubuntu-24.04
+    runs-on: &sonar_runner ubuntu-26.04
     timeout-minutes: 180
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    env:
+    if: ${{ !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    permissions:
+      contents: read
+      packages: read
+    env: &sonar_environment
+      CC: gcc
+      CXX: g++
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.sonar/ccache
       CCACHE_COMPRESS: 'true'
@@ -31,7 +36,7 @@ jobs:
       SONAR_SCANNER_VERSION: '7.2.0.5079'
       HORO_COMPILER_LAUNCHER: ccache
 
-    steps:
+    steps: &sonar_steps
       - name: Checkout source and Git history
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -58,29 +63,24 @@ jobs:
           # Disconnected FetchContent cannot safely update an arbitrary old pin.
           key: sonar-v4-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('CMakeLists.txt', 'cmake/Dependencies.cmake', 'cmake/*Dependency.cmake', 'cmake/Horo*DependencyPolicy.cmake', 'cmake/HoroGnsProtobufConfig.cmake') }}
 
-      - name: Restore compiler cache
-        id: compiler
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
-        with:
-          path: |
-            ${{ github.workspace }}/.sonar/ccache
-          key: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
+      - name: Identify instrumented compilers
+        id: compiler_identity
+        run: |
+          python3 scripts/dev.py ci-cache-identity --github-output "$GITHUB_OUTPUT" \
+            --cc gcc --cxx g++ --cc-version "$(gcc -dumpfullversion -dumpversion)" \
+            --cxx-version "$(g++ -dumpfullversion -dumpversion)" --cmake-version "$(cmake --version)"
 
       - name: Install optional compiler registry client
-        if: steps.compiler.outputs.cache-matched-key == ''
         continue-on-error: true
         uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6
         with:
           version: 1.3.0
 
       - name: Restore optional public compiler checkpoint
-        if: steps.compiler.outputs.cache-matched-key == ''
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 4
         env:
-          COMPILER_NAMESPACE: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
+          COMPILER_NAMESPACE: sonar-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler_identity.outputs.c-compiler }}-${{ steps.compiler_identity.outputs.compiler }}-main-
         run: python3 .github/scripts/compiler_registry.py fetch --key "$COMPILER_NAMESPACE"
 
       - name: Restore Sonar scanner downloads
@@ -95,6 +95,12 @@ jobs:
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
 
+      # Ubuntu 26 defaults to Python 3.14; keep the existing coverage/pytest pins on their qualified interpreter.
+      - name: Select coverage Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
       - name: Install coverage tools
         run: |
           python3 -m venv /tmp/horo-coverage
@@ -108,7 +114,7 @@ jobs:
         id: build
         run: |
           ccache --zero-stats
-          cmake --build --preset sonar
+          cmake --build --preset sonar --target all HoroEditorVulkanShaderCook
           ccache --show-stats
 
       # Checkpoint build inputs before coverage and analysis. A later scan timeout
@@ -122,13 +128,30 @@ jobs:
             .cmake/fetchcontent/*-subbuild
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
-      - name: Save compiler cache
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.build.outcome == 'success' && steps.compiler.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+      - name: Publish main instrumented compiler checkpoint
+        if: ${{ !cancelled() && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: ./.github/actions/publish-compiler-checkpoint
         with:
-          path: |
-            ${{ github.workspace }}/.sonar/ccache
-          key: ${{ steps.compiler.outputs.cache-primary-key }}
+          key: sonar-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler_identity.outputs.c-compiler }}-${{ steps.compiler_identity.outputs.compiler }}-main-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # The build explicitly includes the EXCLUDE_FROM_ALL cook target. Run its
+      # pinned tools on their supported host before coverage, without another job.
+      - name: Cook canonical viewport assets for coverage
+        uses: ./.github/actions/cook-vulkan-viewport
+        with:
+          build-directory: build/sonar
+          asset-root: ${{ github.workspace }}/build/sonar/native-editor-assets
+
+      - name: Verify and select viewport data for coverage
+        run: |
+          set -euo pipefail
+          asset_root="$GITHUB_WORKSPACE/build/sonar/native-editor-assets"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          HORO_VIEWPORT_SOURCE_TREE="$(git rev-parse 'HEAD^{tree}')" \
+            python3 .github/scripts/viewport_asset_bundle.py verify --root "$asset_root"
+          printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$asset_root" >> "$GITHUB_ENV"
 
       - name: Run C++ coverage tests
         id: cpp_tests
@@ -204,3 +227,15 @@ jobs:
             ${{ github.workspace }}/.sonar/user-home/cache
             ${{ github.workspace }}/.sonar/user-home/sonar-scanner-${{ env.SONAR_SCANNER_VERSION }}-linux-x64
           key: ${{ steps.scanner_cache.outputs.cache-primary-key }}
+
+  # Share the complete analysis pipeline; only the canonical main job can publish.
+  sonar-main:
+    name: SonarCloud (main)
+    runs-on: *sonar_runner
+    timeout-minutes: 180
+    if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+      packages: write
+    env: *sonar_environment
+    steps: *sonar_steps

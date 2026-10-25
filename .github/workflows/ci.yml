@@ -29,11 +29,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # PR commits supersede their ref; main is bounded by the job lanes below.
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tooling:
+    concurrency:
+      group: ${{ github.workflow }}-tooling-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Format & Tooling Check
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -65,6 +69,11 @@ jobs:
       - name: Check C++ formatting
         run: python3 scripts/dev.py format --check
 
+      - name: Test Protobuf coverage scope contracts
+        run: |
+          cmake -S tests/cmake/protobuf_coverage -B build/protobuf-coverage
+          ctest --test-dir build/protobuf-coverage --output-on-failure --no-tests=error
+
       - name: Test Python tooling
         run: pytest tests/python/
 
@@ -72,6 +81,9 @@ jobs:
         run: node --test tests/javascript/cache-retention.test.js tests/javascript/external-cache-policy.test.js
 
   android-storage:
+    concurrency:
+      group: ${{ github.workflow }}-android-storage-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Android Storage · NDK arm64 API 29
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -101,17 +113,24 @@ jobs:
           CPP
 
   shaders:
+    concurrency:
+      group: ${{ github.workflow }}-shaders-${{ matrix.os }}-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: Shaders · ${{ matrix.os }}
     needs: tooling
+    if: ${{ !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+    permissions:
+      contents: read
+      packages: read
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    strategy:
+    strategy: &shader_strategy
       fail-fast: false
       # Share hosted capacity across concurrent PRs without adding shards.
       max-parallel: 1
       matrix:
         include:
-          - os: ubuntu-24.04
+          - os: ubuntu-26.04
             preset: ci-linux-debug
             cc: gcc
             cxx: g++
@@ -121,14 +140,14 @@ jobs:
             cc: cl
             cxx: cl
             launcher: sccache
-    env:
+    env: &shader_environment
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
       HORO_COMPILER_LAUNCHER: ${{ matrix.launcher }}
-    defaults:
+    defaults: &shader_defaults
       run:
         shell: bash
-    steps:
+    steps: &shader_steps
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: ./.github/actions/setup-build-tools
       - name: Select software Vulkan driver
@@ -137,15 +156,21 @@ jobs:
           selected_icd="$(python3 scripts/dev.py select-lavapipe-icd)"
           printf 'VK_DRIVER_FILES=%s\n' "$selected_icd" >> "$GITHUB_ENV"
       - name: Restore compatible main dependency and compiler caches
+        id: shader_cache
         uses: ./.github/actions/restore-native-cache
         with:
-          profile: native-tests-v1
+          compiler-storage: registry
+          # Ubuntu 26 uses a different GCC from the primary Linux matrix.
+          # This composition owns a checkpoint produced by the same shader job.
+          profile: native-shaders-v1
+          dependency-profile: native-tests-v1
           mode: Debug
           max-size: 2G
       - name: Configure focused headless Vulkan composition
         run: >-
           cmake --preset "${{ matrix.preset }}"
-          -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=OFF
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
           -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
           -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
           -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
@@ -155,9 +180,57 @@ jobs:
           HoroMultiviewSceneExtractionTests HoroMultiviewSceneExtractionPublicHeaderConsumer HoroXRApiTests HoroXROpenXRTests
           HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingTests HoroMaterialBindingPublicHeaderConsumer
           HoroRenderGraphTests HoroRenderFrontendTests HoroRenderBackendRegistryTests HoroXROpenXRHostInterfaceConsumer --parallel 2
+      - name: Build the matching Vulkan editor composition
+        if: runner.os == 'Linux'
+        run: |
+          cmake --build build/ci --target HoroEditor HoroEditorVulkanShaderCook \
+            HoroShaderReflectionCookTests HoroEditorVulkanPresentationSmoke \
+            HoroRenderFrontendPublicHeaderConsumer HoroRenderApiPublicHeaderConsumer --parallel 2
+          python3 - <<'PYCODE'
+          import json
+          from pathlib import Path
+          commands = json.loads(Path("build/ci/compile_commands.json").read_text())
+          sources = [Path(entry["file"]).as_posix() for entry in commands]
+          required = {
+              "src/runtime/renderer/modules/vulkan/VulkanPresentationRuntime.cpp",
+              "src/runtime/renderer/modules/vulkan/VulkanGuiCommands.cpp",
+              "src/editor/renderer/vulkan/EditorGuiRendererVulkan.cpp",
+              "src/editor/renderer/vulkan/EditorViewportRendererVulkan.cpp",
+              "tests/integration/renderer/EditorVulkanPresentationSmoke.cpp",
+          }
+          missing = [name for name in required if not any(source.endswith(name) for source in sources)]
+          if missing:
+              raise SystemExit(f"Native Vulkan translation units missing from the actual compile database: {missing}")
+          PYCODE
+      - name: Cook the viewport with the canonical locked tools
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/cook-vulkan-viewport
+        with:
+          asset-root: ${{ github.workspace }}/build/ci/native-editor-assets
+      - name: Stage the canonical viewport assets for the editor
+        if: runner.os == 'Linux'
+        run: |
+          asset_root="$GITHUB_WORKSPACE/build/ci/native-editor-assets"
+          editor_asset_root="$(cat build/ci/apps/HoroEditorAssetRoot-Debug.txt)"
+          cmake -E copy_directory "$asset_root" "$editor_asset_root"
+          printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$editor_asset_root" >> "$GITHUB_ENV"
       - name: Build Vulkan command smoke
         if: runner.os == 'Linux'
         run: cmake --build build/ci --target HoroVulkanCommandExecutionSmoke --parallel 2
+      - name: Report shader compiler cache statistics
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            sccache --show-stats
+          else
+            ccache --show-stats
+          fi
+      - name: Publish main shader compiler checkpoint
+        if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: ./.github/actions/publish-compiler-checkpoint
+        with:
+          key: ${{ steps.shader_cache.outputs.compiler-key }}
       - name: Run Vulkan native-call and lifecycle regressions
         run: >-
           ctest --test-dir build/ci --no-tests=error --parallel 1 --timeout 90 --output-on-failure
@@ -189,6 +262,19 @@ jobs:
         run: >-
           ctest --test-dir build/ci --no-tests=error --output-on-failure
           --timeout 90 -R '^HoroVulkanCommandExecutionSmoke$' --output-junit vulkan-commands.xml
+      - name: Qualify the real Vulkan GUI and WSI pair
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci/vulkan-editor-evidence
+          vulkaninfo --summary > build/ci/vulkan-editor-evidence/driver.txt
+          cp "$RUNNER_TEMP/viewport-cook-tools/catalog.tsv" build/ci/vulkan-editor-evidence/
+          xvfb-run -a ctest --test-dir build/ci --no-tests=error --verbose --parallel 1 --timeout 30 \
+            -R '^(HoroEditorVulkanPresentationSmoke::|HoroShaderReflectionCookTests::)' \
+            --output-junit vulkan-editor.xml 2>&1 | tee build/ci/vulkan-editor-evidence/native.log
+          if grep -E 'Validation (Error|Warning)|VUID-' build/ci/vulkan-editor-evidence/native.log; then
+            exit 1
+          fi
       - name: Upload shader test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -196,10 +282,16 @@ jobs:
           name: shader-results-${{ runner.os }}
           path: |
             build/ci/*.xml
+            build/ci/vulkan-editor-evidence/
+            build/ci/native-editor-assets/
+            build/ci/compile_commands.json
             build/ci/Testing/Temporary/LastTest.log
           if-no-files-found: warn
 
   directx-resources:
+    concurrency:
+      group: ${{ github.workflow }}-directx-resources-${{ github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+      cancel-in-progress: false
     name: D3D12 · Windows WARP resources
     needs: tooling
     runs-on: windows-2022
@@ -219,6 +311,7 @@ jobs:
       - name: Restore dependency and compiler caches
         uses: ./.github/actions/restore-native-cache
         with:
+          compiler-storage: registry
           profile: native-tests-v1
           mode: Debug
           max-size: 2G
@@ -252,17 +345,21 @@ jobs:
   test:
     name: Test · ${{ matrix.name }}
     needs: tooling
+    if: ${{ !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+    permissions:
+      contents: read
+      packages: read
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
-    defaults:
+    defaults: &native_defaults
       run:
         shell: bash
-    env:
+    env: &native_environment
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
       HORO_COMPILER_LAUNCHER: ${{ matrix.launcher }}
       HORO_LOG_LEVEL: debug
-    strategy:
+    strategy: &native_strategy
       fail-fast: false
       max-parallel: 2
       matrix:
@@ -274,7 +371,7 @@ jobs:
             launcher: ccache
             preset: ci-linux-debug
           - name: macOS / Clang
-            runner: macos-latest
+            runner: ${{ vars.HORO_MACOS_METAL_RUNNER != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.HORO_MACOS_METAL_RUNNER || 'macos-latest' }}
             cc: clang
             cxx: clang++
             launcher: ccache
@@ -287,7 +384,7 @@ jobs:
             cxx: cl
             launcher: sccache
             preset: ci-windows-debug
-    steps:
+    steps: &native_steps
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
@@ -297,9 +394,14 @@ jobs:
       # Native publication requires a canonical parent. macOS TMPDIR may contain
       # /var aliases; establish the host temp root before tools and tests use it.
       - name: Canonicalize macOS temporary directory
-        if: runner.os == 'macOS'
+        if: matrix.name == 'macOS / Clang'
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" != macOS ]]; then
+            echo '::error::The macOS qualification runner must be a native Mac.'
+            exit 1
+          fi
+          xcrun --sdk macosx metal --version
           python3 - <<'PYTHON'
           import os
           import pathlib
@@ -319,10 +421,20 @@ jobs:
           echo "HORO_QUALIFICATION_PYTHON=$verifier_python" >> "$GITHUB_ENV"
           "$verifier_python" -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
 
+      - name: Verify Windows CTest fixture isolation
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: |
+          "$HORO_QUALIFICATION_PYTHON" -m pip install --no-cache-dir --only-binary=:all: pytest==8.3.4
+          "$HORO_QUALIFICATION_PYTHON" -m pytest tests/python/test_ci_test_isolation.py \
+            tests/python/test_ci_case_isolation.py \
+            -k 'test_generated_suite_properties_preserve_contracts_and_control_concurrency or test_case_' -q
+
       - name: Restore dependency and compiler caches
         id: cache
         uses: ./.github/actions/restore-native-cache
         with:
+          compiler-storage: registry
           # Preserve the existing main Debug checkpoint and build directory.
           # Compiler entries also validate the flags of auxiliary builds.
           profile: native-tests-v1
@@ -350,6 +462,14 @@ jobs:
       # Preserve Debug's working set before Release/Metal/provider variants
       # compete for the bounded compiler cache. Later failures retain this
       # completed checkpoint; only main may publish it.
+      - name: Publish main Debug compiler checkpoint
+        if: ${{ !cancelled() && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && steps.debug_build.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: ./.github/actions/publish-compiler-checkpoint
+        with:
+          key: ${{ steps.cache.outputs.compiler-key }}
+
       - name: Checkpoint main Debug compiler cache
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         continue-on-error: true
@@ -359,6 +479,7 @@ jobs:
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
           dependency-ready: 'false'
+          compiler-ready: 'false'
 
       - name: Qualify OpenGL editor GUI composition with Mesa
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.debug_build.outcome == 'success' }}
@@ -378,6 +499,7 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         uses: ./.github/actions/restore-native-cache
         with:
+          compiler-storage: registry
           profile: native-variants-v1
           mode: Mixed
           max-size: 2G
@@ -407,7 +529,36 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/metal-device.m" <<'OBJC'
           #import <Metal/Metal.h>
-          int main(void) { @autoreleasepool { return MTLCreateSystemDefaultDevice() == nil ? 77 : 0; } }
+          #include <stdio.h>
+          int main(void) { @autoreleasepool {
+          #if defined(__aarch64__) || defined(__arm64__)
+            NSString *architecture = @"arm64";
+          #elif defined(__x86_64__)
+            NSString *architecture = @"x86_64";
+          #else
+            NSString *architecture = @"unsupported";
+          #endif
+            id<MTLDevice> selected = MTLCreateSystemDefaultDevice();
+            NSMutableArray *devices = [NSMutableArray array];
+            for (id<MTLDevice> device in MTLCopyAllDevices()) {
+              [devices addObject:@{
+                @"name": device.name ?: @"",
+                @"registryId": @(device.registryID),
+                @"selected": @(selected != nil && device.registryID == selected.registryID),
+                @"apple7": @([device supportsFamily:MTLGPUFamilyApple7]),
+                @"mac2": @([device supportsFamily:MTLGPUFamilyMac2])
+              }];
+            }
+            NSData *json = [NSJSONSerialization dataWithJSONObject:@{
+              @"processArchitecture": architecture,
+              @"os": NSProcessInfo.processInfo.operatingSystemVersionString,
+              @"devices": devices
+            } options:0 error:nil];
+            if (json == nil) return 1;
+            fwrite(json.bytes, 1, json.length, stdout);
+            fputc('\n', stdout);
+            return selected == nil ? 77 : 0;
+          } }
           OBJC
           xcrun clang -fobjc-arc "$RUNNER_TEMP/metal-device.m" -framework Metal -framework Foundation -o "$RUNNER_TEMP/metal-device"
           status=0
@@ -503,6 +654,14 @@ jobs:
 
       # Compiler entries remain individually content checked even if a later
       # test fails. Preserve successful auxiliary compilation before testing.
+      - name: Publish main auxiliary compiler checkpoint
+        if: ${{ !cancelled() && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && steps.variants_cache.outcome == 'success' && (steps.release_build.outcome == 'success' || steps.network_build.outcome == 'success' || steps.xr_build.outcome == 'success') }}
+        continue-on-error: true
+        timeout-minutes: 4
+        uses: ./.github/actions/publish-compiler-checkpoint
+        with:
+          key: ${{ steps.variants_cache.outputs.compiler-key }}
+
       - name: Checkpoint auxiliary compiler variants
         if: ${{ !cancelled() && steps.variants_cache.outcome == 'success' && (steps.release_build.outcome == 'success' || steps.network_build.outcome == 'success' || steps.xr_build.outcome == 'success') }}
         continue-on-error: true
@@ -513,6 +672,7 @@ jobs:
           dependency-key: ''
           dependency-hit: 'true'
           dependency-ready: 'false'
+          compiler-ready: 'false'
 
       - name: Checkpoint complete dependency sources
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
@@ -840,3 +1000,41 @@ jobs:
             build/ci-audio-release/navigation-allocation-regex.txt
           if-no-files-found: warn
           retention-days: 14
+
+  # Identical build/test steps, but only trusted main receives a write token.
+  # Exactly one matrix is selected per run; PR check names stay unchanged.
+  test-main:
+    concurrency:
+      group: ${{ github.workflow }}-native-${{ matrix.name }}-${{ github.ref }}
+      cancel-in-progress: false
+    name: Test · ${{ matrix.name }} (main)
+    needs: tooling
+    if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    defaults: *native_defaults
+    env: *native_environment
+    strategy: *native_strategy
+    steps: *native_steps
+
+  # Select one shader matrix per run. Only its canonical main copy can publish;
+  # PR names, runner count and matrix width remain the same.
+  shaders-main:
+    concurrency:
+      group: ${{ github.workflow }}-shaders-${{ matrix.os }}-${{ github.ref }}
+      cancel-in-progress: false
+    name: Shaders · ${{ matrix.os }} (main)
+    needs: tooling
+    if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults: *shader_defaults
+    env: *shader_environment
+    strategy: *shader_strategy
+    steps: *shader_steps

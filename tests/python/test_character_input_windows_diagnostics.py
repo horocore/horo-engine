@@ -11,7 +11,9 @@ WORKFLOW = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 def test_original_windows_timeout_suite_and_assertions_are_preserved() -> None:
     presets = json.loads((ROOT / 'CMakePresets.json').read_text(encoding='utf-8'))
     windows = next(item for item in presets['testPresets'] if item['name'] == 'ci-windows-debug')
-    assert windows['execution'] == {'jobs': 1, 'timeout': 90}
+    assert windows['execution'] == {'jobs': 4, 'timeout': 90}
+    configuration = next(item for item in presets['configurePresets'] if item['name'] == 'ci-windows-debug')
+    assert configuration['cacheVariables']['HORO_CI_ISOLATE_TEST_EXECUTABLES'] == 'ON'
     assert "'--timeout', '90', '--no-tests=error'" in SCRIPT
     assert '[regex]::Escape($case)' in SCRIPT
     assert 'exit $result' in SCRIPT

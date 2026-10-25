@@ -463,7 +463,7 @@ namespace Horo::Render::Detail {
                 if (std::this_thread::get_id() != ownerThread_) {
                     return WrongThread();
                 }
-                if (commandBuffer_ == nil || activeGraphLease_ != nullptr) {
+                if (commandBuffer_ == nil || (activeGraphLease_ != nullptr && activeGraphLease_ != &lease)) {
                     return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
                 }
                 activeGraphLease_ = &lease;

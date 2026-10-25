@@ -105,6 +105,38 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc RenderGraphResourceLeasePool::AcquireGui */
+    Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::AcquireGui(const std::span<const RenderGraphResidentIdentity> pins,
+                                                                                 IRenderGraphResourceLease *existing) {
+        using Outcome = Result<IRenderGraphResourceLease *>;
+        if (pins.size() > RenderGraphLimits::HardMaxResources)
+            return Outcome::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        const auto selected = std::ranges::find_if(leases_, [existing](const Lease &candidate) {
+            return existing ? static_cast<const IRenderGraphResourceLease *>(&candidate) == existing && candidate.active
+                            : !candidate.active;
+        });
+        if (selected == leases_.end())
+            return Outcome::Failure(MakeError(FrontendErrors::ResourceNotReady));
+        auto &lease = *selected;
+        const std::size_t initialPins = lease.pins.size();
+        lease.active = true;
+        const auto rollbackPins = [this, initialPins, existing](Lease *pending) {
+            while (pending->pins.size() > initialPins) {
+                const auto pin = pending->pins.back();
+                static_cast<void>(registry_->ReleaseSubmissionPin(pin.resourceClass, pin.identity));
+                pending->pins.pop_back();
+                --activePins_;
+            }
+            if (existing == nullptr)
+                pending->active = false;
+        };
+        std::unique_ptr<Lease, decltype(rollbackPins)> rollback{&lease, rollbackPins};
+        for (const auto &pin : pins)
+            if (auto retained = lease.PinIdentity(pin); retained.HasError())
+                return Outcome::Failure(retained.ErrorValue());
+        return Outcome::Success(rollback.release());
+    }
+
     /** @copydoc RenderGraphResourceLeasePool::AcquireMaterial */
     Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::AcquireMaterial(
         const std::span<const RenderGraphResidentIdentity> pins, const std::span<const RenderMaterialDraw> draws) {

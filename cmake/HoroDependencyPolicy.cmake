@@ -77,8 +77,12 @@ horo_allow_target_dependencies(TARGET HoroPlayTopologyApplication DEPENDENCIES H
 horo_allow_target_dependencies(TARGET HoroNetworkRuntime DEPENDENCIES HoroNetworkApi HoroRuntimeScene HoroRuntime HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroNetworkTransportNull DEPENDENCIES HoroNetworkApi)
 if(HORO_BUILD_NETWORK_GNS)
-    horo_allow_target_dependencies(TARGET HoroNetworkTransportGNSFactoryInternal DEPENDENCIES HoroNetworkApi)
+    horo_allow_target_dependencies(TARGET HoroNetworkTransportGNSFactoryInternal DEPENDENCIES HoroNetworkApi HoroNetworkRuntime)
     horo_allow_target_dependencies(TARGET HoroNetworkTransportGNS DEPENDENCIES HoroNetworkTransportGNSFactoryInternal)
+    if(BUILD_TESTING)
+        horo_allow_target_dependencies(TARGET HoroGnsNativeQualificationSupport
+            DEPENDENCIES HoroNetworkTransportGNSFactoryInternal HoroPlatform)
+    endif()
 endif()
 horo_allow_target_dependencies(TARGET HoroAudioApi DEPENDENCIES HoroFoundation HoroAssets)
 horo_allow_target_dependencies(TARGET HoroAudioImport DEPENDENCIES HoroAudioApi)
@@ -210,11 +214,15 @@ horo_allow_target_dependencies(TARGET HoroGameplayLua DEPENDENCIES HoroGameplayR
 
 horo_allow_target_dependencies(TARGET HoroRenderApi DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroSceneRenderExtraction DEPENDENCIES HoroRuntimeScene HoroRenderApi)
-horo_allow_target_dependencies(TARGET HoroShaderCompilerToolchain DEPENDENCIES HoroRenderApi HoroPlatform)
+horo_allow_target_dependencies(TARGET HoroEditorVulkanShaderInternal DEPENDENCIES HoroShaderReflectionCookInternal)
+horo_allow_target_dependencies(TARGET HoroShaderReflectionCookInternal DEPENDENCIES HoroRenderApi HoroFoundationJsonInternal)
+horo_allow_target_dependencies(TARGET HoroShaderCompilerToolchain DEPENDENCIES HoroRenderApi HoroPlatform HoroShaderReflectionCookInternal)
 horo_allow_target_dependencies(TARGET HoroShaderBuild DEPENDENCIES HoroFoundation HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderBackendRegistry DEPENDENCIES HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderExternalImagesInterface DEPENDENCIES HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderVulkanExternalImagesInterface DEPENDENCIES HoroRenderExternalImagesInterface)
+horo_allow_target_dependencies(TARGET HoroRenderVulkanHostInterface DEPENDENCIES HoroRenderApi)
+horo_allow_target_dependencies(TARGET HoroSdlVulkanPresentationInternal DEPENDENCIES HoroRenderVulkanHostInterface HoroRenderVulkan)
 horo_allow_target_dependencies(TARGET HoroRenderFrontend
     DEPENDENCIES HoroRenderApi HoroRenderBackendRegistry HoroRuntimeUi HoroRenderExternalImagesInterface)
 horo_allow_target_dependencies(TARGET HoroSceneModel DEPENDENCIES HoroFoundation HoroGameplayApi HoroRuntimeUi HoroAudioApi)
@@ -268,6 +276,8 @@ horo_allow_target_dependencies(TARGET HoroEditorServices
         HoroEditorPlaySceneHostInternal
         HoroSceneSourceCodecInternal
         HoroAssets)
+horo_allow_target_dependencies(TARGET HoroEditorVulkanGuiInternal
+    DEPENDENCIES HoroRenderVulkanHostInterface HoroRenderFrontend HoroRenderVulkan HoroEditorViewportResources HoroEditorVulkanShaderInternal)
 horo_allow_target_dependencies(TARGET HoroEditorViewportOpenGL
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderOpenGL HoroRenderFrontend HoroSdlOpenGLPresentationInternal)
 horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
@@ -291,7 +301,7 @@ horo_allow_target_dependencies(TARGET HoroEditorSceneProductHost
     DEPENDENCIES HoroEditorPlaySceneHostInternal HoroScenePhysicsHost HoroApplication HoroProjectCollisionSettings
         HoroAISceneIntegration HoroPrefabRuntime HoroSceneRuntimeConversion)
 horo_allow_target_dependencies(TARGET HoroNetworkProductHost
-    DEPENDENCIES HoroNetworkRuntime HoroRuntimeScene HoroPhysics HoroRuntime HoroGameplayModuleHost HoroGameplayLua HoroGameplayPhysicsIntegration HoroGameplayCharacterIntegration HoroPrefabRuntime HoroNetworkDebuggerApplication HoroScenePhysicsHost HoroProjectCollisionSettings HoroPlatformProjectReadFiles HoroSceneRuntimeConversion HoroAISceneIntegration)
+    DEPENDENCIES HoroNetworkRuntime HoroRuntimeScene HoroPhysics HoroRuntime HoroGameplayModuleHost HoroGameplayLua HoroGameplayPhysicsIntegration HoroGameplayCharacterIntegration HoroPrefabRuntime HoroNetworkDebuggerApplication HoroScenePhysicsHost HoroProjectCollisionSettings HoroPlatformProjectReadFiles HoroSceneRuntimeConversion HoroAISceneIntegration HoroNetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
 horo_allow_target_dependencies(TARGET HoroUiAnimationRuntimeIntegration DEPENDENCIES HoroRuntime HoroRuntimeUi)
 horo_allow_target_dependencies(TARGET horo-engine
     DEPENDENCIES HoroNativeNavigationBakeHost HoroPlatformProjectIo HoroProjectCollisionSettings HoroPlatformProjectReadFiles HoroPlatformImmutableFileStorage HoroPackageProjectHost HoroCliPackageAdapters HoroMcpPackageAdapters HoroApplication HoroExtensions HoroHostModuleComposition HoroNetworkProductHost HoroNetworkTransportGNS HoroCliHost HoroRuntime HoroMcpController HoroPlatform HoroCliNavigationAdapters HoroMcpNavigationAdapters HoroNavigationRecastDetour)
@@ -332,6 +342,8 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroOpenTelemetry
         HoroEditorViewportOpenGL
         HoroEditorViewportMetal
+        HoroEditorVulkanGuiInternal
+        HoroEditorVulkanShaderInternal
         HoroHostModuleComposition)
 
 # These edges predate the target-level architecture. Each exception is tied to
@@ -413,3 +425,6 @@ horo_allow_target_dependencies(TARGET HoroUiStyleWorkspaceApplication DEPENDENCI
 horo_allow_target_dependencies(TARGET HoroEditorUiStyleHostInternal
     DEPENDENCIES HoroEditorServices HoroUiStyleWorkspaceApplication HoroPlatformImmutableFileStorage HoroPlatform HoroProjectMutationGuard)
 horo_allow_target_dependencies(TARGET HoroWorldBakeApplication DEPENDENCIES HoroNetworkApi HoroEditorModel HoroSceneCellPayload HoroWorldStreaming HoroSceneRuntimeConversion HoroFoundation HoroAssets HoroProjectReadFilesApi HoroProjectMutationGuard)
+
+horo_allow_target_dependencies(TARGET HoroEditorVulkanShaderCook
+    DEPENDENCIES HoroEditorVulkanShaderInternal HoroShaderCompilerToolchain HoroPlatform)

@@ -16,6 +16,7 @@ namespace Horo::Render::TestSupport {
     [[nodiscard]] inline RenderMemoryPlacement PlacementFor(const RenderMemoryCostPlan &plan, const std::uint64_t attempt,
                                                             const std::uint64_t pool = 1) {
         return {.pool = {{1}, pool},
+                .block = {{1}, pool},
                 .scope = {1, 1},
                 .attempt = {attempt},
                 .memoryClass = plan.memoryClass,

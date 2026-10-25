@@ -19,7 +19,9 @@ namespace Horo::Network {
         if (slot.phase != ConnectionPhase::Connected)
             return Result<NetworkConnectionStats>::Failure(MakeError(NetworkErrors::TransportConnectionFailed));
         SteamNetConnectionRealTimeStatus_t nativeStatus{};
-        if (native_->GetConnectionRealTimeStatus(slot.native, &nativeStatus, 0, nullptr) != k_EResultOK)
+        if (GnsDetail::NativeCall([this, &slot, &nativeStatus] {
+            return nativeOwner_.sockets->GetConnectionRealTimeStatus(slot.native, &nativeStatus, 0, nullptr);
+        }).value_or(k_EResultFail) != k_EResultOK)
             return Result<NetworkConnectionStats>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
         NetworkConnectionStats result{};
         if (nativeStatus.m_nPing >= 0)
@@ -38,10 +40,12 @@ namespace Horo::Network {
         TransportCapabilities capabilities{};
         capabilities.revision = capabilityRevision_;
         capabilities.delivery.fill(Unsupported);
-        const auto support = initialized_ && !shutdown_ ? Available : Unavailable;
+        // An inert exact secure candidate declaration is not native/auth readiness.
+        const bool declared = (initialized_ || security_) && !shutdown_;
+        const auto support = declared ? Available : Unavailable;
         capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)] = support;
         capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = support;
-        if (initialized_ && !shutdown_) {
+        if (declared) {
             capabilities.maximumChannels = 1;
             capabilities.maximumMessageBytes = config_.maximumMessageBytes;
         }

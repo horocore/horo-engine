@@ -103,7 +103,7 @@ jobs:
             libglu1-mesa-dev
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
@@ -129,7 +129,7 @@ jobs:
           cp build/debug/sdk/assets/editor_schema.json artifact/bin/assets/
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75bde44955e1dbb3e9c9b7d2113
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ui-binary-linux
           path: artifact/bin/
@@ -137,7 +137,7 @@ jobs:
 
       - name: Save dependency cache on main
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
@@ -162,7 +162,7 @@ jobs:
         run: brew install ffmpeg ninja
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: dependency_cache
         with:
           path: ~/.cmake/fetchcontent
@@ -188,7 +188,7 @@ jobs:
           cp build/debug/sdk/assets/editor_schema.json artifact/bin/assets/
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75bde44955e1dbb3e9c9b7d2113
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ui-binary-macos
           path: artifact/bin/
@@ -196,7 +196,7 @@ jobs:
 
       - name: Save dependency cache on main
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cmake/fetchcontent
           key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
@@ -216,10 +216,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@1583d6b38d7b86129b83e1c73e4d8d455ca32f48
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
 
       - name: Cache sccache
-        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: compiler_cache
         with:
           path: ${{ env.SCCACHE_DIR }}
@@ -227,7 +227,7 @@ jobs:
           restore-keys: sccache-ui-windows-
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
@@ -268,7 +268,7 @@ jobs:
           Copy-Item build/debug-msvc/bin/sdk/assets/editor_schema.json artifact/bin/assets/
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75bde44955e1dbb3e9c9b7d2113
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ui-binary-windows
           path: artifact/bin/
@@ -276,14 +276,14 @@ jobs:
 
       - name: Save compiler cache on main
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.compiler_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ env.SCCACHE_DIR }}
           key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
 
       - name: Save dependency cache on main
         if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
@@ -315,7 +315,7 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev
 
       - name: Download binary artifact
-        uses: actions/download-artifact@d3f86a106a0bac45f2f8406bd4850e7943e2c8df
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ui-binary-linux
           path: bin
@@ -343,7 +343,7 @@ jobs:
 
       - name: Upload suite artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75bde44955e1dbb3e9c9b7d2113
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ui-results-linux-${{ matrix.suite }}
           path: ui_test_output/
@@ -370,7 +370,7 @@ jobs:
         run: brew install ffmpeg
 
       - name: Download binary artifact
-        uses: actions/download-artifact@d3f86a106a0bac45f2f8406bd4850e7943e2c8df
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ui-binary-macos
           path: bin
@@ -398,7 +398,7 @@ jobs:
 
       - name: Upload suite artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75bde44955e1dbb3e9c9b7d2113
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ui-results-macos-${{ matrix.suite }}
           path: ui_test_output/
@@ -426,7 +426,7 @@ jobs:
         shell: pwsh
 
       - name: Download binary artifact
-        uses: actions/download-artifact@d3f86a106a0bac45f2f8406bd4850e7943e2c8df
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: ui-binary-windows
           path: bin
@@ -458,7 +458,7 @@ jobs:
 
       - name: Upload suite artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75bde44955e1dbb3e9c9b7d2113
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ui-results-windows-${{ matrix.suite }}
           path: ui_test_output\

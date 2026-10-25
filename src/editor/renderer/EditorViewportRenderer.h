@@ -13,7 +13,8 @@
 
 namespace Horo::Render {
     class RenderFrontend;
-}
+    class RenderFrameScope;
+}  // namespace Horo::Render
 
 namespace Horo::Editor {
     /** @brief Pixel extent requested by the editor viewport panel. */
@@ -36,6 +37,8 @@ namespace Horo::Editor {
         float v0{0.0F};
         float u1{1.0F};
         float v1{1.0F};
+        Render::RenderTextureViewHandle sampledView; /**< Exact generation owned by this viewport; native ID alone is insufficient. */
+        Render::RenderSamplerHandle sampledSampler;  /**< Optional matching frontend-owned sampler. */
 
         /** @brief Reports whether the matching GUI bridge can consume this view. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
@@ -65,6 +68,14 @@ namespace Horo::Editor {
     class IEditorViewportRenderer : public Render::IStaticMeshPassExecutor {
     public:
         virtual ~IEditorViewportRenderer() = default;
+
+        /** @brief Executes one prepared editor frame through the existing frontend frame/submission owner.
+         * @param frame Exact active frontend scope. @param passes Frozen borrowed scene/output descriptors.
+         * @return Original execution failure; no second frame, backend selection or submission authority is created.
+         * @details Borrowed GL/Metal peers forward to the current static-mesh recipe; explicit peers use the same
+         * frame's material/graph operations. GUI composition and presentation remain subsequent host phases. */
+        [[nodiscard]] virtual Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
+                                                                std::span<const Render::RenderPassDescriptor> passes) = 0;
 
         /**
          * @brief Synchronizes backend-neutral viewport resources at a frame boundary.

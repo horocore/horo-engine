@@ -21,6 +21,7 @@
 
 namespace Horo::Render {
     class RenderFrontend;
+    class IRenderGraphResourceLease;
     struct RenderMaterialPass;
     struct RenderGraphQueueSubmission;
     class CompiledRenderGraphExecution;
@@ -52,6 +53,7 @@ namespace Horo::Render {
         class RenderGraphTransientResourcePool;
         class RenderParallelWorkState;
         class RenderParallelGraphWorkState;
+        class RenderSubmissionAllocator;
     }  // namespace Detail
 
     /** @brief Finite frontend admission and per-drain limits for initial resource uploads. */
@@ -150,6 +152,13 @@ namespace Horo::Render {
         /** @brief Aborts any currently owned frame, then transfers ownership. */
         RenderFrameScope &operator=(RenderFrameScope &&other) noexcept;
 
+        /** @brief Borrows this scope's existing active backend frame identity without issuing or submitting work.
+         * @return Exact active token, or invalid after ownership was moved, presented or cancelled.
+         * @details Read on the frame owner. Native private bridges still validate thread/current-frame admission. */
+        [[nodiscard]] FrameToken Token() const noexcept {
+            return backend_ != nullptr ? frame_ : FrameToken{};
+        }
+
         /**
          * @brief Executes the ordered pass sequence for this frame exactly once.
          * @param orderedPasses Non-owning pass sequence valid for this call.
@@ -157,6 +166,17 @@ namespace Horo::Render {
          * or a translated backend exception.
          */
         [[nodiscard]] Result<void> Execute(std::span<const RenderPassDescriptor> orderedPasses);
+
+        /** @brief Reserves one ordered submission from this frontend's admitted queue topology.
+         * @param role Admitted queue role; aliased roles share the same timeline.
+         * @param waits Exact admitted points or earlier reservations in this frame, copied into bounded storage.
+         * @return A record valid until this frame ends, or a typed owner, capacity or history failure.
+         * @details Owner-thread only. Abandonment burns identities; later frames never recycle them.
+         * Pass the result to explicit graph/material execution; reservation alone submits no work.
+         * Reserved dependencies must be admitted earlier in the same batch or an earlier call.
+         */
+        [[nodiscard]] Result<RenderQueueSubmission> ReserveSubmission(RenderQueueRole role,
+                                                                      std::span<const RenderTimelinePoint> waits = {});
 
         /**
          * @brief Composes GUI output once after successful execution and before presentation.
@@ -299,10 +319,17 @@ namespace Horo::Render {
                                                         std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
                                                         RenderGraphTransientResourcesHandle transientResources = {},
                                                         std::span<const RenderGraphQueueSubmission> submissions = {});
+        /** @brief Guards one acquired graph lease and commits queue history only after backend acceptance. */
+        [[nodiscard]] Result<void> ExecuteLeasedGraph(RenderGraphExecutionRequest request,
+                                                      const Detail::RenderSubmissionAllocator &submissionHistory);
         /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
         [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
         struct MaterialExecutionOutcome;
         struct MaterialExecutionInstances;
+        struct GuiCompositionState;
+        /** @brief Validates GUI declaration, resolves sampled generations and acquires the existing completion lease. */
+        [[nodiscard]] Result<void> PrepareGuiComposition(IGuiPassExecutor &executor, GuiCompositionState &state);
+
         /** @brief Resolves bounded draw identities without acquiring or transferring completion ownership. */
         [[nodiscard]] Result<void> ResolveMaterialDraws(const RenderMaterialPass &pass, MaterialExecutionInstances &instances) const;
         /** @brief Contains admission/execution exceptions and completes rollback before allocation-free outcome transport. */
@@ -329,6 +356,7 @@ namespace Horo::Render {
         std::uint64_t hostFrame_{};
         bool executed_{false};
         bool guiComposed_{false};
+        IRenderGraphResourceLease *completionLease_{nullptr}; /**< Borrowed exact active frame lease; backend owns retirement. */
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
     };
@@ -764,6 +792,7 @@ namespace Horo::Render {
         };
 
         std::unique_ptr<IRenderBackend> backend_;
+        std::unique_ptr<Detail::RenderSubmissionAllocator> submissionAllocator_;
         /** @brief Checks owner affinity before closing state; no mutable native work is admitted after close. */
         [[nodiscard]] Result<void> RequireOpenOwner() const;
 
