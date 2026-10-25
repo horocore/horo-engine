@@ -128,6 +128,12 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     }
     Check(frontendResult.HasValue());
     std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
+    RenderTextureDescriptor shadowDepth{.extent = {2048, 2048},
+                                        .format = RenderTextureFormat::Depth32Float,
+                                        .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+    REQUIRE(frontend->Capabilities().support.Supports(shadowDepth));
+    shadowDepth.usage = shadowDepth.usage | RenderTextureUsage::Storage;
+    CHECK_FALSE(frontend->Capabilities().support.Supports(shadowDepth));
 
     EditorViewportRendererMetal viewport{*frontend, graphicsBridge};
     Check(viewport.Initialize().HasValue());
