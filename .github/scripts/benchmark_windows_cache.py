@@ -29,12 +29,24 @@ def run(arguments, output, environment):
 
 def configure_launcher(index, launcher, environment):
     """Change only the launcher and prove every real compiler input is retained."""
+    assert launcher in {"sccache", "ccache"}
+    hook = RESULTS / "launcher.cmake"
+    hook.write_text(
+        "function(horo_benchmark_launcher)\n"
+        "  set_property(TARGET HoroFoundation HoroRuntimeUi HoroPhysics HoroNavigationApi\n"
+        "    PROPERTY CXX_COMPILER_LAUNCHER ${HORO_BENCHMARK_LAUNCHER})\n"
+        "endfunction()\n"
+        "cmake_language(DEFER CALL horo_benchmark_launcher)\n", encoding="utf-8")
     path = BUILD / "compile_commands.json"
     before = json.loads(path.read_text(encoding="utf-8"))
     run(["cmake", "--preset", "ci-audio-release", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-         f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}", f"-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}"],
+         "-DCMAKE_C_COMPILER_LAUNCHER=sccache", "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache",
+         f"-DCMAKE_PROJECT_HoroEngine_INCLUDE={hook}", f"-DHORO_BENCHMARK_LAUNCHER={launcher}"],
         RESULTS / f"{index}-{launcher}.configure.log", environment)
     after = json.loads(path.read_text(encoding="utf-8"))
+    if before != after:
+        difference = {"before": before, "after": after}
+        (RESULTS / "command-differences.json").write_text(json.dumps(difference), encoding="utf-8")
     # CMake compile databases describe the actual compiler, omitting launchers.
     assert before == after, "Changing a launcher changed compiler commands"
 
