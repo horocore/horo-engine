@@ -14,6 +14,9 @@
 #define XR_USE_TIMESPEC
 #endif
 #endif
+#if defined(XR_USE_GRAPHICS_API_VULKAN)
+#include <vulkan/vulkan.h>
+#endif
 #include <openxr/openxr_platform.h>
 
 namespace Horo::Application::Internal {

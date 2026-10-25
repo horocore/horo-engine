@@ -3,6 +3,7 @@
  * @brief Application cutoff conversion between actual native OS evidence and the sole scheduler's elapsed simulation time.
  */
 #include "Horo/Runtime/FrameScheduler.h"
+#include "Horo/XR/XRSpacePose.h"
 #include "OpenXRNativeSession.h"
 
 namespace Horo::Application::Internal {

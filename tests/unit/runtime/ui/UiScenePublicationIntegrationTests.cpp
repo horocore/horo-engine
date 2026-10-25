@@ -108,6 +108,70 @@ namespace {
             CHECK(active.UpdateAttachment(activeAttachment, Config().viewport).HasValue());
         }
     };
+
+    /** @brief Owns one issued animated source and all borrowed projection arrays through reader retirement. */
+    struct AnimatedExtraction final {
+        Incoming fixture;
+        DeterministicClock clock;
+        std::unique_ptr<RuntimeHost> host = Take(RuntimeHost::Create(clock));
+        UiAnimationRuntimeParticipant *participant = Start();
+        UiAnimationFrameLease frame = Take(participant->Acquire());
+        UiReloadLease source = Take(fixture.service.Acquire(Instance()));
+        const UiElementTree &tree = source.Get()->Canvases().front().tree;
+        const UiRenderViewId view{Owner(), 10, 1};
+        const UiRenderSnapshotLimits limits{1, 0, 0, 0, 0, 1, 0};
+        const UiRenderSnapshotDescriptor descriptor = Descriptor();
+        UiRenderExtractor extractor = Take(UiRenderExtractor::Create({view, limits, 1}));
+        UiRenderGeometryArena arena = Take(UiRenderGeometryArena::Create({view, {4, 6, 1}, 1}));
+        const std::array<UiLogicalTransform, 1> transforms{UiLogicalTransform{}};
+        const std::array<UiDrawCommand, 1> commands{UiDrawCommand{tree.Root().Value().handle,
+                                                                  {{0, 0}, {4, 4}},
+                                                                  0,
+                                                                  NoUiRenderIndex,
+                                                                  NoUiRenderIndex,
+                                                                  1.0F,
+                                                                  UiSolidDraw{{1.0F, 1.0F, 1.0F, 1.0F}}}};
+        const UiRenderProjection projection{commands, {}, {}, {}, {}, transforms, {}, {}};
+
+        AnimatedExtraction() = default;
+        AnimatedExtraction(const AnimatedExtraction &) = delete;
+        AnimatedExtraction &operator=(const AnimatedExtraction &) = delete;
+        AnimatedExtraction(AnimatedExtraction &&) = delete;
+        AnimatedExtraction &operator=(AnimatedExtraction &&) = delete;
+
+        ~AnimatedExtraction() {
+            host->Shutdown();
+        }
+
+        /** @brief Publishes and runs the actual animation participant before issuing a frame or source lease. */
+        UiAnimationRuntimeParticipant *Start() {
+            auto composition =
+                Take(UiAnimationRuntimeParticipant::Compose(std::move(*fixture.animation), host->DispatchSource(), Config()));
+            fixture.animation.reset();
+            auto *active = composition.participant.get();
+            auto publication = fixture.Publication();
+            REQUIRE(publication.Seal(Cutoff).HasValue());
+            publication.Publish();
+            REQUIRE(host->AddParticipant(std::move(composition.participant)).HasValue());
+            REQUIRE(host->Startup().HasValue());
+            REQUIRE(host->RunFrame().HasValue());
+            return active;
+        }
+
+        /** @brief Copies the issued frame's exact layout lineage into the extraction request. */
+        UiRenderSnapshotDescriptor Descriptor() const {
+            const auto &layout = frame.Layout().Descriptor();
+            return {layout.instance,
+                    layout.canvas,
+                    layout.document,
+                    layout.sources.document,
+                    layout.sources.tree,
+                    layout.interaction,
+                    Revision<UiRenderSnapshotRevision>(1),
+                    view,
+                    limits};
+        }
+    };
 }  // namespace
 
 TEST_CASE("Initial Scene publication promotes the exact private animation publisher without allocating",
@@ -365,133 +429,104 @@ TEST_CASE("Private source baseline prepares canonical presentation without host 
     host->Shutdown();
 }
 
-TEST_CASE("Animated render extraction pins exact source issuance until pooled readers retire",
+TEST_CASE("Animated render extraction independent source with equal numeric lineage cannot borrow the frame",
           "[runtime_ui][animation][scene][publication][render_lifetime]") {
-    Incoming fixture;
-    DeterministicClock clock;
-    auto host = Take(RuntimeHost::Create(clock));
-    auto composition = Take(UiAnimationRuntimeParticipant::Compose(std::move(*fixture.animation), host->DispatchSource(), Config()));
-    fixture.animation.reset();
-    auto *participant = composition.participant.get();
-    auto publication = fixture.Publication();
-    REQUIRE(publication.Seal(Cutoff).HasValue());
-    publication.Publish();
-    REQUIRE(host->AddParticipant(std::move(composition.participant)).HasValue());
-    REQUIRE(host->Startup().HasValue());
-    REQUIRE(host->RunFrame().HasValue());
-    auto frame = Take(participant->Acquire());
-    auto source = Take(fixture.service.Acquire(Instance()));
-    const auto &tree = source.Get()->Canvases().front().tree;
-    const auto &layout = frame.Layout().Descriptor();
-    const UiRenderViewId view{Owner(), 10, 1};
-    const UiRenderSnapshotLimits limits{1, 0, 0, 0, 0, 1, 0};
-    const UiRenderSnapshotDescriptor descriptor{layout.instance,
-                                                layout.canvas,
-                                                layout.document,
-                                                layout.sources.document,
-                                                layout.sources.tree,
-                                                layout.interaction,
-                                                Revision<UiRenderSnapshotRevision>(1),
-                                                view,
-                                                limits};
-    auto extractor = Take(UiRenderExtractor::Create({view, limits, 1}));
-    auto arena = Take(UiRenderGeometryArena::Create({view, {4, 6, 1}, 1}));
-    const std::array transforms{UiLogicalTransform{}};
-    const std::array commands{UiDrawCommand{tree.Root().Value().handle,
-                                            {{0, 0}, {4, 4}},
-                                            0,
-                                            NoUiRenderIndex,
-                                            NoUiRenderIndex,
-                                            1.0F,
-                                            UiSolidDraw{{1.0F, 1.0F, 1.0F, 1.0F}}}};
-    const UiRenderProjection projection{commands, {}, {}, {}, {}, transforms, {}, {}};
+    AnimatedExtraction setup;
+    auto foreignAllocator = Take(UiElementSlotAllocator::Create(Owner()));
+    auto foreign = Generation(foreignAllocator, 1, 32, false, 0, 0, 4);
+    const auto &otherTree = foreign.Canvases().front().tree;
+    REQUIRE(otherTree.Instance() == setup.tree.Instance());
+    REQUIRE(otherTree.Canvas() == setup.tree.Canvas());
+    REQUIRE(otherTree.Revision() == setup.tree.Revision());
+    CHECK(setup.extractor.Extract(otherTree, setup.descriptor, setup.projection, setup.frame).HasError());
+    CHECK(setup.extractor.IsDrained());
+    CHECK(setup.extractor.Extract(setup.tree, setup.descriptor, setup.projection, UiAnimationFrameLease{}).HasError());
+    CHECK(setup.extractor.IsDrained());
+    auto snapshot = Take(setup.extractor.Extract(setup.tree, setup.descriptor, setup.projection, setup.frame));
+    CHECK(snapshot.IsValid());
+}
 
-    SECTION("independent source with equal numeric lineage cannot borrow the frame") {
-        auto foreignAllocator = Take(UiElementSlotAllocator::Create(Owner()));
-        auto foreign = Generation(foreignAllocator, 1, 32, false, 0, 0, 4);
-        const auto &otherTree = foreign.Canvases().front().tree;
-        REQUIRE(otherTree.Instance() == tree.Instance());
-        REQUIRE(otherTree.Canvas() == tree.Canvas());
-        REQUIRE(otherTree.Revision() == tree.Revision());
-        CHECK(extractor.Extract(otherTree, descriptor, projection, frame).HasError());
-        CHECK(extractor.IsDrained());
-        CHECK(extractor.Extract(tree, descriptor, projection, UiAnimationFrameLease{}).HasError());
-        CHECK(extractor.IsDrained());
-        auto snapshot = Take(extractor.Extract(tree, descriptor, projection, frame));
-        CHECK(snapshot.IsValid());
-    }
-    SECTION("same-issued frame copies extract and build without success allocations") {
-        const auto frameCopy = frame;
-        std::optional<UiRenderSnapshot> snapshot;
-        std::optional<UiRenderGeometryPlan> geometry;
-        Horo::Tests::AllocationProbe::Measurement measured;
-        {
-            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
-            auto extracted = extractor.Extract(tree, descriptor, projection, frameCopy);
-            if (extracted.HasValue()) {
-                snapshot.emplace(std::move(extracted).Value());
-                auto built = arena.Build(*snapshot);
-                if (built.HasValue())
-                    geometry.emplace(std::move(built).Value());
-            }
-            measured = probe.Snapshot();
+TEST_CASE("Animated render extraction same-issued frame copies extract and build without success allocations",
+          "[runtime_ui][animation][scene][publication][render_lifetime]") {
+    AnimatedExtraction setup;
+    const auto frameCopy = setup.frame;
+    std::optional<UiRenderSnapshot> snapshot;
+    std::optional<UiRenderGeometryPlan> geometry;
+    Horo::Tests::AllocationProbe::Measurement measured;
+    {
+        Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+        auto extracted = setup.extractor.Extract(setup.tree, setup.descriptor, setup.projection, frameCopy);
+        if (extracted.HasValue()) {
+            snapshot.emplace(std::move(extracted).Value());
+            auto built = setup.arena.Build(*snapshot);
+            if (built.HasValue())
+                geometry.emplace(std::move(built).Value());
         }
-        REQUIRE(snapshot.has_value());
-        REQUIRE(geometry.has_value());
-        CHECK(measured.requests == 0);
+        measured = probe.Snapshot();
     }
-    SECTION("unsent snapshot copies release without extractor reuse") {
-        std::optional<UiRenderSnapshot> snapshot{Take(extractor.Extract(tree, descriptor, projection, frame))};
-        std::optional<UiRenderSnapshot> copy{*snapshot};
-        frame = {};
-        source = {};
-        host->Shutdown();
-        REQUIRE(participant->DrainRetired().HasValue());
-        CHECK_FALSE(participant->CanReclaim());
-        snapshot.reset();
-        CHECK_FALSE(extractor.IsDrained());
-        std::thread reader([retained = std::move(copy)]() mutable {
-            retained.reset();
-        });
-        reader.join();
-        CHECK(extractor.IsDrained());
-        REQUIRE(participant->DrainRetired().HasValue());
-        CHECK(participant->CanReclaim());
-    }
-    SECTION("failed geometry preparation releases its source before making the slot reusable") {
-        auto smallArena = Take(UiRenderGeometryArena::Create({view, {1, 1, 1}, 1}));
-        std::optional<UiRenderSnapshot> snapshot{Take(extractor.Extract(tree, descriptor, projection, frame))};
-        CHECK(smallArena.Build(*snapshot).HasError());
-        CHECK(smallArena.IsDrained());
-        frame = {};
-        source = {};
-        snapshot.reset();
-        CHECK(extractor.IsDrained());
-        host->Shutdown();
-        REQUIRE(participant->DrainRetired().HasValue());
-        CHECK(participant->CanReclaim());
-    }
-    SECTION("geometry copies release both pooled source pins without arena reuse") {
-        std::optional<UiRenderSnapshot> snapshot{Take(extractor.Extract(tree, descriptor, projection, frame))};
-        std::optional<UiRenderGeometryPlan> geometry{Take(arena.Build(*snapshot))};
-        std::optional<UiRenderGeometryPlan> copy{*geometry};
-        frame = {};
-        source = {};
-        snapshot.reset();
-        host->Shutdown();
-        REQUIRE(participant->DrainRetired().HasValue());
-        CHECK_FALSE(participant->CanReclaim());
-        geometry.reset();
-        CHECK_FALSE(arena.IsDrained());
-        CHECK_FALSE(extractor.IsDrained());
-        std::thread reader([retained = std::move(copy)]() mutable {
-            retained.reset();
-        });
-        reader.join();
-        CHECK(arena.IsDrained());
-        CHECK(extractor.IsDrained());
-        REQUIRE(participant->DrainRetired().HasValue());
-        CHECK(participant->CanReclaim());
-    }
-    host->Shutdown();
+    REQUIRE(snapshot.has_value());
+    REQUIRE(geometry.has_value());
+    CHECK(measured.requests == 0);
+}
+
+TEST_CASE("Animated render extraction unsent snapshot copies release without extractor reuse",
+          "[runtime_ui][animation][scene][publication][render_lifetime]") {
+    AnimatedExtraction setup;
+    std::optional<UiRenderSnapshot> snapshot{Take(setup.extractor.Extract(setup.tree, setup.descriptor, setup.projection, setup.frame))};
+    std::optional<UiRenderSnapshot> copy{*snapshot};
+    setup.frame = {};
+    setup.source = {};
+    setup.host->Shutdown();
+    REQUIRE(setup.participant->DrainRetired().HasValue());
+    CHECK_FALSE(setup.participant->CanReclaim());
+    snapshot.reset();
+    CHECK_FALSE(setup.extractor.IsDrained());
+    std::thread reader([retained = std::move(copy)]() mutable {
+        retained.reset();
+    });
+    reader.join();
+    CHECK(setup.extractor.IsDrained());
+    REQUIRE(setup.participant->DrainRetired().HasValue());
+    CHECK(setup.participant->CanReclaim());
+}
+
+TEST_CASE("Animated render extraction failed geometry preparation releases its source before making the slot reusable",
+          "[runtime_ui][animation][scene][publication][render_lifetime]") {
+    AnimatedExtraction setup;
+    auto smallArena = Take(UiRenderGeometryArena::Create({setup.view, {1, 1, 1}, 1}));
+    std::optional<UiRenderSnapshot> snapshot{Take(setup.extractor.Extract(setup.tree, setup.descriptor, setup.projection, setup.frame))};
+    CHECK(smallArena.Build(*snapshot).HasError());
+    CHECK(smallArena.IsDrained());
+    setup.frame = {};
+    setup.source = {};
+    snapshot.reset();
+    CHECK(setup.extractor.IsDrained());
+    setup.host->Shutdown();
+    REQUIRE(setup.participant->DrainRetired().HasValue());
+    CHECK(setup.participant->CanReclaim());
+}
+
+TEST_CASE("Animated render extraction geometry copies release both pooled source pins without arena reuse",
+          "[runtime_ui][animation][scene][publication][render_lifetime]") {
+    AnimatedExtraction setup;
+    std::optional<UiRenderSnapshot> snapshot{Take(setup.extractor.Extract(setup.tree, setup.descriptor, setup.projection, setup.frame))};
+    std::optional<UiRenderGeometryPlan> geometry{Take(setup.arena.Build(*snapshot))};
+    std::optional<UiRenderGeometryPlan> copy{*geometry};
+    setup.frame = {};
+    setup.source = {};
+    snapshot.reset();
+    setup.host->Shutdown();
+    REQUIRE(setup.participant->DrainRetired().HasValue());
+    CHECK_FALSE(setup.participant->CanReclaim());
+    geometry.reset();
+    CHECK_FALSE(setup.arena.IsDrained());
+    CHECK_FALSE(setup.extractor.IsDrained());
+    std::thread reader([retained = std::move(copy)]() mutable {
+        retained.reset();
+    });
+    reader.join();
+    CHECK(setup.arena.IsDrained());
+    CHECK(setup.extractor.IsDrained());
+    REQUIRE(setup.participant->DrainRetired().HasValue());
+    CHECK(setup.participant->CanReclaim());
 }

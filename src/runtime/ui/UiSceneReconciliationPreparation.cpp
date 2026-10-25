@@ -93,25 +93,37 @@ namespace Horo::Runtime::Ui {
         return Horo::Result<void>::Success();
     }
 
+    /** @copydoc UiSceneReconciliation::Storage::ValidatePreparation */
+    Result<void> UiSceneReconciliation::Storage::ValidatePreparation(const UiSceneTransitionRequest &request,
+                                                                     const std::size_t bindingCount, const std::size_t incomingCount,
+                                                                     const CancellationToken &cancellation) const {
+        if (stopped || collecting || publicationSeal)
+            return Failure(UiErrors::InstanceStateInvalid);
+        if ((!request.previous && !request.next) || (request.previous && !request.previous->IsValid()) ||
+            (request.next && (!request.next->IsValid() || request.next == request.previous)))
+            return Failure(UiErrors::IdentityInvalid);
+        if (!request.previous && std::ranges::any_of(active, [&](const auto &entry) {
+            return entry && entry->descriptor.owner.scene == request.next;
+        }))
+            return Failure(UiErrors::HandleOwnerMismatch);
+        if (bindingCount > limits.maximumInstances || incomingCount > limits.maximumInstances ||
+            preparedCount == limits.maximumPreparedTransitions)
+            return Failure(UiErrors::CapacityExceeded);
+        if (cancellation.IsCancellationRequested())
+            return Failure(UiErrors::AssetLoadCancelled);
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiSceneReconciliation::Prepare */
     Result<UiSceneReconciliation::Prepared> UiSceneReconciliation::Prepare(const UiSceneTransitionRequest &request,
                                                                            std::vector<UiSceneBindingReplacement> bindings,
                                                                            std::vector<UiSceneActivation> incoming,
                                                                            const CancellationToken &cancellation) {
-        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || storage_.Get()->publicationSeal)
+        if (!storage_)
             return Failure<Prepared>(UiErrors::InstanceStateInvalid);
-        if ((!request.previous && !request.next) || (request.previous && !request.previous->IsValid()) ||
-            (request.next && (!request.next->IsValid() || request.next == request.previous)))
-            return Failure<Prepared>(UiErrors::IdentityInvalid);
-        if (!request.previous && std::ranges::any_of(storage_.Get()->active, [&](const auto &entry) {
-            return entry && entry->descriptor.owner.scene == request.next;
-        }))
-            return Failure<Prepared>(UiErrors::HandleOwnerMismatch);
-        if (bindings.size() > storage_.Get()->limits.maximumInstances || incoming.size() > storage_.Get()->limits.maximumInstances ||
-            storage_.Get()->preparedCount == storage_.Get()->limits.maximumPreparedTransitions)
-            return Failure<Prepared>(UiErrors::CapacityExceeded);
-        if (cancellation.IsCancellationRequested())
-            return Failure<Prepared>(UiErrors::AssetLoadCancelled);
+        if (const auto valid = storage_.Get()->ValidatePreparation(request, bindings.size(), incoming.size(), cancellation);
+            valid.HasError())
+            return Result<Prepared>::Failure(valid.ErrorValue());
         try {
             auto prepared = std::make_shared<Prepared::Storage>();
             prepared->owner = storage_.OwnerPin();

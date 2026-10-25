@@ -147,7 +147,9 @@ namespace {
         }
 
         Detail::VulkanExternalNativeViews PreparedNativeViews() const noexcept override {
-            return {NativeHandle<VkImageView>(902), NativeHandle<VkImageView>(903)};
+            return {.attachment = NativeHandle<VkImageView>(902),
+                    .layers = {NativeHandle<VkImageView>(903), NativeHandle<VkImageView>(904)},
+                    .layerCount = descriptor.layerCount};
         }
 
         bool AdmitsFirstEyeGuiMirror(const RenderTextureViewDescriptor &view) const noexcept override {

@@ -99,9 +99,20 @@ namespace Horo::XR {
                    result.ErrorValue().code.Value() == descriptor.code.Value();
         }
 
+        /** @brief Keeps one bounded inline snapshot result in the validation call instead of each caller assertion's stack frame. */
+        [[nodiscard]] bool SnapshotHasError(const XRTrackingSnapshotDescriptor &descriptor, const TrackingFixture &fixture,
+                                            const ErrorCodeDescriptor &error) {
+            const auto result = XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin);
+            return HasErrorIdentity(result, error);
+        }
+
+        /** @brief Tests successful admission without retaining a separate full snapshot for every malformed-candidate assertion. */
+        [[nodiscard]] bool SnapshotHasValue(const XRTrackingSnapshotDescriptor &descriptor, const TrackingFixture &fixture) {
+            return XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasValue();
+        }
+
         void RequireInvalidSnapshot(const TrackingFixture &fixture) {
-            REQUIRE(HasErrorIdentity(XRTrackingSnapshot::Create(fixture.Descriptor(), fixture.session, fixture.origin),
-                                     XRErrors::TrackingSnapshotInvalid));
+            REQUIRE(SnapshotHasError(fixture.Descriptor(), fixture, XRErrors::TrackingSnapshotInvalid));
         }
     }  // namespace
 
@@ -140,26 +151,24 @@ namespace Horo::XR {
         TrackingFixture fixture;
         auto descriptor = fixture.Descriptor();
         descriptor.contractVersion = {};
-        REQUIRE(
-            HasErrorIdentity(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin), XRErrors::ContractVersionInvalid));
+        REQUIRE(SnapshotHasError(descriptor, fixture, XRErrors::ContractVersionInvalid));
 
         descriptor = fixture.Descriptor();
         descriptor.limits.maximumDevices = 1;
-        REQUIRE(HasErrorIdentity(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin), XRErrors::CapacityExceeded));
+        REQUIRE(SnapshotHasError(descriptor, fixture, XRErrors::CapacityExceeded));
 
         descriptor = fixture.Descriptor();
         descriptor.limits = {.maximumDevices = XRTrackingSnapshotHardLimits::MaximumDevices,
                              .maximumPoses = XRTrackingSnapshotHardLimits::MaximumPoses};
-        REQUIRE(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasValue());
+        REQUIRE(SnapshotHasValue(descriptor, fixture));
 
         descriptor.limits.maximumPoses = XRTrackingSnapshotHardLimits::MaximumPoses + 1;
-        REQUIRE(HasErrorIdentity(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin), XRErrors::CapacityExceeded));
+        REQUIRE(SnapshotHasError(descriptor, fixture, XRErrors::CapacityExceeded));
 
         descriptor = fixture.Descriptor();
         std::swap(fixture.devices[0], fixture.devices[1]);
         descriptor.devices = fixture.devices;
-        REQUIRE(
-            HasErrorIdentity(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin), XRErrors::TrackingSnapshotInvalid));
+        REQUIRE(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
 
         fixture.devices = {fixture.head, fixture.controller};
         fixture.devices.push_back(fixture.controller);
@@ -297,22 +306,22 @@ namespace Horo::XR {
         descriptor.limits.maximumActions = 1;
         descriptor.bindingRevision = 19;
         descriptor.actions = actions;
-        REQUIRE(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasValue());
+        REQUIRE(SnapshotHasValue(descriptor, fixture));
         descriptor.bindingRevision = 0;
-        CHECK(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasError());
+        CHECK(!SnapshotHasValue(descriptor, fixture));
         descriptor.bindingRevision = 19;
         for (const auto invalid : {XRTrackedActionRecord{fixture.controller.id, 4, XRTrackedActionKind::Boolean, true, 0.5F, 0},
                                    XRTrackedActionRecord{fixture.controller.id, 4, XRTrackedActionKind::Scalar, false, 1, 0},
                                    XRTrackedActionRecord{fixture.controller.id, 4, XRTrackedActionKind::Scalar, true, 1, 1}}) {
             actions[0] = invalid;
-            CHECK(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasError());
+            CHECK(!SnapshotHasValue(descriptor, fixture));
         }
         actions[0] = {fixture.controller.id, 4, XRTrackedActionKind::Boolean, true, 1, 0};
         descriptor.focus = XRTrackingFocusState::Unfocused;
-        CHECK(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasError());
+        CHECK(!SnapshotHasValue(descriptor, fixture));
         descriptor.focus = XRTrackingFocusState::Focused;
         actions[0].device = {fixture.session, {21, 2}};
-        CHECK(XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin).HasError());
+        CHECK(!SnapshotHasValue(descriptor, fixture));
         CHECK(actions[0].device.slot.generation == 2);
     }
 
@@ -332,6 +341,9 @@ namespace Horo::XR {
     }
 
     TEST_CASE("XR inline snapshot storage has an explicit finite copy budget", "[unit][xr][tracking-snapshot][storage-budget]") {
+        INFO("snapshot bytes=" << sizeof(XRTrackingSnapshot) << ", result bytes=" << sizeof(Result<XRTrackingSnapshot>)
+                               << ", pose array bytes="
+                               << sizeof(std::array<XRTrackedPoseRecord, XRTrackingSnapshotHardLimits::MaximumPoses>));
         CHECK(sizeof(XRTrackingSnapshot) <= 256U * 1024U);
         CHECK(sizeof(XRTrackedDeviceRecord) <= 128U);
         CHECK(sizeof(XRTrackedPoseRecord) <= 512U);

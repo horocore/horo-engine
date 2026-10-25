@@ -194,18 +194,23 @@ namespace {
             }
             ui.KeyDown(ImGuiKey_RightArrow);
             ui.Yield();
-            editor.AdvanceFixedTicks(1);
+            const auto movementTick = editor.AdvanceFixedTicks(1);
             ui.Yield();
+            IM_CHECK(editor.CompletedFixedTicks() == movementTick);
             IM_CHECK(ui.ItemExists("//**/###workspace_play_pause"));
             const auto moved = editor.FirstViewportObjectPosition();
             IM_CHECK(moved.has_value());
             IM_CHECK(moved->x == before->x + 1.0F);
 
             ui.ItemClick("//**/###workspace_play_pause");
-            editor.AdvanceFixedTicks(1);
+            const auto pausedTick = editor.AdvanceFixedTicks(1);
+            ui.Yield();
+            IM_CHECK(editor.CompletedFixedTicks() == pausedTick);
             IM_CHECK(editor.FirstViewportObjectPosition()->x == moved->x);
             ui.ItemClick("//**/###workspace_play_step");
-            editor.AdvanceFixedTicks(1);
+            const auto steppedTick = editor.AdvanceFixedTicks(1);
+            ui.Yield();
+            IM_CHECK(editor.CompletedFixedTicks() == steppedTick);
             IM_CHECK(editor.FirstViewportObjectPosition()->x == moved->x + 1.0F);
             ui.KeyUp(ImGuiKey_RightArrow);
             ui.ItemClick("//**/###workspace_play_stop");
