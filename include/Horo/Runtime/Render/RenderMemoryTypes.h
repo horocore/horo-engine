@@ -70,6 +70,19 @@ namespace Horo::Render {
         [[nodiscard]] constexpr auto operator<=>(const RenderMemoryPoolId &) const noexcept = default;
     };
 
+    /** @brief Identifies one physical backing block within a renderer incarnation, independently of its logical pool. */
+    struct RenderMemoryBlockId {
+        RenderResourceOwnerId renderer; /**< Renderer incarnation that issued the block. */
+        std::uint64_t value{0};         /**< Monotonic ledger block identity; zero is invalid. */
+
+        /** @brief Returns whether the renderer and block identities are usable. @return True for a nonzero renderer-scoped block. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return renderer.IsValid() && value != 0;
+        }
+
+        [[nodiscard]] constexpr auto operator<=>(const RenderMemoryBlockId &) const noexcept = default;
+    };
+
     /** @brief Generation-safe identity of one outstanding memory reservation. */
     struct RenderMemoryReservationId {
         RenderResourceOwnerId renderer; /**< Renderer incarnation that owns the reservation. */
@@ -120,7 +133,8 @@ namespace Horo::Render {
 
     /** @brief Fields shared by admitted placement and committed allocation records. */
     struct RenderMemoryPlacement {
-        RenderMemoryPoolId pool;                                            /**< Accounted backing pool identity. */
+        RenderMemoryPoolId pool;                                            /**< Accounted logical pool identity. */
+        RenderMemoryBlockId block;                                          /**< Physical backing within the logical pool. */
         RenderMemoryScopeId scope;                                          /**< Charged logical scope. */
         ResourceOperationId attempt;                                        /**< Resource creation attempt that consumed the reservation. */
         RenderMemoryClass memoryClass{RenderMemoryClass::PersistentDevice}; /**< Accounted memory class. */
@@ -140,9 +154,10 @@ namespace Horo::Render {
                 static_cast<std::uint8_t>(allocationClass) <= static_cast<std::uint8_t>(RenderMemoryAllocationClass::Dedicated);
             const bool provenanceValid =
                 static_cast<std::uint8_t>(provenance) <= static_cast<std::uint8_t>(RenderMemoryCostProvenance::Estimated);
-            return memoryClassValid && allocationClassValid && provenanceValid && pool.IsValid() && scope.IsValid() && attempt.IsValid() &&
-                   compatibility.IsValid() && budgetRevision != 0 && payloadBytes > 0 && requiredBytes >= payloadBytes &&
-                   backingBytes >= requiredBytes && offsetBytes <= backingBytes - requiredBytes;
+            return memoryClassValid && allocationClassValid && provenanceValid && pool.IsValid() && block.IsValid() &&
+                   block.renderer == pool.renderer && scope.IsValid() && attempt.IsValid() && compatibility.IsValid() &&
+                   budgetRevision != 0 && payloadBytes > 0 && requiredBytes >= payloadBytes && backingBytes >= requiredBytes &&
+                   offsetBytes <= backingBytes - requiredBytes;
         }
     };
 

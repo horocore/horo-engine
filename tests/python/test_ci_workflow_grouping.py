@@ -585,7 +585,7 @@ def test_windows_save_timeout_diagnostics_preserve_the_original_gate_and_artifac
     assert not any(option in debug for option in ("--timeout", "--repeat", "continue-on-error"))
     windows = preset("testPresets", "ci-windows-debug")
     assert preset("configurePresets", windows["configurePreset"])["binaryDir"] == "${sourceDir}/build/ci"
-    assert windows["execution"] == {"jobs": 1, "timeout": 90}
+    assert windows["execution"] == {"jobs": 4, "timeout": 90}
     assert windows["output"]["outputJUnitFile"] == "${sourceDir}/build/ci/ctest.xml"
     assert "build/ci/ctest.xml" in artifact
     assert "build/ci/Testing/Temporary/LastTest.log" in artifact
@@ -714,12 +714,27 @@ def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -
 
 def test_parallel_ctest_preserves_suite_selection_and_bounds_runner_work() -> None:
     assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
-    for name in ("ci-linux-debug", "ci-macos-debug"):
-        assert preset("testPresets", name)["execution"]["jobs"] == 2
+    assert preset("configurePresets", "ci-windows-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
+    for name, workers in (("ci-linux-debug", 4), ("ci-macos-debug", 3), ("ci-windows-debug", 4)):
+        assert preset("testPresets", name)["execution"]["jobs"] == workers
     assert preset("testPresets", "sonar")["execution"]["jobs"] == 4
     assert preset("testPresets", "ci-linux-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
     assert preset("testPresets", "ci-macos-debug")["filter"] == {"exclude": {"label": "gui|tooling"}}
+    assert preset("testPresets", "ci-windows-debug")["filter"] == {"include": {"label": "^ci-windows$"}}
     assert preset("testPresets", "sonar")["filter"] == {"include": {"label": "^sonar-coverage$"}}
+
+
+def test_windows_parallel_tests_require_native_fixture_isolation_qualification() -> None:
+    native = workflow_job("test")
+    marker = "- name: Verify Windows CTest fixture isolation"
+    qualification = native.split(marker, 1)[1].split("\n      - name:", 1)[0]
+    assert "if: runner.os == 'Windows'" in qualification
+    assert "pytest==8.3.4" in qualification
+    assert "tests/python/test_ci_case_isolation.py" in qualification
+    assert "-k 'test_generated_suite_properties_preserve_contracts_and_control_concurrency or test_case_' -q" in qualification
+    assert "timeout-minutes: 2" in qualification
+    assert "continue-on-error" not in qualification
+    assert native.index(marker) < native.index("- name: Configure Debug") < native.index("- name: Test Debug")
 
 
 def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:

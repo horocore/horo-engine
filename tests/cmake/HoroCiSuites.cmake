@@ -2,6 +2,10 @@
 option(HORO_CI_SONAR_COVERAGE "Register the filtered Sonar UI coverage run" OFF)
 option(HORO_CI_ISOLATE_TEST_EXECUTABLES "Isolate discovered executable suites for bounded CTest parallelism" OFF)
 
+# Audited headless suites with process-local state and temporary-file fixtures.
+# Explicit case resource locks still apply after private directories are assigned.
+set(HORO_CI_CASE_ISOLATED_TARGETS HoroPhysicsTests)
+
 set(HORO_CI_AUDIO_TARGETS
     HoroAudioRealtimeSafetyHarnessTests
     HoroAudioWatchdogTests
@@ -319,6 +323,33 @@ function(horo_ci_catch_labels target)
     set(ARG_PROPERTIES "${ARG_PROPERTIES}" PARENT_SCOPE)
 endfunction()
 
+function(horo_ci_test_runtime_root target output)
+    set(root "${CMAKE_CURRENT_BINARY_DIR}/ci-runtime/${target}")
+    if(CMAKE_HOST_WIN32 AND DEFINED ENV{RUNNER_TEMP} AND NOT "$ENV{RUNNER_TEMP}" STREQUAL "")
+        # Keep classic Win32 fixture I/O below MAX_PATH without sharing namespaces
+        # between build compositions. Reject a shortened-key collision explicitly.
+        file(REAL_PATH "${CMAKE_CURRENT_BINARY_DIR}" build_identity)
+        set(runtime_identity "${build_identity}\n${target}")
+        string(SHA256 build_key "${runtime_identity}")
+        string(SUBSTRING "${build_key}" 0 16 build_key)
+        set(namespace "$ENV{RUNNER_TEMP}/hci/${build_key}")
+        file(MAKE_DIRECTORY "${namespace}")
+        set(identity_file "${namespace}/identity.txt")
+        if(EXISTS "${identity_file}")
+            file(READ "${identity_file}" existing_identity)
+            if(NOT existing_identity STREQUAL runtime_identity)
+                message(FATAL_ERROR "CI temporary build namespace collision")
+            endif()
+        else()
+            file(WRITE "${identity_file}" "${runtime_identity}")
+        endif()
+        set(root "${namespace}")
+    endif()
+    file(MAKE_DIRECTORY "${root}")
+    file(REAL_PATH "${root}" root)
+    set(${output} "${root}" PARENT_SCOPE)
+endfunction()
+
 function(horo_ci_catch_properties target)
     # Apply properties after discovery: Catch flattens list-valued properties
     # into separate arguments, corrupting labels and subsequent key/value pairs.
@@ -328,18 +359,21 @@ function(horo_ci_catch_properties target)
     endforeach()
     set(isolation "")
     if(HORO_CI_ISOLATE_TEST_EXECUTABLES)
-        # Cases in one executable may share fixture names. Serialize those
-        # cases, while independent executables use private working/temp/home
-        # directories. Keep explicit suite properties and environment intact.
-        set(runtime_root "${CMAKE_CURRENT_BINARY_DIR}/ci-runtime/${target}")
-        file(MAKE_DIRECTORY "${runtime_root}/work" "${runtime_root}/tmp" "${runtime_root}/home")
-        file(REAL_PATH "${runtime_root}" runtime_root)
-        set(suite_locks "horo-suite-${target}")
-        set(suite_environment "TMPDIR=set:${runtime_root}/tmp;TMP=set:${runtime_root}/tmp;TEMP=set:${runtime_root}/tmp;HOME=set:${runtime_root}/home;USERPROFILE=set:${runtime_root}/home")
-        string(APPEND isolation
-            "    set_tests_properties(\${${target}_TESTS} PROPERTIES WORKING_DIRECTORY [==[${runtime_root}/work]==])\n"
-            "    set_tests_properties(\${${target}_TESTS} PROPERTIES RESOURCE_LOCK [==[${suite_locks}]==])\n"
-            "    set_tests_properties(\${${target}_TESTS} PROPERTIES ENVIRONMENT_MODIFICATION [==[${suite_environment}]==])\n")
+        horo_ci_test_runtime_root("${target}" runtime_root)
+        if(target IN_LIST HORO_CI_CASE_ISOLATED_TARGETS AND NOT "${ARG_LABELS}" MATCHES "(^|;)(gpu|display|realtime-safety)(;|$)")
+            set(case_properties "${CMAKE_CURRENT_BINARY_DIR}/${target}_case_isolation.cmake")
+            configure_file("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/HoroCiCaseIsolation.cmake.in" "${case_properties}" @ONLY)
+            string(APPEND isolation "    include([==[${case_properties}]==])\n")
+        else()
+            # Unaudited suites may share fixture names; keep their cases locked.
+            file(MAKE_DIRECTORY "${runtime_root}/work" "${runtime_root}/tmp" "${runtime_root}/home")
+            set(suite_locks "horo-suite-${target}")
+            set(suite_environment "TMPDIR=set:${runtime_root}/tmp;TMP=set:${runtime_root}/tmp;TEMP=set:${runtime_root}/tmp;HOME=set:${runtime_root}/home;USERPROFILE=set:${runtime_root}/home")
+            string(APPEND isolation
+                "    set_tests_properties(\${${target}_TESTS} PROPERTIES WORKING_DIRECTORY [==[${runtime_root}/work]==])\n"
+                "    set_tests_properties(\${${target}_TESTS} PROPERTIES RESOURCE_LOCK [==[${suite_locks}]==])\n"
+                "    set_tests_properties(\${${target}_TESTS} PROPERTIES ENVIRONMENT_MODIFICATION [==[${suite_environment}]==])\n")
+        endif()
         if("${ARG_LABELS}" MATCHES "(^|;)(gpu|display|realtime-safety)(;|$)")
             string(APPEND isolation "    set_tests_properties(\${${target}_TESTS} PROPERTIES RUN_SERIAL TRUE)\n")
         endif()

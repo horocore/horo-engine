@@ -194,6 +194,44 @@ CI uses two cache layers per job across the validation, UI, and release
 workflows. The workflow files implement the contracts in this document; action
 versions and runner labels may change without changing those contracts.
 
+### Native macOS qualification runner
+
+The native macOS matrix entry can use a repository runner selected by the
+`HORO_MACOS_METAL_RUNNER` repository variable. Leave it unset to use
+`macos-latest`. Set it to a unique custom label only after verifying a native
+Mac against the rendering architecture's device-family baseline and providing
+an interactive user session for presentation tests. Install Xcode's optional
+Metal Toolchain once during host provisioning with
+`xcodebuild -downloadComponent MetalToolchain`. Verify execution with
+`xcrun --sdk macosx metal --version`; `xcrun --find metal` can find a stub even
+when the component is missing. CI checks execution before restoring caches or
+building Debug, so an incomplete Xcode installation fails immediately. A successful device query
+alone does not qualify the engine's GPU tests.
+
+Only pushes, manual dispatches and same-repository pull requests can select
+this runner. Fork pull requests retain the hosted label. Installing a runner
+therefore authorizes repository branch code on that host; do not assign this
+label to a general-purpose or differently qualified runner. Workflow routing
+alone is not a host access boundary: provision a host-owned
+`ACTIONS_RUNNER_HOOK_JOB_STARTED` script outside the runner application and
+checkout; install a reviewed copy of
+`.github/scripts/macos_runner_admission.sh` there. Before any job steps, it must reject missing/malformed payloads,
+other repositories, unexpected events and pull requests whose head repository
+differs. Do not approve a fork workflow that attempts to change this policy.
+The job also rejects a non-macOS host before configuration. Existing CPU, Metal, audio, network and XR
+qualification stays in the same platform job with the existing matrix width.
+One runner accepts one job at a time; superseded runs retain workflow
+cancellation. Additional PRs queue rather than multiplying local build workers.
+
+Use an isolated runner installation and work directory, a user-session service,
+and a runner-local Python virtual environment providing both `python` and
+`python3`; the allocation verifier installs into that environment. Keep runner
+auto-update enabled. Coordinate this host's CI execution with local heavy
+builds. Unset the repository variable to route subsequent runs back to hosted
+machines, and stop the user service before host maintenance. Hosted fallback
+still needs its own hardware qualification and must not be reported as a native
+Metal pass when the required device family is absent.
+
 ### Cache Storage Ownership
 
 Only runs with `github.ref == 'refs/heads/main'` may publish GitHub Actions
@@ -275,6 +313,52 @@ test selection. UI, release, Network GNS, and the other focused jobs are separat
 follow-up rollout scopes. Sonar compiler/coverage and analysis caches remain in
 their existing namespaces.
 
+### Native CTest capacity
+
+Native Debug tests use four CTest workers on Linux and Windows and three on
+macOS ARM64, matching the standard public runner CPU counts in
+[GitHub's runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories).
+These are processes inside the existing platform job; matrix widths and runner
+job counts do not increase. Build worker budgets, test filters, assertions,
+timeouts and JUnit paths remain unchanged.
+
+All three native Debug configurations enable executable-suite isolation. Suites
+retain their resource lock and private work/temp/home directories unless they
+have been audited for case isolation. The Physics suite uses a SHA-256 namespace
+per exact discovered test name for its working, temporary and home directories;
+its process-local state and temporary collision-cooker projects can therefore
+overlap within the same CTest worker budget. Explicit resource locks remain in
+force. Other suites keep their executable lock. Direct integration contracts,
+GPU/display and realtime suites retain their serial execution requirements.
+Windows verifies the actual generated CTest properties, environment and overlap
+with small two-, three- and four-worker fixtures before the native build. A
+failed isolation check fails the job. Sonar keeps its existing four-worker
+coverage configuration. Hosted duration and failure results must be recorded
+separately from the small fixture's concurrency proof.
+
+Windows runner fixtures use a shorter directory under `RUNNER_TEMP`, separated
+by build identity and target name. Keeping the repository/build prefix out of
+these paths preserves classic Win32 file I/O in deep Save namespaces. The build
+identity is recorded and a shortened-key collision fails configuration. The
+Windows qualification step exercises both case isolation and explicit-lock
+serialization before compiling the engine. Linux tooling also compares all GCC
+coverage counters for one versus four concurrent instances of an instrumented
+fixture; collection still waits for CTest completion. New case-isolated suites
+require a filesystem/state audit and hosted qualification, not just membership
+in the allowlist.
+
+The Metal host probe reports architecture and every device's selected state,
+Apple7 and Mac2 family predicates before native tests. A non-null device is
+insufficient for the renderer baseline. These diagnostics preserve the existing
+test execution and do not qualify an unsupported host or lower the device floor.
+
+Sonar's fastcov collection uses up to four gcov workers on its four-CPU Linux
+runner. Batches remain capped at 64 inputs and execute sequentially; increasing
+worker count does not expand the batch, source filters or collected line
+universe. Trace merging and report validation still complete before publishing
+coverage. Worker-count experiments must compare full counters, including shared
+source merges and zero-hit lines, and qualify memory use on the hosted runner.
+
 ### Layer 1: Compiler Cache
 
 | Platform | Cache tool | Cache key |
@@ -284,6 +368,14 @@ their existing namespaces.
 | Windows  | sccache    | `sccache-v1-${{ github.job }}-${{ runner.os }}-${{ steps.compiler-version.outputs.version }}-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}` |
 
 Key design decisions:
+
+- **Source revision scope:** Keep `HORO_SOURCE_REVISION` on the application
+  translation units that read it: terminal entry, network product launch and
+  editor application composition. The value remains the current Git revision
+  (or the existing `unknown` fallback); other compile definitions and runtime
+  identity checks are unchanged. Passing this changing value to whole targets
+  unnecessarily invalidates compiler and CFamily analysis caches for unrelated
+  application sources on every commit.
 
 - **Compiler identity:** Every compiler-cache key includes a normalized
   compiler identity obtained after toolchain setup. The identity includes the
@@ -756,7 +848,7 @@ PRs restore native Debug, shader, auxiliary variants and instrumented Sonar dire
 from GHCR. These stores neither read nor write Actions compiler snapshots, so
 source/scanner caches no longer compete with their multi-gigabyte copies.
 Other focused compiler profiles can retain Actions storage. The public client
-uses an empty credential store and a 90-second
+uses an empty credential store and a shared 180-second
 network budget. A fixed digest selects the blob, capped at 3 GiB compressed and
 4 GiB expanded. A bounded manifest requires the independently selected namespace,
 source key, regular portable paths, sizes and per-file SHA-256. Every file is
@@ -765,6 +857,14 @@ are excluded; local entries/settings are preserved. Restore runs before compiler
 activity, with the Windows cache server stopped. A failed fetch retains normal
 compilation. The CLI chooses only fixed primary, auxiliary and Sonar cache paths, rather
 than accepting an arbitrary destination.
+
+The shared deadline covers manifest and blob operations together; it is not
+reset for each request. Sonar's restore step allows four minutes for transfer
+and verification. This gives multi-gigabyte snapshots more room before falling
+back to a cold build. A simulated 150-second restore must succeed, while a
+transfer exceeding the total budget must preserve the existing cache. Failure
+diagnostics include only the exception type, never client arguments, output or
+credentials. No retry or weaker validation is introduced.
 
 This is independent storage against Actions quota eviction, not a latency
 measurement or a replacement for dependency packages. Hosted publication and

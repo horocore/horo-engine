@@ -22,6 +22,7 @@ namespace {
     [[nodiscard]] RenderMemoryPlacement TestPlacement(const std::size_t bytes, const std::uint64_t compatibility = 1,
                                                       const std::uint64_t attempt = 1) {
         return {.pool = {{1}, compatibility},
+                .block = {{1}, compatibility},
                 .scope = {1, 1},
                 .attempt = {attempt},
                 .compatibility = {compatibility},

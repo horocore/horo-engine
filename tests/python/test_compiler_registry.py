@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import sys
 import tarfile
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -129,6 +130,67 @@ def test_fetch_uses_anonymous_digest_and_preserves_existing_entry(snapshot, monk
     assert local.read_bytes() == b"local entry"
     assert all(call[0] != "login" for call in calls)
     assert calls[1][2].startswith(transport.REGISTRY + "@sha256:")
+
+
+def install_timed_registry(archive, monkeypatch, blob_seconds):
+    """Exercise the real shared-deadline client without sleeping or networking."""
+    layer = {"mediaType": compiler.LAYER_TYPE, "size": archive.stat().st_size,
+             "digest": "sha256:" + compiler.package.digest_file(archive)}
+    document = {"schemaVersion": 2, "artifactType": compiler.ARTIFACT_TYPE,
+                "layers": [layer], "annotations": {"io.horo.compiler.source-key": KEY}}
+    clock = [0]
+    budgets = []
+    monkeypatch.setattr(transport, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(transport.shutil, "which", lambda _name: "fixture-oras")
+
+    def client(arguments, **kwargs):
+        manifest = arguments[1:3] == ["manifest", "fetch"]
+        duration = 5 if manifest else blob_seconds
+        budgets.append(kwargs["timeout"])
+        if kwargs["timeout"] < duration:
+            Path(arguments[arguments.index("--output") + 1]).write_bytes(b"partial transfer")
+            raise compiler.subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+        clock[0] += duration
+        if not manifest:
+            shutil.copyfile(archive, arguments[arguments.index("--output") + 1])
+        return compiler.subprocess.CompletedProcess(arguments, 0, json.dumps(document) if manifest else "", "")
+
+    monkeypatch.setattr(transport.subprocess, "run", client)
+    return clock, budgets
+
+
+@pytest.mark.parametrize("blob_seconds,succeeds", [(145, True), (181, False)])
+def test_slow_restore_remains_bounded_and_preserves_live_cache(snapshot, monkeypatch, blob_seconds, succeeds):
+    clock, budgets = install_timed_registry(snapshot, monkeypatch, blob_seconds)
+    destination = compiler.cache_root(NAMESPACE)
+    destination.mkdir(parents=True)
+    settings = destination / "ccache.conf"
+    settings.write_text("local settings", encoding="utf-8")
+    if succeeds:
+        compiler.fetch(NAMESPACE)
+        assert (destination / "a/b/entryR").read_bytes() == b"compiler object"
+        assert clock[0] == 150
+    else:
+        with pytest.raises(compiler.subprocess.TimeoutExpired):
+            compiler.fetch(NAMESPACE)
+        assert sorted(path.name for path in destination.iterdir()) == ["ccache.conf"]
+    assert settings.read_text(encoding="utf-8") == "local settings"
+    assert budgets == [180, 175]
+
+
+@pytest.mark.parametrize("error", [TimeoutError("private client output"),
+                                  compiler.subprocess.TimeoutExpired("private client output", 180),
+                                  ValueError("private client output")])
+def test_optional_failure_reports_type_without_client_output(monkeypatch, capsys, error):
+    def fail(_key):
+        raise error
+
+    monkeypatch.setattr(compiler, "fetch", fail)
+    monkeypatch.setattr(sys, "argv", ["compiler_registry.py", "fetch", "--key", NAMESPACE])
+    assert compiler.main() == 1
+    captured = capsys.readouterr()
+    assert type(error).__name__ in captured.out
+    assert "private client output" not in captured.out + captured.err
 
 
 @pytest.mark.parametrize("field,value", [

@@ -267,7 +267,7 @@ def test_python_api_has_no_tool_selection_or_process_launch_authority() -> None:
     assert '--gcda-files "${inputs[@]}"' in host
     assert '--include "${includes[@]}"' in host
     assert '--add-tracefile "${reports[@]}"' in host
-    assert '--jobs 2' in host
+    assert '--gcov gcov --jobs 4 --process-gcno' in host
 
 
 @pytest.mark.parametrize("target_name", ["HoroAudioComponentPreviewHostTests", "HoroEditorNavigationBakeHostTests"])
