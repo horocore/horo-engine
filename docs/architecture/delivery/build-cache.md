@@ -194,6 +194,39 @@ CI uses two cache layers per job across the validation, UI, and release
 workflows. The workflow files implement the contracts in this document; action
 versions and runner labels may change without changing those contracts.
 
+### Native macOS qualification runner
+
+The native macOS matrix entry can use a repository runner selected by the
+`HORO_MACOS_METAL_RUNNER` repository variable. Leave it unset to use
+`macos-latest`. Set it to a unique custom label only after verifying a native
+Mac against the rendering architecture's device-family baseline and providing
+an interactive user session for presentation tests. A successful device query
+alone does not qualify the engine's GPU tests.
+
+Only pushes, manual dispatches and same-repository pull requests can select
+this runner. Fork pull requests retain the hosted label. Installing a runner
+therefore authorizes repository branch code on that host; do not assign this
+label to a general-purpose or differently qualified runner. Workflow routing
+alone is not a host access boundary: provision a host-owned
+`ACTIONS_RUNNER_HOOK_JOB_STARTED` script outside the runner application and
+checkout; install a reviewed copy of
+`.github/scripts/macos_runner_admission.sh` there. Before any job steps, it must reject missing/malformed payloads,
+other repositories, unexpected events and pull requests whose head repository
+differs. Do not approve a fork workflow that attempts to change this policy.
+The job also rejects a non-macOS host before configuration. Existing CPU, Metal, audio, network and XR
+qualification stays in the same platform job with the existing matrix width.
+One runner accepts one job at a time; superseded runs retain workflow
+cancellation. Additional PRs queue rather than multiplying local build workers.
+
+Use an isolated runner installation and work directory, a user-session service,
+and a runner-local Python virtual environment providing both `python` and
+`python3`; the allocation verifier installs into that environment. Keep runner
+auto-update enabled. Coordinate this host's CI execution with local heavy
+builds. Unset the repository variable to route subsequent runs back to hosted
+machines, and stop the user service before host maintenance. Hosted fallback
+still needs its own hardware qualification and must not be reported as a native
+Metal pass when the required device family is absent.
+
 ### Cache Storage Ownership
 
 Only runs with `github.ref == 'refs/heads/main'` may publish GitHub Actions

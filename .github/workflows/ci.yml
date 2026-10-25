@@ -371,7 +371,7 @@ jobs:
             launcher: ccache
             preset: ci-linux-debug
           - name: macOS / Clang
-            runner: macos-latest
+            runner: ${{ vars.HORO_MACOS_METAL_RUNNER != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.HORO_MACOS_METAL_RUNNER || 'macos-latest' }}
             cc: clang
             cxx: clang++
             launcher: ccache
@@ -394,9 +394,13 @@ jobs:
       # Native publication requires a canonical parent. macOS TMPDIR may contain
       # /var aliases; establish the host temp root before tools and tests use it.
       - name: Canonicalize macOS temporary directory
-        if: runner.os == 'macOS'
+        if: matrix.name == 'macOS / Clang'
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" != macOS ]]; then
+            echo '::error::The macOS qualification runner must be a native Mac.'
+            exit 1
+          fi
           python3 - <<'PYTHON'
           import os
           import pathlib
