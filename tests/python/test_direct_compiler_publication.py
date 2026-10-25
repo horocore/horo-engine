@@ -111,13 +111,21 @@ def test_main_native_writers_serialize_by_platform_without_global_head_of_line_w
     source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     block = job(source, "test-main")
     keys = set()
-    for platform in ("Linux / GCC", "macOS / Clang", "Windows / MSVC"):
+    for platform in ("Linux / GCC", "Windows / MSVC"):
         context = ci_context("refs/heads/main", "101", platform)
         key = concurrency_key(block, context)
         context["github.run_id"] = "102"
         assert concurrency_key(block, context) == key
         keys.add(key)
+    macos = job(source, "macos-build-main")
+    context = ci_context("refs/heads/main", "101", "macOS / Clang")
+    macos_key = concurrency_key(macos, context)
+    context["github.run_id"] = "102"
+    assert concurrency_key(macos, context) == macos_key
+    keys.add(macos_key)
     assert len(keys) == 3
+    assert "      cancel-in-progress: false\n" in macos
+    assert "    concurrency:" not in job(source, "macos-build")
     assert "      cancel-in-progress: false\n" in block
     assert "    concurrency:" not in job(source, "test")
     shader = job(source, "shaders")
@@ -127,6 +135,7 @@ def test_main_native_writers_serialize_by_platform_without_global_head_of_line_w
 
 @pytest.mark.parametrize("workflow,readonly,writer", [
     ("ci", "test", "test-main"), ("sonar", "sonar", "sonar-main"),
+    ("ci", "macos-build", "macos-build-main"),
     ("ci", "shaders", "shaders-main"),
 ])
 @pytest.mark.parametrize("repository", ["horocore/horo-engine", "fork/horo-engine"])
@@ -177,7 +186,10 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
         assert f"    {field}: *{match[1]}\n" in main
     if readonly == "test":
         assert "max-parallel: 2" in reader
-        assert reader.count("          - name:") == 3
+        assert reader.count("          - name:") == 2
+        matrix = reader.split("    strategy:", 1)[1].split("    steps:", 1)[0]
+        assert "- name: Linux / GCC" in matrix and "- name: Windows / MSVC" in matrix
+        assert "- name: macOS / Clang" not in matrix
     if readonly == "shaders":
         assert "max-parallel: 1" in reader
         assert reader.count("          - os:") == 2
@@ -263,3 +275,48 @@ def test_registry_storage_skips_actions_while_focused_profiles_keep_the_default(
         settings = block.split("\n      - name:", 1)[0]
         if "profile: native-tests-v1" in settings:
             assert "compiler-storage: registry" in settings
+
+
+def test_macos_publishers_retain_complete_native_pipeline_and_bundle_outputs() -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    reader, main = job(source, "macos-build"), job(source, "macos-build-main")
+    for field, anchor in (("steps", "native_steps"), ("env", "native_environment"), ("defaults", "native_defaults")):
+        assert f"    {field}: *{anchor}\n" in reader
+        assert f"    {field}: *{anchor}\n" in main
+        assert f"    {field}: &{anchor}\n" in source
+    for field in ("strategy", "outputs"):
+        match = re.search(rf"^    {field}: &(\w+)", reader, re.MULTILINE)
+        assert match is not None
+        assert f"    {field}: *{match[1]}\n" in main
+    assert "packages: read" in reader and "packages: write" not in reader
+    assert "packages: write" in main
+    assert reader.count("          - name:") == 1 and "- name: macOS / Clang" in reader
+    assert "max-parallel: 1" in reader and "runs-on: macos-latest" in reader
+    for output in ("artifact-id", "artifact-digest", "payload-digest", "producer-attempt"):
+        assert f"      {output}:" in reader
+
+
+@pytest.mark.parametrize("event,isolated,head_repo,reader_result,main_result,label,expected", [
+    ("workflow_dispatch", False, "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
+    ("workflow_dispatch", True, "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal-qualification"),
+    ("pull_request", True, "fork/horo-engine", "success", "skipped", "horo-macos-metal", "macos-latest"),
+    ("pull_request", True, "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
+    ("push", True, "horocore/horo-engine", "skipped", "success", "horo-macos-metal", "horo-macos-metal"),
+    ("workflow_dispatch", True, "horocore/horo-engine", "failure", "skipped", "horo-macos-metal", "ubuntu-slim"),
+    ("workflow_dispatch", False, "horocore/horo-engine", "success", "skipped", "", "macos-latest"),
+    ("pull_request", False, "fork/horo-engine", "failure", "skipped", "horo-macos-metal", "ubuntu-slim"),
+])
+def test_actual_metal_runner_expression_preserves_admission(
+    event: str, isolated: bool, head_repo: str, reader_result: str, main_result: str, label: str, expected: str,
+) -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    hardware = job(source, "macos-metal")
+    routing = re.search(r"^    runs-on: (.+)$", hardware, re.MULTILINE)
+    assert routing is not None
+    context = {"github.event_name": event, "inputs.isolated_metal_qualification": isolated,
+               "github.event.pull_request.head.repo.full_name": head_repo,
+               "github.repository": "horocore/horo-engine", "vars.HORO_MACOS_METAL_RUNNER": label,
+               "needs.macos-build.result": reader_result, "needs.macos-build-main.result": main_result,
+               "true": True}
+    # Reuse the existing restricted Actions interpreter on the actual field value.
+    assert concurrency_key("    group: " + routing[1], context) == expected
