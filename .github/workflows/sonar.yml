@@ -108,14 +108,20 @@ jobs:
             coverage==7.6.10 fastcov==1.17 pytest==8.3.4 defusedxml==0.7.1
 
       - name: Configure instrumented Debug build
-        run: cmake --preset sonar -DPython3_EXECUTABLE=/tmp/horo-coverage/bin/python
+        run: |
+          if ! python3 .github/scripts/compiler_registry.py reconcile; then
+            echo '::warning::Local compiler cache maintenance unavailable; compile without ccache'
+            export CCACHE_DISABLE=1
+            echo 'CCACHE_DISABLE=1' >> "$GITHUB_ENV"
+          fi
+          cmake --preset sonar -DPython3_EXECUTABLE=/tmp/horo-coverage/bin/python
 
       - name: Build instrumented targets
         id: build
         run: |
-          ccache --zero-stats
+          if [[ "${CCACHE_DISABLE:-}" != 1 ]]; then ccache --zero-stats; fi
           cmake --build --preset sonar --target all HoroEditorVulkanShaderCook
-          ccache --show-stats
+          if [[ "${CCACHE_DISABLE:-}" != 1 ]]; then ccache --show-stats; fi
 
       # Checkpoint build inputs before coverage and analysis. A later scan timeout
       # must not discard the dependency and compiler work needed by the next run.

@@ -253,6 +253,29 @@ its initial checkpoints before other refs can benefit from them, and old main
 generations still share the repository quota and eviction policy. Cache cleanup
 must identify exact refs/keys and preserve needed main checkpoints.
 
+### Restored Compiler Cache Accounting
+
+Public compiler checkpoints contain verified entries, while operational cache
+statistics and configuration remain local. Imported entries therefore require
+ccache to recount its local file count and disk usage before compilation; a high
+hit rate or the counters copied from another runner do not prove the local budget.
+
+The owning native restore and Sonar configure steps call the compiler transport
+helper's `reconcile` operation after tools are installed. It accepts only the
+selected canonical `.ci-cache/compiler`, `.ci-cache/compiler-variants`, or
+`.sonar/ccache` store within the checkout, requires the ccache launcher and an
+explicit positive budget within the existing transport bound, and runs a bounded
+two-pass cleanup with that exact directory and budget. Imported stores have no
+operational counters: the first pass recounts entries, and the second applies
+eviction using those counters. Each pass has a 30-second timeout; a failure stops
+maintenance and selects ordinary compilation. Legacy Windows sccache stores keep
+their own server lifecycle.
+
+If maintenance fails, that job uses ordinary compilation through ccache's disable
+mode and does not publish a ccache checkpoint. Native tests, coverage generation,
+analysis and quality gates retain their existing selection and behavior. Archive
+schema and recency metadata semantics remain unchanged by this accounting fix.
+
 ### Native Test And Audio Checkpoints
 
 CI groups Debug and Release audio qualification into one runner per platform,
