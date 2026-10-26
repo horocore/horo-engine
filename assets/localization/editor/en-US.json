@@ -1585,6 +1585,7 @@
     "workspace.panel.game": {"text": "Game"},
     "workspace.panel.global_dock": {"text": "Bottom Dock"},
     "workspace.game.idle": {"text": "Press Play to start the game."},
+    "workspace.game.xr_mirror": {"text": "XR left-eye mirror"},
     "workspace.play.pause": {"text": "Pause"},
     "workspace.play.resume": {"text": "Resume"},
     "workspace.play.step": {"text": "Step"},

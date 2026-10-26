@@ -1,8 +1,8 @@
 #include "../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "../../support/renderer/RenderGraphSubmissionFixture.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
-#include "runtime/renderer/modules/vulkan/VulkanBackendModule.h"
 
+#include <VulkanBackendModule.h>
 #include <array>
 #include <bit>
 #include <catch2/catch_test_macros.hpp>

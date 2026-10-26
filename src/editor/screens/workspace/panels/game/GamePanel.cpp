@@ -30,9 +30,12 @@ namespace Horo::Editor {
                               EditorWorkspaceViewCommandData &, const EditorGuiContext &context) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
         ImGui::BeginChild("##GameContent", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        const bool selectedXr = viewModel.playViewSource == EditorPlayViewSource::SelectedXr;
+        if (selectedXr)
+            ImGui::TextWrapped("%s", context.localization.Get("editor", "workspace.game.xr_mirror").c_str());
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = size.x;
-        const float height = size.y;
+        const float height = selectedXr ? std::max(0.0F, ImGui::GetContentRegionAvail().y) : size.y;
         const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
         if (viewportRenderer_ != nullptr) {
             viewportRenderer_->RequestExtent(
@@ -45,7 +48,7 @@ namespace Horo::Editor {
         }
         if (const EditorViewportTextureView texture =
                 viewportRenderer_ != nullptr ? viewportRenderer_->TextureView() : EditorViewportTextureView{};
-            viewportRenderer_ != nullptr && viewportRenderer_->IsReady() && texture.IsValid() &&
+            viewportRenderer_ != nullptr && (selectedXr || viewportRenderer_->IsReady()) && texture.IsValid() &&
             (viewModel.playState == EditorPlayState::Playing || viewModel.playState == EditorPlayState::Paused)) {
             ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(texture.textureId), origin,
                                                  ImVec2(origin.x + width, origin.y + height), ImVec2(texture.u0, texture.v0),

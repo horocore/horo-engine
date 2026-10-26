@@ -313,6 +313,19 @@ namespace {
             CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);
     }
 
+    TEST_CASE("Selected XR mirror meaning is explicit in both supported locales", "[unit][editor][xr][localization]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        for (const auto &[locale, label] :
+             std::array{std::pair{"en-US", "XR left-eye mirror"}, std::pair{"tr-TR", "XR sol göz yansıtması"}}) {
+            Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{locale}};
+            Horo::Editor::LocalizationError error;
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            CHECK(service.Get("editor", "workspace.game.xr_mirror") == label);
+        }
+    }
+
     constexpr const char *AudioInspectorKeys[] = {
         "workspace.inspector.audio.allow",
         "workspace.inspector.audio.asset_missing",

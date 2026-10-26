@@ -15,6 +15,19 @@ namespace Horo::Render {
         inline constexpr ShaderParameterId ViewLayers{3};
     }  // namespace MultiviewShaderParameterIds
 
+    /** @brief Writes actual view/object/routing parameters into an owner-retained frame slot without allocation.
+     * @param layout Exact final-artifact reflected layout. @param views Complete ordered current runtime views.
+     * @param localToWorld Canonical instance transform. @param layers Exact target layer per view.
+     * @param destination Bounded scratch retained through the actual frontend upload/record operation.
+     * @return Written prefix extent or original semantic/packing error; failure preserves all destination bytes.
+     * @details Uses the SAME MaterialBinding writer as the allocating overload. No normal-frame compile, heap allocation,
+     * native call, independent reflection interpretation or clock is introduced. Padding is zero; any suffix is untouched.
+     */
+    [[nodiscard]] Result<std::size_t> PackMultiviewShaderParameters(const MaterialBindingLayout &layout,
+                                                                    std::span<const MultiviewSceneView> views,
+                                                                    const Math::Mat4 &localToWorld, std::span<const std::uint32_t> layers,
+                                                                    std::span<std::byte> destination);
+
     /** @brief Validates the exact bounded final-artifact matrix/array layout.
      * @param layout Canonical reflected immutable material layout.
      * @param viewCount Complete active runtime view count.

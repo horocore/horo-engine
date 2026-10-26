@@ -7,9 +7,18 @@ Result<Detail::VulkanEditorDevice> QueryDevice() const override {
     const auto format = presentation_->OutputFormat();
     if (format.HasError())
         return Result<Detail::VulkanEditorDevice>::Failure(format.ErrorValue());
-    return Result<Detail::VulkanEditorDevice>::Success({instance_, editorPhysical_, device_, graphicsQueue_, editorGraphicsFamily_,
-                                                        editorFrames_, format.Value(), dispatch_.getInstanceProcAddr,
-                                                        dispatch_.getDeviceProcAddr, editorGraphicsIdentity_});
+    return Result<Detail::VulkanEditorDevice>::Success(
+        {instance_,
+         editorPhysical_,
+         device_,
+         graphicsQueue_,
+         editorGraphicsFamily_,
+         editorFrames_,
+         format.Value(),
+         dispatch_.getInstanceProcAddr,
+         dispatch_.getDeviceProcAddr,
+         editorGraphicsIdentity_,
+         {enabledGraphics_.api, enabledGraphics_.instanceExtensions, enabledGraphics_.deviceExtensions}});
 }
 
 /** @copydoc IVulkanEditorGraphicsPort::FrameSlot */
@@ -28,8 +37,9 @@ Result<void> PrepareGuiComposition(const GuiCompositionRequest &request) overrid
 Result<void> ExecuteGui(const GuiCompositionRequest &request, Detail::IVulkanGuiEncoder &encoder) override {
     if (!presentation_ || !primaryOutputPrepared_ || request.frame != presentationFrameToken_)
         return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
-    const Detail::VulkanGuiOutput output{presentationFrame_.image, presentationFrame_.view, presentationFrame_.renderFinished,
-                                         presentationFrame_.extent, presentationOutput_.clearColor};
+    const Detail::VulkanGuiOutput output{presentationFrame_.image,          presentationFrame_.view,
+                                         presentationFrame_.renderFinished, presentationFrame_.extent,
+                                         presentationOutput_.clearColor,    !presentationOutput_.outputColor.has_value()};
     const auto recorded = graph_.ExecuteGui(request, output, encoder);
     if (recorded.HasValue())
         presentationCompletion_ = request.submission->signal;

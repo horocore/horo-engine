@@ -109,22 +109,22 @@ namespace Horo::Editor {
             return Result<Render::MeshData>::Success(std::move(mesh));
         }
 
-        [[nodiscard]] Render::RenderMeshSourceHandle HandleFor(const Assets::AssetId asset) noexcept {
+        [[nodiscard]] Render::RenderMeshSourceHandle HandleFor(const Assets::AssetId asset, const std::uint32_t generation) noexcept {
             std::uint64_t value = 1469598103934665603ULL;
             for (const std::uint8_t byte : asset.Bytes()) {
                 value ^= byte;
                 value *= 1099511628211ULL;
             }
             value |= 1ULL << 63U;
-            return {{value}, 1};
+            return {{value}, generation};
         }
     }  // namespace
 
     Result<EditorAssetMeshView> EditorAssetMeshCache::Load(const Assets::AssetId asset, const std::filesystem::path &absolutePath) {
-        if (!asset.IsValid() || !absolutePath.is_absolute())
+        if (generation_ == 0 || !asset.IsValid() || !absolutePath.is_absolute())
             return Result<EditorAssetMeshView>::Failure(MeshError("Imported mesh reference is invalid."));
         if (const auto found = meshes_.find(asset); found != meshes_.end())
-            return Result<EditorAssetMeshView>::Success({HandleFor(asset), found->second.get()});
+            return Result<EditorAssetMeshView>::Success({HandleFor(asset, generation_), found->second.get()});
 
         std::error_code error;
         if (const auto status = std::filesystem::symlink_status(absolutePath, error);
@@ -143,15 +143,27 @@ namespace Horo::Editor {
             return Result<EditorAssetMeshView>::Failure(decoded.ErrorValue());
         auto [inserted, created] = meshes_.try_emplace(asset, std::make_shared<const Render::MeshData>(std::move(decoded).Value()));
         static_cast<void>(created);
-        return Result<EditorAssetMeshView>::Success({HandleFor(asset), inserted->second.get()});
+        return Result<EditorAssetMeshView>::Success({HandleFor(asset, generation_), inserted->second.get()});
     }
 
     std::optional<EditorAssetMeshView> EditorAssetMeshCache::Find(const Assets::AssetId asset) const noexcept {
         const auto found = meshes_.find(asset);
-        return found == meshes_.end() ? std::nullopt : std::optional{EditorAssetMeshView{HandleFor(asset), found->second.get()}};
+        return generation_ == 0 || found == meshes_.end()
+                   ? std::nullopt
+                   : std::optional{EditorAssetMeshView{HandleFor(asset, generation_), found->second.get()}};
+    }
+
+    /** @copydoc EditorAssetMeshCache::Acquire */
+    Result<EditorAssetMeshLease> EditorAssetMeshCache::Acquire(const Assets::AssetId asset) const {
+        const auto found = meshes_.find(asset);
+        if (generation_ == 0 || found == meshes_.end())
+            return Result<EditorAssetMeshLease>::Failure(MeshError("Imported mesh source is missing or retired."));
+        return Result<EditorAssetMeshLease>::Success({HandleFor(asset, generation_), found->second});
     }
 
     void EditorAssetMeshCache::Clear() noexcept {
+        if (generation_ != 0)
+            generation_ = generation_ == std::numeric_limits<std::uint32_t>::max() ? 0 : generation_ + 1;
         meshes_.clear();
     }
 }  // namespace Horo::Editor

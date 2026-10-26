@@ -113,7 +113,7 @@ namespace Horo::Render {
             const auto leased =
                 role == RenderGraphExecutionRole::UiComposition
                     ? owner_->graphResourceLeases_->AcquireUi(graph.Resources(), *ui, transient, completionLease_, workloads)
-                    : owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads);
+                    : owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads, graph.templateBinding_);
             if (leased.HasError()) {
                 Abort();
                 return Result<void>::Failure(leased.ErrorValue());

@@ -4,6 +4,7 @@
 #include "Horo/Runtime/Render/RenderBackend.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
 
+#include <concepts>
 #include <type_traits>
 static_assert(std::is_same_v<decltype(Horo::Render::RenderGraphicsPipelineDescriptor{}.specializationValues),
                              std::vector<Horo::Render::ShaderSpecializationValue>>);
@@ -34,3 +35,10 @@ int main() {
     Horo::Render::IMaterialBindingBackend unsupported;
     return limits.IsValid() && unsupported.Realize({}).HasError() ? 0 : 1;
 }
+
+static_assert(requires(const Horo::Render::MaterialBindingLayout &layout, std::span<const Horo::Render::MaterialParameterValue> values,
+                       std::span<std::byte> bytes) {
+    {
+        Horo::Render::PackMaterialParameterBinding(layout, Horo::Render::ShaderBindingId{1}, values, bytes)
+    } -> std::same_as<Horo::Result<std::size_t>>;
+});

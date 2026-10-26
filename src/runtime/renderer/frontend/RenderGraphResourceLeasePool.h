@@ -1,6 +1,7 @@
 #pragma once
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "RenderGraphTemplate.h"
 #include "RenderResourceRegistry.h"
 #include "UiRenderSubmissionRetention.h"
 
@@ -36,7 +37,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources,
                                                                   UiRenderSubmission *ui = nullptr,
                                                                   RenderGraphTransientResourceSet *transient = nullptr,
-                                                                  std::span<const RenderGraphPassWorkload> workloads = {});
+                                                                  std::span<const RenderGraphPassWorkload> workloads = {},
+                                                                  std::shared_ptr<RenderGraphTemplateBindingState> templateBinding = {});
         /** @brief Captures the unique canonical UI contribution on this frame's existing completion lease.
          * @param resources Exact UI graph bindings. @param ui Canonical source leases to transfer on success.
          * @param transient Prepared UI isolation surfaces, distinct from any scene transient set.
@@ -85,6 +87,7 @@ namespace Horo::Render::Detail {
             void RollbackPins(std::size_t initialPins) noexcept;
             /** @brief Retains exact multiview mesh/material/view generations using this existing completion lease. */
             [[nodiscard]] Result<void> PinMultiview(const RenderGraphMultiview &workload);
+            std::shared_ptr<RenderGraphTemplateBindingState> templateBinding;
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;

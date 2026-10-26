@@ -11,6 +11,7 @@ namespace Horo::Render {
 namespace Horo::Editor {
 
     class IEditorUpdateBackend;
+    struct EditorOpenXRHostServices;
 
     /** @brief Installed-host verified activation result from a completed helper transaction. */
     enum class EditorVerifiedUpdateOutcome {
@@ -37,10 +38,12 @@ namespace Horo::Editor {
      * @param shaderCompiler Optional explicitly qualified offline/development host compiler override. Normal Metal startup uses the
      * immutable package under the explicit Editor asset root; no runtime tool discovery occurs.
      * @param uiPaintTarget Exact admitted route paired with shaderCompiler for the explicit override; absent retains packaged loading.
+     * @param xrHost Optional installer-owned XR policy and canonical package authority retained through native drain/shutdown.
      * @return Process exit code.
      */
     int RunEditorGuiApp(int argc, char **argv, const EditorUpdateHostServices *updateHost = nullptr,
                         std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler = {},
-                        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget = {});
+                        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget = {},
+                        const EditorOpenXRHostServices *xrHost = nullptr);
 
 }  // namespace Horo::Editor

@@ -21,9 +21,16 @@ namespace Horo::XR::OpenXRInternal {
      */
     class OpenXRVulkanSwapchainImages final : public IOpenXRSwapchainImages {
     public:
-        /** @brief Borrows the exact composed frontend, session graphics port/binding and Horo graphics queue. */
+        /** @brief Borrows the exact composed frontend, session graphics port/binding and Horo graphics queue.
+         * @param frontend Canonical selected renderer whose completion retires every fresh import.
+         * @param graphics Same session graphics admission owner.
+         * @param binding Stable same-device native session binding, retained through Reset.
+         * @param queue Exact bound Horo graphics queue; no alternate queue is created.
+         * @param views Actual selected-device image-view dispatch, retained through native view destruction.
+         */
         OpenXRVulkanSwapchainImages(Render::RenderFrontend &frontend, IOpenXRGraphicsBinding &graphics,
-                                    const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue);
+                                    const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
+                                    Render::Detail::VulkanExternalViewDispatch views);
         ~OpenXRVulkanSwapchainImages() override;
         OpenXRVulkanSwapchainImages(const OpenXRVulkanSwapchainImages &) = delete;
         OpenXRVulkanSwapchainImages &operator=(const OpenXRVulkanSwapchainImages &) = delete;
@@ -32,7 +39,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> Validate(const NativeSwapchainRequest &request) const override;
         [[nodiscard]] Result<std::int64_t> SelectFormat(const NativeSwapchainRequest &request,
                                                         std::span<const std::int64_t> formats) const override;
-        [[nodiscard]] Result<void> Enumerate(std::uint32_t count, const IOpenXRSwapchainImageEnumeration &enumeration) override;
+        [[nodiscard]] Result<void> Enumerate(const NativeSwapchainRequest &request, std::uint32_t count,
+                                             const IOpenXRSwapchainImageEnumeration &enumeration) override;
         [[nodiscard]] Result<Render::RenderTextureHandle> Import(const NativeSwapchainRequest &request, const XRSwapchainImageId &image,
                                                                  std::uint32_t index) override;
         [[nodiscard]] Result<void> Retire(Render::RenderTextureHandle texture) override;
@@ -46,6 +54,8 @@ namespace Horo::XR::OpenXRInternal {
         const XrGraphicsBindingVulkanKHR *binding_;
         Render::RenderQueueId queue_;
         OpenXRSwapchain *owner_{};
+        Render::Detail::VulkanExternalViewDispatch views_;
+
         std::array<std::shared_ptr<Source>, 64> sources_;
         std::uint32_t count_{};
         Render::RenderTextureHandle imported_;

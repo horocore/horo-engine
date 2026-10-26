@@ -1,5 +1,6 @@
 #pragma once
 
+#include "EditorPlayState.h"
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorMenuModel.h"
@@ -39,16 +40,6 @@
 #include <vector>
 
 namespace Horo::Editor {
-    /** @brief Presentation projection of the editor play-session lifecycle. */
-    enum class EditorPlayState : std::uint8_t {
-        Idle,
-        Starting,
-        Playing,
-        Paused,
-        Stopping,
-        Failed,
-    };
-
     /** @brief Typed presentation kind projected from authored scene components. */
     enum class SceneObjectKind : std::uint8_t {
         Mesh,
@@ -535,6 +526,7 @@ namespace Horo::Editor {
         bool canUndo = false;
         bool canRedo = false;
         EditorPlayState playState{EditorPlayState::Idle};
+        EditorPlayViewSource playViewSource{EditorPlayViewSource::AuthoredCamera}; /**< Actual host-selected private projection. */
         std::string playError;
         float fps = 0.0F;
 

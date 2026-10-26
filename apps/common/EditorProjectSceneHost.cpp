@@ -71,23 +71,8 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(structural.ErrorValue());
                 if (auto added = scenes_->AddStructuralParticipant(std::move(structural).Value()); added.HasError())
                     return added;
-                auto ai = AI::AiSceneRuntime::Create();
-                if (ai.HasError())
-                    return Result<void>::Failure(ai.ErrorValue());
-                ai_ = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
-                controllers_ = policy.aiControllers;
-                if (auto added = scenes_->AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_));
-                    added.HasError())
+                if (auto added = RegisterPresentationParticipants(policy); added.HasError())
                     return added;
-                if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_)); added.HasError())
-                    return added;
-                // Last participant: sealing the UI generation must be followed only by the Scene publication claim.
-                if (policy.uiSources) {
-                    auto ui = policy.uiSources->MakeParticipant(*scenes_, registry_, *uiLoads_,
-                                                                policy.cooked ? std::optional{policy.cooked->target} : std::nullopt);
-                    if (auto added = scenes_->AddActivationParticipant(std::move(ui)); added.HasError())
-                        return added;
-                }
                 if (policy.prefabGranted) {
                     auto limits = Prefab::PrefabLimitProfile::Create({});
                     if (limits.HasError())
@@ -99,6 +84,33 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             }
 
+            /** @brief Registers the same canonical AI, selected XR and final UI participants in publication order. */
+            Result<void> RegisterPresentationParticipants(const EditorProjectScenePolicy &policy) {
+                auto ai = AI::AiSceneRuntime::Create();
+                if (ai.HasError())
+                    return Result<void>::Failure(ai.ErrorValue());
+                ai_ = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
+                controllers_ = policy.aiControllers;
+                if (auto added = scenes_->AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_));
+                    added.HasError())
+                    return added;
+                if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_)); added.HasError())
+                    return added;
+                selectedXrHost_ = policy.xrHost;
+                if (policy.xrHost) {
+                    if (auto added = scenes_->AddActivationParticipant(policy.xrHost->MakeSceneParticipant()); added.HasError())
+                        return added;
+                }
+                // Last participant: sealing the UI generation must be followed only by the Scene publication claim.
+                if (policy.uiSources) {
+                    auto ui = policy.uiSources->MakeParticipant(*scenes_, registry_, *uiLoads_,
+                                                                policy.cooked ? std::optional{policy.cooked->target} : std::nullopt);
+                    if (auto added = scenes_->AddActivationParticipant(std::move(ui)); added.HasError())
+                        return added;
+                }
+                return Result<void>::Success();
+            }
+
             /** @brief Transfers the preview service to its actual RuntimeHost scheduler; resources remain pinned here. */
             std::unique_ptr<Runtime::RuntimeSceneService> ReleaseScenes() noexcept {
                 return std::move(scenes_);
@@ -106,6 +118,10 @@ namespace Horo::Application::Internal {
 
             Physics::PhysicsRuntimeMode PhysicsMode() const noexcept {
                 return physics_->Mode();
+            }
+
+            const Editor::IEditorPlayXrHost *SelectedXrHost() const noexcept override {
+                return selectedXrHost_;
             }
 
             Runtime::RuntimeSceneService &Scenes() noexcept override {
@@ -213,6 +229,8 @@ namespace Horo::Application::Internal {
             }
 
         private:
+            Editor::IEditorPlayXrHost *selectedXrHost_{};
+
             /** @brief Captures immutable registry/cook payloads before constructing any Scene/native owner. */
             Result<void> CaptureAssets(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                                        const Runtime::RuntimeSceneDefinition *definition) {

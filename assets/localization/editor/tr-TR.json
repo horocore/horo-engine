@@ -1585,6 +1585,7 @@
     "workspace.panel.game": {"text": "Oyun"},
     "workspace.panel.global_dock": {"text": "Alt Panel"},
     "workspace.game.idle": {"text": "Oyunu başlatmak için Oynat'a basın."},
+    "workspace.game.xr_mirror": {"text": "XR sol göz yansıtması"},
     "workspace.play.pause": {"text": "Duraklat"},
     "workspace.play.resume": {"text": "Sürdür"},
     "workspace.play.step": {"text": "Adım"},

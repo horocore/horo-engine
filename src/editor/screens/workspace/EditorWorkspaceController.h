@@ -1,5 +1,4 @@
 #pragma once
-
 #include "EditorWorkspaceHostServices.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/WorldBakeApplication.h"
@@ -25,6 +24,7 @@
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
+#include "editor/renderer/xr/EditorXrSceneGeometry.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/PCGPreviewWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
@@ -51,6 +51,7 @@ namespace Horo::Platform {
 }
 
 namespace Horo::Editor {
+    class IEditorPlayXrHost;
     class ILocalizationService;
     struct EditorViewportPickResult;
     /** @brief Host presentation adapter for one already-validated source-open result. */
@@ -122,6 +123,17 @@ namespace Horo::Editor {
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
     public:
+        /** @brief Supplies the SAME workspace caches/document through a weak owner-lane fence. */
+        [[nodiscard]] EditorXrSceneSourcePort XrSceneSource() const noexcept {
+            return m_xrSceneSource.Port();
+        }
+
+        /** @brief Selects the actual application XR host; null preserves authored-camera desktop Play. */
+        void SelectXrPlayHost(IEditorPlayXrHost *host) noexcept {
+            m_selectedXrPlayHost = host;
+            m_viewModel.playViewSource = host ? EditorPlayViewSource::SelectedXr : EditorPlayViewSource::AuthoredCamera;
+        }
+
         EditorWorkspaceController(const std::filesystem::path &projectRoot, Runtime::RuntimeSceneService &runtimeScene,
                                   const Assets::AssetRegistrySnapshot &assetRegistry = {},
                                   const EditorWorkspaceDependencies &dependencies = {});
@@ -566,6 +578,8 @@ namespace Horo::Editor {
         EditorViewportModel m_viewport{m_dataBus};
         Runtime::PrimitiveMeshCache m_primitiveMeshCache;
         EditorAssetMeshCache m_assetMeshCache;
+        EditorXrSceneSourceOwner m_xrSceneSource{m_document, m_primitiveMeshCache, m_assetMeshCache};
+        IEditorPlayXrHost *m_selectedXrPlayHost{};
         EditorViewportSceneSnapshot m_viewportScene;
 
         struct CameraPreviewState final {

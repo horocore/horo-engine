@@ -5,6 +5,7 @@
  * @brief Backend-neutral editor viewport presentation contract.
  */
 
+#include "EditorViewportTextureView.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderBackend.h"
 #include "editor/renderer/EditorViewportScene.h"
@@ -28,22 +29,6 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] constexpr bool operator==(const EditorViewportExtent &) const noexcept = default;
-    };
-
-    /** @brief Backend-supplied GUI texture identity and normalized presentation coordinates. */
-    struct EditorViewportTextureView {
-        std::uintptr_t textureId{0};
-        float u0{0.0F};
-        float v0{0.0F};
-        float u1{1.0F};
-        float v1{1.0F};
-        Render::RenderTextureViewHandle sampledView; /**< Exact generation owned by this viewport; native ID alone is insufficient. */
-        Render::RenderSamplerHandle sampledSampler;  /**< Optional matching frontend-owned sampler. */
-
-        /** @brief Reports whether the matching GUI bridge can consume this view. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return textureId != 0;
-        }
     };
 
     /** @brief Per-frame editor grid presentation options requested by the viewport panel. */

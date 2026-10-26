@@ -20,6 +20,66 @@ target_compile_features(HoroHostSignatureDocuments PUBLIC cxx_std_20)
 target_include_directories(HoroHostSignatureDocuments PUBLIC "${HORO_HOST_SIGNATURE_HEADERS}")
 target_link_libraries(HoroHostSignatureDocuments PUBLIC HoroEngine::PackageSecurity PRIVATE HoroFoundationJsonInternal)
 
+if(HORO_BUILD_XR_OPENXR)
+    # First-party installed-component admission belongs to the application root,
+    # not XRRuntime, ExtensionHost or a concrete renderer. Only this staged
+    # non-installed contract is visible to explicitly composed host consumers.
+    set(HORO_OPENXR_PRODUCT_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/openxr_product_host_headers")
+    file(MAKE_DIRECTORY "${HORO_OPENXR_PRODUCT_HOST_HEADERS}")
+    configure_file(common/xr/OpenXRComponentManifest.h
+        "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRComponentManifest.h" COPYONLY)
+    configure_file(common/xr/OpenXRProductDeployment.h
+        "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRProductDeployment.h" COPYONLY)
+    configure_file(common/xr/OpenXRLoaderLease.h
+        "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRLoaderLease.h" COPYONLY)
+    configure_file(common/xr/OpenXRInstalledProductSelection.h
+        "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRInstalledProductSelection.h" COPYONLY)
+    configure_file(common/xr/OpenXRInstalledHostCatalog.h
+        "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRInstalledHostCatalog.h" COPYONLY)
+    add_library(HoroOpenXRProductHost STATIC
+        common/xr/OpenXRComponentManifest.cpp
+        common/xr/OpenXRComponentVerification.cpp
+        common/xr/OpenXRProductDeployment.cpp
+        common/xr/OpenXRLoaderLease.cpp
+        common/xr/OpenXRInstalledProductSelection.cpp
+        common/xr/OpenXRInstalledHostCatalog.cpp)
+    target_compile_features(HoroOpenXRProductHost PUBLIC cxx_std_20)
+    target_include_directories(HoroOpenXRProductHost PUBLIC "${HORO_OPENXR_PRODUCT_HOST_HEADERS}")
+    target_link_libraries(HoroOpenXRProductHost
+        PUBLIC HoroEngine::PackageSecurity HoroEngine::XRApi HoroEngine::XRRuntime HoroEngine::Platform HoroPackageProjectHost
+        PRIVATE HoroFoundationJsonInternal HoroPackageContentStagingInternal HoroHostSignatureDocuments)
+endif()
+
+if(HORO_BUILD_XR_OPENXR)
+    # Application action composition is independently testable without selecting a concrete renderer.
+    set(HORO_OPENXR_BINDING_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/openxr_binding_headers")
+    file(MAKE_DIRECTORY "${HORO_OPENXR_BINDING_HEADERS}")
+    configure_file(common/xr/OpenXRApplicationBindings.h "${HORO_OPENXR_BINDING_HEADERS}/OpenXRApplicationBindings.h" COPYONLY)
+    configure_file(common/xr/OpenXRInstalledBindings.h "${HORO_OPENXR_BINDING_HEADERS}/OpenXRInstalledBindings.h" COPYONLY)
+    add_library(HoroOpenXRApplicationBindings STATIC common/xr/OpenXRApplicationBindings.cpp common/xr/OpenXRInstalledBindings.cpp)
+    target_compile_features(HoroOpenXRApplicationBindings PUBLIC cxx_std_20)
+    target_include_directories(HoroOpenXRApplicationBindings PUBLIC "${HORO_OPENXR_BINDING_HEADERS}")
+    target_link_libraries(HoroOpenXRApplicationBindings PUBLIC HoroXROpenXRHostInterface HoroOpenXRProductHost
+        PRIVATE HoroEngine::XROpenXR HoroFoundationJsonInternal)
+endif()
+
+if(HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroEditorVulkanXrHostInterface)
+    set(HORO_OPENXR_APPLICATION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/openxr_application_headers")
+    file(MAKE_DIRECTORY "${HORO_OPENXR_APPLICATION_HEADERS}")
+    configure_file(common/xr/OpenXRApplicationSession.h
+        "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRApplicationSession.h" COPYONLY)
+    configure_file(common/xr/OpenXRInputClock.h
+        "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRInputClock.h" COPYONLY)
+    configure_file(common/xr/OpenXRPlayHost.h "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRPlayHost.h" COPYONLY)
+    add_library(HoroOpenXRApplicationHost STATIC common/xr/OpenXRApplicationSession.cpp
+        common/xr/OpenXRApplicationInput.cpp common/xr/OpenXRApplicationProjection.cpp common/xr/OpenXRInputClock.cpp
+        common/xr/OpenXRPlayHost.cpp common/xr/OpenXRPlayFrames.cpp common/xr/OpenXRPlayScene.cpp)
+    target_compile_features(HoroOpenXRApplicationHost PUBLIC cxx_std_20)
+    target_include_directories(HoroOpenXRApplicationHost PUBLIC "${HORO_OPENXR_APPLICATION_HEADERS}")
+    target_link_libraries(HoroOpenXRApplicationHost
+        PUBLIC HoroEditorPlayXrHostInterface HoroEditorXrSceneInternal HoroXRRuntimeHostInterface HoroEngine::RuntimeScene HoroOpenXRProductHost HoroOpenXRApplicationBindings HoroXROpenXRHostInterface HoroXROpenXRVulkanHostInterface HoroRenderVulkanHostInterface HoroEngine::XRRuntime HoroEngine::Runtime
+        PRIVATE HoroEngine::XROpenXR HoroXROpenXRVulkan HoroEngine::RenderFrontend HoroEditorVulkanXrHostInterface)
+endif()
 
 add_library(HoroHostModuleComposition STATIC
     common/HostModuleComposition.cpp
@@ -95,7 +155,7 @@ configure_file(common/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEAD
 add_library(HoroEditorSceneProductHost STATIC common/EditorProjectSceneHost.cpp)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
-target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySceneHostInternal HoroScenePhysicsHost
+target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlayXrHostInterface HoroEditorPlaySceneHostInternal HoroScenePhysicsHost
         HoroEngine::Application HoroEngine::ProjectCollisionSettings HoroEngine::AISceneIntegration
         HoroEngine::PrefabRuntime HoroEngine::SceneRuntimeConversion HoroRuntimeUiPaintHost)
 
@@ -472,6 +532,25 @@ if(HORO_BUILD_EDITOR_GUI)
     )
 
     target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull)
+    if(HORO_BUILD_XR_OPENXR)
+        set(HORO_EDITOR_XR_BOOTSTRAP_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_xr_bootstrap_headers")
+        file(MAKE_DIRECTORY "${HORO_EDITOR_XR_BOOTSTRAP_HEADERS}")
+        foreach(header EditorOpenXRBootstrap.h EditorOpenXRHostServices.h)
+            configure_file("HoroEditor/app/${header}" "${HORO_EDITOR_XR_BOOTSTRAP_HEADERS}/${header}" COPYONLY)
+        endforeach()
+        add_library(HoroEditorOpenXRBootstrap STATIC HoroEditor/app/EditorOpenXRBootstrap.cpp)
+        target_compile_features(HoroEditorOpenXRBootstrap PUBLIC cxx_std_20)
+        target_include_directories(HoroEditorOpenXRBootstrap PUBLIC "${HORO_EDITOR_XR_BOOTSTRAP_HEADERS}")
+        target_link_libraries(HoroEditorOpenXRBootstrap
+            PUBLIC HoroEngine::Foundation HoroEngine::RuntimeScene HoroOpenXRProductHost
+            PRIVATE HoroOpenXRApplicationBindings HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Platform HoroEngine::XRRuntime)
+        target_compile_definitions(HoroEditor PRIVATE HORO_HAS_OPENXR_HOST=1)
+        target_link_libraries(HoroEditor PRIVATE HoroEngine::XRRuntime HoroOpenXRProductHost HoroEditorOpenXRBootstrap)
+        if(TARGET HoroOpenXRApplicationHost)
+            target_compile_definitions(HoroEditor PRIVATE HORO_HAS_OPENXR_VULKAN_HOST=1)
+            target_link_libraries(HoroEditor PRIVATE HoroOpenXRApplicationHost)
+        endif()
+    endif()
     if(TARGET HoroAudioSdl3)
         target_link_libraries(HoroEditor PRIVATE HoroEngine::AudioSdl3)
         target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=1)

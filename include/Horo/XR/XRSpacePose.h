@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <type_traits>
 
 namespace Horo::XR {
     /** @brief Horo XR coordinates use metres in right-handed, Y-up, negative-Z-forward scene space. */
@@ -28,6 +29,7 @@ namespace Horo::XR {
         Local,
         Stage,
         World,
+        Action, /**< Native action-owned grip/aim space; never an alias for a reference or world space. */
         Count
     };
 
@@ -63,7 +65,13 @@ namespace Horo::XR {
         Count
     };
 
-    /** @brief Strong positive nanosecond timestamp whose Tag prevents implicit clock-domain conversion. */
+    struct XRSimulationTimeTag;
+
+    /** @brief Strong domain-local timestamp; only simulation admits the canonical zero epoch.
+     * @details Runtime and prediction timestamps remain strictly positive. Simulation is elapsed fixed-step time:
+     * zero is a valid first/paused cutoff, while its negative default representation remains invalid.
+     * These values cannot convert clock domains or issue simulation ticks.
+     */
     template <typename Tag> class XRTimePoint final {
     public:
         /** @brief Constructs the reserved invalid timestamp. */
@@ -71,23 +79,26 @@ namespace Horo::XR {
 
         /**
          * @brief Creates a typed monotonic timestamp.
-         * @param nanoseconds Positive nanoseconds in the clock domain named by Tag.
+         * @param nanoseconds Domain-local nanoseconds; nonnegative for simulation, strictly positive otherwise.
          * @return Typed value or XRErrors::OperationInvalid.
          */
         [[nodiscard]] static Result<XRTimePoint> Create(const std::int64_t nanoseconds) {
-            if (nanoseconds <= 0)
+            if (nanoseconds < 0 || (!std::is_same_v<Tag, XRSimulationTimeTag> && nanoseconds == 0))
                 return Result<XRTimePoint>::Failure(MakeError(XRErrors::OperationInvalid));
             XRTimePoint value;
             value.nanoseconds_ = nanoseconds;
             return Result<XRTimePoint>::Success(value);
         }
 
-        /** @brief Checks representation only. @return True for a positive timestamp. */
+        /** @brief Checks representation only. @return True for an admitted domain-local timestamp, including simulation zero. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return nanoseconds_ > 0;
+            return std::is_same_v<Tag, XRSimulationTimeTag> ? nanoseconds_ >= 0 : nanoseconds_ > 0;
         }
 
-        /** @brief Returns the exact domain-local timestamp. @return Positive nanoseconds, or zero when invalid. */
+        /** @brief Returns the exact domain-local timestamp.
+         * @return Exact representation: simulation default-invalid is -1, valid simulation starts at zero;
+         * runtime/prediction default-invalid is zero and their valid values are positive.
+         */
         [[nodiscard]] constexpr std::int64_t Nanoseconds() const noexcept {
             return nanoseconds_;
         }
@@ -95,17 +106,16 @@ namespace Horo::XR {
         constexpr auto operator<=>(const XRTimePoint &) const noexcept = default;
 
     private:
-        std::int64_t nanoseconds_{};
+        std::int64_t nanoseconds_{std::is_same_v<Tag, XRSimulationTimeTag> ? -1 : 0};
     };
 
     struct XRRuntimeTimeTag;
-    struct XRSimulationTimeTag;
     struct XRRenderPredictionTimeTag;
     struct XRWorldOriginRevisionTag;
 
     /** @brief Timestamp in the selected XR runtime clock domain. */
     using XRRuntimeTime = XRTimePoint<XRRuntimeTimeTag>;
-    /** @brief Timestamp in the authoritative fixed-simulation clock domain. */
+    /** @brief Elapsed authoritative fixed-simulation time; epoch zero is valid and paused cutoffs may repeat it. */
     using XRSimulationTime = XRTimePoint<XRSimulationTimeTag>;
     /** @brief Timestamp in the render prediction clock domain. */
     using XRRenderPredictionTime = XRTimePoint<XRRenderPredictionTimeTag>;
@@ -184,6 +194,8 @@ namespace Horo::XR {
         [[nodiscard]] const XRPoseComponents &Components() const noexcept;
 
     private:
+        // Only snapshot capacity storage may hold inert entries outside its published prefix.
+        friend class XRTrackingSnapshot;
         explicit XRPoseSample(const XRPoseDescriptor &descriptor) noexcept;
 
         XRSessionId session_;

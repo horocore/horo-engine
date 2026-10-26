@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/UiPaintKernel.h"
+#include "RenderExternalImages.h"
 
 namespace Horo::Tests::RenderFrontendTesting {
     void Check(const bool condition) {
@@ -18,7 +19,7 @@ namespace Horo::Tests::RenderFrontendTesting {
     /** @brief Metadata test resident only; this deliberately does not execute shader code. */
     class TrackingUiPaintKernel final : public IResidentUiPaintKernel {};
 
-    class TrackingBackend final : public IRenderBackend {
+    class TrackingBackend final : public IRenderBackend, public Detail::IRenderExternalTextureBackend {
     public:
         TrackingBackend()
             : capabilities_{.backend = RenderBackendId{"tracking"},
@@ -105,8 +106,28 @@ namespace Horo::Tests::RenderFrontendTesting {
             ++lifecycleState.destroyMeshCount;
         }
 
-        void DestroyTexture(std::uint64_t) noexcept override {
+        Result<std::uint64_t> ImportExternalTexture(const Detail::IRenderExternalTextureSource &source,
+                                                    RenderResourceNativeLifetime lifetime) override {
+            if (auto current = source.Validate(); current.HasError())
+                return Result<std::uint64_t>::Failure(current.ErrorValue());
+            for (auto &entry : external_) {
+                if (entry.id != 0)
+                    continue;
+                entry.id = lifecycleState.nextResourceInstance++;
+                entry.lifetime = std::move(lifetime);
+                return Result<std::uint64_t>::Success(entry.id);
+            }
+            return Result<std::uint64_t>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        void DestroyTexture(const std::uint64_t id) noexcept override {
             ++lifecycleState.destroyTextureCount;
+            for (auto &entry : external_) {
+                if (entry.id == id) {
+                    entry.lifetime = {};
+                    entry.id = 0;
+                }
+            }
         }
 
         void DestroyTextureView(std::uint64_t) noexcept override {
@@ -309,6 +330,11 @@ namespace Horo::Tests::RenderFrontendTesting {
                 lifecycleState.graphLease->Release();
                 lifecycleState.graphLease = nullptr;
             }
+            // NativeAlreadyReleased registry drain requires every backend-owned lifetime to be terminal first.
+            for (auto &entry : external_) {
+                entry.lifetime = {};
+                entry.id = 0;
+            }
             if (initialized_) {
                 ++lifecycleState.shutdownCount;
                 initialized_ = false;
@@ -331,6 +357,12 @@ namespace Horo::Tests::RenderFrontendTesting {
             return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
         }
 
+        struct ExternalRegistration final {
+            std::uint64_t id{};
+            RenderResourceNativeLifetime lifetime;
+        };
+
+        std::array<ExternalRegistration, 8> external_;
         RenderBackendCapabilities capabilities_;
         bool initialized_{false};
     };

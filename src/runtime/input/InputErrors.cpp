@@ -5,6 +5,42 @@ namespace Horo::Input::Errors {
         const ErrorDomainId Domain{"horo.input"};
     }
 
+    const ErrorCodeDescriptor CollectionInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"input.collection.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Input collection candidate or canonical action registration is invalid.",
+        .remediationHint = "Use the current owner-thread collection and a validated canonical registration.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor CollectionStale{
+        .domain = Domain,
+        .code = ErrorCode{"input.collection.stale"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Input collection owner, source, assignment or frame generation is stale.",
+        .remediationHint = "Use the current owner-thread collection and a validated canonical registration.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor CollectionCapacity{
+        .domain = Domain,
+        .code = ErrorCode{"input.collection.capacity"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Input collection fixed source or action capacity is exhausted.",
+        .remediationHint = "Use the current owner-thread collection and a validated canonical registration.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor CollectionWrongThread{
+        .domain = Domain,
+        .code = ErrorCode{"input.collection.wrong_thread"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Input collection must run on its router owner thread.",
+        .remediationHint = "Use the current owner-thread collection and a validated canonical registration.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor ProfileInvalidSchema{
         .domain = Domain,
         .code = ErrorCode{"input.profile.invalid_schema"},

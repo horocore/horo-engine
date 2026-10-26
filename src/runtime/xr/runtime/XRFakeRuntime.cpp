@@ -67,7 +67,7 @@ namespace Horo::XR {
     /** @copydoc XRFakeRuntime::ValidateStep */
     XRFrameStatus XRFakeRuntime::ValidateStep(const XRFakeStep &step, const XRSessionId &session) const {
         using enum XRFakeFailure;
-        if ((step.event && *step.event > XRSessionEvent::InstanceLost) || step.failure >= Count)
+        if ((step.event && *step.event > XRSessionEvent::Ready) || step.failure >= Count)
             return XRFrameStatus::InvalidInput;
         if (!step.executeFrame && (!step.event || step.actionCount != 0 || step.viewCount != 0 || step.failure != None))
             return XRFrameStatus::InvalidInput;

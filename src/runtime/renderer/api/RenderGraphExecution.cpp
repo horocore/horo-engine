@@ -362,8 +362,9 @@ namespace Horo::Render {
 
     /** @copydoc CompiledRenderGraphExecution::CompiledRenderGraphExecution */
     CompiledRenderGraphExecution::CompiledRenderGraphExecution(CompiledRenderGraphExecution &&other) noexcept
-        : owner_(std::exchange(other.owner_, {})), resources_(std::move(other.resources_)), passes_(std::move(other.passes_)),
-          usages_(std::move(other.usages_)), dependencies_(std::move(other.dependencies_)), transitions_(std::move(other.transitions_)),
+        : templateBinding_(std::move(other.templateBinding_)), owner_(std::exchange(other.owner_, {})),
+          resources_(std::move(other.resources_)), passes_(std::move(other.passes_)), usages_(std::move(other.usages_)),
+          dependencies_(std::move(other.dependencies_)), transitions_(std::move(other.transitions_)),
           releaseTransfers_(std::move(other.releaseTransfers_)), acquireTransfers_(std::move(other.acquireTransfers_)),
           importedStates_(std::move(other.importedStates_)),
 
@@ -372,6 +373,7 @@ namespace Horo::Render {
     /** @copydoc CompiledRenderGraphExecution::operator= */
     CompiledRenderGraphExecution &CompiledRenderGraphExecution::operator=(CompiledRenderGraphExecution &&other) noexcept {
         if (this != &other) {
+            templateBinding_ = std::move(other.templateBinding_);
             owner_ = std::exchange(other.owner_, {});
             resources_ = std::move(other.resources_);
             passes_ = std::move(other.passes_);

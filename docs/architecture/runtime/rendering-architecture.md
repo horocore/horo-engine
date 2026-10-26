@@ -2129,3 +2129,65 @@ Required tests cover:
 See [Canonical graph submission and native command retirement](vulkan-command-execution.md)
 for the HORO-326 shared submission, imported-state, bounded closing, device identity
 and native memory-charge lifetime contract and affected caller migration.
+
+
+#### Private external graph topology binding
+
+The selected XR host may prepare immutable graph topology and bounded execution storage before interactive admission through the noninstalled `HoroRenderGraphTemplateInterface`. Typed external texture slots are logical declarations, never fabricated resident identities. The ordinary graph compiler remains the sole schedule and synchronization compiler. A prepared template cannot be submitted until every external slot is bound to an actual fresh frontend texture generation, with its complete descriptor, device incarnation, acquired state and required final release revalidated against the canonical resource registry. Fixed states are admitted cold; a different state/configuration requires a new cold preparation after retirement, rather than a frame-time recompile or reinterpretation.
+
+A successful binding is consumed once by the existing graph-resource completion lease. The lease retains its cold-allocated storage receipt until the same scene and GUI queued references complete. The binding storage cannot change while that lease is outstanding, including presentation failure, abort and late completion. This receipt is allocation backing/lifetime state only: it creates no submission ID, scheduler, queue, resource registry or retirement authority. Backend completion polling and these mutations remain on the existing render-owner lane. All failed partial binding validation leaves the affected unqueued storage unsubmitable.
+
+This adds private friend access and a shared storage receipt to `CompiledRenderGraphExecution`, plus private typed declarations on the existing builder. Installed public methods, ownership targets and ordinary caller behavior are unchanged; public consumer targets must still be rebuilt because the class layout changes. The receipt's control block is prepared outside frame work, and ordinary graphs carry an empty receipt. Private users link the narrow template interface and the existing frontend implementation. A template owner may be destroyed after synchronous encoding without retiring the queue: the existing completion lease retains its receipt independently. Actual native image wrappers/views and acquisition leases retain their separate canonical resource lifetime until real completion.
+
+Successful binding is intended to perform no owner-thread C++ allocations; regression instrumentation measures only that stated scope. This does not establish allocation behavior of native import, view creation, shader/material preparation, graph encoding or complete XR frames. Native import allocation backing must be prepared separately and must never fall back to heap allocation on an admitted interactive path.
+
+### Private XR native image registration backing
+
+The selected Vulkan resource owner cold-prepares fixed shared-control-block cells and
+reusable nodes for its existing texture/view registries. These are allocation backing,
+not additional resident maps or completion authorities. Every acquisition still receives
+a fresh backend and frontend generation. Exhausted cells, nodes, or reserved bucket
+capacity reject admission; normal-frame external registration has no heap fallback.
+Queued resource references retain the cell owner through the final weak reference,
+including after the runtime drops its own pool pointer. Allocation, final shared-owner
+release, and final weak control-block release are all serialized on the existing
+render-owner completion lane. Pool retention prevents dangling storage, but grants no
+foreign-thread release permission; private callers must never export pooled shared/weak
+owners to another thread's retirement path.
+
+The private swapchain image translator now receives the exact immutable allocation
+request during enumeration and the selected device's image-view dispatch at composition.
+It creates attachment and explicitly sampled first-eye views before the first acquisition.
+The Vulkan wrappers borrow those views and never destroy them. Canonical registration
+retirement must finish before translator Reset destroys the native views, and Reset must
+finish before the native swapchain is destroyed. Partial view preparation retains its
+successful prefix for the same rollback path. This migrates only the noninstalled
+IOpenXRSwapchainImages enumeration contract and its concrete/test adapters; public XR
+and Render API declarations and numeric identities are unchanged.
+
+This storage change alone does not qualify the complete XR frame as allocation-free:
+frontend registration capacities, actual mirror/output admission, the post-GUI layout
+restoration, and the App frame producer remain separate required integration evidence.
+
+The selected-XR desktop viewport is an explicitly sampled first-eye mirror, not an
+independent desktop camera. Its initial qualified private route admits only the actual
+sampled layer-zero UNORM color view and the existing legacy unmanaged desktop output.
+It preserves numeric color values without asserting calibrated color matching; sRGB
+images, HDR/explicit output transforms and other array layers reject rather than silently
+reinterpret. The compositor currently admits only RuntimeDefault color space; this
+mirror route does not add a new compositor color-space policy.
+
+The GUI tail validates the current acquisition again before encoding, requires defined
+scene contents, samples the eye, and then records the exact required attachment-layout
+and graphics-queue restoration after the actual GUI encoder. The scene's earlier release
+barrier is insufficient after sampling. Final native state is committed only after the
+same tail submission succeeds. The existing scene/GUI lease retains the image and pool
+backing through its actual final completion, including delayed completion and shutdown.
+Failed recording or submission cannot publish the planned sample/restoration state;
+abort preserves the original native state or the existing submitted cleanup debt.
+
+Pre-ticket GUI preparation is transactional: a rejected resource/output/ticket restores
+only the new attempt's update, barrier, and retained-resource suffixes. Earlier scene
+state, pins and submission obligations remain intact. No planned upload can become a
+retry's apparent producer before that upload was actually encoded and submitted. Once a
+native ticket is admitted, the existing canonical abort/completion path owns its debt.

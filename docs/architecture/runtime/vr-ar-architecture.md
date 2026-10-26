@@ -40,7 +40,8 @@ Activation/replacement/shutdown are host lifecycle operations, not frame work.
 Headless compositions continue to omit both XRRuntime and XROpenXR.
 
 `XRFeatureNegotiation.h` resolves the two version-one requirement sets against
-one immutable system capability publication before any session resource preparation.
+one immutable system capability publication before the canonical lifecycle resource
+transaction and Ready publication.
 Its fixed-size plan records required, enabled optional, explicitly disabled, and
 declared baseline-projection fallback decisions with exact system/revision and finite
 limits. Post-one feature requests fail unsupported even if discovery reports them.
@@ -55,6 +56,24 @@ it does not rediscover features or choose an implicit native fallback.
 The host must still combine real selected-backend, Renderer, Input, Platform and
 product-policy evidence before constructing the snapshot; these contracts alone do
 not claim a production OpenXR backend or qualified product tuple.
+
+OpenXR discovery has an explicit private ordering constraint: reference-space and
+swapchain-format enumeration requires an actual native session. The selected backend
+may therefore prepare one unpublished native session against its retained verified
+installation, actual instance/system discovery, selected graphics binding and current
+host attempt. This preparation issues no Horo session identity, capability availability,
+Ready state or frame authority. Mandatory owner/attempt fences surround native work and
+census borrows; failed destruction retains native children and loader ownership until
+explicit successful retirement. Pre-session discovery must never fabricate space or
+format observations to satisfy feature negotiation.
+
+After actual session census and renderer/product admission form a complete plan,
+`XRSessionLifecycle` remains the sole Horo session candidate/generation issuer. Its
+existing resource transaction binds and activates the same prepared native session
+against that issued identity and complete plan. Reused or stale attempts cannot rebind
+it. This private ordering does not add a second lifecycle, device, frame queue or clock.
+The existing complete-input native `Create` entry point retains its initial full
+validation and uses the same native preparation/activation/rollback implementation.
 
 [ADR-157](../../adr/157-xr-ownership-runtime-composition-and-capability-tier.md)
 is the normative foundation for XR module ownership, host composition, typed
@@ -812,3 +831,107 @@ device release gate.
 - [Android Platform Host](../foundation/android-platform-host.md)
 - [Editor AI Agent Architecture](../editor/editor-ai-agent-architecture.md)
 - [Application Security](../security/application-security.md)
+
+### Simulation Action Snapshot And Input Collection Migration
+
+The existing `XRTrackingSnapshot` now carries a bounded action prefix, exact binding-plan
+revision and session/device provenance alongside independently valid simulation poses.
+It does not introduce another latest-pose owner. Records name plan-local indices, never
+native paths or gameplay action IDs. Boolean/scalar/vector payloads, finite ranges,
+canonical order, complete capacity, current devices, focus and loss state validate before
+any value is published. Controller pose loss alone does not invalidate a scalar button.
+Presentation-late pose evidence still cannot enter this simulation publication.
+
+Snapshot device/pose/action storage is inline at fixed ceilings (64/320/256). Pose
+capacity entries are inert private storage; only validated populated prefixes are exposed.
+Construction and value copies do not allocate, but they copy bounded inline capacity.
+The ABI changes deliberately: all XRApi/runtime/native/public consumers must rebuild;
+trailing zero action capacity and empty action spans preserve tracking-only source callers.
+`sizeof(XRTrackingSnapshot)` and its record types are recorded by the actual consumer
+qualification, not estimated as a speed improvement. This trades fixed value/copy storage
+for absence of per-sample heap storage; no measured throughput claim is made.
+
+`HoroXRInputBindings::XRInputProjection` registers only the exact existing resolved schemas
+through the host-bound Input collection port, then validates the current snapshot,
+session, origin and binding revision before staging a whole scalar contribution. The
+application alone commits at the existing input cutoff. Invalid/missing XR input leaves
+an empty contribution for that source, preserving valid physical input. Rebinding must
+pass Input's real neutral-commit fence. The native sampler remains XROpenXR; this additive
+prerequisite does not advertise full controller projection, hand/gaze/haptics or a shipping
+runtime until the actual production producer and selected-host chain are qualified.
+
+
+### Prepared Native Actions And Action-Space Migration
+
+Private OpenXR preparation may create bounded native actions and reference/action spaces
+on the same attempt-owned native session before `XRSessionLifecycle` issues a candidate.
+The capacity comes from the validated product schema, not a fabricated negotiated frame
+limit. Unpublished native borrows keep both action and space admission limits zero.
+Preparation exposes no Horo session, sampling opportunity or Input publication. After
+complete census/feature negotiation, the existing resource transaction binds those SAME
+children to its canonical candidate; it does not create another instance/session or
+attach action sets twice. Failed cleanup retains exact native debt, and spaces retire
+before their borrowed pose actions, sets, session and loader. Reentrant native callbacks
+cannot mutate these retained arrays during preparation, synchronization or sampling.
+
+`XRSpaceKind::Action` is additive at numeric value 4; View/Local/Stage/World remain
+0/1/2/3 and Count advances to 5. The enum's byte representation and containing structure
+layout are unchanged, but callers rebuild against the new closed vocabulary. The source
+consumer audit found no persistent serializer or wire codec for this enum; session/space
+identities remain transient and must not be persisted. The existing XRApi header owner
+is unchanged. Pose validation now admits an Action source with the SAME session/origin
+and independent-validity checks. Multiview still requires an explicitly World target;
+Action never aliases Local, View or World. Closed-vocabulary consumers must use Count
+and reject unknown values; no existing reference-kind migration is required.
+
+Private native grip/aim POSE_INPUT actions remain physical tracking sources in the
+existing native action owner, separate from canonical scalar Input actions. Native
+spaces exist before their typed identities are bound; identities are issued only for
+successfully created children and the lifecycle-issued candidate. Location uses exact
+runtime-domain time with the simulation cutoff evidence and prepared base-space origin.
+Unavailable native components are absent, including undefined inactive payloads; an
+identity transform is only the explicit native space offset, never a tracking fallback.
+Presentation prediction cannot replace a committed simulation snapshot.
+
+
+### Same-Instance Session Restart And Private Native Receipts
+
+The non-installed native owner may retire a quiescent session while retaining its
+already discovered instance, system, verified loader and immutable startup graphics
+requirements. This is a Play lifecycle operation, not a new session authority.
+The application first closes sampling and retires action spaces, actions, swapchains
+and renderer references. `RetireSession` then destroys the session and releases its
+borrowed graphics binding; only successful retirement permits another preparation.
+A failed destroy preserves the exact native session, binding and loader for explicit
+retry. Full `Close` debt cannot be converted back into reusable discovery, and
+reentrant or foreign-lane destruction is rejected without releasing parents.
+
+A private native-child receipt advances only after a successful non-null native
+session creation. It survives session-only and full retirement, has no clock or
+canonical candidate meaning, and never enters public XR/Input snapshots. Action
+attachment compares this receipt with the native handle so a runtime recycling the
+same handle on the same discovery attempt cannot revive a previous attachment.
+`XRSessionLifecycle` remains the sole issuer of Horo session generations; its
+history does not rewind when a native child is destroyed. Existing atomic `Create`
+callers retain their original create-or-cleanup semantics. Native host consumers
+rebuild for the trailing private borrow field; no installed public ABI changes.
+
+
+### Workspace Input And Typed Play Handoff
+
+The private workspace-to-application XR port borrows the workspace's existing
+`InputActionCollection` only after its canonical project input profile and context
+are installed. It observes the existing `EditorPlayState`; the enum values and
+controller ownership do not change. The enum declaration moves to the narrow
+non-installed host interface, propagated by `HoroGui` because existing workspace
+view-model consumers need that same declaration. Installed public headers gain no
+Editor or OpenXR dependency. Controller and GUI consumers rebuild; there is no
+persisted Play-state format or alternative boolean Play authority to migrate.
+
+Workspace leave and failed-enter recovery revoke the projection before releasing
+the existing context. A non-allocating destructor fallback closes only input
+admission; native children and renderer-completion debt remain application-owned.
+Desktop composition may omit the port, while explicitly selected XR failures are
+preserved and forwarded to the existing Play owner. This bridge alone is not
+production XR frame or shipping-runtime qualification; the application must still
+wire real session activation, canonical input cutoff, rendering and retirement.

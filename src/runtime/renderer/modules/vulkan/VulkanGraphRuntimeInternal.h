@@ -117,6 +117,7 @@ namespace Horo::Render::Detail {
 
         std::array<GuiSamplePlan, GuiCompositionPreparation::MaximumResources> guiPlans;
         RenderGraphExecutionRange guiBufferBarriers;
+        RenderGraphExecutionRange guiExternalFinalBarriers;
         std::optional<RenderQueueSubmission> guiSubmission;
         std::array<RenderTimelinePoint, RenderGraphSubmissionLimits::MaximumQueues> guiWaits;
         std::array<GuiSampledResourceInstance, GuiCompositionPreparation::MaximumResources> guiIdentities;
@@ -140,6 +141,21 @@ namespace Horo::Render::Detail {
         /** @brief Pins exact input buffers and synthesizes their current canonical tail barriers. */
         [[nodiscard]] Result<void> PrepareGuiBuffers(const GuiCompositionRequest &request);
         [[nodiscard]] Result<void> PrepareGuiResources(const GuiCompositionRequest &request);
+        /** @brief Validates the exact admitted GUI identity before touching pre-ticket scratch or native commands. */
+        [[nodiscard]] Result<void> ValidateGuiSubmission(const GuiCompositionRequest &request, const VulkanGuiOutput &output) const;
+        /** @brief Plans acquired-image restoration after all GUI samples in the same tail transaction. */
+        [[nodiscard]] Result<void> PrepareGuiFinalStates(const GuiCompositionRequest &request);
+
+        /** @brief Stack-only suffix transaction; successful ticket admission transfers debt to the canonical abort owner. */
+        struct GuiPreparationRollback final {
+            Impl &graph;
+            VulkanCommandRetention &pins;
+            const std::size_t updateCount, barrierCount, resourceCount;
+            const RenderGraphExecutionRange bufferBarriers, externalBarriers;
+            bool committed{};
+            /** @brief Restores only this unsent attempt's suffix and ranges, preserving prior scene state and pins. */
+            ~GuiPreparationRollback() noexcept;
+        };
 
         /** @brief Borrows the synchronous resolver to load optional material dispatch without copying or allocation. */
         template <typename Resolver> void LoadMaterialDispatch(VkDevice device, const Resolver &resolver) {

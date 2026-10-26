@@ -9,7 +9,7 @@ namespace Horo::Editor {
             return Error{.code = ErrorCode{"editor.renderer.viewport_shader_unavailable"},
                          .domain = ErrorDomainId{"horo.editor.renderer"},
                          .severity = ErrorSeverity::Critical,
-                         .message = "The packaged Vulkan viewport shader bundle is missing, oversized or unreadable. Run the admitted "
+                         .message = "The packaged Vulkan shader bundle is missing, oversized or unreadable. Run the admitted "
                                     "offline cook and package both artifacts."};
         }
 
@@ -37,5 +37,16 @@ namespace Horo::Editor {
         if (metadata.HasError())
             return Result<EditorVulkanViewportCook>::Failure(metadata.ErrorValue());
         return LoadEditorVulkanViewportCook(payload.Value(), metadata.Value());
+    }
+
+    /** @copydoc LoadPackagedVulkanMultiviewShader */
+    Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewShader(const std::filesystem::path &assetRoot) {
+        const auto payload = ReadArtifact(assetRoot / "shaders/runtime/multiview-vulkan.horoshdr", 16U * 1024U * 1024U);
+        if (payload.HasError())
+            return Result<EditorVulkanMultiviewCook>::Failure(payload.ErrorValue());
+        const auto metadata = ReadArtifact(assetRoot / "shaders/runtime/multiview-vulkan.reflection.json", 1024U * 1024U);
+        if (metadata.HasError())
+            return Result<EditorVulkanMultiviewCook>::Failure(metadata.ErrorValue());
+        return LoadEditorVulkanMultiviewCook(payload.Value(), metadata.Value());
     }
 }  // namespace Horo::Editor

@@ -73,8 +73,42 @@ namespace Horo::Render::Detail {
         native.endRendering(command);
         if (encoded.HasError())
             return encoded;
+        Barriers(command, guiExternalFinalBarriers);
         OutputBarrier(native.barrier, command, output.image, true);
         return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::ValidateGuiSubmission */
+    Result<void> VulkanGraphRuntime::Impl::ValidateGuiSubmission(const GuiCompositionRequest &request,
+                                                                 const VulkanGuiOutput &output) const {
+        auto *pins = lifecycle.pins;
+        if (request.frame != lifecycle.frame || !guiPrepared || guiRecorded || !request.submission || pins == nullptr ||
+            request.lease != pins->lease || !output.image || !output.view || !output.renderFinished || !output.extent.IsValid())
+            return Result<void>::Failure(Invalid("GUI encoding requires the exact admitted frame, lease and acquired WSI output."));
+        const auto &admitted = *guiSubmission;
+        const auto &submissionIdentity = *request.submission;
+        const auto equalSample = [](const GuiSampledResourceInstance &left, const GuiSampledResourceInstance &right) {
+            return left.view == right.view && left.sampler == right.sampler && left.uploadSource == right.uploadSource;
+        };
+        if (submissionIdentity.queue != admitted.queue || submissionIdentity.order != admitted.order ||
+            submissionIdentity.signal != admitted.signal || !std::ranges::equal(submissionIdentity.waits, admitted.waits) ||
+            !std::ranges::equal(request.resources, std::span{guiIdentities}.first(guiSampleCount), equalSample) ||
+            !std::ranges::equal(request.buffers, std::span{guiBufferIdentities}.first(guiBufferCount)))
+            return Result<void>::Failure(Invalid("GUI encoder changed its admitted submission or resource identities."));
+
+        return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::GuiPreparationRollback::~GuiPreparationRollback */
+    VulkanGraphRuntime::Impl::GuiPreparationRollback::~GuiPreparationRollback() noexcept {
+        if (committed)
+            return;
+        graph.updates.erase(graph.updates.begin() + updateCount, graph.updates.end());
+        graph.barriers.erase(graph.barriers.begin() + barrierCount, graph.barriers.end());
+        pins.resources.erase(pins.resources.begin() + resourceCount, pins.resources.end());
+        graph.guiBufferBarriers = bufferBarriers;
+        graph.guiExternalFinalBarriers = externalBarriers;
+        // Per-sample scratch is overwritten completely on retry and is never read before successful preparation.
     }
 
     /** @copydoc VulkanGraphRuntime::ExecuteGui */
@@ -82,27 +116,33 @@ namespace Horo::Render::Detail {
                                                 IVulkanGuiEncoder &encoder) {
         if (const auto access = impl_->Access(); access.HasError())
             return access;
+        if (auto admitted = impl_->ValidateGuiSubmission(request, output); admitted.HasError())
+            return admitted;
         auto *pins = impl_->lifecycle.pins;
-        if (request.frame != impl_->lifecycle.frame || !impl_->guiPrepared || impl_->guiRecorded || !request.submission ||
-            pins == nullptr || request.lease != pins->lease || !output.image || !output.view || !output.renderFinished ||
-            !output.extent.IsValid())
-            return Result<void>::Failure(Impl::Invalid("GUI encoding requires the exact admitted frame, lease and acquired WSI output."));
-        const auto &admitted = *impl_->guiSubmission;
-        const auto &submissionIdentity = *request.submission;
-        const auto equalSample = [](const GuiSampledResourceInstance &left, const GuiSampledResourceInstance &right) {
-            return left.view == right.view && left.sampler == right.sampler && left.uploadSource == right.uploadSource;
-        };
-        if (submissionIdentity.queue != admitted.queue || submissionIdentity.order != admitted.order ||
-            submissionIdentity.signal != admitted.signal || !std::ranges::equal(submissionIdentity.waits, admitted.waits) ||
-            !std::ranges::equal(request.resources, std::span{impl_->guiIdentities}.first(impl_->guiSampleCount), equalSample) ||
-            !std::ranges::equal(request.buffers, std::span{impl_->guiBufferIdentities}.first(impl_->guiBufferCount)))
-            return Result<void>::Failure(Impl::Invalid("GUI encoder changed its admitted submission or resource identities."));
-        const auto updateOffset = impl_->updates.size();
+        // Preparing resources may append upload state before a later sample/output/ticket is rejected.
+        // Keep the earlier scene's exact state and retained owners; only this unsent attempt rolls back.
+        Impl::GuiPreparationRollback rollback{*impl_,
+                                              *pins,
+                                              impl_->updates.size(),
+                                              impl_->barriers.size(),
+                                              pins->resources.size(),
+                                              impl_->guiBufferBarriers,
+                                              impl_->guiExternalFinalBarriers};
+
+        const auto updateOffset = rollback.updateCount;
         if (const auto prepared = impl_->PrepareGuiResources(request); prepared.HasError())
             return prepared;
+        if (!output.legacyUnmanagedOutput &&
+            std::ranges::any_of(std::span{impl_->guiSamples}.first(request.resources.size()), [](const VulkanGuiSample &sample) {
+            return sample.requiredFinal.has_value();
+        }))
+            return Result<void>::Failure(
+                Impl::Unsupported("XR first-eye mirror requires the explicitly admitted legacy unmanaged output."));
         const auto ticket = impl_->commands.Begin(request.submission->queue);
         if (ticket.HasError())
             return Result<void>::Failure(ticket.ErrorValue());
+        // This ticket now belongs to the canonical abort/submission path, which retains all pending native debt.
+        rollback.committed = true;
         impl_->submissions.emplace_back();
         auto &submission = impl_->submissions.back();
         submission.ticket = ticket.Value();
