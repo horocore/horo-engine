@@ -82,10 +82,16 @@ def test_native_ctest_keeps_complete_selection_and_verified_payload(tmp_path: Pa
     payload.parent.mkdir(parents=True)
     payload.write_bytes(b"verified native bytes")
     files = {MEMBER: {"sha256": hashlib.sha256(payload.read_bytes()).hexdigest()}}
+    for name in bundle.UI_PAINT_FILES:
+        path = build / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"verified UI qualification input")
+        files[name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     executable = str(tmp_path / "native tools ü" / "ctest")
     calls = []
     monkeypatch.setattr(bundle.shutil, "which", lambda _name: executable)
     monkeypatch.setattr(bundle, "context", lambda _workspace: IDENTITY)
+    monkeypatch.setenv("HORO_UI_PAINT_METAL_FIXTURE", "/untrusted/producer/path")
 
     def execute(arguments, **options):
         calls.append((arguments, options))
@@ -104,7 +110,36 @@ def test_native_ctest_keeps_complete_selection_and_verified_payload(tmp_path: Pa
     assert options["shell"] is False
     assert options["check"] is False
     assert options["env"]["MTL_DEBUG_LAYER"] == "1"
+    assert options["env"]["HORO_UI_PAINT_METAL_FIXTURE"] == str(build / bundle.UI_PAINT_FIXTURE)
     assert payload.read_bytes() == b"verified native bytes"
+
+
+@pytest.mark.parametrize("damage", ["omitted", "missing", "tampered"])
+def test_incomplete_ui_fixture_prevents_native_execution(tmp_path: Path, monkeypatch, damage: str) -> None:
+    files = {}
+    for name in bundle.UI_PAINT_FILES:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"verified UI data")
+        files[name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    name = sorted(bundle.UI_PAINT_FILES)[0]
+    if damage == "omitted":
+        del files[name]
+    elif damage == "missing":
+        (tmp_path / name).unlink()
+    else:
+        (tmp_path / name).write_bytes(b"changed UI data")
+    monkeypatch.setattr(bundle.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("Invalid fixture reached CTest"))
+    with pytest.raises(ValueError, match="qualification inputs|runtime file"):
+        bundle.run_tests(tmp_path, tmp_path, [], files, IDENTITY)
+
+
+def test_graph_cases_have_individual_ctest_results_for_skip_accounting() -> None:
+    contract = (ROOT / "tests/CMakeLists.txt").read_text()
+    assert "horo_register_catch_test(HoroMetalGraphExecutionSmoke" in contract
+    assert "add_test(NAME HoroMetalGraphExecutionSmoke " not in contract
+    assert bundle.re.search(bundle.SELECTION, "HoroMetalGraphExecutionSmoke::Cooked native Metal UI")
+    assert bundle.re.search(bundle.SELECTION, "HoroMetalGraphExecutionSmoke") is None
 
 
 @pytest.mark.parametrize("field", ["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"])
@@ -171,12 +206,16 @@ def native_producer(tmp_path: Path, monkeypatch):
         binary.write_bytes(native_binary())
         binary.chmod(0o755)
         case_name = "HoroEditorMetalFirstFrame" if name == "HoroEditor" else name
-        if name not in {"HoroEditor", "HoroMetalShaderPreparationSmoke", "HoroMetalGraphExecutionSmoke"}:
+        if name not in {"HoroEditor", "HoroMetalShaderPreparationSmoke"}:
             case_name += "::required"
         tests.append({"name": case_name,
                       "command": [str(binary)],
                       "properties": [{"name": "WORKING_DIRECTORY", "value": str(build / "tests")}]})
     (build / "tests/MetalPreparationFixture.metallib").write_bytes(b"shader fixture")
+    for name in bundle.UI_PAINT_FILES:
+        path = build / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"UI qualification data")
     sdk_directory = build / "sdk/gameplay"
     sdk_directory.mkdir(parents=True)
     (sdk_directory / "fixture.cmake").write_text("# runtime SDK fixture\n")
@@ -199,6 +238,22 @@ def test_package_output_is_private_fixed_and_preserves_verified_payload(native_p
     assert (staging / MEMBER).read_bytes() == native_binary()
     assert (staging / "tests/MetalPreparationFixture.metallib").read_bytes() == b"shader fixture"
     assert (staging / "sdk/gameplay/fixture.cmake").read_text() == "# runtime SDK fixture\n"
+    assert all((staging / name).read_bytes() == b"UI qualification data" for name in bundle.UI_PAINT_FILES)
+
+
+@pytest.mark.parametrize("name", sorted(bundle.UI_PAINT_FILES))
+def test_producer_requires_every_ui_qualification_input(native_producer, name: str) -> None:
+    workspace, output, _ = native_producer
+    (workspace / bundle.BUILD / name).unlink()
+    with pytest.raises(ValueError, match="runtime input is absent"):
+        bundle.pack(workspace)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("name", ["extra.metallib", "PaintVertex.air", "nested/PaintVertex.metallib"])
+def test_ui_payload_does_not_admit_unlisted_runtime_inputs(name: str) -> None:
+    with pytest.raises(ValueError, match="undeclared file"):
+        bundle.payload_path(bundle.UI_PAINT_FIXTURE + "/" + name)
 
 
 @pytest.mark.parametrize("attack", ["outside", "relative", "traversal", "different-name"])

@@ -163,16 +163,17 @@ def test_only_canonical_main_selects_the_write_job(
 @pytest.mark.parametrize("writer", [False, True])
 @pytest.mark.parametrize("cancelled", [False, True])
 @pytest.mark.parametrize("tooling", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize("native_job", ["test", "macos-build"])
 def test_native_status_guards_require_uncancelled_successful_tooling(
-    writer: bool, cancelled: bool, tooling: str,
+    writer: bool, cancelled: bool, tooling: str, native_job: str,
 ) -> None:
     source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     context = {"github.repository": "horocore/horo-engine",
                "github.ref": "refs/heads/main" if writer else "refs/heads/topic",
                "github.event_name": "push", "needs.tooling.result": tooling}
     permitted = not cancelled and tooling == "success"
-    assert condition(job(source, "test-main"), context, cancelled=cancelled) is (writer and permitted)
-    assert condition(job(source, "test"), context, cancelled=cancelled) is (not writer and permitted)
+    assert condition(job(source, native_job + "-main"), context, cancelled=cancelled) is (writer and permitted)
+    assert condition(job(source, native_job), context, cancelled=cancelled) is (not writer and permitted)
 
 
 @pytest.mark.parametrize("expression", ["unknown()", "cancelled(True)", "cancelled(flag=True)", "obj.cancelled()"])

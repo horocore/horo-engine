@@ -32,13 +32,19 @@ PAYLOAD = "metal-tests.tar.gz"
 SELECTION = (
     r"^(HoroRender(Display|Frontend|BackendRegistry|Metal)Tests::|"
     r"HoroEditorViewportMetalSmoke::|HoroMetalUploadShutdownSmoke::|"
-    r"HoroEditorMetalFirstFrame$|HoroMetal(ShaderPreparation|GraphExecution)Smoke$)"
+    r"HoroMetalGraphExecutionSmoke::|HoroEditorMetalFirstFrame$|HoroMetalShaderPreparationSmoke$)"
 )
 EXECUTABLES = {
     "HoroRenderDisplayTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests",
     "HoroRenderMetalTests", "HoroEditorViewportMetalSmoke", "HoroMetalUploadShutdownSmoke",
     "HoroMetalShaderPreparationSmoke", "HoroMetalGraphExecutionSmoke", "HoroEditor",
 }
+UI_PAINT_FIXTURE = "tests/ui-paint-fixture"
+UI_PAINT_FILES = {
+    f"{UI_PAINT_FIXTURE}/{stage}{suffix}"
+    for stage in ("PaintVertex", "PaintFragment")
+    for suffix in (".metallib", ".sha256", ".metal", ".reflection.json")
+} | {f"{UI_PAINT_FIXTURE}/{name}" for name in ("reflection-tool.txt", "bindings.txt", "qualification.json")}
 MAX_ARCHIVE_BYTES = artifact.MAX_ARCHIVE_BYTES
 MAX_EXPANDED_BYTES = 2 * 1024 ** 3
 MAX_MEMBERS = 10_000
@@ -239,6 +245,7 @@ def runtime_files(build: Path, tests: list[dict]) -> dict[str, Path]:
     for binary in tuple(candidates):
         candidates.update(parent for parent in binary.parents if parent.suffix == ".app")
     candidates.update({build / "tests/MetalPreparationFixture.metallib", build / "sdk/gameplay"})
+    candidates.update(build / name for name in UI_PAINT_FILES)
     for candidate in candidates:
         for path in materialized_files(candidate):
             relative = package.portable_path(path.relative_to(build).as_posix())
@@ -251,6 +258,7 @@ def payload_path(name: str) -> str:
     package.portable_path(name)
     if (name in {"tests/" + binary for binary in EXECUTABLES - {"HoroEditor"}}
             or name == "tests/MetalPreparationFixture.metallib"
+            or name in UI_PAINT_FILES
             or name.startswith(("apps/HoroEditor.app/Contents/", "sdk/gameplay/"))):
         return name
     raise ValueError("An undeclared file is outside the runtime payload")
@@ -510,6 +518,8 @@ def private_directories(tests: list[dict], build: Path) -> None:
 
 
 def verify_payload_files(build: Path, files: dict) -> None:
+    if not UI_PAINT_FILES.issubset(files):
+        raise ValueError("Required UI Metal qualification inputs are missing")
     for name, record in files.items():
         path = build / payload_path(name)
         if path.is_symlink() or not path.is_file() or package.digest_file(path) != record["sha256"]:
@@ -539,7 +549,7 @@ def run_tests(workspace: Path, build: Path, tests: list[dict], files: dict, iden
     report = build / "ctest.xml"
     if report.exists() or report.is_symlink():
         raise ValueError("A previous native JUnit report already exists")
-    environment = dict(os.environ, MTL_DEBUG_LAYER="1")
+    environment = dict(os.environ, MTL_DEBUG_LAYER="1", HORO_UI_PAINT_METAL_FIXTURE=str(build / UI_PAINT_FIXTURE))
     outcome = subprocess.run(["ctest", "--test-dir", str(build), "--parallel", "1", "--timeout", "90",  # nosec B603
                               "--output-on-failure", "--no-tests=error", "-R", SELECTION,
                               "--output-junit", "ctest.xml"], executable=resolved_tool("ctest"),

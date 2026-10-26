@@ -258,9 +258,6 @@ def test_native_guard_rejects_missing_or_weakened_required_gates(guard):
 def test_workflow_keeps_same_run_metal_handoff_and_independent_native_checks():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     native = workflow.split("\n  test:\n", 1)[1]
-    assert "needs: [tooling, shaders]" in native
-    assert_native_guard(native)
-    assert_native_guard(workflow.split("\n  test-main:\n", 1)[1])
     artifact = "ui-paint-metal-msl-${{ github.sha }}-${{ github.run_attempt }}"
     assert workflow.count("name: " + artifact) == 2
     assert workflow.index("uses: ./.github/actions/cook-vulkan-viewport") < workflow.index("ui_paint_fixture.py produce")
@@ -268,6 +265,19 @@ def test_workflow_keeps_same_run_metal_handoff_and_independent_native_checks():
     assert 'HORO_UI_PAINT_METAL_FIXTURE=%s' in native
     assert 'HoroMetalGraphExecutionSmoke' in native
     assert "--no-tests=error" in native
+
+
+@pytest.mark.parametrize("name,dependencies", [
+    ("test", "tooling"), ("test-main", "tooling"),
+    ("macos-build", "[tooling, shaders]"), ("macos-build-main", "[tooling, shaders-main]"),
+])
+def test_only_metal_consumers_wait_for_the_selected_same_run_shader_producer(name, dependencies):
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.MULTILINE | re.DOTALL)
+    assert match is not None
+    block = match[1]
+    assert re.search(r"^    needs: (.+)$", block, re.MULTILINE)[1] == dependencies
+    assert_native_guard(block)
 
 
 def test_producer_rejects_unattested_executable_before_any_process_or_output(tmp_path, monkeypatch):

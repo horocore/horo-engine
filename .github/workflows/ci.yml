@@ -358,10 +358,7 @@ jobs:
 
   test:
     name: Test · ${{ matrix.name }}
-    # Same-run Linux MSL production is an explicit dependency. This intentionally
-    # waits the complete shader matrix; unrelated Windows shader failure must
-    # not skip native validation. Missing Linux data fails the Mac consumer.
-    needs: [tooling, shaders]
+    needs: tooling
     if: ${{ !cancelled() && needs.tooling.result == 'success' && !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
     permissions:
       contents: read
@@ -513,8 +510,8 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           python3 .github/scripts/ui_paint_fixture.py apple \
-            --root "$RUNNER_TEMP/ui-paint-msl" --output "$RUNNER_TEMP/ui-paint-offline"
-          printf 'HORO_UI_PAINT_METAL_FIXTURE=%s\n' "$RUNNER_TEMP/ui-paint-offline" >> "$GITHUB_ENV"
+            --root "$RUNNER_TEMP/ui-paint-msl" --output "$GITHUB_WORKSPACE/build/ci-metal/tests/ui-paint-fixture"
+          printf 'HORO_UI_PAINT_METAL_FIXTURE=%s\n' "$GITHUB_WORKSPACE/build/ci-metal/tests/ui-paint-fixture" >> "$GITHUB_ENV"
       # Switch after Debug's checkpoint so auxiliary configurations never evict
       # its primary working set. This uses the existing platform job and tools.
       - name: Restore auxiliary compiler variants
@@ -971,7 +968,7 @@ jobs:
             build/ci*/ctest.xml
             build/ci-metal/tests/MetalPreparationFixture.metallib
             ${{ runner.temp }}/ui-paint-msl/
-            ${{ runner.temp }}/ui-paint-offline/
+            build/ci-metal/tests/ui-paint-fixture/
             build/ci-metal/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
@@ -992,8 +989,10 @@ jobs:
   # depends only on this producer, so Windows/Linux cannot occupy the M3 queue.
   macos-build:
     name: Build · ${{ matrix.name }}
-    needs: tooling
-    if: ${{ !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+    # Only macOS consumes the same-run Linux MSL artifact. A Windows shader
+    # failure must not skip this consumer; missing Linux data fails its download.
+    needs: [tooling, shaders]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' && !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
     permissions:
       contents: read
       packages: read
@@ -1023,8 +1022,8 @@ jobs:
       group: ${{ github.workflow }}-native-macos-producer-${{ github.ref }}
       cancel-in-progress: false
     name: Build · ${{ matrix.name }} (main)
-    needs: tooling
-    if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    needs: [tooling, shaders-main]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     permissions:
       contents: read
       packages: write
@@ -1103,7 +1102,7 @@ jobs:
       group: ${{ github.workflow }}-native-${{ matrix.name }}-${{ github.ref }}
       cancel-in-progress: false
     name: Test · ${{ matrix.name }} (main)
-    needs: [tooling, shaders]
+    needs: tooling
     if: ${{ !cancelled() && needs.tooling.result == 'success' && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     permissions:
       contents: read
