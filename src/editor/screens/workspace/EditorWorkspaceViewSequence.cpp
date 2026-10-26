@@ -60,7 +60,7 @@ namespace Horo::Editor {
             return;
         }
         if (area == WorkspaceDockArea::Document &&
-            (DrawUiCanvasDocument(viewModel, outCommand) || DrawPrefabDocument(viewModel, outCommand) ||
+            (m_uiCanvasView.Draw(viewModel, outCommand) || DrawPrefabDocument(viewModel, outCommand) ||
              DrawSourceDocument(viewModel, outCommand) || DrawNavigationDocument(viewModel) || DrawPCGDocument(viewModel, outCommand) ||
              DrawSequenceDocument(viewModel, outCommand))) {
             if (panel)
@@ -116,6 +116,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceView::ResetSourceSession */
     void EditorWorkspaceView::ResetSourceSession() noexcept {
+        m_uiCanvasView.Reset();
         m_sourceSession.Reset();
     }
 

@@ -124,7 +124,8 @@ namespace Horo::Runtime::Ui {
             UiRenderGeometryBatchKey key{.resource = NoUiRenderIndex,
                                          .transform = command.transform,
                                          .clip = command.clip,
-                                         .mask = command.mask};
+                                         .mask = command.mask,
+                                         .group = command.group};
             const auto result = std::visit([&key, &snapshot](const auto &draw) {
                 return AssignBatchKey(key, snapshot, draw);
             }, command.payload);
@@ -227,12 +228,14 @@ namespace Horo::Runtime::Ui {
             PublishLease &operator=(const PublishLease &) = delete;
 
             ~PublishLease() {
-                if (storage_ != nullptr)
-                    storage_->leases.store(0, std::memory_order_release);
+                if (storage_ != nullptr) {
+                    storage_->source.reset();
+                    storage_->leases.store(0, std::memory_order_seq_cst);
+                }
             }
 
             void Commit() noexcept {
-                storage_->leases.store(1, std::memory_order_release);
+                storage_->leases.store(1, std::memory_order_seq_cst);
                 storage_ = nullptr;
             }
 
@@ -242,7 +245,7 @@ namespace Horo::Runtime::Ui {
 
         mutable std::atomic<std::uint64_t> leases{};
         UiRenderGeometryPlanDescriptor descriptor;
-        std::optional<UiRenderSnapshot> source;
+        mutable std::optional<UiRenderSnapshot> source;
         std::vector<UiRenderVertex> vertices;
         std::vector<std::uint32_t> indices;
         std::vector<UiRenderGeometryBatch> batches;
@@ -413,7 +416,7 @@ namespace Horo::Runtime::Ui {
             for (std::size_t offset = 0; offset < slots.size(); ++offset) {
                 const auto index = (nextSlot + offset) % slots.size();
                 std::uint64_t expected{};
-                if (slots[index]->leases.compare_exchange_strong(expected, BuildingLease, std::memory_order_acq_rel)) {
+                if (slots[index]->leases.compare_exchange_strong(expected, BuildingLease, std::memory_order_seq_cst)) {
                     nextSlot = (index + 1) % slots.size();
                     return slots[index];
                 }
@@ -466,9 +469,9 @@ namespace Horo::Runtime::Ui {
     void UiRenderGeometryPlan::Retain() const noexcept {
         if (!storage_)
             return;
-        auto current = storage_->leases.load(std::memory_order_acquire);
+        auto current = storage_->leases.load(std::memory_order_seq_cst);
         while (current > 0 && current < BuildingLease - 1) {
-            if (storage_->leases.compare_exchange_weak(current, current + 1, std::memory_order_acq_rel))
+            if (storage_->leases.compare_exchange_weak(current, current + 1, std::memory_order_seq_cst))
                 return;
         }
         std::terminate();
@@ -478,7 +481,20 @@ namespace Horo::Runtime::Ui {
     void UiRenderGeometryPlan::Release() noexcept {
         if (!storage_)
             return;
-        storage_->leases.fetch_sub(1, std::memory_order_acq_rel);
+        auto current = storage_->leases.load(std::memory_order_seq_cst);
+        bool released = false;
+        while (!released) {
+            if (current == 1) {
+                // The building sentinel also excludes reuse during last-reader source retirement.
+                if (!storage_->leases.compare_exchange_weak(current, BuildingLease, std::memory_order_seq_cst))
+                    continue;
+                storage_->source.reset();
+                storage_->leases.store(0, std::memory_order_seq_cst);
+                released = true;
+            } else {
+                released = storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_seq_cst);
+            }
+        }
         storage_.reset();
     }
 
@@ -543,7 +559,7 @@ namespace Horo::Runtime::Ui {
             ++storage_->failedBuilds;
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryLifecycleUnavailable);
         }
-        if (!snapshot.IsValid()) {
+        if (!snapshot.IsValid() || snapshot.IsPreparationOnly()) {
             ++storage_->failedBuilds;
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryInvalid);
         }
@@ -610,15 +626,15 @@ namespace Horo::Runtime::Ui {
         result.peakBatches = storage_->peakBatches;
         std::uint64_t activeLeases{};
         for (const auto &slot : storage_->slots) {
-            auto leases = slot->leases.load(std::memory_order_acquire);
+            auto leases = slot->leases.load(std::memory_order_seq_cst);
             while (leases > 0 && leases < BuildingLease - 1) {
-                if (!slot->leases.compare_exchange_weak(leases, leases + 1, std::memory_order_acq_rel, std::memory_order_acquire))
+                if (!slot->leases.compare_exchange_weak(leases, leases + 1, std::memory_order_seq_cst, std::memory_order_seq_cst))
                     continue;
                 activeLeases += leases;
                 result.usedVertices += static_cast<std::uint32_t>(slot->vertices.size());
                 result.usedIndices += static_cast<std::uint32_t>(slot->indices.size());
                 result.usedBatches += static_cast<std::uint32_t>(slot->batches.size());
-                slot->leases.fetch_sub(1, std::memory_order_release);
+                slot->leases.fetch_sub(1, std::memory_order_seq_cst);
                 break;
             }
         }

@@ -264,6 +264,8 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneService::QueueUnload */
     Result<void> RuntimeSceneService::QueueUnload() {
+        if (shutdown_)
+            return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (mutatingLifecycle_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         const LifecycleMutation mutation{*this};
@@ -400,7 +402,7 @@ namespace Horo::Runtime {
                 }
             }
             AdvancePreparation();
-            return CommitDeferredChanges();
+            return CommitDeferredChanges(context.cancellation);
         }
         return Result<void>::Success();
     }

@@ -29,6 +29,10 @@ namespace Horo::Editor {
         void Shutdown() noexcept override;
 
     private:
+        /** @brief Restores only this owner's existing window/context before CPU GUI device work.
+         * @return Success or a typed owner/context activation failure; never admits a native render frame.
+         */
+        [[nodiscard]] Result<void> MakeContextCurrent() const;
         /** @brief Rejects a different thread or a context/window that is no longer current. */
         [[nodiscard]] Result<void> ValidateContext() const;
         /** @brief Releases a view before its backing texture without losing cleanup on upload failure. */

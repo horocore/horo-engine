@@ -23,6 +23,7 @@ namespace Horo::Editor {
         Runtime::SceneRuntimeId runtimeSceneId;
         EditorViewportCamera camera;
         std::vector<Runtime::PrimitiveMeshLease> meshLeases;
+        std::vector<EditorAssetMeshLease> importedMeshLeases;
         std::vector<EditorViewportMeshResourceView> meshResources;
         std::vector<EditorViewportInstance> instances;
         std::vector<SceneObjectId> instanceObjects;
@@ -74,6 +75,24 @@ namespace Horo::Editor {
     /** @brief Resolves world and parent matrices from an immutable runtime scene view. */
     [[nodiscard]] Result<SceneObjectWorldTransforms> ResolveSceneObjectWorldTransforms(Runtime::RuntimeSceneView scene,
                                                                                        SceneObjectId object);
+
+    /** @brief Explicit cold extraction policy; the desktop default preserves its original unbounded scene capacity. */
+    struct EditorGeometryExtractionPolicy {
+        std::size_t maximumInstances{static_cast<std::size_t>(-1)};
+        bool requireImportedMeshes{};
+    };
+
+    /** @brief Extracts canonical geometry without selecting or manufacturing a camera.
+     * @param scene Exact candidate runtime scene. @param documentRevision Canonical authored revision.
+     * @param meshCache Existing primitive owner. @param document Optional authored asset mapping.
+     * @param assetMeshes Existing imported owner. @param respectEditorVisibility Existing visibility policy.
+     * @param policy Explicit bounded strict admission for selected XR; desktop uses defaults.
+     * @return Owned geometry and leases, or atomic extraction failure. Camera remains unset.
+     */
+    [[nodiscard]] Result<EditorViewportSceneSnapshot> ExtractEditorViewportGeometry(
+        Runtime::RuntimeSceneView scene, DocumentRevision documentRevision, Runtime::PrimitiveMeshCache &meshCache,
+        const SceneDocumentSnapshot *document, const EditorAssetMeshCache *assetMeshes, bool respectEditorVisibility,
+        EditorGeometryExtractionPolicy policy = {});
 
     /** @brief Extracts supported renderable instances from an immutable runtime scene view. */
     [[nodiscard]] Result<EditorViewportSceneSnapshot> ExtractEditorViewportScene(

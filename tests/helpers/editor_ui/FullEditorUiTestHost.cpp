@@ -229,6 +229,7 @@ namespace Horo::Tests {
         }
 
         ~State() {
+            pendingFixedTicks = 0;
             jobs.StopAccepting();
             if (screenHost)
                 screenHost->Shutdown();
@@ -272,6 +273,8 @@ namespace Horo::Tests {
         CancellationSource runtimeCancellation;
         std::uint64_t runtimeFrameNumber{};
         std::uint64_t runtimeSimulationTick{};
+        std::size_t pendingFixedTicks{};
+        std::optional<Math::Vec3> authoringPosition;
         Editor::EditorViewportSceneState viewportScene;
         IEditorUiTestSurface &surface;
         Editor::IEditorViewportRenderer &viewportRenderer;
@@ -300,6 +303,17 @@ namespace Horo::Tests {
         state_->settingsSnapshot = state_->settings.Snapshot();
         state_->modals.OnUpdate(1.0F / 60.0F);
         state_->screenHost->OnUpdate(1.0F / 60.0F);
+        if (const auto ticks = std::exchange(state_->pendingFixedTicks, 0); ticks != 0) {
+            state_->screenHost->OnInputSnapshot();
+            for (std::size_t index = 0; index < ticks; ++index) {
+                const CancellationToken token = state_->runtimeCancellation.Token();
+                const Runtime::FixedStepContext context{++state_->runtimeSimulationTick, Duration::FromNanoseconds(16'666'667), token};
+                const auto advanced = state_->runtimeScene.OnFixedUpdate(context);
+                if (advanced.HasError())
+                    throw std::runtime_error(advanced.ErrorValue().message);
+                state_->screenHost->OnFixedUpdate(context.simulationTick, 1.0 / 60.0);
+            }
+        }
         state_->drawnRoutes.push_back(state_->screenHost->ActiveRoute().kind);
         state_->screenHost->Draw();
         state_->modals.Draw();
@@ -309,18 +323,29 @@ namespace Horo::Tests {
         const Result<void> committed = state_->runtimeScene.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, context);
         if (committed.HasError())
             throw std::runtime_error(committed.ErrorValue().message);
+        state_->authoringPosition.reset();
+        if (const auto scene = state_->runtimeScene.ActiveScene()) {
+            for (std::size_t slot = 0; slot < scene->SlotCount(); ++slot) {
+                const auto entity = scene->EntityAt(slot);
+                if (entity && entity->primitiveMesh != nullptr && entity->primitiveMesh->has_value()) {
+                    state_->authoringPosition = entity->localTransform->translation;
+                    break;
+                }
+            }
+        }
     }
 
-    void FullEditorUiTestHost::AdvanceFixedTicks(const std::size_t count) {
-        state_->screenHost->OnInputSnapshot();
-        for (std::size_t index = 0; index < count; ++index) {
-            const CancellationToken token = state_->runtimeCancellation.Token();
-            const Runtime::FixedStepContext context{++state_->runtimeSimulationTick, Duration::FromNanoseconds(16'666'667), token};
-            const Result<void> advanced = state_->runtimeScene.OnFixedUpdate(context);
-            if (advanced.HasError())
-                throw std::runtime_error(advanced.ErrorValue().message);
-            state_->screenHost->OnFixedUpdate(context.simulationTick, 1.0 / 60.0);
-        }
+    /** @copydoc FullEditorUiTestHost::AdvanceFixedTicks */
+    std::uint64_t FullEditorUiTestHost::AdvanceFixedTicks(const std::size_t count) {
+        if (count == 0 || count > 64 || state_->pendingFixedTicks != 0)
+            throw std::invalid_argument("Fixed ticks require one nonempty bounded request before the next GUI frame.");
+        state_->pendingFixedTicks = count;
+        return state_->runtimeSimulationTick + count;
+    }
+
+    /** @copydoc FullEditorUiTestHost::CompletedFixedTicks */
+    std::uint64_t FullEditorUiTestHost::CompletedFixedTicks() const noexcept {
+        return state_->runtimeSimulationTick;
     }
 
     std::optional<Math::Vec3> FullEditorUiTestHost::FirstViewportObjectPosition() const noexcept {
@@ -331,15 +356,7 @@ namespace Horo::Tests {
     }
 
     std::optional<Math::Vec3> FullEditorUiTestHost::FirstAuthoringObjectPosition() const noexcept {
-        const std::optional<Runtime::RuntimeSceneView> scene = state_->runtimeScene.ActiveScene();
-        if (!scene)
-            return std::nullopt;
-        for (std::size_t slot = 0; slot < scene->SlotCount(); ++slot) {
-            const std::optional<Runtime::RuntimeEntityView> entity = scene->EntityAt(slot);
-            if (entity && entity->primitiveMesh != nullptr && entity->primitiveMesh->has_value())
-                return entity->localTransform->translation;
-        }
-        return std::nullopt;
+        return state_->authoringPosition;
     }
 
     std::uint64_t FullEditorUiTestHost::ViewportDocumentRevision() const noexcept {

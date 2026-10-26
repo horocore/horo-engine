@@ -27,6 +27,11 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Returns exactly the selected graphics API extension; adapter policy does not choose one. */
         [[nodiscard]] virtual const char *RequiredExtension() const noexcept = 0;
 
+        /** @brief Checks actual selected device/platform preparation without inventing a Horo session generation.
+         * @return Current same-owner graphics evidence or original typed failure; mandatory before unpublished native session creation.
+         */
+        [[nodiscard]] virtual Result<void> ValidatePreparation() const = 0;
+
         /**
          * @brief Checks exact current host device/platform ownership before any native work.
          * @param candidate Unpublished or retained exact Horo session generation.

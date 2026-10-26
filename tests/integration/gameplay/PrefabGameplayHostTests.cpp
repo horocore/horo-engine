@@ -158,9 +158,10 @@ namespace {
         Assets::AssetLoadService loads{jobs, bytes};
         Assets::AssetRegistry registry;
         CancellationSource cancellation;
+        const CancellationToken cancellationToken{cancellation.Token()};
         GameplayWorldComposition *activeGameplay{};
         Runtime::RuntimeSceneService scenes{registry, loads};
-        Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellation.Token()};
+        Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellationToken};
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates;
         std::unique_ptr<GameplayWorldComposition> gameplay;
 
@@ -203,7 +204,9 @@ namespace {
 
         void Retire(EscapedPrefabOperations &escaped) {
             activeGameplay->Shutdown();
+            UNSCOPED_INFO("Prefab host shutdown returned before actual native image release.");
             escaped.image.reset();  // Actual native unload precedes observation and service weak-slot retirement.
+            UNSCOPED_INFO("Actual native image release returned before Scene retirement.");
             gameplay.reset();
             activeGameplay = nullptr;
             if (templates)
@@ -211,6 +214,7 @@ namespace {
             REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
             CHECK(Count(scenes) == 1);
             REQUIRE(scenes.QueueUnload().HasValue());
+            UNSCOPED_INFO("Scene unload admission returned after actual native image release.");
             REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
             CHECK_FALSE(scenes.ActiveScene().has_value());
         }

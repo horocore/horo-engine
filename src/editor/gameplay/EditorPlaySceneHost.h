@@ -52,8 +52,18 @@ namespace Horo::Editor {
      * @details Scene remains the only candidate owner. Application implementations select their explicit backend and
      * capture project inputs before construction; Editor does not discover or instantiate native backends.
      */
+    class IEditorPlayXrHost;
+
     class EditorPlaySceneHost {
     public:
+        /** @brief Identifies the actual selected XR participant in this factory composition.
+         * @return Null for ordinary desktop; exact borrowed host for explicitly selected XR.
+         * This identity alone grants no Ready: the real participant must prepare and validate before Scene publication.
+         */
+        [[nodiscard]] virtual const IEditorPlayXrHost *SelectedXrHost() const noexcept {
+            return nullptr;
+        }
+
         virtual ~EditorPlaySceneHost() = default;
         /** @brief Borrows the actual single Scene service for preparation, behavior transactions and read-only presentation.
          * @return Service owned by this host until shutdown/destruction.

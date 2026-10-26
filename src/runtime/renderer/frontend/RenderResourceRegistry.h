@@ -23,6 +23,8 @@ namespace Horo::Render {
 }  // namespace Horo::Render
 
 namespace Horo::Render::Detail {
+    struct UiPaintOwnerRetirement;
+    class UiPaintResourceRetirement;
     class IRenderExternalTextureSource;
     struct RenderExternalTextureFacts;
 
@@ -143,6 +145,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] RenderResourceOwnerId Owner() const noexcept;
 
     private:
+        friend class UiPaintResourceRetirement;
+
         /** @brief Callback only marks owner-thread evidence; registry/budget mutation happens later in Retire. */
         struct NativeLease final : IRenderResourceRetirementLease {
             bool claimed{false};
@@ -166,6 +170,7 @@ namespace Horo::Render::Detail {
 
         struct Entry {
             std::shared_ptr<const IRenderExternalTextureSource> externalSource;
+            std::shared_ptr<UiPaintOwnerRetirement> uiPaintOwner;
             RenderResourceClass resourceClass{RenderResourceClass::Buffer};
             RenderResourceState state{RenderResourceState::Retired};
             std::uint32_t generation{1};
@@ -249,6 +254,7 @@ namespace Horo::Render::Detail {
         /** @brief Sole generational slot storage; its embedded native lease addresses remain stable after preparation. */
         class SlotStore final {
             friend class RenderResourceRegistry;
+            friend class UiPaintResourceRetirement;
 
             SlotStore(RenderResourceOwnerId owner, std::uint32_t maximumSlots) : owner_(owner), maximumSlots_(maximumSlots) {}
 
@@ -315,6 +321,7 @@ namespace Horo::Render::Detail {
         std::vector<SubmissionPin> submissionPins_;
         std::vector<QueueProgress> queueProgress_;
         std::size_t completionScanCursor_{0};
+        std::size_t uiPaintRetirementCursor_{1};
         std::uint32_t pendingRequests_{0};
         std::uint32_t activeSubmissionPins_{0};
         bool acceptingRequests_{true};

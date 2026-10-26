@@ -4,6 +4,38 @@
 #include <utility>
 
 namespace Horo::Runtime::Ui {
+    /** @copydoc UiAnimationOwner::PrepareSourcePresentation */
+    Result<UiAnimationFrameLease> UiAnimationOwner::PrepareSourcePresentation(const UiAnimationViewport &viewport) {
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
+            storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching ||
+            storage_->currentFrame.has_value() || !storage_->binding.bound || storage_->binding.clocks.updateSequence != 0 ||
+            storage_->pendingCommands != 0 || storage_->route.gate.has_value() ||
+            std::ranges::any_of(storage_->timelines, [](const auto &timeline) {
+            return timeline.occupied;
+        }))
+            return Result<UiAnimationFrameLease>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        auto source = storage_->publisher.Acquire();
+        if (source.HasError())
+            return Result<UiAnimationFrameLease>::Failure(source.ErrorValue());
+        auto &candidate = storage_->candidate;
+        candidate.frameSlot = 0;
+        candidate.commandRevision = storage_->commandRevision;
+        candidate.sourceFrame = 0;
+        candidate.source = std::move(source).Value();
+        candidate.admitted = true;
+        Prepared reservation{storage_.PublisherPin(), candidate.frameSlot, candidate.commandRevision};
+        auto &inactive = *storage_->frames.front();
+        inactive.clocks = storage_->binding.clocks;
+        // No host clock read is fabricated, no timeline/route command is consumed, and no receipt is produced.
+        if (auto timelines = PrepareTimelines(*storage_); timelines.HasError())
+            return Result<UiAnimationFrameLease>::Failure(timelines.ErrorValue());
+        if (auto presentation = PreparePresentation(*storage_, viewport); presentation.HasError())
+            return Result<UiAnimationFrameLease>::Failure(presentation.ErrorValue());
+        if (auto committed = Commit(reservation); committed.HasError())
+            return Result<UiAnimationFrameLease>::Failure(committed.ErrorValue());
+        return Acquire();
+    }
+
     /** @copydoc UiAnimationOwner::Prepare */
     Result<UiAnimationOwner::Prepared> UiAnimationOwner::Prepare(const UiAnimationHostRead &read, const UiAnimationViewport &viewport) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
@@ -49,6 +81,8 @@ namespace Horo::Runtime::Ui {
     Result<void> UiAnimationOwner::PreparePresentation(Storage &storage, const UiAnimationViewport &viewport) {
         auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
         const auto &tree = canvas->tree;
+        if (auto projections = PrepareControlProjections(storage); projections.HasError())
+            return projections;
         if (auto visual = PrepareVisualState(storage); visual.HasError())
             return visual;
         const UiStyleSourceRevisions lineage{tree.SourceDocumentRevision(),     tree.Revision(),
@@ -85,6 +119,13 @@ namespace Horo::Runtime::Ui {
         if (layout.HasError())
             return Result<void>::Failure(layout.ErrorValue());
         storage.candidate.layout.emplace(std::move(layout).Value());
+        return PrepareDerivedPresentation(storage);
+    }
+
+    /** @copydoc UiAnimationOwner::PrepareDerivedPresentation */
+    Result<void> UiAnimationOwner::PrepareDerivedPresentation(Storage &storage) {
+        auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
+        const auto &tree = canvas->tree;
         if (canvas->clipping) {
             auto clipped = canvas->clipping->Prepare(tree, storage.candidate.layout->Candidate(), {canvas->clipPolicies, {}});
             if (clipped.HasError())
@@ -96,6 +137,24 @@ namespace Horo::Runtime::Ui {
         if (auto attachments = PrepareAttachments(storage); attachments.HasError())
             return attachments;
         return PrepareControlSources(storage);
+    }
+
+    /** @copydoc UiAnimationOwner::Storage::CanPublishAttachments */
+    Result<void> UiAnimationOwner::Storage::CanPublishAttachments(const UiElementTree &tree) const {
+        for (const auto &attachment : presentation.attachments) {
+            if (!attachment || !attachment->active)
+                continue;
+            if (!attachment->preparedLayout)
+                return Result<void>::Failure(MakeError(UiErrors::LayoutSourceStale));
+            if (auto valid = attachment->preparedLayout->CanPublish(tree); valid.HasError())
+                return valid;
+            if (attachment->clipping && !attachment->preparedClipping)
+                return Result<void>::Failure(MakeError(UiErrors::LayoutClipSourceStale));
+            if (attachment->preparedClipping)
+                if (auto valid = attachment->preparedClipping->CanPublish(tree); valid.HasError())
+                    return valid;
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc UiAnimationOwner::CanPublish */
@@ -119,19 +178,8 @@ namespace Horo::Runtime::Ui {
             if (auto clipping = candidate.clipping->CanPublish(canvas->tree); clipping.HasError())
                 return clipping;
         }
-        for (const auto &attachment : storage.presentation.attachments) {
-            if (!attachment || !attachment->active)
-                continue;
-            if (!attachment->preparedLayout)
-                return Result<void>::Failure(MakeError(UiErrors::LayoutSourceStale));
-            if (auto valid = attachment->preparedLayout->CanPublish(canvas->tree); valid.HasError())
-                return valid;
-            if (attachment->clipping && !attachment->preparedClipping)
-                return Result<void>::Failure(MakeError(UiErrors::LayoutClipSourceStale));
-            if (attachment->preparedClipping)
-                if (auto valid = attachment->preparedClipping->CanPublish(canvas->tree); valid.HasError())
-                    return valid;
-        }
+        if (const auto attachments = storage.CanPublishAttachments(canvas->tree); attachments.HasError())
+            return attachments;
         if (canvas->captures) {
             if (auto captures = canvas->captures->CanPublishInteraction(canvas->tree.Canvas()); captures.HasError())
                 return captures;

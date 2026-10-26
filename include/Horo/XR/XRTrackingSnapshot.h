@@ -13,7 +13,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <vector>
 
 namespace Horo::XR {
     /** @brief Semantic tracked-device role; role is not device identity or a native path. */
@@ -114,10 +113,30 @@ namespace Horo::XR {
         XRPoseSample sample;                                /**< Immutable validity-aware simulation evidence. */
     };
 
+    /** @brief Closed scalar action payload; native paths and canonical Input identities are deliberately absent. */
+    enum class XRTrackedActionKind : std::uint8_t {
+        Boolean,
+        Scalar,
+        Vector2,
+        Count
+    };
+
+    /** @brief One current binding-plan entry sampled at this snapshot's simulation cutoff. */
+    struct XRTrackedActionRecord final {
+        XRDeviceId device;            /**< Exact session-owned physical source incarnation. */
+        std::uint32_t bindingIndex{}; /**< Index into the exact binding revision, never a durable action identity. */
+        XRTrackedActionKind kind{XRTrackedActionKind::Boolean}; /**< Declared native value shape. */
+        bool active{};                                          /**< Inactive records carry exact zero values. */
+        float x{};                                              /**< Finite normalized scalar or first vector component. */
+        float y{};                                              /**< Finite normalized second component; zero for scalar/Boolean. */
+        constexpr auto operator<=>(const XRTrackedActionRecord &) const noexcept = default;
+    };
+
     /** @brief Finite admitted capacities; publication rejects rather than truncates overflow. */
     struct XRTrackingSnapshotLimits final {
         std::uint32_t maximumDevices{}; /**< Admitted device records, at most MaximumDevices. */
         std::uint32_t maximumPoses{};   /**< Admitted pose records, at most MaximumPoses. */
+        std::uint32_t maximumActions{}; /**< Admitted scalar-action records; zero preserves tracking-only callers. */
         constexpr auto operator<=>(const XRTrackingSnapshotLimits &) const noexcept = default;
     };
 
@@ -125,6 +144,7 @@ namespace Horo::XR {
     struct XRTrackingSnapshotHardLimits final {
         static constexpr std::uint32_t MaximumDevices = 64;
         static constexpr std::uint32_t MaximumPoses = 320;
+        static constexpr std::uint32_t MaximumActions = 256;
     };
 
     /** @brief Caller-owned candidate data validated before any immutable snapshot is published. */
@@ -141,6 +161,8 @@ namespace Horo::XR {
         XRTrackingSnapshotLimits limits;                                         /**< Admitted finite plan bounds. */
         std::span<const XRTrackedDeviceRecord> devices;                          /**< Canonically ordered devices. */
         std::span<const XRTrackedPoseRecord> poses;                              /**< Canonically ordered device poses. */
+        std::uint64_t bindingRevision{};                /**< Non-zero exact resolved-plan revision whenever actions are admitted. */
+        std::span<const XRTrackedActionRecord> actions; /**< Canonical (binding index, device) ordered action evidence. */
     };
 
     /**
@@ -157,7 +179,7 @@ namespace Horo::XR {
          * @param activeSession Current session, or invalid after shutdown.
          * @param activeOriginRevision Current world-origin adapter revision.
          * @return Immutable snapshot or typed version, identity, capacity, unsupported, stale, or invalid failure.
-         * @throws std::bad_alloc When bounded immutable device or pose storage cannot be allocated.
+         * @post Successful construction and value copies require no dynamic allocation.
          * @post On failure, no partial snapshot is published and all caller-owned spans remain unmodified.
          */
         [[nodiscard]] static Result<XRTrackingSnapshot> Create(const XRTrackingSnapshotDescriptor &descriptor,
@@ -189,7 +211,13 @@ namespace Horo::XR {
         /** @brief Returns canonical pose records. @return Immutable contiguous owned records. */
         [[nodiscard]] std::span<const XRTrackedPoseRecord> Poses() const noexcept;
 
+        /** @brief Returns the captured binding-plan revision. @return Zero only for tracking-only publications. */
+        [[nodiscard]] std::uint64_t BindingRevision() const noexcept;
+        /** @brief Returns canonical action evidence. @return Immutable owned populated prefix. */
+        [[nodiscard]] std::span<const XRTrackedActionRecord> Actions() const noexcept;
+
     private:
+        [[nodiscard]] static std::array<XRTrackedPoseRecord, XRTrackingSnapshotHardLimits::MaximumPoses> EmptyPoses() noexcept;
         explicit XRTrackingSnapshot(const XRTrackingSnapshotDescriptor &descriptor);
 
         XRContractVersion contractVersion_;
@@ -202,8 +230,13 @@ namespace Horo::XR {
         XRTrackingVisibilityState visibility_;
         XRTrackingState state_;
         XRTrackingSnapshotLimits limits_;
-        std::vector<XRTrackedDeviceRecord> devices_;
-        std::vector<XRTrackedPoseRecord> poses_;
+        std::array<XRTrackedDeviceRecord, XRTrackingSnapshotHardLimits::MaximumDevices> devices_{};
+        std::array<XRTrackedPoseRecord, XRTrackingSnapshotHardLimits::MaximumPoses> poses_ = EmptyPoses();
+        std::array<XRTrackedActionRecord, XRTrackingSnapshotHardLimits::MaximumActions> actions_{};
+        std::size_t deviceCount_{};
+        std::size_t poseCount_{};
+        std::size_t actionCount_{};
+        std::uint64_t bindingRevision_{};
     };
 
     /**

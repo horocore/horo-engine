@@ -36,6 +36,7 @@ namespace Horo::Render {
         LightCulling,         /**< Cooked native light-culling operation; does not imply general compute dispatch. */
         ViewIndexedShaders,   /**< Real indexed-draw shader execution through the selected backend. */
         InstancedViewRouting, /**< Enabled native layer routing for the same immutable multiview scene. */
+        UiPaint,              /**< Native cooked paint, bounded reusable uploads, clipping/stencil and isolated composition. */
         Count,                /**< Number of defined capabilities; not itself a capability bit. */
     };
 

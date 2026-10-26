@@ -147,8 +147,24 @@ namespace Horo::Render {
                 return Result<ShaderCompilerAdapterOutput>::Failure(std::move(written).ErrorValue());
         }
 
-        return ShaderCompilerToolchainDetail::CompileRoute(state_->configuration, *state_->processes, invocation, cancellation,
-                                                           scratch.Path(), sourcePath);
+        auto output = ShaderCompilerToolchainDetail::CompileRoute(state_->configuration, *state_->processes, invocation, cancellation,
+                                                                  scratch.Path(), sourcePath);
+        if (output.HasError())
+            return output;
+        auto value = std::move(output).Value();
+        if (!invocation.reflection || value.reflection)
+            return Result<ShaderCompilerAdapterOutput>::Success(std::move(value));
+        if (invocation.target.requirement.backend != ShaderTargetBackend::Vulkan)
+            return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid,
+                                                                          "The selected shader route has no admitted reflection handoff."));
+        CompiledShaderArtifact compiled{value.backend, value.payloadFormat, invocation.artifactKey, std::move(value.payload), {}, {}};
+        auto reflected = ReflectVulkan(invocation.manifest, compiled, invocation.target.requirement, invocation.reflection->names,
+                                       invocation.reflection->tool, cancellation);
+        value.payload = std::move(compiled.payload);
+        if (reflected.HasError())
+            return Result<ShaderCompilerAdapterOutput>::Failure(std::move(reflected).ErrorValue());
+        value.reflection = std::make_shared<const ReflectedShaderArtifact>(std::move(reflected).Value());
+        return Result<ShaderCompilerAdapterOutput>::Success(std::move(value));
     }
 
     /** @copydoc ExternalShaderCompilerAdapter::ReflectVulkan */

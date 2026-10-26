@@ -114,7 +114,7 @@ jobs:
         id: build
         run: |
           ccache --zero-stats
-          cmake --build --preset sonar --target all HoroEditorVulkanShaderCook
+          cmake --build --preset sonar --target all HoroEditorVulkanShaderCook HoroEditorUiPaintShaderCook
           ccache --show-stats
 
       # Checkpoint build inputs before coverage and analysis. A later scan timeout

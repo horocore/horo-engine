@@ -54,3 +54,20 @@ identity (including `CoreDefaultMaterial`). `MaterialBindingGenerationId` names
 an exact resident table generation with frontend ownership; it is not a logical
 material name. The descriptor carries the established cooked `MaterialRuntimeId`;
 host extraction resolves logical names to cooked materials before realization.
+
+### Bounded caller-owned packing
+
+The additive `PackMaterialParameterBinding(..., span<byte>, limits)` overload writes
+only the validated required prefix. Existing allocating callers retain their
+signature and delegate to this same implementation. All declarations, counts,
+strides, extents, occupied-byte overlap and input/output aliasing are checked before
+any output write; invalid/undersized input leaves the whole destination unchanged.
+Byte storage needs no stricter pointer alignment because scalar representations are
+copied as bytes. Padding is zero and an oversized destination suffix is preserved.
+The implementation uses a fixed 8 KiB occupied-byte bitmap under the existing
+64 KiB block ceiling. A frame-hot caller retains bounded per-slot storage through
+actual upload/recording; no vector resize or packing allocation belongs in that
+path. `PackMultiviewShaderParameters` exposes the corresponding span overload and
+uses the same canonical scalar/matrix mapping. Public consumer coverage and tests
+compare exact bytes, rejection atomicity, source aliasing and allocation requests;
+measurements apply only to the tested packing calls, not a complete native frame.

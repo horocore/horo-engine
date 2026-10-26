@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -73,7 +74,7 @@ namespace Horo::Runtime {
         DerivedResources
     };
     /** @brief Host-only activation virtual contract revision; all host participants must rebuild together. */
-    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 2;
+    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 4;
     struct SceneInitialPlacement;
 
     /** @brief Detached subsystem state prepared for one aggregate runtime-scene candidate. */
@@ -183,7 +184,17 @@ namespace Horo::Runtime {
          * @return Owned candidate ready for evidence validation and no-fail aggregate publication, or a typed error.
          */
         [[nodiscard]] virtual Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &definition,
-                                                                                        RuntimeSceneView scene) = 0;
+                                                                                        const RuntimeSceneView &scene) = 0;
+
+        /** @brief Prepares optional detached owner state for normal unload of the exact active Scene.
+         * @param scene Borrowed active generation; implementations must retain their own immutable leases, never component pointers.
+         * @return An optional owned candidate, or the original typed failure preserving all active roots.
+         * @details The service prepares and validates every retirement candidate before any publication. A null candidate opts out.
+         * Publish must remove only this Scene's ownership without allocation or failure. Candidate Shutdown abandons unpublished
+         * work or releases an already published transaction. Forced service shutdown skips this fallible hook: the active
+         * activation candidate's Shutdown must revoke its scope and retain/drain outstanding leases independently.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneActivationCandidate>> PrepareRetirement(const RuntimeSceneView &scene);
     };
 
     namespace ScenePublicationDetail {
@@ -635,7 +646,7 @@ namespace Horo::Runtime {
     };
 
     /** @brief Host structural-participant virtual contract revision; external host implementations must rebuild. */
-    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 3;
+    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 4;
 
     /** @brief Application-composed subsystem participant for bounded Scene group transactions. */
     class SceneStructuralParticipant {
@@ -655,7 +666,7 @@ namespace Horo::Runtime {
          * @return Success or a typed failure preserving all owners. Default Physics ownership rejects unhandled trigger proof;
          * other owners may delegate to this no-op. No view or lease may be retained beyond this call.
          */
-        [[nodiscard]] virtual Result<void> ValidateBaselines(RuntimeSceneView active,
+        [[nodiscard]] virtual Result<void> ValidateBaselines(const RuntimeSceneView &active,
                                                              std::span<const SceneBaselinePreparationView> baselines) const;
         /** @brief Prepares detached additions/removals without exposing native state or running gameplay hooks.
          * @param active Existing Scene, borrowed only for this call.
@@ -663,28 +674,33 @@ namespace Horo::Runtime {
          * @param destroyed Existing entities retired by the same transaction.
          * @return Owned unpublished candidate. Its destruction rolls back uncommitted owner work.
          */
-        [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(RuntimeSceneView active,
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(const RuntimeSceneView &active,
                                                                                         std::span<const RuntimeEntityView> created,
                                                                                         std::span<const EntityRef> destroyed) = 0;
     };
 
-    /** @brief Borrowed immutable view of one runtime scene; invalidated by structural commit or transition. */
+    /** @brief Allocation-free owner-thread Scene borrow; invalidated by structural commit or owner retirement.
+     * @details A weak lifetime observation never retains Scene/component storage. Cached identity values remain
+     * available after retirement; storage queries reject expired or foreign-thread borrows before accessing the owner.
+     */
     class RuntimeSceneView final {
     public:
         RuntimeSceneView() = default;
-        /** @brief Reports whether this borrow still observes the structural revision captured at acquisition. */
+        /** @brief Checks owner-thread access, owner lifetime and the structural revision captured at acquisition.
+         * @return False for empty, retired, structurally stale or foreign-thread views, without dereferencing a retired owner.
+         */
         [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Returns the exact committed structural revision captured by this current view.
-         * @return Non-zero revision when current, or zero for an empty/stale view; the scene owner must remain alive.
+         * @return Non-zero revision when current, or zero for an empty, expired, foreign-thread or structurally stale view.
          */
         [[nodiscard]] std::uint64_t StructuralRevision() const noexcept;
-        /** @brief Returns the owning runtime identity. */
+        /** @brief Returns the copied owning runtime identity, including after retirement. */
         [[nodiscard]] SceneRuntimeId RuntimeId() const noexcept;
-        /** @brief Returns the logical definition identity. */
+        /** @brief Returns the copied logical definition identity, including after retirement. */
         [[nodiscard]] SceneDefinitionId DefinitionId() const noexcept;
-        /** @brief Returns the activated authored revision. */
+        /** @brief Returns the copied activated authored revision, including after retirement. */
         [[nodiscard]] SceneDefinitionRevision DefinitionRevision() const noexcept;
-        /** @brief Returns the asset-registry revision used to prepare this scene. */
+        /** @brief Returns the copied preparation registry revision, including after retirement. */
         [[nodiscard]] Assets::AssetRegistryRevision AssetRegistryRevision() const noexcept;
         /** @brief Returns the number of allocated slots, including inactive and retired slots. */
         [[nodiscard]] std::size_t SlotCount() const noexcept;
@@ -710,6 +726,12 @@ namespace Horo::Runtime {
         friend class RuntimeScene;
         explicit RuntimeSceneView(const RuntimeScene &scene) noexcept;
         const RuntimeScene *scene_{};
+        std::weak_ptr<const std::uint8_t> lifetime_;
+        std::thread::id ownerThread_;
+        SceneRuntimeId runtimeId_;
+        SceneDefinitionId definitionId_;
+        SceneDefinitionRevision definitionRevision_;
+        Assets::AssetRegistryRevision assetRegistryRevision_;
         std::uint64_t structuralRevision_{};
     };
 
@@ -748,13 +770,20 @@ namespace Horo::Runtime {
             std::shared_ptr<const std::vector<std::uint8_t>> payload;
         };
 
+        /** @brief Constructs one cold Scene owner and its non-owning view lifetime observation.
+         * @param runtimeId Exact runtime incarnation. @param definitionId Logical definition.
+         * @param revision Authored revision. @param config Generation policy.
+         * @param assetRevision Registry revision used for preparation. @param assets Owned resolved payloads.
+         * @throws std::bad_alloc When the cold lifetime observation cannot be allocated.
+         * @pre Construction, storage queries, mutation and destruction occur on the same owner thread.
+         */
         RuntimeScene(SceneRuntimeId runtimeId, SceneDefinitionId definitionId, SceneDefinitionRevision revision, RuntimeSceneConfig config,
-                     Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> assets) noexcept;
+                     Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> assets);
         RuntimeScene(const RuntimeScene &) = delete;
         RuntimeScene &operator=(const RuntimeScene &) = delete;
         RuntimeScene(RuntimeScene &&) = delete;
         RuntimeScene &operator=(RuntimeScene &&) = delete;
-        /** @brief Returns an immutable borrowed scene view. */
+        /** @brief Returns an allocation-free immutable borrow, or an empty view on a foreign thread. */
         [[nodiscard]] RuntimeSceneView View() const noexcept;
         /** @brief Applies a structural batch atomically, leaving the scene unchanged on failure. @param commands
          * Owner-thread command batch consumed by the operation. @return Created-token resolutions and destroy count, or the
@@ -829,6 +858,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> DestroyEntity(RuntimeSceneStorage &storage, EntityRef entity) const;
         [[nodiscard]] bool IsValid(const RuntimeSceneStorage &storage, EntityRef entity) const noexcept;
 
+        std::shared_ptr<const std::uint8_t> viewLifetime_; /**< Cold liveness only; views never pin Scene/component storage. */
+        const std::thread::id ownerThread_{std::this_thread::get_id()};
         std::unique_ptr<Vfx::VfxWorld> vfxWorld_;
         Math::WorldCoordinate64 vfxOrigin_{};
         std::uint64_t vfxOriginRevision_{};
@@ -894,7 +925,11 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> QueuePreparationWithRestore(RuntimeSceneDefinition definition,
                                                                std::unique_ptr<SceneAggregateRestore> restore,
                                                                RuntimeSceneConfig config = {});
-        /** @brief Queues active-scene unload; repeated unload with no pending transition is harmless. */
+        /** @brief Queues transactional active-scene unload; repeated unload with no pending transition is harmless.
+         * @return Success on admission, or typed shutdown/reentrant/structural-operation rejection.
+         * @details Deferred retirement preparation or validation failure preserves the Scene and all owner roots, and reaches
+         * TakeOperationError(). Forced Shutdown revokes directly and never depends on fallible retirement preparation.
+         */
         [[nodiscard]] Result<void> QueueUnload();
         /** @brief Queues one structural batch against the current active scene. @param commands Batch consumed on success.
          * @return Success or a typed state/pending-operation error. */
@@ -989,7 +1024,9 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> SubmitPreparationLoads();
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
         [[nodiscard]] Result<void> PrepareParticipantPhase(const RuntimeSceneDefinition &definition, SceneActivationPhase phase);
-        [[nodiscard]] Result<void> CommitDeferredChanges();
+        [[nodiscard]] Result<void> CommitDeferredChanges(const CancellationToken &cancellation);
+        /** @brief Prepares and validates all unload owners before the existing no-fail lifecycle publication boundary. */
+        [[nodiscard]] Result<void> RetireActiveScene(const CancellationToken &cancellation);
         /** @brief Waits for owners and validates every candidate before any ownership transfer.
          * @return Ready, pending, or the original typed preparation/validation failure. */
         [[nodiscard]] Result<bool> PreparePendingPublication();

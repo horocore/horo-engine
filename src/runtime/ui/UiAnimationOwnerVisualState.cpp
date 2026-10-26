@@ -29,13 +29,11 @@ namespace Horo::Runtime::Ui {
         for (auto &input : storage.work.elementInputs)
             input.state = {};
         for (const auto &control : canvas->controls) {
-            auto state = control.control.Snapshot();
-            if (state.HasError())
-                return Result<void>::Failure(state.ErrorValue());
+            const auto &state = control.control.PreparedInteractionState();
             const auto input = std::ranges::find(storage.work.elementInputs, control.control.Element(), &UiStyleElementInput::element);
             if (input == storage.work.elementInputs.end())
                 return Result<void>::Failure(MakeError(UiErrors::AnimationTargetStale));
-            input->state = ControlVisualState(state.Value());
+            input->state = ControlVisualState(state);
         }
         if (canvas->focus) {
             const auto focused = canvas->focus->CurrentFocus();

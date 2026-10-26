@@ -304,7 +304,7 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsPlayWorldSession::Prepare */
     Result<void> PhysicsPlayWorldSession::Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                  const Runtime::RuntimeSceneView scene) {
+                                                  const Runtime::RuntimeSceneView &scene) {
         if (const Result<void> owner = CheckOwner(); owner.HasError())
             return owner;
         if (pending_)
@@ -321,7 +321,7 @@ namespace Horo::Physics {
     }
 
     /** @copydoc PhysicsPlayWorldSession::Commit */
-    Result<void> PhysicsPlayWorldSession::Commit(const Runtime::RuntimePhase phase, const Runtime::RuntimeSceneView source) {
+    Result<void> PhysicsPlayWorldSession::Commit(const Runtime::RuntimePhase phase, const Runtime::RuntimeSceneView &source) {
         if (const Result<void> safePoint = CheckSafePoint(phase); safePoint.HasError())
             return safePoint;
         if (!pending_)

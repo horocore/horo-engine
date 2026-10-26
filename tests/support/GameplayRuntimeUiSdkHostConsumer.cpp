@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "RuntimeUiCapabilityTestSupport.h"
+#include "RuntimeUiPaintHostTestFixture.h"
 
 #include <catch2/catch_session.hpp>
 #include <charconv>
@@ -14,10 +15,13 @@ namespace {
 TEST_CASE("External Runtime UI SDK retains only host-issued storage after actual native image unload", "[runtime-ui][sdk][native]") {
     using namespace Horo;
     using namespace Horo::Tests::UiAccess;
-    Fixture fixture;
-    auto grant = fixture.Grant();
+    Horo::Tests::UiPaintHostTesting::Fixture fixture;
+    fixture.Frame();
+    fixture.Frame();
+    REQUIRE(Horo::Tests::RenderFrontendTesting::lifecycleState.uiPaint.updates == 1);
+    auto grant = fixture.source.Grant();
     grant.moduleId = "game.ui_sdk";
-    auto anchor = Take(fixture.service.Issue(grant));
+    auto anchor = Take(fixture.port.Issue(grant));
     auto host = std::make_unique<Gameplay::GameModuleHost>(Gameplay::GameModuleHostOptions{{}, {.runtimeUi = anchor}});
     auto candidate = Take(host->Load(artifact, {"game.ui_sdk", Gameplay::CurrentGameplayBuildFingerprint(), revision}));
     REQUIRE_FALSE(candidate.diagnostic);
@@ -37,7 +41,7 @@ TEST_CASE("External Runtime UI SDK retains only host-issued storage after actual
     copy = nullptr;
     image.reset();
     CHECK(escaped->Validate().HasError());
-    CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
+    fixture.Frame();  // The actual registered production adapter applies the cancelled module request at the owner cutoff.
     CHECK(Take(anchor->ScreenGuard()).revision.Value() == 1);
     std::weak_ptr<const RuntimeUiClient> weak = escaped;
     escaped.reset();
@@ -45,9 +49,7 @@ TEST_CASE("External Runtime UI SDK retains only host-issued storage after actual
     weak.reset();
     host.reset();
     anchor.reset();
-    fixture.service.Shutdown();
-    REQUIRE(fixture.service.CollectRetired().HasValue());
-    CHECK(Take(fixture.service.CanReclaim()));
+    fixture.Stop();
 }
 
 int main(int argc, char **argv) {

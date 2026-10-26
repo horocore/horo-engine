@@ -6,6 +6,7 @@
 #include "MetalResourceInstances.h"
 #include "MetalResourcePolicy.h"
 #include "MetalResourceRuntime.h"
+#include "MetalUiPaintKernel.h"
 
 #import <Metal/Metal.h>
 #include <cstring>
@@ -110,6 +111,7 @@ namespace Horo::Render::Detail {
 
         __strong id<MTLDevice> device{nil};
         std::shared_ptr<const MetalLightKernelOwnerIdentity> lightKernelOwner{std::make_shared<const MetalLightKernelOwnerIdentity>()};
+        std::shared_ptr<const MetalUiPaintOwnerIdentity> uiPaintKernelOwner{std::make_shared<const MetalUiPaintOwnerIdentity>()};
         std::uint64_t lightKernelIncarnation{0}; /**< Monotonic runtime admission generation; old cooked leases cannot cross reset. */
         bool lightKernelIdentityExhausted{false};
         __strong id<MTLCommandQueue> commandQueue{nil};

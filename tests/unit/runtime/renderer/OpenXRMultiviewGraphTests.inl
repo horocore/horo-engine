@@ -11,6 +11,10 @@ public:
         return graphics_.RequiredExtension();
     }
 
+    Horo::Result<void> ValidatePreparation() const override {
+        return graphics_.ValidatePreparation();
+    }
+
     Horo::Result<void> Validate(const Horo::XR::XRSessionId &candidate) const override {
         request_.texture.format = RenderTextureFormat::R8Unorm;
         return graphics_.Validate(candidate);
@@ -36,7 +40,11 @@ TEST_CASE("OpenXR Vulkan format selection rejects format revoked during graphics
     NativeXR::NativeSwapchainRequest request{.target = {session.identity, {1, 1}},
                                              .texture = {.extent = {640, 480}, .usage = RenderTextureUsage::RenderAttachment}};
     ReentrantFormatGraphics graphics{session.graphics, request};
-    NativeXR::OpenXRVulkanSwapchainImages images{*frontend, graphics, session.graphics.binding, {1}};
+    NativeXR::OpenXRVulkanSwapchainImages images{*frontend,
+                                                 graphics,
+                                                 session.graphics.binding,
+                                                 {1},
+                                                 {&FakeCreateImageView, &FakeDestroyImageView}};
     NativeXR::OpenXRSwapchain swapchain{session.owner, images};
     REQUIRE(images.Bind(swapchain).HasValue());
     const std::array<std::int64_t, 1> offered{VK_FORMAT_R8G8B8A8_UNORM};
@@ -60,7 +68,11 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
                 .HasValue());
     REQUIRE(registry.Seal().HasValue());
     auto frontend = SubmissionTest::Take(RenderFrontend::Create(registry, RenderBackendId{"xr-bridge-test"}, {}));
-    NativeXR::OpenXRVulkanSwapchainImages images{*frontend, session.graphics, session.graphics.binding, {1}};
+    NativeXR::OpenXRVulkanSwapchainImages images{*frontend,
+                                                 session.graphics,
+                                                 session.graphics.binding,
+                                                 {1},
+                                                 {&FakeCreateImageView, &FakeDestroyImageView}};
     NativeXR::OpenXRSwapchain swapchain{session.owner, images};
     REQUIRE(images.Bind(swapchain).HasValue());
 

@@ -344,6 +344,10 @@ namespace Horo::Render {
                     return Result<void>::Failure(
                         MakeVulkanError(VulkanBackendErrors::ApiVariantUnsupported, "Only the standard Vulkan API variant is supported."));
                 }
+                auto host = runtimePort_->RequiredGraphicsRequirements();
+                if (host.HasError())
+                    return Result<void>::Failure(host.ErrorValue());
+                hostRequirements_.emplace(std::move(host).Value());
                 auto extensions = ResolveInstanceExtensions(config, loader.Value());
                 if (extensions.HasError()) {
                     return Result<void>::Failure(std::move(extensions).ErrorValue());
@@ -375,6 +379,11 @@ namespace Horo::Render {
                     deviceExtensions.emplace_back(SwapchainExtension);
                     deviceExtensions.emplace_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
                 }
+                if (!hostRequirements_)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
+                auto required = Detail::ResolveHostDeviceExtensions(std::move(deviceExtensions), *candidate, *hostRequirements_);
+                if (required.HasError())
+                    return Result<void>::Failure(required.ErrorValue());
                 deviceCreated_ = true;
                 return runtimePort_->CreateDevice(VulkanDeviceRequest{
                     .adapter = candidate->id,
@@ -382,7 +391,7 @@ namespace Horo::Render {
                     .presentationQueueFamily = presentationQueue,
                     .transferQueueFamily = transferQueue.Value(),
                     .enabledFeatures = {.dynamicRendering = true, .synchronization2 = true, .timelineSemaphore = true},
-                    .enabledExtensions = std::move(deviceExtensions),
+                    .enabledExtensions = std::move(required).Value(),
                     .queueAssignments = config.queueAssignments,
                     .maxFramesInFlight = config.maxFramesInFlight,
                     .enableVertexLayerRouting = candidate->vertexLayerRouting,
@@ -426,16 +435,9 @@ namespace Horo::Render {
                             MakeVulkanError(VulkanBackendErrors::ValidationUnavailable, "VK_LAYER_KHRONOS_validation is unavailable."));
                     }
                 }
-                std::ranges::sort(required);
-                required.erase(std::ranges::unique(required).begin(), required.end());
-                for (const std::string &extension : required) {
-                    if (!Detail::VulkanContains(loader.instanceExtensions, extension)) {
-                        return Result<std::vector<std::string>>::Failure(
-                            MakeVulkanError(VulkanBackendErrors::InstanceExtensionMissing,
-                                            "Required Vulkan instance extension is missing: " + extension));
-                    }
-                }
-                return Result<std::vector<std::string>>::Success(std::move(required));
+                if (!hostRequirements_)
+                    return Result<std::vector<std::string>>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
+                return Detail::ResolveHostInstanceExtensions(std::move(required), loader, *hostRequirements_);
             }
 
             [[nodiscard]] Result<const VulkanAdapterCandidate *> SelectCandidate(const RenderBackendConfig &config,
@@ -486,6 +488,7 @@ namespace Horo::Render {
                     runtimePort_->ReleaseLoader();
                     loaderAcquired_ = false;
                 }
+                hostRequirements_.reset();
                 if (ownsLease_) {
                     lease_->claimed = false;
                     ownsLease_ = false;
@@ -493,6 +496,7 @@ namespace Horo::Render {
             }
 
             IVulkanRuntimePort *runtimePort_{nullptr};
+            std::optional<VulkanHostGraphicsRequirements> hostRequirements_;
             IVulkanResourcePort *resourcePort_{nullptr};
             IVulkanCommandPort *commandPort_{nullptr};
             IRenderResourceBackend *resourceBackend_{nullptr};

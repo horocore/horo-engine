@@ -12,6 +12,9 @@
 #include <optional>
 
 namespace Horo::XR {
+    namespace RuntimeInternal {
+        class XRSessionHostControl;
+    }
     /** @brief Ordered host-composition resource boundaries; native values remain in the selected adapter. */
     enum class XRSessionPreparation : std::uint8_t {
         PlatformLoader,
@@ -46,7 +49,8 @@ namespace Horo::XR {
         Stopping,
         Idle,
         SessionLost,
-        InstanceLost
+        InstanceLost,
+        Ready /**< Native Ready for the same retained owner after Idle; never creates or rediscovers a session. */
     };
 
     /** @brief Fixed-size state publication; consumers must revalidate its exact session before use. */
@@ -122,6 +126,10 @@ namespace Horo::XR {
          * @param source Session generation carried by the normalized backend event.
          * @param event Closed event vocabulary; delayed foreign generations fail stale without state mutation.
          * @return Success for legal or duplicate events, otherwise a typed stale/invalid-transition failure.
+         * @pre The selected backend validates its native incarnation before normalizing an event.
+         * @post Idle closes publication while retaining the exact accepted plan and resources. Ready may republish only
+         * that same inactive owner, without preparation or a new generation. Loss, replacement and shutdown revoke this
+         * restart path; Ready never recovers lost resources or capabilities.
          */
         [[nodiscard]] Result<void> ApplyEvent(const XRSessionId &source, XRSessionEvent event);
 
@@ -143,6 +151,7 @@ namespace Horo::XR {
         void Shutdown() noexcept;
 
     private:
+        friend class RuntimeInternal::XRSessionHostControl;
         static constexpr std::size_t PreparationCount = static_cast<std::size_t>(XRSessionPreparation::Count);
 
         void Retire(const XRSessionId &session) noexcept;

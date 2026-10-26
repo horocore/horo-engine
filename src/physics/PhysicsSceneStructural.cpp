@@ -18,7 +18,7 @@ namespace Horo::Physics::Detail {
         /** @brief Resolves only Scene-issued runtime fixups, or genuine authored references in the active Scene. */
         Result<Runtime::EntityRef> ResolveTarget(const Runtime::RuntimeEntityView &entity, const Runtime::GroupPhysicsReferenceKind kind,
                                                  const std::size_t occurrence, const Runtime::PhysicsBodyReference authored,
-                                                 const Runtime::RuntimeSceneView active) {
+                                                 const Runtime::RuntimeSceneView &active) {
             for (const auto &reference : entity.physicsReferences)
                 if (reference.kind == kind && reference.component == occurrence && reference.body == authored.body)
                     return Result<Runtime::EntityRef>::Success(reference.target);
@@ -28,7 +28,7 @@ namespace Horo::Physics::Detail {
         }
 
         /** @brief Composes candidate and resident parents without consulting authored IDs or creating a temporary Scene. */
-        Result<Math::Transform> WorldTransform(Runtime::RuntimeEntityView entity, const Runtime::RuntimeSceneView active,
+        Result<Math::Transform> WorldTransform(Runtime::RuntimeEntityView entity, const Runtime::RuntimeSceneView &active,
                                                const std::span<const Runtime::RuntimeEntityView> created) {
             if (!entity.localTransform)
                 return Failure<Math::Transform>("A structural body has no local transform.");
@@ -97,7 +97,7 @@ namespace Horo::Physics::Detail {
         }
 
         /** @brief Uses only the admitted named closure; decoded payload views never escape their owning envelope. */
-        Result<void> ValidateAsset(const Runtime::RuntimeEntityView &entity, const Runtime::RuntimeSceneView active,
+        Result<void> ValidateAsset(const Runtime::RuntimeEntityView &entity, const Runtime::RuntimeSceneView &active,
                                    const Assets::AssetId asset, const StructuralAssetKind kind) {
             const auto &code =
                 kind == StructuralAssetKind::Material ? PhysicsErrors::MaterialDescriptorInvalid : PhysicsErrors::ShapeArtifactInvalid;
@@ -165,7 +165,7 @@ namespace Horo::Physics::Detail {
                 return Runtime::SceneStructuralOwner::Physics;
             }
 
-            Result<void> ValidateBaselines(const Runtime::RuntimeSceneView active,
+            Result<void> ValidateBaselines(const Runtime::RuntimeSceneView &active,
                                            const std::span<const Runtime::SceneBaselinePreparationView> baselines) const override {
                 if (!registration_->active || registration_->active->closed || !active.IsCurrent() ||
                     registration_->active->scene != active.RuntimeId() ||
@@ -182,7 +182,7 @@ namespace Horo::Physics::Detail {
             }
 
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
-                const Runtime::RuntimeSceneView active, const std::span<const Runtime::RuntimeEntityView> created,
+                const Runtime::RuntimeSceneView &active, const std::span<const Runtime::RuntimeEntityView> created,
                 const std::span<const Runtime::EntityRef> destroyed) override {
                 if (!registration_->active || registration_->active->closed || !active.IsCurrent() ||
                     registration_->active->scene != active.RuntimeId())
@@ -268,7 +268,7 @@ namespace Horo::Physics::Detail {
 
             /** @brief Converts the typed authored body policy and candidate hierarchy into a native-neutral descriptor. */
             static Result<void> PrepareBodyPolicy(PhysicsSceneGroupBody &body, const Runtime::RuntimeEntityView &entity,
-                                                  const Runtime::RuntimeSceneView active,
+                                                  const Runtime::RuntimeSceneView &active,
                                                   const std::span<const Runtime::RuntimeEntityView> created) {
                 const auto &component = *entity.components->rigidBody;
                 auto transform = WorldTransform(entity, active, created);
@@ -300,7 +300,7 @@ namespace Horo::Physics::Detail {
             static Result<void> PrepareCollider(GroupPlan &plan, PhysicsSceneGroupBody &body,
                                                 std::vector<PhysicsSceneGroupShape::Child> &children,
                                                 const Runtime::RuntimeEntityView &contributor, const Runtime::ColliderComponent &collider,
-                                                const Runtime::RuntimeSceneView active) {
+                                                const Runtime::RuntimeSceneView &active) {
                 const bool hasChildren = !children.empty();
                 const auto *analytic = std::get_if<Runtime::PhysicsAnalyticCollider>(&collider.source);
                 for (const auto &material : collider.materials)
@@ -339,7 +339,7 @@ namespace Horo::Physics::Detail {
 
             /** @brief Collects only exact body-slot contributors and preserves their authored local poses. */
             static Result<void> PrepareBodyColliders(GroupPlan &plan, PhysicsSceneGroupBody &body, const Runtime::RuntimeEntityView &entity,
-                                                     const Runtime::RuntimeSceneView active,
+                                                     const Runtime::RuntimeSceneView &active,
                                                      const std::span<const Runtime::RuntimeEntityView> created) {
                 std::vector<PhysicsSceneGroupShape::Child> children;
                 for (const auto &contributor : created) {
@@ -366,7 +366,7 @@ namespace Horo::Physics::Detail {
             }
 
             /** @brief Projects enabled bodies before any detached native allocation. */
-            static Result<void> PrepareBodies(GroupPlan &plan, const Runtime::RuntimeSceneView active,
+            static Result<void> PrepareBodies(GroupPlan &plan, const Runtime::RuntimeSceneView &active,
                                               const std::span<const Runtime::RuntimeEntityView> created) {
                 for (const auto &entity : created) {
                     if (!entity.components)
@@ -398,7 +398,7 @@ namespace Horo::Physics::Detail {
             /** @brief Resolves a constraint's second endpoint without synthesizing a resident body. */
             static Result<void> ResolveSecondEndpoint(PhysicsConstraintDescriptor &constraint, const Runtime::RuntimeEntityView &entity,
                                                       const Runtime::PhysicsConstraintComponent &component, const std::size_t index,
-                                                      const Runtime::RuntimeSceneView active, const StructuralCandidate &candidate) {
+                                                      const Runtime::RuntimeSceneView &active, const StructuralCandidate &candidate) {
                 if (const auto *second = std::get_if<Runtime::PhysicsConstraintBodyEndpoint>(&component.second)) {
                     auto target = ResolveTarget(entity, Runtime::GroupPhysicsReferenceKind::ConstraintSecond, index, second->body, active);
                     if (target.HasError())
@@ -416,7 +416,7 @@ namespace Horo::Physics::Detail {
 
             /** @brief Projects one enabled typed constraint against the prepared body bindings. */
             static Result<PhysicsConstraintDescriptor> PrepareConstraint(const Runtime::RuntimeEntityView &entity, const std::size_t index,
-                                                                         const Runtime::RuntimeSceneView active,
+                                                                         const Runtime::RuntimeSceneView &active,
                                                                          const StructuralCandidate &candidate) {
                 const auto &component = entity.components->physicsConstraints[index];
                 auto first =
@@ -440,7 +440,7 @@ namespace Horo::Physics::Detail {
             }
 
             /** @brief Stages constraint descriptors and their publication bindings in occurrence order. */
-            static Result<void> PrepareConstraints(StructuralCandidate &candidate, GroupPlan &plan, const Runtime::RuntimeSceneView active,
+            static Result<void> PrepareConstraints(StructuralCandidate &candidate, GroupPlan &plan, const Runtime::RuntimeSceneView &active,
                                                    const std::span<const Runtime::RuntimeEntityView> created) {
                 for (const auto &entity : created) {
                     for (std::size_t index = 0; index < entity.components->physicsConstraints.size(); ++index) {
@@ -485,7 +485,7 @@ namespace Horo::Physics::Detail {
 
             /** @brief Prepares the complete detached owner candidate; publication remains a separate no-fail phase. */
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(
-                const Runtime::RuntimeSceneView active, const std::span<const Runtime::RuntimeEntityView> created,
+                const Runtime::RuntimeSceneView &active, const std::span<const Runtime::RuntimeEntityView> created,
                 const std::span<const Runtime::EntityRef> destroyed) const {
                 auto candidate = std::make_unique<StructuralCandidate>();
                 candidate->state = registration_->active;

@@ -82,3 +82,19 @@ namespace Horo::Runtime::Ui::ThemeInternal {
         return Result<void>::Success();
     }
 }  // namespace Horo::Runtime::Ui::ThemeInternal
+
+namespace Horo::Runtime::Ui {
+    /** @copydoc ProjectUiThemeSurface */
+    Result<UiThemeSurfaceProjection> ProjectUiThemeSurface(const UiComputedStyleSnapshot &snapshot, const UiThemeSurfaceInput &input,
+                                                           const UiThemeSurfaceProperties &properties) {
+        UiThemeSurfaceProjection result;
+        try {
+            const auto projected = ThemeInternal::ProjectSurface(snapshot, input, properties, result.layout, result.paint);
+            if (projected.HasError())
+                return Result<UiThemeSurfaceProjection>::Failure(projected.ErrorValue());
+        } catch (const std::bad_variant_access &) {
+            return Result<UiThemeSurfaceProjection>::Failure(MakeError(UiErrors::StyleTypeMismatch));
+        }
+        return Result<UiThemeSurfaceProjection>::Success(std::move(result));
+    }
+}  // namespace Horo::Runtime::Ui

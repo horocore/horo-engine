@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Ui/UiAnimationOwner.h"
 #include "UiAnimationLayoutProjection.h"
 #include "UiAnimationPlayback.h"
+#include "UiAnimationPublisher.h"
 
 #include <memory>
 #include <thread>
@@ -34,6 +35,11 @@ namespace Horo::Runtime::Ui {
     };
 
     struct UiAnimationOwner::Storage final {
+        /** @brief Release unobserved frame snapshots only at the explicit quiescent collection boundary. */
+        void ReleaseUnobservedFrames();
+        /** @brief Validate each active attachment's prepared geometry before the shared publication cutoff. */
+        [[nodiscard]] Result<void> CanPublishAttachments(const UiElementTree &tree) const;
+
         struct Timeline final {
             std::uint32_t generation{};
             std::uint32_t definition{};
@@ -124,8 +130,8 @@ namespace Horo::Runtime::Ui {
             bool routeChanged{};
         };
 
-        Storage(UiHotReload publisher, RuntimeStyleRegistry registry, UiStyleResolver resolver, UiAnimationCanvasDefinition definition,
-                UiAnimationLimits limits, UiElementSlotRange range, std::size_t controlCapacity)
+        Storage(Detail::UiAnimationPublisher publisher, RuntimeStyleRegistry registry, UiStyleResolver resolver,
+                UiAnimationCanvasDefinition definition, UiAnimationLimits limits, UiElementSlotRange range, std::size_t controlCapacity)
             : publisher(std::move(publisher)), registry(std::move(registry)), resolver(std::move(resolver)),
               definition(std::move(definition)), limits(limits), range(std::move(range)), timelines(limits.timelines),
               route(limits.timelines) {
@@ -146,7 +152,7 @@ namespace Horo::Runtime::Ui {
         }
 
         const std::thread::id ownerThread{std::this_thread::get_id()};
-        UiHotReload publisher;
+        Detail::UiAnimationPublisher publisher;
         RuntimeStyleRegistry registry;
         UiStyleResolver resolver;
         UiAnimationCanvasDefinition definition;

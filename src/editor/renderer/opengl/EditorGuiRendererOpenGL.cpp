@@ -58,6 +58,16 @@ namespace Horo::Editor {
         Shutdown();
     }
 
+    /** @copydoc EditorGuiRendererOpenGL::MakeContextCurrent */
+    Result<void> EditorGuiRendererOpenGL::MakeContextCurrent() const {
+        if (ownerThread_ != std::this_thread::get_id() || ImGui::GetCurrentContext() == nullptr || !context_ || !window_)
+            return Result<void>::Failure(
+                MakeGuiRendererError(RendererErrors::GuiInvalidState, "OpenGL GUI context activation requires its creating owner."));
+        if ((SDL_GL_GetCurrentContext() != context_ || SDL_GL_GetCurrentWindow() != window_) && !SDL_GL_MakeCurrent(window_, context_))
+            return Result<void>::Failure(MakeGuiRendererError(RendererErrors::GuiInvalidState, SDL_GetError()));
+        return ValidateContext();
+    }
+
     /** @copydoc EditorGuiRendererOpenGL::ValidateContext */
     Result<void> EditorGuiRendererOpenGL::ValidateContext() const {
         if (ownerThread_ != std::this_thread::get_id() || ImGui::GetCurrentContext() == nullptr || context_ == nullptr ||
@@ -89,7 +99,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererOpenGL::BeginFrame */
     Result<void> EditorGuiRendererOpenGL::BeginFrame() {
-        if (const auto current = ValidateContext(); current.HasError())
+        if (const auto current = MakeContextCurrent(); current.HasError())
             return current;
         if (!rendererInitialized_) {
             return Result<void>::Failure(

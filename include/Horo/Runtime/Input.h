@@ -601,6 +601,10 @@ namespace Horo::Input {
     };
 
     class InputRouter;
+    class InputActionCollection;
+    class InputCollectionFrame;
+    class InputActionSourceToken;
+    struct InputCollectionLifetime;
 
     /** @brief Narrow callback implemented by an interaction that owns capture. */
     class IInputCaptureOwner {
@@ -686,6 +690,13 @@ namespace Horo::Input {
 
         /** @brief Installs the committed snapshot and clears per-frame consumption. */
         void BeginFrame(const RawInputSnapshot &snapshot);
+        /** @brief Borrows the canonical collection port for a host-owned context and optional existing device assignment.
+         * @param context Exact live context; registration cannot name another context.
+         * @param assignedDevice Optional currently connected gamepad whose existing player assignment is copied, never changed.
+         * @return Assignment-bound port or typed inactive/invalid failure. An empty device binds unfiltered host input.
+         * @post No XR/native dependency or alternate commit owner is introduced. */
+        [[nodiscard]] Result<InputActionCollection> ActionCollection(const InputContextToken &context,
+                                                                     std::optional<GamepadDeviceId> assignedDevice = std::nullopt);
         /** @brief Cancels any capture still held after its initiating button release was delivered to handlers. */
         void EndFrame() noexcept;
         /** @brief Registers a context until the returned move-only token is destroyed. */
@@ -774,6 +785,11 @@ namespace Horo::Input {
         [[nodiscard]] std::optional<PlayerId> PlayerForGamepad(GamepadDeviceId gamepad) const noexcept;
 
     private:
+        friend class InputActionCollection;
+        friend class InputCollectionFrame;
+        friend class InputActionSourceToken;
+        friend struct InputCollectionLifetime;
+        void CommitRawFrame(const RawInputSnapshot &snapshot);
         friend class IInputCaptureOwner;
         friend class InputContextToken;
         friend class PointerCaptureToken;

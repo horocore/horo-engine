@@ -67,6 +67,11 @@ namespace Horo::Render::Detail {
         [[nodiscard]] bool SupportsTexture(const RenderTextureDescriptor &descriptor) const noexcept;
     };
 
+    /** @brief Reports the implemented paint profile independently of per-source shader/resource preparation.
+     * @param capabilities Exact admitted native limits and queried formats.
+     * @return True only for the required primary/offscreen/stencil usages at one sample. */
+    [[nodiscard]] bool SupportsMetalUiPaint(const MetalDeviceCapabilities &capabilities) noexcept;
+
     /**
      * @brief Applies the macOS, GPU-family, identity, queue, limit, and baseline-format policy.
      * @param facts Queried native facts for the exact selected device.

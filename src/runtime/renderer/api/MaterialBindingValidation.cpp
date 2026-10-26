@@ -214,42 +214,42 @@ namespace Horo::Render {
             return false;
         }
 
-        /** @brief Packs one logical row using reflected matrix order and rejects the first occupied byte without changing it. */
-        [[nodiscard]] bool PackParameterRow(const ShaderReflectedParameter &parameter, const MaterialParameterValue &value,
-                                            const std::size_t array, const std::size_t row, MaterialParameterBinding &packed,
-                                            std::vector<bool> &occupied) {
+        /** @brief Visits the sole reflected scalar-address mapping, with bounds already proven by ParameterEnd. */
+        template <typename Visitor> bool VisitParameter(const ShaderReflectedParameter &parameter, Visitor &&visit) {
             const bool matrix = parameter.rows > 1 && parameter.columns > 1;
-            for (std::size_t column = 0; column < parameter.columns; ++column) {
-                const auto vector = parameter.columnMajor ? column : row;
-                const auto component = parameter.columnMajor ? row : column;
-                const auto offset = parameter.byteOffset + array * parameter.arrayStride +
-                                    (matrix ? vector * parameter.matrixStride + component * 4 : (row + column) * 4);
-                const auto bits = std::bit_cast<std::array<std::byte, 4>>(
-                    ParameterBits(value, (array * parameter.rows + row) * parameter.columns + column));
-                for (std::size_t byte = 0; byte < bits.size(); ++byte) {
-                    if (occupied[offset + byte])
-                        return false;
-                    occupied[offset + byte] = true;
-                    packed.bytes[offset + byte] = bits[byte];
-                }
-            }
-            return true;
-        }
-
-        /** @brief Applies reflected offsets with bounds already proven by ParameterEnd; occupied bytes cannot alias. */
-        [[nodiscard]] bool PackParameter(const ShaderReflectedParameter &parameter, const MaterialParameterValue &value,
-                                         MaterialParameterBinding &packed, std::vector<bool> &occupied) {
             for (std::size_t array = 0; array < parameter.arrayCount; ++array)
                 for (std::size_t row = 0; row < parameter.rows; ++row)
-                    if (!PackParameterRow(parameter, value, array, row, packed, occupied))
-                        return false;
+                    for (std::size_t column = 0; column < parameter.columns; ++column) {
+                        const auto vector = parameter.columnMajor ? column : row;
+                        const auto component = parameter.columnMajor ? row : column;
+                        const auto offset = parameter.byteOffset + array * parameter.arrayStride +
+                                            (matrix ? vector * parameter.matrixStride + component * 4 : (row + column) * 4);
+                        if (!visit(offset, (array * parameter.rows + row) * parameter.columns + column))
+                            return false;
+                    }
             return true;
         }
 
-        /** @brief Matches complete values by canonical parameter identity and rejects duplicate reflected identities. */
-        [[nodiscard]] bool PackValues(const MaterialBindingLayout &layout, const ShaderBindingId binding,
-                                      const std::span<const MaterialParameterValue> values, MaterialParameterBinding &packed) {
-            std::vector<bool> occupied(packed.bytes.size(), false);
+        /** @brief Compares borrowed byte ranges without adding potentially overflowing end addresses. */
+        bool Aliases(const std::span<const std::byte> source, const std::span<std::byte> destination) {
+            if (source.empty() || destination.empty())
+                return false;
+            const auto input = reinterpret_cast<std::uintptr_t>(source.data());
+            const auto output = reinterpret_cast<std::uintptr_t>(destination.data());
+            return input <= output ? output - input < source.size() : input - output < destination.size();
+        }
+
+        /** @brief Rejects source/output aliasing before padding or scalar bytes can overwrite a borrowed value. */
+        bool Aliases(const MaterialParameterValue &value, const std::span<std::byte> destination) {
+            return std::visit([destination](const auto components) {
+                return Aliases(std::as_bytes(components), destination);
+            }, value.components);
+        }
+
+        /** @brief Validates all values and occupied bytes transactionally using a fixed 8 KiB bitmap, never heap storage. */
+        bool ValidatePackValues(const MaterialBindingLayout &layout, const ShaderBindingId binding,
+                                const std::span<const MaterialParameterValue> values, const std::span<std::byte> destination) {
+            std::array<std::uint64_t, 64U * 1024U / 64U> occupied{};
             std::size_t count = 0;
             for (const auto &parameter : layout.parameters) {
                 if (!IsBlockParameter(parameter, binding))
@@ -257,11 +257,36 @@ namespace Horo::Render {
                 ++count;
                 const auto value = std::ranges::find(values, parameter.id, &MaterialParameterValue::parameter);
                 if (value == values.end() || std::ranges::count(values, parameter.id, &MaterialParameterValue::parameter) != 1 ||
-                    !UniqueParameter(layout, parameter) || !MatchesParameter(*value, parameter) ||
-                    !PackParameter(parameter, *value, packed, occupied))
+                    !UniqueParameter(layout, parameter) || !MatchesParameter(*value, parameter) || Aliases(*value, destination))
+                    return false;
+                if (!VisitParameter(parameter, [&occupied](const std::size_t offset, std::size_t) {
+                    for (std::size_t byte = offset; byte < offset + 4; ++byte) {
+                        const auto bit = std::uint64_t{1} << (byte % 64);
+                        auto &word = occupied[byte / 64];
+                        if (word & bit)
+                            return false;
+                        word |= bit;
+                    }
+                    return true;
+                }))
                     return false;
             }
             return count == values.size();
+        }
+
+        /** @brief Writes only the prevalidated scalar-address mapping; all padding was zeroed by the caller. */
+        void WritePackValues(const MaterialBindingLayout &layout, const ShaderBindingId binding,
+                             const std::span<const MaterialParameterValue> values, const std::span<std::byte> destination) {
+            for (const auto &parameter : layout.parameters) {
+                if (!IsBlockParameter(parameter, binding))
+                    continue;
+                const auto value = std::ranges::find(values, parameter.id, &MaterialParameterValue::parameter);
+                (void)VisitParameter(parameter, [&](const std::size_t offset, const std::size_t component) {
+                    const auto bits = std::bit_cast<std::array<std::byte, 4>>(ParameterBits(*value, component));
+                    std::copy(bits.begin(), bits.end(), destination.begin() + offset);
+                    return true;
+                });
+            }
         }
     }  // namespace
 
@@ -274,12 +299,28 @@ namespace Horo::Render {
             return Result<MaterialParameterBinding>::Failure(Invalid());
         try {
             MaterialParameterBinding packed{std::vector<std::byte>(bytes.Value(), std::byte{0})};
-            if (!PackValues(layout, binding, values, packed))
-                return Result<MaterialParameterBinding>::Failure(Invalid());
+            if (auto written = PackMaterialParameterBinding(layout, binding, values, std::span{packed.bytes}, limits); written.HasError())
+                return Result<MaterialParameterBinding>::Failure(written.ErrorValue());
             return Result<MaterialParameterBinding>::Success(std::move(packed));
         } catch (...) {  // NOSONAR(cpp:S2738)
             return Result<MaterialParameterBinding>::Failure(MakeError(MaterialBindingErrors::AllocationFailed));
         }
+    }
+
+    /** @copydoc PackMaterialParameterBinding */
+    Result<std::size_t> PackMaterialParameterBinding(const MaterialBindingLayout &layout, const ShaderBindingId binding,
+                                                     const std::span<const MaterialParameterValue> values,
+                                                     const std::span<std::byte> destination, const MaterialBindingLimits &limits) {
+        const auto bytes = ComputeMaterialParameterBufferByteSize(layout, binding, limits);
+        if (bytes.HasError() || values.size() > layout.parameters.size() || destination.size() < bytes.Value())
+            return Result<std::size_t>::Failure(Invalid());
+        const auto prefix = destination.first(bytes.Value());
+        if (Aliases(std::as_bytes(std::span{layout.parameters}), prefix) || Aliases(std::as_bytes(values), prefix) ||
+            !ValidatePackValues(layout, binding, values, prefix))
+            return Result<std::size_t>::Failure(Invalid());
+        std::fill(prefix.begin(), prefix.end(), std::byte{0});
+        WritePackValues(layout, binding, values, prefix);
+        return Result<std::size_t>::Success(bytes.Value());
     }
 
     namespace {

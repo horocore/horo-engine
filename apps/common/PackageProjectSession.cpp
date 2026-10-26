@@ -77,6 +77,16 @@ namespace Horo::Application::Internal {
         return Result<std::shared_ptr<PackageApplication>>::Success({shared_from_this(), impl_->application.get()});
     }
 
+    /** @copydoc PackageProjectSession::InstalledRecord */
+    Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>> PackageProjectSession::InstalledRecord() const {
+        using Outcome = Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>>;
+        if (std::this_thread::get_id() != impl_->owner)
+            return Outcome::Failure(SessionError("packages.host.owner_lane"));
+        if (impl_->closed)
+            return Outcome::Failure(SessionError("packages.host.closed"));
+        return Outcome::Success(impl_->install->InstalledRecord());
+    }
+
     /** @copydoc PackageProjectSession::Pump */
     Result<void> PackageProjectSession::Pump(const Packages::PackageActivationBoundary boundary) {
         if (std::this_thread::get_id() != impl_->owner)

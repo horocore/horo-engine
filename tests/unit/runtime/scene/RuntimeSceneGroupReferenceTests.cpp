@@ -26,7 +26,7 @@ namespace Horo::Runtime {
                 return SceneStructuralOwner::Physics;
             }
 
-            Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(RuntimeSceneView, std::span<const RuntimeEntityView>,
+            Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(const RuntimeSceneView &, std::span<const RuntimeEntityView>,
                                                                       std::span<const EntityRef>) override {
                 return Result<std::unique_ptr<SceneStructuralCandidate>>::Success(std::make_unique<Candidate>());
             }

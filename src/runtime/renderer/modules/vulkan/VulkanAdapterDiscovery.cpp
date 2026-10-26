@@ -20,7 +20,7 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] bool IsAvailable(const VulkanAdapterCandidate &candidate) {
-            return candidate.standardApiVariant && !candidate.portabilitySubset && candidate.driverAllowed &&
+            return candidate.standardApiVariant && !candidate.portabilitySubset && candidate.driverAllowed && candidate.hostAllowed &&
                    Detail::VulkanSupportsVersion(candidate.apiVersion) && candidate.requiredFeatures.AreAvailable() &&
                    Detail::VulkanHasQueue(candidate, false);
         }
@@ -88,8 +88,14 @@ namespace Horo::Render {
             for (const auto &extension : extensions.Value())
                 if (!Detail::VulkanContains(loader.instanceExtensions, extension))
                     return Result<VulkanAdapterEnumeration>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported));
+            auto host = runtimePort.RequiredGraphicsRequirements();
+            if (host.HasError())
+                return Result<VulkanAdapterEnumeration>::Failure(host.ErrorValue());
+            auto required = Detail::ResolveHostInstanceExtensions(std::move(extensions).Value(), loader, host.Value());
+            if (required.HasError())
+                return Result<VulkanAdapterEnumeration>::Failure(required.ErrorValue());
             if (auto instance = runtimePort.CreateInstance(VulkanInstanceRequest{.apiVersion = Detail::RequiredVulkanApiVersion,
-                                                                                 .enabledExtensions = std::move(extensions).Value()});
+                                                                                 .enabledExtensions = std::move(required).Value()});
                 instance.HasError()) {
                 return Result<VulkanAdapterEnumeration>::Failure(std::move(instance).ErrorValue());
             }

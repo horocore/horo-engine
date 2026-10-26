@@ -32,7 +32,7 @@ Result<std::uint64_t> VulkanResourceRuntime::ImportExternalTexture(const IRender
         return Result<std::uint64_t>::Failure(
             ResourceError(VulkanBackendErrors::ResourceUnsupported,
                           "External Vulkan image acquisition/final state is not the qualified attachment tuple."));
-    auto texture = Impl::Allocate<Impl::Texture>();
+    auto texture = impl_->AllocateExternal<Impl::Texture>();
     if (!texture)
         return Result<std::uint64_t>::Failure(
             ResourceError(VulkanBackendErrors::ResourceCreationFailed, "External texture registration storage is unavailable."));
@@ -54,12 +54,16 @@ Result<std::uint64_t> VulkanResourceRuntime::ImportExternalTexture(const IRender
                                                           .levelCount = 1,
                                                           .baseArrayLayer = 0,
                                                           .layerCount = descriptor.layerCount}};
-    if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS) {
+    const auto prepared = native->PreparedNativeViews();
+    if (prepared.attachment != VK_NULL_HANDLE) {
+        texture->colorView = prepared.attachment;
+        texture->borrowedView = true;
+    } else if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS) {
         texture->colorView = VK_NULL_HANDLE;
         return Result<std::uint64_t>::Failure(ResourceError(VulkanBackendErrors::ResourceCreationFailed,
                                                             "Runtime image view creation failed; the foreign allocation is preserved."));
     }
-    return impl_->Register(impl_->textures, std::move(texture));
+    return impl_->RegisterExternal(impl_->textures, impl_->external.textures, std::move(texture));
 }
 
 /** @copydoc VulkanResourceRuntime::ExternalTextureSource */

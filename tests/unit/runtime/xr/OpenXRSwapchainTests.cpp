@@ -27,7 +27,8 @@ namespace Horo::Tests::OpenXR {
                 return Result<std::int64_t>::Success(selectAbsentFormat ? 99 : 37);
             }
 
-            Result<void> Enumerate(std::uint32_t count, const IOpenXRSwapchainImageEnumeration &enumeration) override {
+            Result<void> Enumerate(const NativeSwapchainRequest &, std::uint32_t count,
+                                   const IOpenXRSwapchainImageEnumeration &enumeration) override {
                 CHECK(enumeration.IsAvailable());
                 std::uint32_t written{};
                 CHECK(enumeration.Enumerate(0, &written, nullptr) == XR_SUCCESS);

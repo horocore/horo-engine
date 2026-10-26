@@ -41,6 +41,7 @@ namespace Horo::Editor {
         if (!enabled_)
             return Result<void>::Success();
         frameWork_ = 0;
+        frameOrderValid_ = true;
         SDL_PumpEvents();
         // This opt-in process isolates scripted window notifications from compositor timing.
         SDL_FlushEvents(SDL_EVENT_WINDOW_FIRST, SDL_EVENT_WINDOW_LAST);
@@ -75,8 +76,35 @@ namespace Horo::Editor {
 
     /** @copydoc EditorSurfaceLifecycleQualification::RecordFrameWork */
     void EditorSurfaceLifecycleQualification::RecordFrameWork(const FrameWork work) noexcept {
-        if (enabled_)
-            frameWork_ |= static_cast<unsigned>(work);
+        if (!enabled_)
+            return;
+        using enum FrameWork;
+        unsigned required{};
+        switch (work) {
+            case GuiBegin:
+                required = static_cast<unsigned>(ViewportResources);
+                break;
+            case ViewportResources:
+                break;
+            case Extraction:
+                required = static_cast<unsigned>(GuiBegin) | static_cast<unsigned>(ViewportResources);
+                break;
+            case NativeBegin:
+                required = static_cast<unsigned>(GuiBegin) | static_cast<unsigned>(ViewportResources) | static_cast<unsigned>(Extraction);
+                break;
+            case Execution:
+                required = static_cast<unsigned>(NativeBegin);
+                break;
+            case GuiRender:
+                required = static_cast<unsigned>(Execution);
+                break;
+            case Presentation:
+                required = static_cast<unsigned>(GuiRender);
+                break;
+        }
+        const auto bit = static_cast<unsigned>(work);
+        frameOrderValid_ = frameOrderValid_ && (frameWork_ & required) == required && (frameWork_ & bit) == 0;
+        frameWork_ |= bit;
     }
 
     /** @copydoc EditorSurfaceLifecycleQualification::RecordPresent */
@@ -89,6 +117,8 @@ namespace Horo::Editor {
     Result<void> EditorSurfaceLifecycleQualification::EndFrame(const Render::RenderSurfaceSnapshot &snapshot) {
         if (!enabled_)
             return Result<void>::Success();
+        if (!frameOrderValid_)
+            return Result<void>::Failure(QualificationError("Native admission preceded GUI CPU extraction or a frame phase repeated."));
         if (!ContextRetained())
             return Result<void>::Failure(QualificationError("Recovery replaced or detached the retained native context."));
         if (const unsigned expectedFailures = ExpectedResizeCalls() == 1 ? 1U : 2U;

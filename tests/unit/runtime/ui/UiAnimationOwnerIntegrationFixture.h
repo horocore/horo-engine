@@ -84,20 +84,43 @@ namespace Horo::Runtime::Ui::AnimationTests {
             {Stable<UiRouteId>(9), Stable<UiElementId>(10), Stable<UiAnimationId>(2), Stable<UiAnimationId>(3), UiDuration{deadline}});
     }
 
-    inline AnimationResources Resources(const UiReloadCanvas &canvas, const bool routeMotion = false,
-                                        const std::int64_t deadline = 1000000000) {
+    /** @brief Actual registry authority with an optional Busy layout override for host integration coverage. */
+    inline RuntimeStyleRegistry AnimationRegistry(const bool busyStyle, const bool explicitOrigins = false) {
         UiStyleRegistryDefinition schema;
         schema.properties.push_back({.id = Stable<UiStylePropertyId>(1),
                                      .category = UiStyleValueCategory::Dimension,
-                                     .defaultValue = UiStyleDimension{300},
+                                     .defaultValue = UiStyleDimension{explicitOrigins ? 0 : 300},
                                      .effects = {.measure = true, .paint = true},
                                      .maximumScalar = 1000});
         schema.assets.push_back({.id = Stable<RuntimeStyleAssetId>(1)});
+        if (busyStyle)
+            schema.assets.back().states.push_back(
+                {UiVisualStateMask{UiVisualState::Busy},
+                 {},
+                 UiStateLayer::Availability,
+                 {{Stable<UiStylePropertyId>(1), UiStyleValueSource::Literal(UiStyleDimension{explicitOrigins ? 0 : 240}), false}}});
+        if (explicitOrigins) {
+            schema.properties.push_back({.id = Stable<UiStylePropertyId>(2),
+                                         .category = UiStyleValueCategory::Dimension,
+                                         .defaultValue = UiStyleDimension{0},
+                                         .effects = {.measure = true},
+                                         .maximumScalar = 1000});
+            if (busyStyle)
+                schema.assets.back().states.back().assignments.push_back(
+                    {Stable<UiStylePropertyId>(2), UiStyleValueSource::Literal(UiStyleDimension{4}), false});
+        }
         auto registry = RuntimeStyleRegistry::Create(std::move(schema), Revision<RuntimeStyleGeneration>(1));
         REQUIRE(registry.HasValue());
+        return std::move(registry).Value();
+    }
+
+    inline AnimationResources Resources(const UiReloadCanvas &canvas, const bool routeMotion = false,
+                                        const std::int64_t deadline = 1000000000, const bool busyStyle = false,
+                                        const bool explicitOrigins = false) {
+        auto registry = AnimationRegistry(busyStyle, explicitOrigins);
         // Three retained owner frames need one additional style slot for a prepared candidate.
-        auto styles = UiStyleResolver::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8, 1, 8, 4,
-                                               Revision<RuntimeStyleGeneration>(1), Revision<UiStylePublicationRevision>(1)});
+        auto styles = UiStyleResolver::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8, explicitOrigins ? 2U : 1U,
+                                               8, 4, Revision<RuntimeStyleGeneration>(1), Revision<UiStylePublicationRevision>(1)});
         REQUIRE(styles.HasValue());
         UiAnimationCanvasDefinition definition;
         definition.canvas = canvas.id;
@@ -112,6 +135,14 @@ namespace Horo::Runtime::Ui::AnimationTests {
             definition.elements.push_back(std::move(element));
         }
         definition.layoutBindings.push_back({Stable<UiElementId>(11), Stable<UiStylePropertyId>(1), UiAnimationLayoutField::Height});
+        if (explicitOrigins) {
+            definition.elements.back().layout.width = UiLength::Percent(32);
+            definition.elements.back().layout.padding = {3, 3, 3, 3};
+            definition.layoutBindings = {{Stable<UiElementId>(11), Stable<UiStylePropertyId>(1), UiAnimationLayoutField::Width,
+                                          UiAnimationLayoutValuePolicy::ExplicitOriginsOnly},
+                                         {Stable<UiElementId>(11), Stable<UiStylePropertyId>(2), UiAnimationLayoutField::Padding,
+                                          UiAnimationLayoutValuePolicy::ExplicitOriginsOnly}};
+        }
         UiAnimationDefinition motion;
         motion.id = Stable<UiAnimationId>(1);
         motion.time.duration = UiDuration{100000000};
@@ -123,7 +154,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         definition.animations.push_back(std::move(motion));
         if (routeMotion)
             AppendRouteAnimations(definition, deadline);
-        return {std::move(registry).Value(), std::move(styles).Value(), std::move(definition)};
+        return {std::move(registry), std::move(styles).Value(), std::move(definition)};
     }
 
     /** @brief Explicit load-time choices for the real host and owned UI integration fixture. */
@@ -131,6 +162,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         bool routeMotion{};
         std::int64_t deadline{1000000000};
         bool actions{};
+        bool busyStyle{};
         bool writes{};
         bool routeActions{};
         UiElementSlotAllocator *allocator{};
@@ -140,6 +172,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         std::shared_ptr<const UiLayoutIntrinsicProvider> intrinsicProvider;
         bool boundWidth{};
         bool accessibilityWidth{};
+        bool explicitLayoutOrigins{};
         bool focusAccess{}; /**< Test-only quiescent borrow; never exposed by a production owner contract. */
     };
 
@@ -163,7 +196,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         }
         auto *routeStack = routeActions ? &*initial.Canvas(canvas.id)->routes : nullptr;
         const auto routeOwner = canvas.controls.front().control.Owner();
-        auto resources = Resources(canvas, options.routeMotion, options.deadline);
+        auto resources = Resources(canvas, options.routeMotion, options.deadline, options.busyStyle, options.explicitLayoutOrigins);
         if (options.boundWidth)
             resources.definition.layoutBindings.front().field = UiAnimationLayoutField::Width;
         if (options.accessibilityWidth)
@@ -203,7 +236,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
     /** @brief Owns the actual lifecycle host, animation participant and source issuer. */
     class HostFixture final {
     public:
-        explicit HostFixture(const HostOptions &options = {}) {
+        explicit HostFixture(const HostOptions &options = {}, std::unique_ptr<RuntimeLifecycleParticipant> handoff = {}) {
             auto created = RuntimeHost::Create(clock);
             REQUIRE(created.HasValue());
             host = std::move(created).Value();
@@ -228,6 +261,8 @@ namespace Horo::Runtime::Ui::AnimationTests {
             participant = composition.participant.get();
             controller = std::move(composition.controller);
             REQUIRE(host->AddParticipant(std::move(composition.participant)).HasValue());
+            if (handoff)
+                REQUIRE(host->AddParticipant(std::move(handoff)).HasValue());
             REQUIRE(host->Startup().HasValue());
         }
 

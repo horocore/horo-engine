@@ -72,7 +72,8 @@ namespace Horo::Runtime {
                 return Result<void>::Success();
             }
 
-            Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, RuntimeSceneView scene) override {
+            Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &,
+                                                                      const RuntimeSceneView &scene) override {
                 probe_.phases.push_back(2);
                 const auto owner = scene.Find({2});
                 REQUIRE(owner.has_value());
@@ -106,7 +107,7 @@ namespace Horo::Runtime {
                 return Result<void>::Success();
             }
 
-            Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, RuntimeSceneView) override {
+            Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, const RuntimeSceneView &) override {
                 probe_.phases.push_back(4);
                 return Result<std::unique_ptr<SceneActivationCandidate>>::Success(std::make_unique<DerivedCandidate>());
             }

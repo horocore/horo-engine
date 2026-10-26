@@ -1,5 +1,7 @@
 #include "UiAnimationOwnerInternal.h"
 
+#include <algorithm>
+
 namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationFrameLease::UiAnimationFrameLease */
     UiAnimationFrameLease::UiAnimationFrameLease(std::shared_ptr<const Storage> storage) noexcept : storage_(std::move(storage)) {}
@@ -13,6 +15,15 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationFrameLease::IsValid */
     bool UiAnimationFrameLease::IsValid() const noexcept {
         return storage_ && storage_->styles.has_value() && storage_->layout.has_value();
+    }
+
+    /** @copydoc UiAnimationFrameLease::MatchesSourceTree */
+    bool UiAnimationFrameLease::MatchesSourceTree(const UiElementTree &tree) const noexcept {
+        if (!IsValid() || !storage_->generation.Get())
+            return false;
+        return std::ranges::any_of(storage_->generation.Get()->Canvases(), [&tree](const auto &canvas) {
+            return &canvas.tree == &tree;
+        });
     }
 
     /** @copydoc UiAnimationFrameLease::Clocks */

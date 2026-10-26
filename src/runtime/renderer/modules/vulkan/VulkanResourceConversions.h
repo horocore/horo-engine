@@ -1,6 +1,6 @@
 #pragma once
 
-#include "VulkanBackendModule.h"
+#include <VulkanBackendModule.h>
 
 namespace Horo::Render::Detail::VulkanResourceConversion {
     /** @brief Classifies native depth/depth-stencil attachment formats. */
