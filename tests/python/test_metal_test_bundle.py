@@ -45,12 +45,35 @@ def test_git_inspection_preserves_literal_arguments_and_resolved_executable(tmp_
                       "check": True, "text": True, "capture_output": True, "timeout": 60, "shell": False})]
 
 
-@pytest.mark.parametrize("tool", ["git", "ctest", "/usr/bin/sw_vers"])
+@pytest.mark.parametrize("tool", ["git", "ctest"])
 @pytest.mark.parametrize("resolved", [None, "relative/tool"])
 def test_inspection_rejects_missing_or_relative_executables(monkeypatch, tool: str, resolved: str | None) -> None:
     monkeypatch.setattr(bundle.shutil, "which", lambda _name: resolved)
     with pytest.raises(ValueError, match="inspection tool"):
         bundle.resolved_tool(tool)
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_host_inspection_uses_the_fixed_native_program(monkeypatch, available: bool) -> None:
+    monkeypatch.setattr(bundle.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(bundle.platform, "machine", lambda: "arm64")
+    calls = []
+
+    def inspect(arguments, **options):
+        calls.append((arguments, options))
+        if not available:
+            raise FileNotFoundError("Native OS inspection is unavailable")
+        return SimpleNamespace(stdout="26.0\n")
+
+    monkeypatch.setattr(bundle.subprocess, "run", inspect)
+    executables = {"native": {"minimum": 0}}
+    if available:
+        bundle.validate_host(executables)
+    else:
+        with pytest.raises(FileNotFoundError):
+            bundle.validate_host(executables)
+    assert calls == [(["/usr/bin/sw_vers", "-productVersion"], {
+        "check": True, "text": True, "capture_output": True, "timeout": 60, "shell": False})]
 
 
 def test_native_ctest_keeps_complete_selection_and_verified_payload(tmp_path: Path, monkeypatch) -> None:

@@ -54,7 +54,7 @@ def git_output(arguments: list[str], *, cwd: Path) -> str:
 
 
 def resolved_tool(name: str) -> str:
-    if name not in {"git", "ctest", "/usr/bin/sw_vers"}:
+    if name not in {"git", "ctest"}:
         raise ValueError("Unexpected inspection executable")
     path = shutil.which(name)
     if path is None or not Path(path).is_absolute():
@@ -302,13 +302,15 @@ def pack(workspace: Path) -> dict:
     encoded = json.dumps(manifest, sort_keys=True, allow_nan=False).encode()
     if len(encoded) > MAX_METADATA_BYTES:
         raise ValueError("Metal test metadata exceeds its bound")
-    with output.open("xb") as stream:
-        with tarfile.open(fileobj=stream, mode="w:gz", compresslevel=1, format=tarfile.USTAR_FORMAT) as archive:
-            header = tarfile.TarInfo(MANIFEST)
-            header.size = len(encoded)
-            archive.addfile(header, io.BytesIO(encoded))
-            for name, path in sorted(files.items()):
-                archive.add(path, arcname=name, recursive=False)
+    with (
+        output.open("xb") as stream,
+        tarfile.open(fileobj=stream, mode="w:gz", compresslevel=1, format=tarfile.USTAR_FORMAT) as archive,
+    ):
+        header = tarfile.TarInfo(MANIFEST)
+        header.size = len(encoded)
+        archive.addfile(header, io.BytesIO(encoded))
+        for name, path in sorted(files.items()):
+            archive.add(path, arcname=name, recursive=False)
     if output.stat().st_size > MAX_ARCHIVE_BYTES:
         raise ValueError("The compressed test bundle exceeds its bound")
     if context(workspace) != identity:
@@ -400,9 +402,8 @@ def read_manifest(source, identity: dict) -> dict:
     encoded = source.read(first.size)
     if len(encoded) != first.size:
         raise ValueError("Truncated Metal test manifest")
-    document = validated_manifest(encoded, identity)
     discard_padding(source, first.size)
-    return document
+    return validated_manifest(encoded, identity)
 
 
 def extract_verified_file(source, member, target: Path, record: dict) -> None:
@@ -447,11 +448,7 @@ def validate_producer_roots(roots: list[str]) -> None:
     """Require the sole canonical physical producer build root for this schema."""
     if not isinstance(roots, list) or len(roots) != 1:
         raise ValueError("Unexpected producer path contract")
-    validate_physical_build_root(roots[0])
-
-
-def validate_physical_build_root(root: str) -> None:
-    """Constrain the resolved producer directory to a canonical absolute build path."""
+    root = roots[0]
     if (not isinstance(root, str) or not root.startswith("/") or not root.endswith("/" + BUILD)
             or any(part in {".", "..", ""} for part in root.split("/")[1:])
             or "\\" in root or "\x00" in root):
@@ -483,7 +480,7 @@ def validate_native_inventory(binaries: set[str], document: dict, staging: Path)
 def validate_host(executables: dict) -> None:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise ValueError("The runtime bundle requires a native arm64 Mac")
-    output = subprocess.run(["/usr/bin/sw_vers", "-productVersion"], executable=resolved_tool("/usr/bin/sw_vers"),
+    output = subprocess.run(["/usr/bin/sw_vers", "-productVersion"],
                             check=True, text=True, capture_output=True, timeout=60, shell=False).stdout
     components = [int(part) for part in output.strip().split(".")]
     major, minor, patch = (components + [0, 0])[:3]
