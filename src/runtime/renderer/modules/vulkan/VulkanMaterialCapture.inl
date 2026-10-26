@@ -96,12 +96,18 @@ Result<VulkanGuiBuffer> VulkanResourceRuntime::CaptureGuiBuffer(const std::uint6
 Result<VulkanGuiSample> VulkanResourceRuntime::CaptureGuiSample(const GuiSampledResourceInstance &source,
                                                                 VulkanCommandRetention &retention) const {
     const auto found = impl_->views.find(source.view);
-    if (found == impl_->views.end() || !WholeMaterialView(found->second) || retention.resources.capacity() - retention.resources.size() < 3)
+    if (found == impl_->views.end() || retention.resources.capacity() - retention.resources.size() < 3)
         return Result<VulkanGuiSample>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
     const auto &view = *found->second;
-    if (view.aspect != RenderTextureAspect::Color || view.texture->externalSource != nullptr ||
-        !HasTextureUsage(view.texture->descriptor.usage, RenderTextureUsage::Sampled))
+    const auto *external = view.texture->externalSource;
+    const bool mirror = external != nullptr && external->AdmitsFirstEyeGuiMirror(view.descriptor);
+    if (view.aspect != RenderTextureAspect::Color || (external != nullptr ? !mirror : !WholeMaterialView(found->second)) ||
+        !HasTextureUsage(view.texture->descriptor.usage, RenderTextureUsage::Sampled) || (mirror && source.uploadSource != 0))
         return Result<VulkanGuiSample>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported));
+    if (mirror) {
+        if (auto current = external->Validate(); current.HasError())
+            return Result<VulkanGuiSample>::Failure(current.ErrorValue());
+    }
     const auto sampler = shaders_.CaptureGuiSampler(source.sampler);
     if (sampler.HasError())
         return Result<VulkanGuiSample>::Failure(sampler.ErrorValue());
@@ -111,6 +117,10 @@ Result<VulkanGuiSample> VulkanResourceRuntime::CaptureGuiSample(const GuiSampled
                                        .state = &view.texture->graphState},
                            .view = view.handle,
                            .sampler = sampler.Value().handle};
+    if (mirror) {
+        result.requiredFinal = external->RequiredFinalState();
+        result.requiredFinal->scope = RenderGraphPipelineScope::Graphics;
+    }
     if (source.uploadSource != 0) {
         const auto staging = CaptureGuiBuffer(source.uploadSource, retention);
         if (staging.HasError())

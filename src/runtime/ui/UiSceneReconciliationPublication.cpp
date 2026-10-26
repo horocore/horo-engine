@@ -1,3 +1,4 @@
+#include "UiAnimationPublisher.h"
 #include "UiSceneReconciliationInternal.h"
 
 #include <limits>
@@ -7,8 +8,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiSceneReconciliation::CanCommit */
     Result<void> UiSceneReconciliation::CanCommit(const Prepared &prepared, const UiStructuralCommitPoint point) const {
-        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || !prepared.storage_ || prepared.storage_->consumed ||
-            !UiSceneDetail::Cutoff(point))
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting || storage_.Get()->publicationSeal || !prepared.storage_ ||
+            prepared.storage_->consumed || prepared.storage_->abandoned || !UiSceneDetail::Cutoff(point))
             return Failure(UiErrors::InstanceStateInvalid);
         const auto &candidate = *prepared.storage_;
         if (!storage_.Matches(candidate.owner) || candidate.revision != storage_.Get()->revision)
@@ -19,9 +20,18 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::AssetLoadCancelled);
         if (candidate.retiring.size() + storage_.Get()->limits.maximumInstances > storage_.Get()->FreeRetired())
             return Failure(UiErrors::CapacityExceeded);
+        for (const auto &incoming : candidate.incoming) {
+            if (incoming.sceneRevoked || incoming.providerRevoked)
+                return Failure(UiErrors::BindingProviderUnknown);
+            const auto source = incoming.publisher.Acquire();
+            if (source.HasError())
+                return Result<void>::Failure(source.ErrorValue());
+            if (const auto valid = storage_.Get()->Validate(incoming.descriptor, *source.Value().Get()); valid.HasError())
+                return valid;
+        }
         for (const auto &retiring : candidate.retiring) {
             const auto &entry = storage_.Get()->active[retiring.slot];
-            if (!entry || !entry->publisher.IsCurrent(retiring.source) ||
+            if (!entry || entry->sceneRevoked || !entry->publisher.IsCurrent(retiring.source) ||
                 !UiReloadDetail::MatchesSource(*retiring.source.Get(), retiring.stamps))
                 return Failure(UiErrors::RevisionStale);
         }
@@ -36,15 +46,21 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiSceneReconciliation::Commit */
-    Result<UiSceneReconciliationResult> UiSceneReconciliation::Commit(Prepared &prepared, const UiStructuralCommitPoint point) {
+    Result<UiSceneReconciliationResult> UiSceneReconciliation::Commit(const Prepared &prepared, const UiStructuralCommitPoint point) {
         if (const auto valid = CanCommit(prepared, point); valid.HasError())
             return Result<UiSceneReconciliationResult>::Failure(valid.ErrorValue());
+        return Result<UiSceneReconciliationResult>::Success(CommitValidated(prepared));
+    }
+
+    /** @copydoc UiSceneReconciliation::CommitValidated */
+    UiSceneReconciliationResult UiSceneReconciliation::CommitValidated(const Prepared &prepared) noexcept {
         auto &candidate = *prepared.storage_;
         for (auto &rebind : candidate.rebinding) {
             auto &entry = *storage_.Get()->active[rebind.slot];
             entry.publisher.CommitValidated(rebind.candidate);
             // Unload leaves explicit unavailable/fallback source evidence; ownership remains persistent.
             entry.descriptor.providerScene = candidate.request.next;
+            entry.providerRevoked = false;
         }
         for (const auto &retiring : candidate.retiring) {
             auto &entry = storage_.Get()->active[retiring.slot];
@@ -62,14 +78,21 @@ namespace Horo::Runtime::Ui {
             free->emplace(std::move(incoming));
         }
         candidate.incoming.clear();
+        for (const auto &entry : candidate.preparedAnimations)
+            if (const auto source = entry.lock())
+                source->unpublished = false;
         candidate.consumed = true;
+        if (candidate.admitted) {
+            --storage_.Get()->preparedCount;
+            candidate.admitted = false;
+        }
         ++storage_.Get()->revision;
-        return Result<UiSceneReconciliationResult>::Success(candidate.result);
+        return candidate.result;
     }
 
     /** @copydoc UiSceneReconciliation::CollectRetired */
     Result<std::size_t> UiSceneReconciliation::CollectRetired() {
-        if (!storage_ || storage_.Get()->collecting)
+        if (!storage_ || storage_.Get()->collecting || storage_.Get()->publicationSeal)
             return Failure<std::size_t>(UiErrors::InstanceStateInvalid);
         const auto owner = storage_.OwnerPin();
         owner->collecting = true;
@@ -85,6 +108,7 @@ namespace Horo::Runtime::Ui {
 
             ~Guard() {
                 owner.collecting = false;
+                owner.FlushSceneRevocations();
                 if (owner.shutdownRequested)
                     owner.Stop();
             }
@@ -135,7 +159,7 @@ namespace Horo::Runtime::Ui {
     void UiSceneReconciliation::Shutdown() noexcept {
         if (!storage_ || storage_.Get()->stopped)
             return;
-        if (storage_.Get()->collecting) {
+        if (storage_.Get()->collecting || storage_.Get()->publicationSeal) {
             storage_.Get()->shutdownRequested = true;
             return;
         }
@@ -144,8 +168,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiSceneReconciliation::CanReclaim */
     bool UiSceneReconciliation::CanReclaim() const noexcept {
-        return !storage_ || (storage_.Get()->stopped && !storage_.Get()->collecting && storage_.Get()->preparedCount == 0 &&
-                             std::ranges::all_of(storage_.Get()->retired, [](const auto &entry) {
+        return !storage_ || (storage_.Get()->stopped && !storage_.Get()->collecting && !storage_.Get()->publicationSeal &&
+                             storage_.Get()->preparedCount == 0 && std::ranges::all_of(storage_.Get()->retired, [](const auto &entry) {
             return !entry || entry->publisher.CanReclaim();
         }));
     }

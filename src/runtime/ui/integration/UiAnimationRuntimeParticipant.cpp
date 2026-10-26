@@ -69,6 +69,17 @@ namespace Horo::Runtime {
         Shutdown();
     }
 
+    /** @copydoc UiAnimationRuntimeParticipant::PrepareSourcePresentation */
+    Result<UiAnimationSourcePresentation> UiAnimationRuntimeParticipant::PrepareSourcePresentation() {
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->started || storage_->stopped ||
+            storage_->controls->commands != 0 || storage_->controls->frameReserved)
+            return Result<UiAnimationSourcePresentation>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        auto prepared = storage_->owner.PrepareSourcePresentation(storage_->config.viewport);
+        return prepared.HasError()
+                   ? Result<UiAnimationSourcePresentation>::Failure(prepared.ErrorValue())
+                   : Result<UiAnimationSourcePresentation>::Success(UiAnimationSourcePresentation{std::move(prepared).Value()});
+    }
+
     /** @copydoc UiAnimationRuntimeParticipant::Startup */
     Result<void> UiAnimationRuntimeParticipant::Startup(const CancellationToken &cancellation) {
         if (storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->started ||
@@ -178,7 +189,7 @@ namespace Horo::Runtime {
 
     /** @copydoc UiAnimationRuntimeParticipant::Acquire */
     Result<Ui::UiAnimationFrameLease> UiAnimationRuntimeParticipant::Acquire() const {
-        if (storage_->ownerThread != std::this_thread::get_id())
+        if (storage_->ownerThread != std::this_thread::get_id() || storage_->lastPublishedFrame == 0)
             return Result<Ui::UiAnimationFrameLease>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
         return storage_->owner.Acquire();
     }
@@ -213,9 +224,14 @@ namespace Horo::Runtime {
         return storage_->owner.DrainRetired();
     }
 
+    /** @copydoc UiAnimationRuntimeParticipant::CanReclaim */
+    bool UiAnimationRuntimeParticipant::CanReclaim() const noexcept {
+        return storage_ && storage_->ownerThread == std::this_thread::get_id() && storage_->stopped && storage_->owner.CanReclaim();
+    }
+
     /** @copydoc UiAnimationRuntimeParticipant::ApplyPresentation */
     Result<bool> UiAnimationRuntimeParticipant::ApplyPresentation(const Ui::UiPresentationReceipt &receipt) {
-        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped)
+        if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->lastPublishedFrame == 0)
             return Result<bool>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
         return storage_->owner.ApplyPresentation(receipt);
     }

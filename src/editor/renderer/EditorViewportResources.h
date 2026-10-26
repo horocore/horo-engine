@@ -26,12 +26,19 @@ namespace Horo::Editor {
         struct MeshBinding {
             Render::RenderMeshHandle mesh;
             std::uint32_t indexCount{0};
+            Render::RenderMeshDescriptor descriptor; /**< Exact ready frontend recipe, including its actual vertex/index generations. */
         };
 
         EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig &config) noexcept;
 
         [[nodiscard]] Result<std::optional<Render::RenderTargetHandle>> Prepare(const Render::RenderSceneView &scene,
                                                                                 EditorViewportExtent requestedExtent);
+        /** @brief Prepares the SAME mesh owner without allocating an unrelated desktop camera target.
+         * @param resources Canonical immutable mesh projection retained by the scene owner.
+         * @return Success or original resource/upload failure; pending readiness remains observable through FindMesh.
+         * @pre Lifecycle preparation only, before graph topology admission; normal frames never synchronize meshes.
+         */
+        [[nodiscard]] Result<void> PrepareMeshes(std::span<const EditorViewportMeshResourceView> resources);
         void Shutdown() noexcept;
 
         [[nodiscard]] std::optional<MeshBinding> FindMesh(std::uint64_t sourceId) const noexcept;
@@ -56,6 +63,7 @@ namespace Horo::Editor {
             Render::ResourceOperationId meshOperation;
             std::uint32_t indexCount{0};
             std::uint32_t sourceGeneration{0};
+            Render::RenderMeshDescriptor descriptor;
         };
 
         struct ViewportTargetResources {

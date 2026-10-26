@@ -142,7 +142,7 @@ namespace Horo::Physics {
             }
 
             Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                                               Runtime::RuntimeSceneView scene) override {
+                                                                               const Runtime::RuntimeSceneView &scene) override {
                 auto prepared = owner_.Prepare(definition, scene);
                 if (prepared.HasValue())
                     candidate = dynamic_cast<PhysicsSceneActivationCandidate *>(prepared.Value().get());

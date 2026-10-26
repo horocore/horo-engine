@@ -143,6 +143,21 @@ namespace Horo::Application::Internal {
         return std::this_thread::get_id() == impl_->owner && !impl_->closing && !impl_->closed && !impl_->retiring ? impl_->generation : 0;
     }
 
+    /** @copydoc PackageProjectHost::InstalledRecord */
+    Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>> PackageProjectHost::InstalledRecord(
+        const std::filesystem::path &root, const std::uint64_t generation) const {
+        using Outcome = Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>>;
+        if (auto valid = impl_->Lane(); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        if (root != impl_->policy.projectRoot || generation == 0 || generation != impl_->generation)
+            return Outcome::Failure(Failure("packages.host.project_stale"));
+        if (auto admitted = impl_->Admission(); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        if (!impl_->current)
+            return Outcome::Failure(Failure("packages.host.preparing"));
+        return impl_->current->InstalledRecord();
+    }
+
     /** @copydoc PackageProjectHost::Close */
     Result<void> PackageProjectHost::Close() {
         if (auto valid = impl_->Lane(); valid.HasError())

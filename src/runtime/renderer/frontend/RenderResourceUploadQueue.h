@@ -8,9 +8,11 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace Horo::Render::Detail {
@@ -108,14 +110,28 @@ namespace Horo::Render::Detail {
                                              requests_[readIndex_].stagingByteCount > limits_.maximumBytesPerDrain - completedBytes);
         }
 
-        Request Pop() {
+        Request Pop() noexcept {
             Request request = std::move(requests_[readIndex_]);
             ++readIndex_;
             pendingPayloadBytes_ -= request.stagingByteCount;
             return request;
         }
 
-        [[nodiscard]] std::optional<Request> Cancel(const RenderResourceIdentity identity) {
+        /** @brief Counts cancellation while consuming only the existing front request; batch completion repacks once. */
+        void PopCancelled() noexcept {
+            static_cast<void>(Pop());
+            ++cancelledRequestCount_;
+        }
+
+        /** @brief Borrows the exact pending request without allocation; only the owner thread mutates this queue. */
+        [[nodiscard]] const Request *Find(const RenderResourceIdentity identity) const noexcept {
+            const auto pending = std::ranges::subrange{requests_.begin() + static_cast<std::ptrdiff_t>(readIndex_), requests_.end()};
+            const auto found = std::ranges::find(pending, identity, &Request::identity);
+            return found == pending.end() ? nullptr : std::to_address(found);
+        }
+
+        [[nodiscard]] std::optional<Request> Cancel(const RenderResourceIdentity identity) noexcept {
+            static_assert(std::is_nothrow_move_constructible_v<Request> && std::is_nothrow_move_assignable_v<Request>);
             const auto found =
                 std::ranges::find(std::ranges::subrange{requests_.begin() + static_cast<std::ptrdiff_t>(readIndex_), requests_.end()},
                                   identity, &Request::identity);
@@ -134,11 +150,11 @@ namespace Horo::Render::Detail {
         }
 
         void CompleteBatch(const std::size_t requestCount, const std::size_t payloadBytes) noexcept {
-            if (requestCount == 0)
-                return;
-            ++completedBatchCount_;
-            lastBatchRequestCount_ = static_cast<std::uint32_t>(requestCount);
-            lastBatchPayloadBytes_ = payloadBytes;
+            if (requestCount != 0) {
+                ++completedBatchCount_;
+                lastBatchRequestCount_ = static_cast<std::uint32_t>(requestCount);
+                lastBatchPayloadBytes_ = payloadBytes;
+            }
             Repack();
         }
 

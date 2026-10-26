@@ -17,7 +17,7 @@ namespace Horo::Network {
         product.owners->beforeWorld = [&](const Runtime::RuntimePhase phase) {
             if (phase == Runtime::RuntimePhase::NetworkPoll) {
                 ++observedWorlds;
-                CHECK_FALSE(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).Value().session.has_value());
+                CHECK(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).HasError());
             }
         };
         QueueSessionTravel(product);
@@ -103,7 +103,7 @@ namespace Horo::Network {
         }
         product.owners->beforeWorld = [&](const Runtime::RuntimePhase phase) {
             if (phase == Runtime::RuntimePhase::NetworkPoll)
-                CHECK_FALSE(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).Value().session.has_value());
+                CHECK(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).HasError());
         };
         RequireRevokedTravel(product, peer, expected);
         product.host->Shutdown();
@@ -132,6 +132,7 @@ namespace Horo::Network {
         auto next = AdmittedSession(connection, generation);
         REQUIRE(product.host->AdmitClientSession(NetworkModeWorldKind::Client, next, connection, generation).HasValue());
         product.ingress->Register(next);
+        product.PublishBinding(next, true);
         REQUIRE(first->Terminal() != nullptr);
         CHECK(first->Terminal()->kind == PeerSessionTerminalKind::LocalCancellation);
         product.ingress->transport.Queue({.kind = NetworkTransportEventKind::Closed, .connection = Connection()});
@@ -161,7 +162,7 @@ namespace Horo::Network {
             product.owners->sessions->DetachTransport(product.ingress->transport);
             REQUIRE(peer->Terminal() != nullptr);
             CHECK(peer->Terminal()->kind == PeerSessionTerminalKind::TransportFailed);
-            CHECK_FALSE(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).Value().session.has_value());
+            CHECK(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).HasError());
             product.owners->sessions->OnTransportEvent({.kind = NetworkTransportEventKind::Closed, .connection = Connection()});
             CHECK(product.host->RunFrame().HasError());
         }
@@ -192,6 +193,7 @@ namespace Horo::Network {
         REQUIRE(host->Startup().HasValue());
         auto peer = AdmittedSession();
         REQUIRE(host->AdmitClientSession(NetworkModeWorldKind::Client, peer, Connection(), Session()).HasValue());
+        PublishProductClient(*host, owners, peer);
         REQUIRE(host->RunFrame().HasValue());
         host->Shutdown();
         REQUIRE(peer->Terminal() != nullptr);
@@ -213,7 +215,7 @@ namespace Horo::Network {
         CHECK(product.ingress->transport.closes == 2);
         REQUIRE(product.ingress->report.has_value());
         CHECK(product.ingress->report->rejectedPackets == 1);
-        CHECK_FALSE(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).Value().session.has_value());
+        CHECK(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).HasError());
     }
 
     TEST_CASE("Idle product sessions retain distinct inactivity and lifetime expiry terminals", "[integration][network][mode][session]") {
@@ -221,7 +223,7 @@ namespace Horo::Network {
             SKIP("Canonical Physics is required for actual product world activation.");
         SessionProduct product;
         PeerSessionDeadlines deadlines{10, 20, 30, 100, 10};
-        std::uint64_t expiry = 31;
+        std::uint64_t expiry = 32;
         auto expected = PeerSessionTerminalKind::InactivityTimeout;
         SECTION("Inactivity is not extended by render frames or travel requests") {}
         SECTION("Lifetime is never extended by the activity window") {
@@ -231,7 +233,10 @@ namespace Horo::Network {
         }
         auto peer = AdmittedSession(Connection(), Session(), deadlines);
         product.Start(peer);
+        // The admitted Initial control packet is real activity at tick 22; frame/travel work must not refresh it.
+        REQUIRE(peer->ActivityDeadline() == expiry);
         QueueSessionTravel(product);
+        CHECK(peer->ActivityDeadline() == expiry);
         product.owners->sessionSource->Advance(Duration::FromNanoseconds(static_cast<std::int64_t>(expiry - 22)));
         RequireRevokedTravel(product, peer, expected);
         CHECK(product.ingress->handler->calls == 0);

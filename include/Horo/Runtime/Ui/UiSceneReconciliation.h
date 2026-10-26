@@ -9,6 +9,12 @@
 #include "Horo/Runtime/Ui/UiOverlayLifecycle.h"
 
 namespace Horo::Runtime::Ui {
+    namespace Detail {
+        class UiAnimationPublisher;
+        struct UiAnimationSourceReservation;
+        struct RuntimeUiServiceState;
+        void FinishSceneRevocations(RuntimeUiServiceState &owner) noexcept;
+    }  // namespace Detail
     /** @brief Semantic lifetime authority, independent from audience, band, route, attachment and visibility. */
     enum class UiOwnerScopeKind : std::uint8_t {
         GameInstance,
@@ -48,9 +54,9 @@ namespace Horo::Runtime::Ui {
         std::uint32_t previousInstanceSlot{}; /**< Ever-issued host instance slot high-water mark, including failed admissions. */
     };
 
-    /** @brief Exact outgoing scene and explicit replacement; absence means unload. */
+    /** @brief Exact Scene transition: absent previous means initial activation; absent next means unload. */
     struct UiSceneTransitionRequest final {
-        SceneRuntimeId previous;
+        std::optional<SceneRuntimeId> previous; /**< Absent only for initial activation; never a fabricated outgoing Scene. */
         std::optional<SceneRuntimeId> next;
     };
 
@@ -102,8 +108,13 @@ namespace Horo::Runtime::Ui {
         private:
             struct Storage;
             friend class UiSceneReconciliation;
-            explicit Prepared(std::unique_ptr<Storage> storage) noexcept;
-            std::unique_ptr<Storage> storage_;
+            friend class RuntimeUiService;
+            friend class Detail::UiAnimationPublisher;
+            friend struct Detail::UiAnimationSourceReservation;
+            explicit Prepared(std::shared_ptr<Storage> storage) noexcept;
+            /** @brief Revokes unpublished derived access before releasing the canonical candidate facade. */
+            void Abandon() const noexcept;
+            std::shared_ptr<Storage> storage_;
         };
 
         /** @brief Reserves active/retired slots. @param limits Exact owner and capacities, each at most 64.
@@ -140,7 +151,7 @@ namespace Horo::Runtime::Ui {
          * @param prepared Candidate consumed once on success. @param point Owner cutoff.
          * @return Aggregate evidence or original typed failure preserving every last-good owner.
          */
-        [[nodiscard]] Result<UiSceneReconciliationResult> Commit(Prepared &prepared, UiStructuralCommitPoint point);
+        [[nodiscard]] Result<UiSceneReconciliationResult> Commit(const Prepared &prepared, UiStructuralCommitPoint point);
         /** @brief Borrows one exact active publisher for a synchronous owner operation.
          * @param instance Exact semantic instance. @return Publisher or null after retirement/stale identity.
          * @details Never retain this pointer across registry commands; Acquire pins immutable generations instead.
@@ -164,8 +175,17 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::uint32_t LastIssuedInstanceSlot() const noexcept;
 
     private:
+        friend class Detail::UiAnimationPublisher;
+        friend class RuntimeUiService;
+        friend void Detail::FinishSceneRevocations(Detail::RuntimeUiServiceState &owner) noexcept;
         struct Storage;
         explicit UiSceneReconciliation(std::shared_ptr<Storage> storage) noexcept;
+        /** @brief Fences matching canonical entries immediately; structural moves wait for all borrowed owner windows to close. */
+        void RevokeScene(SceneRuntimeId scene, bool defer) noexcept;
+        /** @brief Transfers previously fenced entries using the registry's reserved shutdown capacity only. */
+        void FlushSceneRevocations() noexcept;
+        /** @brief Pins only an exact inactive incoming or provider replacement owned by this canonical transition. */
+        [[nodiscard]] Result<UiReloadLease> AcquirePrepared(const Prepared &prepared, RuntimeUiInstanceId instance) const;
 
         /**
          * @brief Const-propagating facade ownership of the existing pinned registry state.
@@ -210,6 +230,8 @@ namespace Horo::Runtime::Ui {
             std::shared_ptr<Storage> pin_;
         };
 
+        /** @brief Consumes the previously sealed canonical candidate without callbacks, allocation or validation failure. */
+        [[nodiscard]] UiSceneReconciliationResult CommitValidated(const Prepared &prepared) noexcept;
         static_assert(std::is_same_v<decltype(std::declval<const OwnedState &>().Get()), const Storage *>);
         static_assert(std::is_same_v<decltype(std::declval<OwnedState &>().Get()), Storage *>);
         static_assert(!std::is_invocable_v<decltype(&OwnedState::OwnerPin), const OwnedState &>);

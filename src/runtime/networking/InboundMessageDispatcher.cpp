@@ -2,6 +2,7 @@
 
 #include "Horo/Network/NetworkAdmissionController.h"
 #include "Horo/Network/NetworkErrors.h"
+#include "NetworkWorldBindingController.h"
 
 #include <algorithm>
 #include <new>
@@ -162,6 +163,15 @@ namespace Horo::Network {
             admission_ = controller;
     }
 
+    /** @copydoc InboundMessageDispatcher::HasLiveHandler */
+    bool InboundMessageDispatcher::HasLiveHandler(const ProtocolId protocol, const MessageTypeId message,
+                                                  const MessageTrafficClass traffic) const noexcept {
+        return !shuttingDown_ && std::this_thread::get_id() == owner_ && std::ranges::any_of(handlers_, [&](const Handler &handler) {
+            return handler.binding.protocol == protocol && handler.binding.message == message && handler.binding.traffic == traffic &&
+                   !handler.owner.expired();
+        });
+    }
+
     /** @copydoc InboundMessageDispatcher::RevokeHandler */
     void InboundMessageDispatcher::RevokeHandler(const ProtocolId protocol, const MessageTypeId message) noexcept {
         if (std::this_thread::get_id() != owner_)
@@ -264,10 +274,26 @@ namespace Horo::Network {
         return InvokeHandler(session.Value(), *handler, event, message, nowTick);
     }
 
+    /** @copydoc InboundMessageDispatcher::AdmitWorldBinding */
+    Result<void> InboundMessageDispatcher::AdmitWorldBinding(const Session &session, const MessageTrafficClass traffic,
+                                                             const ConnectionHandle connection, const std::uint64_t nowTick) {
+        if (requiresWorldBinding_ && traffic != MessageTrafficClass::Control) {
+            const auto worlds = worldBinding_.lock();
+            if (!worlds)
+                return RejectAndClose(connection, MakeError(NetworkErrors::NetworkModeUnavailable));
+            if (auto admitted = worlds->AdmitWorldDispatch(connection, session.generation, *session.lifecycle, nowTick);
+                admitted.HasError())
+                return RejectAndClose(connection, admitted.ErrorValue());
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc InboundMessageDispatcher::InvokeHandler */
     Result<void> InboundMessageDispatcher::InvokeHandler(const std::shared_ptr<Session> &session, Handler &handler,
                                                          const NetworkTransportEvent &event, const MessageEnvelope &message,
                                                          const std::uint64_t nowTick) {
+        if (auto world = AdmitWorldBinding(*session, handler.binding.traffic, event.connection, nowTick); world.HasError())
+            return world;
         const auto bound = handler.owner.lock();
         if (bound == nullptr)
             return RejectAndClose(event.connection, MakeError(NetworkErrors::GameplayDispatchRejected));

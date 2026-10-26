@@ -46,18 +46,17 @@ namespace Horo::Editor::PCGCanvasTestSupport {
                 const auto raw = std::as_bytes(std::span(bytes));
                 project.Write({{true, raw.size(), ComputeSha256(raw)}, {raw.begin(), raw.end()}});
             }
-            controller =
-                std::make_unique<EditorWorkspaceController>(project.root, runtime, registry.Snapshot(),
-                                                            EditorWorkspaceDependencies{.world = {.documentSessionOwner = Asset(9)},
-                                                                                        .mutations = &project.mutations,
-                                                                                        .durableFiles = &project.files,
-                                                                                        .jobs = jobs.get(),
-                                                                                        .pcg = std::move(catalog),
-                                                                                        .pcgPreviewInputs =
-                                                                                            preview
-                                                                                                ? std::optional{CreatePCGPreviewSandbox()
-                                                                                                                    .Value()}
-                                                                                                : std::nullopt});
+            controller = std::make_unique<
+                EditorWorkspaceController>(project.root, runtime, registry.Snapshot(),
+                                           EditorWorkspaceDependencies{.world = {.documentSessionOwner = Asset(9)},
+                                                                       .mutations = &project.mutations,
+                                                                       .durableFiles = &project.files,
+                                                                       .jobs = jobs.get(),
+                                                                       .procedural =
+                                                                           {.catalog = std::move(catalog),
+                                                                            .previewInputs =
+                                                                                preview ? std::optional{CreatePCGPreviewSandbox().Value()}
+                                                                                        : std::nullopt}});
 
             Open();
         }

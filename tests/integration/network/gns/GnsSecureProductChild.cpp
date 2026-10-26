@@ -40,6 +40,20 @@ namespace Horo::Network::NativeQualification {
                     context.session->AdmitGameplay(context.connection, context.generation, context.ownerTick).HasError() ||
                     message.payload != std::vector<std::byte>{expected} || !observation || !observation->transport)
                     return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+                REQUIRE(host != nullptr);
+                const auto role = host->Role(world, scene);
+                REQUIRE(role.HasValue());
+                REQUIRE(role.Value().worldSession.has_value());
+                const auto capability = world == NetworkModeWorldKind::AuthorityServer
+                                            ? ReplicationWorldCapability::PublishAuthority
+                                            : ReplicationWorldCapability::ApplyAuthoritativeState;
+                auto lease = host->AcquireReplication(world,
+                                                      {scene, *role.Value().worldSession, Runtime::RuntimePhase::NetworkPoll, 0,
+                                                       context.cancellation},
+                                                      capability);
+                REQUIRE(lease.HasValue());
+                REQUIRE_FALSE(lease.Value().IsRevoked());
+                REQUIRE(lease.Value().Descriptor().session == *role.Value().worldSession);
                 if (calls == 0) {
                     REQUIRE(admission != nullptr);
                     REQUIRE(credentials != nullptr);
@@ -49,12 +63,16 @@ namespace Horo::Network::NativeQualification {
                 ++calls;
                 if (reply.empty())
                     return Result<void>::Success();
-                return observation->transport->Send(context.connection, {}, reply, DeliveryPolicy::ReliableOrdered);
+                return observation->transport->Send(context.connection, ChannelId::Create(1, 2).Value(), reply,
+                                                    DeliveryPolicy::ReliableOrdered);
             }
 
             std::shared_ptr<const Application::Internal::NetworkProductAdmission> admission;
             std::shared_ptr<CredentialObservation> credentials;
             std::shared_ptr<TransportObservation> observation;  // Revoked by the exact adapter before shutdown/destruction.
+            Application::Internal::NetworkProductHost *host{};  // Synchronous handler borrow, revoked before host teardown.
+            NetworkModeWorldKind world{NetworkModeWorldKind::Count};
+            Runtime::SceneRuntimeId scene;
             std::byte expected{};
             std::vector<std::byte> reply;
             std::size_t calls{};
@@ -121,9 +139,11 @@ namespace Horo::Network::NativeQualification {
             REQUIRE(providers.credentials != nullptr);
             providers.credentials = std::make_shared<ObservedCredential>(providers.credentials, owners.credentials);
             owners.handler->credentials = owners.credentials;
-            auto options =
+            auto optionsResult =
                 LoadNativeSelection(input.nativeDirectory.empty() ? input.directory : input.nativeDirectory, input.side, policy.trust);
-            REQUIRE(options.HasValue());
+            REQUIRE(optionsResult.HasValue());
+            auto options = std::move(optionsResult).Value();
+            options.transport.maximumChannels = 2;
             owners.handler->observation = owners.observation;
             owners.handler->expected = input.side == 0 ? std::byte{0x41} : std::byte{0x42};
             if (input.side == 0)
@@ -134,7 +154,7 @@ namespace Horo::Network::NativeQualification {
                                                                      MessageTrafficClass::Command, Runtime::RuntimePhase::NetworkPoll, 64},
                                                                     owners.handler}};
             auto selected = Application::Internal::SelectNetworkProductGns(policy, std::move(providers), owners.fixtures.codecs, bindings,
-                                                                           options.Value());
+                                                                           options, owners.fixtures.WorldPolicy());
             REQUIRE(selected.HasValue());
             auto composition = std::move(selected).Value();
             owners.handler->admission = composition.admission;
@@ -142,6 +162,18 @@ namespace Horo::Network::NativeQualification {
             // Passive observation wraps the same selected production candidate; it grants no authority.
             owners.native = std::make_unique<ObservedTransport>(std::move(composition.transport), owners.observation);
             return std::move(composition.admission);
+        }
+
+        /** @brief Start the actual selected host and bind its counting handler to the host-owned local world. */
+        void StartHost(ChildOwners &owners, const NetworkModeWorld &world) {
+            owners.handler->host = owners.host.get();
+            owners.handler->world = world.kind;
+            owners.handler->scene = world.scene;
+            const auto started = owners.host->Startup();
+            if (started.HasError())
+                ReportError(started.ErrorValue());
+            REQUIRE(started.HasValue());
+            std::cout << "NATIVE_PHASE started\n" << std::flush;
         }
 
         void CreateHost(ChildOwners &owners) {
@@ -168,7 +200,7 @@ namespace Horo::Network::NativeQualification {
                 return Application::Internal::CreateNetworkProductTransport(std::move(*slot), role, endpoint, endpoint, debugger, sessions,
                                                                             capture);
             };
-            const std::array world{input.side == 0 ? World(NetworkModeWorldKind::AuthorityServer, 1701, 1)
+            const std::array world{input.side == 0 ? World(NetworkModeWorldKind::AuthorityServer, 1701)
                                                    : World(NetworkModeWorldKind::Client, 1702)};
             auto created = Application::Internal::NetworkProductHost::Create(*owners.clock,
                                                                              {*owners.fixtures.project,
@@ -180,15 +212,13 @@ namespace Horo::Network::NativeQualification {
                                                                               100 + input.side,
                                                                               world,
                                                                               {.localPlayer = input.side == 1},
-                                                                              sessions},
+                                                                              sessions,
+                                                                              NetworkWorldCompositionPurpose::Gameplay,
+                                                                              capture->WorldBinding()},
                                                                              std::move(factories));
             REQUIRE(created.HasValue());
             owners.host = std::move(created).Value();
-            const auto started = owners.host->Startup();
-            if (started.HasError())
-                ReportError(started.ErrorValue());
-            REQUIRE(started.HasValue());
-            std::cout << "NATIVE_PHASE started\n" << std::flush;
+            StartHost(owners, world[0]);
         }
 
         /** @brief Fixed public event kinds, counters and distinct original/canonical error identities only; never native text or payload.
@@ -293,9 +323,12 @@ namespace Horo::Network::NativeQualification {
                 if (input.side == 1 && !sent) {
                     const auto role = owners.host->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702});
                     if (role.HasValue() && role.Value().session.has_value()) {
+                        REQUIRE(role.Value().worldSession.has_value());
+                        REQUIRE_FALSE(role.Value().authority.IsValid());
                         REQUIRE(owners.observation->outbound.IsValid());
                         REQUIRE(owners.observation->transport
-                                    ->Send(owners.observation->outbound, {}, owners.command, DeliveryPolicy::ReliableOrdered)
+                                    ->Send(owners.observation->outbound, ChannelId::Create(1, 2).Value(), owners.command,
+                                           DeliveryPolicy::ReliableOrdered)
                                     .HasValue());
                         sent = true;
                     }

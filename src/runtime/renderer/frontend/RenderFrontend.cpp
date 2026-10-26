@@ -131,7 +131,8 @@ namespace Horo::Render {
         : owner_(std::exchange(other.owner_, nullptr)), backend_(std::exchange(other.backend_, nullptr)),
           frame_(std::exchange(other.frame_, {})), hostFrame_(std::exchange(other.hostFrame_, 0)),
           executed_(std::exchange(other.executed_, false)), guiComposed_(std::exchange(other.guiComposed_, false)),
-          completionLease_(std::exchange(other.completionLease_, nullptr)), parallelWork_(std::move(other.parallelWork_)),
+          completionLease_(std::exchange(other.completionLease_, nullptr)), uiComposed_(std::exchange(other.uiComposed_, false)),
+          uiComposing_(std::exchange(other.uiComposing_, false)), parallelWork_(std::move(other.parallelWork_)),
           parallelGraphWork_(std::move(other.parallelGraphWork_)) {
         if (owner_ != nullptr) {
             owner_->activeFrameScope_ = this;
@@ -149,6 +150,8 @@ namespace Horo::Render {
             executed_ = std::exchange(other.executed_, false);
             guiComposed_ = std::exchange(other.guiComposed_, false);
             completionLease_ = std::exchange(other.completionLease_, nullptr);
+            uiComposed_ = std::exchange(other.uiComposed_, false);
+            uiComposing_ = std::exchange(other.uiComposing_, false);
             parallelWork_ = std::move(other.parallelWork_);
             parallelGraphWork_ = std::move(other.parallelGraphWork_);
             if (owner_ != nullptr) {
@@ -264,7 +267,10 @@ namespace Horo::Render {
         frame_ = {};
         executed_ = false;
         guiComposed_ = false;
+        uiComposing_ = false;
         completionLease_ = nullptr;
+        uiComposed_ = false;
+        uiComposing_ = false;
     }
 
     /** @copydoc RenderFrontend::Create */
@@ -333,14 +339,16 @@ namespace Horo::Render {
                                                   },
                                                   memoryBudget_.get())),
           resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)),
-          graphResourceLeases_(
-              std::make_unique<Detail::RenderGraphResourceLeasePool>(*resourceRegistry_, retirementLimits.maximumSubmissionPins)),
+          graphResourceLeases_(std::make_unique<Detail::RenderGraphResourceLeasePool>(*resourceRegistry_,
+                                                                                      retirementLimits.maximumSubmissionPins,
+                                                                                      retirementLimits.maximumUiCapturesPerFrame)),
           graphTransientResources_(
               std::make_unique<Detail::RenderGraphTransientResourcePool>(*backend_, *resourceRegistry_, *memoryBudget_)),
           inspectionFeed_(resourceOwner) {}
 
     /** @copydoc RenderFrontend::~RenderFrontend */
     RenderFrontend::~RenderFrontend() {
+        uiPaintFrontendState_.reset();
         try {
             const auto begun = BeginShutdown();
             const auto drained = PollDrain();
@@ -423,6 +431,11 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::Capabilities */
     const RenderBackendCapabilities &RenderFrontend::Capabilities() const noexcept {
         return backend_->Capabilities();
+    }
+
+    /** @copydoc RenderFrontend::MaximumUiCapturesPerFrame */
+    std::size_t RenderFrontend::MaximumUiCapturesPerFrame() const noexcept {
+        return graphResourceLeases_ ? graphResourceLeases_->MaximumUiCaptures() : 0;
     }
 
     /** @copydoc RenderFrontend::MemorySnapshot */

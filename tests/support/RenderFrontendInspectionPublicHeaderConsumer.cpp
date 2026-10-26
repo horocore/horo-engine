@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/UiPaintProgram.h"
 
 #include <type_traits>
 
@@ -11,6 +12,8 @@ using Capture = SnapshotResult (Horo::Render::RenderFrameScope::*)(const Horo::R
 using Read = SnapshotResult (Horo::Render::RenderFrontend::*)() const;
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrameScope::CaptureInspection), Capture>);
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrontend::GraphInspectionSnapshot), Read>);
+using ObservePaintPreparation = Horo::Result<void> (Horo::Render::UiPaintProgram::*)();
+static_assert(std::is_same_v<decltype(&Horo::Render::UiPaintProgram::ValidatePreparation), ObservePaintPreparation>);
 static_assert(!std::is_copy_constructible_v<Horo::Render::RenderGraphInspectionSnapshot>);
 
 using ComposeGui = Horo::Result<void> (Horo::Render::RenderFrameScope::*)(Horo::Render::IGuiPassExecutor &,

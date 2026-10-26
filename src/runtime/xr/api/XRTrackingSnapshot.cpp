@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <utility>
 
@@ -81,7 +82,9 @@ namespace Horo::XR {
                    descriptor.limits.maximumDevices <= XRTrackingSnapshotHardLimits::MaximumDevices && descriptor.limits.maximumPoses > 0 &&
                    descriptor.limits.maximumPoses <= XRTrackingSnapshotHardLimits::MaximumPoses &&
                    descriptor.devices.size() <= descriptor.limits.maximumDevices &&
-                   descriptor.poses.size() <= descriptor.limits.maximumPoses;
+                   descriptor.poses.size() <= descriptor.limits.maximumPoses &&
+                   descriptor.limits.maximumActions <= XRTrackingSnapshotHardLimits::MaximumActions &&
+                   descriptor.actions.size() <= descriptor.limits.maximumActions;
         }
 
         /** @brief Checks that advertised device capabilities agree with the semantic role. */
@@ -153,6 +156,31 @@ namespace Horo::XR {
             return Result<void>::Success();
         }
 
+        /** @brief Validates action provenance and normalized payloads independently of pose validity. */
+        [[nodiscard]] Result<void> ValidateActions(const XRTrackingSnapshotDescriptor &descriptor) {
+            if ((descriptor.limits.maximumActions == 0) != (descriptor.bindingRevision == 0))
+                return Reject<void>(XRErrors::TrackingSnapshotInvalid);
+            for (std::size_t index = 0; index < descriptor.actions.size(); ++index) {
+                const auto &action = descriptor.actions[index];
+                const auto *device = FindDevice(descriptor.devices, action.device);
+                if (!device || action.kind >= XRTrackedActionKind::Count ||
+                    action.bindingIndex >= XRTrackingSnapshotHardLimits::MaximumActions || !std::isfinite(action.x) ||
+                    !std::isfinite(action.y) || std::abs(action.x) > 1.0F || std::abs(action.y) > 1.0F ||
+                    (action.kind != XRTrackedActionKind::Vector2 && action.y != 0.0F) ||
+                    (action.kind == XRTrackedActionKind::Boolean && action.x != 0.0F && action.x != 1.0F) ||
+                    (!action.active && (action.x != 0.0F || action.y != 0.0F)))
+                    return Reject<void>(XRErrors::TrackingSnapshotInvalid);
+                if (action.active && (descriptor.focus != XRTrackingFocusState::Focused ||
+                                      (descriptor.state != XRTrackingState::Active && descriptor.state != XRTrackingState::TrackingLost) ||
+                                      device->state == XRTrackedDeviceState::Disconnected))
+                    return Reject<void>(XRErrors::TrackingSnapshotInvalid);
+                if (index > 0 && !(std::pair{descriptor.actions[index - 1].bindingIndex, descriptor.actions[index - 1].device} <
+                                   std::pair{action.bindingIndex, action.device}))
+                    return Reject<void>(XRErrors::TrackingSnapshotInvalid);
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Validates loss-state rules that prevent stale pose fabrication. */
         [[nodiscard]] bool ValidAggregateState(const XRTrackingSnapshotDescriptor &descriptor) noexcept {
             using enum XRTrackingState;
@@ -191,14 +219,28 @@ namespace Horo::XR {
             return Result<XRTrackingSnapshot>::Failure(devices.ErrorValue());
         if (auto poses = ValidatePoses(descriptor, activeSession, activeOriginRevision); poses.HasError())
             return Result<XRTrackingSnapshot>::Failure(poses.ErrorValue());
+        if (auto actions = ValidateActions(descriptor); actions.HasError())
+            return Result<XRTrackingSnapshot>::Failure(actions.ErrorValue());
         return Result<XRTrackingSnapshot>::Success(XRTrackingSnapshot{descriptor});
+    }
+
+    std::array<XRTrackedPoseRecord, XRTrackingSnapshotHardLimits::MaximumPoses> XRTrackingSnapshot::EmptyPoses() noexcept {
+        return []<std::size_t... Indices>(std::index_sequence<Indices...>) {
+            return std::array<XRTrackedPoseRecord, sizeof...(Indices)>{
+                {(static_cast<void>(Indices), XRTrackedPoseRecord{{}, XRTrackedPoseKind::Tracker, XRPoseSample{XRPoseDescriptor{}}})...}};
+        }(std::make_index_sequence<XRTrackingSnapshotHardLimits::MaximumPoses>{});
     }
 
     XRTrackingSnapshot::XRTrackingSnapshot(const XRTrackingSnapshotDescriptor &descriptor)
         : contractVersion_(descriptor.contractVersion), session_(descriptor.session), revision_(descriptor.revision),
           sequence_(descriptor.sequence), sampledAt_(descriptor.sampledAt), worldOriginRevision_(descriptor.worldOriginRevision),
           focus_(descriptor.focus), visibility_(descriptor.visibility), state_(descriptor.state), limits_(descriptor.limits),
-          devices_(descriptor.devices.begin(), descriptor.devices.end()), poses_(descriptor.poses.begin(), descriptor.poses.end()) {}
+          deviceCount_(descriptor.devices.size()), poseCount_(descriptor.poses.size()), actionCount_(descriptor.actions.size()),
+          bindingRevision_(descriptor.bindingRevision) {
+        std::ranges::copy(descriptor.devices, devices_.begin());
+        std::ranges::copy(descriptor.poses, poses_.begin());
+        std::ranges::copy(descriptor.actions, actions_.begin());
+    }
 
     /** @copydoc XRTrackingSnapshot::ContractVersion */
     XRContractVersion XRTrackingSnapshot::ContractVersion() const noexcept {
@@ -252,12 +294,22 @@ namespace Horo::XR {
 
     /** @copydoc XRTrackingSnapshot::Devices */
     std::span<const XRTrackedDeviceRecord> XRTrackingSnapshot::Devices() const noexcept {
-        return devices_;
+        return std::span{devices_}.first(deviceCount_);
     }
 
     /** @copydoc XRTrackingSnapshot::Poses */
     std::span<const XRTrackedPoseRecord> XRTrackingSnapshot::Poses() const noexcept {
-        return poses_;
+        return std::span{poses_}.first(poseCount_);
+    }
+
+    /** @copydoc XRTrackingSnapshot::BindingRevision */
+    std::uint64_t XRTrackingSnapshot::BindingRevision() const noexcept {
+        return bindingRevision_;
+    }
+
+    /** @copydoc XRTrackingSnapshot::Actions */
+    std::span<const XRTrackedActionRecord> XRTrackingSnapshot::Actions() const noexcept {
+        return std::span{actions_}.first(actionCount_);
     }
 
     /** @copydoc ValidateXRTrackingSnapshot */

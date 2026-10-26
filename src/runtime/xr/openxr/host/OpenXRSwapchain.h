@@ -109,9 +109,15 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Selects a native format from the exact bounded runtime publication, with no format fallback. */
         [[nodiscard]] virtual Result<std::int64_t> SelectFormat(const NativeSwapchainRequest &request,
                                                                 std::span<const std::int64_t> formats) const = 0;
-        /** @brief Enumerates API-typed images using official dispatch into adapter-owned bounded storage.
-         * @post Failure retains no renderer imports. The owner keeps the swapchain until Reset succeeds. */
-        [[nodiscard]] virtual Result<void> Enumerate(std::uint32_t count, const IOpenXRSwapchainImageEnumeration &enumeration) = 0;
+        /** @brief Enumerates API-typed images and cold-prepares views using the exact immutable allocation request.
+         * @param request Same validated request passed to native swapchain creation; view policy cannot change per acquisition.
+         * @param count Exact bounded native image count.
+         * @param enumeration Synchronous official dispatch borrow, never retained.
+         * @return Prepared images/views or original native/admission failure.
+         * @post Failure retains no renderer imports. Successful prefix views remain owned until Reset; the owner
+         * keeps the native swapchain and selected device alive until that reset succeeds. */
+        [[nodiscard]] virtual Result<void> Enumerate(const NativeSwapchainRequest &request, std::uint32_t count,
+                                                     const IOpenXRSwapchainImageEnumeration &enumeration) = 0;
         /** @brief Imports one exact ready acquisition into the canonical registry.
          * @post Failure retains no registry or native work; partial asynchronous ownership must return a handle for retirement. */
         [[nodiscard]] virtual Result<Render::RenderTextureHandle> Import(const NativeSwapchainRequest &request,

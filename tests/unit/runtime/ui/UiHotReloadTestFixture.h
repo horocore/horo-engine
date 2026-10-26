@@ -39,6 +39,7 @@ namespace Horo::Runtime::Ui::ReloadTests {
         UiRenderViewId view{Owner(), 10, 1};
         std::vector<UiDocumentPresentationProfiles> profiles; /**< Real durable alternatives for profile integration coverage. */
         std::uint8_t childMarker{11}; /**< Change the real authored target ID to exercise removal across cooked reload. */
+        bool canonicalElements{};     /**< Exercise actual catalog-authored Canvas/TextInput source and its initial control value. */
     };
 
     /** @brief Produces real cooked/provider-loaded closures and actual typed owner compositions. */

@@ -39,6 +39,16 @@ namespace Horo::Render::Detail {
         virtual void ReleaseNative() noexcept = 0;
     };
 
+    /** @brief Exact successful API/extension requests retained immutably by the current native owner.
+     * @details Spans remain stable until all device children release and the corresponding native instance/device retires.
+     * Supported extension enumeration is not enabled-extension evidence.
+     */
+    struct VulkanEnabledGraphicsFacts {
+        VulkanApiVersion api;
+        std::span<const std::string> instanceExtensions;
+        std::span<const std::string> deviceExtensions;
+    };
+
     /** @brief Borrowed same-instance/device facts, queried only after explicit surface realization. */
     struct VulkanEditorDevice {
         VkInstance instance{};
@@ -51,6 +61,7 @@ namespace Horo::Render::Detail {
         PFN_vkGetInstanceProcAddr instanceResolver{};
         PFN_vkGetDeviceProcAddr deviceResolver{};
         RenderQueueId graphicsIdentity;
+        VulkanEnabledGraphicsFacts enabled;
     };
 
     /** @brief Explicit private composition port implemented by the selected runtime's existing owners. */

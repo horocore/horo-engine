@@ -2,6 +2,60 @@
 
 namespace Horo::Tests::OpenXR {
     namespace {
+        TEST_CASE("Lost XR frame retains image and native destruction debt before explicit quiescence reset",
+                  "[unit][xr][compositor][retirement]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto frame = f.Begin();
+            const auto image = f.Acquire(frame);
+            const std::array images{image};
+            REQUIRE(f.frames.Submit(frame, images) == XRFrameStatus::Ok);
+            REQUIRE(f.sessions.ApplyEvent(f.session, XRSessionEvent::SessionLost).HasValue());
+            REQUIRE(f.compositor.BeginShutdown().HasValue());
+            CHECK(f.frames.Abort(frame) != XRFrameStatus::Ok);
+            CHECK(f.frames.Release(frame, image) != XRFrameStatus::Ok);
+            CHECK(f.compositor.EndEmpty(frame).HasError());
+            CHECK(f.script.ends == 0);
+
+            auto closed = f.color.Close();
+            REQUIRE(closed.HasValue());
+            CHECK_FALSE(closed.Value());
+            CHECK(f.swapScript.releases == 0);
+            CHECK(f.swapScript.destroys == 0);
+            CHECK(f.frames.Snapshot().frame == frame);
+            CHECK(f.frames.Snapshot().phase != XRFramePhase::Idle);
+
+            f.images.complete = true;  // Scripted exact image/scene/GUI completion, never a loss-event receipt.
+            f.swapScript.fail = "release";
+            f.swapScript.failure = XR_ERROR_SESSION_LOST;
+            CHECK(f.color.Close().HasError());
+            CHECK(f.frames.Snapshot().phase != XRFramePhase::Idle);
+            f.swapScript.fail = {};
+            closed = f.color.Close();
+            REQUIRE(closed.HasValue());
+            REQUIRE(closed.Value());
+            CHECK(f.swapScript.releases == 0);  // Loss did not invent a successful xrReleaseSwapchainImage.
+            CHECK(f.swapScript.destroys == 1);
+            CHECK(f.color.BorrowReleased(image).HasError());
+
+            f.native.script.failRetirement = true;
+            CHECK(f.native.owner.RetireSession().HasError());
+            CHECK(f.native.script.liveSessions == 1);
+            CHECK(f.frames.Snapshot().frame == frame);
+            CHECK(f.compositor.Wait().HasError());
+            CHECK(f.script.ends == 0);
+            f.native.script.failRetirement = false;
+            REQUIRE(f.native.owner.RetireSession().HasValue());
+            REQUIRE(f.native.script.liveSessions == 0);
+            REQUIRE(f.compositor.ResetAfterQuiescence().HasValue());
+            f.frames.ResetAfterQuiescence();
+            CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
+            CHECK(f.sessions.Snapshot().state == XRSessionState::Lost);
+            CHECK(f.sessions.ApplyEvent(f.session, XRSessionEvent::Ready).HasError());
+            CHECK(f.script.ends == 0);
+            CHECK(f.native.script.liveInstances == 1);
+        }
+
         TEST_CASE("Native XR compositor snapshots admitted pacing before loader callbacks", "[unit][xr][compositor][pacing]") {
             CompositorFixture f;
             NativeFramePacingPolicy pacing;
@@ -14,6 +68,40 @@ namespace Horo::Tests::OpenXR {
             CHECK(observation.Value().cpuSubmissionDeadlineNanoseconds == 8'500'000);
             CHECK(observation.Value().deadline == NativeFrameDeadline::WithinBudget);
             f.Empty(frame);
+        }
+
+        TEST_CASE("Missed XR deadlines preserve pending image debt before zero-layer end and the next frame",
+                  "[unit][xr][compositor][pacing]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto frame = f.Begin();
+            const auto image = f.Acquire(frame);
+            const auto now = GENERATE(9'000'000, 10'000'000);
+            const auto pacing = f.compositor.ObservePacing(frame, IdentityValue<XRRenderPredictionTime>(now));
+            REQUIRE(pacing.HasValue());
+            CHECK(pacing.Value().deadline ==
+                  (now < f.script.prediction ? NativeFrameDeadline::CpuSubmissionMissed : NativeFrameDeadline::DisplayMissed));
+            REQUIRE(f.frames.Abort(frame) == XRFrameStatus::Ok);
+            REQUIRE_FALSE(f.color.PollRelease().Value());
+            CHECK(f.compositor.EndEmpty(frame).HasError());
+            CHECK(f.compositor.Wait().HasError());
+            CHECK(f.frames.Snapshot().frame == frame);
+            CHECK(f.frames.Snapshot().phase == XRFramePhase::Aborting);
+            CHECK(f.script.ends == 0);
+            CHECK(f.swapScript.releases == 0);
+
+            f.images.complete = true;
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, image) == XRFrameStatus::Ok);
+            REQUIRE(f.compositor.EndEmpty(frame).HasValue());
+            CHECK(f.script.layers == 0);
+            CHECK(f.script.ends == 1);
+            CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
+            const auto next = f.Begin();
+            CHECK(next != frame);
+            CHECK(next.session == frame.session);
+            CHECK(f.script.waits == 2);
+            f.Empty(next);
         }
 
         TEST_CASE("Native XR compositor preserves predicted protocol and reports finite renderer deadlines",
@@ -46,13 +134,7 @@ namespace Horo::Tests::OpenXR {
             CompositorFixture f;
             f.Bind();
             const auto frame = f.Begin();
-            REQUIRE(f.frames.LocateViews(frame, 2) == XRFrameStatus::Ok);
-            REQUIRE(f.color.Acquire().HasValue());
-            REQUIRE(f.color.Wait(0).Value());
-            const auto imported = f.color.Import();
-            REQUIRE(imported.HasValue());
-            const auto image = imported.Value().image;
-            REQUIRE(f.frames.Acquire(frame, image) == XRFrameStatus::Ok);
+            const auto image = f.Acquire(frame);
             const auto plan = f.Plan(frame, image);
             const std::array owners{NativeProjectionTarget{&f.color, image}};
             REQUIRE_FALSE(f.compositor.EndProjection(frame, plan, owners).HasValue());

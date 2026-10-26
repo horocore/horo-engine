@@ -457,6 +457,20 @@ namespace Horo::XR {
             }
         }
 
+        TEST_CASE("XR multiview never treats an Action target as World origin conversion", "[unit][xr][multiview]") {
+            PlanFixture fixture;
+            const auto plan = fixture.Create();
+            const auto active = MultiviewOwner(fixture);
+            auto descriptor = fixture.views[0].pose;
+            descriptor.source = descriptor.target;
+            descriptor.target = Space(fixture.session, XRSpaceKind::Action, 99);
+            const auto action = XRPoseSample::Create(descriptor, fixture.session, fixture.origin);
+            REQUIRE(action.HasValue());
+            const std::array origins{action.Value(), OriginSample(fixture, 1)};
+            const XRMultiviewSceneInput input{.plan = plan, .referenceToWorld = origins, .publication = active.renderer};
+            RequireFailureIdentity(XRMultiviewScene::Create(input, active), XRErrors::CoordinateSpaceIncompatible);
+        }
+
         TEST_CASE("XR multiview conversion retains immutable values without heap allocation", "[unit][xr][multiview][allocation]") {
             PlanFixture fixture;
             const auto plan = fixture.Create();

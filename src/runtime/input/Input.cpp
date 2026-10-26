@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Utf8.h"
 #include "InputErrors.h"
+#include "InputRouterInternal.h"
 
 #include <algorithm>
 #include <bitset>
@@ -128,36 +129,6 @@ namespace Horo::Input {
             float axis{0.0F};
             ButtonState state{};
             std::optional<GamepadDeviceId> device;
-        };
-
-        /** @brief Fixed exact transition ledger avoids frame-hot hash-node allocation and identity collisions. */
-        struct GamepadTransitions {
-            struct Entry {
-                GamepadDeviceId device;
-                BindingControlKind kind;
-                std::uint64_t control;
-                bool operator==(const Entry &) const noexcept = default;
-            };
-
-            std::array<Entry, MaximumConsumedGamepadTransitions> entries{};
-            std::size_t count{};
-            bool capacityExceeded{};
-
-            bool Consume(const Entry &entry) noexcept {
-                if (const auto used = std::span(entries).first(count); std::ranges::find(used, entry) != used.end())
-                    return false;
-                if (count == entries.size()) {
-                    capacityExceeded = true;
-                    return false;
-                }
-                entries[count++] = entry;
-                return true;
-            }
-
-            void clear() noexcept {
-                count = 0;
-                capacityExceeded = false;
-            }
         };
 
         float ResolveGamepadAxis(const float rawAxis, const InputBinding &binding) noexcept {
@@ -625,59 +596,6 @@ namespace Horo::Input {
         return Result<void>::Success();
     }
 
-    struct InputRouter::Impl {
-        struct Context {
-            std::uint64_t token;
-            InputContextId id;
-            InputContextKind kind;
-        };
-
-        struct Capture {
-            std::uint64_t token;
-            std::uint64_t context;
-            PointerButton button;
-            IInputCaptureOwner *owner;
-        };
-
-        // One owner and one delivery window govern all committed text and pre-edit state.
-        struct TextFocusState {
-            std::uint64_t focusToken{0};
-            std::uint64_t minimumCompositionRevision{0};
-            std::uint64_t lastDeliveredCompositionRevision{0};
-            bool served{false};
-            bool blockedFrame{false};
-        };
-
-        const RawInputSnapshot *snapshot{nullptr};
-        const RawInputSnapshot *previousSnapshot{nullptr};
-        RawInputSnapshot empty;
-        std::vector<Context> contexts;
-        std::optional<Capture> capture;
-        std::vector<ActionDescriptor> actions;
-        InputBindingProfile profile;
-
-        /** @brief Frame-local admission ledger shared by direct reads and action evaluation/rollback. */
-        struct ConsumptionState final {
-            std::bitset<static_cast<std::size_t>(Key::Count)> keys;
-            std::bitset<static_cast<std::size_t>(PointerButton::Count)> pointerButtons;
-            std::bitset<MaximumTouchContacts> touchContacts;
-            bool pointerMotion{};
-            GamepadTransitions gamepadTransitions;
-            bool wheelX{false};
-            bool wheelY{false};
-        };
-
-        ConsumptionState consumed;
-        InputDeviceAssignments assignments;
-        std::uint64_t configurationRevision{1};
-        std::uint64_t assignmentRevision{1};
-        ActionReadStatus lastActionStatus{ActionReadStatus::Unavailable};
-        std::uint64_t nextToken{1};
-        bool modalBarrier{false};
-        bool blockNextFrame{false};
-        TextFocusState textFocus;
-    };
-
     namespace {
         int Priority(const InputContextKind kind) noexcept {
             return static_cast<int>(kind);
@@ -688,9 +606,12 @@ namespace Horo::Input {
         }
     }  // namespace
 
-    InputRouter::InputRouter() : impl_(std::make_unique<Impl>()) {}
+    InputRouter::InputRouter() : impl_(std::make_unique<Impl>()) {
+        impl_->collection = std::make_shared<InputCollectionLifetime>(*this);
+    }
 
     InputRouter::~InputRouter() {
+        impl_->collection->router = nullptr;
         if (impl_->capture)
             impl_->capture->owner->capturingRouter_ = nullptr;
     }
@@ -701,6 +622,12 @@ namespace Horo::Input {
     }
 
     void InputRouter::BeginFrame(const RawInputSnapshot &snapshot) {
+        // Legacy empty-source publication cannot fail: it does not register or append candidates.
+        impl_->collection->CommitEmpty();
+        CommitRawFrame(snapshot);
+    }
+
+    void InputRouter::CommitRawFrame(const RawInputSnapshot &snapshot) {
         impl_->modalBarrier =
             std::exchange(impl_->blockNextFrame, false) || std::ranges::any_of(impl_->contexts, [](const Impl::Context &context) {
             return Priority(context.kind) >= Priority(InputContextKind::ModalRoot);
@@ -842,7 +769,7 @@ namespace Horo::Input {
     }
 
     bool InputRouter::IsContextActive(const InputContextToken &context) const noexcept {
-        if (context.router_ != this || !TokenActive(context.token_))
+        if (!impl_->collection->routingAllowed || context.router_ != this || !TokenActive(context.token_))
             return false;
         const auto found = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
         if ((impl_->snapshot && !impl_->snapshot->window.focused) ||
@@ -863,6 +790,7 @@ namespace Horo::Input {
         impl_->actions = std::move(actions);
         impl_->profile = std::move(profile);
         AdvanceRevision(impl_->configurationRevision);
+        impl_->collection->Reconfigure();
         return Result<void>::Success();
     }
 
@@ -879,6 +807,7 @@ namespace Horo::Input {
             return Result<void>::Failure(MakeError(Errors::ProfileValidationFailed, validation.diagnostics.front().message));
         impl_->profile = std::move(profile);
         AdvanceRevision(impl_->configurationRevision);
+        impl_->collection->Reconfigure();
         return Result<void>::Success();
     }
 
@@ -1052,6 +981,7 @@ namespace Horo::Input {
             impl_->lastActionStatus = evidence.status;
             return evidence;
         }
+        impl_->collection->Accumulate(static_cast<std::size_t>(descriptor - impl_->actions.begin()), player, value);
         FinalizeAction(evidence, radial2D, radialDeadzone);
         impl_->lastActionStatus = evidence.status;
         return evidence;

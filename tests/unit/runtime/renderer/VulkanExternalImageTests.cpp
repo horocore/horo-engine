@@ -1,4 +1,5 @@
 #include "VulkanExternalGraphTestSupport.h"
+#include "runtime/renderer/modules/vulkan/VulkanExternalRegistrationStorage.h"
 #include "runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.h"
 
 namespace {
@@ -27,6 +28,12 @@ namespace {
         bool current{true};
         mutable bool releaseStateProved{};
         std::uint32_t family{};
+        Detail::VulkanExternalNativeViews prepared;
+
+        Detail::VulkanExternalNativeViews PreparedNativeViews() const noexcept override {
+            return prepared;
+        }
+
         RenderTextureDescriptor descriptor{.extent = {640, 480}, .layerCount = 2, .usage = RenderTextureUsage::RenderAttachment};
 
         Result<void> Validate() const override {
@@ -75,6 +82,68 @@ namespace {
             return state;
         }
     };
+
+    TEST_CASE("Vulkan external wrapper backing is bounded and survives the final queued weak reference", "[vulkan][external][storage]") {
+        struct Value {
+            int marker{42};
+        };
+
+        auto pool = std::make_shared<Detail::VulkanExternalAllocationPool>();
+        std::weak_ptr<Detail::VulkanExternalAllocationPool> retainedPool = pool;
+        std::weak_ptr<Value> retained;
+        {
+            auto value = std::allocate_shared<Value>(Detail::VulkanExternalAllocator<Value>{pool});
+            retained = value;
+            pool.reset();
+            CHECK_FALSE(retainedPool.expired());
+            CHECK(value->marker == 42);
+        }
+        CHECK(retained.expired());
+        CHECK_FALSE(retainedPool.expired());
+        retained.reset();
+        CHECK(retainedPool.expired());
+        pool = std::make_shared<Detail::VulkanExternalAllocationPool>();
+        std::array<std::shared_ptr<Value>, Detail::VulkanExternalAllocationPool::Capacity> values;
+        for (auto &value : values)
+            value = std::allocate_shared<Value>(Detail::VulkanExternalAllocator<Value>{pool});
+        CHECK_THROWS_AS(std::allocate_shared<Value>(Detail::VulkanExternalAllocator<Value>{pool}), std::bad_alloc);
+        values.front().reset();
+        CHECK_NOTHROW(values.front() = std::allocate_shared<Value>(Detail::VulkanExternalAllocator<Value>{pool}));
+    }
+
+    TEST_CASE("Vulkan acquired image registrations borrow cold views without creating or destroying native views",
+              "[vulkan][external][storage]") {
+        NativeResourceScope native;
+        ExternalNativeLease lease;
+        ExternalNativeSource source;
+        source.descriptor.usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled;
+        source.prepared = {NativeHandle<VkImageView>(701), {NativeHandle<VkImageView>(702), NativeHandle<VkImageView>(703)}, 2};
+        Detail::VulkanResourceRuntime runtime;
+        InitializeNativeResourceRuntime(runtime);
+        std::uint64_t previous{};
+        for (std::size_t acquisition = 0; acquisition < 128; ++acquisition) {
+            const auto imported = runtime.ImportExternalTexture(source, RenderResourceNativeLifetime{lease});
+            REQUIRE(imported.HasValue());
+            CHECK(imported.Value() > previous);
+            previous = imported.Value();
+            const RenderTextureViewDescriptor eye{.texture = {{41}, 1, 1}};
+            const auto view = runtime.CreateTextureView(eye, imported.Value());
+            REQUIRE(view.HasValue());
+            auto right = eye;
+            right.baseLayer = 1;
+            REQUIRE(runtime.CreateTextureView(right, imported.Value()).HasValue());
+            auto outside = eye;
+            outside.baseLayer = 2;
+            CHECK(runtime.CreateTextureView(outside, imported.Value()).HasError());
+            runtime.DestroyTexture(imported.Value());
+            CHECK(runtime.ExternalTextureSource(imported.Value()) == nullptr);
+        }
+        CHECK(lease.claims == 128);
+        CHECK(lease.releases == 128);
+        CHECK(native.state.createViewCount == 0);
+        CHECK(native.state.destroyViewCount == 0);
+        CHECK(native.state.destroyImageCount == 0);
+    }
 
     TEST_CASE("Vulkan external image retirement destroys only Horo views and releases the canonical lifetime",
               "[unit][runtime][renderer][vulkan][external]") {

@@ -8,7 +8,7 @@
 #include <imgui.h>
 
 namespace Horo::Editor {
-    /** @brief Persistent document panel presenting the active play-session camera output. */
+    /** @brief Persistent document panel presenting the active authored camera or explicitly selected XR left-eye mirror. */
     class GamePanel final : public IWorkspacePanel {
     public:
         [[nodiscard]] std::string GetId() const override {

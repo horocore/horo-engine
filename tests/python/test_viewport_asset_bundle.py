@@ -21,7 +21,7 @@ def test_sonar_cooks_and_verifies_locally_after_build_before_coverage():
     assert 'actions: read' not in consumer
     assert 'download-artifact' not in consumer
     assert 'waitForViewportArtifact' not in consumer
-    assert 'cmake --build --preset sonar --target all HoroEditorVulkanShaderCook' in consumer
+    assert 'cmake --build --preset sonar --target all HoroEditorVulkanShaderCook HoroEditorUiPaintShaderCook' in consumer
     assert 'uses: ./.github/actions/cook-vulkan-viewport' in consumer
     assert 'build-directory: build/sonar' in consumer
     assert 'asset-root: ${{ github.workspace }}/build/sonar/native-editor-assets' in consumer

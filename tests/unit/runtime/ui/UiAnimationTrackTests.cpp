@@ -1,3 +1,4 @@
+#include "UiAnimationAdmission.h"
 #include "UiAnimationLayoutProjection.h"
 #include "UiAnimationTrackSampling.h"
 #include "UiTestUtils.h"
@@ -38,6 +39,8 @@ namespace {
                                          .category = dimensions ? UiStyleValueCategory::Dimension : UiStyleValueCategory::Scalar,
                                          .defaultValue = dimensions ? UiStyleValue{UiStyleDimension{0}} : UiStyleValue{UiStyleScalar{0}},
                                          .effects = {.measure = dimensions, .paint = true},
+                                         .allowsSignedDimension = dimensions,
+                                         .minimumScalar = dimensions ? -200.0F : 0.0F,
                                          .maximumScalar = 200});
         definition.assets.push_back({.id = Stable<RuntimeStyleAssetId>(1)});
         auto result = RuntimeStyleRegistry::Create(std::move(definition), RuntimeStyleGeneration::Create(1).Value());
@@ -52,7 +55,7 @@ namespace {
     }
 
     UiComputedStyleSnapshot ComputedDimension(const UiElementTree &tree, const RuntimeStyleRegistry &registry, const std::int32_t value,
-                                              const std::span<const UiStyleAssignment> policy = {}) {
+                                              const std::span<const UiStyleAssignment> policy = {}, const bool includeAnimation = true) {
         const auto owner = UiOwnershipGeneration::Create(83).Value();
         auto created = UiStyleResolver::Create({{owner, 1, 1},
                                                 {owner, 2, 1},
@@ -68,8 +71,14 @@ namespace {
         const auto root = tree.Root();
         REQUIRE(root.HasValue());
         const std::array animation{UiStyleAnimationSample{Stable<UiStylePropertyId>(1), UiStyleDimension{value}}};
-        const std::array elements{
-            UiStyleElementInput{root.Value().handle, Stable<RuntimeStyleAssetId>(1), {}, {}, {}, policy, {}, animation}};
+        const std::array elements{UiStyleElementInput{root.Value().handle,
+                                                      Stable<RuntimeStyleAssetId>(1),
+                                                      {},
+                                                      {},
+                                                      {},
+                                                      policy,
+                                                      {},
+                                                      std::span{animation}.first(includeAnimation ? 1 : 0)}};
         const UiStyleSourceRevisions sources{UiDocumentRevision::Create(1).Value(),     UiRuntimeTreeRevision::Create(1).Value(),
                                              RuntimeStyleGeneration::Create(1).Value(), UiStyleContentRevision::Create(1).Value(),
                                              UiStylePolicyRevision::Create(1).Value(),  UiInteractionRevision::Create(1).Value()};
@@ -143,7 +152,7 @@ TEST_CASE("Actual computed animation dimensions project into declarative layout 
     std::array descriptors{UiLayoutElementDescriptor{root.Value().handle, {}}};
     const std::array bindings{LayoutBinding{root.Value().handle, Stable<UiStylePropertyId>(1), UiAnimationLayoutField::Width}};
     const auto animated = ComputedDimension(tree, registry, 128);
-    REQUIRE(ProjectLayout(animated, bindings, descriptors).HasValue());
+    REQUIRE(Horo::Runtime::Ui::AnimationInternal::ProjectLayout(animated, bindings, descriptors).HasValue());
     CHECK(descriptors.front().style.width == UiLength::Dip(128));
     auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
     REQUIRE(evaluator.HasValue());
@@ -152,7 +161,49 @@ TEST_CASE("Actual computed animation dimensions project into declarative layout 
     CHECK(measured.Value().desired.width == 128);
     const std::array policy{UiStyleAssignment{Stable<UiStylePropertyId>(1), UiStyleValueSource::Literal(UiStyleDimension{64}), false}};
     const auto accessible = ComputedDimension(tree, registry, 256, policy);
-    REQUIRE(ProjectLayout(accessible, bindings, descriptors).HasValue());
+    REQUIRE(Horo::Runtime::Ui::AnimationInternal::ProjectLayout(accessible, bindings, descriptors).HasValue());
     CHECK(descriptors.front().style.width == UiLength::Dip(64));
     CHECK(descriptors.front().style.width != UiLength::Dip(256));
+}
+
+TEST_CASE("Explicit layout bindings preserve defaults but apply explicit zero and reject negative padding",
+          "[runtime_ui][animation][layout]") {
+    auto tree = Tree();
+    auto registry = Registry(true);
+    const auto root = tree.Root().Value().handle;
+    std::array descriptors{UiLayoutElementDescriptor{root, {.width = UiLength::Percent(32), .padding = {3, 3, 3, 3}}}};
+    std::array bindings{LayoutBinding{root, Stable<UiStylePropertyId>(1), UiAnimationLayoutField::Width,
+                                      UiAnimationLayoutValuePolicy::ExplicitOriginsOnly},
+                        LayoutBinding{root, Stable<UiStylePropertyId>(1), UiAnimationLayoutField::Padding,
+                                      UiAnimationLayoutValuePolicy::ExplicitOriginsOnly}};
+    const auto defaults = ComputedDimension(tree, registry, 0, {}, false);
+    REQUIRE(Horo::Runtime::Ui::AnimationInternal::ProjectLayout(defaults, bindings, descriptors).HasValue());
+    CHECK(descriptors.front().style.width == UiLength::Percent(32));
+    CHECK(descriptors.front().style.padding == UiLayoutEdges{3, 3, 3, 3});
+    const auto explicitZero = ComputedDimension(tree, registry, 0);
+    REQUIRE(Horo::Runtime::Ui::AnimationInternal::ProjectLayout(explicitZero, bindings, descriptors).HasValue());
+    CHECK(descriptors.front().style.width == UiLength::Dip(0));
+    CHECK(descriptors.front().style.padding == UiLayoutEdges{});
+    descriptors.front().style.padding = {3, 3, 3, 3};
+    const auto negative = ComputedDimension(tree, registry, -1);
+    CHECK(Horo::Runtime::Ui::AnimationInternal::ProjectLayout(negative, std::span{bindings}.subspan(1), descriptors).HasError());
+    CHECK(descriptors.front().style.padding == UiLayoutEdges{3, 3, 3, 3});
+}
+
+TEST_CASE("Animation owner admission rejects unknown layout value policy", "[runtime_ui][animation][layout]") {
+    UiReloadCanvas canvas{Stable<UiCanvasId>(2), Tree()};
+    auto engine = UiLayoutEngine::Create(
+        {canvas.tree.Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 1, 1, 3, UiInteractionRevision::Create(1).Value()});
+    REQUIRE(engine.HasValue());
+    canvas.layoutEngine.emplace(std::move(engine).Value());
+    UiAnimationCanvasDefinition definition;
+    definition.canvas = canvas.id;
+    definition.content = UiStyleContentRevision::Create(1).Value();
+    definition.resolvedPolicy = UiStylePolicyRevision::Create(1).Value();
+    definition.elements.push_back({.element = Stable<UiElementId>(1), .asset = Stable<RuntimeStyleAssetId>(1)});
+    definition.layoutBindings.push_back({Stable<UiElementId>(1), Stable<UiStylePropertyId>(1), UiAnimationLayoutField::Padding});
+    const auto registry = Registry(true);
+    REQUIRE(ValidateDefinitions(definition, canvas, registry, {}).HasValue());
+    definition.layoutBindings.front().values = UiAnimationLayoutValuePolicy::Count;
+    CHECK(ValidateDefinitions(definition, canvas, registry, {}).HasError());
 }

@@ -256,7 +256,7 @@ namespace Horo::Runtime::RestoreTest {
     public:
         explicit SceneParticipant(std::shared_ptr<SceneParticipantControl> control) : control_(std::move(control)) {}
 
-        Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, RuntimeSceneView) override {
+        Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, const RuntimeSceneView &) override {
             return Result<std::unique_ptr<SceneActivationCandidate>>::Success(std::make_unique<SceneCandidate>(control_));
         }
 

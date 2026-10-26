@@ -3,6 +3,8 @@
 #include "Horo/Runtime/Render/RenderMemoryBudget.h"
 #include "RenderExternalImages.h"
 #include "RenderFrontendErrors.h"
+#include "UiPaintOwnerRetirement.h"
+#include "UiPaintResourceRetirement.h"
 
 #include <algorithm>
 #include <array>
@@ -195,6 +197,7 @@ namespace Horo::Render::Detail {
         entry.backendInstance = 0;
         entry.memoryAllocation.reset();
         entry.memoryReservation = {};
+        entry.uiPaintOwner.reset();
         entry.nativeLease = {};
         entry.nativeDestroyRequested = false;
         entry.memoryRetirementBegun = false;
@@ -363,6 +366,53 @@ namespace Horo::Render::Detail {
             return Result<RenderResourceState>::Failure(validated.ErrorValue());
         }
         return Result<RenderResourceState>::Success(slots_.At(validated.Value()).state);
+    }
+
+    /** @copydoc UiPaintResourceRetirement::BindOwner */
+    void UiPaintResourceRetirement::BindOwner(const ResourceReservation &reservation,
+                                              const std::shared_ptr<UiPaintOwnerRetirement> &owner) const noexcept {
+        assert(registry_.slots_.FindExact(reservation.identity) &&
+               registry_.slots_.FindExact(reservation.identity)->state == RenderResourceState::Pending &&
+               registry_.slots_.FindExact(reservation.identity)->operation == reservation.operation);
+        registry_.slots_.At(reservation.identity.slot).uiPaintOwner = owner;
+    }
+
+    /** @copydoc UiPaintResourceRetirement::PendingReservation */
+    std::optional<ResourceReservation> UiPaintResourceRetirement::PendingReservation(const RenderResourceIdentity identity) const noexcept {
+        const RenderResourceRegistry::Entry *entry = registry_.slots_.FindExact(identity);
+        if (!entry || entry->state != RenderResourceState::Pending || !entry->uiPaintOwner || !entry->uiPaintOwner->Requested())
+            return std::nullopt;
+        return ResourceReservation{identity, entry->operation};
+    }
+
+    /** @copydoc UiPaintResourceRetirement::Retire */
+    void UiPaintResourceRetirement::Retire(const RenderResourceIdentity identity, const ResourceOperationId operation) const noexcept {
+        using enum RenderResourceState;
+        const RenderResourceRegistry::Entry *entry = registry_.slots_.FindExact(identity);
+        if (!entry || entry->operation != operation || !entry->uiPaintOwner || !entry->uiPaintOwner->Requested())
+            return;
+        if (entry->state == Pending) {
+            registry_.RollbackPending(entry->resourceClass, {identity, operation});
+            return;
+        }
+        if (entry->state == Ready)
+            registry_.slots_.At(identity.slot).state = Retiring;
+        registry_.QueueRetirementIfEligible(identity.slot);
+    }
+
+    /** @copydoc UiPaintResourceRetirement::Sweep */
+    void UiPaintResourceRetirement::Sweep() const noexcept {
+        if (registry_.slots_.Size() <= 1)
+            return;
+        const auto maximum = std::min<std::size_t>(registry_.limits_.retirementDrainBudget, registry_.slots_.Size() - 1);
+        for (std::size_t examined = 0; examined < maximum; ++examined) {
+            if (registry_.uiPaintRetirementCursor_ >= registry_.slots_.Size())
+                registry_.uiPaintRetirementCursor_ = 1;
+            const auto slot = registry_.uiPaintRetirementCursor_++;
+            if (const RenderResourceRegistry::Entry &entry = registry_.slots_.At(slot);
+                entry.state == RenderResourceState::Ready && entry.uiPaintOwner && entry.uiPaintOwner->Requested())
+                Retire({registry_.owner_, static_cast<std::uint32_t>(slot), entry.generation}, entry.operation);
+        }
     }
 
     /** @copydoc RenderResourceRegistry::RollbackPending */
@@ -637,6 +687,7 @@ namespace Horo::Render::Detail {
         entry.dependencies.clear();
         entry.backendInstance = 0;
         entry.externalSource.reset();
+        entry.uiPaintOwner.reset();
         entry.memoryAllocation.reset();
         entry.operation = {};
         entry.state = RenderResourceState::Retired;

@@ -1,6 +1,7 @@
 #include "Horo/XR/XRErrors.h"
 #include "Horo/XR/XRSessionErrors.h"
 #include "Horo/XR/XRSessionLifecycle.h"
+#include "XRSessionHostControl.h"
 #include "support/AllocationProbe.h"
 #include "support/TypedIdentityTestSupport.h"
 
@@ -47,7 +48,7 @@ namespace Horo::XR {
                                                                              .maximumActions = 4,
                                                                              .maximumDevices = 1}};
 
-        class RecordingResources final : public IXRSessionResources {
+        class RecordingResources final : public RuntimeInternal::IXRSessionRetirementResources {
         public:
             struct Entry final {
                 XRSessionPreparation stage;
@@ -68,8 +69,20 @@ namespace Horo::XR {
                 calls.push_back({stage, session, true});
             }
 
+            Result<bool> RetirementComplete(const XRSessionId &session) const override {
+                REQUIRE(session == retiring);
+                ++observations;
+                if (cleanupFailed)
+                    return Result<bool>::Failure(MakeError(XRErrors::RuntimeUnavailable));
+                return Result<bool>::Success(drained);
+            }
+
             XRSessionPreparation failAt{XRSessionPreparation::Count};
             std::vector<Entry> calls;
+            XRSessionId retiring;
+            bool drained{};
+            bool cleanupFailed{};
+            mutable std::size_t observations{};
         };
 
         XRFeaturePlan PlanFor(const XRCapabilitySnapshot &capabilities) {
@@ -88,6 +101,79 @@ namespace Horo::XR {
             auto result = TryActivate(lifecycle, capabilities);
             REQUIRE(result.HasValue());
             return result.Value();
+        }
+
+        /** @brief Completes actual fixture cleanup, verifies the next generation, then checks permanent shutdown. */
+        void RequireRetiredAndNextGeneration(RecordingResources &resources, XRSessionLifecycle &lifecycle, XRFrameLifecycle &frames,
+                                             XRSessionId session, const XRCapabilitySnapshot &capabilities, std::size_t prepared) {
+            using RuntimeInternal::XRSessionHostControl;
+            resources.drained = true;
+            REQUIRE(XRSessionHostControl::Retire(lifecycle, frames, resources, session).HasValue());
+            REQUIRE(resources.calls.size() == prepared + 7);
+            REQUIRE(lifecycle.Snapshot().state == XRSessionState::Inactive);
+            REQUIRE_FALSE(lifecycle.AcceptedPlan());
+            RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, resources, session), XRErrors::IdentityStale);
+            const auto next = Activate(lifecycle, capabilities);
+            REQUIRE(next.slot.generation > session.slot.generation);
+            resources.retiring = next;
+            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Started).HasValue());
+            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Stopping).HasValue());
+            REQUIRE(lifecycle.ApplyEvent(next, XRSessionEvent::Idle).HasValue());
+            REQUIRE(XRSessionHostControl::Retire(lifecycle, frames, resources, next).HasValue());
+            REQUIRE_FALSE(lifecycle.Snapshot().session.IsValid());
+            lifecycle.Shutdown();
+            REQUIRE(TryActivate(lifecycle, capabilities).HasError());
+        }
+
+        TEST_CASE("XR host retirement preserves debt and the sole generation issuer", "[unit][xr][lifecycle][host]") {
+            using RuntimeInternal::XRSessionHostControl;
+            RecordingResources resources;
+            XRSessionLifecycle lifecycle{resources};
+            XRFrameLifecycle frames{lifecycle};
+            const auto capabilities = Capabilities();
+            const auto session = Activate(lifecycle, capabilities);
+            resources.retiring = session;
+            const auto prepared = resources.calls.size();
+
+            SECTION("foreign gate and resource owner cannot supply completion") {
+                RecordingResources foreign;
+                XRSessionLifecycle other{foreign};
+                XRFrameLifecycle otherFrames{other};
+                RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, otherFrames, resources, session),
+                                       XRErrors::OperationIncompatible);
+                RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, foreign, session), XRErrors::OperationIncompatible);
+                REQUIRE(resources.observations == 0);
+            }
+            SECTION("running and outstanding frame debt reject before observing physical completion") {
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Started).HasValue());
+                RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, resources, session),
+                                       XRSessionErrors::TransitionInvalid);
+                REQUIRE(frames.BindConfiguration({session, {.index = 0, .generation = 1}}, capabilities,
+                                                 {.maximumViews = 2, .maximumImages = 2, .maximumLayers = 1}) == XRFrameStatus::Ok);
+                REQUIRE(frames.ReserveWait(session).status == XRFrameStatus::Ok);
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Stopping).HasValue());
+                RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, resources, session),
+                                       XRSessionErrors::TransitionInvalid);
+                REQUIRE(resources.observations == 0);
+                REQUIRE(frames.CancelWait() == XRFrameStatus::Ok);  // No native wait was entered in this fixture.
+            }
+            SECTION("pending and failed cleanup retain exact publication and retry ownership") {
+                RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, resources, session), XRErrors::OperationUnavailable);
+                resources.cleanupFailed = true;
+                RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, resources, session), XRErrors::RuntimeUnavailable);
+                REQUIRE(lifecycle.Snapshot().session == session);
+                REQUIRE(lifecycle.AcceptedPlan());
+                REQUIRE(resources.calls.size() == prepared);
+                resources.cleanupFailed = false;
+            }
+            SECTION("lost owner requires cleanup and never revives through Ready") {
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::SessionLost).HasValue());
+                RequireFailureIdentity(XRSessionHostControl::Retire(lifecycle, frames, resources, session), XRErrors::OperationUnavailable);
+                REQUIRE(lifecycle.Snapshot().state == XRSessionState::Lost);
+                RequireFailureIdentity(lifecycle.ApplyEvent(session, XRSessionEvent::Ready), XRSessionErrors::TransitionInvalid);
+            }
+
+            RequireRetiredAndNextGeneration(resources, lifecycle, frames, session, capabilities, prepared);
         }
 
         TEST_CASE("XRRuntime contributes unique actionable session errors", "[unit][xr][lifecycle]") {
@@ -129,6 +215,71 @@ namespace Horo::XR {
             REQUIRE_FALSE(lifecycle.Snapshot().session.IsValid());
             REQUIRE_FALSE(lifecycle.AcceptedPlan().has_value());
             RequireFailureIdentity(lifecycle.Admit(session, false), XRErrors::IdentityStale);
+        }
+
+        TEST_CASE("XR native Ready restarts the same retained owner across two complete cycles", "[unit][xr][lifecycle]") {
+            RecordingResources resources;
+            XRSessionLifecycle lifecycle{resources};
+            const auto capabilities = Capabilities();
+            const auto session = Activate(lifecycle, capabilities);
+            const auto preparedCalls = resources.calls.size();
+            for (int cycle = 0; cycle < 2; ++cycle) {
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Ready).HasValue());
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Ready).HasValue());
+                REQUIRE(lifecycle.Snapshot().session == session);
+                REQUIRE(lifecycle.Snapshot().capabilityRevision == capabilities.Revision());
+                REQUIRE(lifecycle.AcceptedPlan()->Revision() == capabilities.Revision());
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Started).HasValue());
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::BecameVisible).HasValue());
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::BecameFocused).HasValue());
+                REQUIRE(lifecycle.Admit(session, true).HasValue());
+                RequireFailureIdentity(lifecycle.ApplyEvent(session, XRSessionEvent::Ready), XRSessionErrors::TransitionInvalid);
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Stopping).HasValue());
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Idle).HasValue());
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Idle).HasValue());
+                REQUIRE_FALSE(lifecycle.Snapshot().session.IsValid());
+                REQUIRE_FALSE(lifecycle.Snapshot().capabilityRevision.IsValid());
+                REQUIRE_FALSE(lifecycle.AcceptedPlan());
+                REQUIRE(lifecycle.Admit(session, false).HasError());
+                REQUIRE(lifecycle.Admit(session, true).HasError());
+                REQUIRE(resources.calls.size() == preparedCalls);
+            }
+        }
+
+        TEST_CASE("XR Ready cannot revive loss replacement shutdown or an unprepared owner", "[unit][xr][lifecycle]") {
+            RecordingResources resources;
+            XRSessionLifecycle lifecycle{resources};
+            RequireFailureIdentity(lifecycle.ApplyEvent({}, XRSessionEvent::Ready), XRErrors::OperationInvalid);
+            const auto session = Activate(lifecycle, Capabilities());
+            auto forged = session;
+            ++forged.slot.generation;
+            RequireFailureIdentity(lifecycle.ApplyEvent(forged, XRSessionEvent::Ready), XRErrors::IdentityStale);
+            REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Stopping).HasValue());
+            REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Idle).HasValue());
+            SECTION("loss while inactive revokes the private retained plan") {
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::SessionLost).HasValue());
+                RequireFailureIdentity(lifecycle.ApplyEvent(session, XRSessionEvent::Ready), XRSessionErrors::TransitionInvalid);
+                REQUIRE_FALSE(lifecycle.AcceptedPlan());
+            }
+            SECTION("failed replacement preserves the retained owner") {
+                resources.failAt = XRSessionPreparation::RendererTargets;
+                REQUIRE(TryActivate(lifecycle, Capabilities(2)).HasError());
+                REQUIRE(lifecycle.Snapshot().state == XRSessionState::Inactive);
+                REQUIRE_FALSE(lifecycle.AcceptedPlan());
+                REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Ready).HasValue());
+                REQUIRE(lifecycle.Snapshot().session == session);
+                REQUIRE(lifecycle.AcceptedPlan()->Revision() == Capabilities().Revision());
+            }
+            SECTION("successful replacement fences the prior native event") {
+                const auto replacement = Activate(lifecycle, Capabilities(2));
+                RequireFailureIdentity(lifecycle.ApplyEvent(session, XRSessionEvent::Ready), XRErrors::IdentityStale);
+                REQUIRE(lifecycle.Snapshot().session == replacement);
+            }
+            SECTION("shutdown cannot republish retained resources") {
+                lifecycle.Shutdown();
+                RequireFailureIdentity(lifecycle.ApplyEvent(session, XRSessionEvent::Ready), XRErrors::IdentityStale);
+                REQUIRE(lifecycle.Snapshot().state == XRSessionState::Destroyed);
+            }
         }
 
         TEST_CASE("XR activation rolls each failed candidate back in reverse order", "[unit][xr][lifecycle]") {

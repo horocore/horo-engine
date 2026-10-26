@@ -17,6 +17,9 @@ namespace {
     /** @brief Test composition adapter; all image, graph, submission and retirement behavior delegates to production owners. */
     class ExternalGraphBackend final : public IRenderBackend, public Detail::IRenderExternalTextureBackend {
     public:
+        static inline const Detail::IVulkanExternalTextureSource
+            *lastImportedSource{};  // Synchronous test-only observation, never an owner.
+
         explicit ExternalGraphBackend(NativeGraphFixture &fixture) : fixture_(&fixture) {
             capabilities_.backend = RenderBackendId{"xr-bridge-test"};
             capabilities_.support.deviceIncarnation = 11;
@@ -28,7 +31,7 @@ namespace {
             capabilities_.support.features.Enable(RenderCapability::ViewIndexedShaders);
             capabilities_.support.limits = {65536, 2048, 1, 3, 2, 2};
             capabilities_.support.formats.sampleCountMask = 2;
-            capabilities_.support.formats.usages.fill(RenderTextureUsage::RenderAttachment);
+            capabilities_.support.formats.usages.fill(RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled);
             capabilities_.supportsBufferResources = true;
             capabilities_.supportsMeshResources = true;
             capabilities_.supportsRenderTargetResources = true;
@@ -80,7 +83,9 @@ namespace {
 
         Result<std::uint64_t> ImportExternalTexture(const Detail::IRenderExternalTextureSource &s,
                                                     RenderResourceNativeLifetime l) override {
-            return fixture_->resources.ImportExternalTexture(s, std::move(l));
+            auto imported = fixture_->resources.ImportExternalTexture(s, std::move(l));
+            lastImportedSource = imported.HasValue() ? dynamic_cast<const Detail::IVulkanExternalTextureSource *>(&s) : nullptr;
+            return imported;
         }
 
         void DestroyBuffer(std::uint64_t i) noexcept override {
@@ -187,6 +192,12 @@ namespace {
             return "XR_KHR_vulkan_enable2";
         }
 
+        Horo::Result<void> ValidatePreparation() const override {
+            return binding.instance && binding.physicalDevice && binding.device
+                       ? Horo::Result<void>::Success()
+                       : Horo::Result<void>::Failure(Horo::MakeError(Horo::XR::XRErrors::OperationUnavailable));
+        }
+
         Horo::Result<void> Validate(const Horo::XR::XRSessionId &) const override {
             return Horo::Result<void>::Success();
         }
@@ -244,8 +255,9 @@ namespace {
             return SubmissionTest::Take(RenderFrontend::Create(registry, RenderBackendId{"xr-bridge-test"}, {}));
         }
 
-        explicit XRBridgeFixture(const bool depth)
-            : session(depth), frontend(CreateFrontend(native)), images(*frontend, session.graphics, session.graphics.binding, {1}),
+        explicit XRBridgeFixture(const bool depth,
+                                 const Detail::VulkanExternalViewDispatch views = {&FakeCreateImageView, &FakeDestroyImageView})
+            : session(depth), frontend(CreateFrontend(native)), images(*frontend, session.graphics, session.graphics.binding, {1}, views),
               swapchain(session.owner, images),
               request{.target = {session.identity, {.index = 1, .generation = 1}},
                       .texture = {.extent = {640, 480},
@@ -329,6 +341,7 @@ namespace {
         }
         XRBridgeFixture fixture{depth};
         fixture.Acquire();
+        CHECK(fixture.native.resourceState.state.createViewCount == static_cast<int>(fixture.xr.imageCount * 3));
         auto packet = fixture.Packet();
         fixture.Render(packet);
         const auto pending = fixture.swapchain.PollRelease();
@@ -348,6 +361,91 @@ namespace {
         fixture.RejectReacquiredStaleGraph(packet);
         REQUIRE(fixture.swapchain.Close().Value());
         CHECK(fixture.xr.destroys == 1);
+        CHECK(fixture.native.resourceState.state.createViewCount == static_cast<int>(fixture.xr.imageCount * 3));
+        CHECK(fixture.native.resourceState.state.destroyViewCount == static_cast<int>(fixture.xr.imageCount * 3));
+    }
+
+    std::vector<VkImageViewCreateInfo> coldViewRequests;
+
+    VKAPI_ATTR VkResult VKAPI_CALL RecordColdView(VkDevice device, const VkImageViewCreateInfo *info,
+                                                  const VkAllocationCallbacks *callbacks, VkImageView *view) {
+        coldViewRequests.push_back(*info);
+        return FakeCreateImageView(device, info, callbacks, view);
+    }
+
+    TEST_CASE("OpenXR stereo layer views are prepared before acquisition while only the sampled first eye admits GUI mirroring",
+              "[xr][vulkan][mirror]") {
+        coldViewRequests.clear();
+        XRBridgeFixture fixture{false, {&RecordColdView, &FakeDestroyImageView}};
+        fixture.request.texture.usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled;
+        fixture.Acquire();
+        const auto coldCount = static_cast<int>(fixture.xr.imageCount * 3);
+        CHECK(fixture.native.resourceState.state.createViewCount == coldCount);
+        REQUIRE(coldViewRequests.size() == static_cast<std::size_t>(coldCount));
+        for (std::size_t image = 0; image < fixture.xr.imageCount; ++image) {
+            const auto &array = coldViewRequests[image * 3];
+            CHECK(array.viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+            CHECK(array.subresourceRange.layerCount == 2);
+            for (std::uint32_t layer = 0; layer < 2; ++layer) {
+                const auto &view = coldViewRequests[image * 3 + layer + 1];
+                CHECK(view.image == array.image);
+                CHECK(view.viewType == VK_IMAGE_VIEW_TYPE_2D);
+                CHECK(view.subresourceRange.baseArrayLayer == layer);
+                CHECK(view.subresourceRange.layerCount == 1);
+                CHECK(view.subresourceRange.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT);
+            }
+        }
+        const auto *source = ExternalGraphBackend::lastImportedSource;
+        REQUIRE(source != nullptr);
+        REQUIRE(source->PreparedNativeViews().layerCount == 2);
+        CHECK(source->PreparedNativeViews().layers[0] != VK_NULL_HANDLE);
+        CHECK(source->PreparedNativeViews().layers[1] != VK_NULL_HANDLE);
+        RenderTextureViewDescriptor eye{.texture = fixture.acquired.texture};
+        CHECK(source->AdmitsFirstEyeGuiMirror(eye));
+        eye.baseLayer = 1;
+        CHECK_FALSE(source->AdmitsFirstEyeGuiMirror(eye));
+        eye.baseLayer = 0;
+        eye.format = RenderTextureFormat::Rgba8UnormSrgb;
+        CHECK_FALSE(source->AdmitsFirstEyeGuiMirror(eye));
+        fixture.Render(fixture.Packet());
+        CHECK(coldViewRequests.size() == static_cast<std::size_t>(coldCount));
+        fixture.Complete();
+        REQUIRE(fixture.swapchain.PollRelease().Value());
+        CHECK(fixture.native.resourceState.state.destroyViewCount == 0);
+        REQUIRE(fixture.swapchain.Close().Value());
+        CHECK(fixture.native.resourceState.state.createViewCount == coldCount);
+        CHECK(fixture.native.resourceState.state.destroyViewCount == coldCount);
+    }
+
+    int viewAttempts{};
+    int failedViewAttempt{2};
+
+    VKAPI_ATTR VkResult VKAPI_CALL FailSecondView(VkDevice device, const VkImageViewCreateInfo *info,
+                                                  const VkAllocationCallbacks *callbacks, VkImageView *view) {
+        if (++viewAttempts == failedViewAttempt) {
+            *view = VK_NULL_HANDLE;
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+        return FakeCreateImageView(device, info, callbacks, view);
+    }
+
+    TEST_CASE("OpenXR cold image view preparation failure rolls back the prepared prefix before destroying its swapchain",
+              "[xr][vulkan][rollback]") {
+        viewAttempts = 0;
+        SECTION("first eye fails after the array") {
+            failedViewAttempt = 2;
+        }
+        SECTION("second eye fails after the array and first eye") {
+            failedViewAttempt = 3;
+        }
+        XRBridgeFixture fixture{false, {&FailSecondView, &FakeDestroyImageView}};
+        const auto created = fixture.swapchain.Create(fixture.request, XRTest::SwapchainScript::GetProc);
+        CHECK(created.HasError());
+        CHECK(viewAttempts == failedViewAttempt);
+        CHECK(fixture.native.resourceState.state.createViewCount == failedViewAttempt - 1);
+        CHECK(fixture.native.resourceState.state.destroyViewCount == failedViewAttempt - 1);
+        CHECK(fixture.xr.destroys == 1);
+        CHECK(std::ranges::find(fixture.xr.calls, "acquire") == fixture.xr.calls.end());
     }
 
 #include "../renderer/OpenXRMultiviewGraphTests.inl"

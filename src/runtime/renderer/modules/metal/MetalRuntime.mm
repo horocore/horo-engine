@@ -109,6 +109,8 @@ namespace Horo::Render::Detail {
                 capabilities.deviceIncarnation = incarnation.Value();
                 capabilities.implemented.support.deviceIncarnation = incarnation.Value();
                 capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
+                if (SupportsMetalUiPaint(capabilities))
+                    capabilities.implemented.support.features.Enable(RenderCapability::UiPaint);
                 auto acquisition = MetalDrawableAcquisition::Create(layer_, device_, MakeMetalDrawableSource());
                 if (acquisition.HasError()) {
                     CloseUnsubmittedInitialization();
@@ -127,6 +129,25 @@ namespace Horo::Render::Detail {
                     return Preparation::Failure(
                         MakeError(LightCullingErrors::InvalidInput, "Kernel realization requires a preparation safe point."));
                 return resources_.RealizeLightCullingKernel(kernel);
+            }
+
+            Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel) override {
+                using Preparation = Result<std::shared_ptr<IResidentUiPaintKernel>>;
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Preparation::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (commandBuffer_ != nil)
+                    return Preparation::Failure(
+                        MakeError(MetalBackendErrors::InvalidExecutionPlan, "UI pipeline realization requires a preparation safe point."));
+                return resources_.RealizeUiPaintKernel(kernel);
+            }
+
+            Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (commandBuffer_ != nil)
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::InvalidExecutionPlan, "UI slots update before native frame acquisition."));
+                return resources_.UpdateUiPaintFrame(update);
             }
 
             Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update) override {
@@ -444,6 +465,8 @@ namespace Horo::Render::Detail {
                     if (const auto encoding = ValidatePrimaryOutput(*primary); encoding.HasError())
                         return encoding;
                 }
+                if (const auto *paint = std::get_if<RenderGraphUiPaint>(&workload))
+                    return resources_.ValidateUiPaint(*paint, resources, (__bridge void *)drawable_.texture);
                 return resources_.ValidateGraphWorkload(workload, resources);
             }
 
@@ -456,6 +479,9 @@ namespace Horo::Render::Detail {
                     return ExecutePrimaryOutput(*primary);
                 }
                 EndPrimaryEncoder();
+                if (const auto *paint = std::get_if<RenderGraphUiPaint>(&workload))
+                    return resources_.ExecuteUiPaint((__bridge void *)commandBuffer_, *paint, resources,
+                                                     (__bridge void *)drawable_.texture);
                 return resources_.ExecuteGraphWorkload((__bridge void *)commandBuffer_, workload, resources);
             }
 

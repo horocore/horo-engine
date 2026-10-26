@@ -454,6 +454,7 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/NetworkAdmissionController.h
     Horo/Network/InboundMessageDispatcher.h
     Horo/Network/NetworkModeComposition.h
+    Horo/Network/NetworkWorldBinding.h
     Horo/Network/TransportBackendComposition.h
     Horo/Network/NetworkDiagnostics.h
     Horo/Network/AuthenticationSessionAdapter.h
@@ -650,6 +651,7 @@ horo_configure_target_header_boundary(HoroAndroidInputIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
+    Horo/Runtime/InputCollection.h
 )
 horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
     Horo/Physics/CharacterPolicies.h
@@ -956,6 +958,7 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroXRInputBindings PUBLIC_HEADERS
     Horo/XR/XRActionBindings.h
+    Horo/XR/XRInputProjection.h
 )
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
@@ -1153,6 +1156,9 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/RenderSurfaceLifecycleErrors.h
     Horo/Runtime/Render/RenderGraph.h
     Horo/Runtime/Render/RenderGraphWorkload.h
+    Horo/Runtime/Render/UiPaintWorkload.h
+    Horo/Runtime/Render/UiPaintKernel.h
+    Horo/Runtime/Render/UiPaintFrameUpload.h
     Horo/Runtime/Render/RenderGraphExecution.h
     Horo/Runtime/Render/RenderGraphInspection.h
     Horo/Runtime/Render/RenderGraphInspectionErrors.h
@@ -1195,6 +1201,8 @@ horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/LightFrameBufferPool.h
+    Horo/Runtime/Render/UiPaintFrameBufferPool.h
+    Horo/Runtime/Render/UiPaintProgram.h
     Horo/Runtime/Render/RenderFrontend.h
     Horo/Runtime/Render/RenderGraphTransientResources.h
     Horo/Runtime/Render/RenderMemoryBudget.h

@@ -6,8 +6,10 @@
  */
 
 #include "Horo/Network/NetworkTargetCapabilities.h"
+#include "Horo/Network/NetworkWorldBinding.h"
 #include "Horo/Network/PeerSessionLifecycle.h"
 #include "Horo/Network/ReplicationRoles.h"
+#include "Horo/Network/ReplicationWorldLifecycle.h"
 #include "Horo/Runtime/FrameScheduler.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -20,6 +22,8 @@
 #include <span>
 
 namespace Horo::Network {
+    class NetworkWorldBindingController;
+    struct NetworkModeHostAccess;
     /** @brief A participant's owner; listen-server worlds are always distinct. */
     enum class NetworkModeWorldKind : std::uint8_t {
         Standalone,
@@ -56,7 +60,6 @@ namespace Horo::Network {
     struct NetworkModeWorld final {
         NetworkModeWorldKind kind{NetworkModeWorldKind::Count};
         Runtime::SceneRuntimeId scene{};
-        ReplicationAuthorityEpoch authority{}; /**< Present only for an authority world. */
     };
 
     /** @brief Immutable validated mode and exact world roles for one host generation. */
@@ -128,6 +131,7 @@ namespace Horo::Network {
         ReplicationExecutionRole role{ReplicationExecutionRole::Count};
         std::optional<NetworkOperationGeneration> session;
         ReplicationAuthorityEpoch authority{};
+        std::optional<NetworkSessionGeneration> worldSession; /**< Canonical published world occurrence, distinct from peer session. */
     };
 
     /**
@@ -138,7 +142,10 @@ namespace Horo::Network {
     class NetworkModeComposition final {
     public:
         /** @brief Create a stopped composition without constructing services. */
-        [[nodiscard]] static Result<NetworkModeComposition> Create(NetworkModePlan plan, NetworkModeFactories factories);
+        [[nodiscard]] static Result<NetworkModeComposition> Create(
+            NetworkModePlan plan, NetworkModeFactories factories,
+            NetworkWorldCompositionPurpose purpose = NetworkWorldCompositionPurpose::Gameplay,
+            std::optional<NetworkWorldBindingSetup> binding = std::nullopt);
         NetworkModeComposition(const NetworkModeComposition &) = delete;
         NetworkModeComposition &operator=(const NetworkModeComposition &) = delete;
         NetworkModeComposition(NetworkModeComposition &&) noexcept;
@@ -152,7 +159,7 @@ namespace Horo::Network {
         /** @brief Dispatch one exact canonical fixed tick to active participants. */
         [[nodiscard]] Result<void> RunFixedTick(const Runtime::FixedStepContext &context);
         /** @brief Publish a client session only after the peer lifecycle admits exact active evidence. */
-        [[nodiscard]] Result<void> AdmitClientSession(NetworkModeWorldKind world, const PeerSessionLifecycle &session,
+        [[nodiscard]] Result<void> AdmitClientSession(NetworkModeWorldKind world, std::shared_ptr<PeerSessionLifecycle> session,
                                                       ConnectionHandle connection, NetworkOperationGeneration generation,
                                                       std::uint64_t nowTick);
         /** @brief Revoke only the matching client session; never promote it to standalone or transfer server authority. */
@@ -160,22 +167,42 @@ namespace Horo::Network {
         /** @brief Atomically replace Scene generations for all worlds at the host lifecycle safe point. */
         [[nodiscard]] Result<void> Travel(std::span<const NetworkModeWorld> replacements, Runtime::RuntimePhase phase,
                                           std::optional<NetworkOperationGeneration> admittedClientSession = std::nullopt);
+
+        /** @brief Whether one prepared world/service aggregate is waiting for authenticated commit. */
+        [[nodiscard]] bool TravelInProgress() const noexcept {
+            return travelPending_;
+        }
+
+        /** @brief Consume one asynchronous travel preparation/commit failure without retiring the old published aggregate. */
+        [[nodiscard]] std::optional<Error> TakeTravelFailure();
         /** @brief Acquire current world-scoped role evidence; stale Scene identities fail. */
         [[nodiscard]] Result<NetworkModeRoleView> Role(NetworkModeWorldKind world, Runtime::SceneRuntimeId scene) const;
+        /** @brief Acquire actual phase/tick role permission from the canonical published world. */
+        [[nodiscard]] Result<ReplicationWorldReadLease> AcquireReplication(NetworkModeWorldKind world,
+                                                                           const ReplicationWorldWorkRequest &request,
+                                                                           ReplicationWorldCapability capability) const;
         /** @brief Revalidate a copied role view before a privileged owner operation. */
         [[nodiscard]] Result<void> ValidateRole(const NetworkModeRoleView &view) const;
         /** @brief Idempotently revoke views before releasing all participants. */
         void Shutdown() noexcept;
+        /** @brief Whether service startup completed and admission may proceed, independently of world publication. */
+        [[nodiscard]] bool ServicesStarted() const noexcept;
         /** @brief Whether this host has published all selected worlds. */
         [[nodiscard]] bool Active() const noexcept;
 
     private:
+        friend struct NetworkModeHostAccess;
+
         struct Entry final {
             NetworkModeServiceRequest request{};
             std::unique_ptr<INetworkModeService> service;
         };
 
-        NetworkModeComposition(NetworkModePlan plan, NetworkModeFactories factories) noexcept;
+        NetworkModeComposition(NetworkModePlan plan, NetworkModeFactories factories, NetworkWorldCompositionPurpose purpose,
+                               std::shared_ptr<NetworkWorldBindingController> binding) noexcept;
+        [[nodiscard]] static bool WorldShapeMatches(NetworkProjectRole mode, std::span<const NetworkModeWorld> worlds) noexcept;
+        [[nodiscard]] static NetworkModeServiceRequest Request(const NetworkModePlan &plan, NetworkModeServiceKind service,
+                                                               const NetworkModeWorld *world = nullptr) noexcept;
         [[nodiscard]] Result<void> BuildEntries();
         void ReleaseEntries() noexcept;
         [[nodiscard]] std::size_t WorldIndex(NetworkModeWorldKind kind) const noexcept;
@@ -187,10 +214,18 @@ namespace Horo::Network {
         void CommitTravelEntries(std::span<const NetworkModeWorld> replacements, std::array<Entry, 5> &prepared,
                                  std::size_t count) noexcept;
 
+        [[nodiscard]] Result<void> AdvanceTravel(Runtime::RuntimePhase phase);
         NetworkModePlan plan_;
         NetworkModeFactories factories_;
+        NetworkWorldCompositionPurpose purpose_;
+        std::shared_ptr<NetworkWorldBindingController> binding_;
         std::array<Entry, 24> entries_{};
         std::size_t entryCount_{};
+        std::array<Entry, 5> travelEntries_{};
+        std::array<NetworkModeWorld, 2> travelWorlds_{};
+        std::size_t travelEntryCount_{};
+        std::optional<Error> travelFailure_;
+        bool travelPending_{};
         std::array<std::optional<NetworkOperationGeneration>, 2> sessions_{};
         std::array<std::optional<NetworkOperationGeneration>, 2> lastSessions_{};
         bool started_{};

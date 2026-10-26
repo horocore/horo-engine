@@ -32,7 +32,7 @@ namespace Horo::Navigation {
             std::unique_ptr<NavigationAgentSceneCandidate> candidate_;
         };
 
-        [[nodiscard]] Result<NavigationAgentSceneBinding> MakeBinding(const Runtime::RuntimeSceneView scene) {
+        [[nodiscard]] Result<NavigationAgentSceneBinding> MakeBinding(const Runtime::RuntimeSceneView &scene) {
             const Runtime::SceneRuntimeId runtimeId = scene.RuntimeId();
             if (!runtimeId.IsValid())
                 return Result<NavigationAgentSceneBinding>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
@@ -52,7 +52,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> NavigationSceneActivationParticipant::Prepare(
-        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
         if (registry_ == nullptr || !scene.IsCurrent())
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
 

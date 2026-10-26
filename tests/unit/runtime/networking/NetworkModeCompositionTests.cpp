@@ -1,4 +1,5 @@
 #include "Horo/Network/NetworkModeComposition.h"
+#include "NetworkModeBindingTestSupport.h"
 #include "NetworkTestUtils.h"
 
 #include <algorithm>
@@ -46,13 +47,12 @@ namespace Horo::Network {
             }
         };
 
-        [[nodiscard]] NetworkModeWorld World(const NetworkModeWorldKind kind, const std::uint64_t scene,
-                                             const std::uint64_t authority = 0) {
-            return {kind, Runtime::SceneRuntimeId{scene},
-                    authority == 0 ? ReplicationAuthorityEpoch{} : ReplicationAuthorityEpoch::Create(authority).Value()};
+        [[nodiscard]] NetworkModeWorld World(const NetworkModeWorldKind kind, const std::uint64_t scene) {
+            return {kind, Runtime::SceneRuntimeId{scene}};
         }
 
         struct Calls final {
+            std::shared_ptr<ModeBindingTests::BindingFixture> binding = std::make_shared<ModeBindingTests::BindingFixture>();
             std::vector<NetworkModeServiceRequest> created;
             std::vector<NetworkModeServiceRequest> prepared;
             std::vector<NetworkModeServiceRequest> activated;
@@ -116,55 +116,19 @@ namespace Horo::Network {
             }));
         }
 
-        [[nodiscard]] HandshakeSelection Negotiation() {
-            HandshakeSelection selection;
-            selection.connection = Connection();
-            selection.sessionGeneration = Session();
-            selection.protocol = WireIdentity<ProtocolId>(1);
-            selection.version = {1, 2};
-            selection.schemaFingerprint = 42;
-            selection.features.values[0] = WireIdentity<ProtocolFeatureId>(1);
-            selection.features.values[1] = WireIdentity<ProtocolFeatureId>(2);
-            selection.features.count = 2;
-            selection.compression = HandshakeCompression::None;
-            selection.transport.capabilityRevision = 3;
-            selection.transport.admittedDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
-            selection.transport.channelCount = 2;
-            selection.transport.maximumMessageBytes = 1200;
-            return selection;
+        [[nodiscard]] std::shared_ptr<PeerSessionLifecycle> ActiveSession() {
+            return ModeBindingTests::Active(Connection(), Session());
         }
 
-        [[nodiscard]] AuthenticationResult Authentication() {
-            AuthenticationResult result;
-            result.connection = Connection();
-            result.sessionGeneration = Session();
-            result.policy = Id<NetworkTrustPolicyId>(10);
-            result.policyRevision = 4;
-            result.principal.principal = Id<NetworkPrincipalId>(20);
-            result.principal.session.bytes = Bytes<NetworkSessionIdBytes>(0x80);
-            result.principal.trustLevel = NetworkTrustLevel::ProductAnchor;
-            result.principal.roles.values[0] = Id<NetworkRoleId>(30);
-            result.principal.roles.count = 1;
-            result.principal.capabilities.values[0] = Id<NetworkCapabilityId>(40);
-            result.principal.capabilities.count = 1;
-            result.principal.provenance = Id<CredentialProvenanceId>(50);
-            result.principal.expiresAtTick = 150;
-            result.secureChannel.stamp = {Connection(), Session(), 5};
-            result.secureChannel.binding = Id<PrivateKeyBindingId>(11);
-            result.secureChannel.channel = Id<SecureChannelId>(12);
-            result.secureChannel.channelGeneration = 6;
-            result.secureChannel.bindingDigest = Bytes<AuthenticationDigestBytes>(0x20);
-            return result;
-        }
-
-        [[nodiscard]] PeerSessionLifecycle ActiveSession() {
-            auto session = PeerSessionLifecycle::Create(Connection(), Session(), {10, 20, 30, 100, 10}).Value();
-            REQUIRE(session.BeginNegotiation(Connection(), Session(), 1).HasValue());
-            REQUIRE(session.AcceptNegotiation(Negotiation(), 2).HasValue());
-            REQUIRE(session.AcceptAuthentication(Authentication(), 11).HasValue());
-            REQUIRE(session.Activate({Connection(), Session(), Id<SecureChannelId>(12), 6, Bytes<AuthenticationDigestBytes>(0x20)}, 21)
-                        .HasValue());
-            return session;
+        Result<NetworkModeComposition> Compose(NetworkModePlan plan, NetworkModeFactories factories, const std::shared_ptr<Calls> &calls) {
+            auto composed =
+                NetworkModeComposition::Create(plan, std::move(factories), NetworkWorldCompositionPurpose::Gameplay, calls->binding->setup);
+            if (composed.HasError())
+                return composed;
+            auto mode = std::move(composed).Value();
+            if (plan.mode != NetworkProjectRole::Standalone)
+                calls->binding->Attach(mode);
+            return Result<NetworkModeComposition>::Success(std::move(mode));
         }
     }  // namespace
 
@@ -179,13 +143,13 @@ namespace Horo::Network {
         fixture.selection.expectedHostRevision = Id<NetworkHostCapabilityRevision>(99);
         RequireError(fixture.Plan(standalone), NetworkErrors::NetworkModeInvalid);
 
-        const std::array listen{World(NetworkModeWorldKind::AuthorityServer, 2, 3), World(NetworkModeWorldKind::Client, 4)};
+        const std::array listen{World(NetworkModeWorldKind::AuthorityServer, 2), World(NetworkModeWorldKind::Client, 4)};
         Fixture listenFixture(NetworkProjectRole::ListenServer);
         RequireError(listenFixture.Plan(listen), NetworkErrors::NetworkModeInvalid);
         REQUIRE(listenFixture.Plan(listen, {.localPlayer = true}).HasValue());
         const std::array duplicate{listen[0], World(NetworkModeWorldKind::Client, 2)};
         RequireError(listenFixture.Plan(duplicate, {.localPlayer = true}), NetworkErrors::NetworkModeInvalid);
-        const std::array dedicated{World(NetworkModeWorldKind::AuthorityServer, 5, 6)};
+        const std::array dedicated{World(NetworkModeWorldKind::AuthorityServer, 5)};
         RequireError(Fixture(NetworkProjectRole::DedicatedServer).Plan(dedicated, {.renderer = true}), NetworkErrors::NetworkModeInvalid);
     }
 
@@ -193,18 +157,19 @@ namespace Horo::Network {
               "[unit][network][mode][headless]") {
         for (const auto mode : {NetworkProjectRole::Standalone, NetworkProjectRole::DedicatedServer}) {
             const std::array world{mode == NetworkProjectRole::Standalone ? World(NetworkModeWorldKind::Standalone, 1)
-                                                                          : World(NetworkModeWorldKind::AuthorityServer, 2, 3)};
+                                                                          : World(NetworkModeWorldKind::AuthorityServer, 2)};
             auto plan =
                 Fixture(mode).Plan(world, mode == NetworkProjectRole::Standalone
                                               ? NetworkModePresentation{.audio = true, .renderer = true, .input = true, .localPlayer = true}
                                               : NetworkModePresentation{});
             REQUIRE(plan.HasValue());
             const auto calls = std::make_shared<Calls>();
-            auto composed = NetworkModeComposition::Create(plan.Value(), Factories(calls));
+            auto composed = Compose(plan.Value(), Factories(calls), calls);
             REQUIRE(composed.HasValue());
             auto host = std::move(composed).Value();
             REQUIRE(host.Start().HasValue());
-            REQUIRE(host.Active());
+            REQUIRE(host.ServicesStarted());
+            CHECK(host.Active() == (mode == NetworkProjectRole::Standalone));
             CHECK(Count(calls->created, NetworkModeServiceKind::Scene) == 1);
             CHECK(Count(calls->created, NetworkModeServiceKind::Physics) == 1);
             CHECK(Count(calls->created, NetworkModeServiceKind::Transport) == (mode == NetworkProjectRole::Standalone ? 0 : 1));
@@ -215,6 +180,9 @@ namespace Horo::Network {
                                            NetworkModeServiceKind::Input, NetworkModeServiceKind::LocalPlayer})
                     CHECK(Count(calls->created, omitted) == 0);
             }
+            REQUIRE(host.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+            REQUIRE(host.Active());
+            calls->phases.clear();
             CancellationSource cancellation;
             REQUIRE(host.RunFixedTick({1, Duration::FromNanoseconds(16'666'667), cancellation.Token()}).HasValue());
             CHECK(calls->phases.size() == calls->created.size());
@@ -227,12 +195,12 @@ namespace Horo::Network {
     }
 
     TEST_CASE("Mode startup fails atomically and reverses every constructed participant", "[unit][network][mode][failure]") {
-        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 1, 10), World(NetworkModeWorldKind::Client, 2)};
+        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 1), World(NetworkModeWorldKind::Client, 2)};
         auto plan = Fixture(NetworkProjectRole::ListenServer).Plan(worlds, {.localPlayer = true});
         REQUIRE(plan.HasValue());
         const auto calls = std::make_shared<Calls>();
         calls->failActivate = NetworkModeServiceKind::Physics;
-        auto composed = NetworkModeComposition::Create(plan.Value(), Factories(calls));
+        auto composed = Compose(plan.Value(), Factories(calls), calls);
         REQUIRE(composed.HasValue());
         auto host = std::move(composed).Value();
         RequireError(host.Start(), NetworkErrors::NetworkModeUnavailable);
@@ -242,60 +210,66 @@ namespace Horo::Network {
     }
 
     TEST_CASE("Client admission, disconnect and listen travel fence session and Scene generations", "[unit][network][mode][lifecycle]") {
-        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 1, 10), World(NetworkModeWorldKind::Client, 2)};
+        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 1), World(NetworkModeWorldKind::Client, 2)};
         auto plan = Fixture(NetworkProjectRole::ListenServer).Plan(worlds, {.localPlayer = true});
         REQUIRE(plan.HasValue());
         const auto calls = std::make_shared<Calls>();
-        auto composed = NetworkModeComposition::Create(plan.Value(), Factories(calls));
+        auto composed = Compose(plan.Value(), Factories(calls), calls);
         REQUIRE(composed.HasValue());
         auto host = std::move(composed).Value();
         REQUIRE(host.Start().HasValue());
         auto pending = PeerSessionLifecycle::Create(Connection(), Session(), {10, 20, 30, 100, 10});
         REQUIRE(pending.HasValue());
-        RequireError(host.AdmitClientSession(NetworkModeWorldKind::Client, pending.Value(), Connection(), Session(), 1),
+        RequireError(host.AdmitClientSession(NetworkModeWorldKind::Client,
+                                             std::make_shared<PeerSessionLifecycle>(std::move(pending).Value()), Connection(), Session(),
+                                             1),
                      NetworkErrors::GameplayDispatchRejected);
-        REQUIRE_FALSE(host.Role(NetworkModeWorldKind::Client, worlds[1].scene).Value().session.has_value());
+        REQUIRE(host.Role(NetworkModeWorldKind::Client, worlds[1].scene).HasError());
         auto active = ActiveSession();
         REQUIRE(host.AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 22).HasValue());
+        calls->binding->PublishInitial(host, active);
         CHECK(host.Role(NetworkModeWorldKind::Client, worlds[1].scene).Value().session == Session());
-        CHECK(host.Role(NetworkModeWorldKind::AuthorityServer, worlds[0].scene).Value().authority == worlds[0].authority);
+        CHECK(host.Role(NetworkModeWorldKind::AuthorityServer, worlds[0].scene).Value().authority.IsValid());
         const auto oldClientView = host.Role(NetworkModeWorldKind::Client, worlds[1].scene).Value();
         REQUIRE(host.ValidateRole(oldClientView).HasValue());
 
-        const std::array next{World(NetworkModeWorldKind::AuthorityServer, 3, 11), World(NetworkModeWorldKind::Client, 4)};
+        const std::array next{World(NetworkModeWorldKind::AuthorityServer, 3), World(NetworkModeWorldKind::Client, 4)};
         RequireError(host.Travel(next, Runtime::RuntimePhase::FixedUpdate, Session()), NetworkErrors::NetworkModeInvalid);
         RequireError(host.Travel(next, Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Session(9)), NetworkErrors::NetworkModeStale);
         REQUIRE(host.Travel(next, Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Session()).HasValue());
+        calls->binding->CommitTravel(host);
         RequireError(host.Role(NetworkModeWorldKind::Client, worlds[1].scene), NetworkErrors::NetworkModeStale);
         RequireError(host.Role(NetworkModeWorldKind::AuthorityServer, worlds[0].scene), NetworkErrors::NetworkModeStale);
         RequireError(host.ValidateRole(oldClientView), NetworkErrors::NetworkModeStale);
-        CHECK(host.Role(NetworkModeWorldKind::AuthorityServer, next[0].scene).Value().authority == next[0].authority);
+        CHECK(host.Role(NetworkModeWorldKind::AuthorityServer, next[0].scene).Value().authority.IsValid());
         CHECK(host.Role(NetworkModeWorldKind::Client, next[1].scene).Value().session == Session());
         const auto beforeDisconnect = host.Role(NetworkModeWorldKind::Client, next[1].scene).Value();
         RequireError(host.DisconnectClient(NetworkModeWorldKind::Client, Session(9)), NetworkErrors::NetworkModeStale);
         REQUIRE(host.DisconnectClient(NetworkModeWorldKind::Client, Session()).HasValue());
-        CHECK_FALSE(host.Role(NetworkModeWorldKind::Client, next[1].scene).Value().session.has_value());
+        CHECK(host.Role(NetworkModeWorldKind::Client, next[1].scene).HasError());
+        // A copied generation is stale even though the disconnected world has no current role to dereference.
         RequireError(host.ValidateRole(beforeDisconnect), NetworkErrors::NetworkModeStale);
         RequireError(host.AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 23),
                      NetworkErrors::NetworkModeStale);
-        CHECK(host.Role(NetworkModeWorldKind::AuthorityServer, next[0].scene).Value().authority == next[0].authority);
+        CHECK(host.Role(NetworkModeWorldKind::AuthorityServer, next[0].scene).Value().authority.IsValid());
         host.Shutdown();
         RequireError(host.Travel(next, Runtime::RuntimePhase::CommitDeferredLifecycleChanges), NetworkErrors::NetworkModeUnavailable);
     }
 
     TEST_CASE("Aggregate listen travel retains both old worlds after candidate failure", "[unit][network][mode][rollback]") {
-        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 21, 30), World(NetworkModeWorldKind::Client, 22)};
+        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 21), World(NetworkModeWorldKind::Client, 22)};
         auto plan = Fixture(NetworkProjectRole::ListenServer).Plan(worlds, {.localPlayer = true});
         REQUIRE(plan.HasValue());
         const auto calls = std::make_shared<Calls>();
-        auto composed = NetworkModeComposition::Create(plan.Value(), Factories(calls));
+        auto composed = Compose(plan.Value(), Factories(calls), calls);
         REQUIRE(composed.HasValue());
         auto host = std::move(composed).Value();
         REQUIRE(host.Start().HasValue());
         auto active = ActiveSession();
         REQUIRE(host.AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 22).HasValue());
+        calls->binding->PublishInitial(host, active);
         calls->failPrepare = NetworkModeServiceKind::Physics;
-        const std::array next{World(NetworkModeWorldKind::AuthorityServer, 23, 31), World(NetworkModeWorldKind::Client, 24)};
+        const std::array next{World(NetworkModeWorldKind::AuthorityServer, 23), World(NetworkModeWorldKind::Client, 24)};
         RequireError(host.Travel(next, Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Session()),
                      NetworkErrors::NetworkModeUnavailable);
         CHECK(host.Role(NetworkModeWorldKind::AuthorityServer, worlds[0].scene).HasValue());
@@ -303,6 +277,111 @@ namespace Horo::Network {
         RequireError(host.Role(NetworkModeWorldKind::AuthorityServer, next[0].scene), NetworkErrors::NetworkModeStale);
         calls->failPrepare = NetworkModeServiceKind::Count;
         REQUIRE(host.Travel(next, Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Session()).HasValue());
+        calls->binding->CommitTravel(host);
         host.Shutdown();
+    }
+
+    TEST_CASE("Canonical world ownership survives mode moves and revokes queued callbacks on shutdown",
+              "[unit][network][mode][binding][move]") {
+        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 2), World(NetworkModeWorldKind::Client, 4)};
+        const auto plan = Fixture(NetworkProjectRole::ListenServer).Plan(worlds, {.localPlayer = true});
+        REQUIRE(plan.HasValue());
+        auto calls = std::make_shared<Calls>();
+        auto created = Compose(plan.Value(), Factories(calls), calls);
+        REQUIRE(created.HasValue());
+        auto beforeStart = std::move(created).Value();
+        auto stable = NetworkModeHostAccess::Binding(beforeStart).lock();
+        REQUIRE(stable);
+        REQUIRE(beforeStart.Start().HasValue());
+        auto client = ActiveSession();
+        REQUIRE(beforeStart.AdmitClientSession(NetworkModeWorldKind::Client, client, Connection(), Session(), 22).HasValue());
+        calls->binding->PublishInitial(beforeStart, client);
+        auto afterStart = std::move(beforeStart);
+        beforeStart.Shutdown();
+        CHECK(NetworkModeHostAccess::Binding(afterStart).lock() == stable);
+        const auto role = afterStart.Role(NetworkModeWorldKind::Client, worlds[1].scene);
+        REQUIRE(role.HasValue());
+        auto lease = afterStart.AcquireReplication(NetworkModeWorldKind::Client,
+                                                   {worlds[1].scene, *role.Value().worldSession, Runtime::RuntimePhase::NetworkPoll, 0, {}},
+                                                   ReplicationWorldCapability::ApplyAuthoritativeState);
+        REQUIRE(lease.HasValue());
+        calls->binding->transport.event = {.kind = NetworkTransportEventKind::PacketReceived,
+                                           .connection = Connection(),
+                                           .channel = {},
+                                           .delivery = DeliveryPolicy::ReliableOrdered,
+                                           .payload = std::vector<std::byte>(calls->binding->transport.sent.begin(),
+                                                                             calls->binding->transport.sent.begin() +
+                                                                                 calls->binding->transport.size)};
+        calls->binding->transport.queued = true;
+        afterStart.Shutdown();
+        CHECK(lease.Value().IsRevoked());
+        CHECK(afterStart.Role(NetworkModeWorldKind::Client, worlds[1].scene).HasError());
+        const auto polled = calls->binding->dispatcher->RunNetworkPoll(22);
+        REQUIRE(polled.HasValue());
+        CHECK(polled.Value().rejectedPackets == 1);
+        CHECK_FALSE(stable->Ready(NetworkModeWorldKind::Client, worlds[1].scene));
+    }
+
+    TEST_CASE("Published listen travel retains exact COMMIT debt through native backpressure", "[unit][network][mode][binding][travel]") {
+        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 2), World(NetworkModeWorldKind::Client, 4)};
+        const auto plan = Fixture(NetworkProjectRole::ListenServer).Plan(worlds, {.localPlayer = true});
+        REQUIRE(plan.HasValue());
+        auto calls = std::make_shared<Calls>();
+        auto created = Compose(plan.Value(), Factories(calls), calls);
+        REQUIRE(created.HasValue());
+        auto mode = std::move(created).Value();
+        REQUIRE(mode.Start().HasValue());
+        auto client = ActiveSession();
+        REQUIRE(mode.AdmitClientSession(NetworkModeWorldKind::Client, client, Connection(), Session(), 22).HasValue());
+        calls->binding->PublishInitial(mode, client);
+        const auto oldClient = mode.Role(NetworkModeWorldKind::Client, worlds[1].scene);
+        REQUIRE(oldClient.HasValue());
+        const std::array next{World(NetworkModeWorldKind::AuthorityServer, 3), World(NetworkModeWorldKind::Client, 5)};
+        REQUIRE(mode.Travel(next, Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Session()).HasValue());
+        calls->binding->Deliver();  // PREPARE is accepted and staged, but old roles still publish.
+        CHECK(mode.ValidateRole(oldClient.Value()).HasValue());
+        calls->binding->transport.backpressure = true;
+        REQUIRE(mode.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+        REQUIRE(mode.Role(NetworkModeWorldKind::Client, next[1].scene).HasValue());
+        CHECK(mode.ValidateRole(oldClient.Value()).HasError());
+        auto owner = calls->binding->binding.lock();
+        REQUIRE(owner);
+        REQUIRE(owner->Flush(23).HasValue());
+        REQUIRE(owner->CancelTravel().HasValue());  // Cannot discard a published COMMIT.
+        REQUIRE(owner->Flush(24).HasValue());
+        calls->binding->transport.backpressure = false;
+        REQUIRE(owner->Flush(25).HasValue());
+        const auto envelope = DecodeMessageEnvelope(std::span{calls->binding->transport.sent}.first(calls->binding->transport.size),
+                                                    *calls->binding->setup.codecs);
+        REQUIRE(envelope.HasValue());
+        CHECK(envelope.Value().sequence.Value() == 3);
+        const auto commit = DecodeNetworkWorldBinding(envelope.Value().payload);
+        REQUIRE(commit.HasValue());
+        CHECK(commit.Value().kind == NetworkWorldBindingKind::CommitTravel);
+        CHECK(commit.Value().worldSession == *mode.Role(NetworkModeWorldKind::Client, next[1].scene).Value().worldSession);
+    }
+
+    TEST_CASE("Requested network gameplay cannot silently become transport qualification", "[unit][network][mode][binding][policy]") {
+        for (const auto selected : {NetworkProjectRole::Client, NetworkProjectRole::ListenServer, NetworkProjectRole::DedicatedServer}) {
+            std::array<NetworkModeWorld, 2> worlds{World(NetworkModeWorldKind::AuthorityServer, 1), World(NetworkModeWorldKind::Client, 2)};
+            const auto count = selected == NetworkProjectRole::ListenServer ? 2u : 1u;
+            if (selected == NetworkProjectRole::Client)
+                worlds[0] = worlds[1];
+            const auto plan =
+                Fixture(selected).Plan(std::span{worlds}.first(count), {.localPlayer = selected != NetworkProjectRole::DedicatedServer});
+            REQUIRE(plan.HasValue());
+            auto calls = std::make_shared<Calls>();
+            const auto missing = NetworkModeComposition::Create(plan.Value(), Factories(calls));
+            RequireError(missing, NetworkErrors::AdmissionPolicyInvalid);
+            CHECK(calls->created.empty());
+            auto qualification =
+                NetworkModeComposition::Create(plan.Value(), Factories(calls), NetworkWorldCompositionPurpose::TransportQualification);
+            REQUIRE(qualification.HasValue());
+            auto transportOnly = std::move(qualification).Value();
+            REQUIRE(transportOnly.Start().HasValue());
+            REQUIRE(transportOnly.ServicesStarted());
+            CHECK(transportOnly.Role(worlds[0].kind, worlds[0].scene).HasError());
+            CHECK(NetworkModeHostAccess::Binding(transportOnly).expired());
+        }
     }
 }  // namespace Horo::Network

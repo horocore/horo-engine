@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 
 #include <algorithm>
+#include <optional>
 
 namespace Horo::Runtime::Ui::AnimationInternal {
     namespace {
@@ -34,6 +35,11 @@ namespace Horo::Runtime::Ui::AnimationInternal {
                 case OffsetTop:
                     style.offsets.top = value;
                     break;
+                case Padding:
+                    if (value < 0)
+                        return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
+                    style.padding = {value, value, value, value};
+                    break;
                 case Count:
                     return Result<void>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
                 default:
@@ -43,18 +49,21 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         }
 
         /** @brief Reads only the actual immutable computed property's typed Dimension category. */
-        Result<std::int32_t> Dimension(const UiComputedStyleSnapshot &styles, const LayoutBinding &binding) {
+        Result<std::optional<std::int32_t>> Dimension(const UiComputedStyleSnapshot &styles, const LayoutBinding &binding) {
             const auto record = styles.Get(binding.element);
             if (record.HasError())
-                return Result<std::int32_t>::Failure(record.ErrorValue());
+                return Result<std::optional<std::int32_t>>::Failure(record.ErrorValue());
             const auto properties = styles.Properties(record.Value());
             const auto property = std::ranges::find(properties, binding.property, &UiComputedStyleProperty::property);
             if (property == properties.end())
-                return Result<std::int32_t>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
+                return Result<std::optional<std::int32_t>>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
+            if (binding.values == UiAnimationLayoutValuePolicy::ExplicitOriginsOnly &&
+                property->provenance.origin == UiStyleOrigin::RegisteredDefault)
+                return Result<std::optional<std::int32_t>>::Success(std::nullopt);
             const auto *dimension = std::get_if<UiStyleDimension>(&property->value);
             if (!dimension)
-                return Result<std::int32_t>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
-            return Result<std::int32_t>::Success(dimension->value);
+                return Result<std::optional<std::int32_t>>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
+            return Result<std::optional<std::int32_t>>::Success(dimension->value);
         }
     }  // namespace
 
@@ -68,7 +77,9 @@ namespace Horo::Runtime::Ui::AnimationInternal {
             const auto value = Dimension(styles, binding);
             if (value.HasError())
                 return Result<void>::Failure(value.ErrorValue());
-            if (const auto applied = ApplyField(descriptor->style, binding.field, value.Value()); applied.HasError())
+            if (!value.Value().has_value())
+                continue;
+            if (const auto applied = ApplyField(descriptor->style, binding.field, *value.Value()); applied.HasError())
                 return applied;
         }
         if (std::ranges::any_of(descriptors, [](const auto &descriptor) {

@@ -120,7 +120,7 @@ jobs:
         id: build
         run: |
           if [[ "${CCACHE_DISABLE:-}" != 1 ]]; then ccache --zero-stats; fi
-          cmake --build --preset sonar --target all HoroEditorVulkanShaderCook
+          cmake --build --preset sonar --target all HoroEditorVulkanShaderCook HoroEditorUiPaintShaderCook
           if [[ "${CCACHE_DISABLE:-}" != 1 ]]; then ccache --show-stats; fi
 
       # Checkpoint build inputs before coverage and analysis. A later scan timeout

@@ -13,9 +13,9 @@ namespace Horo::Network {
         pair.features[0] = {};  // Captured offers must not borrow the caller's feature storage.
         pair.channels[0].delivery = DeliveryPolicy::Count;
         pair.Start();
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
         pair.Frames();
-        REQUIRE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        REQUIRE(pair.ClientRole().session);
         for (const auto &authority : pair.authorities) {
             CHECK(authority->issuerCalls == 1);
             CHECK(authority->credentialCalls == 1);
@@ -45,7 +45,7 @@ namespace Horo::Network {
         pair.Frames();
         CHECK(pair.handlers[0]->calls == 0);
         CHECK(pair.handlers[1]->calls == 0);
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
         CHECK_FALSE(pair.link->ends[0].open);
         CHECK(pair.authorities[0]->credentialCalls == 0);
     }
@@ -73,7 +73,7 @@ namespace Horo::Network {
         pair.Frames(1);
         CHECK(pair.link->ends[0].lastOtherClosed == hostile);
         CHECK(pair.link->ends[0].open);
-        REQUIRE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        REQUIRE(pair.ClientRole().session);
         pair.Gameplay(0);
         pair.Gameplay(1);
         pair.Frames(1);
@@ -101,7 +101,7 @@ namespace Horo::Network {
         CHECK(pair.authorities[0]->credentialCalls == 0);
         CHECK(pair.handlers[0]->calls == 0);
         CHECK_FALSE(pair.link->ends[0].open);
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
     }
 
     TEST_CASE("Explicit remote policy cannot borrow the in-memory loopback exception to issue a proof",
@@ -141,7 +141,7 @@ namespace Horo::Network {
         CHECK(pair.authorities[0]->issuerCalls == 1);
         CHECK(pair.handlers[0]->calls == 0);
         CHECK(pair.handlers[1]->calls == 0);
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
         CHECK_FALSE(pair.link->ends[0].open);
     }
 
@@ -156,7 +156,7 @@ namespace Horo::Network {
         pair.Frames(1);
         auto peer = pair.handlers[1]->lastSession.lock();
         REQUIRE(peer);
-        const auto generation = pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session;
+        const auto generation = pair.ClientRole().session;
         REQUIRE(generation);
         const std::array replacement{World(NetworkModeWorldKind::Client, 1703)};
         REQUIRE(pair.hosts[1]->RequestTravel(replacement, generation).HasValue());
@@ -167,7 +167,7 @@ namespace Horo::Network {
         REQUIRE(peer->Terminal());
         CHECK(peer->Terminal()->kind == PeerSessionTerminalKind::CredentialExpired);
         CHECK(pair.hosts[1]->ClientSessionTerminal() == peer->Terminal());
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
         CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1703}).HasError());
         CHECK(pair.hosts[1]->TakeTravelFailure().has_value());
     }
@@ -222,7 +222,7 @@ namespace Horo::Network {
         pair.Start();
         pair.Frames(1);
         CHECK_FALSE(pair.hosts[1]->ClientSessionTerminal());
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
         SECTION("Protocol rejection") {
             pair.Gameplay(1);
         }
@@ -232,7 +232,7 @@ namespace Horo::Network {
         pair.Frames();
         const auto *terminal = pair.hosts[1]->ClientSessionTerminal();
         REQUIRE(terminal);
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
         CHECK(terminal->failure.has_value());
         CHECK(pair.handlers[1]->calls == 0);
         pair.hosts[1]->Shutdown();
@@ -274,7 +274,7 @@ namespace Horo::Network {
         REQUIRE(candidate->BeginNegotiation(connection, generation, 22).HasValue());
         CHECK(pair.owners[1]->sessions->OnSessionPrepared(AdmissionEndpoint::Client, candidate, generation, 22).HasError());
         pair.Frames();
-        REQUIRE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        REQUIRE(pair.ClientRole().session);
         CHECK_FALSE(candidate->Authentication());
         pair.Gameplay(1);
         pair.Frames(1);
@@ -303,7 +303,7 @@ namespace Horo::Network {
         }
         pair.Frames();
         CHECK_FALSE(pair.link->ends[0].open);
-        CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
         CHECK(pair.handlers[0]->calls == 0);
         CHECK(pair.handlers[1]->calls == 0);
     }
@@ -318,7 +318,7 @@ namespace Horo::Network {
                                                                 pair.handlers[0]}};
         const auto captured =
             Application::Internal::NetworkProductAdmission::Capture(pair.Policy(0), pair.authorities[0]->Providers(pair.authorities[0]),
-                                                                    pair.codecs, bindings);
+                                                                    pair.codecs, bindings, pair.WorldPolicy());
         REQUIRE(captured.HasValue());
         pair.captures[0] = captured.Value();
         auto created = pair.Create(0);
@@ -351,7 +351,7 @@ namespace Horo::Network {
         REQUIRE(retired->Terminal());
         pair.Reconnect();
         pair.Frames();
-        REQUIRE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+        REQUIRE(pair.ClientRole().session);
         REQUIRE(pair.link->Queue(1, {.kind = NetworkTransportEventKind::Closed, .connection = old}).HasValue());
         pair.Gameplay(1);
         pair.Frames(1);

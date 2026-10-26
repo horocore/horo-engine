@@ -74,7 +74,7 @@ namespace Horo::Prefab::SpawnTest {
             return Runtime::SceneStructuralOwner::Gameplay;
         }
 
-        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView active,
+        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &active,
                                                                            std::span<const Runtime::RuntimeEntityView> created,
                                                                            std::span<const Runtime::EntityRef> destroyed) override {
             REQUIRE(runtime_ != nullptr);

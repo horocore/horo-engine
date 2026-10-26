@@ -46,6 +46,14 @@ namespace Horo::Runtime::Ui {
         MaximumHeight,
         OffsetLeft,
         OffsetTop,
+        Padding,
+        Count
+    };
+
+    /** @brief Closed admission of computed values for a property-to-layout binding. */
+    enum class UiAnimationLayoutValuePolicy : std::uint8_t {
+        AllComputedValues,   /**< Existing explicit binding semantics, including the registered default. */
+        ExplicitOriginsOnly, /**< Host auto-binding preserves authored layout when the only value is RegisteredDefault. */
         Count
     };
 
@@ -53,11 +61,15 @@ namespace Horo::Runtime::Ui {
      * @brief Inert authored property-to-layout binding, qualified against actual tree and immutable registry at admission.
      * @details The computed style value, including sealing and accessibility precedence, supplies the value. No raw timeline
      *          sample bypasses the computed-style owner. Dimensional values retain canonical 1/64-DIP units without scaling twice.
+     *          ExplicitOriginsOnly skips only RegisteredDefault each update; explicit zero and all other computed origins apply.
+     *          Skipped bindings retain that update's authored/responsive base, never the prior frame's projected pixels.
+     *          Padding applies the same validated nonnegative Dimension to all four edges.
      */
     struct UiAnimationLayoutBinding final {
         UiElementId target;
         UiStylePropertyId property;
         UiAnimationLayoutField field{UiAnimationLayoutField::Width};
+        UiAnimationLayoutValuePolicy values{UiAnimationLayoutValuePolicy::AllComputedValues};
     };
 
     /** @brief Inert authored marker at one exact normalized position; repeats are handled by the bounded playback owner. */

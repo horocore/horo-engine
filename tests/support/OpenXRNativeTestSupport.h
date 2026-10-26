@@ -35,12 +35,19 @@ namespace Horo::Tests::OpenXR {
         bool advertiseLayer{};
         bool enabledLayer{};
         bool failRetirement{};
+        bool failInstanceRetirement{};
         bool stale{};
         bool staleAfterSession{};
         bool throwAfterInstance{};
         bool throwUnknownAfterInstance{};
         std::uint32_t liveInstances{};
         std::uint32_t liveSessions{};
+
+        struct RetirementProbe final {
+            OpenXRNativeSession *owner{};
+            bool rejectedSession{};
+            bool rejectedFull{};
+        } retirement;
 
         Script() {
             REQUIRE(active == nullptr);
@@ -96,6 +103,8 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL DestroyInstance(XrInstance) {
             const auto result = Record("destroy-instance");
+            if (active->failInstanceRetirement)
+                return XR_ERROR_RUNTIME_FAILURE;
             if (XR_SUCCEEDED(result))
                 --active->liveInstances;
             return result;
@@ -119,6 +128,10 @@ namespace Horo::Tests::OpenXR {
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL DestroySession(XrSession) {
+            if (active->retirement.owner) {
+                active->retirement.rejectedSession = active->retirement.owner->RetireSession().HasError();
+                active->retirement.rejectedFull = active->retirement.owner->Close().HasError();
+            }
             const auto result = Record("destroy-session");
             if (active->failRetirement)
                 return XR_ERROR_RUNTIME_FAILURE;
@@ -183,6 +196,10 @@ namespace Horo::Tests::OpenXR {
             return "XR_KHR_vulkan_enable2";
         }
 
+        Result<void> ValidatePreparation() const override {
+            return Script::active->stale ? Result<void>::Failure(MakeError(XRErrors::CapabilityStale)) : Result<void>::Success();
+        }
+
         Result<void> Validate(const XRSessionId &) const override {
             return Script::active->stale ? Result<void>::Failure(MakeError(XRErrors::CapabilityStale)) : Result<void>::Success();
         }
@@ -204,6 +221,14 @@ namespace Horo::Tests::OpenXR {
 
     class Fence final : public IOpenXRCompositionFence {
     public:
+        Result<void> ValidatePreparation(const XRLoaderPreflightSnapshot &preflight,
+                                         const XRLoaderPreflightAttempt attempt) const override {
+            if (Script::active->stale)
+                return Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
+            return ValidateXRLoaderPreflight(preflight, attempt, preflight.Backend(), preflight.InstallRecord(),
+                                             preflight.ProductProfile());
+        }
+
         Result<void> Validate(const XRSessionId &, const XRLoaderPreflightSnapshot &, const XRFeaturePlan &) const override {
             return Script::active->stale ? Result<void>::Failure(MakeError(XRErrors::CapabilityStale)) : Result<void>::Success();
         }

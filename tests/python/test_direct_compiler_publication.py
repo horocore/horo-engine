@@ -20,8 +20,8 @@ def job(workflow: str, name: str) -> str:
     return match[1]
 
 
-def condition(block: str, context: dict[str, str]) -> bool:
-    """Interpret only the equality/boolean subset used by these token guards."""
+def condition(block: str, context: dict[str, str], *, cancelled: bool = False) -> bool:
+    """Interpret the token guards with an explicit, non-executing cancellation status."""
     match = re.search(r"^    if: \$\{\{ (.*?) \}\}$", block, re.MULTILINE)
     assert match is not None
     expression = match[1]
@@ -29,35 +29,40 @@ def condition(block: str, context: dict[str, str]) -> bool:
         expression = expression.replace(name, repr(value))
     expression = expression.replace("&&", " and ").replace("||", " or ")
     expression = re.sub(r"!(?!=)", "not ", expression).strip()
-    return bool(boolean_value(ast.parse(expression, mode="eval").body))
+    return bool(boolean_value(ast.parse(expression, mode="eval").body, cancelled=cancelled))
 
 
-def boolean_value(node: ast.AST) -> str | bool:
-    """Reject calls and unsupported syntax instead of evaluating workflow code."""
+def boolean_value(node: ast.AST, *, cancelled: bool | None = None) -> str | bool:
+    """Model only the closed zero-argument status call; never execute workflow code."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "cancelled" and not node.args and not node.keywords
+            and cancelled is not None):
+        return cancelled
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.BoolOp):
-        return logical_value(node)
+        return logical_value(node, cancelled=cancelled)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return not boolean_value(node.operand)
+        return not boolean_value(node.operand, cancelled=cancelled)
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
-        return comparison_value(node)
+        return comparison_value(node, cancelled=cancelled)
     raise ValueError("Unexpected token-guard expression")
 
 
-def logical_value(node: ast.BoolOp) -> str | bool:
+def logical_value(node: ast.BoolOp, *, cancelled: bool | None = None) -> str | bool:
     """Preserve operand values for Actions' conditional group-key selection."""
-    values = [boolean_value(value) for value in node.values]
+    values = [boolean_value(value, cancelled=cancelled) for value in node.values]
     short_circuit = isinstance(node.op, ast.Or)
     return next((value for value in values if bool(value) == short_circuit), values[-1])
 
 
-def comparison_value(node: ast.Compare) -> bool:
+def comparison_value(node: ast.Compare, *, cancelled: bool | None = None) -> bool:
     """Restrict comparisons to the two string equality operators used by Actions."""
     operation = {ast.Eq: operator.eq, ast.NotEq: operator.ne}.get(type(node.ops[0]))
     if operation is None:
         raise ValueError("Unexpected token-guard comparison")
-    return operation(boolean_value(node.left), boolean_value(node.comparators[0]))
+    return operation(boolean_value(node.left, cancelled=cancelled),
+                     boolean_value(node.comparators[0], cancelled=cancelled))
 
 
 def concurrency_key(block: str, context: dict[str, str]) -> str:
@@ -148,10 +153,33 @@ def test_only_canonical_main_selects_the_write_job(
     context = {"github.repository": repository, "github.ref": ref,
                "github.event_name": event,
                "github.event.pull_request.head.repo.full_name": repository}
+    context["needs.tooling.result"] = "success"
     expected = (repository == "horocore/horo-engine" and ref == "refs/heads/main"
                 and event in {"push", "workflow_dispatch"})
     assert condition(job(source, writer), context) is expected
     assert condition(job(source, readonly), context) is not expected
+
+
+@pytest.mark.parametrize("writer", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("tooling", ["success", "failure", "cancelled", "skipped"])
+def test_native_status_guards_require_uncancelled_successful_tooling(
+    writer: bool, cancelled: bool, tooling: str,
+) -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    context = {"github.repository": "horocore/horo-engine",
+               "github.ref": "refs/heads/main" if writer else "refs/heads/topic",
+               "github.event_name": "push", "needs.tooling.result": tooling}
+    permitted = not cancelled and tooling == "success"
+    assert condition(job(source, "test-main"), context, cancelled=cancelled) is (writer and permitted)
+    assert condition(job(source, "test"), context, cancelled=cancelled) is (not writer and permitted)
+
+
+@pytest.mark.parametrize("expression", ["unknown()", "cancelled(True)", "cancelled(flag=True)", "obj.cancelled()"])
+def test_status_model_rejects_arbitrary_or_parameterized_calls(expression: str) -> None:
+    parsed = ast.parse(expression, mode="eval").body
+    with pytest.raises(ValueError, match="Unexpected token-guard expression"):
+        boolean_value(parsed, cancelled=False)
 
 
 def test_foreign_fork_sonar_policy_is_preserved() -> None:

@@ -22,12 +22,18 @@
 namespace Horo::Render {
     class RenderFrontend;
     class IRenderGraphResourceLease;
+    struct UiPaintFrameBuffers;
+    struct UiPaintFrameUpdate;
+    enum class RenderGraphExecutionRole : std::uint8_t;
     struct RenderMaterialPass;
     struct RenderGraphQueueSubmission;
     class CompiledRenderGraphExecution;
     class RenderGraphLifetimePlan;
+    class UiPaintFrameBufferPool;
+    class UiPaintProgram;
     struct RenderGraphPassWorkload;
     struct UiRenderSubmission;
+    struct UiPaintGraphComposition;
     class UiRenderImageTexture;
     class UiRenderAtlasTexture;
 
@@ -44,11 +50,15 @@ namespace Horo::Runtime::Ui {
 namespace Horo::Render {
 
     namespace Detail {
+        struct UiPaintFrontendState;
+        struct UiPaintOwnerRetirement;
+        struct RenderResourceIdentity;
         struct VfxSchedulingStorage;
         class RenderResourceRegistry;
         class RenderResourceUploadQueue;
         class RenderFrontendResourceAccess;
         class RenderExternalTextureAccess;
+        class PreparedRenderGraphTemplate;
         class RenderGraphResourceLeasePool;
         class RenderGraphTransientResourcePool;
         class RenderParallelWorkState;
@@ -105,10 +115,12 @@ namespace Horo::Render {
             128}; /**< Maximum timeline-pin records inspected per drain; complete graph leases use maximumSubmissionPins. */
         std::uint32_t maximumRetirementsPerDrain{64}; /**< Maximum native instances destroyed at one safe point. */
 
+        std::uint32_t maximumUiCapturesPerFrame{8}; /**< Explicit product canvas bound; native leases reserve this once, hard ceiling 64. */
+
         /** @brief Reports whether every completion and destruction bound is finite and non-zero. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return maximumSubmissionPins > 0 && maximumTrackedQueues > 0 && maximumCompletionsPerDrain > 0 &&
-                   maximumRetirementsPerDrain > 0;
+                   maximumRetirementsPerDrain > 0 && maximumUiCapturesPerFrame > 0 && maximumUiCapturesPerFrame <= 64;
         }
     };
 
@@ -195,6 +207,26 @@ namespace Horo::Render {
          * @throws std::bad_alloc If owned error construction cannot allocate, after exception cleanup has completed.
          * @throws std::length_error If owned error construction exceeds its representation limits. */
         [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialPass &pass);
+
+        /** @brief Records the explicit lawful no-source UI contribution after scene execution and before GUI.
+         * @return Success or typed inactive/order/repeated-composition failure; issues no native work. */
+        [[nodiscard]] Result<void> ComposeUi();
+        /** @brief Encodes one exact prepared UI graph after scene execution and before GUI composition.
+         * @param graph Exact immutable UI-only compiled graph. @param workloads Bounded paint-only retained operations.
+         * @param ui Exact canonical geometry/resource leases transferred to native completion.
+         * @param transientResources Prepared isolation surfaces matching graph lifetimes.
+         * @return Success or original admission/encoding failure; failure aborts presentation of the whole frame.
+         * @details This named stage does not reopen general Execute/ExecuteGraph admission or allow repeated scene execution. */
+        [[nodiscard]] Result<void> ComposeUi(const CompiledRenderGraphExecution &graph, std::span<const RenderGraphPassWorkload> workloads,
+                                             UiRenderSubmission ui, RenderGraphTransientResourcesHandle transientResources = {});
+
+        /** @brief Encodes one bounded ordered UI phase containing every admitted canvas before GUI composition.
+         * @param canvases Complete borrowed mutable handoff, transferring source leases after whole-batch validation.
+         * @return Original typed failure or success; malformed later entries issue no native work and partial native failure
+         * aborts presentation while already queued source/resource leases remain with the same frame completion owner.
+         * @details At most 64 entries and the configured capture bound; no allocation, waits or generic Execute reopening.
+         */
+        [[nodiscard]] Result<void> ComposeUi(std::span<UiPaintGraphComposition> canvases);
 
         /**
          * @brief Resolves resident resources and executes one compiled graph exactly once.
@@ -322,6 +354,18 @@ namespace Horo::Render {
         /** @brief Guards one acquired graph lease and commits queue history only after backend acceptance. */
         [[nodiscard]] Result<void> ExecuteLeasedGraph(RenderGraphExecutionRequest request,
                                                       const Detail::RenderSubmissionAllocator &submissionHistory);
+        /** @brief Encodes a graph only after its named scene or UI stage has independently admitted it. */
+        [[nodiscard]] Result<void> EncodeAdmittedGraph(const CompiledRenderGraphExecution &graph,
+                                                       std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
+                                                       RenderGraphTransientResourcesHandle transientResources,
+                                                       std::span<const RenderGraphQueueSubmission> submissions,
+                                                       RenderGraphExecutionRole role);
+        /** @brief Requires the unique UI stage between successful scene execution and GUI encoding. */
+        [[nodiscard]] Result<void> ValidateUiCompositionAdmission() const;
+        struct UiCompositionState;
+        [[nodiscard]] Result<void> PrepareUiComposition(std::span<UiPaintGraphComposition> canvases, UiCompositionState &state);
+        [[nodiscard]] Result<void> PrepareUiCompositionEntry(UiPaintGraphComposition &canvas, UiCompositionState &state, std::size_t index);
+        [[nodiscard]] Result<void> EncodeUiComposition(std::span<UiPaintGraphComposition> canvases, UiCompositionState &state);
         /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
         [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
         struct MaterialExecutionOutcome;
@@ -357,6 +401,8 @@ namespace Horo::Render {
         bool executed_{false};
         bool guiComposed_{false};
         IRenderGraphResourceLease *completionLease_{nullptr}; /**< Borrowed exact active frame lease; backend owns retirement. */
+        bool uiComposed_{false};
+        bool uiComposing_{false}; /**< Owner-thread reentry fence spanning the complete ordered UI batch. */
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
     };
@@ -421,6 +467,10 @@ namespace Horo::Render {
          * @return Reference valid until frontend destruction; safe to query during an active frame.
          */
         [[nodiscard]] const RenderBackendCapabilities &Capabilities() const noexcept;
+        /** @brief Observes the actual preallocated per-frame UI capture bound for whole-product source admission.
+         * @return Configured capture capacity, or zero after renderer ownership has moved/revoked.
+         */
+        [[nodiscard]] std::size_t MaximumUiCapturesPerFrame() const noexcept;
 
         /** @brief Consumes retained live-effect instances into actual typed passes of the host's recipe graph.
          * @param builder Open host-owned recipe graph. @param snapshot Immutable scene extraction lease.
@@ -554,6 +604,25 @@ namespace Horo::Render {
          * Unsupported source formats/color spaces fail through normal texture admission without conversion or fallback.
          */
         [[nodiscard]] Result<UiRenderImageTexture> CreateUiImageTexture(
+            const Runtime::Ui::UiImageResourceRegistry &registry, Runtime::Ui::UiRuntimeHandle<Runtime::Ui::UiImageResourceHandleTag> image,
+            std::uint32_t page, std::span<const std::byte> pixels);
+        /** @brief Realizes the exact cooked UI raster interface before frame acquisition.
+         * @param kernel Immutable explicit target/cook/attachment evidence.
+         * @return Selected-backend native lease or original typed failure; no source compilation/fallback. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel);
+        /** @brief Updates an already allocated free UI frame slot before opening a native frame.
+         * @param buffers Exact resident ring handles. @param update Complete synchronous finite CPU payload.
+         * @return Success or typed owner/ready/busy/capacity failure without advancing accepted UI state. */
+        [[nodiscard]] Result<void> UpdateUiPaintFrame(const UiPaintFrameBuffers &buffers, const UiPaintFrameUpdate &update);
+
+        /**
+         * @brief Realizes a current image page explicitly for alpha-mask sampling.
+         * @param registry Borrowed image authority. @param image Exact current image generation.
+         * @param page Source page index. @param pixels Complete tightly packed RGBA8 page; alpha supplies coverage.
+         * @return Exact Mask-role provenance and readiness, or the original typed image/upload failure.
+         * @details Uses the same owned upload path as images. A paint-image realization cannot impersonate this role.
+         */
+        [[nodiscard]] Result<UiRenderImageTexture> CreateUiMaskTexture(
             const Runtime::Ui::UiImageResourceRegistry &registry, Runtime::Ui::UiRuntimeHandle<Runtime::Ui::UiImageResourceHandleTag> image,
             std::uint32_t page, std::span<const std::byte> pixels);
         /**
@@ -734,6 +803,7 @@ namespace Horo::Render {
         friend class RenderFrameScope;
         friend class Detail::RenderFrontendResourceAccess;
         friend class Detail::RenderExternalTextureAccess;
+        friend class Detail::PreparedRenderGraphTemplate;
 
         class ConstructionKey {
             ConstructionKey() = default;
@@ -803,6 +873,28 @@ namespace Horo::Render {
         std::shared_ptr<Detail::VfxSchedulingStorage> vfxScheduling_;
         std::thread::id vfxSchedulingOwner_{std::this_thread::get_id()};
         RenderFrontendMemoryConfig memoryConfig_;
+        friend class UiPaintFrameBufferPool;
+        friend class UiPaintProgram;
+        /** @brief Validate buffer creation at the existing owner boundary before any resource reservation. */
+        [[nodiscard]] Result<void> AdmitUiPaintBufferRequest(const RenderBufferDescriptor &descriptor,
+                                                             std::span<const std::byte> initialData) const;
+        /** @brief Validate texture creation at the existing owner boundary before any resource reservation. */
+        [[nodiscard]] Result<void> AdmitUiPaintTextureRequest(const RenderTextureDescriptor &descriptor,
+                                                              std::span<const std::byte> initialData) const;
+        /** @brief Admits a buffer with its nonallocating UI-owner retirement handoff before publication. */
+        [[nodiscard]] Result<ResourceCreation<RenderBufferHandle>> CreateOwnedUiPaintBuffer(
+            RenderMemoryScopeId scope, const RenderBufferDescriptor &descriptor, std::span<const std::byte> initialData,
+            const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner);
+        /** @brief Admits a texture with its nonallocating UI-owner retirement handoff before publication. */
+        [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateOwnedUiPaintTexture(
+            RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, std::span<const std::byte> initialData,
+            const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner);
+        /** @brief Tries immediate owner-boundary cleanup; deferred requests remain registry-owned. */
+        void RetireOwnedUiPaintBuffer(RenderBufferHandle handle, ResourceOperationId operation) noexcept;
+        /** @brief Tries immediate owner-boundary cleanup; deferred requests remain registry-owned. */
+        void RetireOwnedUiPaintTexture(RenderTextureHandle handle, ResourceOperationId operation) noexcept;
+        [[nodiscard]] bool RetireOwnedUiPaintResource(Detail::RenderResourceIdentity identity, ResourceOperationId operation) noexcept;
+        std::shared_ptr<Detail::UiPaintFrontendState> uiPaintFrontendState_;
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;
         std::unique_ptr<Detail::RenderResourceUploadQueue> resourceUploadQueue_;
         std::unique_ptr<Detail::RenderGraphResourceLeasePool> graphResourceLeases_;

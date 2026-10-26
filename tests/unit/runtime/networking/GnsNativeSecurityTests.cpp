@@ -336,7 +336,7 @@ namespace {
 TEST_CASE("Failed cold native Kill transfers retry ownership once and an old adapter cannot kill its replacement",
           "[unit][network][gns][security]") {
     coldKillCalls = 0;
-    auto old = std::make_unique<GnsTransport>(ThrowBeforeNativeKill);
+    auto old = std::make_unique<GnsTransport>(GnsTransportSetup{.kill = ThrowBeforeNativeKill});
     REQUIRE(old->Initialize({4, 64, 1200}).HasValue());
     old->Shutdown();
     REQUIRE(coldKillCalls == 1);
@@ -412,7 +412,7 @@ namespace {
 TEST_CASE("Native active and retiring owners deny competing admission without releasing the real owner", "[unit][network][gns][security]") {
     cleanupProbeCalls = 0;
     cleanupProbeDenied = false;
-    auto owner = std::make_unique<GnsTransport>(ProbeBeforeNativeKill);
+    auto owner = std::make_unique<GnsTransport>(GnsTransportSetup{.kill = ProbeBeforeNativeKill});
     REQUIRE(owner->Initialize({4, 64, 1200}).HasValue());
     auto competing = CreateGnsTransport();
     REQUIRE(competing.HasValue());

@@ -39,7 +39,7 @@ namespace Horo::Editor {
          * @return Success or a typed diagnostic-preservation failure.
          */
         [[nodiscard]] Result<void> ObserveFailure(const Error &error);
-        /** @brief Records actual viewport/native/GUI admission for the current runtime frame.
+        /** @brief Records actual GUI CPU/extraction/native order for the current runtime frame, rejecting duplicate admissions.
          * @param work Production phase whose admission is being observed.
          */
         void RecordFrameWork(FrameWork work) noexcept;
@@ -83,6 +83,7 @@ namespace Horo::Editor {
         unsigned resizeCalls_{};
         unsigned failureCalls_{};
         unsigned frameWork_{};
+        bool frameOrderValid_{true};
         unsigned presents_{};
         bool closeQueued_{};
     };

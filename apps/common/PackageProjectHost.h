@@ -49,6 +49,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Retire(const std::filesystem::path &root);
         /** @brief Returns the current owner-lane project policy generation. @return Nonwrapping generation, zero before binding. */
         [[nodiscard]] std::uint64_t Generation() const;
+        /** @brief Reads sealed availability for the exact current fresh project generation without pumping or activating it.
+         * @param root Exact bound project. @param generation Previously captured canonical Generation().
+         * @return Immutable installed graph lease, empty before installation, or original typed admission/stale failure.
+         * @details A retained record owns bytes, not continuing host admission or execution trust. Native users must fence the
+         * same generation again before activation and retain their own verified resources through asynchronous retirement.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>> InstalledRecord(
+            const std::filesystem::path &root, std::uint64_t generation) const;
         /** @brief Cancels admission and drains completed callbacks without waiting or destroying borrowed services.
          * @return Success once every owned callback/session is closed, otherwise typed busy. */
         [[nodiscard]] Result<void> Close();

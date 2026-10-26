@@ -118,7 +118,7 @@ namespace Horo::Tests::OpenXR {
                 return Result<std::int64_t>::Success(formats.front());
             }
 
-            Result<void> Enumerate(std::uint32_t, const IOpenXRSwapchainImageEnumeration &) override {
+            Result<void> Enumerate(const NativeSwapchainRequest &, std::uint32_t, const IOpenXRSwapchainImageEnumeration &) override {
                 return Result<void>::Success();
             }
 
@@ -210,6 +210,18 @@ namespace Horo::Tests::OpenXR {
                 REQUIRE(waited.Value().status == XRFrameStatus::Ok);
                 REQUIRE(compositor.Begin(waited.Value().frame).HasValue());
                 return waited.Value().frame;
+            }
+
+            /** @brief Acquires one actual fixture image and records it in the same canonical frame gate. */
+            XRSwapchainImageId Acquire(const XRFrameId &frame) {
+                REQUIRE(frames.LocateViews(frame, 2) == XRFrameStatus::Ok);
+                REQUIRE(color.Acquire().HasValue());
+                REQUIRE(color.Wait(0).Value());
+                const auto imported = color.Import();
+                REQUIRE(imported.HasValue());
+                const auto image = imported.Value().image;
+                REQUIRE(frames.Acquire(frame, image) == XRFrameStatus::Ok);
+                return image;
             }
 
             void Empty(const XRFrameId &frame) {

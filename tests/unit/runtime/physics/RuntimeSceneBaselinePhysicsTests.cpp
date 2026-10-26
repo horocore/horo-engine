@@ -13,7 +13,7 @@ namespace Horo::Physics {
                 : participant(runtime, authority, Settings()) {}
 
             Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                                               Runtime::RuntimeSceneView scene) override {
+                                                                               const Runtime::RuntimeSceneView &scene) override {
                 auto result = participant.Prepare(definition, scene);
                 if (result.HasValue())
                     candidate = dynamic_cast<PhysicsSceneActivationCandidate *>(result.Value().get());
@@ -85,7 +85,7 @@ namespace Horo::Physics {
                 return Runtime::SceneStructuralOwner::Gameplay;
             }
 
-            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView,
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &,
                                                                                std::span<const Runtime::RuntimeEntityView>,
                                                                                std::span<const Runtime::EntityRef>) override {
                 ++prepares_;
@@ -106,12 +106,12 @@ namespace Horo::Physics {
                 return owner_->Owner();
             }
 
-            Result<void> ValidateBaselines(Runtime::RuntimeSceneView active,
+            Result<void> ValidateBaselines(const Runtime::RuntimeSceneView &active,
                                            std::span<const Runtime::SceneBaselinePreparationView> baselines) const override {
                 return owner_->ValidateBaselines(active, baselines);
             }
 
-            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView active,
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &active,
                                                                                std::span<const Runtime::RuntimeEntityView> created,
                                                                                std::span<const Runtime::EntityRef> destroyed) override {
                 ++prepares_;

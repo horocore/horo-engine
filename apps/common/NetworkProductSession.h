@@ -115,6 +115,12 @@ namespace Horo::Application::Internal {
          * Existing canonical remote-close reasons survive later transport failure and shutdown.
          */
         void OnTransportEvent(const Network::NetworkTransportEvent &event) noexcept override;
+
+        /** @brief Borrow the stable canonical world owner; valid across permitted composition moves. */
+        [[nodiscard]] std::weak_ptr<Network::NetworkWorldBindingController> WorldBinding() const noexcept {
+            return binding_;
+        }
+
         /** @brief Retain one exact pre-active runtime owner for terminal observation without granting client gameplay authority. */
         [[nodiscard]] Result<void> OnSessionPrepared(Network::AdmissionEndpoint endpoint,
                                                      const std::shared_ptr<Network::PeerSessionLifecycle> &lifecycle,
@@ -156,6 +162,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<NetworkProductSessionClock> clock_;
         std::shared_ptr<Network::PeerSessionLifecycle> peer_;
         Network::NetworkModeComposition *mode_{};
+        std::weak_ptr<Network::NetworkWorldBindingController> binding_;
         Network::INetworkTransport *transport_{};  // Borrow ends explicitly before transport shutdown/destruction.
         Network::ConnectionHandle connection_{};
         Network::ConnectionHandle pendingConnection_{};

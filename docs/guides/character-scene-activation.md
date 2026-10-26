@@ -88,7 +88,7 @@ reinterpret an older cache key or publish data after dropping the new field.
 The host `SceneActivationParticipant` vtable and `RuntimeComponentSet` change.
 Rebuild all engine/editor/Scene/Physics, streaming, prefab, VFX, gameplay and
 other host participant consumers together. The phase revision is
-`SceneActivationParticipantContractVersion = 2`. Host plugins must not mix old and new
+`SceneActivationParticipantContractVersion = 3`. Host plugins must not mix old and new
 participant binaries.
 
 The supported Gameplay SDK export lists are defined in the top-level
@@ -370,3 +370,9 @@ The private workspace dependency bundle stores the host-bound play-scene factory
 under `gameplay.sceneFactory`, alongside gameplay build and module-retirement
 services. Application composition passes the factory explicitly; the workspace
 does not discover a concrete backend.
+
+The project UI participant is registered after Physics/AI participants and uses
+the same Scene v3 claim for initial activation, replacement and normal unload.
+`PrepareRetirement` is fallible before that claim; forced `Shutdown` does not call
+it. Its exact-generation revocation must not revoke the newly published Scene's
+UI sources when the old candidate is shut down after a logical replacement.

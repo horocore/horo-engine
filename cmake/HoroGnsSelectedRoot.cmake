@@ -48,14 +48,25 @@ function(horo_prepare_gns_selected_root pristine out_source)
             if(EXISTS "${owned}/${path}")
                 file(READ "${owned}/${path}" text)
                 string(REPLACE "\r\n" "\n" text "${text}")
-                file(WRITE "${owned}/${path}" "${text}")
+                # CONFIGURE emits one final LF for its template line. Remove only
+                # the pinned source's final LF before the single variable expansion;
+                # vendor @...@/${...} text is never interpreted as a template.
+                string(REGEX REPLACE "\n$" "" text "${text}")
+                file(CONFIGURE OUTPUT "${owned}/${path}" CONTENT [=[@text@]=] @ONLY NEWLINE_STYLE UNIX)
+                file(SHA256 "${owned}/${path}" materialized)
+                string(JSON expected GET "${manifest}" paths ${index} pristineSha256)
+                if(NOT materialized STREQUAL expected)
+                    message(FATAL_ERROR "GNS build-owned pristine bytes changed during normalization: ${path}")
+                endif()
             endif()
         endforeach()
         find_package(Git REQUIRED)
         set(owned_patch "${owned}.patch")
-        file(WRITE "${owned_patch}" "${patch_text}")
+        string(REGEX REPLACE "\n$" "" patch_text "${patch_text}")
+        file(CONFIGURE OUTPUT "${owned_patch}" CONTENT [=[@patch_text@]=] @ONLY NEWLINE_STYLE UNIX)
         # An in-repository build directory must not let git discover the parent
         # Horo checkout and interpret patch paths relative to that worktree.
+        # Keep reviewed candidate bytes independent of the caller's checkout conversion.
         execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_INDEX_FILE
                         "GIT_CEILING_DIRECTORIES=${owned}"
                         "${GIT_EXECUTABLE}" -c core.autocrlf=false apply "${owned_patch}"
@@ -68,9 +79,7 @@ function(horo_prepare_gns_selected_root pristine out_source)
     foreach(index RANGE 0 ${last_path})
         string(JSON path GET "${manifest}" paths ${index} path)
         string(JSON expected GET "${manifest}" paths ${index} candidateSha256)
-        file(READ "${owned}/${path}" text)
-        string(REPLACE "\r\n" "\n" text "${text}")
-        string(SHA256 digest "${text}")
+        file(SHA256 "${owned}/${path}" digest)
         if(NOT digest STREQUAL expected)
             message(FATAL_ERROR "GNS build-owned selected-root source changed: ${path}")
         endif()
