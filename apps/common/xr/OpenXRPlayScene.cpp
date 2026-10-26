@@ -56,7 +56,7 @@ namespace Horo::Application::Internal {
         explicit SceneParticipant(OpenXRPlayHost &host) : host_(&host) {}
 
         Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                                           const Runtime::RuntimeSceneView scene) override {
+                                                                           const Runtime::RuntimeSceneView &scene) override {
             auto prepared = host_->PrepareScene(definition, scene);
             if (prepared.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(prepared.ErrorValue());
@@ -69,7 +69,7 @@ namespace Horo::Application::Internal {
             }
         }
 
-        Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PrepareRetirement(const Runtime::RuntimeSceneView scene) override {
+        Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PrepareRetirement(const Runtime::RuntimeSceneView &scene) override {
             const auto identity = scene.RuntimeId();
             if (host_->retiredScene_ == identity && identity.IsValid())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(

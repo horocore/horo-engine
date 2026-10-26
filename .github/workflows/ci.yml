@@ -516,7 +516,7 @@ jobs:
       # its primary working set. This uses the existing platform job and tools.
       - name: Restore auxiliary compiler variants
         id: variants_cache
-        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
         uses: ./.github/actions/restore-native-cache
         with:
           compiler-storage: registry

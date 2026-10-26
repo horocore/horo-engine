@@ -236,6 +236,21 @@ def step(source: str, name: str) -> str:
     return source.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("cache", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize("debug", ["success", "failure", "cancelled", "skipped"])
+def test_auxiliary_restore_survives_debug_failure_without_relaxing_primary_publication(
+    cancelled: bool, cache: str, debug: str,
+) -> None:
+    source = job((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"), "test")
+    context = {"steps.cache.outcome": cache, "steps.debug_build.outcome": debug,
+               "github.repository": "horocore/horo-engine", "github.ref": "refs/heads/main"}
+    restore = "\n".join(line[4:] for line in step(source, "Restore auxiliary compiler variants").splitlines())
+    assert condition(restore, context, cancelled=cancelled) is (not cancelled and cache == "success")
+    publication = "\n".join(line[4:] for line in step(source, "Publish main Debug compiler checkpoint").splitlines())
+    assert condition(publication, context, cancelled=cancelled) is (not cancelled and debug == "success")
+
+
 def test_compiled_native_stores_publish_before_the_next_phase_without_actions_copies() -> None:
     source = job((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"), "test")
     assert source.index("name: Build Debug") < source.index("name: Publish main Debug compiler checkpoint")
