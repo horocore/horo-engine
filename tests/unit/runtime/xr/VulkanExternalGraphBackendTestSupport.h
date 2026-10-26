@@ -10,7 +10,7 @@ namespace Horo::Render::VulkanExternalTest {
     using namespace Horo::Render::VulkanGraphTest;
 
     /** @brief Test composition adapter; all image, graph, submission and retirement behavior delegates to production owners. */
-    class ExternalGraphBackend final : public IRenderBackend, public Detail::IRenderExternalTextureBackend, public IMaterialBindingBackend {
+    class ExternalGraphBackend final : public IRenderBackend, public Detail::IRenderExternalTextureBackend {
     public:
         static inline const Detail::IVulkanExternalTextureSource
             *lastImportedSource{};  // Synchronous test-only observation, never an owner.

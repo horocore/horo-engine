@@ -93,7 +93,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::CreateMaterialLayout */
-    Result<void> EditorViewportRendererVulkan::CreateMaterialLayout(const ShaderResources &program,
+    Result<void> EditorViewportRendererVulkan::CreateMaterialLayout(ShaderResources &program,
                                                                     const Render::NormalizedShaderReflection &reflection) {
         using namespace Render;
         const auto layout = PrepareMaterialBindingLayout(reflection);

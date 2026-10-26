@@ -160,8 +160,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> CreateUniformSlot(const ShaderResources &program, DrawSlot &draw, std::uint64_t material,
                                                      Render::RenderPipelineHandle pipeline);
         /** @brief Validates one ABI and prepares its sole material-table owner before interactive use. */
-        [[nodiscard]] Result<void> CreateMaterialLayout(const ShaderResources &program,
-                                                        const Render::NormalizedShaderReflection &reflection);
+        [[nodiscard]] Result<void> CreateMaterialLayout(ShaderResources &program, const Render::NormalizedShaderReflection &reflection);
         [[nodiscard]] Result<void> CreateOverlaySlots();
         [[nodiscard]] Result<void> CreateOverlayMesh(OverlaySlot &slot);
         void ReleaseOverlaySlots() noexcept;

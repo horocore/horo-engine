@@ -1,4 +1,4 @@
-#include "support/OpenXRSelectedVulkanTestSupport.h"
+#include "OpenXRSelectedVulkanTestSupport.h"
 
 #include <algorithm>
 #include <bit>

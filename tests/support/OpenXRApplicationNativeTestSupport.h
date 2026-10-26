@@ -2,13 +2,13 @@
 /** @file OpenXRApplicationNativeTestSupport.h
  * @brief Reuses existing official scripts and the private graphics port for real-loader application lifecycle tests.
  */
+#include "OpenXRSelectedVulkanTestSupport.h"
 #include "VulkanEditorGraphicsBridge.h"
 #include "support/OpenXRActionBindingTestSupport.h"
 #include "support/OpenXRCensusTestSupport.h"
 #include "support/OpenXRClockTestSupport.h"
 #include "support/OpenXREventScriptTestSupport.h"
 #include "support/OpenXRFrameScriptTestSupport.h"
-#include "support/OpenXRSelectedVulkanTestSupport.h"
 #include "support/OpenXRSwapchainTestSupport.h"
 
 namespace Horo::Tests::OpenXRApplication {
