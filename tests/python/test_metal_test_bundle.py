@@ -8,7 +8,6 @@ import importlib.util
 import io
 import json
 from pathlib import Path
-import struct
 import sys
 import tarfile
 from types import SimpleNamespace
@@ -17,7 +16,7 @@ import pytest
 
 from test_ci_test_isolation import run
 from test_dependency_package import sdk
-from test_metal_test_artifact import artifact_module as artifact
+from test_metal_test_artifact import artifact_module as artifact, native_binary
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("metal_test_bundle", ROOT / ".github/scripts/metal_test_bundle.py")
@@ -167,17 +166,6 @@ def test_private_fixture_directories_preserve_environment_scope_and_confinement(
     with pytest.raises(ValueError, match="escapes the bundle"):
         bundle.private_environment_directories([f"HOME=set:{outside}"], build)
     assert not outside.exists()
-
-
-def native_binary(cpu: int = 0x0100000C, dependency: str | None = None) -> bytes:
-    commands = struct.pack("<6I", 0x32, 24, 1, 14 << 16, 26 << 16, 0)
-    count = 1
-    if dependency:
-        name = dependency.encode() + b"\0"
-        size = (24 + len(name) + 7) // 8 * 8
-        commands += struct.pack("<6I", 0xC, size, 24, 0, 0, 0) + name.ljust(size - 24, b"\0")
-        count += 1
-    return struct.pack("<8I", 0xFEEDFACF, cpu, 0, 2, count, len(commands), 0, 0) + commands
 
 
 def manifest(data: bytes) -> dict:
@@ -396,21 +384,6 @@ def test_archive_bounds_precede_installation(tmp_path: Path, monkeypatch, limit:
     staging.mkdir()
     with pytest.raises(ValueError):
         bundle.unpack(payload, staging, IDENTITY)
-
-
-def test_macho_identity_checks_real_architecture_sdk_and_library_closure(tmp_path: Path) -> None:
-    path = tmp_path / "native"
-    path.write_bytes(native_binary(dependency="/System/Library/Frameworks/Metal.framework/Versions/A/Metal"))
-    identity = bundle.macho_identity(path)
-    assert identity["architecture"] == "arm64"
-    assert identity["minimum"] == 14 << 16
-    assert identity["sdk"] == 26 << 16
-    path.write_bytes(native_binary(cpu=0x01000007))
-    with pytest.raises(ValueError, match="arm64"):
-        bundle.macho_identity(path)
-    path.write_bytes(native_binary(dependency="/opt/homebrew/lib/private.dylib"))
-    with pytest.raises(ValueError, match="non-system"):
-        bundle.macho_identity(path)
 
 
 def test_typed_relocation_preserves_arguments_and_every_unrelated_property(tmp_path: Path) -> None:

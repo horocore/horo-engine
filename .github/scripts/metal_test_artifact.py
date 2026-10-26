@@ -6,6 +6,7 @@ import json
 import os
 import re
 import stat
+import struct
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -151,3 +152,64 @@ def unwrap_artifact(archive: Path, output: Path, payload_digest: str) -> None:
                 raise ValueError("The artifact payload exceeds its declared size")
     if package.digest_file(output) != payload_digest:
         raise ValueError("The test bundle differs from the producer output")
+
+
+def deployment_identity(entry: bytes) -> dict:
+    """Decode a single macOS build-version load command."""
+    if len(entry) < 24:
+        raise ValueError("Invalid deployment command")
+    target_platform, minimum, sdk, _ = struct.unpack_from("<4I", entry, 8)
+    if target_platform != 1:
+        raise ValueError("Invalid macOS deployment platform")
+    return {"minimum": minimum, "sdk": sdk}
+
+
+def system_library(entry: bytes) -> str:
+    """Admit only a terminated system-library install name."""
+    if len(entry) < 24:
+        raise ValueError("Invalid library command")
+    offset = struct.unpack_from("<I", entry, 8)[0]
+    if not 24 <= offset < len(entry) or b"\0" not in entry[offset:]:
+        raise ValueError("Invalid library path")
+    name = entry[offset:].split(b"\0", 1)[0].decode("utf-8")
+    if not name.startswith(("/System/Library/", "/usr/lib/")):
+        raise ValueError("The executable requires an unstaged non-system library")
+    return name
+
+
+def macho_commands(path: Path) -> tuple[int, bytes]:
+    """Bound the native arm64 executable's load-command table before parsing."""
+    with path.open("rb") as stream:
+        header = stream.read(32)
+        if len(header) != 32:
+            raise ValueError("Truncated Mach-O header")
+        magic, cpu, _, kind, count, size, _, _ = struct.unpack("<8I", header)
+        if magic != 0xFEEDFACF or cpu != 0x0100000C or kind != 2 or count > 4096 or size > 2 * 1024 ** 2:
+            raise ValueError("Only native arm64 Mach-O executables are supported")
+        data = stream.read(size)
+    if len(data) != size:
+        raise ValueError("Truncated Mach-O commands")
+    return count, data
+
+
+def macho_identity(path: Path) -> dict:
+    """Read bounded Mach-O load commands without executing the binary."""
+    count, data = macho_commands(path)
+    position, deployment, libraries = 0, None, []
+    for _ in range(count):
+        if position + 8 > len(data):
+            raise ValueError("Truncated load command")
+        kind, length = struct.unpack_from("<II", data, position)
+        if length < 8 or position + length > len(data):
+            raise ValueError("Invalid load command length")
+        entry = data[position:position + length]
+        if kind == 0x32:
+            if deployment is not None:
+                raise ValueError("Invalid macOS deployment platform")
+            deployment = deployment_identity(entry)
+        elif kind in {0xC, 0x80000018, 0x8000001F, 0x80000023, 0x20}:
+            libraries.append(system_library(entry))
+        position += length
+    if position != len(data) or deployment is None:
+        raise ValueError("Missing or inconsistent deployment identity")
+    return {"architecture": "arm64", **deployment, "libraries": libraries}
