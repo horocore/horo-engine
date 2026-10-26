@@ -321,7 +321,7 @@ namespace Horo::Physics {
     }
 
     /** @copydoc PhysicsPlayWorldSession::Commit */
-    Result<void> PhysicsPlayWorldSession::Commit(const Runtime::RuntimePhase phase, const Runtime::RuntimeSceneView source) {
+    Result<void> PhysicsPlayWorldSession::Commit(const Runtime::RuntimePhase phase, const Runtime::RuntimeSceneView &source) {
         if (const Result<void> safePoint = CheckSafePoint(phase); safePoint.HasError())
             return safePoint;
         if (!pending_)

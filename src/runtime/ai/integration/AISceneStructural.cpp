@@ -118,7 +118,7 @@ namespace Horo::AI::Detail {
         }
 
     private:
-        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(const Runtime::RuntimeSceneView scene,
+        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(const Runtime::RuntimeSceneView &scene,
                                                                                 const std::span<const Runtime::RuntimeEntityView> created,
                                                                                 const std::span<const Runtime::EntityRef> destroyed) {
             auto candidate = std::make_unique<StructuralCandidate>();

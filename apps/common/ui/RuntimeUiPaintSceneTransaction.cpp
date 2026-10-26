@@ -186,7 +186,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Retires only this exact runtime Scene incarnation; replacement's newly promoted scope is untouched. */
-        bool RetireScope(const Runtime::SceneRuntimeId scene) noexcept {
+        bool RetireScope(const Runtime::SceneRuntimeId scene) const noexcept {
             bool changed = false;
             for (auto &source : state_->sceneSources)
                 if (source && source->scene == scene) {

@@ -46,7 +46,7 @@ namespace Horo::AI {
             return (required.bits & ~available.bits) == 0;
         }
 
-        [[nodiscard]] Result<AiSceneActivationBinding> MakeBinding(const Runtime::RuntimeSceneView scene) {
+        [[nodiscard]] Result<AiSceneActivationBinding> MakeBinding(const Runtime::RuntimeSceneView &scene) {
             if (!scene.IsCurrent() || !scene.RuntimeId().IsValid())
                 return Failure<AiSceneActivationBinding>(AIErrors::SceneActivationInvalid,
                                                          "The RuntimeScene view is stale or has no valid runtime identity.");

@@ -272,7 +272,7 @@ namespace Horo::Physics {
          * @param phase Current host phase; only CommitDeferredLifecycleChanges is admitted.
          * @param source Original scene view supplied to Prepare; its owner must remain alive until this call.
          * @return Success or a typed error; failed revalidation leaves the old world active. */
-        [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase, Runtime::RuntimeSceneView source);
+        [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase, const Runtime::RuntimeSceneView &source);
         /** @brief Closes play admission and retires both worlds at the host lifecycle safe point.
          * @param phase Current host phase; only CommitDeferredLifecycleChanges is admitted.
          * @return Success, including repeated stop, or a typed phase/affinity error. */

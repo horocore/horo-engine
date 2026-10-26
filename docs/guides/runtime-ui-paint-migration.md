@@ -651,7 +651,8 @@ the existing frontend owner boundary and completion pins. The destructor path
 cannot allocate an error diagnostic, throw, wait for the GPU or abandon a native
 owner. Explicit Shutdown retains its typed failure/retry contract.
 
-Scene activation preparation/retirement and structural preparation/baseline validation now borrow
+Scene activation preparation/retirement, Play-world commit validation and structural
+preparation/baseline validation now borrow
 `const RuntimeSceneView&` for the synchronous call instead of copying the view.
 The host-only activation and structural participant contract revisions advance
 from 3 to 4. Update overrides to the same signature and rebuild C++
