@@ -50,9 +50,14 @@ namespace Horo::Network::AdmissionTests {
                                WireIdentity<MessageSchemaId>(static_cast<std::uint16_t>(200 + i)),
                                {1, 0},
                                false};
-                codecDescriptors[i] = {protocols[0].id, messages[i].id, messages[i].schema, {{1, 0}, {1, 0}}, 1168};
+                codecDescriptors[i] = {protocols[0].id,
+                                       messages[i].id,
+                                       messages[i].schema,
+                                       {{1, 0}, {1, 0}},
+                                       i == 5 ? NetworkWorldBindingWireBytes : 1168};
             }
-            const std::array featureDescriptors{FeatureIdentityDescriptor{protocols[0].id, features[0], {1, 0}}};
+            const std::array featureDescriptors{FeatureIdentityDescriptor{protocols[0].id, features[0], {1, 0}},
+                                                FeatureIdentityDescriptor{protocols[0].id, features[1], {1, 0}}};
             const auto identities = ProtocolIdentityRegistry::Create({protocols, messages, featureDescriptors, {}});
             REQUIRE(identities.HasValue());
             const auto created = MessageCodecRegistry::Create({codecDescriptors, {}}, identities.Value());
@@ -67,7 +72,7 @@ namespace Horo::Network::AdmissionTests {
             input.protocol = {protocols[0].id, {{1, 0}, {1, 0}}, 42};
             input.transport.requirement = NetworkProjectTransportRequirement::Required;
             input.transport.capabilities.requiredDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
-            input.transport.capabilities.requiredChannels = 1;
+            input.transport.capabilities.requiredChannels = 2;
             input.transport.capabilities.requiredMaximumMessageBytes = 1200;
             const auto configured = NetworkProjectSettings::Create(input);
             REQUIRE(configured.HasValue());
@@ -89,7 +94,7 @@ namespace Horo::Network::AdmissionTests {
             TransportCapabilities caps;
             caps.revision = 1;
             caps.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = TransportSupport::Available;
-            caps.maximumChannels = 1;
+            caps.maximumChannels = 2;
             caps.maximumMessageBytes = 1200;
             return caps;
         }
@@ -103,7 +108,7 @@ namespace Horo::Network::AdmissionTests {
             policy.local.compatibility.compression[static_cast<std::size_t>(HandshakeCompression::None)] = true;
             policy.local.transport = Capabilities();
             policy.requirements.requiredDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
-            policy.requirements.requiredChannels = 1;
+            policy.requirements.requiredChannels = 2;
             policy.requirements.requiredMaximumMessageBytes = 1200;
             policy.endpoints[static_cast<std::size_t>(side == 0 ? AdmissionEndpoint::Server : AdmissionEndpoint::Client)] = true;
             policy.trust = {AuthenticationContractVersion,
@@ -127,14 +132,18 @@ namespace Horo::Network::AdmissionTests {
             return policy;
         }
 
+        [[nodiscard]] NetworkWorldBindingPolicy WorldPolicy() const {
+            return {messages[5], features[1], Id<NetworkPrincipalId>(20), Id<CredentialProvenanceId>(50), Id<NetworkCapabilityId>(40)};
+        }
+
         void Capture(const std::size_t side, std::optional<NetworkAdmissionPolicy> policy = std::nullopt) {
             const std::array bindings{
                 Application::Internal::NetworkProductInboundHandler{{protocols[0].id, messages[4].id, MessageTrafficClass::Command,
                                                                      Runtime::RuntimePhase::NetworkPoll, 64},
                                                                     handlers[side]}};
-            auto captured =
-                Application::Internal::NetworkProductAdmission::Capture(policy ? *policy : Policy(side),
-                                                                        authorities[side]->Providers(authorities[side]), codecs, bindings);
+            auto captured = Application::Internal::NetworkProductAdmission::Capture(policy ? *policy : Policy(side),
+                                                                                    authorities[side]->Providers(authorities[side]), codecs,
+                                                                                    bindings, WorldPolicy());
             REQUIRE(captured.HasValue());
             captures[side] = std::move(captured).Value();
         }
@@ -154,7 +163,7 @@ namespace Horo::Network::AdmissionTests {
                 return Application::Internal::CreateNetworkProductTransport(std::make_unique<PairedTransport>(link, side), role, {}, {},
                                                                             debugger, sessions, capture);
             };
-            const std::array world{side == 0 ? World(NetworkModeWorldKind::AuthorityServer, 1701, 1)
+            const std::array world{side == 0 ? World(NetworkModeWorldKind::AuthorityServer, 1701)
                                              : World(NetworkModeWorldKind::Client, 1702)};
             return Application::Internal::NetworkProductHost::Create(*runtimeClocks[side],
                                                                      {*project,
@@ -166,7 +175,11 @@ namespace Horo::Network::AdmissionTests {
                                                                       100 + side,
                                                                       world,
                                                                       {.localPlayer = side == 1},
-                                                                      owners[side]->sessions},
+                                                                      owners[side]->sessions,
+                                                                      captures[side]
+                                                                          ? NetworkWorldCompositionPurpose::Gameplay
+                                                                          : NetworkWorldCompositionPurpose::TransportQualification,
+                                                                      captures[side] ? captures[side]->WorldBinding() : std::nullopt},
                                                                      std::move(factories));
         }
 
@@ -179,10 +192,20 @@ namespace Horo::Network::AdmissionTests {
                 hosts[side] = std::move(created).Value();
                 auto started = hosts[side]->Startup();
                 if (started.HasError())
-                    INFO(started.ErrorValue().domain.Value()
-                         << ':' << started.ErrorValue().code.Value() << ':' << started.ErrorValue().message);
+                    UNSCOPED_INFO(started.ErrorValue().domain.Value()
+                                  << ':' << started.ErrorValue().code.Value() << ':' << started.ErrorValue().message);
                 REQUIRE(started.HasValue());
             }
+        }
+
+        /** @brief Borrow only the real published role; unready outcomes retain their typed diagnostic before assertion. */
+        [[nodiscard]] NetworkModeRoleView ClientRole() const {
+            const auto role = hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702});
+            if (role.HasError())
+                UNSCOPED_INFO(role.ErrorValue().domain.Value()
+                              << ':' << role.ErrorValue().code.Value() << ':' << role.ErrorValue().message);
+            REQUIRE(role.HasValue());
+            return role.Value();
         }
 
         void Frames(const std::size_t count = 8) {
@@ -237,7 +260,7 @@ namespace Horo::Network::AdmissionTests {
         void Gameplay(const std::size_t receiver, const std::uint32_t sequence = 1) {
             REQUIRE(link->Queue(receiver, {.kind = NetworkTransportEventKind::PacketReceived,
                                            .connection = link->ends[receiver].connection,
-                                           .channel = {},
+                                           .channel = ChannelId::Create(1, 2).Value(),
                                            .delivery = DeliveryPolicy::ReliableOrdered,
                                            .payload = GameplayFrame(sequence)})
                         .HasValue());
@@ -250,11 +273,13 @@ namespace Horo::Network::AdmissionTests {
         std::array<std::shared_ptr<Handler>, 2> handlers;
         std::array<std::unique_ptr<DeterministicClock>, 2> runtimeClocks;
         std::array<ProtocolIdentityDescriptor, 1> protocols;
-        std::array<MessageIdentityDescriptor, 5> messages;
-        std::array<MessageCodecDescriptor, 5> codecDescriptors;
-        std::array<ProtocolFeatureId, 1> features{WireIdentity<ProtocolFeatureId>(5)};
-        std::array<MessageDeliveryChannel, 1> channels{
-            MessageDeliveryChannel{{}, DeliveryPolicy::ReliableOrdered, MessageTrafficClass::Command, false}};
+        std::array<MessageIdentityDescriptor, 6> messages;
+        std::array<MessageCodecDescriptor, 6> codecDescriptors;
+        std::array<ProtocolFeatureId, 2> features{WireIdentity<ProtocolFeatureId>(5), WireIdentity<ProtocolFeatureId>(6)};
+        std::array<MessageDeliveryChannel, 2>
+            channels{MessageDeliveryChannel{{}, DeliveryPolicy::ReliableOrdered, MessageTrafficClass::Control, false},
+                     MessageDeliveryChannel{ChannelId::Create(1, 2).Value(), DeliveryPolicy::ReliableOrdered, MessageTrafficClass::Command,
+                                            false}};
         std::shared_ptr<const MessageCodecRegistry> codecs;
         std::optional<NetworkProjectSettings> project;
         NetworkModeFactories worlds;

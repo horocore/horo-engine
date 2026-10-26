@@ -24,7 +24,7 @@ namespace Horo::Network {
                 pair.authorities[0]->throwNonStandard = nonstandard;
                 pair.Start();
                 pair.Frames();
-                CHECK_FALSE(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).Value().session);
+                CHECK(pair.hosts[1]->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
                 CHECK(pair.handlers[0]->calls == 0);
                 CHECK(pair.handlers[1]->calls == 0);
                 CHECK_FALSE(pair.link->ends[0].open);
@@ -44,6 +44,8 @@ namespace Horo::Network {
             pair.Frames(1);
             auto peer = pair.handlers[1]->lastSession.lock();
             REQUIRE(peer);
+            auto worldOwner = pair.owners[1]->sessions->WorldBinding().lock();
+            REQUIRE(worldOwner);
             const auto closesBeforeRetirement = pair.link->ends[1].closes;
             pair.link->ends[1].throwClose = true;
             pair.link->ends[1].throwCloseNonStandard = nonstandard;
@@ -53,6 +55,11 @@ namespace Horo::Network {
             CHECK(peer->Terminal()->kind == PeerSessionTerminalKind::CredentialExpired);
             const auto closes = pair.link->ends[1].closes;
             REQUIRE(closes == closesBeforeRetirement + 1);
+            const auto tick = pair.owners[1]->sessionClock->PollTick();
+            REQUIRE(tick.HasValue());
+            REQUIRE(worldOwner->Reconcile(tick.Value()).HasValue());
+            CHECK(pair.link->ends[1].closes == closes);  // Repeated world retirement never takes native cleanup ownership.
+            CHECK(worldOwner->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702}).HasError());
             pair.hosts[1]->Shutdown();
             pair.hosts[1]->Shutdown();
             CHECK(pair.link->ends[1].closes == closes);

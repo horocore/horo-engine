@@ -246,7 +246,7 @@ namespace Horo::Network {
         try {
             const auto config = options.transport;
             auto authority = std::make_shared<GnsSecurity>(std::move(options));
-            auto transport = std::make_unique<GnsTransport>(authority, config);
+            auto transport = std::make_unique<GnsTransport>(GnsTransportSetup{.security = authority, .config = config});
             return Result<GnsSecureTransportComposition>::Success({std::move(transport), {authority, authority, authority, authority}});
         } catch (const std::bad_alloc &) {
             return Result<GnsSecureTransportComposition>::Failure(MakeError(NetworkErrors::TransportCapabilityUnavailable));

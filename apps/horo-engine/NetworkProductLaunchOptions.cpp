@@ -209,30 +209,47 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Consume exactly one gameplay module selection without advancing on failure. */
+        Result<void> ReadGameplaySelection(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (launch.gameplay || arguments.size() - index < 5)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
+            auto selection = ParseGameplaySelection(arguments.subspan(index, 5));
+            if (selection.HasError())
+                return Result<void>::Failure(selection.ErrorValue());
+            launch.gameplay = std::move(selection).Value();
+            index += 5;
+            return Result<void>::Success();
+        }
+
         /** @brief Keeps legacy gameplay suffix parsing separate from paired explicit Scene options. */
         Result<void> ParseSceneOptions(const std::span<char *> arguments, ProductLaunch &launch) {
             SeenSceneOptions seen{};
             std::optional<bool> prefabGrant;
             for (std::size_t index = 0; index < arguments.size();) {
                 const std::string_view key{arguments[index]};
+                if (key == "--transport-qualification") {
+                    if (launch.purpose != Net::NetworkWorldCompositionPurpose::Gameplay)
+                        return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
+                    launch.purpose = Net::NetworkWorldCompositionPurpose::TransportQualification;
+                    ++index;
+                    continue;
+                }
                 if (key == "--prefab") {
                     if (auto permission = ReadPrefabPermission(arguments, index, prefabGrant); permission.HasError())
                         return permission;
                     continue;
                 }
                 if (key == "--game-module" || key == "--game-script") {
-                    if (launch.gameplay || arguments.size() - index < 5)
-                        return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
-                    auto selection = ParseGameplaySelection(arguments.subspan(index, 5));
-                    if (selection.HasError())
-                        return Result<void>::Failure(selection.ErrorValue());
-                    launch.gameplay = std::move(selection).Value();
-                    index += 5;
+                    if (auto selected = ReadGameplaySelection(arguments, index, launch); selected.HasError())
+                        return selected;
                     continue;
                 }
                 if (auto applied = ReadSceneOption(arguments, index, seen, launch.sceneInput); applied.HasError())
                     return applied;
             }
+            if (launch.gameplay && launch.purpose == Net::NetworkWorldCompositionPurpose::TransportQualification)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Transport qualification cannot request a gameplay module."));
             if (auto permission = ApplyPrefabPermission(launch, prefabGrant); permission.HasError())
                 return permission;
             return ValidateSceneOptions(seen, launch.sceneInput);

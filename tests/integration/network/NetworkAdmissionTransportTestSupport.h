@@ -87,7 +87,8 @@ namespace Horo::Network::AdmissionTests {
         Result<void> Send(const ConnectionHandle connection, const ChannelId channel, const std::span<const std::byte> bytes,
                           const DeliveryPolicy delivery) override {
             auto &self = link_->ends[side_];
-            if (bytes.size() > self.config.maximumMessageBytes || channel.Value() != 0 || delivery != DeliveryPolicy::ReliableOrdered)
+            if (bytes.size() > self.config.maximumMessageBytes || channel.Value() >= self.config.maximumChannels ||
+                delivery != DeliveryPolicy::ReliableOrdered)
                 return Result<void>::Failure(MakeError(NetworkErrors::TransportLimitExceeded));
             if (connection != self.connection)
                 return Result<void>::Success();  // An isolated hostile third peer may receive control; it never joins the paired path.
@@ -156,7 +157,7 @@ namespace Horo::Network::AdmissionTests {
             TransportCapabilities caps;
             caps.revision = 1;
             caps.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = TransportSupport::Available;
-            caps.maximumChannels = 1;
+            caps.maximumChannels = 2;
             caps.maximumMessageBytes = 1200;
             return caps;
         }

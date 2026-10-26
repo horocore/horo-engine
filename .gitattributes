@@ -1,0 +1,2 @@
+# The reviewed native patch manifest requires identical bytes on every checkout.
+/cmake/patches/gns/horo-gns-selected-root-v1.patch -text

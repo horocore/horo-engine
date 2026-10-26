@@ -26,9 +26,8 @@ namespace Horo::Application::Internal {
      * No listener, connection, issuer or native startup runs here. The real product service owns initialization,
      * admission, detach and native retirement. GNS-disabled hosts do not compile or link this operation.
      */
-    [[nodiscard]] Result<NetworkProductGnsSelection> SelectNetworkProductGns(const Network::NetworkAdmissionPolicy &policy,
-                                                                             Network::NetworkAdmissionProviders providers,
-                                                                             std::shared_ptr<const Network::MessageCodecRegistry> codecs,
-                                                                             std::span<const NetworkProductInboundHandler> handlers,
-                                                                             const Network::GnsNativeSecurityOptions &options);
+    [[nodiscard]] Result<NetworkProductGnsSelection> SelectNetworkProductGns(
+        const Network::NetworkAdmissionPolicy &policy, Network::NetworkAdmissionProviders providers,
+        std::shared_ptr<const Network::MessageCodecRegistry> codecs, std::span<const NetworkProductInboundHandler> handlers,
+        const Network::GnsNativeSecurityOptions &options, std::optional<Network::NetworkWorldBindingPolicy> worldBinding = std::nullopt);
 }  // namespace Horo::Application::Internal

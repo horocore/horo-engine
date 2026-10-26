@@ -1,6 +1,7 @@
 #include "NetworkProductSession.h"
 
 #include "Horo/Network/NetworkErrors.h"
+#include "NetworkModeHostAccess.h"
 
 #include <utility>
 
@@ -171,10 +172,14 @@ namespace Horo::Application::Internal {
     Result<void> ClientSessionOwner::OnSessionPrepared(const Network::AdmissionEndpoint endpoint,
                                                        const std::shared_ptr<Network::PeerSessionLifecycle> &lifecycle,
                                                        const Network::NetworkOperationGeneration generation, const std::uint64_t nowTick) {
-        if (endpoint == Network::AdmissionEndpoint::Server)
+        if (endpoint == Network::AdmissionEndpoint::Server) {
+            // Preparation observes an inert negotiating candidate; binding requires Active.
+            if (!mode_ || !mode_->ServicesStarted() || stopped_ || transportRetired_)
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeUnavailable));
             return Result<void>::Success();
-        if (endpoint != Network::AdmissionEndpoint::Client || !lifecycle || !mode_ || !mode_->Active() || stopped_ || transportRetired_ ||
-            !clock_ || admitted_ || connectionTerminal_ || (peer_ && !peer_->Terminal()) || !generation.IsValid() ||
+        }
+        if (endpoint != Network::AdmissionEndpoint::Client || !lifecycle || !mode_ || !mode_->ServicesStarted() || stopped_ ||
+            transportRetired_ || !clock_ || admitted_ || connectionTerminal_ || (peer_ && !peer_->Terminal()) || !generation.IsValid() ||
             (generation_.IsValid() && generation <= generation_) || lifecycle->State() != Network::PeerSessionState::Negotiating)
             return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
         if (pendingConnection_.IsValid() && pendingConnection_ != lifecycle->Connection())
@@ -196,8 +201,13 @@ namespace Horo::Application::Internal {
     Result<void> ClientSessionOwner::OnSessionActivated(const Network::AdmissionEndpoint endpoint,
                                                         const std::shared_ptr<Network::PeerSessionLifecycle> &lifecycle,
                                                         const Network::NetworkOperationGeneration generation, const std::uint64_t nowTick) {
-        if (endpoint == Network::AdmissionEndpoint::Server)
+        if (endpoint == Network::AdmissionEndpoint::Server) {
+            if (!mode_ || !mode_->ServicesStarted() || stopped_ || transportRetired_)
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeUnavailable));
+            if (auto binding = binding_.lock())
+                return binding->BindPeer(endpoint, lifecycle, generation, nowTick);
             return Result<void>::Success();
+        }
         if (endpoint != Network::AdmissionEndpoint::Client || !lifecycle)
             return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
         return Admit(Network::NetworkModeWorldKind::Client, lifecycle, lifecycle->Connection(), generation, nowTick);
@@ -206,13 +216,14 @@ namespace Horo::Application::Internal {
     /** @copydoc ClientSessionOwner::Bind */
     void ClientSessionOwner::Bind(Network::NetworkModeComposition &mode) noexcept {
         mode_ = &mode;
+        binding_ = Network::NetworkModeHostAccess::Binding(mode);
     }
 
     /** @copydoc ClientSessionOwner::Admit */
     Result<void> ClientSessionOwner::Admit(const Network::NetworkModeWorldKind world, std::shared_ptr<Network::PeerSessionLifecycle> peer,
                                            const Network::ConnectionHandle connection, const Network::NetworkOperationGeneration generation,
                                            const std::optional<std::uint64_t> publishedTick) {
-        if (stopped_ || transportRetired_ || !mode_ || !mode_->Active())
+        if (stopped_ || transportRetired_ || !mode_ || !mode_->ServicesStarted())
             return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeUnavailable));
         if (pendingConnection_.IsValid() || connectionTerminal_)
             return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
@@ -228,7 +239,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(Network::NetworkErrors::AdmissionBindingInvalid));
         if (now.HasError())
             return Result<void>::Failure(now.ErrorValue());
-        if (auto admitted = mode_->AdmitClientSession(world, *peer, connection, generation, now.Value()); admitted.HasError())
+        if (auto admitted = mode_->AdmitClientSession(world, peer, connection, generation, now.Value()); admitted.HasError())
             return admitted;
         if (peer_ && peer_ != peer && !peer_->Terminal())
             (void)peer_->Cancel(connection_, generation_, now.Value());
@@ -250,6 +261,10 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(now.ErrorValue());
         if (admitted_)
             (void)peer_->Expire(now.Value());
+        if (auto binding = binding_.lock()) {
+            if (auto reconciled = binding->Reconcile(now.Value()); reconciled.HasError())
+                return reconciled;
+        }
         return Reconcile();
     }
 
@@ -265,6 +280,10 @@ namespace Horo::Application::Internal {
             if (admitted_)
                 (void)Revoke();
             return Result<void>::Failure(MakeError(Network::NetworkErrors::TransportNativeUnavailable));
+        }
+        if (auto binding = binding_.lock()) {
+            if (auto reconciled = binding->Reconcile(lastTick_); reconciled.HasError())
+                return reconciled;
         }
         if (admitted_ && peer_->State() != Network::PeerSessionState::Active)
             return Revoke();

@@ -86,6 +86,8 @@ namespace Horo::Network {
      * only stages owned events. Decoding, session admission, delivery replay checks and application calls
      * occur after PollEvents returns on the construction thread. Shutdown/revocation discard queued work.
      */
+    class NetworkWorldBindingController;
+
     class InboundMessageDispatcher final : private INetworkTransportEventConsumer {
     public:
         /** @brief Binds the owner thread and preallocates bounded work storage. @return Router or typed limit failure. */
@@ -105,6 +107,11 @@ namespace Horo::Network {
         /** @brief Registers one exact typed handler with a weak owner lease. @return Typed conflict or capacity result. */
         [[nodiscard]] Result<void> RegisterHandler(const InboundHandlerBinding &binding,
                                                    const std::shared_ptr<IInboundMessageHandler> &handler);
+        /** @brief Query the SAME canonical handler registry for an exact live traffic-class binding without invoking it.
+         * @param protocol Registered protocol identity. @param message Registered message identity.
+         * @param traffic Required declared class. @return False after revocation, weak-owner expiry, or on another thread.
+         */
+        [[nodiscard]] bool HasLiveHandler(ProtocolId protocol, MessageTypeId message, MessageTrafficClass traffic) const noexcept;
         /** @brief Borrows a host admission observer weakly; absence never admits a transport peer. */
         void SetSessionHost(const std::shared_ptr<IInboundSessionHost> &host) noexcept;
         /** @brief Bind the sole runtime admission controller weakly; absence preserves pre-active rejection. */
@@ -124,6 +131,7 @@ namespace Horo::Network {
         void Shutdown() noexcept;
 
     private:
+        friend class NetworkWorldBindingController;
         struct Session;
         struct Handler;
 
@@ -145,6 +153,9 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Dispatch(NetworkTransportEvent &event, std::uint64_t nowTick);
         [[nodiscard]] Result<void> DispatchPacket(NetworkTransportEvent &event, std::uint64_t nowTick);
         [[nodiscard]] Result<std::shared_ptr<Session>> AdmitSession(ConnectionHandle connection, std::uint64_t nowTick);
+        /** @brief Require the same published canonical world before non-Control gameplay invocation. */
+        [[nodiscard]] Result<void> AdmitWorldBinding(const Session &session, MessageTrafficClass traffic, ConnectionHandle connection,
+                                                     std::uint64_t nowTick);
         [[nodiscard]] Result<void> InvokeHandler(const std::shared_ptr<Session> &session, Handler &handler,
                                                  const NetworkTransportEvent &event, const MessageEnvelope &message, std::uint64_t nowTick);
         [[nodiscard]] Result<void> RejectAndClose(ConnectionHandle connection, Error error);
@@ -160,6 +171,8 @@ namespace Horo::Network {
         std::vector<Handler> handlers_;
         std::weak_ptr<IInboundSessionHost> sessionHost_;
         std::weak_ptr<NetworkAdmissionController> admission_;
+        std::weak_ptr<NetworkWorldBindingController> worldBinding_;
+        bool requiresWorldBinding_{};
         std::size_t queued_{};
         std::uint64_t lastTick_{};
         bool overflowed_{};

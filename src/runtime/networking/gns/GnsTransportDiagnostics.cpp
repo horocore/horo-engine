@@ -46,7 +46,7 @@ namespace Horo::Network {
         capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)] = support;
         capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = support;
         if (declared) {
-            capabilities.maximumChannels = 1;
+            capabilities.maximumChannels = config_.maximumChannels;
             capabilities.maximumMessageBytes = config_.maximumMessageBytes;
         }
         return capabilities;

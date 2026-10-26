@@ -79,7 +79,7 @@ namespace Horo::Network {
                 return Fail(NetworkErrors::TransportLimitExceeded);
             if (security_ &&
                 (config.maximumConnections != config_.maximumConnections || config.maximumEventsPerPoll != config_.maximumEventsPerPoll ||
-                 config.maximumMessageBytes != config_.maximumMessageBytes))
+                 config.maximumMessageBytes != config_.maximumMessageBytes || config.maximumChannels != config_.maximumChannels))
                 return Fail(NetworkErrors::TransportBackendConflict);
             try {
                 connections_.reserve(config.maximumConnections);
