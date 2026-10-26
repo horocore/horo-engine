@@ -50,7 +50,8 @@ namespace Horo::Network {
     bool ValidGnsTransportConfig(const NetworkTransportConfig &config) noexcept {
         return config.maximumConnections > 0 && config.maximumConnections <= MaximumConfiguredConnections &&
                config.maximumEventsPerPoll > 0 && config.maximumEventsPerPoll <= MaximumConfiguredEvents &&
-               config.maximumMessageBytes > 0 && config.maximumMessageBytes <= MaximumConfiguredMessageBytes;
+               config.maximumMessageBytes > 0 && config.maximumMessageBytes <= MaximumConfiguredMessageBytes &&
+               config.maximumChannels > 0 && config.maximumChannels <= 3;
     }
 
     // GNS fixes the mutable callback parameter type.
@@ -289,6 +290,10 @@ namespace Horo::Network {
         if (!slot)
             return;  // Retired native callback cannot name a replacement generation.
         if (status.m_info.m_eState == k_ESteamNetworkingConnectionState_Connected && slot->phase == ConnectionPhase::Pending) {
+            if (!ConfigureLanes(*slot)) {
+                End(*slot, NetworkTransportEventKind::Failed, &NetworkErrors::TransportCapabilityUnavailable);
+                return;
+            }
             slot->phase = ConnectionPhase::Connected;
             ++stats_.activeConnections;
             Enqueue({.kind = slot->listener.IsValid() ? NetworkTransportEventKind::Accepted : NetworkTransportEventKind::Connected,

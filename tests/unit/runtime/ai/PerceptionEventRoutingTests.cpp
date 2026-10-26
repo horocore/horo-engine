@@ -1,6 +1,7 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/Gameplay/PerceptionEventSource.h"
+#include "Horo/Network/NetworkWorldBinding.h"
 
 #include <algorithm>
 #include <array>
@@ -72,6 +73,31 @@ namespace Horo::AI {
             }
         };
 
+        /** @brief Author a real canonical server control inventory; no peer authentication or role is fabricated. */
+        [[nodiscard]] Network::NetworkWorldBindingSetup ServerWorldBinding() {
+            const Network::ProtocolIdentityDescriptor protocol{MakeIdentity<Network::ProtocolId>(1), {{1, 0}, {1, 0}}};
+            const Network::MessageIdentityDescriptor message{protocol.id,
+                                                             MakeIdentity<Network::MessageTypeId>(1),
+                                                             MakeIdentity<Network::MessageSchemaId>(1),
+                                                             {1, 0},
+                                                             false};
+            const Network::FeatureIdentityDescriptor feature{protocol.id, MakeIdentity<Network::ProtocolFeatureId>(1), {1, 0}};
+            auto identities =
+                Network::ProtocolIdentityRegistry::Create({std::span{&protocol, 1}, std::span{&message, 1}, std::span{&feature, 1}, {}});
+            REQUIRE(identities.HasValue());
+            const Network::MessageCodecDescriptor codec{protocol.id,
+                                                        message.id,
+                                                        message.schema,
+                                                        {{1, 0}, {1, 0}},
+                                                        Network::NetworkWorldBindingWireBytes};
+            auto codecs = Network::MessageCodecRegistry::Create({std::span{&codec, 1}, {}}, identities.Value());
+            REQUIRE(codecs.HasValue());
+            return {{message, feature.id, MakeIdentity<Network::NetworkPrincipalId>(1), MakeIdentity<Network::CredentialProvenanceId>(1),
+                     MakeIdentity<Network::NetworkCapabilityId>(1)},
+                    std::make_shared<const Network::MessageCodecRegistry>(std::move(codecs).Value()),
+                    1};
+        }
+
         [[nodiscard]] Network::NetworkModeComposition Host(const Network::NetworkProjectRole mode) {
             Network::NetworkTargetAssessment assessment;
             auto &matrix = assessment.matrix;
@@ -92,8 +118,6 @@ namespace Horo::AI {
                 selection.protocolVersion = {1, 0};
                 world.kind = mode == Network::NetworkProjectRole::Client ? Network::NetworkModeWorldKind::Client
                                                                          : Network::NetworkModeWorldKind::AuthorityServer;
-                if (world.kind == Network::NetworkModeWorldKind::AuthorityServer)
-                    world.authority = Network::ReplicationAuthorityEpoch::Create(1).Value();
             }
             const Network::NetworkModePresentation presentation{.localPlayer = mode == Network::NetworkProjectRole::Client};
             auto plan = Network::ResolveNetworkModePlan(assessment, selection, 17, std::span{&world, 1}, presentation);
@@ -103,10 +127,22 @@ namespace Horo::AI {
                 factory = [](const Network::NetworkModeServiceRequest &) {
                     return Result<std::unique_ptr<Network::INetworkModeService>>::Success(std::make_unique<ReadyService>());
                 };
-            auto host = Network::NetworkModeComposition::Create(plan.Value(), std::move(factories));
+            const bool server = mode == Network::NetworkProjectRole::DedicatedServer;
+            auto host = Network::NetworkModeComposition::Create(plan.Value(), std::move(factories),
+                                                                server ? Network::NetworkWorldCompositionPurpose::Gameplay
+                                                                       : Network::NetworkWorldCompositionPurpose::TransportQualification,
+                                                                server ? std::optional{ServerWorldBinding()} : std::nullopt);
             REQUIRE(host.HasValue());
             auto composition = std::move(host).Value();
             REQUIRE(composition.Start().HasValue());
+            if (server) {
+                REQUIRE(composition.Role(world.kind, world.scene).HasError());
+                REQUIRE(composition.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+                const auto published = composition.Role(world.kind, world.scene);
+                REQUIRE(published.HasValue());
+                REQUIRE(published.Value().authority.IsValid());
+                REQUIRE(published.Value().worldSession.has_value());
+            }
             return composition;
         }
 

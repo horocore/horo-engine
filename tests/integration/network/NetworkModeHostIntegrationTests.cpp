@@ -25,11 +25,12 @@ namespace Horo::Network {
             if (mode == NetworkProjectRole::ListenServer) {
                 auto active = AdmittedSession();
                 REQUIRE(host->AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session()).HasValue());
+                PublishProductClient(*host, owners, active);
                 admittedSession = Session();
             }
             REQUIRE(host->RunFrame().HasValue());
             script.ChangeCodec();
-            std::array replacement{World(NetworkModeWorldKind::AuthorityServer, 203, 210), World(NetworkModeWorldKind::Client, 204)};
+            std::array replacement{World(NetworkModeWorldKind::AuthorityServer, 203), World(NetworkModeWorldKind::Client, 204)};
             REQUIRE(host->RequestTravel({replacement.data(), count}, admittedSession).HasValue());
             REQUIRE(host->RunFrame().HasValue());
             auto failure = host->TakeTravelFailure();
@@ -118,11 +119,11 @@ namespace Horo::Network {
             REQUIRE(host->RunFrame().HasValue());
             CHECK(owners->constructedTransport == (mode == NetworkProjectRole::Standalone ? 0 : 1));
             CHECK(owners->localPlayers == (mode == NetworkProjectRole::Client || mode == NetworkProjectRole::ListenServer ? 1 : 0));
-            for (std::size_t index = 0; index < count; ++index)
-                CHECK(host->Role(worlds[index].kind, worlds[index].scene).HasValue());
-            if (mode == NetworkProjectRole::Client || mode == NetworkProjectRole::ListenServer)
-                VerifyClientLifecycle(*host, mode, {worlds.data(), count});
-            else
+            if (mode == NetworkProjectRole::Client || mode == NetworkProjectRole::ListenServer) {
+                for (std::size_t index = 0; index < count; ++index)
+                    CHECK(host->Role(worlds[index].kind, worlds[index].scene).HasError());
+                VerifyClientLifecycle(*host, mode, {worlds.data(), count}, owners);
+            } else
                 VerifyNonClientTravel(*host, mode, {worlds.data(), count});
             host->Shutdown();
             CHECK_FALSE(host->Role(worlds[0].kind, worlds[0].scene).HasValue());
@@ -148,6 +149,7 @@ namespace Horo::Network {
         REQUIRE(started.HasValue());
         auto active = AdmittedSession();
         REQUIRE(host->AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session()).HasValue());
+        PublishProductClient(*host, owners, active);
         REQUIRE(host->RequestTravel(replacement, Session()).HasValue());
         SECTION("Disconnect before safe-point publication") {
             REQUIRE(host->DisconnectClient(NetworkModeWorldKind::Client, Session()).HasValue());
@@ -156,8 +158,7 @@ namespace Horo::Network {
             const auto failed = host->TakeTravelFailure();
             REQUIRE(failed.has_value());
             REQUIRE(failed->code.Value() == NetworkErrors::NetworkModeStale.code.Value());
-            REQUIRE(host->Role(worlds[0].kind, worlds[0].scene).HasValue());
-            REQUIRE_FALSE(host->Role(worlds[0].kind, worlds[0].scene).Value().session.has_value());
+            REQUIRE(host->Role(worlds[0].kind, worlds[0].scene).HasError());
             REQUIRE(host->Role(replacement[0].kind, replacement[0].scene).HasError());
         }
         SECTION("Shutdown discards queued travel") {
@@ -209,7 +210,7 @@ namespace Horo::Network {
     TEST_CASE("Product launch rejects a declared mode absent from actual package inventory before factories",
               "[integration][network][mode][package]") {
         DeterministicClock clock;
-        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 5, 11)};
+        const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 5)};
         const auto owners = std::make_shared<ProductOwners>();
         auto created = Product(clock, NetworkProjectRole::DedicatedServer, worlds, {}, owners, true);
         CHECK(created.HasError());

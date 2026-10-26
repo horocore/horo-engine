@@ -409,7 +409,7 @@ TEST_CASE("GNS IPv6 loopback listens, connects, and closes when host IPv6 is ava
 TEST_CASE("GNS cancels an in-flight DNS query once and rejects its stale handle", "[network][gns][dns]") {
     SilentDnsServer dns;
     REQUIRE_FALSE(dns.Server().empty());
-    GnsTransport delayed(dns.Server());
+    GnsTransport delayed{GnsTransportSetup{.resolverServer = dns.Server()}};
     REQUIRE(delayed.Initialize({.maximumConnections = 2, .maximumEventsPerPoll = 8, .maximumMessageBytes = 1200}).HasValue());
     const auto endpoint = NetworkAddress::Parse("pending.horo-1107.invalid:42499");
     REQUIRE(endpoint.HasValue());
@@ -439,7 +439,7 @@ TEST_CASE("GNS cancels an in-flight DNS query once and rejects its stale handle"
 TEST_CASE("GNS times out and destroys pending DNS without delivering a late result", "[network][gns][dns]") {
     SilentDnsServer dns;
     REQUIRE_FALSE(dns.Server().empty());
-    GnsTransport transport(dns.Server());
+    GnsTransport transport{GnsTransportSetup{.resolverServer = dns.Server()}};
     REQUIRE(transport.Initialize({.maximumConnections = 2, .maximumEventsPerPoll = 8, .maximumMessageBytes = 1200}).HasValue());
     const auto endpoint = NetworkAddress::Parse("pending.horo-1107.invalid:42499");
     REQUIRE(endpoint.HasValue());
