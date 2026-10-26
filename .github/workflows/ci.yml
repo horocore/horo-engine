@@ -963,7 +963,7 @@ jobs:
   # Build macOS work on a standard hosted ARM64 runner. The hardware job
   # depends only on this producer, so Windows/Linux cannot occupy the M3 queue.
   macos-build:
-    name: Build · macOS / Clang
+    name: Build · ${{ matrix.name }}
     needs: tooling
     if: ${{ !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
     permissions:
@@ -994,7 +994,7 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-native-macos-producer-${{ github.ref }}
       cancel-in-progress: false
-    name: Build · macOS / Clang (main)
+    name: Build · ${{ matrix.name }} (main)
     needs: tooling
     if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     permissions:

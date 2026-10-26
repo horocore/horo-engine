@@ -280,6 +280,8 @@ def test_registry_storage_skips_actions_while_focused_profiles_keep_the_default(
 def test_macos_publishers_retain_complete_native_pipeline_and_bundle_outputs() -> None:
     source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     reader, main = job(source, "macos-build"), job(source, "macos-build-main")
+    assert "    name: Build · ${{ matrix.name }}\n" in reader
+    assert "    name: Build · ${{ matrix.name }} (main)\n" in main
     for field, anchor in (("steps", "native_steps"), ("env", "native_environment"), ("defaults", "native_defaults")):
         assert f"    {field}: *{anchor}\n" in reader
         assert f"    {field}: *{anchor}\n" in main
