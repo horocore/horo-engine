@@ -49,7 +49,14 @@ namespace Horo::Application::Internal {
     class RuntimeUiPaintProjection final {
         struct Storage;
 
+        class ConstructionKey final {
+            friend class RuntimeUiPaintProjection;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Factory-only construction after validated storage preparation. */
+        explicit RuntimeUiPaintProjection(ConstructionKey, std::unique_ptr<Storage> storage) noexcept;
         /** @brief Reserves extraction storage against the actual service-issued source generation.
          * @param service Canonical host-owned source service. @param instance Exact admitted instance.
          * @param declaration Owned real source components. @param descriptor Finite extraction/view policy.
@@ -89,7 +96,6 @@ namespace Horo::Application::Internal {
                                                                     const Runtime::Ui::UiAnimationFrameLease &frame);
 
     private:
-        explicit RuntimeUiPaintProjection(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;
     };
 }  // namespace Horo::Application::Internal

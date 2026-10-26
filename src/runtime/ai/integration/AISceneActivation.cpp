@@ -575,7 +575,7 @@ namespace Horo::AI {
 
     /** @copydoc AiSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> AiSceneActivationParticipant::Prepare(
-        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
         if (runtime_ == nullptr)
             return Failure<std::unique_ptr<Runtime::SceneActivationCandidate>>(AIErrors::SceneActivationInvalid,
                                                                                "The AI scene participant has no runtime owner.");

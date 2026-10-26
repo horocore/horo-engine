@@ -184,7 +184,7 @@ namespace Horo::Runtime {
          * @return Owned candidate ready for evidence validation and no-fail aggregate publication, or a typed error.
          */
         [[nodiscard]] virtual Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &definition,
-                                                                                        RuntimeSceneView scene) = 0;
+                                                                                        const RuntimeSceneView &scene) = 0;
 
         /** @brief Prepares optional detached owner state for normal unload of the exact active Scene.
          * @param scene Borrowed active generation; implementations must retain their own immutable leases, never component pointers.
@@ -674,7 +674,7 @@ namespace Horo::Runtime {
          * @param destroyed Existing entities retired by the same transaction.
          * @return Owned unpublished candidate. Its destruction rolls back uncommitted owner work.
          */
-        [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(RuntimeSceneView active,
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(const RuntimeSceneView &active,
                                                                                         std::span<const RuntimeEntityView> created,
                                                                                         std::span<const EntityRef> destroyed) = 0;
     };

@@ -34,6 +34,19 @@ namespace Horo::Application::Internal {
             source.reset();
             return Result<bool>::Success(true);
         }
+
+        /** @brief Releases the exact retirement reservation only after its source was reclaimed. */
+        Result<void> CollectReservedSource(Detail::RuntimeUiPaintHostState &state, std::unique_ptr<Detail::RuntimeUiPaintSource> &entry,
+                                           bool &drained) {
+            const auto slot = entry ? entry->retirementSlot : NoUiRenderIndex;
+            const auto result = CollectSource(entry);
+            if (result.HasError())
+                return Result<void>::Failure(result.ErrorValue());
+            drained = drained && result.Value();
+            if (!entry && slot < state.reservedRetirements.size())
+                state.reservedRetirements[slot] = false;
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc RuntimeUiPaintHost::Compose */
@@ -165,25 +178,15 @@ namespace Horo::Application::Internal {
         if (!state_ || state_->owner != std::this_thread::get_id() || state_->dispatching || state_->sceneSealed || state_->scenePreparing)
             return Result<bool>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         bool drained = true;
-        const auto collect = [&](auto &entry) -> Result<void> {
-            const auto slot = entry ? entry->retirementSlot : NoUiRenderIndex;
-            const auto result = CollectSource(entry);
-            if (result.HasError())
-                return Result<void>::Failure(result.ErrorValue());
-            drained = drained && result.Value();
-            if (!entry && slot < state_->reservedRetirements.size())
-                state_->reservedRetirements[slot] = false;
-            return Result<void>::Success();
-        };
-        if (const auto result = collect(state_->source); result.HasError())
+        if (const auto result = CollectReservedSource(*state_, state_->source, drained); result.HasError())
             return Result<bool>::Failure(result.ErrorValue());
         for (auto &entry : state_->sceneSources)
-            if (const auto result = collect(entry); result.HasError())
+            if (const auto result = CollectReservedSource(*state_, entry, drained); result.HasError())
                 return Result<bool>::Failure(result.ErrorValue());
         for (auto &entry : state_->retiredSources) {
             if (!entry)
                 continue;
-            if (const auto result = collect(entry); result.HasError())
+            if (const auto result = CollectReservedSource(*state_, entry, drained); result.HasError())
                 return Result<bool>::Failure(result.ErrorValue());
         }
         if (const auto active = state_->Sources(); std::ranges::any_of(active, [](auto *entry) {

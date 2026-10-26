@@ -98,7 +98,7 @@ namespace Horo::Application::Internal {
          * The candidate's no-fail Publish runs only under the existing Scene claim; Shutdown revokes only its exact Scene.
          */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PrepareScene(
-            Runtime::Ui::UiSceneTransitionRequest transition, std::vector<RuntimeUiPaintSceneSourcePreparation> incoming,
+            const Runtime::Ui::UiSceneTransitionRequest &transition, std::vector<RuntimeUiPaintSceneSourcePreparation> incoming,
             std::vector<Runtime::Ui::UiSceneBindingReplacement> replacements = {}, const CancellationToken &cancellation = {}) const;
         /** @brief Coordinates the same source publisher/derived owner; failed preparation keeps the prior source and native program. */
         [[nodiscard]] Result<Runtime::UiAnimationRuntimeReload> Reload(Runtime::Ui::UiAnimationReloadPreparation preparation,

@@ -112,7 +112,7 @@ namespace Horo::Application::Internal::Detail {
     }
 
     /** @copydoc RuntimeUiPaintSource::Extract */
-    Result<void> RuntimeUiPaintSource::Extract(RuntimeUiService &service, const std::uint64_t frameNumber,
+    Result<void> RuntimeUiPaintSource::Extract(const RuntimeUiService &service, const std::uint64_t frameNumber,
                                                const CancellationToken &cancellation) {
         ReleaseFrame();
         auto current = animation->Acquire();
@@ -165,7 +165,7 @@ namespace Horo::Application::Internal::Detail {
     }
 
     /** @copydoc RuntimeUiPaintSource::OnPhase */
-    Result<void> RuntimeUiPaintSource::OnPhase(RuntimeUiService &service, Render::RenderFrontend &frontend,
+    Result<void> RuntimeUiPaintSource::OnPhase(const RuntimeUiService &service, Render::RenderFrontend &frontend,
                                                const Runtime::RuntimePhase phase, const Runtime::FrameContext &context,
                                                const CancellationToken &cancellation) {
         if (phase == Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands) {

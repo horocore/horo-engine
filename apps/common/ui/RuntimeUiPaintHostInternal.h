@@ -89,14 +89,14 @@ namespace Horo::Application::Internal::Detail {
         /** @brief Builds allocation-free current image/font/atlas evidence for the exact selected native slot. */
         [[nodiscard]] Result<void> BindResources();
         /** @brief Extracts current canonical source/derived data before the editor opens its native frame. */
-        [[nodiscard]] Result<void> Extract(Runtime::Ui::RuntimeUiService &service, std::uint64_t frameNumber,
+        [[nodiscard]] Result<void> Extract(const Runtime::Ui::RuntimeUiService &service, std::uint64_t frameNumber,
                                            const CancellationToken &cancellation);
         /** @brief Releases local CPU pins before the existing derived/source drain fence is queried. */
         void ReleaseFrame() noexcept;
         /** @brief Closes this exact derived producer while preserving pending native and immutable leases for collection. */
         [[nodiscard]] Result<void> Retire();
         /** @brief Forwards the existing owner phases and extraction to this exact source without a second scheduler. */
-        [[nodiscard]] Result<void> OnPhase(Runtime::Ui::RuntimeUiService &service, Render::RenderFrontend &frontend,
+        [[nodiscard]] Result<void> OnPhase(const Runtime::Ui::RuntimeUiService &service, Render::RenderFrontend &frontend,
                                            Runtime::RuntimePhase phase, const Runtime::FrameContext &context,
                                            const CancellationToken &cancellation);
     };

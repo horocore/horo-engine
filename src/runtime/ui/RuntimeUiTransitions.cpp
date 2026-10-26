@@ -22,8 +22,7 @@ namespace Horo::Runtime::Ui {
                 auto source = entry.lock();
                 if (!source || source->instance != instance || source->retiring)
                     continue;
-                const auto candidate = source->preparation.lock();
-                if (found || (candidate && !candidate->consumed))
+                if (const auto candidate = source->preparation.lock(); found || (candidate && !candidate->consumed))
                     return Result<AnimationSource>::Failure(MakeError(UiErrors::CapabilityBusy));
                 found = std::move(source);
             }
@@ -66,8 +65,7 @@ namespace Horo::Runtime::Ui {
                 const auto source = entry.lock();
                 if (!source || source->retiring)
                     continue;
-                const auto candidate = source->preparation.lock();
-                if (candidate && candidate.get() == preparation)
+                if (const auto candidate = source->preparation.lock(); candidate && candidate.get() == preparation)
                     continue;
                 const auto descriptor = state.registry.Describe(source->instance);
                 if (descriptor.HasError())
@@ -121,17 +119,17 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::PrepareTransition */
-    Result<UiSceneReconciliation::Prepared> RuntimeUiService::PrepareTransition(  // NOSONAR(cpp:S5817) Reserves transition candidates and
-                                                                                  // replacement inventory.
-        const UiSceneTransitionRequest &request, std::vector<UiSceneBindingReplacement> bindings, std::vector<UiSceneActivation> incoming,
-        const CancellationToken &cancellation) {
+    Result<UiSceneReconciliation::Prepared> RuntimeUiService::PrepareTransition(const UiSceneTransitionRequest &request,
+                                                                                std::vector<UiSceneBindingReplacement> bindings,
+                                                                                std::vector<UiSceneActivation> incoming,
+                                                                                const CancellationToken &cancellation) const {
         return PrepareTransition(request, std::move(bindings), std::move(incoming), std::span<const RuntimeUiInstanceId>{}, cancellation);
     }
 
     /** @copydoc RuntimeUiService::PrepareTransition */
     Result<UiSceneReconciliation::Prepared> RuntimeUiService::PrepareTransition(
         const UiSceneTransitionRequest &request, std::vector<UiSceneBindingReplacement> bindings, std::vector<UiSceneActivation> incoming,
-        const std::span<const RuntimeUiInstanceId> coordinatedSources, const CancellationToken &cancellation) {
+        const std::span<const RuntimeUiInstanceId> coordinatedSources, const CancellationToken &cancellation) const {
         using Prepared = Result<UiSceneReconciliation::Prepared>;
         if (auto valid = Detail::CheckOwner(state_); valid.HasError())
             return Prepared::Failure(valid.ErrorValue());
@@ -188,7 +186,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc RuntimeUiService::CommitTransition */
     Result<UiSceneReconciliationResult> RuntimeUiService::CommitTransition(  // NOSONAR(cpp:S5817) Publishes prepared owners and discards
                                                                              // expired routes.
-        UiSceneReconciliation::Prepared &prepared, const UiStructuralCommitPoint point) {
+        const UiSceneReconciliation::Prepared &prepared, const UiStructuralCommitPoint point) {
         if (auto valid = Detail::CheckOwner(state_); valid.HasError())
             return Result<UiSceneReconciliationResult>::Failure(valid.ErrorValue());
         if (const auto admitted = CanCommitTransition(prepared, point); admitted.HasError())

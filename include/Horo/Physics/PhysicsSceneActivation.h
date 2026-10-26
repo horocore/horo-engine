@@ -226,7 +226,7 @@ namespace Horo::Physics {
 
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                                                         Runtime::RuntimeSceneView scene) override;
+                                                                                         const Runtime::RuntimeSceneView &scene) override;
         /** @brief Creates the structural adapter for this explicit activation owner before Scene startup.
          * @return Owned adapter following the exact published world selected by this participant.
          * @details The participant, runtime and authority outlive the Scene service. Registration does not
@@ -267,7 +267,7 @@ namespace Horo::Physics {
          * @param scene Exact resolved scene generation corresponding to definition.
          * @return Success with an unpublished candidate, or a typed error preserving the active world.
          * @pre Owner thread between fixed ticks; only one pending candidate is allowed. */
-        [[nodiscard]] Result<void> Prepare(const Runtime::RuntimeSceneDefinition &definition, Runtime::RuntimeSceneView scene);
+        [[nodiscard]] Result<void> Prepare(const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene);
         /** @brief Publishes the pending world and retires the old one at the host lifecycle safe point.
          * @param phase Current host phase; only CommitDeferredLifecycleChanges is admitted.
          * @param source Original scene view supplied to Prepare; its owner must remain alive until this call.

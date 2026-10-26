@@ -41,7 +41,7 @@ namespace Horo::Editor {
                 return Runtime::SceneStructuralOwner::Gameplay;
             }
 
-            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView scene,
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &scene,
                                                                                std::span<const Runtime::RuntimeEntityView> created,
                                                                                std::span<const Runtime::EntityRef> destroyed) override {
                 auto *runtime = runtime_();

@@ -304,7 +304,7 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsPlayWorldSession::Prepare */
     Result<void> PhysicsPlayWorldSession::Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                  const Runtime::RuntimeSceneView scene) {
+                                                  const Runtime::RuntimeSceneView &scene) {
         if (const Result<void> owner = CheckOwner(); owner.HasError())
             return owner;
         if (pending_)

@@ -198,9 +198,7 @@ namespace Horo::Render {
 
             bool &active;
 
-            explicit StageFence(bool &flag) : active(flag) {
-                active = true;
-            }
+            explicit StageFence(bool &flag) : active(flag = true) {}
 
             ~StageFence() {
                 active = false;

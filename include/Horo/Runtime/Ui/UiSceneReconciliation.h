@@ -151,7 +151,7 @@ namespace Horo::Runtime::Ui {
          * @param prepared Candidate consumed once on success. @param point Owner cutoff.
          * @return Aggregate evidence or original typed failure preserving every last-good owner.
          */
-        [[nodiscard]] Result<UiSceneReconciliationResult> Commit(Prepared &prepared, UiStructuralCommitPoint point);
+        [[nodiscard]] Result<UiSceneReconciliationResult> Commit(const Prepared &prepared, UiStructuralCommitPoint point);
         /** @brief Borrows one exact active publisher for a synchronous owner operation.
          * @param instance Exact semantic instance. @return Publisher or null after retirement/stale identity.
          * @details Never retain this pointer across registry commands; Acquire pins immutable generations instead.

@@ -4,6 +4,7 @@
 #include "RenderExternalImages.h"
 #include "RenderFrontendErrors.h"
 #include "UiPaintOwnerRetirement.h"
+#include "UiPaintResourceRetirement.h"
 
 #include <algorithm>
 #include <array>
@@ -367,50 +368,50 @@ namespace Horo::Render::Detail {
         return Result<RenderResourceState>::Success(slots_.At(validated.Value()).state);
     }
 
-    /** @copydoc RenderResourceRegistry::BindUiPaintOwner */
-    void RenderResourceRegistry::BindUiPaintOwner(const ResourceReservation &reservation,
-                                                  const std::shared_ptr<UiPaintOwnerRetirement> &owner) noexcept {
-        assert(slots_.FindExact(reservation.identity) && slots_.FindExact(reservation.identity)->state == RenderResourceState::Pending &&
-               slots_.FindExact(reservation.identity)->operation == reservation.operation);
-        slots_.At(reservation.identity.slot).uiPaintOwner = owner;
+    /** @copydoc UiPaintResourceRetirement::BindOwner */
+    void UiPaintResourceRetirement::BindOwner(const ResourceReservation &reservation,
+                                              const std::shared_ptr<UiPaintOwnerRetirement> &owner) const noexcept {
+        assert(registry_.slots_.FindExact(reservation.identity) &&
+               registry_.slots_.FindExact(reservation.identity)->state == RenderResourceState::Pending &&
+               registry_.slots_.FindExact(reservation.identity)->operation == reservation.operation);
+        registry_.slots_.At(reservation.identity.slot).uiPaintOwner = owner;
     }
 
-    /** @copydoc RenderResourceRegistry::PendingUiPaintRetirement */
-    std::optional<ResourceReservation> RenderResourceRegistry::PendingUiPaintRetirement(
-        const RenderResourceIdentity identity) const noexcept {
-        const Entry *entry = slots_.FindExact(identity);
+    /** @copydoc UiPaintResourceRetirement::PendingReservation */
+    std::optional<ResourceReservation> UiPaintResourceRetirement::PendingReservation(const RenderResourceIdentity identity) const noexcept {
+        const RenderResourceRegistry::Entry *entry = registry_.slots_.FindExact(identity);
         if (!entry || entry->state != RenderResourceState::Pending || !entry->uiPaintOwner || !entry->uiPaintOwner->Requested())
             return std::nullopt;
         return ResourceReservation{identity, entry->operation};
     }
 
-    /** @copydoc RenderResourceRegistry::RetireUiPaintResource */
-    void RenderResourceRegistry::RetireUiPaintResource(const RenderResourceIdentity identity,
-                                                       const ResourceOperationId operation) noexcept {
-        const Entry *entry = slots_.FindExact(identity);
+    /** @copydoc UiPaintResourceRetirement::Retire */
+    void UiPaintResourceRetirement::Retire(const RenderResourceIdentity identity, const ResourceOperationId operation) const noexcept {
+        using enum RenderResourceState;
+        const RenderResourceRegistry::Entry *entry = registry_.slots_.FindExact(identity);
         if (!entry || entry->operation != operation || !entry->uiPaintOwner || !entry->uiPaintOwner->Requested())
             return;
-        if (entry->state == RenderResourceState::Pending) {
-            RollbackPending(entry->resourceClass, {identity, operation});
+        if (entry->state == Pending) {
+            registry_.RollbackPending(entry->resourceClass, {identity, operation});
             return;
         }
-        if (entry->state == RenderResourceState::Ready)
-            slots_.At(identity.slot).state = RenderResourceState::Retiring;
-        QueueRetirementIfEligible(identity.slot);
+        if (entry->state == Ready)
+            registry_.slots_.At(identity.slot).state = Retiring;
+        registry_.QueueRetirementIfEligible(identity.slot);
     }
 
-    /** @copydoc RenderResourceRegistry::SweepUiPaintRetirements */
-    void RenderResourceRegistry::SweepUiPaintRetirements() noexcept {
-        if (slots_.Size() <= 1)
+    /** @copydoc UiPaintResourceRetirement::Sweep */
+    void UiPaintResourceRetirement::Sweep() const noexcept {
+        if (registry_.slots_.Size() <= 1)
             return;
-        const auto maximum = std::min<std::size_t>(limits_.retirementDrainBudget, slots_.Size() - 1);
+        const auto maximum = std::min<std::size_t>(registry_.limits_.retirementDrainBudget, registry_.slots_.Size() - 1);
         for (std::size_t examined = 0; examined < maximum; ++examined) {
-            if (uiPaintRetirementCursor_ >= slots_.Size())
-                uiPaintRetirementCursor_ = 1;
-            const auto slot = uiPaintRetirementCursor_++;
-            if (const Entry &entry = slots_.At(slot);
+            if (registry_.uiPaintRetirementCursor_ >= registry_.slots_.Size())
+                registry_.uiPaintRetirementCursor_ = 1;
+            const auto slot = registry_.uiPaintRetirementCursor_++;
+            if (const RenderResourceRegistry::Entry &entry = registry_.slots_.At(slot);
                 entry.state == RenderResourceState::Ready && entry.uiPaintOwner && entry.uiPaintOwner->Requested())
-                RetireUiPaintResource({owner_, static_cast<std::uint32_t>(slot), entry.generation}, entry.operation);
+                Retire({registry_.owner_, static_cast<std::uint32_t>(slot), entry.generation}, entry.operation);
         }
     }
 

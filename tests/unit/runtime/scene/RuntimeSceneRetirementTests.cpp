@@ -95,7 +95,7 @@ namespace {
     public:
         explicit RetirementParticipant(RetirementAudit &audit) : audit_(audit) {}
 
-        Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, RuntimeSceneView) override {
+        Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, const RuntimeSceneView &) override {
             return Result<std::unique_ptr<SceneActivationCandidate>>::Success(std::make_unique<ActiveRoot>(audit_));
         }
 

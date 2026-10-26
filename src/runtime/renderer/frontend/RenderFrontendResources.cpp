@@ -5,6 +5,7 @@
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
+#include "UiPaintResourceRetirement.h"
 
 #include <algorithm>
 #include <array>
@@ -276,7 +277,7 @@ namespace Horo::Render {
         }
         const Detail::ResourceReservation &reservation = admitted.Value().resource;
         if (owner)
-            resourceRegistry_->BindUiPaintOwner(reservation, owner);
+            Detail::UiPaintResourceRetirement{*resourceRegistry_}.BindOwner(reservation, owner);
         try {
             if (reservation.identity.slot >= buffers_.size())
                 buffers_.resize(static_cast<std::size_t>(reservation.identity.slot) + 1);
@@ -401,7 +402,7 @@ namespace Horo::Render {
         }
         const Detail::ResourceReservation &reservation = admitted.Value().resource;
         if (owner)
-            resourceRegistry_->BindUiPaintOwner(reservation, owner);
+            Detail::UiPaintResourceRetirement{*resourceRegistry_}.BindOwner(reservation, owner);
         try {
             if (reservation.identity.slot >= textures_.size())
                 textures_.resize(static_cast<std::size_t>(reservation.identity.slot) + 1);
@@ -531,14 +532,14 @@ namespace Horo::Render {
                                                     const ResourceOperationId operation) noexcept {
         if (std::this_thread::get_id() != preparationOwner_ || activeFrameScope_ != nullptr)
             return false;
-        if (const auto pending = resourceRegistry_->PendingUiPaintRetirement(identity); pending && pending->operation == operation) {
-            if (const auto *request = resourceUploadQueue_->Find(identity); request && request->memoryReservation.IsValid()) {
-                if (!memoryBudget_->TryCancelReservation(request->memoryReservation))
-                    return false;
-            }
+        if (const auto pending = Detail::UiPaintResourceRetirement{*resourceRegistry_}.PendingReservation(identity);
+            pending && pending->operation == operation) {
+            if (const auto *request = resourceUploadQueue_->Find(identity);
+                request && request->memoryReservation.IsValid() && !memoryBudget_->TryCancelReservation(request->memoryReservation))
+                return false;
             static_cast<void>(resourceUploadQueue_->Cancel(identity));
         }
-        resourceRegistry_->RetireUiPaintResource(identity, operation);
+        Detail::UiPaintResourceRetirement{*resourceRegistry_}.Retire(identity, operation);
         static_cast<void>(resourceRegistry_->DrainRetirements());
         static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
         return true;
@@ -563,7 +564,7 @@ namespace Horo::Render {
                                                                   "Resource requests can only be processed at a frame boundary."));
         }
 
-        resourceRegistry_->SweepUiPaintRetirements();
+        Detail::UiPaintResourceRetirement{*resourceRegistry_}.Sweep();
         std::size_t processedRequests = 0;
         std::size_t processedBytes = 0;
         std::size_t completedRequests = 0;
@@ -573,12 +574,12 @@ namespace Horo::Render {
             const std::span<const std::byte> initialData = resourceUploadQueue_->FrontInitialData();
             ++processedRequests;
             processedBytes += initialData.size();
-            if (const auto pending = resourceRegistry_->PendingUiPaintRetirement(request.identity); pending) {
+            if (const auto pending = Detail::UiPaintResourceRetirement{*resourceRegistry_}.PendingReservation(request.identity); pending) {
                 if (request.memoryReservation.IsValid() && !memoryBudget_->TryCancelReservation(request.memoryReservation)) {
                     resourceUploadQueue_->CompleteBatch(completedRequests, completedBytes);
                     return Result<std::size_t>::Failure(MakeError(RenderMemoryBudgetErrors::InvalidReservation));
                 }
-                resourceRegistry_->RetireUiPaintResource(request.identity, pending->operation);
+                Detail::UiPaintResourceRetirement{*resourceRegistry_}.Retire(request.identity, pending->operation);
                 resourceUploadQueue_->PopCancelled();
                 continue;
             }

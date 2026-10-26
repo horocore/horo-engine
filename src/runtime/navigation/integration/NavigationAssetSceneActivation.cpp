@@ -307,7 +307,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationAssetSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> NavigationAssetSceneActivationParticipant::Prepare(
-        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
         if (!ValidPreparationBounds(*state_)) {
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }

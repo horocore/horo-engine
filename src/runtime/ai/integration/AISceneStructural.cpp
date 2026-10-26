@@ -102,7 +102,7 @@ namespace Horo::AI::Detail {
             return Runtime::SceneStructuralPreparationPhase::Identity;
         }
 
-        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView scene,
+        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &scene,
                                                                            const std::span<const Runtime::RuntimeEntityView> created,
                                                                            const std::span<const Runtime::EntityRef> destroyed) override {
             if (runtime_->shutdown_ || !runtime_->active_ || runtime_->active_->closed || !scene.IsCurrent() ||

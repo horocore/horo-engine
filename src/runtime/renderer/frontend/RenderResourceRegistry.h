@@ -24,6 +24,7 @@ namespace Horo::Render {
 
 namespace Horo::Render::Detail {
     struct UiPaintOwnerRetirement;
+    class UiPaintResourceRetirement;
     class IRenderExternalTextureSource;
     struct RenderExternalTextureFacts;
 
@@ -118,14 +119,6 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Fail(RenderResourceClass resourceClass, RenderResourceIdentity identity, Error error);
         [[nodiscard]] Result<void> Release(RenderResourceClass resourceClass, RenderResourceIdentity identity);
         [[nodiscard]] Result<void> CancelPending(RenderResourceClass resourceClass, RenderResourceIdentity identity);
-        /** @brief Attaches one admitted UI owner before its exact pending creation is published to a caller. */
-        void BindUiPaintOwner(const ResourceReservation &reservation, const std::shared_ptr<UiPaintOwnerRetirement> &owner) noexcept;
-        /** @brief Finds requested pending ownership without copying or constructing operation diagnostics. */
-        [[nodiscard]] std::optional<ResourceReservation> PendingUiPaintRetirement(RenderResourceIdentity identity) const noexcept;
-        /** @brief Marks one exact requested UI generation retiring; existing pins still gate native destruction. */
-        void RetireUiPaintResource(RenderResourceIdentity identity, ResourceOperationId operation) noexcept;
-        /** @brief Examines at most the configured retirement budget using a persistent cursor; pending uploads drain separately. */
-        void SweepUiPaintRetirements() noexcept;
         /** @brief Cancels a still-pending exact reservation using its pre-owned rollback error; terminal records are unchanged. */
         void RollbackPending(RenderResourceClass resourceClass, ResourceReservation reservation) noexcept;
         [[nodiscard]] Result<RenderResourceState> State(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
@@ -152,6 +145,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] RenderResourceOwnerId Owner() const noexcept;
 
     private:
+        friend class UiPaintResourceRetirement;
+
         /** @brief Callback only marks owner-thread evidence; registry/budget mutation happens later in Retire. */
         struct NativeLease final : IRenderResourceRetirementLease {
             bool claimed{false};
@@ -259,6 +254,7 @@ namespace Horo::Render::Detail {
         /** @brief Sole generational slot storage; its embedded native lease addresses remain stable after preparation. */
         class SlotStore final {
             friend class RenderResourceRegistry;
+            friend class UiPaintResourceRetirement;
 
             SlotStore(RenderResourceOwnerId owner, std::uint32_t maximumSlots) : owner_(owner), maximumSlots_(maximumSlots) {}
 

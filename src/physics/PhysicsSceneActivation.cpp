@@ -345,7 +345,7 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PhysicsSceneActivationParticipant::Prepare(
-        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
         if (const std::array valid{runtime_->State() == PhysicsRuntimeState::Ready, scene.IsCurrent(), scene.RuntimeId().IsValid()};
             !std::ranges::all_of(valid, std::identity{}))
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::WorldInvalid));

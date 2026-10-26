@@ -16,9 +16,9 @@ namespace Horo::Runtime {
                             cancellation);
     }
 
-    /** @copydoc UiAnimationRuntimeParticipant::Reload(Ui::RuntimeUiService &, Ui::RuntimeUiInstanceId,
+    /** @copydoc UiAnimationRuntimeParticipant::Reload(const Ui::RuntimeUiService &, Ui::RuntimeUiInstanceId,
      * Ui::UiAnimationReloadPreparation, const CancellationToken &) */
-    Result<UiAnimationRuntimeReload> UiAnimationRuntimeParticipant::Reload(Ui::RuntimeUiService &service,
+    Result<UiAnimationRuntimeReload> UiAnimationRuntimeParticipant::Reload(const Ui::RuntimeUiService &service,
                                                                            const Ui::RuntimeUiInstanceId instance,
                                                                            Ui::UiAnimationReloadPreparation preparation,
                                                                            const CancellationToken &cancellation) {
@@ -26,7 +26,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc UiAnimationRuntimeParticipant::ReloadSource */
-    Result<UiAnimationRuntimeReload> UiAnimationRuntimeParticipant::ReloadSource(Ui::RuntimeUiService *service,
+    Result<UiAnimationRuntimeReload> UiAnimationRuntimeParticipant::ReloadSource(const Ui::RuntimeUiService *service,
                                                                                  const Ui::RuntimeUiInstanceId instance,
                                                                                  Ui::UiAnimationReloadPreparation preparation,
                                                                                  const CancellationToken &cancellation) {

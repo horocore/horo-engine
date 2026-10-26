@@ -190,7 +190,7 @@ namespace Horo::Runtime {
          * @param service Exact source service; never retained by wrapper address. @param instance Exact admitted instance.
          * @param preparation Complete trusted source and derived replacement resources. @param cancellation Preparation fence.
          * @return Source/derived outcomes and fresh controller, or original failure retaining previous source/controller/frame. */
-        [[nodiscard]] Result<UiAnimationRuntimeReload> Reload(Ui::RuntimeUiService &service, Ui::RuntimeUiInstanceId instance,
+        [[nodiscard]] Result<UiAnimationRuntimeReload> Reload(const Ui::RuntimeUiService &service, Ui::RuntimeUiInstanceId instance,
                                                               Ui::UiAnimationReloadPreparation preparation,
                                                               const CancellationToken &cancellation = {});
         /** @brief Starts one nonblocking authored animation through the actual retained canvas owner.
@@ -264,7 +264,7 @@ namespace Horo::Runtime {
         friend std::unique_ptr<UiAnimationRuntimeParticipant> std::make_unique<UiAnimationRuntimeParticipant>(std::unique_ptr<Storage> &&);
         explicit UiAnimationRuntimeParticipant(std::unique_ptr<Storage> storage) noexcept;
         /** @brief Shares controller reservation and replacement after either standalone or coordinated canonical reload. */
-        [[nodiscard]] Result<UiAnimationRuntimeReload> ReloadSource(Ui::RuntimeUiService *service, Ui::RuntimeUiInstanceId instance,
+        [[nodiscard]] Result<UiAnimationRuntimeReload> ReloadSource(const Ui::RuntimeUiService *service, Ui::RuntimeUiInstanceId instance,
                                                                     Ui::UiAnimationReloadPreparation preparation,
                                                                     const CancellationToken &cancellation);
         [[nodiscard]] Result<void> PrepareFrame(const RuntimeDispatchFacts &facts);

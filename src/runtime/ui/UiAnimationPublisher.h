@@ -34,7 +34,7 @@ namespace Horo::Runtime::Ui::Detail {
                                                                  RuntimeUiInstanceId instance, UiCanvasId canvas);
         /** @brief Reserves an exact private incoming publisher before canonical Scene publication; abandonment revokes access. */
         [[nodiscard]] static Result<UiAnimationPublisher> AttachPrepared(std::shared_ptr<RuntimeUiServiceState> service,
-                                                                         UiSceneReconciliation::Prepared &prepared,
+                                                                         const UiSceneReconciliation::Prepared &prepared,
                                                                          RuntimeUiInstanceId instance, UiCanvasId canvas);
         [[nodiscard]] bool IsAvailable() const noexcept;
         [[nodiscard]] UiReloadGeneration *Current() noexcept;
@@ -55,7 +55,7 @@ namespace Horo::Runtime::Ui::Detail {
         UiAnimationPublisher(std::shared_ptr<RuntimeUiServiceState> service,
                              std::shared_ptr<UiAnimationSourceReservation> reservation) noexcept;
         [[nodiscard]] static Result<UiAnimationPublisher> AttachPublisher(
-            std::shared_ptr<RuntimeUiServiceState> service, RuntimeUiInstanceId instance, UiCanvasId canvas, UiHotReload &publisher,
+            std::shared_ptr<RuntimeUiServiceState> service, RuntimeUiInstanceId instance, UiCanvasId canvas, const UiHotReload &publisher,
             std::shared_ptr<UiSceneReconciliation::Prepared::Storage> prepared = {}, UiReloadLease source = {});
         [[nodiscard]] UiReloadGeneration *CandidateGeneration() const noexcept;
         [[nodiscard]] UiHotReload *Resolve() noexcept;

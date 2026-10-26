@@ -7,6 +7,21 @@
 #include <utility>
 
 namespace Horo::Runtime::Ui {
+    namespace {
+        /** @brief Closes an unpublished incoming owner while its preparation continues to pin the source. */
+        void RevokeIncomingAnimation(Detail::UiAnimationSourceReservation &source, const SceneRuntimeId scene) noexcept {
+            const auto prepared = source.preparation.lock();
+            if (!prepared)
+                return;
+            for (auto &incoming : prepared->incoming) {
+                if (incoming.descriptor.owner.scene != scene)
+                    continue;
+                incoming.sceneRevoked = true;
+                source.retiring = true;
+            }
+        }
+    }  // namespace
+
     /** @copydoc UiSceneReconciliation::Storage::FlushSceneRevocations */
     void UiSceneReconciliation::Storage::FlushSceneRevocations() noexcept {
         if (collecting || publicationSeal)
@@ -62,7 +77,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::RevokeScene */
-    void RuntimeUiService::RevokeScene(const SceneRuntimeId scene) noexcept {
+    void RuntimeUiService::RevokeScene(const SceneRuntimeId scene) const noexcept {
         if (!state_ || !state_->active || state_->thread != std::this_thread::get_id() || !scene.IsValid())
             return;
         for (const auto &weak : state_->scopes)
@@ -81,28 +96,13 @@ namespace Horo::Runtime::Ui {
         for (auto &action : state_->actions)
             if (action.occupied && matching(action.instance))
                 action.sceneRevoked = true;
-        const auto retireIncoming = [scene](const std::shared_ptr<Detail::UiAnimationSourceReservation> &source) {
-            const auto prepared = source->preparation.lock();
-            if (!prepared)
-                return;
-            for (auto &incoming : prepared->incoming) {
-                if (incoming.descriptor.owner.scene != scene)
-                    continue;
-                incoming.sceneRevoked = true;
-                source->retiring = true;
-            }
-        };
         for (const auto &weak : state_->animationSources) {
             const auto source = weak.lock();
             if (!source)
                 continue;
-            if (const auto slot = state_->registry.storage_.Get()->Find(source->instance);
-                slot < state_->registry.storage_.Get()->active.size()) {
-                const auto &entry = *state_->registry.storage_.Get()->active[slot];
-                if (entry.descriptor.owner.scene == scene || entry.descriptor.providerScene == scene)
-                    source->retiring = true;
-            }
-            retireIncoming(source);
+            if (matching(source->instance))
+                source->retiring = true;
+            RevokeIncomingAnimation(*source, scene);
         }
         state_->registry.RevokeScene(scene, state_->dispatching || state_->scenePublication);
         state_->sceneRevocationsPending = true;

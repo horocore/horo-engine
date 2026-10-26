@@ -317,7 +317,7 @@ namespace Horo::Runtime::Ui {
          * @return Unique derived owner or typed source/thread/identity/capacity failure preserving service admission.
          * @details One exclusive source reservation is retained through reload and retirement. Detach never shuts down
          * or collects the service publisher. The trusted host uses the coordinated service reload overload. */
-        [[nodiscard]] static Result<UiAnimationOwner> Create(RuntimeUiService &service, RuntimeUiInstanceId instance,
+        [[nodiscard]] static Result<UiAnimationOwner> Create(const RuntimeUiService &service, RuntimeUiInstanceId instance,
                                                              UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
                                                              UiStyleResolver styles, UiAnimationCanvasDefinition definition,
                                                              UiAnimationLimits limits = {});

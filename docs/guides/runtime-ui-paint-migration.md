@@ -651,17 +651,22 @@ the existing frontend owner boundary and completion pins. The destructor path
 cannot allocate an error diagnostic, throw, wait for the GPU or abandon a native
 owner. Explicit Shutdown retains its typed failure/retry contract.
 
-Scene activation retirement and structural-baseline validation now borrow
+Scene activation preparation/retirement and structural preparation/baseline validation now borrow
 `const RuntimeSceneView&` for the synchronous call instead of copying the view.
 The host-only activation and structural participant contract revisions advance
 from 3 to 4. Update overrides to the same signature and rebuild C++
 Scene/Physics/UI consumers.
-The Scene remains the canonical owner, and the view still cannot escape the call.
-Coordinated Runtime UI reload and prepared reconciliation helpers use const access
-where only their retained canonical owners are mutated. Installed header ownership,
+The Scene remains the canonical owner. The reference is synchronous; candidates
+that need the view after preparation retain their own value as before.
+Coordinated Runtime UI reload, transition/animation preparation, exact Scene
+revocation and prepared reconciliation helpers use const access where only their
+retained canonical owners are mutated. A const service handle does not make that
+canonical state immutable; all existing owner-thread, publication and capability
+fences still apply. Update exact C++ member/function pointer signatures as well. Installed header ownership,
 the native module C ABI, serialized assets and wire formats are unchanged.
 
-Factory-only shader catalogs, paint hosts and paint programs use non-aggregate
+Factory-only shader catalogs, paint hosts, paint programs, project source factories
+and paint projections use non-aggregate
 private construction keys with standard make_shared/make_unique ownership. A caller
 cannot construct a catalog without the factory's authenticated evidence or bypass
 paint admission with an independently forged key.

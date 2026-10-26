@@ -52,7 +52,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> NavigationSceneActivationParticipant::Prepare(
-        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
         if (registry_ == nullptr || !scene.IsCurrent())
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
 

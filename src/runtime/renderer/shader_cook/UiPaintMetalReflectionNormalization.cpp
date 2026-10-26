@@ -177,8 +177,7 @@ namespace Horo::Render {
             for (std::size_t index = 1; index + 7 < tokens.size(); ++index) {
                 if (tokens[index] != "[" || tokens[index + 1] != "[")
                     continue;
-                const auto kind = tokens[index + 2];
-                if (kind != "buffer" && kind != "texture" && kind != "sampler")
+                if (const auto kind = tokens[index + 2]; kind != "buffer" && kind != "texture" && kind != "sampler")
                     continue;
                 const auto value = AttributeIndex(tokens, index);
                 const auto slot = PlacementSlot(tokens, index, vertex);

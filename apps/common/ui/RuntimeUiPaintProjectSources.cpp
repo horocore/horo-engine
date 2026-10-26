@@ -29,12 +29,13 @@ namespace Horo::Application::Internal {
             std::size_t nextParent = 0;
             while (nextParent < result.size()) {
                 const auto parent = result[nextParent++].id;
-                for (const auto &element : document.Elements())
-                    if (element.parent == parent) {
-                        if (result.size() == capacity)
-                            return Invalid<std::vector<UiElementDescriptor>>(UiErrors::CapacityExceeded);
-                        result.emplace_back(element.id, element.parent);
-                    }
+                for (const auto &element : document.Elements()) {
+                    if (element.parent != parent)
+                        continue;
+                    if (result.size() == capacity)
+                        return Invalid<std::vector<UiElementDescriptor>>(UiErrors::CapacityExceeded);
+                    result.emplace_back(element.id, element.parent);
+                }
             }
             return Result<std::vector<UiElementDescriptor>>::Success(std::move(result));
         }
@@ -396,7 +397,7 @@ namespace Horo::Application::Internal {
         storage->instanceSlot = policy.previousInstanceSlot;
         storage->canvasSlot = policy.previousCanvasSlot;
         storage->policy = std::move(policy);
-        return Created::Success(std::shared_ptr<RuntimeUiPaintProjectSources>{new RuntimeUiPaintProjectSources{std::move(storage)}});
+        return Created::Success(std::make_shared<RuntimeUiPaintProjectSources>(ConstructionKey{}, std::move(storage)));
     }
 
     /** @copydoc RuntimeUiPaintProjectSources::MakeParticipant */
@@ -410,7 +411,7 @@ namespace Horo::Application::Internal {
                 : source_(std::move(source)), scenes_(sceneOwner), registry_(assets), loads_(loader), target_(cookTarget) {}
 
             Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &,
-                                                                               Runtime::RuntimeSceneView scene) override {
+                                                                               const Runtime::RuntimeSceneView &scene) override {
                 return source_->Prepare(scenes_, registry_, loads_, target_, scene);
             }
 

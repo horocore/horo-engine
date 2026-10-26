@@ -85,7 +85,7 @@ namespace Horo::Navigation {
         ~NavigationAssetSceneActivationParticipant() override;
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                                                         Runtime::RuntimeSceneView scene) override;
+                                                                                         const Runtime::RuntimeSceneView &scene) override;
         /** @brief Acquire current generation through the existing runtime world lease.
          * @return Current provider pin or NoNavigationData. */
         [[nodiscard]] Result<NavigationWorldReadLease> Acquire() const;

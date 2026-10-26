@@ -144,11 +144,9 @@ namespace {
         if (!destination.is_absolute() || destination.filename().empty())
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
         std::error_code error;
-        const bool destinationExists = std::filesystem::exists(destination, error);
-        if (error || destinationExists)
+        if (const bool destinationExists = std::filesystem::exists(destination, error); error || destinationExists)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
-        const bool parentIsDirectory = std::filesystem::is_directory(destination.parent_path(), error);
-        if (error || !parentIsDirectory)
+        if (const bool parentIsDirectory = std::filesystem::is_directory(destination.parent_path(), error); error || !parentIsDirectory)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
         PrivatePackage candidate;
         for (unsigned attempt = 0; attempt < 1024; ++attempt) {

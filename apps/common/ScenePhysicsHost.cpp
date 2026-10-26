@@ -125,7 +125,7 @@ namespace Horo::Application::Internal {
         }
 
         Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                                           Runtime::RuntimeSceneView scene) override {
+                                                                           const Runtime::RuntimeSceneView &scene) override {
             auto candidate = owner_.Prepare(definition, scene);
             if (candidate.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(candidate.ErrorValue());

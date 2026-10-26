@@ -21,7 +21,7 @@ namespace Horo::Prefab {
                 return Runtime::SceneStructuralOwner::Gameplay;
             }
 
-            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView,
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &,
                                                                                std::span<const Runtime::RuntimeEntityView> created,
                                                                                std::span<const Runtime::EntityRef> destroyed) override {
                 REQUIRE((created.size() == 2 || destroyed.size() == 2));

@@ -404,18 +404,18 @@ namespace Horo::Runtime::Ui {
     void UiRenderSnapshot::Release() noexcept {
         if (!storage_)
             return;
-        auto current = storage_->leases.load(std::memory_order_acquire);
+        auto current = storage_->leases.load(std::memory_order_seq_cst);
         bool released = false;
         while (!released) {
             if (current == 1) {
                 // Reserve the slot until its final source pin is gone; publishing zero first permits concurrent reuse.
-                if (!storage_->leases.compare_exchange_weak(current, std::numeric_limits<std::uint64_t>::max(), std::memory_order_acq_rel))
+                if (!storage_->leases.compare_exchange_weak(current, std::numeric_limits<std::uint64_t>::max(), std::memory_order_seq_cst))
                     continue;
                 storage_->sourceFrame = {};
-                storage_->leases.store(0, std::memory_order_release);
+                storage_->leases.store(0, std::memory_order_seq_cst);
                 released = true;
             } else {
-                released = storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_acq_rel);
+                released = storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_seq_cst);
             }
         }
         storage_.reset();

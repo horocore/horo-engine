@@ -37,7 +37,7 @@ namespace Horo::Runtime::Ui::Detail {
         using Admission = Result<UiAnimationPublisher>;
         if (const auto valid = CheckOwner(service); valid.HasError())
             return Admission::Failure(valid.ErrorValue());
-        auto *publisher = service->registry.Publisher(instance);
+        const auto *publisher = service->registry.Publisher(instance);
         if (!publisher)
             return Admission::Failure(MakeError(UiErrors::CapabilityUnavailable));
         return AttachPublisher(std::move(service), instance, canvas, *publisher);
@@ -45,7 +45,7 @@ namespace Horo::Runtime::Ui::Detail {
 
     /** @copydoc UiAnimationPublisher::AttachPrepared */
     Result<UiAnimationPublisher> UiAnimationPublisher::AttachPrepared(std::shared_ptr<RuntimeUiServiceState> service,
-                                                                      UiSceneReconciliation::Prepared &prepared,
+                                                                      const UiSceneReconciliation::Prepared &prepared,
                                                                       const RuntimeUiInstanceId instance, const UiCanvasId canvas) {
         using Admission = Result<UiAnimationPublisher>;
         if (const auto valid = CheckOwner(service); valid.HasError())
@@ -75,7 +75,7 @@ namespace Horo::Runtime::Ui::Detail {
     /** @copydoc UiAnimationPublisher::AttachPublisher */
     Result<UiAnimationPublisher> UiAnimationPublisher::AttachPublisher(std::shared_ptr<RuntimeUiServiceState> service,
                                                                        const RuntimeUiInstanceId instance, const UiCanvasId canvas,
-                                                                       UiHotReload &publisher,
+                                                                       const UiHotReload &publisher,
                                                                        std::shared_ptr<UiSceneReconciliation::Prepared::Storage> prepared,
                                                                        UiReloadLease source) {
         using Admission = Result<UiAnimationPublisher>;
@@ -155,7 +155,7 @@ namespace Horo::Runtime::Ui::Detail {
         if (!service_ || !reservation_ || reservation_->unpublished || reservation_->retiring || !service_->active ||
             service_->shutdownRequested || service_->scenePublication || service_->thread != std::this_thread::get_id())
             return nullptr;
-        auto *publisher = service_->registry.Publisher(reservation_->instance);
+        const auto *publisher = service_->registry.Publisher(reservation_->instance);
         return publisher && publisher->IsCurrent(reservation_->generation) ? publisher : nullptr;
     }
 

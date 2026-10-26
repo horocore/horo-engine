@@ -8,7 +8,7 @@ namespace Horo::Runtime::Ui {
     Result<UiAnimationFrameLease> UiAnimationOwner::PrepareSourcePresentation(const UiAnimationViewport &viewport) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
             storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching ||
-            storage_->currentFrame || !storage_->binding.bound || storage_->binding.clocks.updateSequence != 0 ||
+            storage_->currentFrame.has_value() || !storage_->binding.bound || storage_->binding.clocks.updateSequence != 0 ||
             storage_->pendingCommands != 0 || storage_->route.gate.has_value() ||
             std::ranges::any_of(storage_->timelines, [](const auto &timeline) {
             return timeline.occupied;

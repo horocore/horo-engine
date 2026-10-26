@@ -132,11 +132,12 @@ namespace Horo::Application::Internal {
         storage->groups.reserve(descriptor.limits.groups);
         storage->transforms.reserve(descriptor.limits.transforms);
         storage->candidate = nullptr;
-        return Created::Success(std::unique_ptr<RuntimeUiPaintProjection>{new RuntimeUiPaintProjection{std::move(storage)}});
+        return Created::Success(std::make_unique<RuntimeUiPaintProjection>(ConstructionKey{}, std::move(storage)));
     }
 
     /** @copydoc RuntimeUiPaintProjection::RuntimeUiPaintProjection */
-    RuntimeUiPaintProjection::RuntimeUiPaintProjection(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    RuntimeUiPaintProjection::RuntimeUiPaintProjection(ConstructionKey, std::unique_ptr<Storage> storage) noexcept
+        : storage_(std::move(storage)) {}
 
     /** @copydoc RuntimeUiPaintProjection::Canvas */
     const UiCanvasDescriptor &RuntimeUiPaintProjection::Canvas() const noexcept {

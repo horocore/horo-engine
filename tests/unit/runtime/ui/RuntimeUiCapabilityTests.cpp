@@ -6,11 +6,11 @@
 
 namespace Horo::Tests::UiAccess {
     static_assert(std::is_nothrow_invocable_v<decltype(&RuntimeUiService::RevokeScene), RuntimeUiService &, Runtime::SceneRuntimeId>);
-    static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::RevokeScene), const RuntimeUiService &, Runtime::SceneRuntimeId>);
+    static_assert(std::is_nothrow_invocable_v<decltype(&RuntimeUiService::RevokeScene), const RuntimeUiService &, Runtime::SceneRuntimeId>);
     static_assert(!std::is_default_constructible_v<RuntimeUiClient::ConstructionKey>);
     static_assert(!std::is_copy_constructible_v<RuntimeUiClient>);
 
-    // Each command remains available to its mutable owner and unavailable through const observation.
+    // Dispatch and lifecycle commands require the mutable host handle.
     static_assert(std::is_invocable_v<decltype(&RuntimeUiService::ApplyQueuedCommands), RuntimeUiService &, RuntimeUiCommandCutoff>);
     static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::ApplyQueuedCommands), const RuntimeUiService &, RuntimeUiCommandCutoff>);
     static_assert(std::is_invocable_v<decltype(&RuntimeUiService::DispatchActions), RuntimeUiService &, RuntimeUiInstanceId, UiCanvasId,
@@ -40,25 +40,26 @@ namespace Horo::Tests::UiAccess {
     static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::CollectRetired), const RuntimeUiService &>);
     static_assert(std::is_invocable_v<decltype(&RuntimeUiService::Shutdown), RuntimeUiService &>);
     static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::Shutdown), const RuntimeUiService &>);
+    // Preparation borrows the handle; its retained canonical owner still enforces thread and capability fences.
     using TransitionSignature = Result<UiSceneReconciliation::Prepared> (RuntimeUiService::*)(const UiSceneTransitionRequest &,
                                                                                               std::vector<UiSceneBindingReplacement>,
                                                                                               std::vector<UiSceneActivation>,
-                                                                                              const CancellationToken &);
+                                                                                              const CancellationToken &) const;
     constexpr auto Transition = static_cast<TransitionSignature>(&RuntimeUiService::PrepareTransition);
     static_assert(std::is_invocable_v<decltype(Transition), RuntimeUiService &, const UiSceneTransitionRequest &,
                                       std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>, const CancellationToken &>);
-    static_assert(!std::is_invocable_v<decltype(Transition), const RuntimeUiService &, const UiSceneTransitionRequest &,
-                                       std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>, const CancellationToken &>);
+    static_assert(std::is_invocable_v<decltype(Transition), const RuntimeUiService &, const UiSceneTransitionRequest &,
+                                      std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>, const CancellationToken &>);
     using CoordinatedTransitionSignature = Result<UiSceneReconciliation::Prepared> (RuntimeUiService::*)(
         const UiSceneTransitionRequest &, std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>,
-        std::span<const RuntimeUiInstanceId>, const CancellationToken &);
+        std::span<const RuntimeUiInstanceId>, const CancellationToken &) const;
     constexpr auto CoordinatedTransition = static_cast<CoordinatedTransitionSignature>(&RuntimeUiService::PrepareTransition);
     static_assert(std::is_invocable_v<decltype(CoordinatedTransition), RuntimeUiService &, const UiSceneTransitionRequest &,
                                       std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>,
                                       std::span<const RuntimeUiInstanceId>, const CancellationToken &>);
-    static_assert(!std::is_invocable_v<decltype(CoordinatedTransition), const RuntimeUiService &, const UiSceneTransitionRequest &,
-                                       std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>,
-                                       std::span<const RuntimeUiInstanceId>, const CancellationToken &>);
+    static_assert(std::is_invocable_v<decltype(CoordinatedTransition), const RuntimeUiService &, const UiSceneTransitionRequest &,
+                                      std::vector<UiSceneBindingReplacement>, std::vector<UiSceneActivation>,
+                                      std::span<const RuntimeUiInstanceId>, const CancellationToken &>);
     static_assert(std::is_invocable_v<decltype(&RuntimeUiService::CommitTransition), RuntimeUiService &, UiSceneReconciliation::Prepared &,
                                       UiStructuralCommitPoint>);
     static_assert(!std::is_invocable_v<decltype(&RuntimeUiService::CommitTransition), const RuntimeUiService &,
@@ -385,11 +386,12 @@ namespace Horo::Tests::UiAccess {
         Fixture fixture{true};
         auto client = fixture.Client();
         auto retained = Take(fixture.service.Acquire(Instance()));
+        const RuntimeUiService &service = fixture.service;
         Horo::Tests::AllocationProbe::Measurement measured;
         {
             Horo::Tests::AllocationProbe::ScopedMeasurement probe;
-            fixture.service.RevokeScene(Runtime::SceneRuntimeId{101});
-            fixture.service.RevokeScene(Runtime::SceneRuntimeId{101});
+            service.RevokeScene(Runtime::SceneRuntimeId{101});
+            service.RevokeScene(Runtime::SceneRuntimeId{101});
             measured = probe.Snapshot();
         }
         CHECK(measured.requests == 0);
