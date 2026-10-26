@@ -57,7 +57,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererVulkan::CreatePipelineState */
     Result<Render::RenderPipelineHandle> EditorViewportRendererVulkan::CreatePipelineState(
-        ShaderResources &program, const Render::ShaderManifest &manifest, const Render::RenderGraphicsPipelineState &state) {
+        const ShaderResources &program, const Render::ShaderManifest &manifest, const Render::RenderGraphicsPipelineState &state) {
         using namespace Render;
         const auto target = EditorVulkanViewportShaderTarget();
         const auto &reflection = program.metadata.reflection;
@@ -93,7 +93,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::CreateMaterialLayout */
-    Result<void> EditorViewportRendererVulkan::CreateMaterialLayout(ShaderResources &program,
+    Result<void> EditorViewportRendererVulkan::CreateMaterialLayout(const ShaderResources &program,
                                                                     const Render::NormalizedShaderReflection &reflection) {
         using namespace Render;
         const auto layout = PrepareMaterialBindingLayout(reflection);
@@ -133,7 +133,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::CreateUniformSlot */
-    Result<void> EditorViewportRendererVulkan::CreateUniformSlot(ShaderResources &program, DrawSlot &draw, const std::uint64_t material,
+    Result<void> EditorViewportRendererVulkan::CreateUniformSlot(const ShaderResources &program, DrawSlot &draw,
+                                                                 const std::uint64_t material,
                                                                  const Render::RenderPipelineHandle pipeline) {
         using namespace Render;
         const std::array<std::byte, MaximumUniformBytes> zero{};
@@ -174,8 +175,7 @@ namespace Horo::Editor {
         const auto encoded = EncodeReflectedShaderArtifact(cooked.metadata);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
-        const auto admitted = LoadEditorVulkanMultiviewCook(cooked.payload, encoded.Value());
-        if (admitted.HasError())
+        if (const auto admitted = LoadEditorVulkanMultiviewCook(cooked.payload, encoded.Value()); admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
         xrShader_.payload = std::move(cooked.payload);
         xrShader_.metadata = std::move(cooked.metadata);

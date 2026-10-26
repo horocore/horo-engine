@@ -96,7 +96,7 @@ namespace Horo::Application::Internal {
     private:
         /** @brief Retains only factory-verified installation and exact bound component evidence. */
         VerifiedOpenXRComponent(std::shared_ptr<const Packages::VerifiedPackageInstallRecord> install, std::size_t index,
-                                Packages::PackagePath descriptor, OpenXRComponentManifest manifest, Sha256Digest identity,
+                                Packages::PackagePath descriptor, OpenXRComponentManifest manifest, const Sha256Digest &identity,
                                 XR::XRInstallRecordId installIdentity);
         std::shared_ptr<const Packages::VerifiedPackageInstallRecord> install_;
         std::size_t packageIndex_{};

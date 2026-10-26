@@ -56,7 +56,7 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRFrameCompositor::Bind */
-    Result<void> OpenXRFrameCompositor::Bind(NativeCompositorDispatch dispatch, const NativeFramePacingPolicy &pacing,
+    Result<void> OpenXRFrameCompositor::Bind(NativeOpenXRDispatch dispatch, const NativeFramePacingPolicy &pacing,
                                              NativeCompositorColorSpace colorSpace) {
         // Snapshot before foreign loader callbacks can mutate the caller-owned policy.
         const NativeFramePacingPolicy admittedPacing = pacing;

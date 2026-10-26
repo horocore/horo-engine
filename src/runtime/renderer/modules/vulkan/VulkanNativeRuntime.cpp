@@ -879,7 +879,9 @@ namespace Horo::Render {
                 VulkanApiVersion api;
                 std::vector<std::string> instanceExtensions;
                 std::vector<std::string> deviceExtensions;
-            } enabledGraphics_;
+            };
+
+            EnabledGraphicsState enabledGraphics_;
 
             VkInstance instance_{VK_NULL_HANDLE};
 

@@ -13,7 +13,7 @@ namespace Horo::Application::Internal {
     OpenXRApplicationSession::OpenXRApplicationSession(OpenXRApplicationAuthorities authorities, XRProjectSettings settings,
                                                        OpenXRInstalledProductCandidate product, const OpenXRInstalledProductPolicy &policy)
         : authorities_(std::move(authorities)), settings_(std::move(settings)), product_(std::move(product)), policy_(policy),
-          installed_(product_->component.Install()), installIdentity_(product_->component.InstallIdentity()) {}
+          installed_{product_->component.Install(), product_->component.InstallIdentity()} {}
 
     /** @copydoc OpenXRApplicationSession::~OpenXRApplicationSession */
     OpenXRApplicationSession::~OpenXRApplicationSession() {
@@ -35,7 +35,7 @@ namespace Horo::Application::Internal {
         const auto installed = authorities_.packages.InstalledRecord(authorities_.projectRoot, authorities_.packageGeneration);
         if (installed.HasError())
             return Result<void>::Failure(installed.ErrorValue());
-        if (installed.Value() != installed_)
+        if (installed.Value() != installed_.record)
             return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightStale));
         return Result<void>::Success();
     }
@@ -57,7 +57,7 @@ namespace Horo::Application::Internal {
         const auto &manifest = product_->component.Manifest();
         selection_ = {.attempt = attempt.Value(),
                       .backend = manifest.identity.backend,
-                      .installRecord = installIdentity_,
+                      .installRecord = installed_.identity,
                       .productProfile = profile.Value(),
                       .loaderSource = XRLoaderSourcePolicy::BundledVerified,
                       .runtimeSelection = settings_.RuntimeSelection(),
@@ -162,8 +162,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(current.ErrorValue());
         if (!native_ || !preflight_ || !system_ || !sessionCensus_)
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
-        auto prepared = native_->BorrowPreparedSession({*preflight_, selection_.attempt});
-        if (prepared.HasError())
+        if (auto prepared = native_->BorrowPreparedSession({*preflight_, selection_.attempt}); prepared.HasError())
             return Outcome::Failure(prepared.ErrorValue());
         auto discovery = native_->BorrowDiscovery(selection_.attempt);
         if (discovery.HasError())
@@ -209,7 +208,7 @@ namespace Horo::Application::Internal {
             return current;
         if (!preflight_ || preflight.RuntimeGeneration() != preflight_->RuntimeGeneration() || attempt != selection_.attempt)
             return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightStale));
-        return ValidateXRLoaderPreflight(preflight, attempt, selection_.backend, installIdentity_, selection_.productProfile);
+        return ValidateXRLoaderPreflight(preflight, attempt, selection_.backend, installed_.identity, selection_.productProfile);
     }
 
     /** @copydoc OpenXRApplicationSession::Validate */
@@ -235,16 +234,21 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
 
         struct Scope final {
+            Scope(const Scope &) = delete;
+            Scope &operator=(const Scope &) = delete;
+
             bool &value;
 
             explicit Scope(bool &active) : value(active) {
-                value = true;
+                active = true;
             }
 
             ~Scope() {
                 value = false;
             }
-        } scope{retiringSession_};
+        };
+
+        Scope scope{retiringSession_};
 
         RevokeInput();
         sessionCensus_.reset();
@@ -266,16 +270,21 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
 
         struct Retirement final {
+            Retirement(const Retirement &) = delete;
+            Retirement &operator=(const Retirement &) = delete;
+
             bool &active;
 
             explicit Retirement(bool &value) noexcept : active(value) {
-                active = true;
+                value = true;
             }
 
             ~Retirement() {
                 active = false;
             }
-        } operation{retiringSession_};
+        };
+
+        Retirement operation{retiringSession_};
 
         RevokeInput();
         sessionCensus_.reset();
@@ -304,8 +313,7 @@ namespace Horo::Application::Internal {
             input_.native.reset();
         }
         if (native_) {
-            auto closed = native_->Close();
-            if (closed.HasError())
+            if (auto closed = native_->Close(); closed.HasError())
                 return closed;
             native_.reset();
         }

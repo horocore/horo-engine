@@ -176,7 +176,8 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRActionBindings::PreparePresentation */
-    Result<void> OpenXRActionBindings::PreparePresentation(PFN_xrGetInstanceProcAddr getProc) {
+    Result<void> OpenXRActionBindings::PreparePresentation(NativeOpenXRDispatch dispatch) {
+        const auto getProc = dispatch.getProc;
         if (auto lane = ControlLane(); lane.HasError())
             return lane;
         if (sampling_ || !active_ || !getProc || !tracking_.request || tracking_.world == XR_NULL_HANDLE || dispatch_.locateViews)
@@ -192,17 +193,17 @@ namespace Horo::XR::OpenXRInternal {
         if (auto resolved = Load(getProc, current.Value().instance, "xrEnumerateViewConfigurationViews", enumerate); resolved.HasError())
             return resolved;
         std::uint32_t count{};
-        const auto counted =
-            enumerate(current.Value().instance, current.Value().system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &count, nullptr);
-        if (counted != XR_SUCCESS || count != tracking_.eyeIdentities.size())
+        if (const auto counted =
+                enumerate(current.Value().instance, current.Value().system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &count, nullptr);
+            counted != XR_SUCCESS || count != tracking_.eyeIdentities.size())
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
         std::array<XrViewConfigurationView, 2> views{};
         for (auto &view : views)
             view.type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
         std::uint32_t written{};
-        const auto observed = enumerate(current.Value().instance, current.Value().system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, count,
-                                        &written, views.data());
-        if (observed != XR_SUCCESS || written != count || current.Value().maximumSpaces < tracking_.nextSpaceSlot + count)
+        if (const auto observed = enumerate(current.Value().instance, current.Value().system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                                            count, &written, views.data());
+            observed != XR_SUCCESS || written != count || current.Value().maximumSpaces < tracking_.nextSpaceSlot + count)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         for (const auto &view : views)
             if (view.type != XR_TYPE_VIEW_CONFIGURATION_VIEW || view.next || view.recommendedImageRectWidth == 0 ||
@@ -253,12 +254,36 @@ namespace Horo::XR::OpenXRInternal {
             info.actionType = NativeType(action->valueType);
             info.countSubactionPaths = 1;
             info.subactionPaths = &hands_[role];
-            actions_.push_back({action->action, XR_NULL_HANDLE, action->valueType, action->role});
+            actions_.emplace_back(action->action, XR_NULL_HANDLE, action->valueType, action->role);
             const auto result = dispatch_.createAction(set->native, &info, &actions_.back().native);
             if (XR_FAILED(result) || actions_.back().native == XR_NULL_HANDLE)
                 return Result<void>::Failure(NativeFailure("create action", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRActionBindings::SuggestControls */
+    Result<std::uint32_t> OpenXRActionBindings::SuggestControls(const Profile &profile,
+                                                                const std::span<const XRResolvedActionBinding> bindings,
+                                                                const std::span<const NativeActionControlPath> controls,
+                                                                const std::span<XrActionSuggestedBinding> suggestions) {
+        std::uint32_t count{};
+        for (const auto &binding : bindings) {
+            if (binding.profile != profile.id)
+                continue;
+            const auto control = std::ranges::find_if(controls, [&](const auto &candidate) {
+                return candidate.profile == binding.profile && candidate.control == binding.control && candidate.role == binding.role;
+            });
+            const auto action = std::ranges::find(actions_, binding.action, &Action::id);
+            const std::string component{control->path};
+            XrPath nativePath{};
+            const auto result = dispatch_.stringToPath(native_.instance, component.c_str(), &nativePath);
+            if (XR_FAILED(result) || nativePath == XR_NULL_PATH)
+                return Result<std::uint32_t>::Failure(
+                    NativeFailure("resolve control path", XR_FAILED(result) ? result : XR_ERROR_PATH_INVALID));
+            suggestions[count++] = {action->native, nativePath};
+        }
+        return Result<std::uint32_t>::Success(count);
     }
 
     /** @brief Suggests each admitted profile in deterministic ID/action order with exact registered component paths. */
@@ -280,21 +305,10 @@ namespace Horo::XR::OpenXRInternal {
             if (resolved.HasError())
                 return Result<void>::Failure(resolved.ErrorValue());
             std::array<XrActionSuggestedBinding, XRActionBindingLimits::MaximumActions> suggestions{};
-            std::uint32_t count = 0;
-            for (const auto &binding : resolved.Value().bindings) {
-                if (binding.profile != profile.id)
-                    continue;
-                const auto control = std::ranges::find_if(controls, [&](const auto &candidate) {
-                    return candidate.profile == binding.profile && candidate.control == binding.control && candidate.role == binding.role;
-                });
-                const auto action = std::ranges::find(actions_, binding.action, &Action::id);
-                const std::string component{control->path};
-                XrPath nativePath{};
-                result = dispatch_.stringToPath(native_.instance, component.c_str(), &nativePath);
-                if (XR_FAILED(result) || nativePath == XR_NULL_PATH)
-                    return Result<void>::Failure(NativeFailure("resolve control path", XR_FAILED(result) ? result : XR_ERROR_PATH_INVALID));
-                suggestions[count++] = {action->native, nativePath};
-            }
+            const auto actionCount = SuggestControls(profile, resolved.Value().bindings, controls, suggestions);
+            if (actionCount.HasError())
+                return Result<void>::Failure(actionCount.ErrorValue());
+            std::uint32_t count = actionCount.Value();
             const auto poseCount = SuggestPoses(profile, poses, std::span{suggestions}.subspan(count));
             if (poseCount.HasError())
                 return Result<void>::Failure(poseCount.ErrorValue());
@@ -310,12 +324,16 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
-    /** @brief Prevalidates all profile plans, then creates, suggests and attaches the native candidate. */
-    Result<void> OpenXRActionBindings::Prepare(const XRActionBindingSchema &schema, const std::span<const XRProfileControl> catalog,
-                                               const std::span<const XRActionBindingOverride> overrides,
-                                               const std::span<const NativeInteractionProfilePath> profiles,
-                                               const std::span<const NativeActionControlPath> controls, const NativeActionLabels &labels,
-                                               const std::uint32_t maximumActions, const std::span<const NativePoseActionPath> poses) {
+    /** @copydoc OpenXRActionBindings::Prepare */
+    Result<void> OpenXRActionBindings::Prepare(const NativeActionBindingRequest &request, const std::uint32_t maximumActions) {
+        // Snapshot view bounds before any native callback can reenter the caller's request storage.
+        const auto &schema = request.schema;
+        const auto catalog = request.catalog;
+        const auto overrides = request.overrides;
+        const auto profiles = request.profiles;
+        const auto controls = request.controls;
+        const auto labels = request.labels;
+        const auto poses = request.posePaths;
         if (auto valid = ValidateXRActionBindings(schema, catalog, overrides); valid.HasError())
             return valid;
         if (maximumActions == 0 || maximumActions > XRActionBindingLimits::MaximumActions || schema.actions.size() > maximumActions)
@@ -347,6 +365,11 @@ namespace Horo::XR::OpenXRInternal {
             return result;
         if (auto valid = ValidateOwner(); valid.HasError())
             return valid;
+        return AttachPreparedSets();
+    }
+
+    /** @copydoc OpenXRActionBindings::AttachPreparedSets */
+    Result<void> OpenXRActionBindings::AttachPreparedSets() {
         std::array<XrActionSet, XRActionBindingLimits::MaximumSets> sets{};
         std::ranges::transform(sets_, sets.begin(), &Set::native);
         const XrSessionActionSetsAttachInfo info{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, static_cast<std::uint32_t>(sets_.size()),
@@ -413,8 +436,8 @@ namespace Horo::XR::OpenXRInternal {
         auto profiles = ReadProfiles(native_.session);
         if (profiles.HasError())
             return profiles;
-        if (auto current = ValidateOwner(); current.HasError())
-            return Result<Profiles>::Failure(current.ErrorValue());
+        if (auto validated = ValidateOwner(); validated.HasError())
+            return Result<Profiles>::Failure(validated.ErrorValue());
         return profiles;
     }
 

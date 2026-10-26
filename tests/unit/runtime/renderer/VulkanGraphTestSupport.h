@@ -28,6 +28,7 @@ namespace Horo::Render::VulkanGraphTest {
         };
 
         std::vector<DrawCall> drawCalls;
+        std::uint32_t expectedIndexCount{3};
         int renderingBegins{};
         int renderingEnds{};
         int pipelineBinds{}, descriptorBinds{}, vertexBinds{}, indexBinds{}, draws{};
@@ -92,7 +93,7 @@ namespace Horo::Render::VulkanGraphTest {
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureDraw(VkCommandBuffer, std::uint32_t count, std::uint32_t instances, std::uint32_t,
                                                   std::int32_t, std::uint32_t firstView) {
-        CHECK(count == 3);
+        CHECK(count == encodedGraph->expectedIndexCount);
         CHECK(instances > 0);
         CHECK(instances <= MultiviewExtractionLimits::HardMaximumViews);
         encodedGraph->drawCalls.push_back({count, instances, firstView});

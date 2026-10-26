@@ -148,7 +148,7 @@ namespace Horo::Editor {
         /** @brief Admits the reflected uniform layout and creates its one binding table. */
         [[nodiscard]] Result<Render::RenderPipelineHandle> CreatePipelineState(const Render::RenderGraphicsPipelineState &state);
         /** @brief Realizes a validated program through the same selected-device pipeline/cache owner. */
-        [[nodiscard]] Result<Render::RenderPipelineHandle> CreatePipelineState(ShaderResources &program,
+        [[nodiscard]] Result<Render::RenderPipelineHandle> CreatePipelineState(const ShaderResources &program,
                                                                                const Render::ShaderManifest &manifest,
                                                                                const Render::RenderGraphicsPipelineState &state);
         /** @brief Allocates both native shader stages once during cold program admission. */
@@ -157,10 +157,11 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> CreateDrawSlots();
         [[nodiscard]] Result<void> CreateUniformSlot(DrawSlot &draw, std::uint64_t material, Render::RenderPipelineHandle pipeline);
         /** @brief Allocates one bounded cold uniform/material generation for the exact program's reflected ABI. */
-        [[nodiscard]] Result<void> CreateUniformSlot(ShaderResources &program, DrawSlot &draw, std::uint64_t material,
+        [[nodiscard]] Result<void> CreateUniformSlot(const ShaderResources &program, DrawSlot &draw, std::uint64_t material,
                                                      Render::RenderPipelineHandle pipeline);
         /** @brief Validates one ABI and prepares its sole material-table owner before interactive use. */
-        [[nodiscard]] Result<void> CreateMaterialLayout(ShaderResources &program, const Render::NormalizedShaderReflection &reflection);
+        [[nodiscard]] Result<void> CreateMaterialLayout(const ShaderResources &program,
+                                                        const Render::NormalizedShaderReflection &reflection);
         [[nodiscard]] Result<void> CreateOverlaySlots();
         [[nodiscard]] Result<void> CreateOverlayMesh(OverlaySlot &slot);
         void ReleaseOverlaySlots() noexcept;

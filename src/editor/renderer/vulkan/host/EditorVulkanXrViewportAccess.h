@@ -33,7 +33,7 @@ namespace Horo::Editor {
                                                   std::span<const Render::RenderMeshResourceView> meshes,
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
-                                                  const Render::RenderGraphLogicalState &final);
+                                                  const Render::RenderGraphLogicalState &requiredFinal);
         /** @brief Bind one real acquisition before BeginFrame, using fixed owner storage and exact live publications.
          * @param viewport Existing owner. @param color Fresh native import. @param views Exact layer views.
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.

@@ -49,7 +49,7 @@ namespace Horo::Application::Internal {
                                                                         const NativeSessionPreparation &preparation,
                                                                         const OpenXRApplicationActionDispatch dispatch,
                                                                         const std::span<const Input::ActionDescriptor> registeredActions,
-                                                                        const NativeTrackingSpaceRequest tracking) const {
+                                                                        const NativeTrackingSpaceRequest &tracking) const {
         using Outcome = Result<XRResolvedActionBindings>;
         if (dispatch.getProc == nullptr)
             return Outcome::Failure(MakeError(XRErrors::IdentityInvalid));

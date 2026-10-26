@@ -1123,30 +1123,42 @@ namespace Horo::Editor {
                 if (cooked.HasError())
                     return Result<void>::Failure(cooked.ErrorValue());
                 auto &bridge = *composition.vulkanGraphicsBridge;
-                auto viewport = std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge, std::move(cooked).Value());
-#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-                std::optional<EditorVulkanMultiviewCook> xrCooked;
-                if (composition.xrSession) {
-                    auto multiview = LoadPackagedVulkanMultiviewShader(EditorAssetRoot());
-                    if (multiview.HasError())
-                        return Result<void>::Failure(multiview.ErrorValue());
-                    xrCooked.emplace(std::move(multiview).Value());
-                }
-                composition.xrViewport = viewport.get();
-#endif
-                const auto installed =
-                    InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
-                                           std::move(viewport));
-                if (installed.HasError())
-                    return installed;
-#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-                if (xrCooked)
-                    return composition.xrViewport->PrepareXrProgram(std::move(*xrCooked));
-#endif
-                return Result<void>::Success();
+                return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
+                                              std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge,
+                                                                                             std::move(cooked).Value()));
 #endif
             }
             return Result<void>::Success();
+        }
+
+        /** @brief Keeps selected XR native/program composition outside the parent's unchanged desktop renderer installation. */
+        [[nodiscard]] Result<void> InstallSelectedEditorHostRenderers(SDL_Window &window, const EditorGuiOptions &options,
+                                                                      EditorRenderComposition &composition) {
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (composition.xrSession) {
+                if (options.rendererBackend != "vulkan" || !composition.vulkanGraphicsBridge)
+                    return Result<void>::Failure(
+                        MakeEditorRendererError("editor.xr.renderer_unavailable",
+                                                "Selected XR requires the same admitted Vulkan renderer and device bridge."));
+                auto cooked = LoadPackagedVulkanViewportShader(EditorAssetRoot());
+                if (cooked.HasError())
+                    return Result<void>::Failure(cooked.ErrorValue());
+                auto multiview = LoadPackagedVulkanMultiviewShader(EditorAssetRoot());
+                if (multiview.HasError())
+                    return Result<void>::Failure(multiview.ErrorValue());
+                auto &bridge = *composition.vulkanGraphicsBridge;
+                auto viewport = std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge, std::move(cooked).Value());
+                composition.xrViewport = viewport.get();
+                if (const auto installed =
+                        InstallEditorRenderers(composition,
+                                               std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
+                                               std::move(viewport));
+                    installed.HasError())
+                    return installed;
+                return composition.xrViewport->PrepareXrProgram(std::move(multiview).Value());
+            }
+#endif
+            return InstallSelectedEditorRenderers(window, options, composition);
         }
 
         /** @brief Starts explicit native readiness preparation only after the caller owns the complete frontend. */
@@ -1201,7 +1213,7 @@ namespace Horo::Editor {
             if (const auto prepared = PrepareInitialEditorPresentation(window, *composition.frontend); prepared.HasError())
                 return prepared;
 
-            if (const auto installed = InstallSelectedEditorRenderers(window, options, composition); installed.HasError())
+            if (const auto installed = InstallSelectedEditorHostRenderers(window, options, composition); installed.HasError())
                 return installed;
 
             if (const Result<void> attached = composition.frontend->AttachStaticMeshPassExecutor(*composition.viewportRenderer);
@@ -1330,7 +1342,7 @@ namespace Horo::Editor {
                     if (auto updated = UpdatePacingSurface(); updated.HasError())
                         return updated;
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-                    if (auto *xr = p_->presentation.composition.xrPlay.get();
+                    if (const auto *xr = p_->presentation.composition.xrPlay.get();
                         xr && xr->PresentationState() == Application::Internal::OpenXRPlayPresentation::FrameAdmitted)
                         return Result<void>::Success();  // SAME native xrWaitFrame later supplies selected-XR pacing.
 #endif
@@ -1962,9 +1974,9 @@ namespace Horo::Editor {
                 }
 #endif
                 p_->presentation.guiRenderer.BindViewportTexture(texture);
-                const auto gui =
-                    frameState_.frame->ComposeGui(p_->presentation.guiRenderer, pacing_.hostCancellation.value_or(CancellationToken{}));
-                if (gui.HasError())
+                if (const auto gui =
+                        frameState_.frame->ComposeGui(p_->presentation.guiRenderer, pacing_.hostCancellation.value_or(CancellationToken{}));
+                    gui.HasError())
                     return FailRenderFrame(gui.ErrorValue());
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 if (std::exchange(frameState_.xrFramePrepared, false)) {
@@ -2044,7 +2056,7 @@ namespace Horo::Editor {
             struct FrameState final {
                 bool nativePresentationPending{false};
                 bool guiFrameStarted{};     /**< ImGui CPU frame requiring Render or EndFrame, independent of native scope. */
-                bool xrFramePrepared{};     /**< Exact prepared-acquisition notification debt, never another native frame authority. */
+                bool xrFramePrepared{};     /**< Exact acquired-frame GUI notification debt; no separate native authority. */
                 bool extractedFrameReady{}; /**< Completed extraction eligible for one native admission. */
                 Input::FrameNumber inputFrameNumber{1};
                 Input::InputContextToken focusedWidgetInputContext;
@@ -2220,6 +2232,33 @@ namespace Horo::Editor {
             return output.HasValue() && port.UpdateOutput(output.Value()).HasValue();
         }
 
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        /** @brief Composes selected XR Play from the same runtime scheduler and installed host before source registration. */
+        bool ComposeSelectedEditorXrPlay(RunEditorMainLoopParams &p, Runtime::RuntimeHost &runtime, const Duration fixedStep) {
+            auto &xrComposition = p.presentation.composition;
+            if (xrComposition.xrSession) {
+                if (!p.background.xrHost || !p.background.xrHost->bindings || !xrComposition.xrViewport) {
+                    LOG_ERROR("editor.xr", "Selected XR Play composition is missing its installed bindings or same Vulkan viewport");
+                    return false;
+                }
+                const auto trackingRoot = SelectedXrTrackingRoot(p.options, *p.background.xrHost);
+                if (trackingRoot.HasError()) {
+                    LOG_ERROR("editor.xr", "%s", trackingRoot.ErrorValue().message.c_str());
+                    return false;
+                }
+                auto composed = Application::Internal::OpenXRPlayHost::Create(
+                    {*xrComposition.xrSession, p.inputRouter, *xrComposition.xrViewport, p.presentation.renderFrontend,
+                     p.background.xrHost->bindings, runtime.DispatchSource(), fixedStep, trackingRoot.Value()});
+                if (composed.HasError()) {
+                    LOG_ERROR("editor.xr", "Selected XR Play composition failed: %s", composed.ErrorValue().message.c_str());
+                    return false;
+                }
+                xrComposition.xrPlay = std::move(composed).Value();
+            }
+            return true;
+        }
+#endif
+
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             ThemeContext themeContext{p.fonts};
@@ -2280,35 +2319,24 @@ namespace Horo::Editor {
             }
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             auto &xrComposition = p.presentation.composition;
-            if (xrComposition.xrSession) {
-                if (!p.background.xrHost || !p.background.xrHost->bindings || !xrComposition.xrViewport) {
-                    LOG_ERROR("editor.xr", "Selected XR Play composition is missing its installed bindings or same Vulkan viewport");
-                    return std::nullopt;
-                }
-                const auto trackingRoot = SelectedXrTrackingRoot(p.options, *p.background.xrHost);
-                if (trackingRoot.HasError()) {
-                    LOG_ERROR("editor.xr", "%s", trackingRoot.ErrorValue().message.c_str());
-                    return std::nullopt;
-                }
-                auto composed = Application::Internal::OpenXRPlayHost::Create(
-                    {*xrComposition.xrSession, p.inputRouter, *xrComposition.xrViewport, p.presentation.renderFrontend,
-                     p.background.xrHost->bindings, createdRuntime.Value()->DispatchSource(), schedulerConfig.fixedStep,
-                     trackingRoot.Value()});
-                if (composed.HasError()) {
-                    LOG_ERROR("editor.xr", "Selected XR Play composition failed: %s", composed.ErrorValue().message.c_str());
-                    return std::nullopt;
-                }
-                xrComposition.xrPlay = std::move(composed).Value();
-            }
+            if (!ComposeSelectedEditorXrPlay(p, *createdRuntime.Value(), schedulerConfig.fixedStep))
+                return std::nullopt;
 
             struct XrInputOwnerScope final {
+                explicit XrInputOwnerScope(Application::Internal::OpenXRPlayHost *owner) noexcept : host(owner) {}
+
+                XrInputOwnerScope(const XrInputOwnerScope &) = delete;
+                XrInputOwnerScope &operator=(const XrInputOwnerScope &) = delete;
+
                 Application::Internal::OpenXRPlayHost *host;
 
                 ~XrInputOwnerScope() {
                     if (host)
                         host->ReleaseInputOwner();
                 }
-            } xrInputOwner{xrComposition.xrPlay.get()};
+            };
+
+            XrInputOwnerScope xrInputOwner{xrComposition.xrPlay.get()};
 #endif
             auto uiComposition =
                 Application::Internal::RuntimeUiPaintHost::Compose(p.presentation.renderFrontend, createdRuntime.Value()->DispatchSource(),
@@ -2647,7 +2675,7 @@ namespace Horo::Editor {
 
     /** @brief Registers inert descriptors and resolves explicit captured inputs before any native presentation. */
     [[nodiscard]] static std::optional<EditorStartupConfiguration> PrepareEditorConfiguration(const EditorSettings &settings,
-                                                                                              ModuleHost &modules,
+                                                                                              const ModuleHost &modules,
                                                                                               const EditorOpenXRHostServices *xrHost) {
         auto moduleSchema = modules.BuildConfigurationSchema();
         if (moduleSchema.HasError()) {
@@ -2703,8 +2731,7 @@ namespace Horo::Editor {
                 LOG_CRITICAL("editor.xr", "%s", current.ErrorValue().message.c_str());
                 return false;
             }
-            const auto trackingRoot = SelectedXrTrackingRoot(startup.options, *startup.xrHost);
-            if (trackingRoot.HasError()) {
+            if (const auto trackingRoot = SelectedXrTrackingRoot(startup.options, *startup.xrHost); trackingRoot.HasError()) {
                 LOG_CRITICAL("editor.xr", "%s", trackingRoot.ErrorValue().message.c_str());
                 return false;
             }
@@ -2736,11 +2763,11 @@ namespace Horo::Editor {
         }
 #if defined(HORO_HAS_OPENXR_HOST)
         std::unique_ptr<EditorOpenXRBootstrap> bootstrap;
-        const bool hostArguments =
-            std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())), [](const char *value) {
+        if (const bool hostArguments = std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())),
+                                                           [](const char *value) {
             return std::string_view{value}.starts_with("--xr-host-");
         });
-        if (xrHost && hostArguments) {
+            xrHost && hostArguments) {
             LOG_CRITICAL("editor.xr", "Injected installer services and explicit host bootstrap inputs cannot select two authorities.");
             return std::nullopt;
         }
@@ -2982,12 +3009,10 @@ namespace Horo::Editor {
         EditorTextures textures;
     };
 
-    /** @brief Releases graphical resources before a renderer restart or module teardown. */
-    [[nodiscard]] static Result<Render::RenderBackendDrainProgress> ShutdownEditorPresentation(SDL_Window *window,
-                                                                                               EditorRenderComposition &composition,
-                                                                                               EditorTextures &textures) {
-        using Progress = Render::RenderBackendDrainProgress;
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+    /** @brief Retires only selected XR children while the same device, loader and application parents remain retained. */
+    [[nodiscard]] static Result<Render::RenderBackendDrainProgress> RetireSelectedEditorXrHost(EditorRenderComposition &composition) {
+        using Progress = Render::RenderBackendDrainProgress;
         // XR closes only after its canonical frame/image receipts retire, while the selected device and loader still exist.
         if (composition.xrPlay) {
             const auto closed = composition.xrPlay->Close();
@@ -3001,6 +3026,18 @@ namespace Horo::Editor {
             if (auto closed = composition.xrSession->Close(); closed.HasError())
                 return Result<Progress>::Failure(closed.ErrorValue());
         }
+        return Result<Progress>::Success(Progress::Drained);
+    }
+#endif
+
+    /** @brief Releases graphical resources before a renderer restart or module teardown. */
+    [[nodiscard]] static Result<Render::RenderBackendDrainProgress> ShutdownEditorPresentation(SDL_Window *window,
+                                                                                               EditorRenderComposition &composition,
+                                                                                               EditorTextures &textures) {
+        using Progress = Render::RenderBackendDrainProgress;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        if (auto xr = RetireSelectedEditorXrHost(composition); xr.HasError() || xr.Value() != Progress::Drained)
+            return xr;
 #endif
         if (composition.frontend) {
             if (!composition.retirementBegun) {

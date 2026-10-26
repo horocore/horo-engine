@@ -116,7 +116,7 @@ namespace Horo::Render {
             [[nodiscard]] static Result<void> ValidateOptionalReads(const RenderGraph &graph,
                                                                     std::span<const RenderGraphOptionalRead> reads);
             [[nodiscard]] Result<void> SelectReads(CompiledRenderGraphExecution &execution, std::span<const RenderGraphOptionalRead> reads);
-            [[nodiscard]] Result<void> ValidateResidentSuperset(RenderFrontend &frontend,
+            [[nodiscard]] Result<void> ValidateResidentSuperset(const RenderFrontend &frontend,
                                                                 const CompiledRenderGraphExecution &execution) const;
             [[nodiscard]] static Result<void> ValidateSlots(const RenderGraph &graph,
                                                             std::span<const RenderGraphExternalTextureSlot> slots);
@@ -131,7 +131,9 @@ namespace Horo::Render {
                 std::vector<int> roles;  // Resource-indexed closed role; -1 means mandatory/non-optional.
                 std::vector<std::uint8_t> selected;
                 std::vector<std::uint8_t> externalSlots;
-            } reads_;
+            };
+
+            ReadStorage reads_;
 
             bool binding_{}; /**< Owner-lane foreign-source reentry fence, not cross-thread synchronization. */
         };

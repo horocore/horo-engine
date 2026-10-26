@@ -14,6 +14,7 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Maps native validity independently; absent components are never replaced by default transforms. */
         XRPoseComponents Components(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
+            using enum Horo::XR::XRPoseComponentValidity;
             const auto flags = location.locationFlags;
             const bool position = (flags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
             const bool orientation = (flags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
@@ -22,19 +23,19 @@ namespace Horo::XR::OpenXRInternal {
             XRPoseComponents result;
             if (position)
                 result.positionMeters = {{Math::Vec3{location.pose.position.x, location.pose.position.y, location.pose.position.z}},
-                                         positionTracked ? XRPoseComponentValidity::Tracked : XRPoseComponentValidity::Inferred};
+                                         positionTracked ? Tracked : Inferred};
             if (orientation)
                 result.orientation = {{Math::Quaternion{location.pose.orientation.x, location.pose.orientation.y,
                                                         location.pose.orientation.z, location.pose.orientation.w}},
-                                      orientationTracked ? XRPoseComponentValidity::Tracked : XRPoseComponentValidity::Inferred};
+                                      orientationTracked ? Tracked : Inferred};
             if (position && (velocity.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0)
                 result.linearVelocityMetersPerSecond = {{Math::Vec3{velocity.linearVelocity.x, velocity.linearVelocity.y,
                                                                     velocity.linearVelocity.z}},
-                                                        XRPoseComponentValidity::Inferred};
+                                                        Inferred};
             if (orientation && (velocity.velocityFlags & XR_SPACE_VELOCITY_ANGULAR_VALID_BIT) != 0)
                 result.angularVelocityRadiansPerSecond = {{Math::Vec3{velocity.angularVelocity.x, velocity.angularVelocity.y,
                                                                       velocity.angularVelocity.z}},
-                                                          XRPoseComponentValidity::Inferred};
+                                                          Inferred};
             if (position || orientation)
                 result.confidence = positionTracked && orientationTracked ? XRTrackingConfidence::High : XRTrackingConfidence::Low;
             if (position && orientation)
@@ -63,8 +64,8 @@ namespace Horo::XR::OpenXRInternal {
         Result<void> ValidateLocation(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
             constexpr XrSpaceLocationFlags known = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                                    XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
-            constexpr XrSpaceVelocityFlags knownVelocity = XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT;
-            if (location.type != XR_TYPE_SPACE_LOCATION || location.next != &velocity || velocity.type != XR_TYPE_SPACE_VELOCITY ||
+            if (constexpr XrSpaceVelocityFlags knownVelocity = XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT;
+                location.type != XR_TYPE_SPACE_LOCATION || location.next != &velocity || velocity.type != XR_TYPE_SPACE_VELOCITY ||
                 velocity.next != nullptr || (location.locationFlags & ~known) != 0 || (velocity.velocityFlags & ~knownVelocity) != 0 ||
                 ((location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0 &&
                  (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0) ||
@@ -77,9 +78,9 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Validates complete stereo ABI, independent component flags and asymmetric view ranges before any publication. */
         Result<void> ValidatePresentationViews(const NativePresentationViews &output, const XrViewState &state,
                                                std::uint32_t expectedViews) {
-            constexpr XrViewStateFlags known = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT |
-                                               XR_VIEW_STATE_ORIENTATION_TRACKED_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT;
-            if (state.type != XR_TYPE_VIEW_STATE || state.next || output.count != expectedViews || (state.viewStateFlags & ~known) != 0 ||
+            if (constexpr XrViewStateFlags known = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT |
+                                                   XR_VIEW_STATE_ORIENTATION_TRACKED_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT;
+                state.type != XR_TYPE_VIEW_STATE || state.next || output.count != expectedViews || (state.viewStateFlags & ~known) != 0 ||
                 ((state.viewStateFlags & XR_VIEW_STATE_POSITION_TRACKED_BIT) &&
                  !(state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT)) ||
                 ((state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_TRACKED_BIT) &&
@@ -87,11 +88,11 @@ namespace Horo::XR::OpenXRInternal {
                 return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
             for (const auto &view : std::span{output.views}.first(output.count)) {
                 constexpr float rightAngle = 1.57079632679489661923F;
-                const auto &fov = view.fov;
-                if (view.type != XR_TYPE_VIEW || view.next || !std::isfinite(fov.angleLeft) || !std::isfinite(fov.angleRight) ||
-                    !std::isfinite(fov.angleDown) || !std::isfinite(fov.angleUp) || fov.angleLeft <= -rightAngle ||
-                    fov.angleRight >= rightAngle || fov.angleDown <= -rightAngle || fov.angleUp >= rightAngle ||
-                    fov.angleLeft >= fov.angleRight || fov.angleDown >= fov.angleUp)
+                if (const auto &fov = view.fov; view.type != XR_TYPE_VIEW || view.next || !std::isfinite(fov.angleLeft) ||
+                                                !std::isfinite(fov.angleRight) || !std::isfinite(fov.angleDown) ||
+                                                !std::isfinite(fov.angleUp) || fov.angleLeft <= -rightAngle ||
+                                                fov.angleRight >= rightAngle || fov.angleDown <= -rightAngle || fov.angleUp >= rightAngle ||
+                                                fov.angleLeft >= fov.angleRight || fov.angleDown >= fov.angleUp)
                     return Result<void>::Failure(MakeError(XRErrors::ViewPlanInvalid));
                 if ((state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
                     !Math::IsFinite(Math::Vec3{view.pose.position.x, view.pose.position.y, view.pose.position.z}))
@@ -111,8 +112,7 @@ namespace Horo::XR::OpenXRInternal {
                                                           const XRTimeEvidence &time) const {
         XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
         XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &velocity};
-        const auto result = dispatch_.locate(source, tracking_.base, time.runtimeSample.Nanoseconds(), &location);
-        if (result != XR_SUCCESS)
+        if (const auto result = dispatch_.locate(source, tracking_.base, time.runtimeSample.Nanoseconds(), &location); result != XR_SUCCESS)
             return Result<XRPoseDescriptor>::Failure(PoseFailure("locate tracking space", result));
         if (auto valid = ValidateLocation(location, velocity); valid.HasError())
             return Result<XRPoseDescriptor>::Failure(valid.ErrorValue());
@@ -133,8 +133,7 @@ namespace Horo::XR::OpenXRInternal {
         const std::size_t role = action.role == XRTrackedDeviceRole::LeftController ? 0 : 1;
         const XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action.native, hands_[role]};
         XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
-        const auto result = dispatch_.poseState(native_.session, &info, &state);
-        if (result != XR_SUCCESS)
+        if (const auto result = dispatch_.poseState(native_.session, &info, &state); result != XR_SUCCESS)
             return Outcome::Failure(PoseFailure("query pose action", result));
         if (state.type != XR_TYPE_ACTION_STATE_POSE || state.next != nullptr || (state.isActive != XR_TRUE && state.isActive != XR_FALSE))
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
@@ -160,6 +159,17 @@ namespace Horo::XR::OpenXRInternal {
         samples.records_[samples.count_++] = {XRTrackedDeviceRole::Head, XRTrackedPoseKind::Head, observed, pose.Value()};
         return Result<void>::Success();
     }
+
+    namespace {
+        /** @brief Filters only the retained issuer-owned device generation and capability before native sampling. */
+        bool AdmitsTrackingSource(const std::span<const XRTrackedDeviceRecord> devices, const bool filter, const XRTrackedDeviceRole role,
+                                  const XRTrackedDeviceCapability capability) {
+            if (!filter)
+                return true;
+            const auto device = std::ranges::find(devices, role, &XRTrackedDeviceRecord::role);
+            return device != devices.end() && device->state != XRTrackedDeviceState::Disconnected && device->capabilities.Has(capability);
+        }
+    }  // namespace
 
     /** @copydoc OpenXRActionBindings::CollectPoseObservations */
     Result<NativePoseObservations> OpenXRActionBindings::CollectPoseObservations(
@@ -187,18 +197,14 @@ namespace Horo::XR::OpenXRInternal {
         if (const auto current = Current(session); current.HasError())
             return Outcome::Failure(current.ErrorValue());
         NativePoseObservations samples;
-        const auto head = std::ranges::find(currentDevices, XRTrackedDeviceRole::Head, &XRTrackedDeviceRecord::role);
-        if (!devices || (head != currentDevices.end() && head->state != XRTrackedDeviceState::Disconnected &&
-                         head->capabilities.Has(XRTrackedDeviceCapability::HeadPose))) {
+        if (AdmitsTrackingSource(currentDevices, devices.has_value(), XRTrackedDeviceRole::Head, XRTrackedDeviceCapability::HeadPose)) {
             if (auto observed = AppendHeadObservation(time, samples); observed.HasError())
                 return Outcome::Failure(observed.ErrorValue());
         }
         for (const auto &action : tracking_.actions) {
-            const auto device = std::ranges::find(currentDevices, action.role, &XRTrackedDeviceRecord::role);
             const auto capability =
                 action.kind == XRTrackedPoseKind::Grip ? XRTrackedDeviceCapability::GripPose : XRTrackedDeviceCapability::AimPose;
-            if (devices && (device == currentDevices.end() || device->state == XRTrackedDeviceState::Disconnected ||
-                            !device->capabilities.Has(capability)))
+            if (!AdmitsTrackingSource(currentDevices, devices.has_value(), action.role, capability))
                 continue;
             auto pose = LocateAction(action, time);
             if (pose.HasError())
@@ -244,8 +250,8 @@ namespace Horo::XR::OpenXRInternal {
     Result<XRPoseDescriptor> OpenXRActionBindings::PresentationReference(const XRTimeEvidence &time) const {
         XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
         XrSpaceLocation reference{XR_TYPE_SPACE_LOCATION, &velocity};
-        const auto transformed = dispatch_.locate(tracking_.base, tracking_.world, time.renderPrediction->Nanoseconds(), &reference);
-        if (transformed != XR_SUCCESS)
+        if (const auto transformed = dispatch_.locate(tracking_.base, tracking_.world, time.renderPrediction->Nanoseconds(), &reference);
+            transformed != XR_SUCCESS)
             return Result<XRPoseDescriptor>::Failure(PoseFailure("locate presentation reference in World", transformed));
         if (auto valid = ValidateLocation(reference, velocity); valid.HasError())
             return Result<XRPoseDescriptor>::Failure(valid.ErrorValue());
@@ -276,9 +282,9 @@ namespace Horo::XR::OpenXRInternal {
         const XrViewLocateInfo info{XR_TYPE_VIEW_LOCATE_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
                                     time.renderPrediction->Nanoseconds(), tracking_.base};
         XrViewState state{XR_TYPE_VIEW_STATE};
-        const auto located =
-            dispatch_.locateViews(current.Value().session, &info, &state, expectedViews, &output.count, output.views.data());
-        if (located != XR_SUCCESS)
+        if (const auto located =
+                dispatch_.locateViews(current.Value().session, &info, &state, expectedViews, &output.count, output.views.data());
+            located != XR_SUCCESS)
             return Outcome::Failure(PoseFailure("locate primary views", located));
         if (auto valid = ValidatePresentationViews(output, state, expectedViews); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
@@ -296,8 +302,7 @@ namespace Horo::XR::OpenXRInternal {
         }
         output.reference = tracking_.baseIdentity;
         output.referenceToWorld = std::move(reference).Value();
-        const auto validated = XRPoseSample::Create(output.referenceToWorld, owner_, tracking_.request->origin);
-        if (validated.HasError())
+        if (const auto validated = XRPoseSample::Create(output.referenceToWorld, owner_, tracking_.request->origin); validated.HasError())
             return Outcome::Failure(validated.ErrorValue());
         if (auto fenced = Current(session); fenced.HasError())
             return Outcome::Failure(fenced.ErrorValue());

@@ -1,5 +1,6 @@
 #include "HostSignatureDocument.h"
 #include "OpenXRInstalledHostCatalog.h"
+#include "support/OpenXRProductSigningTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -11,84 +12,7 @@ namespace Horo::Application::Internal::Tests {
     namespace {
         using Json = nlohmann::json;
 
-        /** @brief Test-owned key material, unrelated to product release roots; every partial failure has RAII cleanup. */
-        struct SigningKey final {
-            struct Group final {
-                mbedtls_ecp_group value;
-
-                Group() {
-                    mbedtls_ecp_group_init(&value);
-                }
-
-                ~Group() {
-                    mbedtls_ecp_group_free(&value);
-                }
-            } group;
-
-            struct Point final {
-                mbedtls_ecp_point value;
-
-                Point() {
-                    mbedtls_ecp_point_init(&value);
-                }
-
-                ~Point() {
-                    mbedtls_ecp_point_free(&value);
-                }
-            } point;
-
-            struct Integer final {
-                mbedtls_mpi value;
-
-                Integer() {
-                    mbedtls_mpi_init(&value);
-                }
-
-                ~Integer() {
-                    mbedtls_mpi_free(&value);
-                }
-            } secret;
-
-            std::uint32_t random{0x48305230U};
-            Security::TrustedSigningKey root;
-
-            static int Random(void *state, unsigned char *output, const std::size_t size) {
-                auto &value = *static_cast<std::uint32_t *>(state);
-                for (std::size_t index = 0; index < size; ++index) {
-                    value = value * 1664525U + 1013904223U;
-                    output[index] = static_cast<unsigned char>(value >> 24U);
-                }
-                return 0;
-            }
-
-            SigningKey() {
-                REQUIRE(mbedtls_ecp_group_load(&group.value, MBEDTLS_ECP_DP_SECP256R1) == 0);
-                REQUIRE(mbedtls_mpi_lset(&secret.value, 1) == 0);
-                REQUIRE(mbedtls_ecp_mul(&group.value, &point.value, &secret.value, &group.value.G, Random, &random) == 0);
-                root.publisherId = "com.horo.tests";
-                root.keyId = "host-test-key";
-                root.publicKey.resize(65);
-                std::size_t size{};
-                REQUIRE(mbedtls_ecp_point_write_binary(&group.value, &point.value, MBEDTLS_ECP_PF_UNCOMPRESSED, &size,
-                                                       reinterpret_cast<unsigned char *>(root.publicKey.data()),
-                                                       root.publicKey.size()) == 0);
-                REQUIRE(size == root.publicKey.size());
-            }
-
-            Security::DetachedSignatureEnvelope Sign(const std::span<const std::byte> bytes) {
-                Security::DetachedSignatureEnvelope envelope{.publisherId = root.publisherId,
-                                                             .keyId = root.keyId,
-                                                             .artifactDigest = ComputeSha256(bytes),
-                                                             .signature = std::vector<std::byte>(64)};
-                const auto digest = Security::ComputeSignaturePayloadDigest(envelope);
-                Integer r, s;
-                REQUIRE(mbedtls_ecdsa_sign(&group.value, &r.value, &s.value, &secret.value, digest.bytes.data(), digest.bytes.size(),
-                                           Random, &random) == 0);
-                REQUIRE(mbedtls_mpi_write_binary(&r.value, reinterpret_cast<unsigned char *>(envelope.signature.data()), 32) == 0);
-                REQUIRE(mbedtls_mpi_write_binary(&s.value, reinterpret_cast<unsigned char *>(envelope.signature.data()) + 32, 32) == 0);
-                return envelope;
-            }
-        };
+        using Horo::Tests::OpenXRProduct::SigningKey;
 
         std::span<const std::byte> Bytes(const std::string_view text) {
             return std::as_bytes(std::span{text.data(), text.size()});
@@ -186,5 +110,33 @@ namespace Horo::Application::Internal::Tests {
             return;
         }
         CHECK(fixture.Verify(fixture.document.dump()).HasError());
+    }
+
+    TEST_CASE("Signed XR catalog parses exact UTF8 path bytes and rejects signed malformed text", "[xr][host][security][install]") {
+        CatalogFixture fixture;
+        constexpr std::string_view path = "runtime/xr/bindings-ü.json";
+        fixture.document["bindings"] = path;
+        auto bytes = fixture.document.dump();
+        bool malformed{};
+        SECTION("valid non-ASCII path") {}
+        SECTION("invalid UTF8 byte inside an otherwise signed path") {
+            const auto offset = bytes.find("ü");
+            REQUIRE(offset != std::string::npos);
+            bytes[offset] = static_cast<char>(0xff);
+            malformed = true;
+        }
+        SECTION("truncated signed JSON") {
+            bytes.pop_back();
+            malformed = true;
+        }
+        // Sign the exact supplied bytes, so malformed-input rejection cannot be mistaken for signature rejection.
+        const auto parsed = fixture.Verify(bytes);
+        if (malformed) {
+            CHECK(parsed.HasError());
+        } else {
+            REQUIRE(parsed.HasValue());
+            CHECK(parsed.Value().Bindings().Value() == path);
+            CHECK(parsed.Value().Evidence().ArtifactDigest() == ComputeSha256(Bytes(bytes)));
+        }
     }
 }  // namespace Horo::Application::Internal::Tests

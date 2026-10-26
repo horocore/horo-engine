@@ -41,13 +41,18 @@ namespace Horo::Application::Internal {
                 components.orientation = {{Math::Quaternion{native.pose.orientation.x, native.pose.orientation.y, native.pose.orientation.z,
                                                             native.pose.orientation.w}},
                                           trackedOrientation ? XRPoseComponentValidity::Tracked : XRPoseComponentValidity::Inferred};
-            components.confidence = !position && !orientation               ? XRTrackingConfidence::None
-                                    : trackedPosition && trackedOrientation ? XRTrackingConfidence::High
-                                                                            : XRTrackingConfidence::Low;
-            components.loss = position && orientation ? XRTrackingLossState::None
-                              : position              ? XRTrackingLossState::OrientationLost
-                              : orientation           ? XRTrackingLossState::PositionLost
-                                                      : XRTrackingLossState::FullyLost;
+            components.confidence = XRTrackingConfidence::Low;
+            if (!position && !orientation)
+                components.confidence = XRTrackingConfidence::None;
+            else if (trackedPosition && trackedOrientation)
+                components.confidence = XRTrackingConfidence::High;
+            components.loss = XRTrackingLossState::FullyLost;
+            if (position && orientation)
+                components.loss = XRTrackingLossState::None;
+            else if (position)
+                components.loss = XRTrackingLossState::OrientationLost;
+            else if (orientation)
+                components.loss = XRTrackingLossState::PositionLost;
             view.projection = {std::tan(native.fov.angleLeft), std::tan(native.fov.angleRight), std::tan(native.fov.angleDown),
                                std::tan(native.fov.angleUp)};
             view.recommendedExtent = projection.recommended[eye];
@@ -108,18 +113,18 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRPlayHost::FinishFrameResources(const XRSessionId &candidate, const XRCapabilitySnapshot &capabilities) {
         if (!render_ || render_->session != candidate || sessions_.Snapshot().session != candidate || events_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        const auto configured = frames_.BindConfiguration({candidate, {.index = 0, .generation = 1}}, capabilities,
-                                                          {.maximumViews = 2, .maximumImages = 1, .maximumLayers = 1});
-        if (configured != XRFrameStatus::Ok)
+        if (const auto configured = frames_.BindConfiguration({candidate, {.index = 0, .generation = 1}}, capabilities,
+                                                              {.maximumViews = 2, .maximumImages = 1, .maximumLayers = 1});
+            configured != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (auto bound = render_->compositor.Bind({getProc_}, {}); bound.HasError())
             return bound;
-        if (auto bound = clock_.BindNative(getProc_); bound.HasError())
+        if (auto bound = clock_.BindNative({getProc_}); bound.HasError())
             return bound;
         render_->clockBound = true;
         events_.emplace(native_, sessions_, frames_);
         const std::array owners{&render_->color};
-        if (auto bound = events_->Bind(getProc_, owners); bound.HasError())
+        if (auto bound = events_->Bind({getProc_}, owners); bound.HasError())
             return bound;
         eventsBound_ = true;
         return Result<void>::Success();
@@ -132,26 +137,25 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::PresentationState */
     OpenXRPlayPresentation OpenXRPlayHost::PresentationState() const noexcept {
+        using enum Horo::Application::Internal::OpenXRPlayPresentation;
         if (std::this_thread::get_id() != lane_ || busy_)
-            return OpenXRPlayPresentation::Pending;
+            return Pending;
         if (!scene_ && !render_)
-            return OpenXRPlayPresentation::Inactive;
-        return UsesXrScene() && sessions_.Snapshot().admitsFrames && frames_.Snapshot().phase == XRFramePhase::Idle
-                   ? OpenXRPlayPresentation::FrameAdmitted
-                   : OpenXRPlayPresentation::Pending;
+            return Inactive;
+        return UsesXrScene() && sessions_.Snapshot().admitsFrames && frames_.Snapshot().phase == XRFramePhase::Idle ? FrameAdmitted
+                                                                                                                    : Pending;
     }
 
     /** @copydoc OpenXRPlayHost::AbortRenderFrame */
     Result<void> OpenXRPlayHost::AbortRenderFrame() {
-        if (!render_ || frames_.Snapshot().phase == XRFramePhase::Idle)
+        using enum Horo::XR::XRFramePhase;
+        if (!render_ || frames_.Snapshot().phase == Idle)
             return Result<void>::Success();
         render_->rendered = false;
         render_->guiFinished = true;
-        const auto state = frames_.Snapshot();
-        if (state.renderAdmitted && state.phase != XRFramePhase::Aborting && state.phase != XRFramePhase::ImagesReleased) {
-            if (frames_.Abort(state.frame) != XRFrameStatus::Ok)
-                return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        }
+        if (const auto state = frames_.Snapshot(); state.renderAdmitted && state.phase != Aborting && state.phase != ImagesReleased &&
+                                                   frames_.Abort(state.frame) != XRFrameStatus::Ok)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         return Result<void>::Success();
     }
 
@@ -163,7 +167,7 @@ namespace Horo::Application::Internal {
         const Operation operation{*this};
         if (!UsesXrScene() || !render_ || !eventsBound_ || eventsPending_)
             return Output::Failure(MakeError(XRErrors::OperationUnavailable));
-        if (auto valid = ValidateScene(*scene_); valid.HasError())
+        if (auto valid = scene_->Validate(*this); valid.HasError())
             return Output::Failure(valid.ErrorValue());
         if (auto tail = ProgressTail(); tail.HasError())
             return Output::Failure(tail.ErrorValue());
@@ -175,8 +179,7 @@ namespace Horo::Application::Internal {
             if (started.HasError() || !started.Value())
                 return started;
         }
-        const auto pacing = render_->CheckDeadline();
-        if (pacing.HasError() || !pacing.Value())
+        if (const auto pacing = render_->CheckDeadline(); pacing.HasError() || !pacing.Value())
             return pacing;
         if (frames_.Snapshot().phase == XRFramePhase::Begun) {
             if (auto located = render_->LocateViews(); located.HasError())
@@ -228,10 +231,10 @@ namespace Horo::Application::Internal {
         auto converted = render_->ConvertScene(plan.Value(), configuration, revision.Value(), input_.origin, publication);
         if (converted.HasError())
             return Result<void>::Failure(converted.ErrorValue());
-        auto bound =
-            Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews, publication,
-                                                       converted.Value().Scene().Views(), scene_->geometry->Instances());
-        if (bound.HasError())
+        if (auto bound =
+                Editor::EditorVulkanXrViewportAccess::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews,
+                                                           publication, converted.Value().Scene().Views(), scene_->geometry->Instances());
+            bound.HasError())
             return bound;
         render_->plan.emplace(std::move(plan).Value());
         render_->hostFrameNumber = frameNumber;
@@ -245,14 +248,12 @@ namespace Horo::Application::Internal {
         if (!UsesXrScene() || !render_ || !render_->plan || !render_->acquisition || render_->submitted)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const Operation operation{*this};
-        auto executed = Editor::EditorVulkanXrViewportAccess::Execute(composition_.viewport, frame, output);
-        if (executed.HasError()) {
+        if (auto executed = Editor::EditorVulkanXrViewportAccess::Execute(composition_.viewport, frame, output); executed.HasError()) {
             const auto aborted = AbortRenderFrame();
             (void)aborted;
             return executed;
         }
-        const std::array images{render_->acquisition->image};
-        if (frames_.Submit(frames_.Snapshot().frame, images) != XRFrameStatus::Ok)
+        if (const std::array images{render_->acquisition->image}; frames_.Submit(frames_.Snapshot().frame, images) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         render_->submitted = true;
         return Result<void>::Success();
@@ -313,10 +314,9 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(retired.ErrorValue());
         if (!retired.Value())
             return Result<void>::Success();
-        if (render_->acquisitionRecorded && render_->acquisition && state.phase != XRFramePhase::ImagesReleased) {
-            if (frames_.Release(state.frame, render_->acquisition->image) != XRFrameStatus::Ok)
-                return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        }
+        if (render_->acquisitionRecorded && render_->acquisition && state.phase != XRFramePhase::ImagesReleased &&
+            frames_.Release(state.frame, render_->acquisition->image) != XRFrameStatus::Ok)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         Result<void> ended = Result<void>::Success();
         if (render_->rendered && render_->plan && render_->acquisition) {
             const std::array targets{NativeProjectionTarget{&render_->color, render_->acquisition->image}};
@@ -332,49 +332,53 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
-    /** @copydoc OpenXRPlayHost::RetireFrameResources */
-    Result<bool> OpenXRPlayHost::RetireFrameResources(const XRSessionId &candidate) {
+    /** @copydoc OpenXRPlayHost::FrameState::RetireViewsAfterLoss */
+    Result<void> OpenXRPlayHost::FrameState::RetireViewsAfterLoss() {
+        // Loss closes canonical admission, not GPU work. Preserve the same queue references and retry debt.
+        if (submitted) {
+            if (auto polled = Editor::EditorVulkanXrViewportAccess::Poll(host.composition_.viewport); polled.HasError())
+                return polled;
+        }
+        for (auto &view : eyeViews) {
+            if (!view.IsValid())
+                continue;
+            if (auto released = host.composition_.frontend.ReleaseTextureView(view); released.HasError())
+                return released;
+            view = {};
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::RetireResources */
+    Result<bool> OpenXRPlayHost::FrameState::RetireResources(OpenXRPlayHost &host, const XRSessionId &candidate) {
         using Output = Result<bool>;
-        if (render_ && render_->session != candidate)
+        if (host.render_ && host.render_->session != candidate)
             return Output::Failure(MakeError(XRErrors::IdentityStale));
-        const bool lost = sessions_.Snapshot().state == XRSessionState::Lost;
+        const bool lost = host.sessions_.Snapshot().state == XRSessionState::Lost;
         if (!lost) {
-            if (auto tail = ProgressTail(); tail.HasError())
+            if (auto tail = host.ProgressTail(); tail.HasError())
                 return Output::Failure(tail.ErrorValue());
-            if (frames_.Snapshot().phase != XRFramePhase::Idle)
+            if (host.frames_.Snapshot().phase != XRFramePhase::Idle)
                 return Output::Success(false);  // Normal stopping must finish the actual native frame protocol.
         }
-        if (!lost && events_ && events_->Running()) {
-            auto progressed = events_->Poll(false);
-            if (progressed.HasError())
+        if (!lost && host.events_ && host.events_->Running()) {
+            if (auto progressed = host.events_->Poll(false); progressed.HasError())
                 return Output::Failure(progressed.ErrorValue());
-            if (events_->Running())
+            if (host.events_->Running())
                 return Output::Success(false);
         }
-        if (render_) {
-            if (auto closed = render_->compositor.BeginShutdown(); closed.HasError())
+        if (host.render_) {
+            if (auto closed = host.render_->compositor.BeginShutdown(); closed.HasError())
                 return Output::Failure(closed.ErrorValue());
             if (lost) {
-                // Loss closes canonical frame admission, not GPU work. Poll the SAME scene/GUI queue references
-                // before retiring imports; neither a failed End nor a lost event is a completion receipt.
-                if (render_->submitted) {
-                    if (auto polled = Editor::EditorVulkanXrViewportAccess::Poll(composition_.viewport); polled.HasError())
-                        return Output::Failure(polled.ErrorValue());
-                }
-                for (auto &view : render_->eyeViews) {
-                    if (!view.IsValid())
-                        continue;
-                    if (auto released = composition_.frontend.ReleaseTextureView(view); released.HasError())
-                        return Output::Failure(released.ErrorValue());
-                    view = {};
-                }
+                if (auto retired = host.render_->RetireViewsAfterLoss(); retired.HasError())
+                    return Output::Failure(retired.ErrorValue());
             }
-            const auto closed = render_->color.Close();
-            if (closed.HasError() || !closed.Value())
+            if (const auto closed = host.render_->color.Close(); closed.HasError() || !closed.Value())
                 return closed;
             // Native Close observed actual canonical image retirement and destroyed native views. No submitted
             // signal, CPU handle drop, Scene callback or desktop Present substitutes for this evidence.
-            if (auto retired = Editor::EditorVulkanXrViewportAccess::Retire(composition_.viewport); retired.HasError())
+            if (auto retired = Editor::EditorVulkanXrViewportAccess::Retire(host.composition_.viewport); retired.HasError())
                 return Output::Failure(retired.ErrorValue());
         }
         return Output::Success(true);
@@ -386,8 +390,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (render_) {
             if (render_->clockBound) {
-                auto retired = clock_.RetireNative(candidate);
-                if (retired.HasError())
+                if (auto retired = clock_.RetireNative(candidate); retired.HasError())
                     return retired;
                 render_->clockBound = false;
             }

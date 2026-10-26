@@ -32,10 +32,11 @@ namespace Horo::Application::Internal {
                                                        const Packages::PackagePath &descriptor) {
             const auto slash = descriptor.Value().rfind('/');
             const auto entries = package.archive->Manifest().Entries();
-            const auto declared = std::ranges::find_if(entries, [&descriptor](const auto &entry) {
+            if (const auto declared = std::ranges::find_if(entries,
+                                                           [&descriptor](const auto &entry) {
                 return entry.id.path.Value() == descriptor.Value();
             });
-            if (slash == std::string::npos || slash == 0 || declared == entries.end() || !declared->contributionRoot ||
+                slash == std::string::npos || slash == 0 || declared == entries.end() || !declared->contributionRoot ||
                 declared->contributionRoot->Value() != descriptor.Value().substr(0, slash))
                 return Result<std::vector<std::byte>>::Failure(InvalidInstall());
             return package.archive->ReadDeclaredFile(descriptor, 64U * 1024U);
@@ -47,10 +48,11 @@ namespace Horo::Application::Internal {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(XR::XRErrors::LoaderPreflightCancelled));
             const auto entries = package.archive->Manifest().Entries();
-            const auto found = std::ranges::find_if(entries, [&file](const auto &entry) {
+            if (const auto found = std::ranges::find_if(entries,
+                                                        [&file](const auto &entry) {
                 return entry.id.path.Value() == file.path.Value();
             });
-            if (found == entries.end() || !found->executable || !found->contributionRoot || found->contributionRoot->Value() != root ||
+                found == entries.end() || !found->executable || !found->contributionRoot || found->contributionRoot->Value() != root ||
                 found->digest != file.digest || found->size > 64U * 1024U * 1024U)
                 return Result<void>::Failure(InvalidInstall());
             auto bytes = package.archive->ReadDeclaredFile(file.path, 64U * 1024U * 1024U);
@@ -135,7 +137,7 @@ namespace Horo::Application::Internal {
     /** @copydoc VerifiedOpenXRComponent::VerifiedOpenXRComponent */
     VerifiedOpenXRComponent::VerifiedOpenXRComponent(std::shared_ptr<const Packages::VerifiedPackageInstallRecord> install,
                                                      const std::size_t index, Packages::PackagePath descriptor,
-                                                     OpenXRComponentManifest manifest, const Sha256Digest identity,
+                                                     OpenXRComponentManifest manifest, const Sha256Digest &identity,
                                                      const XR::XRInstallRecordId installIdentity)
         : install_(std::move(install)), packageIndex_(index), descriptor_(std::move(descriptor)), manifest_(std::move(manifest)),
           identity_(identity), installIdentity_(installIdentity) {}

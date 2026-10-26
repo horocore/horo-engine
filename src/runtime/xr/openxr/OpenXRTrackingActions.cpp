@@ -14,15 +14,16 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Accepts only the registered controller grip/aim vocabulary, never arbitrary runtime paths. */
         bool PosePath(const NativePoseActionPath &path) {
-            if ((path.role != XRTrackedDeviceRole::LeftController && path.role != XRTrackedDeviceRole::RightController) ||
-                (path.kind != XRTrackedPoseKind::Grip && path.kind != XRTrackedPoseKind::Aim))
+            using enum XRTrackedPoseKind;
+            const bool left = path.role == XRTrackedDeviceRole::LeftController;
+            if ((!left && path.role != XRTrackedDeviceRole::RightController) || (path.kind != Grip && path.kind != Aim))
                 return false;
-            if (path.role == XRTrackedDeviceRole::LeftController) {
-                if (path.kind == XRTrackedPoseKind::Grip)
+            if (left) {
+                if (path.kind == Grip)
                     return path.path == "/user/hand/left/input/grip/pose";
                 return path.path == "/user/hand/left/input/aim/pose";
             }
-            if (path.kind == XRTrackedPoseKind::Grip)
+            if (path.kind == Grip)
                 return path.path == "/user/hand/right/input/grip/pose";
             return path.path == "/user/hand/right/input/aim/pose";
         }
@@ -85,7 +86,7 @@ namespace Horo::XR::OpenXRInternal {
             info.actionType = XR_ACTION_TYPE_POSE_INPUT;
             info.countSubactionPaths = 1;
             info.subactionPaths = &hands_[role];
-            tracking_.actions.push_back({path.set, path.role, path.kind});
+            tracking_.actions.emplace_back(path.set, path.role, path.kind);
             const auto result = dispatch_.createAction(set->native, &info, &tracking_.actions.back().native);
             if (XR_FAILED(result) || tracking_.actions.back().native == XR_NULL_HANDLE)
                 return Result<void>::Failure(
@@ -108,8 +109,8 @@ namespace Horo::XR::OpenXRInternal {
                 return Result<std::uint32_t>::Failure(MakeError(XRErrors::CapacityExceeded));
             const std::string component{path.path};
             XrPath native{};
-            const auto result = dispatch_.stringToPath(native_.instance, component.c_str(), &native);
-            if (XR_FAILED(result) || native == XR_NULL_PATH)
+            if (const auto result = dispatch_.stringToPath(native_.instance, component.c_str(), &native);
+                XR_FAILED(result) || native == XR_NULL_PATH)
                 return Result<std::uint32_t>::Failure(
                     PoseActionFailure("resolve pose path", XR_FAILED(result) ? result : XR_ERROR_PATH_INVALID));
             output[count++] = {action->native, native};

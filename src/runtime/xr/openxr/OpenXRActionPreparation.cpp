@@ -33,11 +33,9 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(borrowed.ErrorValue());
         native_ = borrowed.Value();
         owner_ = session;
-        const auto prepared = PrepareTransaction(request, native_.maximumActions);
-        if (prepared.HasError())
+        if (const auto prepared = PrepareTransaction(request, native_.maximumActions); prepared.HasError())
             return prepared;
-        const auto spaces = BindSpaces(session);
-        if (spaces.HasError()) {
+        if (const auto spaces = BindSpaces(session); spaces.HasError()) {
             (void)Close();
             return spaces;
         }
@@ -61,7 +59,7 @@ namespace Horo::XR::OpenXRInternal {
         if (attached_.native == borrowed.Value().session && attached_.incarnation == borrowed.Value().incarnation)
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationIncompatible, "OpenXR action sets attach only once to the same prepared native session."));
-        preparation_.emplace(Preparation{preparation.preflight, preparation.activeAttempt, maximumActions});
+        preparation_.emplace(preparation.preflight, preparation.activeAttempt, maximumActions);
         native_ = borrowed.Value();  // maximumActions remains zero: creation is not admission to frame work.
         auto prepared = PrepareTransaction(request, maximumActions);
         if (prepared.HasValue())
@@ -86,7 +84,7 @@ namespace Horo::XR::OpenXRInternal {
         if (current.Value().maximumActions < preparation_->maximumActions)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (tracking_.request &&
-            current.Value().maximumSpaces < tracking_.actions.size() + 2 + tracking_.request->worldFromBase.has_value())
+            current.Value().maximumSpaces < tracking_.actions.size() + 2 + (tracking_.request->worldFromBase.has_value() ? 1U : 0U))
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (auto spaces = BindSpaces(session); spaces.HasError())
             return spaces;
@@ -119,8 +117,7 @@ namespace Horo::XR::OpenXRInternal {
                 prepared = Resolve(request, native_.instance);
             }
             if (prepared.HasValue())
-                prepared = Prepare(request.schema, request.catalog, request.overrides, request.profiles, request.controls, request.labels,
-                                   maximumActions, request.posePaths);
+                prepared = Prepare(request, maximumActions);
         } catch (const std::bad_alloc &) {
             prepared = preparationFailure();
         } catch (const std::format_error &) {

@@ -307,9 +307,10 @@ namespace Horo::Input {
         fixture.collector.BeginFrame(1);
         const auto device = fixture.collector.ConnectGamepad("host-assigned");
         fixture.router.BeginFrame(fixture.collector.Commit());
-        CHECK(fixture.router.ActionCollection(fixture.context, device).HasError());
+        const InputRouter &query = fixture.router;
+        CHECK(query.ActionCollection(fixture.context, device).HasError());
         REQUIRE(fixture.router.AssignGamepad(2, device));
-        auto borrowed = fixture.router.ActionCollection(fixture.context, device);
+        auto borrowed = query.ActionCollection(fixture.context, device);
         REQUIRE(borrowed.HasValue());
         auto port = std::move(borrowed).Value();
         auto source = fixture.Source(port);

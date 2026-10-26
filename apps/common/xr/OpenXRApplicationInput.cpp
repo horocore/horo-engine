@@ -6,6 +6,18 @@
 #include <algorithm>
 
 namespace Horo::Application::Internal {
+    namespace {
+        /** @brief Maps the already-normalized native pose vocabulary to its exact issuer capability. */
+        XR::XRTrackedDeviceCapability NativePoseCapability(const XR::XRTrackedPoseKind kind) {
+            using enum XR::XRTrackedDeviceCapability;
+            if (kind == XR::XRTrackedPoseKind::Head)
+                return HeadPose;
+            if (kind == XR::XRTrackedPoseKind::Grip)
+                return GripPose;
+            return AimPose;
+        }
+    }  // namespace
+
     using namespace XR;
     using namespace XR::OpenXRInternal;
 
@@ -17,8 +29,7 @@ namespace Horo::Application::Internal {
             return current;
         if (input_.native || input_.projection || input_.bindings)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        auto census = PrepareSession();
-        if (census.HasError())
+        if (auto census = PrepareSession(); census.HasError())
             return Result<void>::Failure(census.ErrorValue());
         const auto discovery = native_->BorrowDiscovery(selection_.attempt);
         if (discovery.HasError())
@@ -60,11 +71,10 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
         if (auto bound = input_.projection->Bind(candidate, coordinator.Revision()); bound.HasError())
             return bound;
-        const auto native = native_->Borrow(candidate);
-        if (native.HasError())
+        if (const auto native = native_->Borrow(candidate); native.HasError())
             return Result<void>::Failure(native.ErrorValue());
         // Actual dispatch is sealed cold on the same installed instance; frame sampling never resolves symbols.
-        return input_.native->PreparePresentation(getProc_);
+        return input_.native->PreparePresentation({getProc_});
     }
 
     /** @copydoc OpenXRApplicationSession::AppendInput */
@@ -114,38 +124,34 @@ namespace Horo::Application::Internal {
             return current;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-        return AppendPreparedInput(poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision, publication, frame);
+        return AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision}, publication, frame);
     }
 
     /** @copydoc OpenXRApplicationSession::AppendPreparedInput */
-    Result<void> OpenXRApplicationSession::AppendPreparedInput(const NativePoseObservations &poses,
-                                                               const NativeScalarActionSamples &actions, const XRSessionSnapshot &state,
-                                                               const XRTimeEvidence &time, const XRWorldOriginRevision origin,
-                                                               const std::uint64_t bindingRevision,
-                                                               RuntimeInternal::XRTrackingPublication &publication,
+    Result<void> OpenXRApplicationSession::AppendPreparedInput(const PreparedInputSample &sample,
+                                                               XR::RuntimeInternal::XRTrackingPublication &publication,
                                                                Input::InputCollectionFrame &frame) {
+        const auto &[poses, actions, state, time, origin, bindingRevision] = sample;
         std::array<RuntimeInternal::TrackingPoseEvidence, 5> normalized{};
         std::size_t poseCount = 0;
         bool tracked = false;
         for (const auto &pose : poses.Poses()) {
             const auto devices = publication.Devices();
             const auto device = std::ranges::find(devices, pose.role, &XRTrackedDeviceRecord::role);
-            const auto capability = pose.kind == XRTrackedPoseKind::Head   ? XRTrackedDeviceCapability::HeadPose
-                                    : pose.kind == XRTrackedPoseKind::Grip ? XRTrackedDeviceCapability::GripPose
-                                                                           : XRTrackedDeviceCapability::AimPose;
-            if (device == devices.end() || device->state == XRTrackedDeviceState::Disconnected || !device->capabilities.Has(capability))
+            if (const auto capability = NativePoseCapability(pose.kind);
+                device == devices.end() || device->state == XRTrackedDeviceState::Disconnected || !device->capabilities.Has(capability))
                 continue;
             normalized[poseCount++] = {device->id, pose.kind, pose.pose};
             tracked |= pose.pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
                        pose.pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
         }
-        const auto candidate = publication.Publish({time, origin, XRTrackingFocusState::Focused,
-                                                    state.state == XRSessionState::Focused || state.state == XRSessionState::Visible
-                                                        ? XRTrackingVisibilityState::Visible
-                                                        : XRTrackingVisibilityState::Hidden,
-                                                    tracked ? XRTrackingState::Active : XRTrackingState::TrackingLost, bindingRevision,
-                                                    std::span{normalized}.first(poseCount), actions.Actions()});
-        if (candidate.HasError())
+        if (const auto candidate = publication.Publish({time, origin, XRTrackingFocusState::Focused,
+                                                        state.state == XRSessionState::Focused || state.state == XRSessionState::Visible
+                                                            ? XRTrackingVisibilityState::Visible
+                                                            : XRTrackingVisibilityState::Hidden,
+                                                        tracked ? XRTrackingState::Active : XRTrackingState::TrackingLost, bindingRevision,
+                                                        std::span{normalized}.first(poseCount), actions.Actions()});
+            candidate.HasError())
             return candidate;
         const auto *snapshot = publication.Current();
         if (!snapshot)

@@ -58,7 +58,7 @@ namespace Horo::Editor {
         bool active{true};
 
         /** @brief Captures and orders bounded candidate topology cold, rejecting parents and cycles before publication. */
-        Result<void> CaptureHierarchy(const Runtime::RuntimeSceneView candidate) {
+        Result<void> CaptureHierarchy(const Runtime::RuntimeSceneView &candidate) {
             slots.resize(candidate.SlotCount());
             nodes.reserve(candidate.SlotCount());
             for (std::size_t slot = 0; slot < candidate.SlotCount(); ++slot) {
@@ -66,7 +66,7 @@ namespace Horo::Editor {
                 if (!entity)
                     continue;
                 slots[slot] = entity->entity;
-                nodes.push_back({entity->entity, entity->parent, entity->authoredObject, *entity->primitiveMesh});
+                nodes.emplace_back(entity->entity, entity->parent, entity->authoredObject, *entity->primitiveMesh);
             }
             for (auto &node : nodes) {
                 if (!node.parent)
@@ -93,7 +93,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Maps exact authored draw IDs to retained candidate generations without retaining component borrows. */
-        Result<void> MapInstances(const Runtime::RuntimeSceneView candidate) {
+        Result<void> MapInstances(const Runtime::RuntimeSceneView &candidate) {
             worlds.resize(nodes.size());
             instances.reserve(snapshot.instanceObjects.size());
             for (std::size_t index = 0; index < snapshot.instanceObjects.size(); ++index) {
@@ -141,10 +141,9 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PreparedEditorXrGeometry::Update */
-    Result<std::span<const Render::RenderStaticMeshInstance>> PreparedEditorXrGeometry::Update(const Runtime::RuntimeSceneView scene) {
+    Result<std::span<const Render::RenderStaticMeshInstance>> PreparedEditorXrGeometry::Update(const Runtime::RuntimeSceneView &scene) {
         using Output = Result<std::span<const Render::RenderStaticMeshInstance>>;
-        const auto valid = ValidateSource();
-        if (valid.HasError())
+        if (const auto valid = ValidateSource(); valid.HasError())
             return Output::Failure(valid.ErrorValue());
         if (scene.RuntimeId() != impl_->snapshot.runtimeSceneId || scene.SlotCount() != impl_->slots.size())
             return Output::Failure(GeometryError("XR geometry candidate Scene identity or topology changed."));
@@ -180,7 +179,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorXrSceneSourcePort::Capture */
     Result<std::unique_ptr<PreparedEditorXrGeometry>> EditorXrSceneSourcePort::Capture(const Runtime::SceneDefinitionRevision revision,
-                                                                                       const Runtime::RuntimeSceneView candidate) const {
+                                                                                       const Runtime::RuntimeSceneView &candidate) const {
         using Output = Result<std::unique_ptr<PreparedEditorXrGeometry>>;
         auto source = BorrowSource(state_);
         if (source.HasError())
@@ -206,8 +205,7 @@ namespace Horo::Editor {
         if (auto mapped = impl->MapInstances(candidate); mapped.HasError())
             return Output::Failure(mapped.ErrorValue());
         auto prepared = std::unique_ptr<PreparedEditorXrGeometry>(new PreparedEditorXrGeometry(std::move(impl)));
-        const auto valid = prepared->Update(candidate);
-        if (valid.HasError())
+        if (const auto valid = prepared->Update(candidate); valid.HasError())
             return Output::Failure(valid.ErrorValue());
         return Output::Success(std::move(prepared));
     }
@@ -215,8 +213,7 @@ namespace Horo::Editor {
     /** @copydoc EditorXrSceneSourceOwner::EditorXrSceneSourceOwner */
     EditorXrSceneSourceOwner::EditorXrSceneSourceOwner(const SceneDocument &document, Runtime::PrimitiveMeshCache &primitives,
                                                        const EditorAssetMeshCache &assets)
-        : state_(std::make_shared<XrSceneDetail::SourceState>(
-              XrSceneDetail::SourceState{&document, &primitives, &assets, std::this_thread::get_id()})) {}
+        : state_(std::make_shared<XrSceneDetail::SourceState>(&document, &primitives, &assets, std::this_thread::get_id())) {}
 
     EditorXrSceneSourceOwner::~EditorXrSceneSourceOwner() {
         if (state_->lane != std::this_thread::get_id())

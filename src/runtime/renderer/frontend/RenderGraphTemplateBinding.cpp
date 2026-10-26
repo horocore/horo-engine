@@ -8,6 +8,22 @@
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Retains the single binding admission flag across provider reentry and every early return. */
+        struct BindingScope final {
+            explicit BindingScope(bool &flag) : value(flag) {
+                flag = true;
+            }
+
+            BindingScope(const BindingScope &) = delete;
+            BindingScope &operator=(const BindingScope &) = delete;
+
+            ~BindingScope() {
+                value = false;
+            }
+
+            bool &value;
+        };
+
         /** @brief Compares the entire allocation shape; matching format alone cannot admit a different native view. */
         bool SameDescriptor(const RenderTextureDescriptor &left, const RenderTextureDescriptor &right) noexcept {
             return left.dimension == right.dimension && left.extent == right.extent && left.format == right.format &&
@@ -17,13 +33,13 @@ namespace Horo::Render::Detail {
     }  // namespace
 
     /** @copydoc PreparedRenderGraphTemplate::ValidateResidentSuperset */
-    Result<void> PreparedRenderGraphTemplate::ValidateResidentSuperset(RenderFrontend &frontend,
+    Result<void> PreparedRenderGraphTemplate::ValidateResidentSuperset(const RenderFrontend &frontend,
                                                                        const CompiledRenderGraphExecution &execution) const {
         for (std::size_t index = 0; index < execution.resources_.size(); ++index) {
             const auto &resource = execution.resources_[index];
             if (reads_.externalSlots[index] || resource.resourceClass == RenderGraphResourceClass::Transient)
                 continue;
-            auto ready = std::visit([&frontend](const auto &handle) -> Result<void> {
+            auto ready = std::visit([&frontend]<typename Handle>(const Handle &handle) -> Result<void> {
                 if constexpr (std::is_same_v<std::decay_t<decltype(handle)>, std::monostate>)
                     return Result<void>::Failure(MakeError(FrontendErrors::ResourceHandleMalformed));
                 else {
@@ -48,7 +64,7 @@ namespace Horo::Render::Detail {
         }
         if (reads.size() > reads_.declarations.size())
             return Result<void>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
-        std::fill(reads_.selected.begin(), reads_.selected.end(), 0);
+        std::ranges::fill(reads_.selected, 0);
         for (const auto &read : reads) {
             if (read.resource.owner != owner_ || read.resource.value == 0 || read.resource.value > reads_.roles.size())
                 return Result<void>::Failure(MakeError(FrontendErrors::ResourceWrongOwner));
@@ -89,17 +105,7 @@ namespace Horo::Render::Detail {
         if (state.inFlight_)
             return Outcome::Failure(MakeError(FrontendErrors::ResourceNotReady));
 
-        struct BindingScope final {
-            bool &value;
-
-            explicit BindingScope(bool &flag) : value(flag) {
-                value = true;
-            }
-
-            ~BindingScope() {
-                value = false;
-            }
-        } scope{binding_};
+        BindingScope scope{binding_};
 
         // Failed validation revokes the old unsubmitted binding, never a queued plan.
         execution.owner_ = {};

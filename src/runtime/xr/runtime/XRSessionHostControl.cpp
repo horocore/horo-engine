@@ -15,9 +15,8 @@ namespace Horo::XR::RuntimeInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         if (sessions.ownedSession_ != session)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        const auto state = sessions.snapshot_.state;
-        if (state == XRSessionState::Running || state == XRSessionState::Visible || state == XRSessionState::Focused ||
-            frames.current_.phase != XRFramePhase::Idle)
+        if (const auto state = sessions.snapshot_.state; state == XRSessionState::Running || state == XRSessionState::Visible ||
+                                                         state == XRSessionState::Focused || frames.current_.phase != XRFramePhase::Idle)
             return Result<void>::Failure(MakeError(XRSessionErrors::TransitionInvalid));
         const auto completed = resources.RetirementComplete(session);
         if (completed.HasError())

@@ -5,6 +5,7 @@
 #include "JsonUtils.h"
 
 #include <algorithm>
+#include <ranges>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -59,11 +60,10 @@ namespace Horo::Application::Internal {
                 root.at("profile").get<std::uint64_t>() >= static_cast<std::uint64_t>(XR::XRFeatureProfile::Count) ||
                 !Foundation::HasAllowedFields(root.at("limits"), {"views", "spaces", "actions", "devices"}))
                 return false;
-            const auto &limits = root.at("limits");
-            if (!Limit(limits.at("views"), XR::XRHardLimits::MaximumViews) ||
-                !Limit(limits.at("spaces"), XR::XRHardLimits::MaximumSpaces) ||
-                !Limit(limits.at("actions"), XR::XRHardLimits::MaximumActions) ||
-                !Limit(limits.at("devices"), XR::XRHardLimits::MaximumDevices))
+            if (const auto &limits = root.at("limits"); !Limit(limits.at("views"), XR::XRHardLimits::MaximumViews) ||
+                                                        !Limit(limits.at("spaces"), XR::XRHardLimits::MaximumSpaces) ||
+                                                        !Limit(limits.at("actions"), XR::XRHardLimits::MaximumActions) ||
+                                                        !Limit(limits.at("devices"), XR::XRHardLimits::MaximumDevices))
                 return false;
             return true;
         }
@@ -120,8 +120,10 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(evidence.ErrorValue());
         try {
             Foundation::JsonParseGuard guard{6};
-            const auto first = reinterpret_cast<const char *>(bytes.data());
-            const auto root = guard.Parse(first, first + bytes.size());
+            const auto text = bytes | std::views::transform([](const std::byte value) {
+                return std::to_integer<unsigned char>(value);
+            });
+            const auto root = guard.Parse(text.begin(), text.end());
             if (guard.HasDuplicate() || guard.IsTooDeep() || !CatalogFields(root, nowUnixSeconds))
                 return Outcome::Failure(InvalidCatalog());
             const auto &limits = root.at("limits");

@@ -222,7 +222,7 @@ namespace Horo::Tests::OpenXRAction {
         REQUIRE(fixture.Prepare(Math::Transform{}).HasValue());
         fixture.Activate(6);
         const auto session = fixture.actions.session.Request().candidate;
-        REQUIRE(fixture.actions.owner.PreparePresentation(&PresentationScript::GetProc).HasValue());
+        REQUIRE(fixture.actions.owner.PreparePresentation({&PresentationScript::GetProc}).HasValue());
         const XRTimeEvidence time{IdentityValue<XRRuntimeTime>(100), {}, IdentityValue<XRRenderPredictionTime>(200)};
         const auto located = fixture.actions.owner.LocatePresentation(session, time, 2);
         REQUIRE(located.HasValue());
@@ -259,7 +259,7 @@ namespace Horo::Tests::OpenXRAction {
         PresentationScript native;
         REQUIRE(fixture.Prepare(Math::Transform{}).HasValue());
         fixture.Activate(6);
-        REQUIRE(fixture.actions.owner.PreparePresentation(&PresentationScript::GetProc).HasValue());
+        REQUIRE(fixture.actions.owner.PreparePresentation({&PresentationScript::GetProc}).HasValue());
         XRTimeEvidence time{IdentityValue<XRRuntimeTime>(100), {}, IdentityValue<XRRenderPredictionTime>(200)};
         const auto session = fixture.actions.session.Request().candidate;
         SECTION("incomplete native count") {

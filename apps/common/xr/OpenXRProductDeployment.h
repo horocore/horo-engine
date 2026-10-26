@@ -35,7 +35,7 @@ namespace Horo::Application::Internal {
 
     private:
         /** @brief Stores only completely verified exact deployment evidence. */
-        VerifiedOpenXRDeployment(Sha256Digest component, Security::VerifiedArtifactEvidence evidence);
+        VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence);
         Sha256Digest component_;
         Security::VerifiedArtifactEvidence evidence_;
     };

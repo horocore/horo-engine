@@ -90,13 +90,13 @@ namespace Horo::Editor {
      * @return Owned geometry and leases, or atomic extraction failure. Camera remains unset.
      */
     [[nodiscard]] Result<EditorViewportSceneSnapshot> ExtractEditorViewportGeometry(
-        Runtime::RuntimeSceneView scene, DocumentRevision documentRevision, Runtime::PrimitiveMeshCache &meshCache,
+        const Runtime::RuntimeSceneView &scene, DocumentRevision documentRevision, Runtime::PrimitiveMeshCache &meshCache,
         const SceneDocumentSnapshot *document, const EditorAssetMeshCache *assetMeshes, bool respectEditorVisibility,
         EditorGeometryExtractionPolicy policy = {});
 
     /** @brief Extracts supported renderable instances from an immutable runtime scene view. */
     [[nodiscard]] Result<EditorViewportSceneSnapshot> ExtractEditorViewportScene(
-        Runtime::RuntimeSceneView scene, DocumentRevision documentRevision, const EditorViewportCamera &camera,
+        const Runtime::RuntimeSceneView &scene, DocumentRevision documentRevision, const EditorViewportCamera &camera,
         Runtime::PrimitiveMeshCache &meshCache, const SceneDocumentSnapshot *document = nullptr,
         const EditorAssetMeshCache *assetMeshes = nullptr, bool respectEditorVisibility = true);
 

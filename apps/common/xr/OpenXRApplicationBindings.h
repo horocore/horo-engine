@@ -81,7 +81,7 @@ namespace Horo::Application::Internal {
                                                                    const XR::OpenXRInternal::NativeSessionPreparation &preparation,
                                                                    OpenXRApplicationActionDispatch dispatch,
                                                                    std::span<const Input::ActionDescriptor> registeredActions,
-                                                                   XR::OpenXRInternal::NativeTrackingSpaceRequest tracking) const;
+                                                                   const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking) const;
 
         /** @brief Publishes the SAME observed product declaration through the canonical binding coordinator.
          * @param coordinator Exact candidate's sole binding revision issuer.

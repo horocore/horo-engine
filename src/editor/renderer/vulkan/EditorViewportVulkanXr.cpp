@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <utility>
 
 namespace Horo::Editor {
@@ -21,8 +22,9 @@ namespace Horo::Editor {
     /** @copydoc EditorVulkanXrViewportAccess::Prepare */
     Result<void> EditorVulkanXrViewportAccess::Prepare(EditorViewportRendererVulkan &viewport,
                                                        std::span<const RenderMeshResourceView> meshes, const RenderTextureDescriptor &color,
-                                                       const RenderGraphLogicalState &acquired, const RenderGraphLogicalState &final) {
-        return viewport.PrepareXrGraph(meshes, color, acquired, final);
+                                                       const RenderGraphLogicalState &acquired,
+                                                       const RenderGraphLogicalState &requiredFinal) {
+        return viewport.PrepareXrGraph(meshes, color, acquired, requiredFinal);
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::Bind */
@@ -74,7 +76,8 @@ namespace Horo::Editor {
             std::uint64_t source{};
             RenderMeshSourceHandle sourceGeneration;
             RenderMeshHandle mesh;
-            RenderGraphResourceId vertices, indices;
+            RenderGraphResourceId vertices;
+            RenderGraphResourceId indices;
         };
 
         std::vector<Geometry> geometry;
@@ -97,9 +100,9 @@ namespace Horo::Editor {
         RenderTimelinePoint submitted;
 
         /** @brief Cold-creates depth storage and views, retaining every successful prefix for owner teardown. */
-        Result<void> PrepareDepth(RenderFrontend &frontend, const RenderTextureDescriptor &color) {
+        Result<void> PrepareDepth(RenderFrontend &frontend, const RenderTextureDescriptor &colorDescriptor) {
             auto createdDepth =
-                frontend.CreateTexture(RenderMemoryScopes::ViewportResources, {.extent = color.extent,
+                frontend.CreateTexture(RenderMemoryScopes::ViewportResources, {.extent = colorDescriptor.extent,
                                                                                .format = RenderTextureFormat::Depth32Float,
                                                                                .layerCount = 2,
                                                                                .usage = RenderTextureUsage::RenderAttachment});
@@ -128,26 +131,28 @@ namespace Horo::Editor {
         }
 
         /** @brief Declares the fixed external/depth attachment topology before any acquisition. */
-        Result<RenderGraphBuilder> PrepareAttachments(const RenderTextureDescriptor &color, const RenderGraphLogicalState &acquired,
-                                                      const RenderGraphLogicalState &requiredFinal, std::uint64_t deviceIncarnation) {
+        Result<RenderGraphBuilder> PrepareAttachments(const RenderTextureDescriptor &colorDescriptor,
+                                                      const RenderGraphLogicalState &acquired, const RenderGraphLogicalState &requiredFinal,
+                                                      std::uint64_t deviceIncarnation) {
             constexpr auto maximumReads = RenderMaterialPass::MaximumDraws * 3;
             auto created = RenderGraphBuilder::Create(
                 {.maxPasses = 1, .maxResources = maximumReads + 2, .maxUsages = maximumReads + 2, .maxDependencies = 1});
             if (created.HasError())
                 return Result<RenderGraphBuilder>::Failure(created.ErrorValue());
             auto builder = std::move(created).Value();
-            auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
-            if (pass.HasError())
-                return Result<RenderGraphBuilder>::Failure(pass.ErrorValue());
-            this->pass = pass.Value();
-            auto external = Detail::PreparedRenderGraphTemplate::DeclareTexture(builder, color, acquired, requiredFinal, deviceIncarnation);
+            auto createdPass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
+            if (createdPass.HasError())
+                return Result<RenderGraphBuilder>::Failure(createdPass.ErrorValue());
+            this->pass = createdPass.Value();
+            auto external =
+                Detail::PreparedRenderGraphTemplate::DeclareTexture(builder, colorDescriptor, acquired, requiredFinal, deviceIncarnation);
             if (external.HasError())
                 return Result<RenderGraphBuilder>::Failure(external.ErrorValue());
             this->color = external.Value();
-            auto depth = builder.ImportTexture(depthTexture, RenderGraphResourceClass::Persistent);
-            if (depth.HasError())
-                return Result<RenderGraphBuilder>::Failure(depth.ErrorValue());
-            this->depth = depth.Value();
+            auto importedDepth = builder.ImportTexture(depthTexture, RenderGraphResourceClass::Persistent);
+            if (importedDepth.HasError())
+                return Result<RenderGraphBuilder>::Failure(importedDepth.ErrorValue());
+            this->depth = importedDepth.Value();
             if (auto use =
                     builder.AddUsage({this->pass, this->color.resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
                 use.HasError())
@@ -181,14 +186,14 @@ namespace Horo::Editor {
             initial.push_back({imported.Value(),
                                {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
                                 RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue}});
-            inputs.push_back({handle, imported.Value(), role});
-            reads.push_back({imported.Value(), role});
+            inputs.emplace_back(handle, imported.Value(), role);
+            reads.emplace_back(imported.Value(), role);
             return imported;
         }
 
         /** @brief Cold-captures the canonical resident meshes and material slots without another geometry owner. */
         Result<void> PrepareReads(RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
-                                  std::span<const EditorViewportMeshResourceView> meshes, EditorViewportResources &resources,
+                                  std::span<const EditorViewportMeshResourceView> meshes, const EditorViewportResources &resources,
                                   std::span<const DrawSlot> slots, RenderQueueId queue) {
             std::vector<Input> inputs;
             inputs.reserve(RenderMaterialPass::MaximumDraws * 3);
@@ -203,14 +208,15 @@ namespace Horo::Editor {
                 auto indices = ImportRead(builder, initial, inputs, queue, mesh->descriptor.indexBuffer, RenderGraphUsageKind::IndexBuffer);
                 if (indices.HasError())
                     return Result<void>::Failure(indices.ErrorValue());
-                geometry.push_back({source.handle.id.value, source.handle, mesh->mesh, vertices.Value(), indices.Value()});
+                geometry.emplace_back(source.handle.id.value, source.handle, mesh->mesh, vertices.Value(), indices.Value());
             }
             std::ranges::sort(geometry, {}, &XrGraph::Geometry::source);
-            for (std::size_t draw = 0; draw < parameters.size(); ++draw) {
-                auto parameters = ImportRead(builder, initial, inputs, queue, slots[draw].buffer, RenderGraphUsageKind::UniformBuffer);
-                if (parameters.HasError())
-                    return Result<void>::Failure(parameters.ErrorValue());
-                this->parameters[draw] = parameters.Value();
+            for (std::size_t draw = 0; draw < this->parameters.size(); ++draw) {
+                auto importedParameters =
+                    ImportRead(builder, initial, inputs, queue, slots[draw].buffer, RenderGraphUsageKind::UniformBuffer);
+                if (importedParameters.HasError())
+                    return Result<void>::Failure(importedParameters.ErrorValue());
+                this->parameters[draw] = importedParameters.Value();
             }
             return Result<void>::Success();
         }
@@ -227,7 +233,7 @@ namespace Horo::Editor {
                 if (!source.IsValid() || source.material != CoreDefaultMaterial || mesh == geometry.end() ||
                     mesh->sourceGeneration != source.mesh || !slots[index].material)
                     return Result<MultiviewSceneSnapshot>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
-                meshes[index] = &*mesh;
+                meshes[index] = std::to_address(mesh);
                 values[index] = {mesh->mesh, slots[index].material->Id(), source.localToWorld, source.localBounds};
             }
             return MultiviewSceneSnapshot::Extract(publication, publication, views, std::span{values}.first(instances.size()),
@@ -237,10 +243,10 @@ namespace Horo::Editor {
 
         /** @brief Binds exact selected read IDs through the canonical retired-instance gate and immutable superset. */
         Result<const CompiledRenderGraphExecution *> BindReads(
-            RenderFrontend &frontend, RenderTextureHandle colorTexture, const MultiviewSceneSnapshot &scene,
+            RenderFrontend &frontend, RenderTextureHandle colorTexture, const MultiviewSceneSnapshot &snapshot,
             const std::array<const Geometry *, RenderMaterialPass::MaximumDraws> &meshes) {
             constexpr std::size_t maximumReads = RenderMaterialPass::MaximumDraws * 3;
-            std::array<Detail::RenderGraphOptionalRead, maximumReads> reads{};
+            std::array<Detail::RenderGraphOptionalRead, maximumReads> selectedReads{};
             std::array<bool, maximumReads + 2> selected{};
             std::size_t readCount{};
             const auto select = [&](RenderGraphResourceId resource, RenderGraphUsageKind role) {
@@ -248,18 +254,18 @@ namespace Horo::Editor {
                 const auto index = resource.value - 1;
                 if (!selected[index]) {
                     selected[index] = true;
-                    reads[readCount++] = {resource, role};
+                    selectedReads[readCount++] = {resource, role};
                 }
             };
-            for (const auto &draw : scene.Draws()) {
+            for (const auto &draw : snapshot.Draws()) {
                 const auto index = draw.instanceIndex;
                 select(meshes[index]->vertices, RenderGraphUsageKind::VertexBuffer);
                 select(meshes[index]->indices, RenderGraphUsageKind::IndexBuffer);
                 select(parameters[index], RenderGraphUsageKind::UniformBuffer);
             }
             const std::array bindings{Detail::RenderGraphExternalTextureBinding{this->color.resource, colorTexture}};
-            auto bound = topology->Bind(frontend, 0, bindings, std::span{reads}.first(readCount));
-            return bound;
+            auto binding = topology->Bind(frontend, 0, bindings, std::span{selectedReads}.first(readCount));
+            return binding;
         }
 
         /** @brief Stores fixed scene/draw values only after canonical Bind proved the previous queue lease retired. */
@@ -308,8 +314,8 @@ namespace Horo::Editor {
             return prepared;
         if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
             return Result<void>::Failure(processed.ErrorValue());
-        const auto support = ResolveMultiviewCapabilities(frontend_.Capabilities().support);
-        if (!support.multipass || !support.indexedShaders || support.maximumViews < 2)
+        if (const auto support = ResolveMultiviewCapabilities(frontend_.Capabilities().support);
+            !support.multipass || !support.indexedShaders || support.maximumViews < 2)
             return Result<void>::Failure(
                 MakeError(RendererErrors::ViewportInvalidScene, "The selected renderer has no admitted two-view indexed shader path."));
 
@@ -360,8 +366,8 @@ namespace Horo::Editor {
             views.size() != 2 || instances.size() > RenderMaterialPass::MaximumDraws)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         auto &storage = *xrGraph_;
-        const auto &support = frontend_.Capabilities().support;
-        if (support.deviceIncarnation != publication.deviceIncarnation || support.capabilityRevision != publication.capabilityRevision)
+        if (const auto &support = frontend_.Capabilities().support;
+            support.deviceIncarnation != publication.deviceIncarnation || support.capabilityRevision != publication.capabilityRevision)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
 
         // Temporary fixed values do not touch a potentially queued slot. Only successful canonical Bind
@@ -484,14 +490,12 @@ namespace Horo::Editor {
         for (auto &view : xrGraph_->depthViews) {
             if (!view.IsValid())
                 continue;
-            auto released = frontend_.ReleaseTextureView(view);
-            if (released.HasError())
+            if (auto released = frontend_.ReleaseTextureView(view); released.HasError())
                 return released;
             view = {};
         }
         if (xrGraph_->depthTexture.IsValid()) {
-            auto released = frontend_.ReleaseTexture(xrGraph_->depthTexture);
-            if (released.HasError())
+            if (auto released = frontend_.ReleaseTexture(xrGraph_->depthTexture); released.HasError())
                 return released;
             xrGraph_->depthTexture = {};
         }

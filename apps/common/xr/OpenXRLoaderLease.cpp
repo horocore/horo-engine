@@ -6,6 +6,9 @@
 namespace Horo::Application::Internal {
     /** @brief One rollback-safe private artifact owner; library wrappers retain it until native unload completes. */
     struct OpenXRLoaderLease::Files final {
+        Files(const Files &) = delete;
+        Files &operator=(const Files &) = delete;
+
         VerifiedOpenXRComponent component;
         VerifiedOpenXRDeployment deployment;
         std::filesystem::path root;
@@ -86,8 +89,8 @@ namespace Horo::Application::Internal {
         auto evidence = gate->Verify(artifact);
         if (evidence.HasError())
             return Outcome::Failure(evidence.ErrorValue());
-        const auto &publisher = files->component.Install()->Graph()->packages[files->component.PackageIndex()].publisher;
-        if (!publisher || !publisher->publisher || evidence.Value().PublisherId() != publisher->publisher->Value() ||
+        if (const auto &publisher = files->component.Install()->Graph()->packages[files->component.PackageIndex()].publisher;
+            !publisher || !publisher->publisher || evidence.Value().PublisherId() != publisher->publisher->Value() ||
             evidence.Value().KeyId() != publisher->keyId || evidence.Value().ArtifactDigest() != files->component.Manifest().loader.digest)
             return Outcome::Failure(MakeError(XR::XRErrors::RuntimeRejected));
         files->nativeEvidence.emplace(std::move(evidence).Value());

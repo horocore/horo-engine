@@ -33,16 +33,21 @@ namespace Horo::Editor {
         Result<HostArguments> ParseHostArguments(const std::span<char *> arguments) {
             HostArguments parsed;
             constexpr std::array<std::string_view, 3> flags{"--xr-host-roots", "--xr-host-catalog", "--xr-host-catalog-signature"};
-            for (std::size_t index = 1; index < arguments.size(); ++index) {
-                const std::string_view argument{arguments[index]};
+            std::size_t index = 1;
+            while (index < arguments.size()) {
+                if (arguments[index] == nullptr)
+                    return Result<HostArguments>::Failure(BootstrapError("Explicit XR host input contains a null argument."));
+                const std::string_view argument{arguments[index++]};
                 if (!argument.starts_with("--xr-host-"))
                     continue;
                 parsed.requested = true;
                 const auto found = std::ranges::find(flags, argument);
-                if (found == flags.end() || ++index == arguments.size())
+                if (found == flags.end())
+                    return Result<HostArguments>::Failure(BootstrapError("Explicit XR host input is unknown or missing its value."));
+                if (index == arguments.size() || arguments[index] == nullptr)
                     return Result<HostArguments>::Failure(BootstrapError("Explicit XR host input is unknown or missing its value."));
                 const auto slot = static_cast<std::size_t>(found - flags.begin());
-                const std::filesystem::path path{arguments[index]};
+                const std::filesystem::path path{arguments[index++]};
                 if (parsed.paths[slot] || path.empty() || !path.is_absolute() || path != path.lexically_normal())
                     return Result<HostArguments>::Failure(
                         BootstrapError("XR host paths must be unique explicit normalized absolute paths."));
@@ -80,7 +85,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Reads and verifies the explicitly selected catalog with the independently constructed host verifier. */
-        Result<OpenXRInstalledHostCatalog> ReadSignedCatalog(NativeDurableFileSystem &files, const HostArguments &arguments,
+        Result<OpenXRInstalledHostCatalog> ReadSignedCatalog(const NativeDurableFileSystem &files, const HostArguments &arguments,
                                                              std::shared_ptr<const Security::ArtifactVerifier> verifier,
                                                              const std::filesystem::path &cacheRoot, std::uint64_t now) {
             auto signatureBytes = files.ReadFileBounded(*arguments.paths[2], MaximumHostSignatureDocumentBytes);
@@ -112,7 +117,7 @@ namespace Horo::Editor {
                     break;
                 }
             }
-            if (!rootExpiry)
+            if (!rootExpiry.has_value())
                 return Result<std::uint64_t>::Failure(
                     BootstrapError("Verified XR catalog signer no longer matches the active approved host policy."));
             return Result<std::uint64_t>::Success(*rootExpiry);
@@ -170,27 +175,35 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Advances only acquisition/start for the same local startup transaction; all job authority remains canonical. */
+        Result<void> BeginInstall(const std::filesystem::path &project, std::shared_ptr<Application::PackageApplication> &application,
+                                  std::optional<Application::PackageOperationId> &operation) const {
+            if (!application) {
+                auto acquired = packages->Acquire(project);
+                if (acquired.HasValue())
+                    application = std::move(acquired).Value();
+                else if (acquired.ErrorValue().code.Value() != "packages.host.preparing")
+                    return Result<void>::Failure(acquired.ErrorValue());
+            }
+            if (application && !operation) {
+                auto started = application->Install();
+                if (started.HasError())
+                    return Result<void>::Failure(started.ErrorValue());
+                operation = started.Value();
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Waits only during explicit pre-window startup for the actual host's metadata/install jobs. */
-        Result<std::shared_ptr<Application::PackageApplication>> Install(const std::filesystem::path &project) {
+        Result<std::shared_ptr<Application::PackageApplication>> Install(const std::filesystem::path &project) const {
             const auto deadline = clock.MonotonicNow() + Duration::FromMilliseconds(10'000);
             std::shared_ptr<Application::PackageApplication> application;
             std::optional<Application::PackageOperationId> operation;
             while (clock.MonotonicNow() < deadline) {
                 if (auto current = Current(); current.HasError())
                     return Result<std::shared_ptr<Application::PackageApplication>>::Failure(current.ErrorValue());
-                if (!application) {
-                    auto acquired = packages->Acquire(project);
-                    if (acquired.HasValue())
-                        application = std::move(acquired).Value();
-                    else if (acquired.ErrorValue().code.Value() != "packages.host.preparing")
-                        return Result<std::shared_ptr<Application::PackageApplication>>::Failure(acquired.ErrorValue());
-                }
-                if (application && !operation) {
-                    auto started = application->Install();
-                    if (started.HasError())
-                        return Result<std::shared_ptr<Application::PackageApplication>>::Failure(started.ErrorValue());
-                    operation = started.Value();
-                }
+                if (auto started = BeginInstall(project, application, operation); started.HasError())
+                    return Result<std::shared_ptr<Application::PackageApplication>>::Failure(started.ErrorValue());
                 if (auto pumped = packages->Pump(Packages::PackageActivationBoundary::Startup); pumped.HasError())
                     return Result<std::shared_ptr<Application::PackageApplication>>::Failure(pumped.ErrorValue());
                 if (operation) {
@@ -229,8 +242,7 @@ namespace Horo::Editor {
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
             packages = std::move(created).Value();
-            auto installed = Install(project);
-            if (installed.HasError())
+            if (auto installed = Install(project); installed.HasError())
                 return Result<void>::Failure(installed.ErrorValue());
             auto selected =
                 Application::Internal::SelectInstalledOpenXRProduct(*packages, project, packages->Generation(), &catalog.Policy(), {});
@@ -244,7 +256,7 @@ namespace Horo::Editor {
             }, &jobs});
             auto &configuration = services->configuration.invocation;
             const auto put = [&](const char *key, SettingValue value) {
-                configuration.emplace(SettingKey{key}, ConfigurationInputValue{std::move(value), std::nullopt});
+                configuration.try_emplace(SettingKey{key}, ConfigurationInputValue{std::move(value), std::nullopt});
             };
             put("xr.enabled", true);
             put("xr.schema_version", XR::XRProjectSettingsSchemaVersion);

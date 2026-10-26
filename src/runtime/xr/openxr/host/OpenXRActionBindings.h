@@ -255,7 +255,7 @@ namespace Horo::XR::OpenXRInternal {
          * No eye identity is exposed until a successful LocatePresentation, and none grants native XrSpace borrowing.
          * No frame/capability or tracking validity is published.
          */
-        [[nodiscard]] Result<void> PreparePresentation(PFN_xrGetInstanceProcAddr getProc);
+        [[nodiscard]] Result<void> PreparePresentation(NativeOpenXRDispatch dispatch);
         /** @brief Locates actual primary-stereo views at the runtime's exact predicted display time.
          * @param session Same issued active owner. @param time Actual OS-converted sample plus native frame prediction, no simulation time.
          * @param expectedViews Complete primary view count observed by the same native system census.
@@ -272,7 +272,7 @@ namespace Horo::XR::OpenXRInternal {
             const bool previous;
 
             explicit Operation(bool &state) noexcept : busy(state), previous(state) {
-                busy = true;
+                state = true;
             }
 
             ~Operation() {
@@ -421,12 +421,21 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<NativePoseObservations> CollectPoseObservations(
             const XRSessionId &session, const XRTimeEvidence &time, XRWorldOriginRevision origin,
             std::optional<std::span<const XRTrackedDeviceRecord>> devices) const;
-        [[nodiscard]] Result<void> Prepare(const XRActionBindingSchema &schema, std::span<const XRProfileControl> catalog,
-                                           std::span<const XRActionBindingOverride> overrides,
-                                           std::span<const NativeInteractionProfilePath> profiles,
-                                           std::span<const NativeActionControlPath> controls, const NativeActionLabels &labels,
-                                           std::uint32_t maximumActions, std::span<const NativePoseActionPath> poses);
+        /** @brief Captures the existing request's borrowed catalogs before native creation and attachment. */
+        [[nodiscard]] Result<void> Prepare(const NativeActionBindingRequest &request, std::uint32_t maximumActions);
+        /** @brief Attaches the validated native sets once, then prepares spaces under the same retained rollback owner.
+         * @return Original native attachment, space preparation or owner-currentness failure.
+         */
+        [[nodiscard]] Result<void> AttachPreparedSets();
         [[nodiscard]] Result<void> CreateActions(const XRActionBindingSchema &schema, const NativeActionLabels &labels);
+        /** @brief Resolves this profile's admitted action paths into the caller's bounded suggestion storage.
+         * @param profile Exact prepared profile. @param bindings Canonical resolved bindings in deterministic order.
+         * @param controls Validated native control catalog. @param suggestions Cold storage bounded by the admitted schema.
+         * @return Written count or original native path failure; no suggestion is submitted here.
+         */
+        [[nodiscard]] Result<std::uint32_t> SuggestControls(const Profile &profile, std::span<const XRResolvedActionBinding> bindings,
+                                                            std::span<const NativeActionControlPath> controls,
+                                                            std::span<XrActionSuggestedBinding> suggestions);
         [[nodiscard]] Result<void> Suggest(const XRActionBindingSchema &schema, std::span<const XRProfileControl> catalog,
                                            std::span<const XRActionBindingOverride> overrides,
                                            std::span<const NativeInteractionProfilePath> profiles,
