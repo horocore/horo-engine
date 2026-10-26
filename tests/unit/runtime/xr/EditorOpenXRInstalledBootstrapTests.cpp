@@ -92,7 +92,7 @@ namespace Horo::Editor::Tests {
         } else {
             REQUIRE(parsed.HasValue());
             REQUIRE(parsed.Value()->actionLabels.size() == 1);
-            CHECK(parsed.Value()->actionLabels.front().label == label);
+            CHECK(parsed.Value()->actionLabels.front().text == label);
         }
     }
 }  // namespace Horo::Editor::Tests

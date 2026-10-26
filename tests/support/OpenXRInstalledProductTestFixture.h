@@ -285,7 +285,7 @@ namespace Horo::Tests::OpenXRProduct {
             const auto inventory = Json{{"schemaVersion", 1}, {"files", entries}}.dump();
             REQUIRE(mz_zip_writer_add_mem(&zip, "files.manifest.json", inventory.data(), inventory.size(), MZ_BEST_COMPRESSION));
             auto archive = Horo::Tests::Packages::FinalizeArchive(zip);
-            for (const auto &file : files) {
+            for (const auto &file : contents) {
                 if (file.first.ends_with(".so"))
                     Horo::Tests::Packages::SetArchiveFileUnixMode(archive, file.first, 0100755);
             }

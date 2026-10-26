@@ -1549,6 +1549,14 @@ if(HORO_BUILD_XR_OPENXR)
         target_sources(HoroOpenXRProductHostTests PRIVATE unit/runtime/xr/EditorOpenXRBootstrapTests.cpp)
         target_link_libraries(HoroOpenXRProductHostTests PRIVATE HoroEditorOpenXRBootstrap)
     endif()
+    # Compile every real fixture body on portable XR graphs without constructing a native loader.
+    add_library(HoroOpenXRInstalledProductFixtureConsumer OBJECT public_headers/OpenXRInstalledProductFixtureConsumer.cpp)
+    target_compile_features(HoroOpenXRInstalledProductFixtureConsumer PRIVATE cxx_std_20)
+    target_include_directories(HoroOpenXRInstalledProductFixtureConsumer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/support")
+    target_link_libraries(HoroOpenXRInstalledProductFixtureConsumer PRIVATE HoroOpenXRProductHost HoroOpenXRApplicationBindings
+        HoroHostSignatureDocuments nlohmann_json::nlohmann_json MbedTLS::mbedcrypto miniz Catch2::Catch2)
+    add_dependencies(HoroOpenXRProductHostTests HoroOpenXRInstalledProductFixtureConsumer)
     horo_register_catch_test(HoroOpenXRProductHostTests LABELS "unit;xr;headless;packages;host")
 
     add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRNativePreparationTests.cpp
