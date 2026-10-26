@@ -715,6 +715,19 @@ def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -
     assert "github.ref == 'refs/heads/main' && inputs.compiler-ready == 'true'" in action
 
 
+def test_native_primary_budget_preserves_backend_and_auxiliary_boundaries() -> None:
+    native = workflow_job("test")
+    primary = native.split("name: Restore dependency and compiler caches", 1)[1].split("- name:", 1)[0]
+    auxiliary = native.split("name: Restore auxiliary compiler variants", 1)[1].split("- name:", 1)[0]
+    assert "profile: native-tests-v1" in primary
+    assert "max-size: ${{ matrix.launcher == 'ccache' && '3G' || '2G' }}" in primary
+    assert "profile: native-variants-v1" in auxiliary
+    assert "max-size: 2G" in auxiliary
+    assert "max-size: 2G" in workflow_job("shaders")
+    sonar = (ROOT / ".github/workflows/sonar.yml").read_text(encoding="utf-8")
+    assert "CCACHE_MAXSIZE: 2G" in sonar
+
+
 def test_parallel_ctest_preserves_suite_selection_and_bounds_runner_work() -> None:
     assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
     assert preset("configurePresets", "ci-windows-debug")["cacheVariables"]["HORO_CI_ISOLATE_TEST_EXECUTABLES"] == "ON"
@@ -763,35 +776,44 @@ def test_linux_linker_is_explicit_and_bounded_without_changing_other_platforms()
 def test_metal_hardware_queue_requires_the_complete_verified_runtime_selection() -> None:
     producer = workflow_job("macos-build")
     hardware = workflow_job("macos-metal")
-    assert "runs-on: macos-latest" in producer and "max-parallel: 1" in producer
-    assert "needs: [macos-build, macos-build-main]" in hardware and "needs: test" not in hardware
-    assert "name: Test · macOS / Clang" in hardware and "timeout-minutes: 15" in hardware
+    assert "runs-on: macos-latest" in producer
+    assert "max-parallel: 1" in producer
+    assert "needs: [macos-build, macos-build-main]" in hardware
+    assert "needs: test" not in hardware
+    assert "name: Test · macOS / Clang" in hardware
+    assert "timeout-minutes: 15" in hardware
     assert "head.repo.full_name == github.repository" in hardware
-    assert "actions: read" in hardware and "packages: write" not in hardware
+    assert "actions: read" in hardware
+    assert "packages: write" not in hardware
     assert "Require the complete macOS producer to succeed" in hardware
-    assert "'ubuntu-slim'" in hardware and "exit 1" in hardware
-    assert "metal_test_bundle.py consume" in hardware and "cmake --build" not in hardware
-    assert "--artifact-id" in hardware and "--artifact-digest" in hardware
+    assert "'ubuntu-slim'" in hardware
+    assert "exit 1" in hardware
+    assert "metal_test_bundle.py consume" in hardware
+    assert "cmake --build" not in hardware
+    assert "--artifact-id" in hardware
+    assert "--artifact-digest" in hardware
 
 
 def test_only_canonical_main_macos_producer_publishes_shared_compiler_cache() -> None:
     producer, main = workflow_job("macos-build"), workflow_job("macos-build-main")
-    assert "packages: read" in producer and "packages: write" not in producer
-    assert "packages: write" in main and "github.ref == 'refs/heads/main'" in main
-    assert "steps: *native_steps" in producer and "steps: *native_steps" in main
-    assert "cancel-in-progress: false" in main and "concurrency:" not in producer
+    assert "packages: read" in producer
+    assert "packages: write" not in producer
+    assert "packages: write" in main
+    assert "github.ref == 'refs/heads/main'" in main
+    assert "steps: *native_steps" in producer
+    assert "steps: *native_steps" in main
+    assert "cancel-in-progress: false" in main
+    assert "concurrency:" not in producer
 
 
-def test_isolated_metal_routing_is_fixed_opt_in_and_cannot_override_a_failed_producer() -> None:
-    option = WORKFLOW.split("      isolated_metal_qualification:\n", 1)[1].split("      save_allocation_diagnostics:", 1)[0]
-    assert "type: boolean" in option and "default: false" in option and "required: false" in option
+def test_metal_routing_has_one_runner_setting_and_preserves_fork_and_producer_guards() -> None:
     hardware = workflow_job("macos-metal")
     routing = re.search(r"^    runs-on: (.+)$", hardware, re.M).group(1)
-    override = "github.event_name == 'workflow_dispatch' && inputs.isolated_metal_qualification == true && 'horo-macos-metal-qualification'"
-    assert override in routing
     assert routing.startswith("${{ (needs.macos-build.result == 'success' || needs.macos-build-main.result == 'success') && (")
     assert routing.endswith("|| 'ubuntu-slim' }}")
-    assert routing.count("inputs.") == 1
+    assert "inputs." not in routing
     assert "vars.HORO_MACOS_METAL_RUNNER != ''" in routing
     assert "github.event.pull_request.head.repo.full_name == github.repository" in routing
     assert "vars.HORO_MACOS_METAL_RUNNER || 'macos-latest'" in routing
+    assert "Report native Metal device" not in hardware
+    assert "metal_test_bundle.py consume" in hardware

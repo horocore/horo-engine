@@ -14,11 +14,6 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
     inputs:
-      isolated_metal_qualification:
-        description: Use the isolated Metal hardware qualification runner
-        type: boolean
-        required: false
-        default: false
       save_allocation_diagnostics:
         description: Run bounded Windows Save allocation stack diagnostics
         type: boolean
@@ -439,7 +434,7 @@ jobs:
           profile: native-tests-v1
           dependency-profile: ${{ needs.tooling.outputs.network == 'true' && 'native-gns-v1' || '' }}
           mode: Debug
-          max-size: 2G
+          max-size: ${{ matrix.launcher == 'ccache' && '3G' || '2G' }}
 
       - name: Setup optional dependency registry client
         continue-on-error: true
@@ -504,10 +499,10 @@ jobs:
           max-size: 2G
           compiler-only: 'true'
 
-      - name: Establish stable Metal build paths
+      - name: Resolve canonical Metal source directory
         if: runner.os == 'macOS'
         run: |
-          source_root="$("$HORO_QUALIFICATION_PYTHON" .github/scripts/metal_test_bundle.py alias)"
+          source_root="$("$HORO_QUALIFICATION_PYTHON" .github/scripts/metal_test_bundle.py source-root)"
           echo "HORO_METAL_SOURCE=$source_root" >> "$GITHUB_ENV"
 
       - name: Configure Metal shader and presentation tests
@@ -539,14 +534,14 @@ jobs:
 
       - name: Build Release audio checks
         id: release_build
-        run: cmake --build --preset ci-audio-release
+        run: cmake --build --preset ci-audio-release --parallel ${{ runner.os == 'Windows' && 4 || 2 }}
 
       # MSVC Debug container moves may allocate iterator proxies inside noexcept.
       # Keep the complete admission/callback allocation sweep mandatory in Release.
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -1017,7 +1012,7 @@ jobs:
       actions: read
     # A failed producer fails the required check on a small hosted runner.
     # It neither occupies the hardware lane nor produces a skipped-green check.
-    runs-on: ${{ (needs.macos-build.result == 'success' || needs.macos-build-main.result == 'success') && ((github.event_name == 'workflow_dispatch' && inputs.isolated_metal_qualification == true && 'horo-macos-metal-qualification') || (vars.HORO_MACOS_METAL_RUNNER != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.HORO_MACOS_METAL_RUNNER || 'macos-latest')) || 'ubuntu-slim' }}
+    runs-on: ${{ (needs.macos-build.result == 'success' || needs.macos-build-main.result == 'success') && (vars.HORO_MACOS_METAL_RUNNER != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.HORO_MACOS_METAL_RUNNER || 'macos-latest') || 'ubuntu-slim' }}
     timeout-minutes: 15
     defaults:
       run:
@@ -1042,46 +1037,6 @@ jobs:
           verifier="$RUNNER_TEMP/metal-runtime-python/bin/python"
           "$verifier" -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
           echo "METAL_RUNTIME_PYTHON=$verifier" >> "$GITHUB_ENV"
-
-      - name: Report native Metal device
-        env:
-          MTL_DEBUG_LAYER: '1'
-        run: |
-          cat > "$RUNNER_TEMP/metal-device.m" <<'OBJC'
-          #import <Metal/Metal.h>
-          #include <stdio.h>
-          int main(void) { @autoreleasepool {
-          #if defined(__aarch64__) || defined(__arm64__)
-            NSString *architecture = @"arm64";
-          #elif defined(__x86_64__)
-            NSString *architecture = @"x86_64";
-          #else
-            NSString *architecture = @"unsupported";
-          #endif
-            id<MTLDevice> selected = MTLCreateSystemDefaultDevice();
-            NSMutableArray *devices = [NSMutableArray array];
-            for (id<MTLDevice> device in MTLCopyAllDevices()) {
-              [devices addObject:@{
-                @"name": device.name ?: @"",
-                @"registryId": @(device.registryID),
-                @"selected": @(selected != nil && device.registryID == selected.registryID),
-                @"apple7": @([device supportsFamily:MTLGPUFamilyApple7]),
-                @"mac2": @([device supportsFamily:MTLGPUFamilyMac2])
-              }];
-            }
-            NSData *json = [NSJSONSerialization dataWithJSONObject:@{
-              @"processArchitecture": architecture,
-              @"os": NSProcessInfo.processInfo.operatingSystemVersionString,
-              @"devices": devices
-            } options:0 error:nil];
-            if (json == nil) return 1;
-            fwrite(json.bytes, 1, json.length, stdout);
-            fputc('\n', stdout);
-            return selected == nil ? 77 : 0;
-          } }
-          OBJC
-          xcrun clang -fobjc-arc "$RUNNER_TEMP/metal-device.m" -framework Metal -framework Foundation -o "$RUNNER_TEMP/metal-device"
-          "$RUNNER_TEMP/metal-device"
 
       - name: Verify immutable artifact and run every Metal case
         env:

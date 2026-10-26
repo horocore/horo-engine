@@ -37,7 +37,7 @@ def local_cache(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("relative", sorted(compiler.CI_CCACHE_DIRECTORIES))
-@pytest.mark.parametrize("budget", ["1K", "2G", "4GiB"])
+@pytest.mark.parametrize("budget", ["1K", "2G", "3G", "4GiB"])
 def test_maintenance_binds_the_selected_local_store_and_budget(local_cache, monkeypatch, relative, budget):
     workspace, _directory, executable, calls = local_cache
     selected = workspace / relative
@@ -49,19 +49,22 @@ def test_maintenance_binds_the_selected_local_store_and_budget(local_cache, monk
     arguments, options = calls[0]
     assert arguments == ["ccache", "--dir", str(selected), "--cleanup"]
     assert options["executable"] == str(executable)
-    assert options["shell"] is False and options["check"] is True and options["timeout"] == 30
+    assert options["shell"] is False
+    assert options["check"] is True
+    assert options["timeout"] == 30
     assert options["env"]["CCACHE_DIR"] == str(selected)
     assert options["env"]["CCACHE_CONFIGPATH"] == str(selected / "ccache.conf")
     assert options["env"]["CCACHE_MAXSIZE"] == budget
 
 
-@pytest.mark.parametrize("budget", ["", "0", "0G", "-1G", "2", "1.5G", "5G", "--clear", "2G; echo unsafe"])
+@pytest.mark.parametrize("budget", ["", "0", "0G", "-1G", "2", "1.5G", "5G", "--clear", "2G; echo unsafe", "١G", "1٢G"])
 def test_invalid_budget_never_opens_the_store(local_cache, monkeypatch, budget):
     _workspace, directory, _executable, calls = local_cache
     monkeypatch.setenv("CCACHE_MAXSIZE", budget)
     with pytest.raises(ValueError, match="budget"):
         compiler.reconcile()
-    assert not calls and not directory.exists()
+    assert not calls
+    assert not directory.exists()
 
 
 @pytest.mark.parametrize("selection", ["relative", "unowned", "outside", "parent"])
@@ -72,7 +75,8 @@ def test_unowned_or_non_normalized_directory_never_runs_ccache(local_cache, monk
     monkeypatch.setenv("CCACHE_DIR", str(paths[selection]))
     with pytest.raises(ValueError):
         compiler.reconcile()
-    assert not calls and not directory.exists()
+    assert not calls
+    assert not directory.exists()
 
 
 @pytest.mark.parametrize("selection", ["store", "parent", "configuration"])
@@ -97,7 +101,8 @@ def test_cache_and_configuration_symlinks_are_rejected(local_cache, monkeypatch,
         pytest.skip("Host does not permit fixture symlinks")
     with pytest.raises(ValueError):
         compiler.reconcile()
-    assert not calls and marker.read_text() == "retain"
+    assert not calls
+    assert marker.read_text() == "retain"
 
 
 @pytest.mark.parametrize("launcher", ["sccache", "", "ccache; echo unsafe"])
@@ -106,7 +111,8 @@ def test_only_the_selected_ccache_backend_can_reconcile(local_cache, monkeypatch
     monkeypatch.setenv("HORO_COMPILER_LAUNCHER", launcher)
     with pytest.raises(ValueError, match="launcher"):
         compiler.reconcile()
-    assert not calls and not directory.exists()
+    assert not calls
+    assert not directory.exists()
 
 
 def test_missing_ccache_never_creates_an_operational_store(local_cache, monkeypatch):
@@ -114,7 +120,8 @@ def test_missing_ccache_never_creates_an_operational_store(local_cache, monkeypa
     monkeypatch.setattr(compiler.shutil, "which", lambda _name: None)
     with pytest.raises(ValueError, match="unavailable"):
         compiler.reconcile()
-    assert not calls and not directory.exists()
+    assert not calls
+    assert not directory.exists()
 
 
 @pytest.mark.parametrize("failure", ["exit", "timeout"])
@@ -199,7 +206,8 @@ add_custom_target(cache_statistics COMMAND "{executable}" --print-stats)
     run("cmake", "-S", str(source), "-B", str(build))
     run("cmake", "--build", str(build), "--target", "cache_fixture", "--parallel", "1")
     original = cache_statistics(build)
-    assert original["files_in_cache"] > 0 and original["cache_size_kibibyte"] > 0
+    assert original["files_in_cache"] > 0
+    assert original["cache_size_kibibyte"] > 0
     archive = workspace / "checkpoint.tar.gz"
     compiler.pack(directory, KEY, archive)
     directory.rename(workspace / "original-cache")

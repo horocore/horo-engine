@@ -4135,10 +4135,12 @@ target_include_directories(HoroRuntimeUiTextUnicodeTests PRIVATE ${CMAKE_CURRENT
 target_compile_definitions(HoroRuntimeUiTextUnicodeTests PRIVATE HORO_UNICODE_DATA_FILE="${HORO_UNICODE_DATA_FILE}")
 add_executable(HoroRuntimeUiUnicodeStartupTests unit/runtime/ui/UiTextUnicodeStartupTests.cpp)
 target_compile_features(HoroRuntimeUiUnicodeStartupTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiUnicodeStartupTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiUnicodeStartupTests PRIVATE HoroEngine::RuntimeUi HoroThirdParty::Unicode)
 target_compile_definitions(HoroRuntimeUiUnicodeStartupTests PRIVATE HORO_UNICODE_DATA_FILE="${HORO_UNICODE_DATA_FILE}")
 add_executable(HoroRuntimeUiUnicodeLifecycleTests unit/runtime/ui/UiTextUnicodeLifecycleTests.cpp)
 target_compile_features(HoroRuntimeUiUnicodeLifecycleTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiUnicodeLifecycleTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiUnicodeLifecycleTests PRIVATE HoroEngine::RuntimeUi)
 target_compile_definitions(HoroRuntimeUiUnicodeLifecycleTests PRIVATE HORO_UNICODE_DATA_FILE="${HORO_UNICODE_DATA_FILE}")
 add_executable(HoroRuntimeSaveArchiveMetadataTests
@@ -5123,11 +5125,12 @@ if (HORO_BUILD_RENDER_METAL)
         add_executable(HoroMetalShaderPreparationSmoke integration/renderer/MetalShaderPreparationSmoke.mm "${metal_preparation_fixture}")
         target_compile_features(HoroMetalShaderPreparationSmoke PRIVATE cxx_std_20)
         target_compile_options(HoroMetalShaderPreparationSmoke PRIVATE -fobjc-arc)
-        target_compile_definitions(HoroMetalShaderPreparationSmoke PRIVATE HORO_METAL_PREPARATION_FIXTURE="${metal_preparation_fixture}")
+        target_compile_definitions(HoroMetalShaderPreparationSmoke PRIVATE HORO_METAL_PREPARATION_FIXTURE="MetalPreparationFixture.metallib")
         target_include_directories(HoroMetalShaderPreparationSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/support)
         target_link_libraries(HoroMetalShaderPreparationSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
         add_test(NAME HoroMetalShaderPreparationSmoke COMMAND HoroMetalShaderPreparationSmoke)
-        set_tests_properties(HoroMetalShaderPreparationSmoke PROPERTIES LABELS "gpu;metal;shader;material" TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 4)
+        set_tests_properties(HoroMetalShaderPreparationSmoke PROPERTIES LABELS "gpu;metal;shader;material" TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 4
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
     endif ()
     add_executable(HoroRenderMetalTests
             support/AllocationProbe.cpp

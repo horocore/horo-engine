@@ -35,7 +35,8 @@ KEY_PATTERN = re.compile(
     r"sonar-v3-Linux-X64-gcc-[0-9]+(?:\.[0-9]+)+-gcc-[0-9]+(?:\.[0-9]+)+-main-)"
     r"([1-9][0-9]*)-([1-9][0-9]*)")
 # Never import remote configuration, operational locks, or per-run counters.
-LOCAL_FILES = {"ccache.conf", "stats", "stats.log", "cachedir.tag", MANIFEST}
+CCACHE_CONFIGURATION = "ccache.conf"
+LOCAL_FILES = {CCACHE_CONFIGURATION, "stats", "stats.log", "cachedir.tag", MANIFEST}
 CI_CCACHE_DIRECTORIES = {".ci-cache/compiler", ".ci-cache/compiler-variants", ".sonar/ccache"}
 
 
@@ -77,7 +78,7 @@ def ccache_directory() -> Path:
             break
         if parent.is_symlink():
             raise ValueError("The compiler cache directory must not use symlink aliases")
-    if (root / "ccache.conf").is_symlink():
+    if (root / CCACHE_CONFIGURATION).is_symlink():
         raise ValueError("The local compiler configuration must not be a symlink")
     return root
 
@@ -85,7 +86,7 @@ def ccache_directory() -> Path:
 def ccache_budget() -> str:
     """Require a positive explicit CI budget within the archive's expanded bound."""
     budget = os.environ.get("CCACHE_MAXSIZE", "")
-    match = re.fullmatch(r"([1-9][0-9]{0,8})([KMG])(iB|B)?", budget)
+    match = re.fullmatch(r"([1-9]\d{0,8})([KMG])(iB|B)?", budget, flags=re.ASCII)
     if not match:
         raise ValueError("The compiler cache budget must be explicit and positive")
     unit = 1024 if match[3] == "iB" else 1000
@@ -108,7 +109,7 @@ def reconcile() -> None:
     # Bind every write to the selected store. Reading local settings is allowed;
     # importing settings or changing a global configuration is not maintenance.
     environment = dict(os.environ, CCACHE_DIR=str(root),
-                       CCACHE_CONFIGPATH=str(root / "ccache.conf"), CCACHE_MAXSIZE=budget)
+                       CCACHE_CONFIGPATH=str(root / CCACHE_CONFIGURATION), CCACHE_MAXSIZE=budget)
     # Imported stores have no counters. The first pass rebuilds them; ccache
     # chooses eviction limits from the counters present at the start of a pass.
     # A second bounded pass therefore applies the budget to the recounted store.

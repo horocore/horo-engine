@@ -188,7 +188,8 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
         assert "max-parallel: 2" in reader
         assert reader.count("          - name:") == 2
         matrix = reader.split("    strategy:", 1)[1].split("    steps:", 1)[0]
-        assert "- name: Linux / GCC" in matrix and "- name: Windows / MSVC" in matrix
+        assert "- name: Linux / GCC" in matrix
+        assert "- name: Windows / MSVC" in matrix
         assert "- name: macOS / Clang" not in matrix
     if readonly == "shaders":
         assert "max-parallel: 1" in reader
@@ -290,32 +291,35 @@ def test_macos_publishers_retain_complete_native_pipeline_and_bundle_outputs() -
         match = re.search(rf"^    {field}: &(\w+)", reader, re.MULTILINE)
         assert match is not None
         assert f"    {field}: *{match[1]}\n" in main
-    assert "packages: read" in reader and "packages: write" not in reader
+    assert "packages: read" in reader
+    assert "packages: write" not in reader
     assert "packages: write" in main
-    assert reader.count("          - name:") == 1 and "- name: macOS / Clang" in reader
-    assert "max-parallel: 1" in reader and "runs-on: macos-latest" in reader
+    assert reader.count("          - name:") == 1
+    assert "- name: macOS / Clang" in reader
+    assert "max-parallel: 1" in reader
+    assert "runs-on: macos-latest" in reader
     for output in ("artifact-id", "artifact-digest", "payload-digest", "producer-attempt"):
         assert f"      {output}:" in reader
 
 
-@pytest.mark.parametrize("event,isolated,head_repo,reader_result,main_result,label,expected", [
-    ("workflow_dispatch", False, "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
-    ("workflow_dispatch", True, "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal-qualification"),
-    ("pull_request", True, "fork/horo-engine", "success", "skipped", "horo-macos-metal", "macos-latest"),
-    ("pull_request", True, "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
-    ("push", True, "horocore/horo-engine", "skipped", "success", "horo-macos-metal", "horo-macos-metal"),
-    ("workflow_dispatch", True, "horocore/horo-engine", "failure", "skipped", "horo-macos-metal", "ubuntu-slim"),
-    ("workflow_dispatch", False, "horocore/horo-engine", "success", "skipped", "", "macos-latest"),
-    ("pull_request", False, "fork/horo-engine", "failure", "skipped", "horo-macos-metal", "ubuntu-slim"),
+@pytest.mark.parametrize("event,head_repo,reader_result,main_result,label,expected", [
+    ("workflow_dispatch", "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
+    ("push", "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
+    ("pull_request", "fork/horo-engine", "success", "skipped", "horo-macos-metal", "macos-latest"),
+    ("pull_request", "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
+    ("push", "horocore/horo-engine", "skipped", "success", "horo-macos-metal", "horo-macos-metal"),
+    ("workflow_dispatch", "horocore/horo-engine", "failure", "skipped", "horo-macos-metal", "ubuntu-slim"),
+    ("workflow_dispatch", "horocore/horo-engine", "success", "skipped", "", "macos-latest"),
+    ("pull_request", "fork/horo-engine", "failure", "skipped", "horo-macos-metal", "ubuntu-slim"),
 ])
 def test_actual_metal_runner_expression_preserves_admission(
-    event: str, isolated: bool, head_repo: str, reader_result: str, main_result: str, label: str, expected: str,
+    event: str, head_repo: str, reader_result: str, main_result: str, label: str, expected: str,
 ) -> None:
     source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     hardware = job(source, "macos-metal")
     routing = re.search(r"^    runs-on: (.+)$", hardware, re.MULTILINE)
     assert routing is not None
-    context = {"github.event_name": event, "inputs.isolated_metal_qualification": isolated,
+    context = {"github.event_name": event,
                "github.event.pull_request.head.repo.full_name": head_repo,
                "github.repository": "horocore/horo-engine", "vars.HORO_MACOS_METAL_RUNNER": label,
                "needs.macos-build.result": reader_result, "needs.macos-build-main.result": main_result,

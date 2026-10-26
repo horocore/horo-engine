@@ -83,14 +83,25 @@ def test_hardware_retry_uses_explicit_producer_attempt_without_changing_consumer
     monkeypatch.setattr(artifact_module, "api_document", server)
     assert artifact_module.artifact_provenance(produced, "8", artifact["digest"], job["name"])["producer"] == 9
     assert requests[-1] == "repos/horocore/horo-engine/actions/runs/7/attempts/1/jobs?per_page=100"
-    assert produced == IDENTITY and consumer == before
+    assert produced == IDENTITY
+    assert consumer == before
 
 
 
-@pytest.mark.parametrize("attempt", ["", "0", "-1", "2", "1.0", "01", "1/../2", "1" * 21])
+@pytest.mark.parametrize("attempt", ["", "0", "-1", "2", "1.0", "01", "1/../2", "1" * 21, "١", "1٢"])
 def test_missing_malformed_or_future_producer_attempt_fails_closed(attempt: str) -> None:
     with pytest.raises(ValueError, match="producer attempt"):
         artifact_module.producer_identity(IDENTITY, attempt)
+
+
+@pytest.mark.parametrize("artifact_id", ["٨", "1٨"])
+def test_non_ascii_artifact_ids_fail_before_metadata_lookup(monkeypatch, artifact_id: str) -> None:
+    def unexpected_request(_path):
+        pytest.fail("Malformed artifact IDs must fail before an API request")
+
+    monkeypatch.setattr(artifact_module, "api_document", unexpected_request)
+    with pytest.raises(ValueError, match="immutable producer artifact outputs"):
+        artifact_module.artifact_provenance(IDENTITY, artifact_id, "sha256:" + "a" * 64, "Build · macOS / Clang")
 
 
 
@@ -142,7 +153,8 @@ def test_signed_storage_download_receives_no_api_authorization(tmp_path: Path, m
 
     class Storage:
         def open(self, request, *, timeout):
-            assert request == location and timeout == 120
+            assert request == location
+            assert timeout == 120
             return io.BytesIO(data)
 
     monkeypatch.setattr(artifact_module, "api_request", redirect)

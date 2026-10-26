@@ -48,7 +48,7 @@ def api_document(path: str) -> dict:
 
 def producer_identity(consumer: dict, attempt: str) -> dict:
     """Retain source guards while admitting only an earlier attempt of this run."""
-    if not re.fullmatch(r"[1-9][0-9]{0,19}", attempt) or int(attempt) > consumer["attempt"]:
+    if not re.fullmatch(r"[1-9]\d{0,19}", attempt, flags=re.ASCII) or int(attempt) > consumer["attempt"]:
         raise ValueError("Invalid producer attempt")
     return dict(consumer, attempt=int(attempt))
 
@@ -57,7 +57,7 @@ def artifact_provenance(identity: dict, artifact_id: str, digest: str, producer_
     """Check server metadata and the specific completed producer before download."""
     if re.fullmatch(r"[0-9a-f]{64}", digest):
         digest = "sha256:" + digest
-    if not re.fullmatch(r"[1-9][0-9]{0,19}", artifact_id) or not DIGEST.fullmatch(digest):
+    if not re.fullmatch(r"[1-9]\d{0,19}", artifact_id, flags=re.ASCII) or not DIGEST.fullmatch(digest):
         raise ValueError("Missing immutable producer artifact outputs")
     artifact = api_document(f"repos/{REPOSITORY}/actions/artifacts/{artifact_id}")
     validate_artifact_record(artifact, identity, artifact_id, digest)

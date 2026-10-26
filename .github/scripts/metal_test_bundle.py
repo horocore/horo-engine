@@ -25,8 +25,8 @@ import dependency_package as package
 import metal_test_artifact as artifact
 
 REPOSITORY = artifact.REPOSITORY
-LOGICAL_SOURCE = Path("/private/tmp/horo-metal-ci/source")
 BUILD = "build/ci-metal"
+SCHEMA = 2
 MANIFEST = "horo-metal-tests.json"
 PAYLOAD = "metal-tests.tar.gz"
 SELECTION = (
@@ -47,11 +47,10 @@ PRIVATE_ENVIRONMENT = {"HOME", "USERPROFILE", "TMPDIR", "TMP", "TEMP"}
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
-def command(arguments: list[str], *, cwd: Path | None = None) -> str:
-    """Run fixed build-inspection tools, never shell text from an artifact."""
-    executable = resolved_tool(arguments[0])
-    return subprocess.run([executable, *arguments[1:]], cwd=cwd, check=True, text=True,  # nosec B603
-                          capture_output=True, timeout=60).stdout
+def git_output(arguments: list[str], *, cwd: Path) -> str:
+    """Inspect source identity through the resolved Git executable without a shell."""
+    return subprocess.run(["git", *arguments], executable=resolved_tool("git"), cwd=cwd,  # nosec B603
+                          check=True, text=True, capture_output=True, timeout=60, shell=False).stdout
 
 
 def resolved_tool(name: str) -> str:
@@ -64,10 +63,10 @@ def resolved_tool(name: str) -> str:
 
 
 def source_identity(workspace: Path) -> tuple[str, str]:
-    values = command(["git", "rev-parse", "HEAD", "HEAD^{tree}"], cwd=workspace).splitlines()
+    values = git_output(["rev-parse", "HEAD", "HEAD^{tree}"], cwd=workspace).splitlines()
     if len(values) != 2 or any(not SHA.fullmatch(value) for value in values):
         raise ValueError("Invalid checkout identity")
-    if command(["git", "diff", "--name-only", "HEAD", "--"], cwd=workspace).strip():
+    if git_output(["diff", "--name-only", "HEAD", "--"], cwd=workspace).strip():
         raise ValueError("The checkout contains tracked changes")
     return values[0], values[1]
 
@@ -79,7 +78,7 @@ def context(workspace: Path) -> dict:
         raise ValueError("Unexpected repository or checkout")
     run = os.environ.get("GITHUB_RUN_ID", "")
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
-    if not re.fullmatch(r"[1-9][0-9]*", run) or not re.fullmatch(r"[1-9][0-9]*", attempt):
+    if not re.fullmatch(r"[1-9]\d*", run, flags=re.ASCII) or not re.fullmatch(r"[1-9]\d*", attempt, flags=re.ASCII):
         raise ValueError("Invalid workflow run identity")
     if os.environ.get("GITHUB_EVENT_NAME") not in {"pull_request", "push", "workflow_dispatch"}:
         raise ValueError("Unexpected source event")
@@ -95,21 +94,6 @@ def context(workspace: Path) -> dict:
         raise ValueError("Invalid source head")
     return {"repository": REPOSITORY, "run": int(run), "attempt": int(attempt),
             "commit": commit, "tree": tree, "head": head}
-
-
-def logical_source(workspace: Path) -> Path:
-    """Create one owner-private stable alias without replacing an existing path."""
-    parent = LOGICAL_SOURCE.parent
-    parent.mkdir(mode=0o700, exist_ok=True)
-    info = parent.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("The logical source directory is not private")
-    if LOGICAL_SOURCE.is_symlink():
-        if LOGICAL_SOURCE.resolve(strict=True) != workspace:
-            raise ValueError("The logical source alias belongs to another checkout")
-    else:
-        LOGICAL_SOURCE.symlink_to(workspace, target_is_directory=True)
-    return LOGICAL_SOURCE
 
 
 def build_relative(value: str, roots: list[str]) -> str:
@@ -220,8 +204,10 @@ def macho_identity(path: Path) -> dict:
 
 
 def discovery(build: Path) -> list[dict]:
-    document = json.loads(command(["ctest", "--test-dir", str(build), "--show-only=json-v1", "-R", SELECTION]),
-                          object_pairs_hook=package.unique_object)
+    output = subprocess.run(["ctest", "--test-dir", str(build), "--show-only=json-v1", "-R", SELECTION],
+                            executable=resolved_tool("ctest"), check=True, text=True,
+                            capture_output=True, timeout=60, shell=False).stdout
+    document = json.loads(output, object_pairs_hook=package.unique_object)
     tests = document.get("tests", [])
     names = [test["name"] for test in tests]
     binaries = {Path(test["command"][0]).name for test in tests}
@@ -248,7 +234,7 @@ def materialized_files(candidate: Path):
 def runtime_files(build: Path, tests: list[dict]) -> dict[str, Path]:
     """Stage executable/app resources and the existing generated shader/SDK data."""
     files = {}
-    roots = [str(build), str(build.resolve(strict=True))]
+    roots = [str(build)]
     candidates = {build / build_relative(test["command"][0], roots) for test in tests}
     for binary in tuple(candidates):
         candidates.update(parent for parent in binary.parents if parent.suffix == ".app")
@@ -280,27 +266,49 @@ def payload_inventory(files: dict[str, Path]) -> dict:
     return table
 
 
-def pack(workspace: Path, output: Path) -> dict:
+def package_output(workspace: Path) -> Path:
+    """Admit only a new bundle in this checkout's private output directory."""
+    workspace = workspace.resolve(strict=True)
+    directory = workspace / "build" / "metal-test-bundle"
+    output = directory / PAYLOAD
+    build = directory.parent
+    if build.resolve(strict=True) != build or not build.is_dir():
+        raise ValueError("The package build directory must be canonical")
+    directory.mkdir(mode=0o700, exist_ok=True)
+    info = directory.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_mode & 0o077):
+        raise ValueError("The package output directory is not owner-private")
+    if output.exists() or output.is_symlink():
+        raise ValueError("A previous bundle output already exists")
+    return output
+
+
+def pack(workspace: Path) -> dict:
+    workspace = workspace.resolve(strict=True)
+    output = package_output(workspace)
     identity = context(workspace)
-    build = logical_source(workspace) / BUILD
+    build = workspace / BUILD
+    if build.resolve(strict=True) != build:
+        raise ValueError("The producer build directory must be canonical")
     tests = discovery(build)
-    roots = [str(build), str(build.resolve(strict=True))]
+    roots = [str(build)]
     files = runtime_files(build, tests)
     table = payload_inventory(files)
     binaries = {build_relative(test["command"][0], roots) for test in tests}
     native = {name: macho_identity(build / name) for name in binaries}
-    manifest = {"schema": 1, "identity": identity, "selection": SELECTION, "producerRoots": roots,
+    manifest = {"schema": SCHEMA, "identity": identity, "selection": SELECTION, "producerRoots": roots,
                 "tests": tests, "files": table, "executables": native}
     encoded = json.dumps(manifest, sort_keys=True, allow_nan=False).encode()
     if len(encoded) > MAX_METADATA_BYTES:
         raise ValueError("Metal test metadata exceeds its bound")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(output, "w:gz", compresslevel=1, format=tarfile.USTAR_FORMAT) as archive:
-        header = tarfile.TarInfo(MANIFEST)
-        header.size = len(encoded)
-        archive.addfile(header, io.BytesIO(encoded))
-        for name, path in sorted(files.items()):
-            archive.add(path, arcname=name, recursive=False)
+    with output.open("xb") as stream:
+        with tarfile.open(fileobj=stream, mode="w:gz", compresslevel=1, format=tarfile.USTAR_FORMAT) as archive:
+            header = tarfile.TarInfo(MANIFEST)
+            header.size = len(encoded)
+            archive.addfile(header, io.BytesIO(encoded))
+            for name, path in sorted(files.items()):
+                archive.add(path, arcname=name, recursive=False)
     if output.stat().st_size > MAX_ARCHIVE_BYTES:
         raise ValueError("The compressed test bundle exceeds its bound")
     if context(workspace) != identity:
@@ -337,16 +345,6 @@ def ctest_file(tests: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def validate_file_record(record: dict) -> int:
-    """Validate a payload's exact size, digest and executable mode declaration."""
-    size = record.get("size")
-    if (not isinstance(size, int) or isinstance(size, bool) or size < 0
-            or not re.fullmatch(r"[0-9a-f]{64}", record.get("sha256", ""))
-            or not isinstance(record.get("executable"), bool)):
-        raise ValueError("Invalid payload file record")
-    return size
-
-
 def validate_file_inventory(document: dict) -> None:
     """Require a bounded, unique set of declared runtime payload paths."""
     files = document.get("files")
@@ -358,7 +356,7 @@ def validate_file_inventory(document: dict) -> None:
         if name.casefold() in folded or name.casefold() == MANIFEST.casefold():
             raise ValueError("Duplicate or reserved payload path")
         folded.add(name.casefold())
-        total += validate_file_record(record)
+        total += package.validate_file_record(record)
     if total > MAX_EXPANDED_BYTES:
         raise ValueError("The Metal payload exceeds its expanded size bound")
 
@@ -368,7 +366,7 @@ def validated_manifest(encoded: bytes, identity: dict) -> dict:
     document = json.loads(encoded, object_pairs_hook=package.unique_object)
     exact_identity = json.dumps(document.get("identity"), sort_keys=True) == json.dumps(identity, sort_keys=True)
     if (not isinstance(document.get("schema"), int) or isinstance(document.get("schema"), bool)
-            or document["schema"] != 1 or not exact_identity or document.get("selection") != SELECTION):
+            or document["schema"] != SCHEMA or not exact_identity or document.get("selection") != SELECTION):
         raise ValueError("Incompatible Metal test bundle identity")
     validate_file_inventory(document)
     return document
@@ -446,10 +444,10 @@ def unpack(payload: Path, staging: Path, identity: dict) -> dict:
 
 
 def validate_producer_roots(roots: list[str]) -> None:
-    """Require both the logical and physical canonical producer build roots."""
-    if not isinstance(roots, list) or len(roots) != 2 or roots[0] != str(LOGICAL_SOURCE / BUILD):
+    """Require the sole canonical physical producer build root for this schema."""
+    if not isinstance(roots, list) or len(roots) != 1:
         raise ValueError("Unexpected producer path contract")
-    validate_physical_build_root(roots[1])
+    validate_physical_build_root(roots[0])
 
 
 def validate_physical_build_root(root: str) -> None:
@@ -485,11 +483,24 @@ def validate_native_inventory(binaries: set[str], document: dict, staging: Path)
 def validate_host(executables: dict) -> None:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise ValueError("The runtime bundle requires a native arm64 Mac")
-    components = [int(part) for part in command(["/usr/bin/sw_vers", "-productVersion"]).strip().split(".")]
+    output = subprocess.run(["/usr/bin/sw_vers", "-productVersion"], executable=resolved_tool("/usr/bin/sw_vers"),
+                            check=True, text=True, capture_output=True, timeout=60, shell=False).stdout
+    components = [int(part) for part in output.strip().split(".")]
     major, minor, patch = (components + [0, 0])[:3]
     current = major << 16 | minor << 8 | patch
     if any(record["minimum"] > current for record in executables.values()):
         raise ValueError("The host OS is older than a compiled deployment target")
+
+
+def private_environment_directories(values: list[str], build: Path) -> None:
+    """Create only admitted private fixture directories confined to this build."""
+    for value in values:
+        name, _, setting = value.partition("=")
+        if name in PRIVATE_ENVIRONMENT:
+            path = setting.removeprefix("set:")
+            if not Path(path).is_relative_to(build):
+                raise ValueError("A private fixture path escapes the bundle")
+            Path(path).mkdir(parents=True, exist_ok=True)
 
 
 def private_directories(tests: list[dict], build: Path) -> None:
@@ -498,13 +509,7 @@ def private_directories(tests: list[dict], build: Path) -> None:
             if prop["name"] == "WORKING_DIRECTORY":
                 Path(prop["value"]).mkdir(parents=True, exist_ok=True)
             elif prop["name"] in {"ENVIRONMENT", "ENVIRONMENT_MODIFICATION"}:
-                for value in prop["value"]:
-                    name, _, setting = value.partition("=")
-                    if name in PRIVATE_ENVIRONMENT:
-                        path = setting.removeprefix("set:")
-                        if not Path(path).is_relative_to(build):
-                            raise ValueError("A private fixture path escapes the bundle")
-                        Path(path).mkdir(parents=True, exist_ok=True)
+                private_environment_directories(prop["value"], build)
 
 
 def verify_payload_files(build: Path, files: dict) -> None:
@@ -538,9 +543,10 @@ def run_tests(workspace: Path, build: Path, tests: list[dict], files: dict, iden
     if report.exists() or report.is_symlink():
         raise ValueError("A previous native JUnit report already exists")
     environment = dict(os.environ, MTL_DEBUG_LAYER="1")
-    outcome = subprocess.run([resolved_tool("ctest"), "--test-dir", str(build), "--parallel", "1", "--timeout", "90",  # nosec B603
+    outcome = subprocess.run(["ctest", "--test-dir", str(build), "--parallel", "1", "--timeout", "90",  # nosec B603
                               "--output-on-failure", "--no-tests=error", "-R", SELECTION,
-                              "--output-junit", "ctest.xml"], cwd=workspace, env=environment, check=False)
+                              "--output-junit", "ctest.xml"], executable=resolved_tool("ctest"),
+                             cwd=workspace, env=environment, check=False, shell=False)
     if context(workspace) != identity:
         raise ValueError("The source changed while running Metal tests")
     verify_payload_files(build, files)
@@ -549,13 +555,16 @@ def run_tests(workspace: Path, build: Path, tests: list[dict], files: dict, iden
 
 def consume(workspace: Path, artifact_id: str, artifact_digest: str, payload_digest: str,
             producer_name: str, producer_attempt: str) -> dict:
+    workspace = workspace.resolve(strict=True)
     identity = context(workspace)
     produced = artifact.producer_identity(identity, producer_attempt)
     provenance = artifact.artifact_provenance(produced, artifact_id, artifact_digest, producer_name)
     destination = workspace / BUILD
-    if destination.exists():
+    if destination.exists() or destination.is_symlink():
         raise ValueError("A consumer test installation already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.parent.resolve(strict=True) != destination.parent:
+        raise ValueError("The consumer build directory must be canonical")
     with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
         quarantine = Path(temporary)
         archive, payload, staging = quarantine / "artifact.zip", quarantine / PAYLOAD, quarantine / "verified"
@@ -565,26 +574,24 @@ def consume(workspace: Path, artifact_id: str, artifact_digest: str, payload_dig
         document = unpack(payload, staging, produced)
         validate_test_manifest(document, staging)
         validate_host(document["executables"])
-        logical_build = logical_source(workspace) / BUILD
-        tests = [relocate_test(test, document["producerRoots"], logical_build) for test in document["tests"]]
+        tests = [relocate_test(test, document["producerRoots"], destination) for test in document["tests"]]
         if context(workspace) != identity:
             raise ValueError("The source changed before bundle installation")
         staging.rename(destination)
-    private_directories(tests, logical_build)
+    private_directories(tests, destination)
     (destination / "CTestTestfile.cmake").write_text(ctest_file(tests))
-    actual = discovery(logical_build)
+    actual = discovery(destination)
     if sorted(actual, key=lambda test: test["name"]) != sorted(tests, key=lambda test: test["name"]):
         raise ValueError("Consumer CTest commands or properties differ from the producer")
-    result = run_tests(workspace, logical_build, tests, document["files"], identity)
+    result = run_tests(workspace, destination, tests, document["files"], identity)
     return {"identity": identity, "artifact": int(artifact_id), "producerJob": provenance["producer"],
             "producerAttempt": produced["attempt"], "testCount": len(tests),
-            "build": str(logical_build), "qualification": result}
+            "build": str(destination), "qualification": result}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("alias", "pack", "consume"))
-    parser.add_argument("--output", type=Path)
+    parser.add_argument("operation", choices=("source-root", "pack", "consume"))
     parser.add_argument("--artifact-id")
     parser.add_argument("--artifact-digest")
     parser.add_argument("--payload-digest")
@@ -592,12 +599,10 @@ def main() -> int:
     parser.add_argument("--producer-attempt")
     arguments = parser.parse_args()
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
-    if arguments.operation == "alias":
-        print(logical_source(workspace))
+    if arguments.operation == "source-root":
+        print(workspace)
     elif arguments.operation == "pack":
-        if arguments.output is None:
-            parser.error("pack requires --output")
-        print(json.dumps(pack(workspace, arguments.output), sort_keys=True))
+        print(json.dumps(pack(workspace), sort_keys=True))
     else:
         if not all((arguments.artifact_id, arguments.artifact_digest, arguments.payload_digest,
                     arguments.producer_name, arguments.producer_attempt)):

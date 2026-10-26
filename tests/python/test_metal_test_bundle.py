@@ -11,6 +11,7 @@ from pathlib import Path
 import struct
 import sys
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,6 +29,88 @@ IDENTITY = {"repository": "horocore/horo-engine", "run": 7, "attempt": 1,
 MEMBER = "tests/HoroRenderMetalTests"
 
 
+def test_git_inspection_preserves_literal_arguments_and_resolved_executable(tmp_path: Path, monkeypatch) -> None:
+    executable = str(tmp_path / "native tools ü" / "git")
+    calls = []
+    monkeypatch.setattr(bundle.shutil, "which", lambda _name: executable)
+
+    def inspect(arguments, **options):
+        calls.append((arguments, options))
+        return SimpleNamespace(stdout="source identity")
+
+    monkeypatch.setattr(bundle.subprocess, "run", inspect)
+    arguments = ["rev-parse", "literal; $(not a shell) ü"]
+    assert bundle.git_output(arguments, cwd=tmp_path) == "source identity"
+    assert calls == [(["git", *arguments], {"executable": executable, "cwd": tmp_path,
+                      "check": True, "text": True, "capture_output": True, "timeout": 60, "shell": False})]
+
+
+@pytest.mark.parametrize("tool", ["git", "ctest", "/usr/bin/sw_vers"])
+@pytest.mark.parametrize("resolved", [None, "relative/tool"])
+def test_inspection_rejects_missing_or_relative_executables(monkeypatch, tool: str, resolved: str | None) -> None:
+    monkeypatch.setattr(bundle.shutil, "which", lambda _name: resolved)
+    with pytest.raises(ValueError, match="inspection tool"):
+        bundle.resolved_tool(tool)
+
+
+def test_native_ctest_keeps_complete_selection_and_verified_payload(tmp_path: Path, monkeypatch) -> None:
+    build = tmp_path / "native build ü"
+    payload = build / MEMBER
+    payload.parent.mkdir(parents=True)
+    payload.write_bytes(b"verified native bytes")
+    files = {MEMBER: {"sha256": hashlib.sha256(payload.read_bytes()).hexdigest()}}
+    executable = str(tmp_path / "native tools ü" / "ctest")
+    calls = []
+    monkeypatch.setattr(bundle.shutil, "which", lambda _name: executable)
+    monkeypatch.setattr(bundle, "context", lambda _workspace: IDENTITY)
+
+    def execute(arguments, **options):
+        calls.append((arguments, options))
+        (build / "ctest.xml").write_text('<testsuite><testcase name="required"/></testsuite>')
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bundle.subprocess, "run", execute)
+    assert bundle.run_tests(tmp_path, build, [{"name": "required"}], files, IDENTITY) == {
+        "tests": 1, "failures": 0, "skipped": 0}
+    arguments, options = calls[0]
+    assert arguments == ["ctest", "--test-dir", str(build), "--parallel", "1", "--timeout", "90",
+                         "--output-on-failure", "--no-tests=error", "-R", bundle.SELECTION,
+                         "--output-junit", "ctest.xml"]
+    assert options["executable"] == executable
+    assert options["cwd"] == tmp_path
+    assert options["shell"] is False
+    assert options["check"] is False
+    assert options["env"]["MTL_DEBUG_LAYER"] == "1"
+    assert payload.read_bytes() == b"verified native bytes"
+
+
+@pytest.mark.parametrize("field", ["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"])
+@pytest.mark.parametrize("value", ["١", "1٢"])
+def test_non_ascii_run_identity_fails_before_event_read(tmp_path: Path, monkeypatch, field: str, value: str) -> None:
+    monkeypatch.setattr(bundle, "source_identity", lambda _workspace: (IDENTITY["commit"], IDENTITY["tree"]))
+    monkeypatch.setenv("GITHUB_REPOSITORY", IDENTITY["repository"])
+    monkeypatch.setenv("GITHUB_SHA", IDENTITY["commit"])
+    monkeypatch.setenv("GITHUB_RUN_ID", "7")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv(field, value)
+    with pytest.raises(ValueError, match="workflow run identity"):
+        bundle.context(tmp_path)
+
+
+def test_private_fixture_directories_preserve_environment_scope_and_confinement(tmp_path: Path) -> None:
+    build = tmp_path / "build ü"
+    home = build / "home"
+    temporary = build / "temporary"
+    outside = tmp_path / "outside"
+    bundle.private_environment_directories([f"HOME=set:{home}", f"TMPDIR={temporary}", f"UNRELATED={outside}"], build)
+    assert home.is_dir()
+    assert temporary.is_dir()
+    assert not outside.exists()
+    with pytest.raises(ValueError, match="escapes the bundle"):
+        bundle.private_environment_directories([f"HOME=set:{outside}"], build)
+    assert not outside.exists()
+
+
 def native_binary(cpu: int = 0x0100000C, dependency: str | None = None) -> bytes:
     commands = struct.pack("<6I", 0x32, 24, 1, 14 << 16, 26 << 16, 0)
     count = 1
@@ -40,7 +123,7 @@ def native_binary(cpu: int = 0x0100000C, dependency: str | None = None) -> bytes
 
 
 def manifest(data: bytes) -> dict:
-    return {"schema": 1, "identity": IDENTITY, "selection": bundle.SELECTION,
+    return {"schema": bundle.SCHEMA, "identity": IDENTITY, "selection": bundle.SELECTION,
             "files": {MEMBER: {"size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "executable": True}}}
 
 
@@ -51,6 +134,127 @@ def archive_at(path: Path, document: dict, entries: list) -> Path:
             info.type, info.size = kind, len(data)
             archive.addfile(info, io.BytesIO(data))
     return path
+
+
+@pytest.fixture
+def native_producer(tmp_path: Path, monkeypatch):
+    workspace = tmp_path.resolve() / "checkout with spaces ü"
+    build = workspace / bundle.BUILD
+    tests = []
+    for name in sorted(bundle.EXECUTABLES):
+        relative = "apps/HoroEditor.app/Contents/MacOS/HoroEditor" if name == "HoroEditor" else "tests/" + name
+        binary = build / relative
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(native_binary())
+        binary.chmod(0o755)
+        case_name = "HoroEditorMetalFirstFrame" if name == "HoroEditor" else name
+        if name not in {"HoroEditor", "HoroMetalShaderPreparationSmoke", "HoroMetalGraphExecutionSmoke"}:
+            case_name += "::required"
+        tests.append({"name": case_name,
+                      "command": [str(binary)],
+                      "properties": [{"name": "WORKING_DIRECTORY", "value": str(build / "tests")}]})
+    (build / "tests/MetalPreparationFixture.metallib").write_bytes(b"shader fixture")
+    sdk_directory = build / "sdk/gameplay"
+    sdk_directory.mkdir(parents=True)
+    (sdk_directory / "fixture.cmake").write_text("# runtime SDK fixture\n")
+    monkeypatch.setattr(bundle, "context", lambda _workspace: IDENTITY)
+    monkeypatch.setattr(bundle, "discovery", lambda _build: tests)
+    return workspace, workspace / "build/metal-test-bundle" / bundle.PAYLOAD, tests
+
+
+def test_package_output_is_private_fixed_and_preserves_verified_payload(native_producer, tmp_path: Path) -> None:
+    workspace, output, tests = native_producer
+    report = bundle.pack(workspace)
+    assert report["testCount"] == len(tests)
+    assert report["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert output.parent.stat().st_mode & 0o777 == 0o700
+    staging = tmp_path / "consumer"
+    staging.mkdir()
+    document = bundle.unpack(output, staging, IDENTITY)
+    bundle.validate_test_manifest(document, staging)
+    assert document["tests"] == tests
+    assert (staging / MEMBER).read_bytes() == native_binary()
+    assert (staging / "tests/MetalPreparationFixture.metallib").read_bytes() == b"shader fixture"
+    assert (staging / "sdk/gameplay/fixture.cmake").read_text() == "# runtime SDK fixture\n"
+
+
+@pytest.mark.parametrize("attack", ["outside", "relative", "traversal", "different-name"])
+def test_cli_rejects_output_selection_before_source_inspection(native_producer, tmp_path: Path, monkeypatch,
+                                                             attack: str) -> None:
+    _workspace, output, _ = native_producer
+    requested = {"outside": tmp_path / "outside.tar.gz", "relative": Path("build/metal-test-bundle/metal-tests.tar.gz"),
+                 "traversal": output.parent / ".." / "metal-test-bundle" / bundle.PAYLOAD,
+                 "different-name": output.with_name("other.tar.gz")}[attack]
+    monkeypatch.setattr(bundle, "context", lambda _workspace: pytest.fail("Invalid output reached source inspection"))
+    monkeypatch.setattr(sys, "argv", ["metal_test_bundle.py", "pack", "--output", str(requested)])
+    with pytest.raises(SystemExit) as error:
+        bundle.main()
+    assert error.value.code == 2
+    assert not output.parent.exists()
+    assert not (tmp_path / "outside.tar.gz").exists()
+
+
+@pytest.mark.parametrize("attack", ["parent-link", "file-link", "existing-file", "public-directory"])
+def test_package_destination_never_replaces_files_or_follows_links(native_producer, tmp_path: Path, attack: str) -> None:
+    workspace, output, _ = native_producer
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / bundle.PAYLOAD
+    sentinel.write_bytes(b"preserve outside bytes")
+    if attack == "parent-link":
+        output.parent.symlink_to(outside, target_is_directory=True)
+    else:
+        output.parent.mkdir(mode=0o700)
+        if attack == "file-link":
+            output.symlink_to(sentinel)
+        elif attack == "existing-file":
+            output.write_bytes(b"preserve existing bytes")
+        else:
+            output.parent.chmod(0o755)
+    with pytest.raises(ValueError):
+        bundle.pack(workspace)
+    assert sentinel.read_bytes() == b"preserve outside bytes"
+    if attack == "existing-file":
+        assert output.read_bytes() == b"preserve existing bytes"
+
+
+def test_exclusive_bundle_creation_preserves_a_file_created_after_validation(native_producer, monkeypatch) -> None:
+    workspace, output, _ = native_producer
+
+    def inspect(_workspace):
+        output.write_bytes(b"created after validation")
+        return IDENTITY
+
+    monkeypatch.setattr(bundle, "context", inspect)
+    with pytest.raises(FileExistsError):
+        bundle.pack(workspace)
+    assert output.read_bytes() == b"created after validation"
+
+
+@pytest.mark.parametrize("schema", [1, 3, True, "2", None])
+def test_bundle_schema_requires_the_current_relocatable_path_contract(schema) -> None:
+    document = manifest(native_binary())
+    document["schema"] = schema
+    encoded = json.dumps(document).encode()
+    with pytest.raises(ValueError, match="bundle identity"):
+        bundle.validated_manifest(encoded, IDENTITY)
+
+
+@pytest.mark.parametrize("roots", [[], ["/old/source/build/ci-metal", "/old/physical/build/ci-metal"],
+                                  "/producer/build/ci-metal", None])
+def test_bundle_rejects_legacy_or_ambiguous_root_contracts(roots) -> None:
+    with pytest.raises(ValueError, match="producer path contract"):
+        bundle.validate_producer_roots(roots)
+
+
+def test_shader_fixture_path_contract_uses_its_explicit_ctest_working_directory() -> None:
+    cmake = (ROOT / "tests/CMakeLists.txt").read_text()
+    start = cmake.index("target_compile_definitions(HoroMetalShaderPreparationSmoke")
+    end = cmake.index("    endif ()", start)
+    contract = cmake[start:end]
+    assert 'HORO_METAL_PREPARATION_FIXTURE="MetalPreparationFixture.metallib"' in contract
+    assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"' in contract
+    assert 'TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 4' in contract
 
 
 def test_verified_regular_payload_keeps_bytes_and_uses_safe_modes(tmp_path: Path) -> None:
@@ -120,7 +324,9 @@ def test_macho_identity_checks_real_architecture_sdk_and_library_closure(tmp_pat
     path = tmp_path / "native"
     path.write_bytes(native_binary(dependency="/System/Library/Frameworks/Metal.framework/Versions/A/Metal"))
     identity = bundle.macho_identity(path)
-    assert identity["architecture"] == "arm64" and identity["minimum"] == 14 << 16 and identity["sdk"] == 26 << 16
+    assert identity["architecture"] == "arm64"
+    assert identity["minimum"] == 14 << 16
+    assert identity["sdk"] == 26 << 16
     path.write_bytes(native_binary(cpu=0x01000007))
     with pytest.raises(ValueError, match="arm64"):
         bundle.macho_identity(path)
@@ -157,10 +363,14 @@ def test_ctest_round_trip_retains_literal_arguments_and_execution_guards(tmp_pat
     (tmp_path / "CTestTestfile.cmake").write_text(bundle.ctest_file([test]))
     document = json.loads(run("ctest", "--test-dir", str(tmp_path), "--show-only=json-v1").stdout)
     actual = document["tests"][0]
-    assert actual["name"] == name and actual["command"] == test["command"]
+    assert actual["name"] == name
+    assert actual["command"] == test["command"]
     properties = {item["name"]: item["value"] for item in actual["properties"]}
-    assert properties["RESOURCE_LOCK"] == ["original-lock"] and properties["ENVIRONMENT"] == ["KEY=literal;semicolon"]
-    assert properties["RUN_SERIAL"] is True and properties["SKIP_RETURN_CODE"] == 4 and properties["TIMEOUT"] == 60
+    assert properties["RESOURCE_LOCK"] == ["original-lock"]
+    assert properties["ENVIRONMENT"] == ["KEY=literal;semicolon"]
+    assert properties["RUN_SERIAL"] is True
+    assert properties["SKIP_RETURN_CODE"] == 4
+    assert properties["TIMEOUT"] == 60
 
 
 @pytest.mark.parametrize("field", list(IDENTITY))
@@ -170,8 +380,9 @@ def test_retained_producer_bundle_cannot_change_any_bound_source_field(field: st
     document["identity"][field] = 9 if field in {"attempt", "run"} else "d" * 40
     consumer = dict(IDENTITY, attempt=2)
     expected = artifact.producer_identity(consumer, "1")
+    encoded = json.dumps(document).encode()
     with pytest.raises(ValueError, match="bundle identity"):
-        bundle.validated_manifest(json.dumps(document).encode(), expected)
+        bundle.validated_manifest(encoded, expected)
 
 
 @pytest.mark.parametrize("body,returncode", [
@@ -199,6 +410,6 @@ def test_native_junit_requires_every_case_and_success(tmp_path: Path, body: str,
                                   "/producer/../build/ci-metal", "/producer//build/ci-metal",
                                   "/producer\\bad/build/ci-metal", "/producer\x00/build/ci-metal"])
 def test_producer_root_must_be_an_absolute_canonical_build_directory(tmp_path: Path, root) -> None:
-    document = {"tests": [], "producerRoots": [str(bundle.LOGICAL_SOURCE / bundle.BUILD), root]}
+    document = {"tests": [], "producerRoots": [root]}
     with pytest.raises(ValueError, match="producer path contract"):
         bundle.validate_test_manifest(document, tmp_path)
