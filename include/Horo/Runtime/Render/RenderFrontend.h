@@ -51,6 +51,8 @@ namespace Horo::Render {
 
     namespace Detail {
         struct UiPaintFrontendState;
+        struct UiPaintOwnerRetirement;
+        struct RenderResourceIdentity;
         struct VfxSchedulingStorage;
         class RenderResourceRegistry;
         class RenderResourceUploadQueue;
@@ -873,6 +875,25 @@ namespace Horo::Render {
         RenderFrontendMemoryConfig memoryConfig_;
         friend class UiPaintFrameBufferPool;
         friend class UiPaintProgram;
+        /** @brief Validate buffer creation at the existing owner boundary before any resource reservation. */
+        [[nodiscard]] Result<void> AdmitUiPaintBufferRequest(const RenderBufferDescriptor &descriptor,
+                                                             std::span<const std::byte> initialData) const;
+        /** @brief Validate texture creation at the existing owner boundary before any resource reservation. */
+        [[nodiscard]] Result<void> AdmitUiPaintTextureRequest(const RenderTextureDescriptor &descriptor,
+                                                              std::span<const std::byte> initialData) const;
+        /** @brief Admits a buffer with its nonallocating UI-owner retirement handoff before publication. */
+        [[nodiscard]] Result<ResourceCreation<RenderBufferHandle>> CreateOwnedUiPaintBuffer(
+            RenderMemoryScopeId scope, const RenderBufferDescriptor &descriptor, std::span<const std::byte> initialData,
+            const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner);
+        /** @brief Admits a texture with its nonallocating UI-owner retirement handoff before publication. */
+        [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateOwnedUiPaintTexture(
+            RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, std::span<const std::byte> initialData,
+            const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner);
+        /** @brief Tries immediate owner-boundary cleanup; deferred requests remain registry-owned. */
+        void RetireOwnedUiPaintBuffer(RenderBufferHandle handle, ResourceOperationId operation) noexcept;
+        /** @brief Tries immediate owner-boundary cleanup; deferred requests remain registry-owned. */
+        void RetireOwnedUiPaintTexture(RenderTextureHandle handle, ResourceOperationId operation) noexcept;
+        [[nodiscard]] bool RetireOwnedUiPaintResource(Detail::RenderResourceIdentity identity, ResourceOperationId operation) noexcept;
         std::shared_ptr<Detail::UiPaintFrontendState> uiPaintFrontendState_;
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;
         std::unique_ptr<Detail::RenderResourceUploadQueue> resourceUploadQueue_;

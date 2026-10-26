@@ -153,7 +153,6 @@ separate closed `MultiplyCoverage` operation. No outside-mask white region may
 survive. These source additions remain unqualified until actual native execution
 and the complete prepared program path are tested.
 
-
 ### Immutable prepared program and ordinary frame changes
 
 `UiPaintProgram::ValidatePreparation` is an owner mutation and is no longer const:
@@ -191,7 +190,6 @@ push/pop; fractional rounded and texture coverage is applied once through the
 coverage texture. CPU tracking regressions qualify these issued graph/workload
 relationships only; native image comparison is still separately required.
 
-
 The prepared sampler key preserves independent minification, magnification and
 mipmap selection (twelve closed combinations prepared once). Current source
 realizations have one mip level; native nearest/linear mip selection retains its
@@ -201,7 +199,6 @@ admission boundary. Coverage surfaces exactly match the output extent and use an
 explicit corresponding-texel load, independent of a source image's sampler. The
 portable shader source revision advances to 3 for this sampling change; the
 parameter ABI remains exactly 64 bytes and the two texture bindings are unchanged.
-
 
 An accepted upload is bound to the exact retained geometry arena-slot issuance,
 not merely its view and snapshot revision. Copies of that same immutable plan
@@ -216,7 +213,6 @@ No new global registry, caller nonce or mutable source authority is introduced.
 An atlas supplied with zero font bindings contributes no encoded texture or glyph
 identity. Its ordinary canonical capture/lifetime rules still apply; no new atlas
 observation API or ownership authority is needed for that unused input.
-
 
 ## Application source producer and retirement port
 
@@ -249,7 +245,6 @@ The owning application and actual SDK-host regressions exercise this producer;
 CPU program tests alone do not qualify its native pixel output. OpenGL/Vulkan
 can explicitly deny this optional capability while ordinary GUI preview remains
 available. Selected-Metal native effects and lifecycle still require native proof.
-
 
 ## Output evidence handoff
 
@@ -373,6 +368,7 @@ completion lease as Scene and GUI.
 existing finite completion slots reserves its source-retention inventory once at frontend construction. Frame work cannot grow it;
 capacity failure rejects the complete composition before encoding. This does not advertise a native capability on an unsupported
 backend or qualify pixels, compiler artifacts, presentation, or device restart.
+
 ## Transactional normal Scene retirement
 
 `SceneActivationParticipant` contract revision 3 adds optional
@@ -394,8 +390,6 @@ The application UI adapter must prepare removal of only the outgoing Scene scope
 game-instance and player-owned UI survive. Its activation candidate still owns
 forced revocation and GPU/snapshot draining: `Shutdown` never calls this fallible
 retirement hook. Borrowed component storage cannot be retained by a candidate.
-
-
 
 ## Same-boundary compiler reflection output
 
@@ -425,7 +419,6 @@ backend discovery or runtime shader compilation is added by this migration. Scri
 normalization tests qualify rejection/ownership only; real locked-tool translation,
 Apple offline compilation and native pixels remain separate required evidence.
 
-
 ## Host automatic layout bindings
 
 Existing explicit `UiAnimationLayoutBinding` values keep `AllComputedValues` by
@@ -436,7 +429,6 @@ from the authored/responsive layout on every update, so removal of an override
 restores percentages and authored padding rather than retaining previous pixels.
 The closed `Padding` field maps the validated Dimension to all four edges and
 rejects negative padding. No timeline sample bypasses the sole computed-style owner.
-
 
 The existing reflected-record canonical codec and identity calculation now belong
 to RenderApi as pure portable value operations, with Foundation JSON implementation
@@ -546,7 +538,6 @@ resource. Format admission is not shader, pixel or application qualification.
 OpenGL/Vulkan keep explicit capability-denied paint behavior while their ordinary
 editor GUI/document preview paths remain available.
 
-
 ### Unassigned authored style namespaces
 
 Canonical document elements may omit `styleAsset` while retaining typed inline
@@ -564,7 +555,6 @@ ADR-076 precedence; signatures and authored/cooked formats are unchanged. Existi
 callers with assigned assets retain their current cascade and validation. The real
 project Scene loader uses this path for default/inline-only canonical documents.
 
-
 ### Animated extraction retention
 
 Real animation callers pass the exact committed `UiAnimationFrameLease` to the
@@ -581,7 +571,6 @@ may remain alive after completion without retaining a retired source. Failed
 geometry preparation clears its new source pin before returning the slot. No new
 renderer lifetime authority or frame allocation is introduced.
 
-
 The prepared program copies bounded structural command/mask/group/resource values
 at cold creation, including safe-point refresh. It does not retain the real
 animation publication used to derive those values. Successful slot replacement
@@ -590,7 +579,6 @@ preparation releases only its unpublished candidate. The accepted revision and
 all independently captured native completion leases retain their original exact
 geometry/binding checks and lifetimes. No frame or resource capacity increases
 are needed to retire these obsolete cache references.
-
 
 ### Cold project preparation precedes native admission
 
@@ -652,3 +640,34 @@ against the paired boundary22 / `gameplay-sdk22` fingerprint. The canonical load
 rejects SDK21 before activation; a stale native module cannot acquire or consume
 these new value layouts. Cached view identity remains readable after retirement,
 but storage queries require the original live Scene and owner thread.
+
+## Sonar remediation and owner-thread retirement
+
+UI pool/program destruction now requests retirement through a cold-admitted token
+retained by the exact renderer registry generations. The atomic request may be set
+from a foreign thread; it never carries a frontend pointer across threads. Native
+retirement, pending-upload cancellation and reservation release remain bounded by
+the existing frontend owner boundary and completion pins. The destructor path
+cannot allocate an error diagnostic, throw, wait for the GPU or abandon a native
+owner. Explicit Shutdown retains its typed failure/retry contract.
+
+Scene activation preparation/retirement, Play-world commit validation and structural
+preparation/baseline validation now borrow
+`const RuntimeSceneView&` for the synchronous call instead of copying the view.
+The host-only activation and structural participant contract revisions advance
+from 3 to 4. Update overrides to the same signature and rebuild C++
+Scene/Physics/UI consumers.
+The Scene remains the canonical owner. The reference is synchronous; candidates
+that need the view after preparation retain their own value as before.
+Coordinated Runtime UI reload, transition/animation preparation, exact Scene
+revocation and prepared reconciliation helpers use const access where only their
+retained canonical owners are mutated. A const service handle does not make that
+canonical state immutable; all existing owner-thread, publication and capability
+fences still apply. Update exact C++ member/function pointer signatures as well. Installed header ownership,
+the native module C ABI, serialized assets and wire formats are unchanged.
+
+Factory-only shader catalogs, paint hosts, paint programs, project source factories
+and paint projections use non-aggregate
+private construction keys with standard make_shared/make_unique ownership. A caller
+cannot construct a catalog without the factory's authenticated evidence or bypass
+paint admission with an independently forged key.

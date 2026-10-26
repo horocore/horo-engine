@@ -2,6 +2,8 @@
 
 #include "MetalRenderBackendErrors.h"
 
+#include <algorithm>
+#include <array>
 #include <limits>
 #include <string>
 
@@ -153,13 +155,13 @@ namespace Horo::Render::Detail {
             return false;
         using enum RenderTextureFormat;
         using enum RenderTextureUsage;
-        for (const auto descriptor : {RenderTextureDescriptor{.extent = {1, 1}, .format = Bgra8Unorm, .usage = RenderAttachment},
-                                      RenderTextureDescriptor{.extent = {1, 1}, .format = Rgba16Float, .usage = Sampled | RenderAttachment},
-                                      RenderTextureDescriptor{.extent = {1, 1}, .format = Rgba8Unorm, .usage = Sampled | CopyDestination},
-                                      RenderTextureDescriptor{.extent = {1, 1}, .format = Depth32FloatStencil8, .usage = RenderAttachment}})
-            if (!capabilities.SupportsTexture(descriptor))
-                return false;
-        return true;
+        const std::array descriptors{RenderTextureDescriptor{.extent = {1, 1}, .format = Bgra8Unorm, .usage = RenderAttachment},
+                                     RenderTextureDescriptor{.extent = {1, 1}, .format = Rgba16Float, .usage = Sampled | RenderAttachment},
+                                     RenderTextureDescriptor{.extent = {1, 1}, .format = Rgba8Unorm, .usage = Sampled | CopyDestination},
+                                     RenderTextureDescriptor{.extent = {1, 1}, .format = Depth32FloatStencil8, .usage = RenderAttachment}};
+        return std::ranges::all_of(descriptors, [&capabilities](const auto &descriptor) {
+            return capabilities.SupportsTexture(descriptor);
+        });
     }
 
     Result<MetalDeviceCapabilities> AdmitMetalDevice(const MetalDeviceFacts &facts, const MetalDeviceAdmissionRequest &request) {

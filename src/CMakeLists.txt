@@ -1031,6 +1031,13 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/AdmissionProtection.cpp
         runtime/networking/InboundMessageDispatcher.cpp
         runtime/networking/NetworkModeComposition.cpp
+        runtime/networking/NetworkModeTravel.cpp
+        runtime/networking/NetworkWorldBinding.cpp
+        runtime/networking/NetworkWorldBindingController.cpp
+        runtime/networking/NetworkWorldBindingPeer.cpp
+        runtime/networking/NetworkWorldBindingTravel.cpp
+        runtime/networking/NetworkWorldOccurrenceIssuer.cpp
+        runtime/networking/NetworkModeWorldState.cpp
         runtime/networking/TransportBackendComposition.cpp
         runtime/networking/TransportTargetComposition.cpp
         runtime/networking/NetworkDiagnostics.cpp
@@ -1058,6 +1065,15 @@ add_library(HoroNetworkRuntime STATIC
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime HoroEngine::Security)
+
+# Host composition sees only these two non-installed headers, never the source root.
+set(HORO_NETWORK_MODE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/network_mode_host_headers")
+file(MAKE_DIRECTORY "${HORO_NETWORK_MODE_HOST_HEADERS}")
+configure_file(runtime/networking/NetworkWorldBindingController.h "${HORO_NETWORK_MODE_HOST_HEADERS}/NetworkWorldBindingController.h" COPYONLY)
+configure_file(runtime/networking/NetworkModeHostAccess.h "${HORO_NETWORK_MODE_HOST_HEADERS}/NetworkModeHostAccess.h" COPYONLY)
+add_library(HoroNetworkModeHostInternal INTERFACE)
+target_include_directories(HoroNetworkModeHostInternal INTERFACE "${HORO_NETWORK_MODE_HOST_HEADERS}")
+target_link_libraries(HoroNetworkModeHostInternal INTERFACE HoroEngine::NetworkRuntime)
 
 add_library(HoroPlayTopologyApplication STATIC
         application/network/PlayTopology.cpp
@@ -3456,8 +3472,10 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
         PRIVATE HoroRenderFrontendResourceAccessInternal HoroRenderGraphTemplateInterface HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
     set(_horo_editor_vulkan_xr_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_vulkan_xr_host_headers")
     file(MAKE_DIRECTORY "${_horo_editor_vulkan_xr_headers}")
-    configure_file(editor/renderer/vulkan/host/EditorVulkanXrViewportAccess.h
-        "${_horo_editor_vulkan_xr_headers}/EditorVulkanXrViewportAccess.h" COPYONLY)
+    # Forward this deliberate internal contract so source and App consumers share
+    # the canonical borrowed mirror value without copying its declaration.
+    file(GENERATE OUTPUT "${_horo_editor_vulkan_xr_headers}/EditorVulkanXrViewportAccess.h"
+        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/vulkan/host/EditorVulkanXrViewportAccess.h\"\n")
     configure_file(editor/renderer/vulkan/host/EditorVulkanXrMirrorProjection.h
         "${_horo_editor_vulkan_xr_headers}/EditorVulkanXrMirrorProjection.h" COPYONLY)
     add_library(HoroEditorVulkanXrHostInterface INTERFACE)

@@ -12,6 +12,10 @@ import subprocess
 SOURCE = "assets/shaders/runtime/ui_paint.hlsl"
 CATALOG = "src/runtime/renderer/toolchain/ShaderCompilerToolchainCatalog.cpp"
 SCRIPT = ".github/scripts/ui_paint_fixture.py"
+MANIFEST = "manifest.json"
+MSL_SUFFIX = ".metal"
+REFLECTION_SUFFIX = ".reflection.json"
+XCRUN = "/usr/bin/xcrun"
 LIMIT = 16 * 1024 * 1024
 STAGES = (("PaintVertex", "vert", "vs_6_0"), ("PaintFragment", "frag", "ps_6_0"))
 DXC_OPTIONS = ("-nologo", "-HV", "2021", "-Ges", "-Zpc", "-Gis", "-O3",
@@ -22,11 +26,25 @@ PARAMETER_OFFSETS = {"Extent": 0, "Opacity": 8, "Sampling": 12, "Flags": 16,
                      "MaskExtent": 32, "MaskReserved": 40, "CornerRadii": 48}
 
 
-def bounded(path, maximum=LIMIT):
-    """Anchor every component with no-follow descriptors, including during concurrent replacement."""
+def absolute_data_path(path):
+    """Translate only macOS's fixed system /var alias; never resolve caller-controlled descendants."""
     path = path.absolute()
     if ".." in path.parts:
         raise ValueError("Parent traversal forbidden")
+    if platform.system() == "Darwin" and path.parts[:2] == ("/", "var"):
+        try:
+            target = os.readlink("/var")
+        except OSError as error:
+            raise ValueError("Unexpected macOS temporary-root alias") from error
+        if target not in ("private/var", "/private/var"):
+            raise ValueError("Unexpected macOS temporary-root alias")
+        path = Path("/private/var").joinpath(*path.parts[2:])
+    return path
+
+
+def bounded(path, maximum=LIMIT):
+    """Anchor every physical component with no-follow descriptors, including during concurrent replacement."""
+    path = absolute_data_path(path)
     directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
         for component in path.parts[1:-1]:
@@ -67,7 +85,7 @@ def identity(source):
     if not re.fullmatch(r"[0-9a-f]{40}", expected["GITHUB_SHA"]):
         raise ValueError("Invalid revision")
     for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
-        if not re.fullmatch(r"[1-9][0-9]{0,19}", expected[key]):
+        if not re.fullmatch(r"[1-9]\d{0,19}", expected[key], flags=re.ASCII):
             raise ValueError("Invalid run identity")
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
     if actual != expected["GITHUB_SHA"]:
@@ -78,7 +96,11 @@ def identity(source):
 def catalog(source):
     text = bounded(source / CATALOG, 128 * 1024).decode("utf-8")
     result = {}
-    for role, body in re.findall(r"ApprovedShaderCompilerTool\{ShaderCompilerTool::(\w+),\s*(.*?)\}", text, re.S):
+    for entry in text.split("ApprovedShaderCompilerTool{ShaderCompilerTool::")[1:]:
+        role, separator, fields_text = entry.partition(",")
+        body, closing, _ = fields_text.partition("}")
+        if not separator or not closing or not re.fullmatch(r"\w+", role):
+            raise ValueError("Malformed canonical tool entry")
         if role not in ("Dxc", "SpirvTools", "SpirvCross"):
             continue
         fields = ["".join(re.findall(r'"([^"\n]*)"', part)) for part in body.split(",")]
@@ -123,21 +145,21 @@ def inventory(root):
 
 
 def verify(root, source):
-    expected_files = {"manifest.json"} | {entry + suffix for entry, _, _ in STAGES
-                                          for suffix in (".spv", ".metal", ".reflection.json")}
+    expected_files = {MANIFEST} | {entry + suffix for entry, _, _ in STAGES
+                                          for suffix in (".spv", MSL_SUFFIX, REFLECTION_SUFFIX)}
     if inventory(root) != expected_files:
         raise ValueError("Unexpected handoff entries")
-    manifest = json.loads(bounded(root / "manifest.json", 64 * 1024), object_pairs_hook=unique_object)
+    manifest = json.loads(bounded(root / MANIFEST, 64 * 1024), object_pairs_hook=unique_object)
     expected = expected_manifest(source)
-    hashes = {name: digest(bounded(root / name)) for name in sorted(expected_files - {"manifest.json"})}
+    hashes = {name: digest(bounded(root / name)) for name in sorted(expected_files - {MANIFEST})}
     if manifest != {**expected, "files": hashes}:
         raise ValueError("Stale/tampered source, run, options, tools or data")
     for entry, _, _ in STAGES:
         if bounded(root / (entry + ".spv"))[:4] != b"\x03\x02\x23\x07":
             raise ValueError("Invalid SPIR-V magic")
-        if b"#include <metal_stdlib>" not in bounded(root / (entry + ".metal")):
+        if b"#include <metal_stdlib>" not in bounded(root / (entry + MSL_SUFFIX)):
             raise ValueError("Invalid MSL translation")
-        validate_reflection(root / (entry + ".reflection.json"))
+        validate_reflection(root / (entry + REFLECTION_SUFFIX))
     return manifest
 
 
@@ -167,7 +189,7 @@ def run(command, env=None):
 
 def native_bindings(root):
     """Derive the fixture map from generated MSL; actual Metal reflection checks it again."""
-    stages = {entry: bounded(root / (entry + ".metal")).decode("utf-8") for entry, _, _ in STAGES}
+    stages = {entry: bounded(root / (entry + MSL_SUFFIX)).decode("utf-8") for entry, _, _ in STAGES}
     # SPIRV-Cross sanitizes the compiler's struct type name. The preceding exact
     # reflection check establishes its one uniform block; do not infer a name.
     patterns = ((r"constant\s+\w+\s*&\s*\w+\s*\[\[buffer\((\d+)\)\]\]", "buffer"),
@@ -185,12 +207,17 @@ def native_bindings(root):
     return indices
 
 
-def produce(args):
+def require_production_host():
+    """Admit only the exact canonical Linux host before tool or output access."""
     if os.name != "posix" or platform.machine() != "x86_64" or not Path("/etc/os-release").exists():
         raise ValueError("Linux qualification host required")
     release = Path("/etc/os-release").read_text()
     if not re.search(r'^ID=ubuntu$', release, re.M) or not re.search(r'^VERSION_ID="26\.04"$', release, re.M):
         raise ValueError("Exact approved Ubuntu26.04 host required")
+
+
+def produce(args):
+    require_production_host()
     metadata = expected_manifest(args.source)
     tools = {"Dxc": args.dxc, "SpirvTools": args.validator, "SpirvCross": args.cross}
     if args.tools_root:
@@ -207,34 +234,35 @@ def produce(args):
     args.root.mkdir(parents=True, exist_ok=False)
     for entry, stage, profile in STAGES:
         spirv = args.root / (entry + ".spv")
-        msl = args.root / (entry + ".metal")
+        msl = args.root / (entry + MSL_SUFFIX)
         run([str(tools["Dxc"]), *DXC_OPTIONS, "-T", profile, "-E", entry, "-Fo", str(spirv), str(args.source / SOURCE)], tool_environment)
         bounded(spirv)
         run([str(tools["SpirvTools"]), "--target-env", "vulkan1.3", str(spirv)], tool_environment)
-        reflection = args.root / (entry + ".reflection.json")
+        reflection = args.root / (entry + REFLECTION_SUFFIX)
         run([str(tools["SpirvCross"]), str(spirv), "--reflect", "--output", str(reflection)], tool_environment)
         validate_reflection(reflection)
         run([str(tools["SpirvCross"]), str(spirv), "--output", str(msl), "--entry", entry,
              "--stage", stage, "--msl", "--msl-version", "20400"], tool_environment)
         bounded(msl)
     metadata["files"] = {name: digest(bounded(args.root / name)) for name in sorted(inventory(args.root))}
-    (args.root / "manifest.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    (args.root / MANIFEST).write_text(json.dumps(metadata, indent=2) + "\n")
     verify(args.root, args.source)
 
 
 def apple(args):
     manifest = verify(args.root, args.source)  # Complete validation before tooling or output publication.
     bindings = native_bindings(args.root)
-    if args.xcrun != Path("/usr/bin/xcrun"):
+    args.output = absolute_data_path(args.output)
+    if args.xcrun != Path(XCRUN):
         raise ValueError("Only the selected installed Apple tool dispatcher is admitted")
     bounded(args.xcrun)
     installed = {}
     for tool in ("metal", "metallib"):
-        path = Path(subprocess.check_output(["/usr/bin/xcrun", "-sdk", "macosx", "--find", tool],
+        path = Path(subprocess.check_output([XCRUN, "-sdk", "macosx", "--find", tool],
                                            text=True, timeout=10).strip())
         installed[tool] = {"path": str(path), "sha256": digest(bounded(path, 256 * 1024 * 1024))}
     manifest["apple_tools"] = installed
-    manifest["apple_sdk"] = subprocess.check_output(["/usr/bin/xcrun", "-sdk", "macosx", "--show-sdk-path"],
+    manifest["apple_sdk"] = subprocess.check_output([XCRUN, "-sdk", "macosx", "--show-sdk-path"],
                                                     text=True, timeout=10).strip()
     if any(parent.is_symlink() for parent in (args.output, *args.output.absolute().parents)):
         raise ValueError("Symlink output directory forbidden")
@@ -243,7 +271,7 @@ def apple(args):
         air = args.output / (entry + ".air")
         library = args.output / (entry + ".metallib")
         run([str(args.xcrun), "-sdk", "macosx", "metal", *APPLE_OPTIONS,
-             "-c", str(args.root / (entry + ".metal")), "-o", str(air)])
+             "-c", str(args.root / (entry + MSL_SUFFIX)), "-o", str(air)])
         bounded(air)
         run([str(args.xcrun), "-sdk", "macosx", "metallib", str(air), "-o", str(library)])
         if bounded(library)[:4] != b"MTLB":
@@ -255,7 +283,7 @@ def apple(args):
     for entry, _, _ in STAGES:
         (args.output / (entry + ".sha256")).write_text("sha256:" + manifest["apple_libraries"][entry] + "\n")
     for entry, _, _ in STAGES:
-        for suffix in (".metal", ".reflection.json"):
+        for suffix in (MSL_SUFFIX, REFLECTION_SUFFIX):
             (args.output / (entry + suffix)).write_bytes(bounded(args.root / (entry + suffix)))
     cross = manifest["tools"]["SpirvCross"]
     (args.output / "reflection-tool.txt").write_text(cross["release"] + "\n" + cross["archive"] + "\n")
@@ -273,10 +301,10 @@ def main():
     parser.add_argument("--validator", type=Path)
     parser.add_argument("--cross", type=Path)
     parser.add_argument("--tools-root", type=Path)
-    parser.add_argument("--xcrun", type=Path, default=Path("/usr/bin/xcrun"))
+    parser.add_argument("--xcrun", type=Path, default=Path(XCRUN))
     args = parser.parse_args()
-    args.source = args.source.absolute()
-    args.root = args.root.absolute()
+    args.source = absolute_data_path(args.source)
+    args.root = absolute_data_path(args.root)
     if args.operation == "apple" and args.output is None:
         parser.error("apple requires --output")
     {"produce": produce, "verify": lambda value: verify(value.root, value.source), "apple": apple}[args.operation](args)

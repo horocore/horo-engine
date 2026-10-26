@@ -64,6 +64,13 @@ namespace Horo::Runtime::Ui::PaintInternal {
                    OptionalIndex(group.clip, projection.clips.size()) && OptionalIndex(group.mask, projection.masks.size());
         }
 
+        /** @brief A nested group's full command interval must fit within its already validated parent. */
+        bool FitsParent(const UiRenderProjection &projection, const UiOpacityGroup &group, const std::uint32_t parent,
+                        const std::uint32_t command) noexcept {
+            return parent == NoUiRenderIndex ||
+                   group.commandCount <= projection.groups[parent].firstCommand + projection.groups[parent].commandCount - command;
+        }
+
         /** @brief Ordered intervals form a properly nested forest; each command names exactly its deepest group. */
         Result<void> ValidateGroups(const UiElementTree &tree, const UiRenderProjection &projection) {
             std::array<std::uint32_t, MaximumUiRenderOpacityGroupDepth> stack{};
@@ -71,8 +78,7 @@ namespace Horo::Runtime::Ui::PaintInternal {
             std::uint32_t next = 0;
             for (std::uint32_t command = 0; command < projection.commands.size(); ++command) {
                 while (depth != 0) {
-                    const auto &active = projection.groups[stack[depth - 1]];
-                    if (command < active.firstCommand + active.commandCount)
+                    if (const auto &active = projection.groups[stack[depth - 1]]; command < active.firstCommand + active.commandCount)
                         break;
                     --depth;
                 }
@@ -81,11 +87,8 @@ namespace Horo::Runtime::Ui::PaintInternal {
                     const auto parent = depth == 0 ? NoUiRenderIndex : stack[depth - 1];
                     if (!ValidGroup(tree, projection, group) || group.parent != parent || depth == stack.size())
                         return Invalid();
-                    if (depth != 0) {
-                        const auto &outer = projection.groups[parent];
-                        if (group.commandCount > outer.firstCommand + outer.commandCount - command)
-                            return Invalid();
-                    }
+                    if (!FitsParent(projection, group, parent, command))
+                        return Invalid();
                     stack[depth++] = next++;
                 }
                 if (projection.commands[command].group != (depth == 0 ? NoUiRenderIndex : stack[depth - 1]))

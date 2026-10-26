@@ -6,7 +6,6 @@
 #include "OpenXRPlayFrameState.h"
 #include "OpenXRPlayHost.h"
 #include "OpenXRVulkanSwapchain.h"
-#include "editor/renderer/EditorViewportRenderer.h"
 
 #include <bit>
 #include <cmath>

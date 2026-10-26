@@ -40,8 +40,8 @@ reports=()
 for manifest in "${manifests[@]}"; do
   mapfile -d '' -t inputs < "$manifest"
   report="${manifest%.files}.json"
-  echo "Fastcov batch ${#reports[@]}: ${#inputs[@]} inputs, at most two workers."
-  "$fastcov" --gcov gcov --jobs 2 --process-gcno --search-directory "$build_dir" \
+  echo "Fastcov batch ${#reports[@]}: ${#inputs[@]} inputs, at most four workers."
+  "$fastcov" --gcov gcov --jobs 4 --process-gcno --search-directory "$build_dir" \
     --gcda-files "${inputs[@]}" --include "${includes[@]}" --output "$report"
   [[ -s "$report" ]] || { echo "Missing fastcov batch report" >&2; exit 2; }
   reports+=("$report")

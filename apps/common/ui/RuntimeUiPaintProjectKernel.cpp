@@ -66,10 +66,9 @@ namespace Horo::Application::Internal {
                                             ? work->result->ErrorValue()
                                             : MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
         auto compiled = std::move(*work->result).Value();
-        auto kernel = std::make_shared<CookedUiPaintKernel>(
-            CookedUiPaintKernel{std::move(work->request.compilation.manifest), compiler.target.requirement,
-                                std::move(compiled.artifacts.front()), RenderTextureFormat::Bgra8Unorm,
-                                RenderTextureFormat::Depth32FloatStencil8});
+        auto kernel = std::make_shared<CookedUiPaintKernel>(std::move(work->request.compilation.manifest), compiler.target.requirement,
+                                                            std::move(compiled.artifacts.front()), RenderTextureFormat::Bgra8Unorm,
+                                                            RenderTextureFormat::Depth32FloatStencil8);
         if (const auto validated = ValidateCookedUiPaintKernel(*kernel, ShaderTargetBackend::Metal); validated.HasError())
             return Preparation::Failure(validated.ErrorValue());
         return Preparation::Success(std::move(kernel));

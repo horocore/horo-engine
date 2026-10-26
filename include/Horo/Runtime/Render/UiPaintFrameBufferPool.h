@@ -43,7 +43,7 @@ namespace Horo::Render {
         /** @brief Initializes metadata; Create owns the sole construction key.
          * @param frontend Selected renderer that outlives the pool. @param budget Validated fixed capacity.
          * @param slots Validated device-bounded slot count. @param key Factory-only construction authority. */
-        UiPaintFrameBufferPool(RenderFrontend &frontend, UiPaintFrameBudget budget, std::uint32_t slots, ConstructionKey key);
+        UiPaintFrameBufferPool(const RenderFrontend &frontend, UiPaintFrameBudget budget, std::uint32_t slots, ConstructionKey key);
         /** @brief Allocates three host-visible buffers per finite slot at the render preparation safe point.
          * @param frontend Initialized selected renderer, with no frame active. @param budget Fixed complete geometry/uniform capacity.
          * @param slots Explicit count bounded by eight and device frames in flight.
@@ -71,6 +71,7 @@ namespace Horo::Render {
     private:
         friend class UiPaintProgram;
         std::weak_ptr<Detail::UiPaintFrontendState> frontendState_;
+        std::shared_ptr<Detail::UiPaintOwnerRetirement> retirement_;
         UiPaintFrameBudget budget_;
         std::uint32_t count_;
         std::thread::id owner_;

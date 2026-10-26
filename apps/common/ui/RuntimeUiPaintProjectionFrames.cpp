@@ -46,14 +46,14 @@ namespace Horo::Application::Internal {
             if (masks.size() == descriptor.limits.masks)
                 return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
             const auto &input = declaration.masks[row.authoredMask];
-            masks.push_back({paint.rect, input.resource, paint.transform, input.shape, row.mask, input.cornerRadii});
+            masks.emplace_back(paint.rect, input.resource, paint.transform, input.shape, row.mask, input.cornerRadii);
             row.mask = static_cast<std::uint32_t>(masks.size() - 1);
         }
         if (row.isolate) {
             if (groups.size() == descriptor.limits.groups)
                 return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
-            groups.push_back(
-                {row.element, paint.rect, row.firstCommand, 0, row.group, paint.opacity, paint.transform, paint.clip, row.mask});
+            groups.emplace_back(row.element, paint.rect, row.firstCommand, 0, row.group, paint.opacity, paint.transform, paint.clip,
+                                row.mask);
             row.group = static_cast<std::uint32_t>(groups.size() - 1);
         }
         return Result<void>::Success();
@@ -82,8 +82,7 @@ namespace Horo::Application::Internal {
         }
         transforms.push_back(transform);
         row.firstCommand = static_cast<std::uint32_t>(commands.size());
-        const auto scopes = BeginScopes(index, paint);
-        if (scopes.HasError())
+        if (const auto scopes = BeginScopes(index, paint); scopes.HasError())
             return scopes;
         paint.mask = row.mask;
         paint.group = row.group;
@@ -122,10 +121,11 @@ namespace Horo::Application::Internal {
         groups.clear();
         transforms.clear();
         if (const auto *clipping = frame.Clipping()) {
-            const auto &source = frame.Layout().Descriptor();
-            const auto &derived = clipping->Descriptor();
-            if (source.instance != derived.instance || source.canvas != derived.canvas || source.sources != derived.sources ||
-                source.interaction != derived.interaction || clipping->Clips().size() > descriptor.limits.clips)
+            const auto &layoutSource = frame.Layout().Descriptor();
+            if (const auto &derived = clipping->Descriptor();
+                layoutSource.instance != derived.instance || layoutSource.canvas != derived.canvas ||
+                layoutSource.sources != derived.sources || layoutSource.interaction != derived.interaction ||
+                clipping->Clips().size() > descriptor.limits.clips)
                 return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
             for (const auto &clip : clipping->Clips())
                 clips.push_back({clip.rect, clip.parent});

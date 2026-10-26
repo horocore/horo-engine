@@ -66,7 +66,8 @@ namespace Horo::Render::Detail {
             if (CanCreatePaintTexture(device, MTLPixelFormatRGBA8Unorm, MTLTextureUsageShaderRead))
                 enableUsage(RenderTextureFormat::Rgba8Unorm, sampledAttachment | RenderTextureUsage::CopyDestination);
             enableUsage(RenderTextureFormat::Bgra8Unorm, sampledAttachment);
-            enableUsage(RenderTextureFormat::Depth32Float, RenderTextureUsage::RenderAttachment);
+            // Native depth textures can also be sampled by the viewport's shadow pass.
+            enableUsage(RenderTextureFormat::Depth32Float, sampledAttachment);
             if (device.depth24Stencil8PixelFormatSupported) {
                 enableUsage(RenderTextureFormat::Depth24Stencil8, RenderTextureUsage::RenderAttachment);
             }

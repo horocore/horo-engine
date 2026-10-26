@@ -42,7 +42,15 @@ namespace Horo::Application::Internal {
     class RuntimeUiPaintProjectSources final {
         struct Storage;
 
+        class ConstructionKey final {
+            friend class RuntimeUiPaintProjectSources;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Factory-only construction after validated storage preparation. */
+        explicit RuntimeUiPaintProjectSources(ConstructionKey, std::shared_ptr<Storage> storage) : storage_(std::move(storage)) {}
+
         ~RuntimeUiPaintProjectSources();
         /** @brief Captures the actual application port, sole element allocator and admitted shader/source policy.
          * @param port Canonical fixed lifecycle composition. @param allocator Actual sole namespace issuer.
@@ -60,8 +68,6 @@ namespace Horo::Application::Internal {
                                                                                            std::optional<Assets::AssetCookTargetId> target);
 
     private:
-        explicit RuntimeUiPaintProjectSources(std::shared_ptr<Storage> storage) : storage_(std::move(storage)) {}
-
         std::shared_ptr<Storage> storage_;
     };
 }  // namespace Horo::Application::Internal

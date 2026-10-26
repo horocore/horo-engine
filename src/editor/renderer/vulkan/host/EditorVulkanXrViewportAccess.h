@@ -2,6 +2,7 @@
 /** @file EditorVulkanXrViewportAccess.h
  * @brief Non-installed explicit App access to the SAME selected viewport's XR resource/graph owner.
  */
+#include "../../EditorViewportTextureView.h"
 #include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
 #include "Horo/Runtime/Render/RenderScene.h"
@@ -14,7 +15,6 @@ namespace Horo::Render {
 
 namespace Horo::Editor {
     class EditorViewportRendererVulkan;
-    struct EditorViewportTextureView;
 
     /** @brief Static composition boundary, without another viewport, scene, queue or completion authority.
      * @details All borrows use the viewport's render-owner lane and existing resource lifetime. The concrete

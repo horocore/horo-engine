@@ -52,10 +52,16 @@ namespace Horo::Application::Internal::Detail {
         Runtime::Ui::UiRenderExtractorDescriptor extraction;
         Runtime::Ui::UiRenderGeometryArena arena;
         Runtime::Ui::UiRenderGeometryArenaDescriptor geometryPolicy;
-        Render::UiPaintProgramDescriptor policy;
-        Render::CookedUiPaintKernel kernel;
-        std::unique_ptr<Render::UiPaintProgram> program;
-        std::unique_ptr<Render::UiPaintProgram> retiredProgram;
+
+        /** @brief One preparation policy and its active/retiring native generations, destroyed in reverse ownership order. */
+        struct NativePrograms final {
+            Render::UiPaintProgramDescriptor policy;
+            Render::CookedUiPaintKernel kernel;
+            std::unique_ptr<Render::UiPaintProgram> active;
+            std::unique_ptr<Render::UiPaintProgram> retired;
+        };
+
+        NativePrograms programs;
         RuntimeUiPaintFrame frame;
         std::vector<Render::RenderTextureHandle> textures;
         bool refresh{true};
@@ -71,8 +77,8 @@ namespace Horo::Application::Internal::Detail {
                              std::shared_ptr<Runtime::Ui::UiElementSlotAllocator> allocatorOwner = {})
             : instance(id), allocatorLifetime(std::move(allocatorOwner)), animation(std::move(derived.participant)),
               controller(std::move(derived.controller)), projection(std::move(projected)), resources(std::move(assets)),
-              extraction(prepared.extraction), arena(std::move(geometryArena)), geometryPolicy(prepared.geometry), policy(prepared.program),
-              kernel(std::move(prepared.kernel)), output{projection->Canvas(), prepared.viewport} {}
+              extraction(prepared.extraction), arena(std::move(geometryArena)), geometryPolicy(prepared.geometry),
+              programs{prepared.program, std::move(prepared.kernel), {}, {}}, output{projection->Canvas(), prepared.viewport} {}
 
         /** @brief Resolves coalesced native evidence through canonical canvas policy before the next derived update. */
         [[nodiscard]] Result<void> ApplyOutput();
@@ -83,14 +89,14 @@ namespace Horo::Application::Internal::Detail {
         /** @brief Builds allocation-free current image/font/atlas evidence for the exact selected native slot. */
         [[nodiscard]] Result<void> BindResources();
         /** @brief Extracts current canonical source/derived data before the editor opens its native frame. */
-        [[nodiscard]] Result<void> Extract(Runtime::Ui::RuntimeUiService &service, std::uint64_t frameNumber,
+        [[nodiscard]] Result<void> Extract(const Runtime::Ui::RuntimeUiService &service, std::uint64_t frameNumber,
                                            const CancellationToken &cancellation);
         /** @brief Releases local CPU pins before the existing derived/source drain fence is queried. */
         void ReleaseFrame() noexcept;
         /** @brief Closes this exact derived producer while preserving pending native and immutable leases for collection. */
         [[nodiscard]] Result<void> Retire();
         /** @brief Forwards the existing owner phases and extraction to this exact source without a second scheduler. */
-        [[nodiscard]] Result<void> OnPhase(Runtime::Ui::RuntimeUiService &service, Render::RenderFrontend &frontend,
+        [[nodiscard]] Result<void> OnPhase(const Runtime::Ui::RuntimeUiService &service, Render::RenderFrontend &frontend,
                                            Runtime::RuntimePhase phase, const Runtime::FrameContext &context,
                                            const CancellationToken &cancellation);
     };

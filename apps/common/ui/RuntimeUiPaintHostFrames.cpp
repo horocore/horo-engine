@@ -1,6 +1,7 @@
 #include "RuntimeUiPaintHostInternal.h"
 
 #include <algorithm>
+#include <format>
 
 namespace Horo::Application::Internal::Detail {
     using namespace Runtime::Ui;
@@ -12,7 +13,7 @@ namespace Horo::Application::Internal::Detail {
         }
 
         /** @brief Pins the actual pre-realized glyph set; a failed unsealed candidate releases its own pin set. */
-        Result<UiGlyphAtlas::FrameLease> SealGlyphs(RuntimeUiPaintResources &resources) {
+        Result<UiGlyphAtlas::FrameLease> SealGlyphs(const RuntimeUiPaintResources &resources) {
             if (resources.fonts.empty())
                 return Result<UiGlyphAtlas::FrameLease>::Success({});
             if (!resources.atlas)
@@ -61,14 +62,14 @@ namespace Horo::Application::Internal::Detail {
     Result<void> RuntimeUiPaintSource::Refresh(Render::RenderFrontend &frontend, const CancellationToken &cancellation) {
         if (!refresh || !frame.snapshot)
             return Result<void>::Success();
-        auto candidate = Render::UiPaintProgram::Create(frontend, policy, *frame.snapshot, textures, kernel, cancellation);
+        auto candidate =
+            Render::UiPaintProgram::Create(frontend, programs.policy, *frame.snapshot, textures, programs.kernel, cancellation);
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
-        const auto realized = frontend.ProcessResourceRequests();
-        if (realized.HasError())
+        if (const auto realized = frontend.ProcessResourceRequests(); realized.HasError())
             return Result<void>::Failure(realized.ErrorValue());
         // All creation/compilation precedes publication. Old queued passes retain their canonical completion leases.
-        program = std::move(candidate).Value();
+        programs.active = std::move(candidate).Value();
         refresh = false;
         return Result<void>::Success();
     }
@@ -77,7 +78,7 @@ namespace Horo::Application::Internal::Detail {
     Result<void> RuntimeUiPaintSource::BindResources() {
         for (std::size_t index = 0; index < resources.images.size(); ++index) {
             const auto &image = resources.images[index];
-            auto resource = program->TextureResource(frame.slot, image.realization.Creation().handle);
+            auto resource = programs.active->TextureResource(frame.slot, image.realization.Creation().handle);
             if (resource.HasError())
                 return Result<void>::Failure(resource.ErrorValue());
             frame.images[index] = {image.registry.get(), image.realization.Image(), image.realization.Page(), resource.Value(),
@@ -85,7 +86,7 @@ namespace Horo::Application::Internal::Detail {
         }
         for (std::size_t index = 0; index < resources.fonts.size(); ++index) {
             const auto &font = resources.fonts[index];
-            auto resource = program->TextureResource(frame.slot, font.realization.Creation().handle);
+            auto resource = programs.active->TextureResource(frame.slot, font.realization.Creation().handle);
             if (resource.HasError())
                 return Result<void>::Failure(resource.ErrorValue());
             frame.fonts[index] = {font.face.get(), resource.Value(), &font.realization};
@@ -111,7 +112,7 @@ namespace Horo::Application::Internal::Detail {
     }
 
     /** @copydoc RuntimeUiPaintSource::Extract */
-    Result<void> RuntimeUiPaintSource::Extract(RuntimeUiService &service, const std::uint64_t frameNumber,
+    Result<void> RuntimeUiPaintSource::Extract(const RuntimeUiService &service, const std::uint64_t frameNumber,
                                                const CancellationToken &cancellation) {
         ReleaseFrame();
         auto current = animation->Acquire();
@@ -125,17 +126,16 @@ namespace Horo::Application::Internal::Detail {
             return Result<void>::Failure(std::move(error));
         }
         frame.snapshot.emplace(std::move(extracted).Value());
-        if (!program || refresh)
+        if (!programs.active || refresh)
             return Result<void>::Success();  // The explicit next owner safe point consumes this actual prototype.
-        auto built = arena.Build(*frame.snapshot, policy.projection);
+        auto built = arena.Build(*frame.snapshot, programs.policy.projection);
         if (built.HasError())
             return Result<void>::Failure(built.ErrorValue());
         frame.geometry.emplace(std::move(built).Value());
-        frame.slot = static_cast<std::uint32_t>(frameNumber % policy.frameSlots);
-        const auto bindings = BindResources();
-        if (bindings.HasError())
+        frame.slot = static_cast<std::uint32_t>(frameNumber % programs.policy.frameSlots);
+        if (const auto bindings = BindResources(); bindings.HasError())
             return bindings;
-        auto uploaded = program->Prepare(frame.slot, frame.submission, cancellation);
+        auto uploaded = programs.active->Prepare(frame.slot, frame.submission, cancellation);
         if (uploaded.HasError()) {
             frame.submission = {};
             if (Is(uploaded.ErrorValue(), Render::UiPaintProgramErrors::PreparationRequired)) {
@@ -156,17 +156,16 @@ namespace Horo::Application::Internal::Detail {
         animation->Shutdown();
         ReleaseFrame();
         projection.reset();
-        if (program) {
-            const auto closed = program->Shutdown();
-            if (closed.HasError())
+        if (programs.active) {
+            if (const auto closed = programs.active->Shutdown(); closed.HasError())
                 return closed;
-            program.reset();
+            programs.active.reset();
         }
         return Result<void>::Success();
     }
 
     /** @copydoc RuntimeUiPaintSource::OnPhase */
-    Result<void> RuntimeUiPaintSource::OnPhase(RuntimeUiService &service, Render::RenderFrontend &frontend,
+    Result<void> RuntimeUiPaintSource::OnPhase(const RuntimeUiService &service, Render::RenderFrontend &frontend,
                                                const Runtime::RuntimePhase phase, const Runtime::FrameContext &context,
                                                const CancellationToken &cancellation) {
         if (phase == Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands) {
@@ -178,7 +177,7 @@ namespace Horo::Application::Internal::Detail {
         }
         if (const auto forwarded = animation->OnPhase(phase, context); forwarded.HasError()) {
             auto error = forwarded.ErrorValue();
-            error.message = "Runtime UI animation phase " + std::to_string(static_cast<unsigned>(phase)) + ": " + error.message;
+            error.message = std::format("Runtime UI animation phase {}: {}", static_cast<unsigned>(phase), error.message);
             return Result<void>::Failure(std::move(error));
         }
         return phase == Runtime::RuntimePhase::RenderExtraction ? Extract(service, context.frameNumber, cancellation)

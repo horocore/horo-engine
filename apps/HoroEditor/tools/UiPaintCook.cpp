@@ -10,6 +10,7 @@
 #include <bit>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iostream>
 
@@ -104,7 +105,7 @@ namespace {
             const std::filesystem::path executable{argv[7 + index]};
             if (entry == approved.end() || !executable.is_absolute())
                 return Configuration::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-            configuration.tools.push_back({entry->identity, executable, entry->executableDigest});
+            configuration.tools.emplace_back(entry->identity, executable, entry->executableDigest);
         }
         return Configuration::Success(std::move(configuration));
     }
@@ -122,6 +123,12 @@ namespace {
         std::filesystem::path path;
         bool owned{};
 
+        PrivatePackage() = default;
+        PrivatePackage(const PrivatePackage &) = delete;
+        PrivatePackage &operator=(const PrivatePackage &) = delete;
+        PrivatePackage(PrivatePackage &&) = delete;
+        PrivatePackage &operator=(PrivatePackage &&) = delete;
+
         ~PrivatePackage() {
             if (owned) {
                 std::error_code ignored;
@@ -137,12 +144,13 @@ namespace {
         if (!destination.is_absolute() || destination.filename().empty())
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
         std::error_code error;
-        if (std::filesystem::exists(destination, error) || error || !std::filesystem::is_directory(destination.parent_path(), error) ||
-            error)
+        if (const bool destinationExists = std::filesystem::exists(destination, error); error || destinationExists)
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
+        if (const bool parentIsDirectory = std::filesystem::is_directory(destination.parent_path(), error); error || !parentIsDirectory)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
         PrivatePackage candidate;
         for (unsigned attempt = 0; attempt < 1024; ++attempt) {
-            candidate.path = destination.parent_path() / (".ui-paint-package-" + std::to_string(attempt));
+            candidate.path = destination.parent_path() / std::format(".ui-paint-package-{}", attempt);
             candidate.owned = std::filesystem::create_directory(candidate.path, error);
             if (candidate.owned)
                 break;
@@ -152,11 +160,9 @@ namespace {
         }
         if (!candidate.owned || !std::filesystem::create_directories(candidate.path / "shaders/runtime", error) || error)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
-        const auto payload = Write(candidate.path / "shaders/runtime/ui-paint-metal.horoshdr", compiled.payload);
-        if (payload.HasError())
+        if (const auto payload = Write(candidate.path / "shaders/runtime/ui-paint-metal.horoshdr", compiled.payload); payload.HasError())
             return payload;
-        const auto record = Write(candidate.path / "shaders/runtime/ui-paint-metal.reflection.json", metadata);
-        if (record.HasError())
+        if (const auto record = Write(candidate.path / "shaders/runtime/ui-paint-metal.reflection.json", metadata); record.HasError())
             return record;
         std::filesystem::rename(candidate.path, destination, error);
         if (error)
@@ -200,8 +206,8 @@ namespace {
         const auto metadata = EncodeReflectedShaderArtifact(*artifact.reflection);
         if (metadata.HasError())
             return Result<void>::Failure(metadata.ErrorValue());
-        const auto admitted = DecodeProjectUiPaintMetalPackage(artifact.payload, metadata.Value(), target.requirement.backend);
-        if (admitted.HasError())
+        if (const auto admitted = DecodeProjectUiPaintMetalPackage(artifact.payload, metadata.Value(), target.requirement.backend);
+            admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
         return Publish(std::filesystem::path{argv[2]}, artifact, metadata.Value());
     }

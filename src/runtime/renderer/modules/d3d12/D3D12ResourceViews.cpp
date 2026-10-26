@@ -270,6 +270,7 @@ namespace Horo::Render::D3D12Detail {
             return Failure<std::uint64_t>("render.d3d12.descriptor_capacity", "Retire sampler descriptors before creating another.");
         resource->descriptors[D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER] = slot;
         resource->pool = placement.pool;
+        resource->block = placement.block;
         resource->backingBytes = placement.backingBytes;
         resource->requiredBytes = placement.requiredBytes;
         resource->sampler = descriptor;

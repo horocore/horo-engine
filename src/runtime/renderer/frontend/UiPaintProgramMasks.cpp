@@ -5,7 +5,7 @@ namespace Horo::Render {
     using Detail::NoPaintRole;
 
     /** @copydoc UiPaintProgram::Storage::Fullscreen */
-    Result<std::uint32_t> UiPaintProgram::Storage::Fullscreen(Detail::UiPaintCpuFrame &frame) {
+    Result<std::uint32_t> UiPaintProgram::Storage::Fullscreen(Detail::UiPaintCpuFrame &frame) const {
         if (frame.vertices.size() + 4 > descriptor.capacity.vertices || frame.indices.size() + 6 > descriptor.capacity.indices)
             return Result<std::uint32_t>::Failure(MakeError(UiPaintProgramErrors::Capacity));
         const auto firstVertex = static_cast<std::uint32_t>(frame.vertices.size());
@@ -48,7 +48,7 @@ namespace Horo::Render {
                 draw.sampling = UiPaintSampling::RoundedRectangle;
                 draw.maskExtent = {static_cast<float>(mask.rect.extent.width), static_cast<float>(mask.rect.extent.height)};
                 for (std::size_t index = 0; index < draw.cornerRadii.size(); ++index)
-                    draw.cornerRadii[index] = mask.cornerRadii[index];
+                    draw.cornerRadii[index] = static_cast<float>(mask.cornerRadii[index]);
             }
             if (const auto added = Draw(frame, draw); added.HasError())
                 return added;

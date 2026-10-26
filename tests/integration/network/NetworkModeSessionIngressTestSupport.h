@@ -66,7 +66,12 @@ namespace Horo::Network {
             }
 
             TransportCapabilities Capabilities() const noexcept override {
-                return {};
+                TransportCapabilities capabilities;
+                capabilities.revision = 3;
+                capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = TransportSupport::Available;
+                capabilities.maximumChannels = 2;
+                capabilities.maximumMessageBytes = 1200;
+                return capabilities;
             }
 
             void Shutdown() noexcept override {
@@ -95,15 +100,35 @@ namespace Horo::Network {
 
         struct SessionIngress final {
             std::array<ProtocolIdentityDescriptor, 1> protocols{ProtocolIdentityDescriptor{WireIdentity<ProtocolId>(1), {{1, 0}, {1, 3}}}};
-            std::array<MessageIdentityDescriptor, 1> messages{MessageIdentityDescriptor{protocols[0].id,
+            std::array<MessageIdentityDescriptor, 2> messages{MessageIdentityDescriptor{protocols[0].id,
                                                                                         WireIdentity<MessageTypeId>(2),
                                                                                         WireIdentity<MessageSchemaId>(3),
                                                                                         {1, 1},
+                                                                                        false},
+                                                              MessageIdentityDescriptor{protocols[0].id,
+                                                                                        WireIdentity<MessageTypeId>(10),
+                                                                                        WireIdentity<MessageSchemaId>(11),
+                                                                                        {1, 0},
                                                                                         false}};
-            std::array<MessageCodecDescriptor, 1> codecs{
-                MessageCodecDescriptor{protocols[0].id, messages[0].id, messages[0].schema, {{1, 0}, {1, 2}}, 64}};
-            ProtocolIdentityRegistry identities = ProtocolIdentityRegistry::Create({protocols, messages, {}, {}}).Value();
-            MessageCodecRegistry registry = MessageCodecRegistry::Create({codecs, {}}, identities).Value();
+            std::array<MessageCodecDescriptor, 2>
+                codecs{MessageCodecDescriptor{protocols[0].id, messages[0].id, messages[0].schema, {{1, 0}, {1, 2}}, 64},
+                       MessageCodecDescriptor{protocols[0].id,
+                                              messages[1].id,
+                                              messages[1].schema,
+                                              {{1, 0}, {1, 0}},
+                                              NetworkWorldBindingWireBytes}};
+            std::array<FeatureIdentityDescriptor, 1> features{
+                FeatureIdentityDescriptor{protocols[0].id, WireIdentity<ProtocolFeatureId>(1), {1, 0}}};
+            ProtocolIdentityRegistry identities = ProtocolIdentityRegistry::Create({protocols, messages, features, {}}).Value();
+            std::shared_ptr<const MessageCodecRegistry> registry =
+                std::make_shared<const MessageCodecRegistry>(MessageCodecRegistry::Create({codecs, {}}, identities).Value());
+            NetworkWorldBindingSetup setup{{messages[1], features[0].id, Id<NetworkPrincipalId>(20), Id<CredentialProvenanceId>(50),
+                                            Id<NetworkCapabilityId>(40)},
+                                           registry,
+                                           42,
+                                           {},
+                                           4,
+                                           50};
             SessionTestTransport transport;
             std::shared_ptr<SessionPacketHandler> handler = std::make_shared<SessionPacketHandler>();
             std::unique_ptr<InboundMessageDispatcher> router;
@@ -115,7 +140,7 @@ namespace Horo::Network {
             explicit SessionIngress(std::shared_ptr<Application::Internal::ClientSessionOwner> owner) : sessions(std::move(owner)) {}
 
             Result<void> Prepare() {
-                auto created = InboundMessageDispatcher::Create(transport, registry);
+                auto created = InboundMessageDispatcher::Create(transport, *registry);
                 if (created.HasError())
                     return Result<void>::Failure(created.ErrorValue());
                 router = std::move(created).Value();
@@ -123,6 +148,11 @@ namespace Horo::Network {
                 if (attached.HasError())
                     return attached;
                 router->SetSessionHost(sessions);
+                if (auto binding = sessions->WorldBinding().lock()) {
+                    auto bound = binding->Attach(transport, *router, binding);
+                    if (bound.HasError())
+                        return bound;
+                }
                 if (failAfterAttach)
                     return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
                 handler->polling = &transport.polling;
@@ -136,7 +166,9 @@ namespace Horo::Network {
                 auto gate =
                     MessageDeliveryGate::Create(peer->Negotiation()->transport, 3, peer->Connection(),
                                                 peer->Negotiation()->sessionGeneration,
-                                                {{ChannelId{}, DeliveryPolicy::ReliableOrdered, MessageTrafficClass::Command, false}});
+                                                {{ChannelId{}, DeliveryPolicy::ReliableOrdered, MessageTrafficClass::Control, false},
+                                                 {ChannelId::Create(1, 2).Value(), DeliveryPolicy::ReliableOrdered,
+                                                  MessageTrafficClass::Command, false}});
                 REQUIRE(gate.HasValue());
                 REQUIRE(
                     router->RegisterSession(peer, peer->Connection(), peer->Negotiation()->sessionGeneration, std::move(gate).Value(), 22)
@@ -150,11 +182,11 @@ namespace Horo::Network {
                 envelope.schema = messages[0].schema;
                 envelope.schemaVersion = {1, 1};
                 envelope.sequence = MessageSequenceNumber{sequence};
-                auto encoded = EncodeMessageEnvelope(envelope, registry);
+                auto encoded = EncodeMessageEnvelope(envelope, *registry);
                 REQUIRE(encoded.HasValue());
                 transport.Queue({.kind = NetworkTransportEventKind::PacketReceived,
                                  .connection = connection,
-                                 .channel = ChannelId{},
+                                 .channel = ChannelId::Create(1, 2).Value(),
                                  .delivery = DeliveryPolicy::ReliableOrdered,
                                  .payload = std::move(encoded).Value()});
             }
@@ -172,6 +204,8 @@ namespace Horo::Network {
             }
 
             void Shutdown() noexcept {
+                if (auto binding = sessions->WorldBinding().lock())
+                    binding->Detach(transport);
                 if (router)
                     router->Shutdown();
                 sessions->DetachTransport(transport);
@@ -214,6 +248,7 @@ namespace Horo::Network {
 
         inline std::shared_ptr<SessionIngress> InstallIngress(const std::shared_ptr<ProductOwners> &owners) {
             auto ingress = std::make_shared<SessionIngress>(owners->sessions);
+            owners->worldSetup = ingress->setup;
             owners->transportOverride = [ingress](const NetworkModeServiceRequest &) {
                 return Result<std::unique_ptr<INetworkModeService>>::Success(std::make_unique<SessionIngressService>(ingress));
             };
@@ -246,6 +281,30 @@ namespace Horo::Network {
                     host->AdmitClientSession(NetworkModeWorldKind::Client, peer, peer->Connection(), peer->Negotiation()->sessionGeneration)
                         .HasValue());
                 ingress->Register(peer);
+                PublishBinding(peer);
+            }
+
+            void PublishBinding(const std::shared_ptr<PeerSessionLifecycle> &peer, const bool replacement = false) {
+                PrepareRemotePublisher(owners);
+                if (replacement) {
+                    auto &server = owners->remoteWire->server;
+                    const auto oldConnection = server->Connection();
+                    const auto oldGeneration = server->Negotiation()->sessionGeneration;
+                    REQUIRE(server->Cancel(oldConnection, oldGeneration, 22).HasValue());
+                    REQUIRE(owners->remotePublisher->Reconcile(22).HasValue());
+                    const auto nextGeneration = NetworkOperationGeneration::Create(oldGeneration.Value() + 1).Value();
+                    server = AdmittedSession(oldConnection.NextGeneration().Value(), nextGeneration);
+                    REQUIRE(owners->remotePublisher->BindPeer(AdmissionEndpoint::Server, server, nextGeneration, 22).HasValue());
+                }
+                REQUIRE(owners->remotePublisher->Flush(22).HasValue());
+                const auto &wire = owners->remoteWire->transport;
+                ingress->transport.Queue({.kind = NetworkTransportEventKind::PacketReceived,
+                                          .connection = peer->Connection(),
+                                          .channel = {},
+                                          .delivery = DeliveryPolicy::ReliableOrdered,
+                                          .payload = std::vector<std::byte>(wire.sent.begin(), wire.sent.begin() + wire.size)});
+                REQUIRE(host->RunFrame().HasValue());
+                REQUIRE(host->Role(NetworkModeWorldKind::Client, worlds[0].scene).HasValue());
             }
         };
 
@@ -276,7 +335,7 @@ namespace Horo::Network {
             CHECK(peer->Terminal()->kind == expected);
             CHECK(product.host->ClientSessionTerminal() == peer->Terminal());
             REQUIRE(product.host->TakeTravelFailure().has_value());
-            CHECK_FALSE(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).Value().session.has_value());
+            CHECK(product.host->Role(NetworkModeWorldKind::Client, product.worlds[0].scene).HasError());
             CHECK(product.host->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{202}).HasError());
         }
 

@@ -438,8 +438,8 @@ namespace Horo::Render {
             if (!output.reflection)
                 return false;
             const auto &record = *output.reflection;
-            const auto &tool = request.reflection->tool;
-            if (ValidateReflectedShaderArtifact(output, record).HasError() || record.reflectionTool.tool != tool.tool ||
+            if (const auto &tool = request.reflection->tool;
+                ValidateReflectedShaderArtifact(output, record).HasError() || record.reflectionTool.tool != tool.tool ||
                 record.reflectionTool.release != tool.release || record.reflectionTool.buildDigest != tool.buildDigest ||
                 !HasNonZeroDigest(record.cookedArtifactKey))
                 return false;

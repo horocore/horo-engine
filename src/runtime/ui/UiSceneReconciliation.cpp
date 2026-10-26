@@ -173,7 +173,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiSceneReconciliation::Prepared::Abandon */
-    void UiSceneReconciliation::Prepared::Abandon() noexcept {
+    void UiSceneReconciliation::Prepared::Abandon() const noexcept {
         if (storage_ && !storage_->consumed) {
             storage_->abandoned = true;
             for (const auto &entry : storage_->preparedAnimations)

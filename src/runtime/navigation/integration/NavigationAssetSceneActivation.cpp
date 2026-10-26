@@ -87,7 +87,7 @@ namespace Horo::Navigation {
         /** @brief Publication swaps a fully finalized detached owner, while shutdown targets only this candidate. */
         class AssetWorldCandidate final : public Runtime::SceneActivationCandidate {
         public:
-            AssetWorldCandidate(std::shared_ptr<Detail::NavigationAssetSceneState> state, const Runtime::RuntimeSceneView scene,
+            AssetWorldCandidate(std::shared_ptr<Detail::NavigationAssetSceneState> state, const Runtime::RuntimeSceneView &scene,
                                 std::shared_ptr<NavigationWorldLifecycle> world,
                                 std::shared_ptr<const std::vector<NavigationAssetProvenance>> provenance)
                 : state_(std::move(state)), scene_(scene), world_(std::move(world)), provenance_(std::move(provenance)) {}
@@ -127,7 +127,7 @@ namespace Horo::Navigation {
         };
 
         /** @brief Pending RuntimeScene incarnations are never reused and fence all provider/Scene identities. */
-        [[nodiscard]] Result<NavigationWorldActivationDescriptor> Descriptor(const Runtime::RuntimeSceneView scene) {
+        [[nodiscard]] Result<NavigationWorldActivationDescriptor> Descriptor(const Runtime::RuntimeSceneView &scene) {
             const auto value = scene.RuntimeId().value;
             const auto world = NavigationWorldId::Create(value);
             const auto sceneId = NavigationSceneRuntimeId::Create(value);
@@ -141,7 +141,7 @@ namespace Horo::Navigation {
         }
 
         /** @brief Resolve one canonical asset once per Scene preparation, even when multiple surfaces share it. */
-        [[nodiscard]] Result<std::size_t> ResolveAsset(const Assets::AssetId id, const Runtime::RuntimeSceneView scene,
+        [[nodiscard]] Result<std::size_t> ResolveAsset(const Assets::AssetId id, const Runtime::RuntimeSceneView &scene,
                                                        Detail::NavigationAssetSceneState &state, std::vector<LoadedNavMeshAsset> &assets) {
             if (const auto found = std::ranges::find(assets, id, &LoadedNavMeshAsset::id); found != assets.end())
                 return Result<std::size_t>::Success(static_cast<std::size_t>(found - assets.begin()));
@@ -165,7 +165,7 @@ namespace Horo::Navigation {
         }
 
         /** @brief Match every enabled surface/profile exactly; missing or stale generated partitions cannot fall back. */
-        [[nodiscard]] Result<void> SelectSurfaces(const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene,
+        [[nodiscard]] Result<void> SelectSurfaces(const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene,
                                                   Detail::NavigationAssetSceneState &state, std::vector<LoadedNavMeshAsset> &assets,
                                                   std::vector<NavigationLoadedSurface> &surfaces) {
             // Reserve before taking pointers into move-only loaded partition vectors.
@@ -192,7 +192,8 @@ namespace Horo::Navigation {
 
         /** @brief Required packaged NavMesh content cannot be bypassed by an empty surface projection. */
         [[nodiscard]] Result<void> ValidateRequiredCoverage(const Runtime::RuntimeSceneDefinition &definition,
-                                                            const Runtime::RuntimeSceneView scene, Detail::NavigationAssetSceneState &state,
+                                                            const Runtime::RuntimeSceneView &scene,
+                                                            Detail::NavigationAssetSceneState &state,
                                                             std::vector<LoadedNavMeshAsset> &assets,
                                                             const std::span<const NavigationLoadedSurface> surfaces) {
             for (const auto &dependency : definition.AssetDependencies()) {
@@ -307,7 +308,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationAssetSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> NavigationAssetSceneActivationParticipant::Prepare(
-        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
         if (!ValidPreparationBounds(*state_)) {
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }

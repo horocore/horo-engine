@@ -29,7 +29,7 @@ namespace Horo::Network::AdmissionTests {
             options.appId = 480;
             options.trust = trust;
             options.peerTrust = NetworkTrustLevel::Paired;
-            options.transport = {4, 64, 1200};
+            options.transport = {4, 64, 1200, 2};
             options.provisioningBudget = std::chrono::seconds(5);
             options.issuer = issuer;
             return options;

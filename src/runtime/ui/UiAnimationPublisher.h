@@ -10,13 +10,14 @@ namespace Horo::Runtime::Ui::Detail {
 
     /** @brief Owner-thread source reservation; service keeps weak entries, derived owner keeps the only admission pin. */
     struct UiAnimationSourceReservation final {
+        /** @brief Exact internal candidate identity; exposed only inside the friend-owned reservation implementation. */
+        using Preparation = UiSceneReconciliation::Prepared::Storage;
         RuntimeUiInstanceId instance;
         UiCanvasId canvas;
         UiReloadLease generation; /**< Exact source pin fences canonical entry reclamation even before the first derived frame. */
         bool retiring{};
         bool unpublished{};
-        std::weak_ptr<UiSceneReconciliation::Prepared::Storage>
-            preparation; /**< Exact unpublished canonical candidate, never a caller nonce. */
+        std::weak_ptr<Preparation> preparation; /**< Exact unpublished canonical candidate, never a caller nonce. */
     };
 
     /** @brief Private source access preserving either standalone ownership or the sole service-owned publisher. */
@@ -33,7 +34,7 @@ namespace Horo::Runtime::Ui::Detail {
                                                                  RuntimeUiInstanceId instance, UiCanvasId canvas);
         /** @brief Reserves an exact private incoming publisher before canonical Scene publication; abandonment revokes access. */
         [[nodiscard]] static Result<UiAnimationPublisher> AttachPrepared(std::shared_ptr<RuntimeUiServiceState> service,
-                                                                         UiSceneReconciliation::Prepared &prepared,
+                                                                         const UiSceneReconciliation::Prepared &prepared,
                                                                          RuntimeUiInstanceId instance, UiCanvasId canvas);
         [[nodiscard]] bool IsAvailable() const noexcept;
         [[nodiscard]] UiReloadGeneration *Current() noexcept;
@@ -54,7 +55,7 @@ namespace Horo::Runtime::Ui::Detail {
         UiAnimationPublisher(std::shared_ptr<RuntimeUiServiceState> service,
                              std::shared_ptr<UiAnimationSourceReservation> reservation) noexcept;
         [[nodiscard]] static Result<UiAnimationPublisher> AttachPublisher(
-            std::shared_ptr<RuntimeUiServiceState> service, RuntimeUiInstanceId instance, UiCanvasId canvas, UiHotReload &publisher,
+            std::shared_ptr<RuntimeUiServiceState> service, RuntimeUiInstanceId instance, UiCanvasId canvas, const UiHotReload &publisher,
             std::shared_ptr<UiSceneReconciliation::Prepared::Storage> prepared = {}, UiReloadLease source = {});
         [[nodiscard]] UiReloadGeneration *CandidateGeneration() const noexcept;
         [[nodiscard]] UiHotReload *Resolve() noexcept;

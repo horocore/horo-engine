@@ -5,7 +5,10 @@
 namespace Horo::Render::ShaderReflectionCookDetail {
     /** @copydoc ReflectionJson */
     Json ReflectionJson(const NormalizedShaderReflection &reflection) {
-        Json bindings = Json::array(), parameters = Json::array(), interfaces = Json::array(), mappings = Json::array();
+        Json bindings = Json::array();
+        Json parameters = Json::array();
+        Json interfaces = Json::array();
+        Json mappings = Json::array();
         for (const auto &value : reflection.bindings)
             bindings.push_back({value.id.value, value.kind, value.access, value.arrayCount, value.stages, value.active});
         for (const auto &value : reflection.parameters)
@@ -31,8 +34,7 @@ namespace Horo::Render::ShaderReflectionCookDetail {
         NormalizedShaderReflection reflection;
         reflection.backend = json.at("backend").get<ShaderTargetBackend>();
         reflection.interfaceSchemaVersion = json.at("schema").get<std::uint32_t>();
-        const auto digest = ParseSha256(json.at("interface").get<std::string>());
-        if (digest.HasValue())
+        if (const auto digest = ParseSha256(json.at("interface").get<std::string>()); digest.HasValue())
             reflection.interfaceCompatibility.digest = digest.Value();
         if (json.at("bindings").size() > 128 || json.at("parameters").size() > 512 || json.at("interfaces").size() > 256 ||
             json.at("mappings").size() > 256)
@@ -57,9 +59,10 @@ namespace Horo::Render::ShaderReflectionCookDetail {
                                              v.at(9).get<bool>(),
                                              v.at(10).get<bool>()});
         for (const auto &v : json.at("interfaces"))
-            reflection.stageInterface.push_back({v.at(0).get<ShaderStage>(), v.at(1).get<ShaderInterfaceDirection>(),
-                                                 v.at(2).get<std::uint32_t>(), v.at(3).get<ShaderValueType>(), v.at(4).get<std::uint8_t>(),
-                                                 v.at(5).get<std::uint8_t>(), v.at(6).get<std::uint32_t>(), v.at(7).get<std::string>()});
+            reflection.stageInterface.emplace_back(v.at(0).get<ShaderStage>(), v.at(1).get<ShaderInterfaceDirection>(),
+                                                   v.at(2).get<std::uint32_t>(), v.at(3).get<ShaderValueType>(),
+                                                   v.at(4).get<std::uint8_t>(), v.at(5).get<std::uint8_t>(), v.at(6).get<std::uint32_t>(),
+                                                   v.at(7).get<std::string>());
         for (const auto &v : json.at("mappings"))
             reflection.targetBindings.push_back({{v.at(0).get<std::uint32_t>()},
                                                  v.at(1).get<std::uint32_t>(),

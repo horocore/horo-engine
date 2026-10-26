@@ -56,7 +56,7 @@ namespace Horo::Application::Internal {
             }
 
             [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
-                const Runtime::RuntimeSceneView scene, const std::span<const Runtime::RuntimeEntityView> created,
+                const Runtime::RuntimeSceneView &scene, const std::span<const Runtime::RuntimeEntityView> created,
                 const std::span<const Runtime::EntityRef> destroyed) override {
                 auto participant = active_ ? active_->MakeStructuralParticipant() : nullptr;
                 if (!participant)

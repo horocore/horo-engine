@@ -119,7 +119,7 @@ namespace Horo::Runtime::Ui {
          * Foreign service, stale instance/reservation and retired animation owners reject before preparation. */
         [[nodiscard]] Result<UiAnimationReloadResult> Reload(RuntimeUiInstanceId instance, UiAnimationOwner &animation,
                                                              UiAnimationReloadPreparation preparation,
-                                                             const CancellationToken &cancellation = {});
+                                                             const CancellationToken &cancellation = {}) const;
         /** @brief Pins presentation data from the sole publisher without granting gameplay mutable owner access.
          * @param instance Exact host-admitted incarnation. @return Immutable generation lease or canonical failure.
          */
@@ -140,7 +140,7 @@ namespace Horo::Runtime::Ui {
          * owners survive; providers bound to this Scene become typed unavailable until explicit canonical rebinding.
          * Foreign-thread or invalid requests do nothing and never mutate another authority.
          */
-        void RevokeScene(SceneRuntimeId scene) noexcept;
+        void RevokeScene(SceneRuntimeId scene) const noexcept;
         /** @brief Prepares the canonical aggregate Scene transition without publishing any owner.
          * @param request Exact outgoing and incoming Scene identity. @param bindings Complete surviving-provider replacements.
          * @param incoming Complete private incoming Scene UI. @param cancellation Host preparation fence.
@@ -149,7 +149,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiSceneReconciliation::Prepared> PrepareTransition(const UiSceneTransitionRequest &request,
                                                                                 std::vector<UiSceneBindingReplacement> bindings,
                                                                                 std::vector<UiSceneActivation> incoming = {},
-                                                                                const CancellationToken &cancellation = {});
+                                                                                const CancellationToken &cancellation = {}) const;
         /** @brief Attaches derived animation to an exact unpublished incoming canonical Scene publisher.
          * @param prepared Private candidate issued by this service. @param instance Exact incoming instance.
          * @param allocator Actual source issuer, borrowed synchronously. @param registry Owned style schema.
@@ -159,10 +159,11 @@ namespace Horo::Runtime::Ui {
          * retain bytes; successful publication transfers that entry to the active registry without a second publisher or Acquire.
          * This host-only method uses the same HoroRuntimeUi owning target and canonical publisher as coordinated animation Reload.
          */
-        [[nodiscard]] Result<UiAnimationOwner> PrepareAnimation(UiSceneReconciliation::Prepared &prepared, RuntimeUiInstanceId instance,
-                                                                UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
-                                                                UiStyleResolver styles, UiAnimationCanvasDefinition definition,
-                                                                UiAnimationLimits limits = {});
+        [[nodiscard]] Result<UiAnimationOwner> PrepareAnimation(const UiSceneReconciliation::Prepared &prepared,
+                                                                RuntimeUiInstanceId instance, UiElementSlotAllocator &allocator,
+                                                                RuntimeStyleRegistry registry, UiStyleResolver styles,
+                                                                UiAnimationCanvasDefinition definition,
+                                                                UiAnimationLimits limits = {}) const;
         /** @brief Prepares the same canonical transition while retaining exact affected derived-source reservations.
          * @param request Exact previous/next Scene or explicit initial activation. @param bindings Persistent provider replacements.
          * @param incoming Complete private incoming publishers. @param coordinatedSources Exact affected active instances owned by this
@@ -173,7 +174,7 @@ namespace Horo::Runtime::Ui {
                                                                                 std::vector<UiSceneBindingReplacement> bindings,
                                                                                 std::vector<UiSceneActivation> incoming,
                                                                                 std::span<const RuntimeUiInstanceId> coordinatedSources,
-                                                                                const CancellationToken &cancellation = {});
+                                                                                const CancellationToken &cancellation = {}) const;
         /** @brief Reserves a one-use no-fail publication after all native/derived preparation, before Scene validation.
          * @param prepared Exact private canonical candidate moved into this token. @return Token or typed owner/capacity failure.
          * @details This allocates only during load-time preparation. Seal does not create storage or acquire source generations.
@@ -189,7 +190,7 @@ namespace Horo::Runtime::Ui {
          * @param prepared Complete canonical candidate. @param point Owner lifecycle cutoff.
          * @return Canonical publication evidence or original error preserving prior UI and grants.
          */
-        [[nodiscard]] Result<UiSceneReconciliationResult> CommitTransition(UiSceneReconciliation::Prepared &prepared,
+        [[nodiscard]] Result<UiSceneReconciliationResult> CommitTransition(const UiSceneReconciliation::Prepared &prepared,
                                                                            UiStructuralCommitPoint point);
         /** @brief Withdraws an explicitly stopped provider using the canonical binding/layout owners.
          * @param instance Exact host instance. @param canvas Authored canvas. @param provider Exact provider incarnation.

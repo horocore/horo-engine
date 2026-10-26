@@ -49,14 +49,21 @@ namespace Horo::Application::Internal {
     class RuntimeUiPaintProjection final {
         struct Storage;
 
+        class ConstructionKey final {
+            friend class RuntimeUiPaintProjection;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Factory-only construction after validated storage preparation. */
+        explicit RuntimeUiPaintProjection(ConstructionKey, std::unique_ptr<Storage> storage) noexcept;
         /** @brief Reserves extraction storage against the actual service-issued source generation.
          * @param service Canonical host-owned source service. @param instance Exact admitted instance.
          * @param declaration Owned real source components. @param descriptor Finite extraction/view policy.
          * @return Complete adapter or original source/capacity/schema error without changing service admission.
          */
         [[nodiscard]] static Result<std::unique_ptr<RuntimeUiPaintProjection>> Create(
-            Runtime::Ui::RuntimeUiService &service, Runtime::Ui::RuntimeUiInstanceId instance, RuntimeUiPaintDeclaration declaration,
+            const Runtime::Ui::RuntimeUiService &service, Runtime::Ui::RuntimeUiInstanceId instance, RuntimeUiPaintDeclaration declaration,
             const Runtime::Ui::UiRenderExtractorDescriptor &descriptor);
         /** @brief Prepares the same bounded adapter against a real private reload candidate before canonical commit.
          * @param candidate Actual generation still owned by the caller's coordinated reload preparation.
@@ -85,11 +92,10 @@ namespace Horo::Application::Internal {
          * @param service Same actual canonical publisher. @param frame Actual animation publication.
          * @return Immutable extracted frame or original stale/capacity/projection failure; no partial snapshot is issued.
          */
-        [[nodiscard]] Result<Runtime::Ui::UiRenderSnapshot> Extract(Runtime::Ui::RuntimeUiService &service,
+        [[nodiscard]] Result<Runtime::Ui::UiRenderSnapshot> Extract(const Runtime::Ui::RuntimeUiService &service,
                                                                     const Runtime::Ui::UiAnimationFrameLease &frame);
 
     private:
-        explicit RuntimeUiPaintProjection(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;
     };
 }  // namespace Horo::Application::Internal

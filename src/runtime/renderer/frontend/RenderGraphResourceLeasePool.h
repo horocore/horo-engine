@@ -50,7 +50,7 @@ namespace Horo::Render::Detail {
          */
         [[nodiscard]] Result<IRenderGraphResourceLease *> AcquireUi(std::span<const RenderGraphResource> resources, UiRenderSubmission &ui,
                                                                     RenderGraphTransientResourceSet *transient,
-                                                                    IRenderGraphResourceLease *existing,
+                                                                    const IRenderGraphResourceLease *existing,
                                                                     std::span<const RenderGraphPassWorkload> workloads = {});
         /** @brief Retains material consumers and exact target/mesh pins using the same preallocated frame-completion pool.
          * @param pins Resolved target and mesh generations. @param draws Immutable materials to retain through completion.

@@ -11,7 +11,9 @@ namespace Horo::Render {
         if (ancestor == NoUiRenderIndex)
             return true;
         const auto masks = source.prototype.Masks();
-        for (std::uint32_t depth = 0; leaf != NoUiRenderIndex && depth < MaximumUiRenderMaskDepth; ++depth) {
+        std::uint32_t depth = 0;
+        while (leaf != NoUiRenderIndex && depth < MaximumUiRenderMaskDepth) {
+            ++depth;
             if (leaf >= masks.size())
                 return false;
             if (leaf == ancestor)
@@ -50,11 +52,12 @@ namespace Horo::Render {
         if (leaf == NoUiRenderIndex)
             return Result<std::uint32_t>::Success(NoPaintRole);
         const auto groups = source.prototype.Groups();
-        for (std::uint32_t depth = 0; group != NoUiRenderIndex && depth < MaximumUiRenderOpacityGroupDepth; ++depth) {
+        std::uint32_t depth = 0;
+        while (group != NoUiRenderIndex && depth < MaximumUiRenderOpacityGroupDepth) {
+            ++depth;
             if (group >= groups.size())
                 return Result<std::uint32_t>::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
-            const auto boundary = groups[group].mask;
-            if (boundary != NoUiRenderIndex && IsMaskAncestor(boundary, leaf))
+            if (const auto boundary = groups[group].mask; boundary != NoUiRenderIndex && IsMaskAncestor(boundary, leaf))
                 return AddMaskScope(leaf, boundary);
             group = groups[group].parent;
         }
@@ -85,8 +88,8 @@ namespace Horo::Render {
             source.groupScopes[index] = scope.Value();
         }
         const auto passes = source.masks.size() + groups.size() + 1;
-        const auto resources = 4 + source.external.size() + source.masks.size() + groups.size();
-        if (passes > descriptor.maximumPasses || resources > RenderGraphLimits::HardMaxResources ||
+        if (const auto resources = 4 + source.external.size() + source.masks.size() + groups.size();
+            passes > descriptor.maximumPasses || resources > RenderGraphLimits::HardMaxResources ||
             source.external.size() + source.masks.size() + groups.size() > UiPaintLimits::MaximumSampledResources)
             return Result<void>::Failure(MakeError(UiPaintProgramErrors::Capacity));
         std::size_t usages{};
@@ -111,15 +114,15 @@ namespace Horo::Render {
             return changed();
         const auto &snapshot = submission.geometry->SourceSnapshot();
         const auto &expected = source.prototype.Descriptor();
-        const auto &actual = snapshot.Descriptor();
-        if (actual.instance != expected.instance || actual.canvas != expected.canvas || actual.document != expected.document ||
+        if (const auto &actual = snapshot.Descriptor();
+            actual.instance != expected.instance || actual.canvas != expected.canvas || actual.document != expected.document ||
             actual.documentRevision != expected.documentRevision || actual.treeRevision != expected.treeRevision ||
             actual.view != expected.view || snapshot.Commands().size() != source.prototype.Commands().size() ||
             snapshot.Groups().size() != source.prototype.Groups().size() || snapshot.Masks().size() != source.prototype.Masks().size() ||
             snapshot.Resources().size() != source.prototype.Resources().size())
             return changed();
-        const auto &presentation = submission.geometry->Descriptor().presentation;
-        if (presentation && *presentation != descriptor.projection)
+        if (const auto &presentation = submission.geometry->Descriptor().presentation;
+            presentation && *presentation != descriptor.projection)
             return changed();
         for (std::size_t index = 0; index < snapshot.Commands().size(); ++index) {
             const auto &command = snapshot.Commands()[index];

@@ -45,7 +45,7 @@ using ReloadSignature = Horo::Result<UiAnimationRuntimeReload> (UiAnimationRunti
     const Horo::Runtime::Ui::UiAnimationReloadAdmission &, const Horo::CancellationToken &);
 static_assert(std::is_same_v<decltype(static_cast<ReloadSignature>(&UiAnimationRuntimeParticipant::Reload)), ReloadSignature>);
 using CoordinatedReloadSignature = Horo::Result<UiAnimationRuntimeReload> (UiAnimationRuntimeParticipant::*)(
-    Horo::Runtime::Ui::RuntimeUiService &, Horo::Runtime::Ui::RuntimeUiInstanceId, Horo::Runtime::Ui::UiAnimationReloadPreparation,
+    const Horo::Runtime::Ui::RuntimeUiService &, Horo::Runtime::Ui::RuntimeUiInstanceId, Horo::Runtime::Ui::UiAnimationReloadPreparation,
     const Horo::CancellationToken &);
 static_assert(
     std::is_same_v<decltype(static_cast<CoordinatedReloadSignature>(&UiAnimationRuntimeParticipant::Reload)), CoordinatedReloadSignature>);

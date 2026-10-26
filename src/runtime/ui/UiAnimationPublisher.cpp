@@ -37,7 +37,7 @@ namespace Horo::Runtime::Ui::Detail {
         using Admission = Result<UiAnimationPublisher>;
         if (const auto valid = CheckOwner(service); valid.HasError())
             return Admission::Failure(valid.ErrorValue());
-        auto *publisher = service->registry.Publisher(instance);
+        const auto *publisher = service->registry.Publisher(instance);
         if (!publisher)
             return Admission::Failure(MakeError(UiErrors::CapabilityUnavailable));
         return AttachPublisher(std::move(service), instance, canvas, *publisher);
@@ -45,7 +45,7 @@ namespace Horo::Runtime::Ui::Detail {
 
     /** @copydoc UiAnimationPublisher::AttachPrepared */
     Result<UiAnimationPublisher> UiAnimationPublisher::AttachPrepared(std::shared_ptr<RuntimeUiServiceState> service,
-                                                                      UiSceneReconciliation::Prepared &prepared,
+                                                                      const UiSceneReconciliation::Prepared &prepared,
                                                                       const RuntimeUiInstanceId instance, const UiCanvasId canvas) {
         using Admission = Result<UiAnimationPublisher>;
         if (const auto valid = CheckOwner(service); valid.HasError())
@@ -54,10 +54,11 @@ namespace Horo::Runtime::Ui::Detail {
         if (!candidate || candidate->consumed || candidate->abandoned || !service->registry.storage_.Matches(candidate->owner) ||
             candidate->revision != candidate->owner->revision)
             return Admission::Failure(MakeError(UiErrors::RevisionStale));
-        const auto entry = std::ranges::find(candidate->incoming, instance, [](const auto &value) {
+        if (const auto entry = std::ranges::find(candidate->incoming, instance,
+                                                 [](const auto &value) {
             return value.descriptor.instance;
         });
-        if (entry != candidate->incoming.end())
+            entry != candidate->incoming.end())
             return AttachPublisher(std::move(service), instance, canvas, entry->publisher, candidate);
         const auto replacement = std::ranges::find_if(candidate->rebinding, [&](const auto &row) {
             return candidate->owner->active[row.slot]->descriptor.instance == instance;
@@ -74,7 +75,7 @@ namespace Horo::Runtime::Ui::Detail {
     /** @copydoc UiAnimationPublisher::AttachPublisher */
     Result<UiAnimationPublisher> UiAnimationPublisher::AttachPublisher(std::shared_ptr<RuntimeUiServiceState> service,
                                                                        const RuntimeUiInstanceId instance, const UiCanvasId canvas,
-                                                                       UiHotReload &publisher,
+                                                                       const UiHotReload &publisher,
                                                                        std::shared_ptr<UiSceneReconciliation::Prepared::Storage> prepared,
                                                                        UiReloadLease source) {
         using Admission = Result<UiAnimationPublisher>;
@@ -84,8 +85,7 @@ namespace Horo::Runtime::Ui::Detail {
                 return Admission::Failure(acquired.ErrorValue());
             source = std::move(acquired).Value();
         }
-        const auto canvases = source.Get()->Canvases();
-        if (std::ranges::find(canvases, canvas, &UiReloadCanvas::id) == canvases.end())
+        if (const auto canvases = source.Get()->Canvases(); std::ranges::find(canvases, canvas, &UiReloadCanvas::id) == canvases.end())
             return Admission::Failure(MakeError(UiErrors::CapabilityUnavailable));
         for (const auto &entry : service->animationSources) {
             const auto current = entry.lock();
@@ -99,15 +99,14 @@ namespace Horo::Runtime::Ui::Detail {
         if (slot == service->animationSources.end())
             return Admission::Failure(MakeError(UiErrors::CapacityExceeded));
         try {
-            auto reservation =
-                std::make_shared<UiAnimationSourceReservation>(UiAnimationSourceReservation{instance, canvas, std::move(source)});
+            auto reservation = std::make_shared<UiAnimationSourceReservation>(instance, canvas, std::move(source));
             if (prepared) {
                 prepared->preparedAnimations.push_back(reservation);
                 reservation->unpublished = true;
             }
             *slot = reservation;
             UiAnimationPublisher result{std::move(service), std::move(reservation)};
-            result.prepared_ = std::move(prepared);
+            result.prepared_ = prepared;
             result.reservation_->preparation = result.prepared_;
             return Admission::Success(std::move(result));
         } catch (const std::bad_alloc &) {
@@ -122,10 +121,11 @@ namespace Horo::Runtime::Ui::Detail {
             prepared->revision != prepared->owner->revision || !service_ || !service_->active || service_->shutdownRequested ||
             service_->scenePublication || service_->thread != std::this_thread::get_id() || !reservation_ || reservation_->retiring)
             return nullptr;
-        const auto incoming = std::ranges::find(prepared->incoming, reservation_->instance, [](const auto &value) {
+        if (const auto incoming = std::ranges::find(prepared->incoming, reservation_->instance,
+                                                    [](const auto &value) {
             return value.descriptor.instance;
         });
-        if (incoming != prepared->incoming.end())
+            incoming != prepared->incoming.end())
             return incoming->publisher.Current();
         const auto replacement = std::ranges::find_if(prepared->rebinding, [&](const auto &row) {
             return prepared->owner->active[row.slot]->descriptor.instance == reservation_->instance;
@@ -142,8 +142,10 @@ namespace Horo::Runtime::Ui::Detail {
         if (!service_ || !reservation_ || reservation_->unpublished || reservation_->retiring || !service_->active ||
             service_->shutdownRequested || service_->scenePublication || service_->thread != std::this_thread::get_id())
             return nullptr;
-        auto *publisher = service_->registry.Publisher(reservation_->instance);
-        return publisher && publisher->IsCurrent(reservation_->generation) ? publisher : nullptr;
+        if (auto *publisher = service_->registry.Publisher(reservation_->instance);
+            publisher && publisher->IsCurrent(reservation_->generation))
+            return publisher;
+        return nullptr;
     }
 
     /** @copydoc UiAnimationPublisher::Resolve */
@@ -153,7 +155,7 @@ namespace Horo::Runtime::Ui::Detail {
         if (!service_ || !reservation_ || reservation_->unpublished || reservation_->retiring || !service_->active ||
             service_->shutdownRequested || service_->scenePublication || service_->thread != std::this_thread::get_id())
             return nullptr;
-        auto *publisher = service_->registry.Publisher(reservation_->instance);
+        const auto *publisher = service_->registry.Publisher(reservation_->instance);
         return publisher && publisher->IsCurrent(reservation_->generation) ? publisher : nullptr;
     }
 

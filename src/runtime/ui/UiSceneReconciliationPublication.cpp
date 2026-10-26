@@ -46,14 +46,14 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiSceneReconciliation::Commit */
-    Result<UiSceneReconciliationResult> UiSceneReconciliation::Commit(Prepared &prepared, const UiStructuralCommitPoint point) {
+    Result<UiSceneReconciliationResult> UiSceneReconciliation::Commit(const Prepared &prepared, const UiStructuralCommitPoint point) {
         if (const auto valid = CanCommit(prepared, point); valid.HasError())
             return Result<UiSceneReconciliationResult>::Failure(valid.ErrorValue());
         return Result<UiSceneReconciliationResult>::Success(CommitValidated(prepared));
     }
 
     /** @copydoc UiSceneReconciliation::CommitValidated */
-    UiSceneReconciliationResult UiSceneReconciliation::CommitValidated(Prepared &prepared) noexcept {
+    UiSceneReconciliationResult UiSceneReconciliation::CommitValidated(const Prepared &prepared) noexcept {
         auto &candidate = *prepared.storage_;
         for (auto &rebind : candidate.rebinding) {
             auto &entry = *storage_.Get()->active[rebind.slot];

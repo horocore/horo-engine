@@ -2,6 +2,7 @@
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkAdmissionController.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Network/NetworkWorldBinding.h"
 #include "Horo/Network/ReplicationInboundApply.h"
 #include "Horo/Network/ReplicationSnapshotHistory.h"
 #include "Horo/Network/ReplicationStateCapture.h"
@@ -61,5 +62,9 @@ namespace {
 }  // namespace
 
 int main() {
+    static_assert(std::is_same_v<decltype(&Horo::Network::NetworkModeComposition::ServicesStarted),
+                                 bool (Horo::Network::NetworkModeComposition::*)() const noexcept>);
+    static_assert(Horo::Network::NetworkWorldBindingWireBytes == 60);
+    static_assert(std::is_trivially_copyable_v<Horo::Network::NetworkWorldBindingRecord>);
     return Horo::Network::NetworkProjectRole::Standalone == Horo::Network::NetworkProjectRole::Count ? 1 : 0;
 }

@@ -113,7 +113,7 @@ namespace Horo::Runtime::Ui {
             friend struct Detail::UiAnimationSourceReservation;
             explicit Prepared(std::shared_ptr<Storage> storage) noexcept;
             /** @brief Revokes unpublished derived access before releasing the canonical candidate facade. */
-            void Abandon() noexcept;
+            void Abandon() const noexcept;
             std::shared_ptr<Storage> storage_;
         };
 
@@ -151,7 +151,7 @@ namespace Horo::Runtime::Ui {
          * @param prepared Candidate consumed once on success. @param point Owner cutoff.
          * @return Aggregate evidence or original typed failure preserving every last-good owner.
          */
-        [[nodiscard]] Result<UiSceneReconciliationResult> Commit(Prepared &prepared, UiStructuralCommitPoint point);
+        [[nodiscard]] Result<UiSceneReconciliationResult> Commit(const Prepared &prepared, UiStructuralCommitPoint point);
         /** @brief Borrows one exact active publisher for a synchronous owner operation.
          * @param instance Exact semantic instance. @return Publisher or null after retirement/stale identity.
          * @details Never retain this pointer across registry commands; Acquire pins immutable generations instead.
@@ -231,7 +231,7 @@ namespace Horo::Runtime::Ui {
         };
 
         /** @brief Consumes the previously sealed canonical candidate without callbacks, allocation or validation failure. */
-        [[nodiscard]] UiSceneReconciliationResult CommitValidated(Prepared &prepared) noexcept;
+        [[nodiscard]] UiSceneReconciliationResult CommitValidated(const Prepared &prepared) noexcept;
         static_assert(std::is_same_v<decltype(std::declval<const OwnedState &>().Get()), const Storage *>);
         static_assert(std::is_same_v<decltype(std::declval<OwnedState &>().Get()), Storage *>);
         static_assert(!std::is_invocable_v<decltype(&OwnedState::OwnerPin), const OwnedState &>);

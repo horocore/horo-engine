@@ -102,6 +102,18 @@ retains its input-only dependency closure instead of gaining Runtime visibility
 solely for those unrelated checks. These consumer builds qualify the corrected
 header edges; they do not replace native Vulkan App or physical-device evidence.
 
+The existing non-installed `HoroEditorVulkanXrHostInterface` forwards its access
+header to the canonical source declaration. The complete borrowed
+`EditorViewportTextureView` lives once in the backend-neutral internal
+`EditorViewportTextureView.h`, included by both the ordinary viewport contract and
+that access contract. App frame composition needs no repository-wide source
+include path or complete viewport renderer class merely to consume a mirror value.
+The real application-host consumer explicitly links the same internal interface
+and checks the complete value/default bindings, rather than compiling only a
+member pointer that permits an incomplete return type. This moves no declaration
+into the installed API and changes no field, GUI identity, sampled generation,
+resource owner or completion lease.
+
 ## Timing and color/depth policy
 
 `ObservePacing` takes an explicitly converted timestamp in the runtime prediction

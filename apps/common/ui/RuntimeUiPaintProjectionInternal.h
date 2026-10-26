@@ -4,7 +4,12 @@
 
 namespace Horo::Application::Internal {
     namespace PaintProjectionDetail {
-        using namespace Runtime::Ui;
+        using Runtime::Ui::NoUiRenderIndex;
+        using Runtime::Ui::UiComputedStyleSnapshot;
+        using Runtime::Ui::UiDocumentElement;
+        using Runtime::Ui::UiElementHandle;
+        using Runtime::Ui::UiLayoutClipSnapshot;
+        using Runtime::Ui::UiLayoutSnapshot;
 
         /** @brief Borrowed same-owner computed inputs for both private preparation and actual frame extraction. */
         struct Presentation final {
@@ -60,7 +65,7 @@ namespace Horo::Application::Internal {
         std::uint64_t revision{};
 
         explicit Storage(Runtime::Ui::UiReloadLease pin, RuntimeUiPaintDeclaration input, Runtime::Ui::UiRenderExtractor render,
-                         Runtime::Ui::UiRenderExtractorDescriptor policy)
+                         const Runtime::Ui::UiRenderExtractorDescriptor &policy)
             : source(std::move(pin)), declaration(std::move(input)), extractor(std::move(render)), descriptor(policy) {}
 
         [[nodiscard]] Result<void> AdmitRows();

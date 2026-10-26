@@ -13,7 +13,7 @@ namespace Horo::Application::Internal {
     /** @brief Actual application Scene participant candidate; the generic Scene claim remains the only publication authority. */
     class RuntimeUiPaintSceneTransaction final : public Runtime::SceneActivationCandidate {
     public:
-        RuntimeUiPaintSceneTransaction(std::shared_ptr<State> state, const UiSceneTransitionRequest transition)
+        RuntimeUiPaintSceneTransaction(std::shared_ptr<State> state, const UiSceneTransitionRequest &transition)
             : state_(std::move(state)), transition_(transition), revision_(state_->sourceRevision) {
             reservations_.fill(NoUiRenderIndex);
         }
@@ -32,7 +32,8 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(UiErrors::CapabilityBusy));
             if (const auto sealed = publication_->Seal(UiStructuralCommitPoint::CommitDeferredLifecycleChanges); sealed.HasError())
                 return sealed;
-            sealed_ = state_->sceneSealed = true;
+            state_->sceneSealed = true;
+            sealed_ = true;
             return publication_->CanPublish();
         }
 
@@ -59,7 +60,8 @@ namespace Horo::Application::Internal {
             })
                                 ? RuntimeUiPaintHostPhase::Active
                                 : RuntimeUiPaintHostPhase::Retiring;
-            state_->sceneSealed = sealed_ = false;
+            sealed_ = false;
+            state_->sceneSealed = false;
             published_ = true;
         }
 
@@ -69,8 +71,10 @@ namespace Horo::Application::Internal {
             if (state_->owner != std::this_thread::get_id())
                 std::terminate();
             closed_ = true;
-            if (sealed_)
-                state_->sceneSealed = sealed_ = false;
+            if (sealed_) {
+                sealed_ = false;
+                state_->sceneSealed = false;
+            }
             publication_.reset();
             if (published_) {
                 if (transition_.next) {
@@ -94,8 +98,8 @@ namespace Horo::Application::Internal {
             for (auto *source : state_->Sources())
                 if (source && (!transition_.previous || source->scene != transition_.previous))
                     ++preserved;
-            const auto capacity = std::min(Detail::MaximumSceneUiSources, state_->frontend->MaximumUiCapturesPerFrame());
-            if (count > capacity || preserved > capacity - count || state_->sourceRevision == std::numeric_limits<std::uint64_t>::max())
+            if (const auto capacity = std::min(Detail::MaximumSceneUiSources, state_->frontend->MaximumUiCapturesPerFrame());
+                count > capacity || preserved > capacity - count || state_->sourceRevision == std::numeric_limits<std::uint64_t>::max())
                 return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
             std::size_t reserved = 0;
             for (std::size_t index = 0; index < state_->reservedRetirements.size() && reserved < count; ++index)
@@ -116,10 +120,10 @@ namespace Horo::Application::Internal {
                                                                  std::vector<UiSceneBindingReplacement> replacements,
                                                                  const CancellationToken &cancellation);
         /** @brief Retains one derived candidate before fallible resource admission so every failure follows reserved retirement. */
-        Result<void> PrepareSource(RuntimeUiPaintSourcePreparation &input, UiSceneReconciliation::Prepared &prepared, std::size_t index,
-                                   const CancellationToken &cancellation);
+        Result<void> PrepareSource(RuntimeUiPaintSourcePreparation &input, const UiSceneReconciliation::Prepared &prepared,
+                                   std::size_t index, const CancellationToken &cancellation);
         /** @brief Prepares output, the initial immutable program and optional startup for an already retained candidate. */
-        Result<void> PrepareProgram(Source &candidate, const UiReloadLease &pin, const CancellationToken &cancellation);
+        Result<void> PrepareProgram(Source &candidate, const UiReloadLease &pin, const CancellationToken &cancellation) const;
         /** @brief Completes native readiness and inventory checks before acquiring the sole publication token. */
         Result<void> PreparePublication(UiSceneReconciliation::Prepared prepared, bool hasIncoming, const CancellationToken &cancellation);
 
@@ -138,7 +142,7 @@ namespace Horo::Application::Internal {
             }
             for (const auto &source : incoming_)
                 if (source)
-                    if (const auto ready = source->program->ValidatePreparation(); ready.HasError())
+                    if (const auto ready = source->programs.active->ValidatePreparation(); ready.HasError())
                         return ready;
             return Result<void>::Success();
         }
@@ -146,7 +150,9 @@ namespace Horo::Application::Internal {
         /** @brief Rejects complete admitted potential work before Scene publication; actual frame admission remains independently strict.
          */
         Result<void> ValidateInventory() const {
-            std::size_t passes{}, resources{}, draws{};
+            std::size_t passes{};
+            std::size_t resources{};
+            std::size_t draws{};
             const auto add = [](std::size_t &sum, const std::size_t count, const std::size_t maximum) {
                 if (count > maximum || sum > maximum - count)
                     return false;
@@ -154,9 +160,9 @@ namespace Horo::Application::Internal {
                 return true;
             };
             const auto include = [&](const Source &source) {
-                if (!source.program)
+                if (!source.programs.active)
                     return false;
-                const auto inventory = source.program->Inventory();
+                const auto inventory = source.programs.active->Inventory();
                 return inventory.passes != 0 && add(passes, inventory.passes, Render::RenderGraphLimits::HardMaxPasses) &&
                        add(resources, inventory.resources, Render::RenderGraphLimits::HardMaxResources) &&
                        add(draws, inventory.draws, Render::UiPaintLimits::MaximumDraws);
@@ -171,7 +177,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Transfers one exact source into its previously reserved retirement slot without teardown or destruction. */
-        void Retain(std::unique_ptr<Source> source) noexcept {
+        void Retain(std::unique_ptr<Source> source) const noexcept {
             const auto slot = source->retirementSlot;
             if (slot >= state_->retiredSources.size() || state_->retiredSources[slot])
                 std::terminate();
@@ -180,7 +186,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Retires only this exact runtime Scene incarnation; replacement's newly promoted scope is untouched. */
-        bool RetireScope(const Runtime::SceneRuntimeId scene) noexcept {
+        bool RetireScope(const Runtime::SceneRuntimeId scene) const noexcept {
             bool changed = false;
             for (auto &source : state_->sceneSources)
                 if (source && source->scene == scene) {
@@ -249,7 +255,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintSceneTransaction::PrepareSource */
     Result<void> RuntimeUiPaintSceneTransaction::PrepareSource(RuntimeUiPaintSourcePreparation &input,
-                                                               UiSceneReconciliation::Prepared &prepared, const std::size_t index,
+                                                               const UiSceneReconciliation::Prepared &prepared, const std::size_t index,
                                                                const CancellationToken &cancellation) {
         if (state_->revoked || !state_->frontend || cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
@@ -286,7 +292,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintSceneTransaction::PrepareProgram */
     Result<void> RuntimeUiPaintSceneTransaction::PrepareProgram(Source &candidate, const UiReloadLease &pin,
-                                                                const CancellationToken &cancellation) {
+                                                                const CancellationToken &cancellation) const {
         if (const auto resources = candidate.AdmitResources(); resources.HasError())
             return resources;
         candidate.output.pending = state_->output;
@@ -298,11 +304,11 @@ namespace Horo::Application::Internal {
         auto prototype = candidate.projection->ExtractPrototype(*pin.Get(), baseline.Value());
         if (prototype.HasError())
             return Result<void>::Failure(prototype.ErrorValue());
-        auto program = Render::UiPaintProgram::Create(*state_->frontend, candidate.policy, prototype.Value(), candidate.textures,
-                                                      candidate.kernel, cancellation);
+        auto program = Render::UiPaintProgram::Create(*state_->frontend, candidate.programs.policy, prototype.Value(), candidate.textures,
+                                                      candidate.programs.kernel, cancellation);
         if (program.HasError())
             return Result<void>::Failure(program.ErrorValue());
-        candidate.program = std::move(program).Value();
+        candidate.programs.active = std::move(program).Value();
         candidate.refresh = false;
         if (state_->started) {
             if (const auto started = candidate.animation->Startup(state_->cancellation.Token()); started.HasError())
@@ -334,7 +340,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintPort::PrepareScene */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> RuntimeUiPaintPort::PrepareScene(
-        const UiSceneTransitionRequest transition, std::vector<RuntimeUiPaintSceneSourcePreparation> incoming,
+        const UiSceneTransitionRequest &transition, std::vector<RuntimeUiPaintSceneSourcePreparation> incoming,
         std::vector<UiSceneBindingReplacement> replacements, const CancellationToken &cancellation) const {
         using Prepared = Result<std::unique_ptr<Runtime::SceneActivationCandidate>>;
         if (!state_ || !state_->Available() || state_->dispatching)
@@ -343,6 +349,11 @@ namespace Horo::Application::Internal {
             return Prepared::Failure(MakeError(Render::UiPaintFrameErrors::Unavailable));
 
         struct PreparationGuard final {
+            PreparationGuard(const PreparationGuard &) = delete;
+            PreparationGuard &operator=(const PreparationGuard &) = delete;
+            PreparationGuard(PreparationGuard &&) = delete;
+            PreparationGuard &operator=(PreparationGuard &&) = delete;
+
             State &state;
 
             explicit PreparationGuard(State &value) : state(value) {
@@ -352,7 +363,9 @@ namespace Horo::Application::Internal {
             ~PreparationGuard() {
                 state.scenePreparing = false;
             }
-        } guard{*state_};
+        };
+
+        PreparationGuard guard{*state_};
 
         auto candidate = std::make_unique<RuntimeUiPaintSceneTransaction>(state_, transition);
         if (const auto prepared = candidate->Prepare(std::move(incoming), std::move(replacements), cancellation); prepared.HasError())

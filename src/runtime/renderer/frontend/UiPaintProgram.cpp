@@ -39,13 +39,42 @@ namespace Horo::Render {
         private:
             Detail::UiPaintCpuFrame *frame_;
         };
+
+        /** @brief Records all creation failures before any explicit shutdown release can recycle a generation. */
+        void ObserveSlotCreations(Detail::UiPaintSlotProgram &slot, const RenderFrontend &frontend) {
+            for (auto &surface : slot.surfaces)
+                if (surface.handle.IsValid())
+                    static_cast<void>(Detail::ObserveUiPaintCreation(frontend, surface.operation, surface.handle));
+            if (slot.stencil.handle.IsValid())
+                static_cast<void>(Detail::ObserveUiPaintCreation(frontend, slot.stencil.operation, slot.stencil.handle));
+        }
+
+        /** @brief Clears one local handle only after explicit release succeeds or frontend revocation has removed native authority. */
+        Result<void> ReleaseSlotTexture(ResourceCreation<RenderTextureHandle> &texture, RenderFrontend *frontend) {
+            if (!texture.handle.IsValid())
+                return Result<void>::Success();
+            if (frontend) {
+                if (const auto released = frontend->ReleaseTexture(texture.handle); released.HasError())
+                    return released;
+            }
+            texture.handle = {};
+            return Result<void>::Success();
+        }
+
+        /** @brief Preserves unreleased slot handles for an explicit owner-thread Shutdown retry. */
+        Result<void> ReleaseSlotTextures(Detail::UiPaintSlotProgram &slot, RenderFrontend *frontend) {
+            for (auto &surface : slot.surfaces)
+                if (const auto released = ReleaseSlotTexture(surface, frontend); released.HasError())
+                    return released;
+            return ReleaseSlotTexture(slot.stencil, frontend);
+        }
     }  // namespace
 
     /** @copydoc UiPaintProgram::UiPaintProgram */
-    UiPaintProgram::UiPaintProgram(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    UiPaintProgram::UiPaintProgram(ConstructionKey, std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     UiPaintProgram::~UiPaintProgram() {
-        static_cast<void>(Shutdown());
+        storage_->RetireNative();
     }
 
     /** @copydoc UiPaintProgram::Create */
@@ -64,15 +93,15 @@ namespace Horo::Render {
             auto storage = std::make_unique<Storage>(prototype, descriptor);
             storage->source.external.assign(textures.begin(), textures.end());
             for (std::size_t index = 0; index < textures.size(); ++index) {
-                const auto prefix = textures.first(index);
-                if (!textures[index].IsValid() || std::ranges::find(prefix, textures[index]) != prefix.end())
+                if (const auto prefix = textures.first(index);
+                    !textures[index].IsValid() || std::ranges::find(prefix, textures[index]) != prefix.end())
                     return Creation::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
                 if (const auto state = renderer.ResourceState(textures[index]); state.HasError())
                     return Creation::Failure(state.ErrorValue());
             }
             if (const auto roles = storage->BuildRoles(); roles.HasError())
                 return Creation::Failure(roles.ErrorValue());
-            auto candidate = std::unique_ptr<UiPaintProgram>(new UiPaintProgram(std::move(storage)));
+            auto candidate = std::make_unique<UiPaintProgram>(ConstructionKey{}, std::move(storage));
             auto &prepared = *candidate->storage_;
             if (const auto native = candidate->PrepareNative(renderer, kernel, cancellation); native.HasError())
                 return Creation::Failure(native.ErrorValue());
@@ -226,8 +255,8 @@ namespace Horo::Render {
         if (state.frontend.expired())
             return Result<UiPaintGraphComposition>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
         auto &slot = state.native.slots[prepared.slot_];
-        const auto &accepted = slot.frames[slot.accepted];
-        if (prepared.revision_ != slot.revision || !source.geometry || !source.geometry->IsValid() || !accepted.geometry ||
+        if (const auto &accepted = slot.frames[slot.accepted];
+            prepared.revision_ != slot.revision || !source.geometry || !source.geometry->IsValid() || !accepted.geometry ||
             &source.geometry->Descriptor() != &accepted.geometry->Descriptor() || !accepted.evidence.Matches(source))
             return Result<UiPaintGraphComposition>::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
         if (const auto valid = state.ValidateSource(source); valid.HasError())
@@ -267,6 +296,25 @@ namespace Horo::Render {
         return storage_->Shutdown();
     }
 
+    /** @copydoc UiPaintProgram::Storage::RetireNative */
+    void UiPaintProgram::Storage::RetireNative() noexcept {
+        closed = true;
+        identity.reset();
+        retirement->Request();
+        if (std::this_thread::get_id() != owner)
+            return;
+        const auto state = frontend.lock();
+        if (!state || !state->frontend)
+            return;
+        for (const auto &slot : native.slots) {
+            for (const auto &surface : slot.surfaces)
+                if (surface.handle.IsValid())
+                    state->frontend->RetireOwnedUiPaintTexture(surface.handle, surface.operation);
+            if (slot.stencil.handle.IsValid())
+                state->frontend->RetireOwnedUiPaintTexture(slot.stencil.handle, slot.stencil.operation);
+        }
+    }
+
     /** @copydoc UiPaintProgram::Storage::Shutdown */
     Result<void> UiPaintProgram::Storage::Shutdown() {
         if (std::this_thread::get_id() != owner)
@@ -275,31 +323,11 @@ namespace Horo::Render {
         identity.reset();
         const auto state = frontend.lock();
         if (state && state->frontend)
-            for (auto &slot : native.slots) {
-                for (auto &surface : slot.surfaces)
-                    if (surface.handle.IsValid())
-                        static_cast<void>(Detail::ObserveUiPaintCreation(*state->frontend, surface.operation, surface.handle));
-                if (slot.stencil.handle.IsValid())
-                    static_cast<void>(Detail::ObserveUiPaintCreation(*state->frontend, slot.stencil.operation, slot.stencil.handle));
-            }
-        for (auto &slot : native.slots) {
-            for (auto &surface : slot.surfaces) {
-                if (!surface.handle.IsValid())
-                    continue;
-                if (state && state->frontend) {
-                    if (const auto released = state->frontend->ReleaseTexture(surface.handle); released.HasError())
-                        return released;
-                }
-                surface.handle = {};
-            }
-            if (slot.stencil.handle.IsValid()) {
-                if (state && state->frontend) {
-                    if (const auto released = state->frontend->ReleaseTexture(slot.stencil.handle); released.HasError())
-                        return released;
-                }
-                slot.stencil.handle = {};
-            }
-        }
+            for (auto &slot : native.slots)
+                ObserveSlotCreations(slot, *state->frontend);
+        for (auto &slot : native.slots)
+            if (const auto released = ReleaseSlotTextures(slot, state ? state->frontend : nullptr); released.HasError())
+                return released;
         return native.buffers ? native.buffers->Shutdown() : Result<void>::Success();
     }
 }  // namespace Horo::Render

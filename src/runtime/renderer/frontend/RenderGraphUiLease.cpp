@@ -41,7 +41,7 @@ namespace Horo::Render::Detail {
     Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::AcquireUi(const std::span<const RenderGraphResource> resources,
                                                                                 UiRenderSubmission &ui,
                                                                                 RenderGraphTransientResourceSet *transient,
-                                                                                IRenderGraphResourceLease *existing,
+                                                                                const IRenderGraphResourceLease *existing,
                                                                                 std::span<const RenderGraphPassWorkload> workloads) {
         using Outcome = Result<IRenderGraphResourceLease *>;
         auto capturedKernels = CaptureKernels(workloads);
@@ -69,7 +69,7 @@ namespace Horo::Render::Detail {
         const auto rollbackPins = [initialPins](Lease *pending) {
             pending->RollbackPins(initialPins);
         };
-        std::unique_ptr<Lease, decltype(rollbackPins)> transaction{&*selected, rollbackPins};
+        std::unique_ptr<Lease, decltype(rollbackPins)> transaction{std::to_address(selected), rollbackPins};
         for (const auto &resource : resources)
             if (const auto retained = selected->PinResource(resource, transient); retained.HasError())
                 return Outcome::Failure(retained.ErrorValue());

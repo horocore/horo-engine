@@ -169,6 +169,7 @@ add_library(HoroNetworkProductHost STATIC
     common/GameplayWorldComposition.cpp
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
@@ -195,6 +196,10 @@ add_executable(horo-engine
     horo-engine/NetworkProductLaunchOptions.cpp
 )
 target_compile_features(horo-engine PRIVATE cxx_std_20)
+# Only identity consumers depend on the changing Git revision. Keep unrelated
+# application units reusable by compiler and analysis caches across commits.
+set_property(SOURCE horo-engine/main.cpp horo-engine/NetworkProductLaunch.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
 
 # Conservative provider closure: any first-party navigation implementation or
 # public contract change invalidates native bake compatibility. Configure again
@@ -236,7 +241,6 @@ endif()
 target_compile_definitions(horo-engine PRIVATE
     HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     HORO_BUILD_CONFIGURATION="$<CONFIG>"
-    HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}"
     HORO_PRODUCT_HAS_GNS=$<BOOL:${HORO_BUILD_NETWORK_GNS}>
     HORO_NAVIGATION_BUILD_FINGERPRINT="${HORO_NAVIGATION_BUILD_FINGERPRINT}-$<CONFIG>"
 )
@@ -468,6 +472,8 @@ if(HORO_BUILD_EDITOR_GUI)
     endif()
 
     target_compile_features(HoroEditor PRIVATE cxx_std_20)
+    set_property(SOURCE HoroEditor/app/HoroEditorApp.cpp
+        APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
     target_link_libraries(HoroEditor PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo)
 
     if(BUILD_TESTING AND HORO_ENABLE_GPU_SMOKE_TESTS AND HORO_BUILD_RENDER_OPENGL)
@@ -491,7 +497,6 @@ if(HORO_BUILD_EDITOR_GUI)
             HORO_EDITOR_PACKAGED_ASSET_ROOT_RELATIVE="${HORO_EDITOR_PACKAGED_ASSET_ROOT_RELATIVE}"
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
             HORO_BUILD_CONFIGURATION="$<CONFIG>"
-            HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}"
             HORO_GAMEPLAY_SDK_PACKAGE_DIR="${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
             HORO_GAMEPLAY_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
     )

@@ -32,6 +32,44 @@ namespace Horo::Render {
             return value.get<std::uint32_t>();
         }
 
+        /** @brief Skips one comment, whitespace byte or quoted literal without exposing binding evidence. */
+        bool SkipNonEvidence(const std::string_view text, std::size_t &cursor) {
+            const auto ch = text[cursor];
+            if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') {
+                ++cursor;
+                return true;
+            }
+            if (text.substr(cursor, 2) == "//") {
+                const auto end = text.find('\n', cursor + 2);
+                cursor = end == std::string_view::npos ? text.size() : end;
+                return true;
+            }
+            if (text.substr(cursor, 2) == "/*") {
+                const auto end = text.find("*/", cursor + 2);
+                if (end == std::string_view::npos)
+                    throw InvalidEvidence{};
+                cursor = end + 2;
+                return true;
+            }
+            if (ch != '"' && ch != '\'')
+                return false;
+            ++cursor;
+            while (cursor < text.size() && text[cursor] != ch) {
+                if (text[cursor] == '\\')
+                    ++cursor;
+                ++cursor;
+            }
+            if (cursor >= text.size())
+                throw InvalidEvidence{};
+            ++cursor;
+            return true;
+        }
+
+        /** @brief Recognizes only the generated ASCII identifier and numeric token alphabet. */
+        bool IsWord(const char value) noexcept {
+            return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9') || value == '_';
+        }
+
         /** @brief Tokenizes bounded generated MSL while excluding comments and string literals from binding evidence. */
         std::vector<std::string_view> Tokens(const std::string_view text) {
             if (text.empty() || text.size() > 1024U * 1024U)
@@ -39,49 +77,51 @@ namespace Horo::Render {
             std::vector<std::string_view> result;
             for (std::size_t cursor = 0; cursor < text.size();) {
                 const auto start = cursor;
-                const auto ch = text[cursor];
-                if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') {
-                    ++cursor;
+                if (SkipNonEvidence(text, cursor))
                     continue;
-                }
-                if (text.substr(cursor, 2) == "//") {
-                    const auto end = text.find('\n', cursor + 2);
-                    cursor = end == text.npos ? text.size() : end;
-                    continue;
-                }
-                if (text.substr(cursor, 2) == "/*") {
-                    const auto end = text.find("*/", cursor + 2);
-                    if (end == text.npos)
-                        throw InvalidEvidence{};
-                    cursor = end + 2;
-                    continue;
-                }
-                if (ch == '"' || ch == '\'') {
-                    ++cursor;
-                    while (cursor < text.size() && text[cursor] != ch) {
-                        if (text[cursor] == '\\')
-                            ++cursor;
+                if (IsWord(text[cursor])) {
+                    while (cursor < text.size() && IsWord(text[cursor]))
                         ++cursor;
-                    }
-                    if (cursor >= text.size())
-                        throw InvalidEvidence{};
+                } else {
                     ++cursor;
-                    continue;
                 }
-                const auto word = [](const char value) {
-                    return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9') ||
-                           value == '_';
-                };
-                if (word(ch))
-                    while (cursor < text.size() && word(text[cursor]))
-                        ++cursor;
-                else
-                    ++cursor;
                 if (result.size() == 131072)
                     throw InvalidEvidence{};
                 result.push_back(text.substr(start, cursor - start));
             }
             return result;
+        }
+
+        struct NativeMember final {
+            std::string_view type;
+            std::uint32_t width;
+        };
+
+        /** @brief Maps the closed reflected scalar/vector set to its actual native spelling and alignment. */
+        NativeMember NativePacking(const Member &member) noexcept {
+            if (member.type == "vec4")
+                return {"float4", 16};
+            if (member.type == "vec2")
+                return {"float2", 8};
+            if (member.type == "uvec2")
+                return {"uint2", 8};
+            return {member.type, 4};
+        }
+
+        /** @brief Checks one matched struct body in order, including its final size and terminator. */
+        void StructMembers(const std::vector<std::string_view> &tokens, std::size_t cursor) {
+            std::uint32_t offset = 0;
+            for (const auto &member : Members) {
+                const auto native = NativePacking(member);
+                offset = (offset + native.width - 1) / native.width * native.width;
+                if (cursor + 2 >= tokens.size() || tokens[cursor] != native.type || tokens[cursor + 1] != member.name ||
+                    tokens[cursor + 2] != ";" || offset != member.offset)
+                    throw InvalidEvidence{};
+                offset += native.width;
+                cursor += 3;
+            }
+            if (cursor >= tokens.size() || tokens[cursor] != "}" || offset != 64)
+                throw InvalidEvidence{};
         }
 
         /** @brief Proves the generated constant struct uses the exact closed scalar/vector packing, not SPIR-V offsets alone. */
@@ -91,26 +131,42 @@ namespace Horo::Render {
                 if (tokens[index] != "struct" || tokens[index + 1] != type || tokens[index + 2] != "{")
                     continue;
                 ++matches;
-                std::size_t cursor = index + 3;
-                std::uint32_t offset = 0;
-                for (const auto &member : Members) {
-                    const auto native = member.type == "vec2"    ? "float2"
-                                        : member.type == "vec4"  ? "float4"
-                                        : member.type == "uvec2" ? "uint2"
-                                                                 : member.type;
-                    const std::uint32_t width = member.type == "vec4" ? 16U : member.type == "vec2" || member.type == "uvec2" ? 8U : 4U;
-                    offset = (offset + width - 1) / width * width;
-                    if (cursor + 2 >= tokens.size() || tokens[cursor] != native || tokens[cursor + 1] != member.name ||
-                        tokens[cursor + 2] != ";" || offset != member.offset)
-                        throw InvalidEvidence{};
-                    offset += width;
-                    cursor += 3;
-                }
-                if (cursor >= tokens.size() || tokens[cursor] != "}" || offset != 64)
-                    throw InvalidEvidence{};
+                StructMembers(tokens, index + 3);
             }
             if (matches != 1)
                 throw InvalidEvidence{};
+        }
+
+        /** @brief Parses the complete bounded native resource attribute after its recognized kind. */
+        std::uint32_t AttributeIndex(const std::vector<std::string_view> &tokens, const std::size_t index) {
+            if (tokens[index + 3] != "(" || tokens[index + 5] != ")" || tokens[index + 6] != "]" || tokens[index + 7] != "]")
+                throw InvalidEvidence{};
+            std::uint32_t value{};
+            const auto number = tokens[index + 4];
+            if (const auto parsed = std::from_chars(number.data(), number.data() + number.size(), value);
+                parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() || value > 30)
+                throw InvalidEvidence{};
+            return value;
+        }
+
+        /** @brief Identifies one closed native role and proves the uniform's constant reference packing. */
+        std::size_t PlacementSlot(const std::vector<std::string_view> &tokens, const std::size_t index, const bool vertex) {
+            const auto kind = tokens[index + 2];
+            if (kind == "buffer") {
+                if (index < 4 || tokens[index - 2] != "&" || tokens[index - 4] != "constant")
+                    throw InvalidEvidence{};
+                StructPacking(tokens, tokens[index - 3]);
+                return 0;
+            }
+            if (vertex)
+                return 4;
+            if (kind == "texture" && tokens[index - 1] == "PaintTexture")
+                return 1;
+            if (kind == "texture" && tokens[index - 1] == "CoverageTexture")
+                return 2;
+            if (kind == "sampler" && tokens[index - 1] == "PaintSampler")
+                return 3;
+            return 4;
         }
 
         /** @brief Reads only complete generated resource attributes, never inferred default resource indices. */
@@ -121,29 +177,10 @@ namespace Horo::Render {
             for (std::size_t index = 1; index + 7 < tokens.size(); ++index) {
                 if (tokens[index] != "[" || tokens[index + 1] != "[")
                     continue;
-                const auto kind = tokens[index + 2];
-                if (kind != "buffer" && kind != "texture" && kind != "sampler")
+                if (const auto kind = tokens[index + 2]; kind != "buffer" && kind != "texture" && kind != "sampler")
                     continue;
-                if (tokens[index + 3] != "(" || tokens[index + 5] != ")" || tokens[index + 6] != "]" || tokens[index + 7] != "]")
-                    throw InvalidEvidence{};
-                std::uint32_t value{};
-                const auto number = tokens[index + 4];
-                const auto parsed = std::from_chars(number.data(), number.data() + number.size(), value);
-                if (parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() || value > 30)
-                    throw InvalidEvidence{};
-                std::size_t slot = 4;
-                if (kind == "buffer") {
-                    // The one reflected fixed block must be a constant reference, not a device or writable argument.
-                    if (index < 4 || tokens[index - 2] != "&" || tokens[index - 4] != "constant")
-                        throw InvalidEvidence{};
-                    StructPacking(tokens, tokens[index - 3]);
-                    slot = 0;
-                } else if (!vertex && kind == "texture" && tokens[index - 1] == "PaintTexture")
-                    slot = 1;
-                else if (!vertex && kind == "texture" && tokens[index - 1] == "CoverageTexture")
-                    slot = 2;
-                else if (!vertex && kind == "sampler" && tokens[index - 1] == "PaintSampler")
-                    slot = 3;
+                const auto value = AttributeIndex(tokens, index);
+                const auto slot = PlacementSlot(tokens, index, vertex);
                 if (slot == 4 || placements[slot] != Missing)
                     throw InvalidEvidence{};
                 placements[slot] = value;
@@ -175,6 +212,29 @@ namespace Horo::Render {
             }
         }
 
+        /** @brief Maps only the fixed reflected resource names; an unknown name cannot acquire a binding. */
+        std::uint32_t ResourceSlot(const std::string_view name) noexcept {
+            if (name == "PaintTexture")
+                return 0;
+            if (name == "CoverageTexture")
+                return 1;
+            if (name == "PaintSampler")
+                return 2;
+            return 3;
+        }
+
+        /** @brief Validates the exact resource entries for one reflected image or sampler category. */
+        void ResourceEntries(const Json &entries, const bool images) {
+            std::array<bool, 3> seen{};
+            for (const auto &entry : entries) {
+                const auto slot = ResourceSlot(entry.at("name").get<std::string>());
+                if (slot == 3 || seen[slot] || images != (slot < 2) || Unsigned(entry.at("set")) != 0 ||
+                    Unsigned(entry.at("binding")) != slot + 1 || entry.contains("array") || (slot < 2 && entry.at("type") != "texture2D"))
+                    throw InvalidEvidence{};
+                seen[slot] = true;
+            }
+        }
+
         /** @brief Admits only the complete actual texture/sampler set for the selected fixed stage. */
         void Resources(const Json &json, const bool vertex) {
             for (const auto key : {"textures", "images", "ssbos", "push_constants", "subpass_inputs", "counters", "acceleration_structures",
@@ -182,54 +242,61 @@ namespace Horo::Render {
                 if (json.contains(key) && !json.at(key).empty())
                     throw InvalidEvidence{};
             for (const auto key : {"separate_images", "separate_samplers"}) {
-                const auto expected = vertex ? 0U : (std::string_view{key} == "separate_images" ? 2U : 1U);
+                const bool images = std::string_view{key} == "separate_images";
+                std::uint32_t expected = 0;
+                if (!vertex)
+                    expected = images ? 2U : 1U;
                 if (!json.contains(key)) {
                     if (expected != 0)
                         throw InvalidEvidence{};
                     continue;
                 }
-                const auto &entries = json.at(key);
-                if (!entries.is_array() || entries.size() != expected)
+                if (const auto &entries = json.at(key); !entries.is_array() || entries.size() != expected)
                     throw InvalidEvidence{};
-                std::array<bool, 3> seen{};
-                for (const auto &entry : entries) {
-                    const auto name = entry.at("name").get<std::string>();
-                    const auto slot = name == "PaintTexture" ? 0U : name == "CoverageTexture" ? 1U : name == "PaintSampler" ? 2U : 3U;
-                    if (slot == 3 || seen[slot] || (std::string_view{key} == "separate_images") != (slot < 2) ||
-                        Unsigned(entry.at("set")) != 0 || Unsigned(entry.at("binding")) != slot + 1 || entry.contains("array") ||
-                        (slot < 2 && entry.at("type") != "texture2D"))
-                        throw InvalidEvidence{};
-                    seen[slot] = true;
-                }
+                ResourceEntries(json.at(key), images);
+            }
+        }
+
+        /** @brief Returns the exact vector width for a canonical stage, direction and location. */
+        std::uint32_t InterfaceWidth(const bool vertex, const ShaderInterfaceDirection direction, const std::uint32_t location,
+                                     const std::uint32_t count) noexcept {
+            if (count == 1)
+                return 4;
+            if (vertex && direction == ShaderInterfaceDirection::Input)
+                return location == 2 ? 4U : 2U;
+            return location == 1 ? 4U : 2U;
+        }
+
+        /** @brief Retains the complete exact IO list for one stage direction after validating every variable. */
+        void InterfaceVariables(const Json &variables, const ShaderStage stage, const ShaderInterfaceDirection direction,
+                                ShaderReflectionCandidate &candidate) {
+            const bool vertex = stage == ShaderStage::Vertex;
+            const auto count = !vertex && direction == ShaderInterfaceDirection::Output ? 1U : 3U;
+            if (!variables.is_array() || variables.size() != count)
+                throw InvalidEvidence{};
+            std::array<bool, 3> seen{};
+            for (const auto &variable : variables) {
+                const auto location = Unsigned(variable.at("location"));
+                const auto width = InterfaceWidth(vertex, direction, location, count);
+                if (location >= count || seen[location] || variable.contains("array") ||
+                    variable.at("type") != (width == 4 ? "vec4" : "vec2"))
+                    throw InvalidEvidence{};
+                seen[location] = true;
+                candidate.stageInterface.emplace_back(stage, direction, location, ShaderValueType::Float32, 1,
+                                                      static_cast<std::uint8_t>(width), 1, variable.at("name").get<std::string>());
             }
         }
 
         /** @brief Validates exact stage entry and finite user IO against the canonical raster ABI. */
         void Interfaces(const Json &json, const ShaderStage stage, ShaderReflectionCandidate &candidate) {
+            using enum ShaderInterfaceDirection;
             const bool vertex = stage == ShaderStage::Vertex;
-            const auto &entries = json.at("entryPoints");
-            if (!entries.is_array() || entries.size() != 1 || entries[0].at("name") != (vertex ? "PaintVertex" : "PaintFragment") ||
-                entries[0].at("mode") != (vertex ? "vert" : "frag"))
+            if (const auto &entries = json.at("entryPoints"); !entries.is_array() || entries.size() != 1 ||
+                                                              entries[0].at("name") != (vertex ? "PaintVertex" : "PaintFragment") ||
+                                                              entries[0].at("mode") != (vertex ? "vert" : "frag"))
                 throw InvalidEvidence{};
-            for (const auto direction : {ShaderInterfaceDirection::Input, ShaderInterfaceDirection::Output}) {
-                const auto &variables = json.at(direction == ShaderInterfaceDirection::Input ? "inputs" : "outputs");
-                const auto count = !vertex && direction == ShaderInterfaceDirection::Output ? 1U : 3U;
-                if (!variables.is_array() || variables.size() != count)
-                    throw InvalidEvidence{};
-                std::array<bool, 3> seen{};
-                for (const auto &variable : variables) {
-                    const auto location = Unsigned(variable.at("location"));
-                    const auto width = count == 1 ? 4U
-                                                  : ((vertex && direction == ShaderInterfaceDirection::Input) ? (location == 2 ? 4U : 2U)
-                                                                                                              : (location == 1 ? 4U : 2U));
-                    if (location >= count || seen[location] || variable.contains("array") ||
-                        variable.at("type") != (width == 4 ? "vec4" : "vec2"))
-                        throw InvalidEvidence{};
-                    seen[location] = true;
-                    candidate.stageInterface.push_back({stage, direction, location, ShaderValueType::Float32, 1,
-                                                        static_cast<std::uint8_t>(width), 1, variable.at("name").get<std::string>()});
-                }
-            }
+            for (const auto direction : {Input, Output})
+                InterfaceVariables(json.at(direction == Input ? "inputs" : "outputs"), stage, direction, candidate);
         }
 
         /** @brief Validates one complete compiler stage before retaining its exact generated native placements. */
@@ -257,8 +324,8 @@ namespace Horo::Render {
         using Outcome = Result<NormalizedShaderReflection>;
         try {
             const auto expected = ComputeShaderInterfaceCompatibilityId(MakeUiPaintShaderManifest(target));
-            const auto actual = ComputeShaderInterfaceCompatibilityId(manifest);
-            if (target.backend != ShaderTargetBackend::Metal || stages.size() != 2 || translations.size() != 2 || expected.HasError() ||
+            if (const auto actual = ComputeShaderInterfaceCompatibilityId(manifest);
+                target.backend != ShaderTargetBackend::Metal || stages.size() != 2 || translations.size() != 2 || expected.HasError() ||
                 actual.HasError() || expected.Value() != actual.Value())
                 throw InvalidEvidence{};
             ShaderReflectionCandidate candidate{.backend = target.backend, .interfaceSchemaVersion = target.interfaceSchemaVersion};

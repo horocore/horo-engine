@@ -632,6 +632,27 @@ startup does not invent another descriptor revision. Native provisioning,
 listeners, connections and authority inspection remain separate readiness gates.
 Raw transport construction preserves its existing lifecycle behavior.
 
+The host fixes `NetworkTransportConfig::maximumChannels` before initialization.
+The GNS adapter accepts one through three real native lanes, with one retained as
+its default for explicit transport qualification. Gameplay composition requiring
+independent control/command (and selected snapshot) delivery configures distinct
+lanes and requires the same count in its captured transport declaration. The
+adapter configures each native connection with `ConfigureConnectionLanes` before
+publishing Accepted/Connected. Failure terminalizes the pending connection without
+publishing readiness. `SendMessages` carries the exact native lane, and received
+`m_idxLane` is checked against the selected bound before a packet is published.
+No envelope field substitutes for native lane identity. Reliable order is per
+lane; equal lane priority/weight does not promise cross-lane receive order.
+
+This extends the former channel-zero-only GNS contract. Existing callers retain
+one lane by default; callers selecting gameplay must capture the complete exact
+configuration and migrate their control/command policies together. Each active
+peer/lane has one outbound sequence owner shared by all producers on that lane.
+Admission control on channel zero precedes Active and uses its existing closed
+negotiation sequence; the active delivery gate begins its separate admitted
+application sequence after activation. Native readiness still grants no gameplay
+authentication, world identity, or object authority.
+
 GNS secure composition owns an explicit public CA root/app selection and retained
 startup issuer. The issuer signs the native-generated public CSR outside native
 and Horo locks before any listener/connect operation; it does not supply a native

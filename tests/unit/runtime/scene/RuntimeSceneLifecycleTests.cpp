@@ -39,7 +39,7 @@ namespace {
     public:
         TrackingSceneParticipant(std::vector<std::string> &events, std::string name) : events_(&events), name_(std::move(name)) {}
 
-        Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, RuntimeSceneView) override {
+        Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, const RuntimeSceneView &) override {
             events_->push_back("prepare:" + name_);
             if (std::exchange(failPreparation, false))
                 return Result<std::unique_ptr<SceneActivationCandidate>>::Failure(MakeError(ParticipantFailure));

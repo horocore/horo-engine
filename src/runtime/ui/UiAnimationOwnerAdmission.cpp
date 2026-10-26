@@ -12,8 +12,7 @@ namespace Horo::Runtime::Ui {
                                                       UiAnimationCanvasDefinition definition, const UiAnimationLimits limits) {
         if (!AnimationInternal::ValidLimits(limits))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
-        const auto *canvas = initial.Canvas(definition.canvas);
-        if (!canvas || !canvas->tree.WasIssuedBy(allocator))
+        if (const auto *canvas = initial.Canvas(definition.canvas); !canvas || !canvas->tree.WasIssuedBy(allocator))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationTargetStale));
         auto reserved =
             allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + limits.timelines + MaximumUiAnimationAttachments);
@@ -27,9 +26,9 @@ namespace Horo::Runtime::Ui {
                                    std::optional<UiElementSlotRange>{std::move(reserved).Value()});
     }
 
-    /** @copydoc UiAnimationOwner::Create(RuntimeUiService &, RuntimeUiInstanceId, UiElementSlotAllocator &,
+    /** @copydoc UiAnimationOwner::Create(const RuntimeUiService &, RuntimeUiInstanceId, UiElementSlotAllocator &,
      * RuntimeStyleRegistry, UiStyleResolver, UiAnimationCanvasDefinition, UiAnimationLimits) */
-    Result<UiAnimationOwner> UiAnimationOwner::Create(RuntimeUiService &service, const RuntimeUiInstanceId instance,
+    Result<UiAnimationOwner> UiAnimationOwner::Create(const RuntimeUiService &service, const RuntimeUiInstanceId instance,
                                                       UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
                                                       UiStyleResolver styles, UiAnimationCanvasDefinition definition,
                                                       const UiAnimationLimits limits) {
@@ -41,10 +40,11 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::PrepareAnimation */
-    Result<UiAnimationOwner> RuntimeUiService::PrepareAnimation(UiSceneReconciliation::Prepared &prepared,
+    Result<UiAnimationOwner> RuntimeUiService::PrepareAnimation(const UiSceneReconciliation::Prepared &prepared,
                                                                 const RuntimeUiInstanceId instance, UiElementSlotAllocator &allocator,
                                                                 RuntimeStyleRegistry registry, UiStyleResolver styles,
-                                                                UiAnimationCanvasDefinition definition, const UiAnimationLimits limits) {
+                                                                UiAnimationCanvasDefinition definition,
+                                                                const UiAnimationLimits limits) const {
         auto publisher = Detail::UiAnimationPublisher::AttachPrepared(state_, prepared, instance, definition.canvas);
         if (publisher.HasError())
             return Result<UiAnimationOwner>::Failure(publisher.ErrorValue());
@@ -61,7 +61,7 @@ namespace Horo::Runtime::Ui {
         if (!AnimationInternal::ValidLimits(limits))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
         auto *generation = publisher.Current();
-        auto *canvas = generation ? generation->Canvas(definition.canvas) : nullptr;
+        const auto *canvas = generation ? generation->Canvas(definition.canvas) : nullptr;
         if (!canvas || !canvas->tree.WasIssuedBy(allocator))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationTargetStale));
         if (!range) {

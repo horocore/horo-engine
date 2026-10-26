@@ -24,7 +24,8 @@ namespace Horo::Runtime::TestSupport {
     public:
         PublicationGateParticipant(const bool &fail, const ErrorCodeDescriptor &error) noexcept : fail_(&fail), error_(&error) {}
 
-        [[nodiscard]] Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &, RuntimeSceneView) override {
+        [[nodiscard]] Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &,
+                                                                                const RuntimeSceneView &) override {
             return Result<std::unique_ptr<SceneActivationCandidate>>::Success(std::make_unique<PublicationGate>(*fail_, *error_));
         }
 

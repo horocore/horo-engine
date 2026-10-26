@@ -132,6 +132,7 @@ def test_main_native_writers_serialize_by_platform_without_global_head_of_line_w
 
 @pytest.mark.parametrize("workflow,readonly,writer", [
     ("ci", "test", "test-main"), ("sonar", "sonar", "sonar-main"),
+    ("ci", "shaders", "shaders-main"),
 ])
 @pytest.mark.parametrize("repository", ["horocore/horo-engine", "fork/horo-engine"])
 @pytest.mark.parametrize("ref", ["refs/heads/main", "refs/heads/topic", "refs/pull/17/merge"])
@@ -167,8 +168,9 @@ def test_native_status_guards_require_uncancelled_successful_tooling(
 
 @pytest.mark.parametrize("expression", ["unknown()", "cancelled(True)", "cancelled(flag=True)", "obj.cancelled()"])
 def test_status_model_rejects_arbitrary_or_parameterized_calls(expression: str) -> None:
+    parsed = ast.parse(expression, mode="eval").body
     with pytest.raises(ValueError, match="Unexpected token-guard expression"):
-        boolean_value(ast.parse(expression, mode="eval").body, cancelled=False)
+        boolean_value(parsed, cancelled=False)
 
 
 def test_foreign_fork_sonar_policy_is_preserved() -> None:
@@ -182,6 +184,7 @@ def test_foreign_fork_sonar_policy_is_preserved() -> None:
 
 @pytest.mark.parametrize("workflow,readonly,writer,fields", [
     ("ci", "test", "test-main", ("steps", "env", "strategy", "defaults")),
+    ("ci", "shaders", "shaders-main", ("steps", "env", "strategy", "defaults")),
     ("sonar", "sonar", "sonar-main", ("steps", "env", "runs-on")),
 ])
 def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
@@ -193,15 +196,19 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
     assert "      packages: read\n" in reader
     assert "packages: write" not in reader
     assert "      packages: write\n" in main
-    assert "    timeout-minutes: 180\n" in reader
-    assert "    timeout-minutes: 180\n" in main
+    timeout = 90 if readonly == "shaders" else 180
+    assert f"    timeout-minutes: {timeout}\n" in reader
+    assert f"    timeout-minutes: {timeout}\n" in main
     for field in fields:
         match = re.search(rf"^    {field}: &(\w+)", reader, re.MULTILINE)
         assert match is not None
         assert f"    {field}: *{match[1]}\n" in main
-    if workflow == "ci":
+    if readonly == "test":
         assert "max-parallel: 2" in reader
         assert reader.count("          - name:") == 3
+    if readonly == "shaders":
+        assert "max-parallel: 1" in reader
+        assert reader.count("          - os:") == 2
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in source
     group = re.search(r"^  group: (.*)$", source, re.MULTILINE)
     assert group is not None
@@ -231,6 +238,32 @@ def test_compiled_native_stores_publish_before_the_next_phase_without_actions_co
         assert "github.ref == 'refs/heads/main'" in block
         assert "continue-on-error: true" in block
         assert "uses: ./.github/actions/publish-compiler-checkpoint" in block
+
+
+def test_shader_checkpoint_has_its_own_profile_and_publishes_only_compiled_state() -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    shader = job(source, "shaders")
+    restore = step(shader, "Restore compatible main dependency and compiler caches")
+    assert "id: shader_cache" in restore
+    assert "profile: native-shaders-v1" in restore
+    assert "dependency-profile: native-tests-v1" in restore
+    assert "compiler-storage: registry" in restore
+    publication = step(shader, "Publish main shader compiler checkpoint")
+    assert "github.ref == 'refs/heads/main'" in publication
+    assert "github.repository == 'horocore/horo-engine'" in publication
+    assert "github.event_name == 'push' || github.event_name == 'workflow_dispatch'" in publication
+    assert "steps.shader_cache.outputs.compiler-key" in publication
+    assert "continue-on-error: true" in publication
+    assert "timeout-minutes: 4" in publication
+    assert "uses: ./.github/actions/publish-compiler-checkpoint" in publication
+    assert shader.index("name: Build Vulkan command smoke") < shader.index("name: Publish main shader compiler checkpoint")
+    assert shader.index("name: Publish main shader compiler checkpoint") < shader.index("name: Run Vulkan native-call")
+    assert "continue-on-error" not in shader.replace(publication, "")
+    main = job(source, "shaders-main")
+    for platform in ("ubuntu-26.04", "windows-2022"):
+        assert concurrency_key(main, ci_context("refs/heads/main", "101", platform)) == concurrency_key(
+            main, ci_context("refs/heads/main", "102", platform))
+    assert "cancel-in-progress: false" in main
 
 
 def test_sonar_publishes_compilation_before_coverage_without_relaxing_analysis() -> None:

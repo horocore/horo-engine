@@ -7,6 +7,21 @@
 #include <utility>
 
 namespace Horo::Runtime::Ui {
+    namespace {
+        /** @brief Closes an unpublished incoming owner while its preparation continues to pin the source. */
+        void RevokeIncomingAnimation(Detail::UiAnimationSourceReservation &source, const SceneRuntimeId scene) noexcept {
+            const auto prepared = source.preparation.lock();
+            if (!prepared)
+                return;
+            for (auto &incoming : prepared->incoming) {
+                if (incoming.descriptor.owner.scene != scene)
+                    continue;
+                incoming.sceneRevoked = true;
+                source.retiring = true;
+            }
+        }
+    }  // namespace
+
     /** @copydoc UiSceneReconciliation::Storage::FlushSceneRevocations */
     void UiSceneReconciliation::Storage::FlushSceneRevocations() noexcept {
         if (collecting || publicationSeal)
@@ -40,13 +55,10 @@ namespace Horo::Runtime::Ui {
         for (auto &entry : storage_.Get()->active) {
             if (!entry)
                 continue;
-            if (entry->descriptor.owner.scene == scene) {
-                if (!std::exchange(entry->sceneRevoked, true))
-                    changed = true;
-            } else if (entry->descriptor.providerScene == scene) {
-                if (!std::exchange(entry->providerRevoked, true))
-                    changed = true;
-            }
+            if (entry->descriptor.owner.scene == scene)
+                changed = !std::exchange(entry->sceneRevoked, true) || changed;
+            else if (entry->descriptor.providerScene == scene)
+                changed = !std::exchange(entry->providerRevoked, true) || changed;
         }
         for (const auto &weak : storage_.Get()->preparations) {
             const auto candidate = weak.lock();
@@ -65,7 +77,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc RuntimeUiService::RevokeScene */
-    void RuntimeUiService::RevokeScene(const SceneRuntimeId scene) noexcept {
+    void RuntimeUiService::RevokeScene(const SceneRuntimeId scene) const noexcept {
         if (!state_ || !state_->active || state_->thread != std::this_thread::get_id() || !scene.IsValid())
             return;
         for (const auto &weak : state_->scopes)
@@ -88,16 +100,9 @@ namespace Horo::Runtime::Ui {
             const auto source = weak.lock();
             if (!source)
                 continue;
-            const auto slot = state_->registry.storage_.Get()->Find(source->instance);
-            if (slot < state_->registry.storage_.Get()->active.size()) {
-                const auto &entry = *state_->registry.storage_.Get()->active[slot];
-                if (entry.descriptor.owner.scene == scene || entry.descriptor.providerScene == scene)
-                    source->retiring = true;
-            }
-            if (const auto prepared = source->preparation.lock())
-                for (auto &incoming : prepared->incoming)
-                    if (incoming.descriptor.owner.scene == scene)
-                        source->retiring = incoming.sceneRevoked = true;
+            if (matching(source->instance))
+                source->retiring = true;
+            RevokeIncomingAnimation(*source, scene);
         }
         state_->registry.RevokeScene(scene, state_->dispatching || state_->scenePublication);
         state_->sceneRevocationsPending = true;

@@ -5,8 +5,8 @@
 
 static_assert(std::is_nothrow_invocable_v<decltype(&Horo::Runtime::Ui::RuntimeUiService::RevokeScene),
                                           Horo::Runtime::Ui::RuntimeUiService &, Horo::Runtime::SceneRuntimeId>);
-static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::Ui::RuntimeUiService::RevokeScene), const Horo::Runtime::Ui::RuntimeUiService &,
-                                   Horo::Runtime::SceneRuntimeId>);
+static_assert(std::is_nothrow_invocable_v<decltype(&Horo::Runtime::Ui::RuntimeUiService::RevokeScene),
+                                          const Horo::Runtime::Ui::RuntimeUiService &, Horo::Runtime::SceneRuntimeId>);
 static_assert(std::is_invocable_v<decltype(&Horo::Runtime::Ui::RuntimeUiService::ScenePublication::CanPublish),
                                   const Horo::Runtime::Ui::RuntimeUiService::ScenePublication &>);
 
@@ -26,9 +26,9 @@ static_assert(std::is_copy_constructible_v<RuntimeUiCommandResult>);
 
 using CoordinatedServiceReload = Horo::Result<UiAnimationReloadResult> (RuntimeUiService::*)(RuntimeUiInstanceId, UiAnimationOwner &,
                                                                                              UiAnimationReloadPreparation,
-                                                                                             const Horo::CancellationToken &);
+                                                                                             const Horo::CancellationToken &) const;
 static_assert(std::is_same_v<decltype(static_cast<CoordinatedServiceReload>(&RuntimeUiService::Reload)), CoordinatedServiceReload>);
-using ServiceAnimationCreate = Horo::Result<UiAnimationOwner> (*)(RuntimeUiService &, RuntimeUiInstanceId, UiElementSlotAllocator &,
+using ServiceAnimationCreate = Horo::Result<UiAnimationOwner> (*)(const RuntimeUiService &, RuntimeUiInstanceId, UiElementSlotAllocator &,
                                                                   RuntimeStyleRegistry, UiStyleResolver, UiAnimationCanvasDefinition,
                                                                   UiAnimationLimits);
 static_assert(std::is_same_v<decltype(static_cast<ServiceAnimationCreate>(&UiAnimationOwner::Create)), ServiceAnimationCreate>);

@@ -192,14 +192,14 @@ namespace Horo::Editor {
             // Catalog references are borrowed only for this immediate-mode call, never retained across locale changes.
             auto devices = std::array{label("workspace.ui_canvas.preview.desktop"), label("workspace.ui_canvas.preview.phone"),
                                       label("workspace.ui_canvas.preview.tablet")};
-            int device = static_cast<int>(state.device);
+            auto device = static_cast<int>(state.device);
             bool changed =
                 Ui::ComboControl("preview_device", &device, devices.data(), static_cast<int>(devices.size()), context.theme.fonts);
             state.device = static_cast<UiCanvasPreviewDevice>(device);
             changed |= Ui::CheckboxControl(label("workspace.ui_canvas.preview.rotate"), &state.rotated, context.theme.fonts);
             auto tools = std::array{label("workspace.ui_canvas.preview.select"), label("workspace.ui_canvas.preview.move"),
                                     label("workspace.ui_canvas.preview.resize"), label("workspace.ui_canvas.preview.anchors")};
-            int tool = static_cast<int>(state.tool);
+            auto tool = static_cast<int>(state.tool);
             changed |= Ui::ComboControl("preview_tool", &tool, tools.data(), static_cast<int>(tools.size()), context.theme.fonts);
             state.tool = static_cast<UiCanvasLayoutTool>(tool);
             changed |= Ui::CheckboxControl(label("workspace.ui_canvas.preview.snap"), &state.snap, context.theme.fonts);

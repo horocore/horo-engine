@@ -108,8 +108,8 @@ namespace Horo::Application::Internal {
             const auto *first = std::bit_cast<const char *>(bytes.data());
             const auto document = Json::parse(first, first + bytes.size(), std::ref(unique));
             auto tools = DecodeToolApprovals(document, actualHost);
-            return Creation::Success(std::shared_ptr<const VerifiedShaderHostCatalog>{
-                new VerifiedShaderHostCatalog(authenticated.Value(), std::string{actualHost}, std::move(tools))});
+            return Creation::Success(std::make_shared<const VerifiedShaderHostCatalog>(ConstructionKey{}, authenticated.Value(),
+                                                                                       std::string{actualHost}, std::move(tools)));
         } catch (const InvalidCatalog &) {
             return Creation::Failure(MakeError(Render::ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid));
         } catch (const Json::exception &) {
@@ -120,7 +120,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc VerifiedShaderHostCatalog::VerifiedShaderHostCatalog */
-    VerifiedShaderHostCatalog::VerifiedShaderHostCatalog(Security::VerifiedArtifactEvidence evidence, std::string host,
+    VerifiedShaderHostCatalog::VerifiedShaderHostCatalog(ConstructionKey, Security::VerifiedArtifactEvidence evidence, std::string host,
                                                          std::vector<ShaderHostToolApproval> tools)
         : evidence_(std::move(evidence)), host_(std::move(host)), tools_(std::move(tools)) {}
 

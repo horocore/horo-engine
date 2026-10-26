@@ -36,6 +36,12 @@ namespace Horo::Render {
 
     /** @brief Bounded same-owner batch handoff; trial reservations and borrowed wait arrays stay alive through native encoding. */
     struct RenderFrameScope::UiCompositionState final {
+        UiCompositionState() = default;
+        UiCompositionState(const UiCompositionState &) = delete;
+        UiCompositionState &operator=(const UiCompositionState &) = delete;
+        UiCompositionState(UiCompositionState &&) = delete;
+        UiCompositionState &operator=(UiCompositionState &&) = delete;
+
         IRenderGraphResourceLease *lease{};
         bool backendOwned{};
         bool transferred{};
@@ -64,8 +70,10 @@ namespace Horo::Render {
         Result<void> ValidateUiCompositionInventory(const std::span<UiPaintGraphComposition> canvases) {
             if (canvases.empty() || canvases.size() > 64)
                 return Result<void>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
-            std::size_t passes{}, resources{}, draws{};
-            for (auto &canvas : canvases) {
+            std::size_t passes{};
+            std::size_t resources{};
+            std::size_t draws{};
+            for (const auto &canvas : canvases) {
                 if (!canvas.graph || canvas.workloads.empty() || canvas.graph->Passes().size() != canvas.workloads.size())
                     return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
                 const auto add = [](std::size_t &sum, const std::size_t value, const std::size_t limit) {
@@ -129,18 +137,18 @@ namespace Horo::Render {
         state.lease = retained.Value();
         const auto submissions =
             state.explicitSubmissions ? std::span{&state.submissions[index], 1} : std::span<const RenderGraphQueueSubmission>{};
-        const auto valid = ValidateRenderGraphExecutionRequest({frame_,
-                                                                *canvas.graph,
-                                                                canvas.workloads,
-                                                                resolved.Value().View(),
-                                                                state.lease,
-                                                                state.transients[index] != nullptr,
-                                                                nullptr,
-                                                                submissions,
-                                                                {},
-                                                                {},
-                                                                RenderGraphExecutionRole::UiComposition});
-        if (valid.HasError())
+        if (const auto valid = ValidateRenderGraphExecutionRequest({frame_,
+                                                                    *canvas.graph,
+                                                                    canvas.workloads,
+                                                                    resolved.Value().View(),
+                                                                    state.lease,
+                                                                    state.transients[index] != nullptr,
+                                                                    nullptr,
+                                                                    submissions,
+                                                                    {},
+                                                                    {},
+                                                                    RenderGraphExecutionRole::UiComposition});
+            valid.HasError())
             return valid;
         return Result<void>::Success();
     }
@@ -149,7 +157,7 @@ namespace Horo::Render {
     Result<void> RenderFrameScope::EncodeUiComposition(const std::span<UiPaintGraphComposition> canvases, UiCompositionState &state) {
         auto history = *owner_->submissionAllocator_;
         for (std::size_t index = 0; index < canvases.size(); ++index) {
-            auto &canvas = canvases[index];
+            const auto &canvas = canvases[index];
             auto resolved = Detail::ResolveFrameGraphResources(*canvas.graph, *owner_->resourceRegistry_, state.transients[index]);
             if (resolved.HasError())
                 return Result<void>::Failure(resolved.ErrorValue());
@@ -183,16 +191,21 @@ namespace Horo::Render {
             return admitted;
 
         struct StageFence final {
+            StageFence(const StageFence &) = delete;
+            StageFence &operator=(const StageFence &) = delete;
+            StageFence(StageFence &&) = delete;
+            StageFence &operator=(StageFence &&) = delete;
+
             bool &active;
 
-            explicit StageFence(bool &flag) : active(flag) {
-                active = true;
-            }
+            explicit StageFence(bool &flag) : active(flag = true) {}
 
             ~StageFence() {
                 active = false;
             }
-        } fence{uiComposing_};
+        };
+
+        StageFence fence{uiComposing_};
 
         try {
             UiCompositionState state;

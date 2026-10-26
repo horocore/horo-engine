@@ -7,7 +7,10 @@ different public contracts into packet, admission and shutdown observations;
 they do not install a production fallback or expose GNS native types to the
 network API. Loopback and unimpeded simulated runs split a nine-byte message
 into four-byte fragments and reassemble it; production GNS delivers one native
-message and supports only channel zero and at most 1200 bytes. The common
+message. The default qualification profile selects one channel and at most
+1200 bytes. Host-selected multi-lane GNS profiles configure distinct real native
+lanes; their routing/ordering coverage is separate from this simulated
+fragmentation contract. The common
 contract checks exact payload ownership, coalesced submissions, channel
 admission, size bounds and shutdown rejection without pretending the backend
 capabilities are identical.

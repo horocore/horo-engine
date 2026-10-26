@@ -145,7 +145,7 @@ namespace Horo::Application::PrefabAtomicTest {
             return owner_->PreparationPhase();
         }
 
-        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView active,
+        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &active,
                                                                            std::span<const Runtime::RuntimeEntityView> created,
                                                                            std::span<const Runtime::EntityRef> destroyed) override {
             auto prepared = owner_->Prepare(active, created, destroyed);

@@ -81,7 +81,8 @@ namespace Horo::Runtime {
                 return SceneStructuralOwner::Gameplay;
             }
 
-            Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(RuntimeSceneView active, std::span<const RuntimeEntityView> created,
+            Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(const RuntimeSceneView &active,
+                                                                      std::span<const RuntimeEntityView> created,
                                                                       std::span<const EntityRef> destroyed) override {
                 REQUIRE(active.IsCurrent());
                 for (const auto &entity : created) {
