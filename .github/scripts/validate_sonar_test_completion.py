@@ -3,24 +3,31 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
 from defusedxml import ElementTree
 
 
+# Full CTest discovery includes commands, environment properties and backtraces
+# for the roughly 10,000-case suite. Allow growth within half the JUnit budget.
+DISCOVERY_LIMIT_BYTES = 64 * 1024 * 1024
+
+
 def read_bounded(path: Path, limit: int) -> bytes:
     """Read a local report with a fixed memory bound."""
     with path.open("rb") as stream:
         data = stream.read(limit + 1)
+        size = os.fstat(stream.fileno()).st_size
     if len(data) > limit:
-        raise ValueError(f"Report exceeds size limit: {path}")
+        raise ValueError(f"Report exceeds size limit: {path} ({size} bytes; limit {limit} bytes)")
     return data
 
 
 def selected_tests(discovery: Path) -> dict[str, bool]:
     """Return independently discovered names and their configured disabled state."""
-    manifest = json.loads(read_bounded(discovery, 16 * 1024 * 1024))
+    manifest = json.loads(read_bounded(discovery, DISCOVERY_LIMIT_BYTES))
     if manifest.get("kind") != "ctestInfo":
         raise ValueError("Expected CTest JSON discovery")
     tests: dict[str, bool] = {}

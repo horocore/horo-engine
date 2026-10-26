@@ -72,6 +72,45 @@ def test_complete_failed_suite_is_evidence_not_a_pass(reports: tuple[Path, Path]
     completion.validate_completion(discovery, junit)
 
 
+def test_full_suite_discovery_can_exceed_the_old_budget(reports: tuple[Path, Path]) -> None:
+    discovery, junit = reports
+    manifest = json.loads(discovery.read_bytes())
+    templates = manifest["tests"]
+    selected, cases = [], []
+    report_root = "/home/runner/work/horo-engine/horo-engine/build/sonar"
+    environment = [
+        f"FIXTURE_INPUT_{index}={report_root}/tests/generated-gameplay-module-inputs/"
+        f"scene-owner-retirement-and-behavior-publication/compiled-fixture-{index}.json"
+        for index in range(8)
+    ]
+    terminal = {"passed": 'status="run"/>', "failed": 'status="fail"><failure/></testcase>',
+                "disabled": 'status="disabled"/>', "skipped": 'status="notrun"><skipped/></testcase>'}
+    for index in range(9744):
+        template = templates[index % len(templates)]
+        name = f"{template['name']}-{index}"
+        selected.append({**template, "name": name,
+                         "properties": [*template.get("properties", []), {"name": "ENVIRONMENT", "value": environment}]})
+        cases.append(f'<testcase name="{name}" {terminal[template["name"]]}')
+    manifest["tests"] = selected
+    payload = json.dumps(manifest, indent=2).encode("utf-8")
+    assert 16 * 1024 * 1024 < len(payload) <= completion.DISCOVERY_LIMIT_BYTES
+    discovery.write_bytes(payload)
+    junit.write_text(f'<testsuite tests="{len(selected)}">{"".join(cases)}</testsuite>')
+    completion.validate_completion(discovery, junit)
+
+
+def test_discovery_budget_accepts_its_boundary_and_rejects_one_more_byte(tmp_path: Path) -> None:
+    discovery = tmp_path / "discovery.json"
+    payload = json.dumps({"kind": "ctestInfo", "tests": [{"name": "passed"}]}).encode("utf-8")
+    limit = completion.DISCOVERY_LIMIT_BYTES
+    discovery.write_bytes(payload + b" " * (limit - len(payload)))
+    assert completion.selected_tests(discovery) == {"passed": False}
+    with discovery.open("ab") as stream:
+        stream.write(b" ")
+    with pytest.raises(ValueError, match=rf"{limit + 1} bytes; limit {limit} bytes"):
+        completion.selected_tests(discovery)
+
+
 @pytest.mark.parametrize("replacement", [
     '<testcase name="passed" status="run"/>',
     '<testcase name="passed" status="notrun"/>',
