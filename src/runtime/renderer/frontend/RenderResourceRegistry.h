@@ -119,7 +119,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Release(RenderResourceClass resourceClass, RenderResourceIdentity identity);
         [[nodiscard]] Result<void> CancelPending(RenderResourceClass resourceClass, RenderResourceIdentity identity);
         /** @brief Attaches one admitted UI owner before its exact pending creation is published to a caller. */
-        void BindUiPaintOwner(ResourceReservation reservation, const std::shared_ptr<UiPaintOwnerRetirement> &owner) noexcept;
+        void BindUiPaintOwner(const ResourceReservation &reservation, const std::shared_ptr<UiPaintOwnerRetirement> &owner) noexcept;
         /** @brief Finds requested pending ownership without copying or constructing operation diagnostics. */
         [[nodiscard]] std::optional<ResourceReservation> PendingUiPaintRetirement(RenderResourceIdentity identity) const noexcept;
         /** @brief Marks one exact requested UI generation retiring; existing pins still gate native destruction. */

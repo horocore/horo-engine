@@ -368,7 +368,7 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc RenderResourceRegistry::BindUiPaintOwner */
-    void RenderResourceRegistry::BindUiPaintOwner(const ResourceReservation reservation,
+    void RenderResourceRegistry::BindUiPaintOwner(const ResourceReservation &reservation,
                                                   const std::shared_ptr<UiPaintOwnerRetirement> &owner) noexcept {
         assert(slots_.FindExact(reservation.identity) && slots_.FindExact(reservation.identity)->state == RenderResourceState::Pending &&
                slots_.FindExact(reservation.identity)->operation == reservation.operation);
@@ -408,8 +408,8 @@ namespace Horo::Render::Detail {
             if (uiPaintRetirementCursor_ >= slots_.Size())
                 uiPaintRetirementCursor_ = 1;
             const auto slot = uiPaintRetirementCursor_++;
-            const Entry &entry = slots_.At(slot);
-            if (entry.state == RenderResourceState::Ready && entry.uiPaintOwner && entry.uiPaintOwner->Requested())
+            if (const Entry &entry = slots_.At(slot);
+                entry.state == RenderResourceState::Ready && entry.uiPaintOwner && entry.uiPaintOwner->Requested())
                 RetireUiPaintResource({owner_, static_cast<std::uint32_t>(slot), entry.generation}, entry.operation);
         }
     }
