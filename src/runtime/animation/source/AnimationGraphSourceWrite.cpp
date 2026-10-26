@@ -1,4 +1,4 @@
-#include "AnimationGraphSourceInternal.h"
+#include "AnimationGraphSourceWriter.h"
 
 #include <type_traits>
 
@@ -12,135 +12,218 @@ namespace Horo::Animation {
         }
 
         /** @brief Writes stable pin identities and exact semantic direction/interface information. */
-        Json Pin(const GraphPin &pin) {
-            return {{"id", pin.id.Value()},
-                    {"role", Roles.at(static_cast<std::size_t>(pin.role))},
-                    {"type", Type(pin.type)},
-                    {"output", pin.output},
-                    {"interface", pin.interfaceId.IsValid() ? Json(pin.interfaceId.Value()) : Json(nullptr)}};
+        void Pin(SourceWriter &out, const GraphPin &pin) {
+            out.Object([&] {
+                out.Field("id", pin.id.Value());
+                out.Field("role", Roles.at(static_cast<std::size_t>(pin.role)));
+                out.Field("type", Type(pin.type));
+                out.Field("output", pin.output);
+                out.Field("interface", [&] {
+                    pin.interfaceId.IsValid() ? out.Value(pin.interfaceId.Value()) : out.Value(nullptr);
+                });
+            });
         }
 
-        /** @brief Writes one transition's ordered typed condition block and exact time/policy operands. */
-        Json StateTransition(const GraphStateTransition &transition) {
-            Json conditions = Json::array();
-            for (const auto &condition : transition.conditions)
-                conditions.push_back(Json{{"parameter", condition.parameter.Value()},
-                                          {"predicate", Predicates.at(static_cast<std::size_t>(condition.predicate))},
-                                          {"threshold", std::visit(
-                                                            []<typename Scalar>(const Scalar scalar) -> Json {
-                    if constexpr (std::is_same_v<Scalar, float>)
-                        return scalar == 0.0F ? Json(0.0F) : Json(scalar);
-                    else
-                        return scalar;
-                }, condition.threshold)},
-                                          {"release", condition.releaseThreshold == 0.0F ? 0.0F : condition.releaseThreshold}});
-            return Json{{"id", transition.id.Value()},
-                        {"source", transition.source.Value()},
-                        {"destination", transition.destination.Value()},
-                        {"priority", transition.priority},
-                        {"duration", transition.duration.ticks},
-                        {"exitTime", transition.exitTime ? Json(transition.exitTime->ticks) : Json(nullptr)},
-                        {"interruption", Interruptions.at(static_cast<std::size_t>(transition.interruption))},
-                        {"curve", BlendCurves.at(static_cast<std::size_t>(transition.curve))},
-                        {"conditions", std::move(conditions)}};
+        /** @brief Writes one transition's ordered typed conditions and exact time/policy operands. */
+        void StateTransition(SourceWriter &out, const GraphStateTransition &transition) {
+            out.Object([&] {
+                out.Field("id", transition.id.Value());
+                out.Field("source", transition.source.Value());
+                out.Field("destination", transition.destination.Value());
+                out.Field("priority", transition.priority);
+                out.Field("duration", transition.duration.ticks);
+                out.Field("exitTime", [&] {
+                    transition.exitTime ? out.Value(transition.exitTime->ticks) : out.Value(nullptr);
+                });
+                out.Field("interruption", Interruptions.at(static_cast<std::size_t>(transition.interruption)));
+                out.Field("curve", BlendCurves.at(static_cast<std::size_t>(transition.curve)));
+                out.Field("conditions", [&] {
+                    out.Array(transition.conditions, [&](const GraphStateCondition &condition) {
+                        out.Object([&] {
+                            out.Field("parameter", condition.parameter.Value());
+                            out.Field("predicate", Predicates.at(static_cast<std::size_t>(condition.predicate)));
+                            out.Field("threshold", [&] {
+                                std::visit([&](const auto scalar) {
+                                    out.Value(scalar);
+                                }, condition.threshold);
+                            });
+                            out.Field("release", condition.releaseThreshold);
+                        });
+                    });
+                });
+            });
         }
 
-        /** @brief Writes only authored state identities, ordered conditions and policies, never runtime clocks or generations. */
-        Json StateMachineReference(const GraphStateMachineNode &machine) {
-            Json states = Json::array();
-            Json transitions = Json::array();
-            for (const auto &state : machine.states) {
-                const auto *clip = std::get_if<AnimationClipId>(&state.source);
-                states.push_back(
-                    Json{{"id", state.id.Value()},
-                         {"sourceKind", clip ? "clip" : "definition"},
-                         {"reference", clip ? Json(clip->Asset().ToString()) : Json(std::get<GraphDefinitionId>(state.source).Value())},
-                         {"loopPeriod", state.loopPeriod ? Json(state.loopPeriod->ticks) : Json(nullptr)}});
-            }
-            for (const auto &transition : machine.transitions) {
-                transitions.push_back(StateTransition(transition));
-            }
-            return Json{{"initial", machine.initial.Value()}, {"states", std::move(states)}, {"transitions", std::move(transitions)}};
+        /** @brief Writes authored state identities and policies without runtime clocks or generations. */
+        void StateMachineReference(SourceWriter &out, const GraphStateMachineNode &machine) {
+            out.Object([&] {
+                out.Field("initial", machine.initial.Value());
+                out.Field("states", [&] {
+                    out.Array(machine.states, [&](const GraphState &state) {
+                        const auto *clip = std::get_if<AnimationClipId>(&state.source);
+                        out.Object([&] {
+                            out.Field("id", state.id.Value());
+                            out.Field("sourceKind", clip ? "clip" : "definition");
+                            out.Field("reference", [&] {
+                                if (clip)
+                                    out.Value(clip->Asset().ToString());
+                                else
+                                    out.Value(std::get<GraphDefinitionId>(state.source).Value());
+                            });
+                            out.Field("loopPeriod", [&] {
+                                state.loopPeriod ? out.Value(state.loopPeriod->ticks) : out.Value(nullptr);
+                            });
+                        });
+                    });
+                });
+                out.Field("transitions", [&] {
+                    out.Array(machine.transitions, [&](const auto &transition) {
+                        StateTransition(out, transition);
+                    });
+                });
+            });
         }
 
         /** @brief Writes the one reference allowed by each typed opcode. */
-        Json Reference(const GraphNodePayload &payload) {
-            return std::visit([]<typename T>(const T &value) -> Json {
+        void Reference(SourceWriter &out, const GraphNodePayload &payload) {
+            std::visit([&]<typename T>(const T &value) {
                 if constexpr (std::is_same_v<T, GraphClipNode>)
-                    return value.clip.Asset().ToString();
+                    out.Value(value.clip.Asset().ToString());
                 else if constexpr (std::is_same_v<T, GraphParameterNode>)
-                    return value.parameter.Value();
+                    out.Value(value.parameter.Value());
                 else if constexpr (std::is_same_v<T, GraphInputNode>)
-                    return value.input.Value();
+                    out.Value(value.input.Value());
                 else if constexpr (std::is_same_v<T, GraphCallNode>)
-                    return value.definition.Value();
-                else if constexpr (std::is_same_v<T, GraphStateMachineNode>) {
-                    return StateMachineReference(value);
-                } else
-                    return nullptr;
+                    out.Value(value.definition.Value());
+                else if constexpr (std::is_same_v<T, GraphStateMachineNode>)
+                    StateMachineReference(out, value);
+                else
+                    out.Value(nullptr);
             }, payload);
         }
 
-        /** @brief Writes exact typed settings independently of opcode identity and runtime generations. */
-        Json Settings(const GraphNodePayload &payload) {
-            if (const auto *clip = std::get_if<GraphClipNode>(&payload))
-                return {{"referencePose", clip->referencePose ? Json(clip->referencePose->Value()) : Json(nullptr)}};
-            if (const auto *blend = std::get_if<GraphBlendNode>(&payload)) {
-                Json joints = Json::array();
-                for (const auto &entry : blend->mask.joints)
-                    joints.push_back(Json{{"joint", entry.joint.Value()}, {"weight", entry.weight == 0.0F ? 0.0F : entry.weight}});
-                return {{"mode", BlendModes.at(static_cast<std::size_t>(blend->mode))},
-                        {"missingJoint", MissingJoints.at(static_cast<std::size_t>(blend->missingJoint))},
-                        {"mask", Json{{"defaultWeight", blend->mask.defaultWeight == 0.0F ? 0.0F : blend->mask.defaultWeight},
-                                      {"joints", std::move(joints)}}}};
-            }
-            return Json::object();
+        /** @brief Writes typed settings independently of opcode identity and runtime generations. */
+        void Settings(SourceWriter &out, const GraphNodePayload &payload) {
+            out.Object([&] {
+                if (const auto *clip = std::get_if<GraphClipNode>(&payload))
+                    out.Field("referencePose", [&] {
+                        clip->referencePose ? out.Value(clip->referencePose->Value()) : out.Value(nullptr);
+                    });
+                if (const auto *blend = std::get_if<GraphBlendNode>(&payload)) {
+                    out.Field("mode", BlendModes.at(static_cast<std::size_t>(blend->mode)));
+                    out.Field("missingJoint", MissingJoints.at(static_cast<std::size_t>(blend->missingJoint)));
+                    out.Field("mask", [&] {
+                        out.Object([&] {
+                            out.Field("defaultWeight", blend->mask.defaultWeight);
+                            out.Field("joints", [&] {
+                                out.Array(blend->mask.joints, [&](const GraphBoneWeight &entry) {
+                                    out.Object([&] {
+                                        out.Field("joint", entry.joint.Value());
+                                        out.Field("weight", entry.weight);
+                                    });
+                                });
+                            });
+                        });
+                    });
+                }
+            });
         }
 
         /** @brief Writes canonical nodes without persisting variant indexes or ABI layout. */
-        Json Node(const GraphNode &node) {
-            Json pins = Json::array();
-            for (const auto &pin : node.pins)
-                pins.push_back(Pin(pin));
-            return {{"id", node.id.Value()},
-                    {"kind", Kinds.at(node.payload.index())},
-                    {"reference", Reference(node.payload)},
-                    {"pins", std::move(pins)},
-                    {"settings", Settings(node.payload)}};
+        void Node(SourceWriter &out, const GraphNode &node) {
+            out.Object([&] {
+                out.Field("id", node.id.Value());
+                out.Field("kind", Kinds.at(node.payload.index()));
+                out.Field("reference", [&] {
+                    Reference(out, node.payload);
+                });
+                out.Field("pins", [&] {
+                    out.Array(node.pins, [&](const auto &pin) {
+                        Pin(out, pin);
+                    });
+                });
+                out.Field("settings", [&] {
+                    Settings(out, node.payload);
+                });
+            });
         }
 
         /** @brief Writes exact stable edge endpoints. */
-        Json Endpoint(const GraphEndpoint &endpoint) {
-            return {{"node", endpoint.node.Value()}, {"pin", endpoint.pin.Value()}};
+        void Endpoint(SourceWriter &out, const GraphEndpoint &endpoint) {
+            out.Object([&] {
+                out.Field("node", endpoint.node.Value());
+                out.Field("pin", endpoint.pin.Value());
+            });
         }
 
         /** @brief Writes a fully validated canonical definition. */
-        Json Definition(const GraphDefinition &definition) {
-            Json inputs = Json::array();
-            Json nodes = Json::array();
-            Json edges = Json::array();
-            for (const auto &input : definition.inputs)
-                inputs.push_back(Json{{"id", input.id.Value()}, {"type", Type(input.type)}});
-            for (const auto &node : definition.nodes)
-                nodes.push_back(Node(node));
-            for (const auto &edge : definition.connections)
-                edges.push_back(
-                    Json{{"source", Endpoint(edge.source)}, {"destination", Endpoint(edge.destination)}, {"type", Type(edge.type)}});
-            return {{"id", definition.id.Value()},
-                    {"inputs", std::move(inputs)},
-                    {"nodes", std::move(nodes)},
-                    {"connections", std::move(edges)}};
+        void Definition(SourceWriter &out, const GraphDefinition &definition) {
+            out.Object([&] {
+                out.Field("id", definition.id.Value());
+                out.Field("inputs", [&] {
+                    out.Array(definition.inputs, [&](const auto &input) {
+                        out.Object([&] {
+                            out.Field("id", input.id.Value());
+                            out.Field("type", Type(input.type));
+                        });
+                    });
+                });
+                out.Field("nodes", [&] {
+                    out.Array(definition.nodes, [&](const auto &node) {
+                        Node(out, node);
+                    });
+                });
+                out.Field("connections", [&] {
+                    out.Array(definition.connections, [&](const GraphConnection &edge) {
+                        out.Object([&] {
+                            out.Field("source", [&] {
+                                Endpoint(out, edge.source);
+                            });
+                            out.Field("destination", [&] {
+                                Endpoint(out, edge.destination);
+                            });
+                            out.Field("type", Type(edge.type));
+                        });
+                    });
+                });
+            });
         }
 
-        /** @brief Writes finite scalar defaults, normalizing equivalent signed zero. */
-        Json Parameter(const GraphParameter &parameter) {
-            Json value = std::visit([]<typename T>(const T scalar) -> Json {
-                if constexpr (std::is_same_v<T, float>)
-                    return scalar == 0.0F ? Json(0.0F) : Json(scalar);
-                else
-                    return Json(scalar);
-            }, parameter.defaultValue);
-            return {{"id", parameter.id.Value()}, {"name", parameter.name}, {"type", Type(parameter.type)}, {"default", std::move(value)}};
+        /** @brief Writes finite scalar defaults with the existing canonical primitive spelling. */
+        void Parameter(SourceWriter &out, const GraphParameter &parameter) {
+            out.Object([&] {
+                out.Field("id", parameter.id.Value());
+                out.Field("name", parameter.name);
+                out.Field("type", Type(parameter.type));
+                out.Field("default", [&] {
+                    std::visit([&](const auto scalar) {
+                        out.Value(scalar);
+                    }, parameter.defaultValue);
+                });
+            });
+        }
+
+        /** @brief Preserves the codec's sorted clip dependencies followed by the exact skeleton. */
+        void Dependencies(SourceWriter &out, const AnimationGraphData &data) {
+            DependencyProjection projection;
+            for (const auto &definition : data.definitions)
+                for (const auto &node : definition.nodes)
+                    std::visit(projection, node.payload);
+            out.Array([&] {
+                for (const auto clip : projection.clips)
+                    out.Item([&] {
+                        out.Object([&] {
+                            out.Field("assetType", "core.animation.clip");
+                            out.Field("assetId", clip.Asset().ToString());
+                        });
+                    });
+                out.Item([&] {
+                    out.Object([&] {
+                        out.Field("assetType", "core.animation.skeleton");
+                        out.Field("assetId", data.skeleton.Asset().ToString());
+                    });
+                });
+            });
         }
     }  // namespace
 
@@ -156,34 +239,38 @@ namespace Horo::Animation {
             if (checked.HasError())
                 return Result<std::string>::Failure(checked.ErrorValue());
             const auto &canonical = checked.Value();
-            Json parameters = Json::array();
-            Json definitions = Json::array();
-            for (const auto &parameter : canonical.parameters) {
-                CheckAdmission(context);
-                parameters.push_back(Parameter(parameter));
-            }
-            for (const auto &definition : canonical.definitions) {
-                CheckAdmission(context);
-                definitions.push_back(Definition(definition));
-            }
-            Json envelope{{"schemaVersion", CurrentAnimationGraphSchemaVersion},
-                          {"assetType", "core.animation.graph"},
-                          {"contractVersion", Json{{"major", CurrentAnimationGraphContractVersion.major},
-                                                   {"minor", CurrentAnimationGraphContractVersion.minor},
-                                                   {"patch", CurrentAnimationGraphContractVersion.patch}}},
-                          {"dependencies", Dependencies(canonical)},
-                          {"payload", Json{{"skeleton", canonical.skeleton.Asset().ToString()},
-                                           {"entry", canonical.entry.Value()},
-                                           {"parameters", std::move(parameters)},
-                                           {"definitions", std::move(definitions)}}}};
-            std::size_t jsonValues{};
-            CheckJsonBudget(envelope, context, limits, 0, jsonValues);
-            auto bytes = envelope.dump();
-            bytes.push_back('\n');
-            if (bytes.size() > limits.bytes)
-                Reject(AnimationErrors::GraphLimitExceeded);
-            CheckAdmission(context);
-            return Result<std::string>::Success(std::move(bytes));
+            SourceWriter out(context, limits);
+            out.Object([&] {
+                out.Field("schemaVersion", CurrentAnimationGraphSchemaVersion);
+                out.Field("assetType", "core.animation.graph");
+                out.Field("contractVersion", [&] {
+                    out.Object([&] {
+                        out.Field("major", CurrentAnimationGraphContractVersion.major);
+                        out.Field("minor", CurrentAnimationGraphContractVersion.minor);
+                        out.Field("patch", CurrentAnimationGraphContractVersion.patch);
+                    });
+                });
+                out.Field("dependencies", [&] {
+                    Dependencies(out, canonical);
+                });
+                out.Field("payload", [&] {
+                    out.Object([&] {
+                        out.Field("skeleton", canonical.skeleton.Asset().ToString());
+                        out.Field("entry", canonical.entry.Value());
+                        out.Field("parameters", [&] {
+                            out.Array(canonical.parameters, [&](const auto &parameter) {
+                                Parameter(out, parameter);
+                            });
+                        });
+                        out.Field("definitions", [&] {
+                            out.Array(canonical.definitions, [&](const auto &definition) {
+                                Definition(out, definition);
+                            });
+                        });
+                    });
+                });
+            });
+            return Result<std::string>::Success(out.Finish());
         } catch (const Rejection &failure) {
             return Result<std::string>::Failure(MakeError(*failure.code));
         }
