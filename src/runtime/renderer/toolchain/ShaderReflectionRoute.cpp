@@ -47,8 +47,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             if (declared.id.value != binding + 1 || declared.name != names[binding] || !declared.parameters.empty())
                 return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
         }
-        const auto &identity = request.tool;
-        if (!cross || cross->identity.release != identity.release || cross->identity.buildDigest != identity.buildDigest)
+        if (const auto &identity = request.tool;
+            !cross || cross->identity.release != identity.release || cross->identity.buildDigest != identity.buildDigest)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
         return Result<void>::Success();
     }

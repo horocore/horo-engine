@@ -52,10 +52,16 @@ namespace Horo::Application::Internal::Detail {
         Runtime::Ui::UiRenderExtractorDescriptor extraction;
         Runtime::Ui::UiRenderGeometryArena arena;
         Runtime::Ui::UiRenderGeometryArenaDescriptor geometryPolicy;
-        Render::UiPaintProgramDescriptor policy;
-        Render::CookedUiPaintKernel kernel;
-        std::unique_ptr<Render::UiPaintProgram> program;
-        std::unique_ptr<Render::UiPaintProgram> retiredProgram;
+
+        /** @brief One preparation policy and its active/retiring native generations, destroyed in reverse ownership order. */
+        struct NativePrograms final {
+            Render::UiPaintProgramDescriptor policy;
+            Render::CookedUiPaintKernel kernel;
+            std::unique_ptr<Render::UiPaintProgram> active;
+            std::unique_ptr<Render::UiPaintProgram> retired;
+        };
+
+        NativePrograms programs;
         RuntimeUiPaintFrame frame;
         std::vector<Render::RenderTextureHandle> textures;
         bool refresh{true};
@@ -71,8 +77,8 @@ namespace Horo::Application::Internal::Detail {
                              std::shared_ptr<Runtime::Ui::UiElementSlotAllocator> allocatorOwner = {})
             : instance(id), allocatorLifetime(std::move(allocatorOwner)), animation(std::move(derived.participant)),
               controller(std::move(derived.controller)), projection(std::move(projected)), resources(std::move(assets)),
-              extraction(prepared.extraction), arena(std::move(geometryArena)), geometryPolicy(prepared.geometry), policy(prepared.program),
-              kernel(std::move(prepared.kernel)), output{projection->Canvas(), prepared.viewport} {}
+              extraction(prepared.extraction), arena(std::move(geometryArena)), geometryPolicy(prepared.geometry),
+              programs{prepared.program, std::move(prepared.kernel), {}, {}}, output{projection->Canvas(), prepared.viewport} {}
 
         /** @brief Resolves coalesced native evidence through canonical canvas policy before the next derived update. */
         [[nodiscard]] Result<void> ApplyOutput();

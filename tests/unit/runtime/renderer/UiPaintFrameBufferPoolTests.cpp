@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/UiPaintFrameBufferPool.h"
 #include "RenderFrontendTestSupport.h"
 #include "UiPaintFrontendState.h"
+#include "support/AllocationProbe.h"
 
 namespace {
     using namespace Horo;
@@ -167,4 +168,70 @@ TEST_CASE("UI creation observation cannot excuse genuinely stale succeeded owner
     const auto stale = frontend->ReleaseBuffer(handle);
     REQUIRE(stale.HasError());
     CHECK(stale.ErrorValue().code.Value() == "render.frontend.resource.stale");
+}
+
+TEST_CASE("UI pool destruction cannot allocate diagnostics for pending or ready residents", "[renderer][ui-paint][pool]") {
+    auto frontend = Frontend();
+    auto created = UiPaintFrameBufferPool::Create(*frontend, Budget, 1);
+    REQUIRE(created.HasValue());
+    auto pool = std::move(created).Value();
+    bool ready = false;
+    SECTION("pending creation is cancelled with its pre-owned diagnostic") {}
+    SECTION("ready generation uses the normal retirement queue") {
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        ready = true;
+    }
+    Horo::Tests::AllocationProbe::Measurement allocations;
+    {
+        Horo::Tests::AllocationProbe::ScopedFailure failure;
+        Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+        pool.reset();
+        allocations = measurement.Snapshot();
+    }
+    CHECK(allocations.requests == 0);
+    CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+    CHECK(frontend->MemorySnapshot().reservationCount == 0);
+    CHECK(frontend->MemorySnapshot().allocationCount == 0);
+    CHECK(lifecycleState.createBufferCount == (ready ? 3 : 0));
+    CHECK(lifecycleState.destroyBufferCount == (ready ? 3 : 0));
+}
+
+TEST_CASE("UI pool destructor requests defer to the frontend owner boundary", "[renderer][ui-paint][pool]") {
+    auto frontend = Frontend();
+    auto created = UiPaintFrameBufferPool::Create(*frontend, Budget, 1);
+    REQUIRE(created.HasValue());
+    auto pool = std::move(created).Value();
+    bool ready = false;
+    SECTION("pending foreign-thread request cancels before native realization") {}
+    SECTION("ready foreign-thread request retains native ownership until its owner drains") {
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        ready = true;
+    }
+    std::thread foreign([owned = std::move(pool)]() mutable {
+        owned.reset();
+    });
+    foreign.join();
+    CHECK(lifecycleState.destroyBufferCount == 0);
+    REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+    CHECK(frontend->MemorySnapshot().reservationCount == 0);
+    CHECK(frontend->MemorySnapshot().allocationCount == 0);
+    CHECK(lifecycleState.createBufferCount == (ready ? 3 : 0));
+    CHECK(lifecycleState.destroyBufferCount == (ready ? 3 : 0));
+}
+
+TEST_CASE("UI pool destructor cannot retire resources inside an active frame", "[renderer][ui-paint][pool]") {
+    auto frontend = Frontend();
+    auto created = UiPaintFrameBufferPool::Create(*frontend, Budget, 1);
+    REQUIRE(created.HasValue());
+    auto pool = std::move(created).Value();
+    {
+        auto frame = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}});
+        REQUIRE(frame.HasValue());
+        pool.reset();
+        CHECK(lifecycleState.destroyBufferCount == 0);
+    }
+    REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    CHECK(lifecycleState.destroyBufferCount == 3);
+    CHECK(frontend->MemorySnapshot().allocationCount == 0);
 }

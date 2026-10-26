@@ -137,7 +137,18 @@ namespace Horo::Application::Internal {
 
     /** @brief Fixed participant registered before RuntimeHost startup and before the editor frame consumer. */
     class RuntimeUiPaintHost final : public Runtime::RuntimeLifecycleParticipant {
+        class ConstructionKey final {
+            friend class RuntimeUiPaintHost;
+            ConstructionKey() noexcept = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) noexcept = default;
+        };
+
     public:
+        /** @brief Factory-only stable host construction; callers cannot forge the private state/key pair. */
+        RuntimeUiPaintHost(ConstructionKey, std::shared_ptr<Detail::RuntimeUiPaintHostState> state) noexcept : state_(std::move(state)) {}
+
         /** @brief Creates a lawful empty canonical service and fixed adapter; no native residents exist until real source admission.
          * @param frontend Actual selected render owner, alive through adapter Shutdown and native drain.
          * @param source Actual RuntimeHost dispatch issuer. @param limits Explicit finite semantic registry policy.
@@ -154,14 +165,16 @@ namespace Horo::Application::Internal {
                                                                        Runtime::RuntimeDispatchSource source,
                                                                        Runtime::Ui::RuntimeUiService service);
         ~RuntimeUiPaintHost() override;
+        RuntimeUiPaintHost(const RuntimeUiPaintHost &) = delete;
+        RuntimeUiPaintHost &operator=(const RuntimeUiPaintHost &) = delete;
+        RuntimeUiPaintHost(RuntimeUiPaintHost &&) = delete;
+        RuntimeUiPaintHost &operator=(RuntimeUiPaintHost &&) = delete;
         [[nodiscard]] Result<void> Startup(const CancellationToken &cancellation) override;
         [[nodiscard]] Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override;
         [[nodiscard]] Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override;
         void Shutdown() noexcept override;
 
     private:
-        explicit RuntimeUiPaintHost(std::shared_ptr<Detail::RuntimeUiPaintHostState> state) noexcept : state_(std::move(state)) {}
-
         std::shared_ptr<Detail::RuntimeUiPaintHostState> state_;
     };
 

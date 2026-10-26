@@ -66,12 +66,10 @@ namespace Horo::Application::Internal {
                                                                                               std::move(preparation.kernel),
                                                                                               preparation.runtime.viewport},
                                                            std::move(preparation.allocatorLifetime));
-        const auto resources = candidate->AdmitResources();
-        if (resources.HasError())
+        if (const auto resources = candidate->AdmitResources(); resources.HasError())
             return resources;
         if (state_->started) {
-            const auto started = candidate->animation->Startup(state_->cancellation.Token());
-            if (started.HasError())
+            if (const auto started = candidate->animation->Startup(state_->cancellation.Token()); started.HasError())
                 return started;
             candidate->started = true;
         }
@@ -88,7 +86,7 @@ namespace Horo::Application::Internal {
                                                                          const CancellationToken &cancellation) const {
         using Reloaded = Result<Runtime::UiAnimationRuntimeReload>;
         if (!state_ || !state_->Available() || state_->dispatching || !state_->source || state_->phase != RuntimeUiPaintHostPhase::Active ||
-            state_->source->retiredProgram)
+            state_->source->programs.retired)
             return Reloaded::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (state_->sourceRevision == std::numeric_limits<std::uint64_t>::max())
             return Reloaded::Failure(MakeError(UiErrors::CapacityExceeded));
@@ -113,7 +111,7 @@ namespace Horo::Application::Internal {
             return result;
         // Nothing below can fail or acquire a source generation. The private projection already reserved/validated its storage.
         source.ReleaseFrame();
-        source.retiredProgram = std::move(source.program);
+        source.programs.retired = std::move(source.programs.active);
         source.projection = std::move(projected).Value();
         source.arena = std::move(arena).Value();
         source.resources = std::move(resources);

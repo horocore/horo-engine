@@ -482,17 +482,18 @@ namespace Horo::Runtime::Ui {
         if (!storage_)
             return;
         auto current = storage_->leases.load(std::memory_order_acquire);
-        for (;;) {
+        bool released = false;
+        while (!released) {
             if (current == 1) {
                 // The building sentinel also excludes reuse during last-reader source retirement.
                 if (!storage_->leases.compare_exchange_weak(current, BuildingLease, std::memory_order_acq_rel))
                     continue;
                 storage_->source.reset();
                 storage_->leases.store(0, std::memory_order_release);
-                break;
+                released = true;
+            } else {
+                released = storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_acq_rel);
             }
-            if (storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_acq_rel))
-                break;
         }
         storage_.reset();
     }

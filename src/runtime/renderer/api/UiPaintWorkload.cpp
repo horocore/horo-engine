@@ -29,44 +29,66 @@ namespace Horo::Render {
             return true;
         }
 
-        /** @brief Exact sorted graph-use admission is linear in pass uses with logarithmic sampled-table lookup. */
-        bool MatchesUses(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
-                         const RenderGraphUiPaint &paint) {
-            const std::array ids{paint.vertices, paint.indices, paint.parameters, paint.color, paint.stencil};
-            constexpr std::array kinds{RenderGraphUsageKind::VertexBuffer, RenderGraphUsageKind::IndexBuffer,
-                                       RenderGraphUsageKind::UniformBuffer, RenderGraphUsageKind::ColorAttachment,
-                                       RenderGraphUsageKind::DepthStencilAttachment};
-            std::size_t expected = paint.sampledResources.size();
+        using FixedPaintResources = std::array<RenderGraphResourceId, 5>;
+        constexpr std::array FixedPaintKinds{RenderGraphUsageKind::VertexBuffer, RenderGraphUsageKind::IndexBuffer,
+                                             RenderGraphUsageKind::UniformBuffer, RenderGraphUsageKind::ColorAttachment,
+                                             RenderGraphUsageKind::DepthStencilAttachment};
+
+        /** @brief Rejects foreign, out-of-range or repeated fixed resources before graph-use lookup. */
+        bool ValidFixedResources(const RenderGraphExecutionRequest &request, const FixedPaintResources &ids) {
             for (std::size_t index = 0; index < ids.size(); ++index) {
                 if (!ids[index].IsValid())
                     continue;
-                ++expected;
                 if (ids[index].owner != request.graph.Owner() || ids[index].value > request.graph.Resources().size())
                     return false;
-                for (std::size_t previous = 0; previous < index; ++previous)
-                    if (ids[index] == ids[previous])
-                        return false;
+                if (const auto prior = std::span{ids}.first(index); std::ranges::find(prior, ids[index]) != prior.end())
+                    return false;
             }
+            return true;
+        }
+
+        /** @brief Selects the exact access for a sampled input, buffer, cleared attachment or preserved attachment. */
+        RenderGraphAccess PaintAccess(const RenderGraphUiPaint &paint, const std::size_t index, const bool sampled) noexcept {
+            using enum RenderGraphAccess;
+            if (sampled || index < 3)
+                return Read;
+            if ((index == 3 && paint.clearColor) || (index == 4 && paint.clearStencil))
+                return Write;
+            return ReadWrite;
+        }
+
+        /** @brief Checks one already ordered graph use against the closed prepared resource categories. */
+        bool MatchesUse(const RenderGraphExecutionRequest &request, const RenderGraphResourceUsage &use, const RenderGraphUiPaint &paint,
+                        const FixedPaintResources &ids) {
+            const auto found = std::ranges::find(ids, use.resource);
+            const auto index = static_cast<std::size_t>(found - ids.begin());
+            const bool sampled = found == ids.end();
+            if (sampled && !std::ranges::binary_search(paint.sampledResources, use.resource))
+                return false;
+            const auto kind = sampled ? RenderGraphUsageKind::Sampled : FixedPaintKinds[index];
+            const auto resourceKind = !sampled && index < 3 ? RenderGraphResourceKind::Buffer : RenderGraphResourceKind::Texture;
+            return use.kind == kind && use.access == PaintAccess(paint, index, sampled) &&
+                   request.graph.Resources()[use.resource.value - 1].kind == resourceKind;
+        }
+
+        /** @brief Exact sorted graph-use admission is linear in pass uses with logarithmic sampled-table lookup. */
+        bool MatchesUses(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
+                         const RenderGraphUiPaint &paint) {
+            const FixedPaintResources ids{paint.vertices, paint.indices, paint.parameters, paint.color, paint.stencil};
+            if (!ValidFixedResources(request, ids))
+                return false;
+            const auto fixed = std::ranges::count_if(ids, [](const auto id) {
+                return id.IsValid();
+            });
             const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
-            if (uses.size() != expected || !ValidSamples(request, paint))
+            if (uses.size() != paint.sampledResources.size() + static_cast<std::size_t>(fixed) || !ValidSamples(request, paint))
                 return false;
             std::uint32_t previous{};
             for (const auto &use : uses) {
                 if (use.resource.owner != request.graph.Owner() || use.resource.value <= previous)
                     return false;
                 previous = use.resource.value;
-                const auto found = std::ranges::find(ids, use.resource);
-                const auto index = static_cast<std::size_t>(found - ids.begin());
-                const bool sampled = found == ids.end();
-                if (sampled && !std::ranges::binary_search(paint.sampledResources, use.resource))
-                    return false;
-                const auto kind = sampled ? RenderGraphUsageKind::Sampled : kinds[index];
-                const bool cleared = !sampled && ((index == 3 && paint.clearColor) || (index == 4 && paint.clearStencil));
-                const auto access = cleared                  ? RenderGraphAccess::Write
-                                    : !sampled && index >= 3 ? RenderGraphAccess::ReadWrite
-                                                             : RenderGraphAccess::Read;
-                const auto resourceKind = !sampled && index < 3 ? RenderGraphResourceKind::Buffer : RenderGraphResourceKind::Texture;
-                if (use.kind != kind || use.access != access || request.graph.Resources()[use.resource.value - 1].kind != resourceKind)
+                if (!MatchesUse(request, use, paint, ids))
                     return false;
             }
             return true;
@@ -74,27 +96,27 @@ namespace Horo::Render {
 
         /** @brief Validates the complete stencil program before encoding; no pass can leak an unmatched mask. */
         bool ValidDraws(const RenderGraphUiPaint &paint) {
+            using enum UiPaintSampling;
+            using enum UiPaintOperation;
             std::uint8_t depth = 0;
             for (const auto &draw : paint.draws) {
                 if (draw.indexCount == 0 || draw.indexCount % 3 != 0 || draw.firstIndex > paint.indexCount ||
                     draw.indexCount > paint.indexCount - draw.firstIndex || !draw.scissor.Fits(paint.extent) ||
-                    !std::isfinite(draw.opacity) || draw.opacity < 0.0F || draw.opacity > 1.0F ||
-                    draw.operation > UiPaintOperation::MultiplyCoverage || draw.sampling > UiPaintSampling::RoundedRectangle ||
-                    draw.filter > RenderSamplerFilter::Linear || draw.magFilter > RenderSamplerFilter::Linear ||
-                    draw.mipmap > UiPaintMipmap::Linear || draw.stencilDepth != depth ||
+                    !std::isfinite(draw.opacity) || draw.opacity < 0.0F || draw.opacity > 1.0F || draw.operation > MultiplyCoverage ||
+                    draw.sampling > RoundedRectangle || draw.filter > RenderSamplerFilter::Linear ||
+                    draw.magFilter > RenderSamplerFilter::Linear || draw.mipmap > UiPaintMipmap::Linear || draw.stencilDepth != depth ||
                     !Detail::ValidUiPaintMask(draw.maskExtent, draw.cornerRadii) ||
-                    ((draw.sampling == UiPaintSampling::Color || draw.sampling == UiPaintSampling::Alpha ||
-                      draw.sampling == UiPaintSampling::Premultiplied) &&
+                    ((draw.sampling == Color || draw.sampling == Alpha || draw.sampling == Premultiplied) &&
                      draw.sampled >= paint.sampledResources.size()) ||
-                    ((draw.operation == UiPaintOperation::PushStencil || draw.operation == UiPaintOperation::PopStencil) &&
-                     (draw.sampling != UiPaintSampling::Solid || draw.coverage != NoUiPaintTexture)) ||
+                    ((draw.operation == PushStencil || draw.operation == PopStencil) &&
+                     (draw.sampling != Solid || draw.coverage != NoUiPaintTexture)) ||
                     (draw.coverage != NoUiPaintTexture && draw.coverage >= paint.sampledResources.size()))
                     return false;
-                if (draw.operation == UiPaintOperation::PushStencil) {
+                if (draw.operation == PushStencil) {
                     if (!paint.stencil.IsValid() || depth == UiPaintLimits::MaximumStencilDepth)
                         return false;
                     ++depth;
-                } else if (draw.operation == UiPaintOperation::PopStencil) {
+                } else if (draw.operation == PopStencil) {
                     if (!paint.stencil.IsValid() || depth == 0)
                         return false;
                     --depth;

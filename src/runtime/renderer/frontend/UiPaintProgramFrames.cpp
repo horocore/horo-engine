@@ -18,8 +18,8 @@ namespace Horo::Render {
         const double scale =
             static_cast<double>(descriptor.projection.pixelsPerDip.pixelUnits) / (64.0 * descriptor.projection.pixelsPerDip.logicalDips);
         for (const auto &vertex : geometry.Vertices()) {
-            const float x = static_cast<float>(vertex.x * scale + safe.x);
-            const float y = static_cast<float>(vertex.y * scale + safe.y);
+            const auto x = static_cast<float>(vertex.x * scale + safe.x);
+            const auto y = static_cast<float>(vertex.y * scale + safe.y);
             if (!std::isfinite(x) || !std::isfinite(y))
                 return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
             frame.vertices.push_back(
@@ -27,16 +27,17 @@ namespace Horo::Render {
         }
         frame.indices.assign(geometry.Indices().begin(), geometry.Indices().end());
         const auto &snapshot = geometry.SourceSnapshot();
+        const auto buildPass = [&](const std::uint32_t pass) {
+            if (pass < source.masks.size())
+                return BuildMask(slot, frame, submission, pass);
+            const auto group = pass == slot.workloads.size() - 1
+                                   ? Detail::NoPaintRole
+                                   : static_cast<std::uint32_t>(source.masks.size() + snapshot.Groups().size() - 1 - pass);
+            return BuildGroup(slot, frame, submission, group);
+        };
         for (std::uint32_t pass = 0; pass < slot.workloads.size(); ++pass) {
             const auto offset = static_cast<std::uint32_t>(frame.draws.size());
-            const auto built =
-                pass < source.masks.size()
-                    ? BuildMask(slot, frame, submission, pass)
-                    : BuildGroup(slot, frame, submission,
-                                 pass == slot.workloads.size() - 1
-                                     ? Detail::NoPaintRole
-                                     : static_cast<std::uint32_t>(source.masks.size() + snapshot.Groups().size() - 1 - pass));
-            if (built.HasError())
+            if (const auto built = buildPass(pass); built.HasError())
                 return built;
             frame.ranges[pass] = {offset, static_cast<std::uint32_t>(frame.draws.size()) - offset};
         }
@@ -57,7 +58,7 @@ namespace Horo::Render {
 
     /** @copydoc UiPaintProgram::Storage::Publish */
     void UiPaintProgram::Storage::Publish(Detail::UiPaintSlotProgram &slot, Detail::UiPaintCpuFrame &frame,
-                                          std::uint64_t revision) noexcept {
+                                          std::uint64_t revision) const noexcept {
         for (std::size_t index = 0; index < slot.workloads.size(); ++index) {
             auto &paint = std::get<RenderGraphUiPaint>(slot.workloads[index].workload);
             const auto range = frame.ranges[index];

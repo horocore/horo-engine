@@ -53,7 +53,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiSceneReconciliation::CommitValidated */
-    UiSceneReconciliationResult UiSceneReconciliation::CommitValidated(Prepared &prepared) noexcept {
+    UiSceneReconciliationResult UiSceneReconciliation::CommitValidated(const Prepared &prepared) noexcept {
         auto &candidate = *prepared.storage_;
         for (auto &rebind : candidate.rebinding) {
             auto &entry = *storage_.Get()->active[rebind.slot];

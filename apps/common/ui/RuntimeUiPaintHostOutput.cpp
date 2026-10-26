@@ -12,7 +12,7 @@ namespace Horo::Application::Internal {
         if (!evidence.IsValid())
             return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
         const auto sources = state_->Sources();
-        for (auto *source : sources) {
+        for (const auto *source : sources) {
             if (!source)
                 continue;
             const auto resolved = ResolveUiScreenCanvasWithEvidence(source->output.canvas, evidence);
@@ -52,13 +52,12 @@ namespace Horo::Application::Internal {
             if (viewport.presentation)
                 viewport.presentation->revision =
                     UiPresentationEvidenceRevision::Create(viewport.presentation->revision.Value() + 1).Value();
-            const auto admitted = animation->SetViewport(viewport);
-            if (admitted.HasError())
+            if (const auto admitted = animation->SetViewport(viewport); admitted.HasError())
                 return admitted;
             output.viewport = viewport;
             output.current = output.pending;
             output.pending.reset();
-            policy.projection = canvas;
+            programs.policy.projection = canvas;
             ReleaseFrame();
             refresh = true;
             return Result<void>::Success();

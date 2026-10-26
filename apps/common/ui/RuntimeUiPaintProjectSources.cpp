@@ -26,13 +26,16 @@ namespace Horo::Application::Internal {
         Result<std::vector<UiElementDescriptor>> TreeElements(const CookedUiDocument &document, const UiCanvasDescriptor &canvas,
                                                               const std::uint32_t capacity) {
             std::vector<UiElementDescriptor> result{{canvas.rootElement, {}}};
-            for (std::size_t index = 0; index < result.size(); ++index)
+            std::size_t nextParent = 0;
+            while (nextParent < result.size()) {
+                const auto parent = result[nextParent++].id;
                 for (const auto &element : document.Elements())
-                    if (element.parent == result[index].id) {
+                    if (element.parent == parent) {
                         if (result.size() == capacity)
                             return Invalid<std::vector<UiElementDescriptor>>(UiErrors::CapacityExceeded);
-                        result.push_back({element.id, element.parent});
+                        result.emplace_back(element.id, element.parent);
                     }
+            }
             return Result<std::vector<UiElementDescriptor>>::Success(std::move(result));
         }
 
@@ -117,8 +120,7 @@ namespace Horo::Application::Internal {
                 const auto handle = canvas.tree.Find(element.id);
                 if (handle.HasError())
                     continue;
-                const auto *type = UiElementCatalog::Find(element.type.Value());
-                if (!type || !type->surface)
+                if (const auto *type = UiElementCatalog::Find(element.type.Value()); !type || !type->surface)
                     return Invalid<UiAnimationCanvasDefinition>(UiErrors::CapabilityUnsupported,
                                                                 "The authored control/text/image requires its actual source component "
                                                                 "owner; it is not replaced by solid paint.");
@@ -140,8 +142,8 @@ namespace Horo::Application::Internal {
                 for (const auto [property, field] : std::array{std::pair{UiCoreStyleProperty::Width, UiAnimationLayoutField::Width},
                                                                std::pair{UiCoreStyleProperty::Height, UiAnimationLayoutField::Height},
                                                                std::pair{UiCoreStyleProperty::Padding, UiAnimationLayoutField::Padding}})
-                    result.layoutBindings.push_back(
-                        {element.id, CoreUiStylePropertyId(property), field, UiAnimationLayoutValuePolicy::ExplicitOriginsOnly});
+                    result.layoutBindings.emplace_back(element.id, CoreUiStylePropertyId(property), field,
+                                                       UiAnimationLayoutValuePolicy::ExplicitOriginsOnly);
             }
             return Result<UiAnimationCanvasDefinition>::Success(std::move(result));
         }
@@ -198,30 +200,31 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Detail::RuntimeUiPaintHostState> host;
         std::shared_ptr<UiElementSlotAllocator> allocator;
         RuntimeUiPaintProjectPolicy policy;
-        std::uint32_t instanceSlot{}, canvasSlot{};
+        std::uint32_t instanceSlot{};
+        std::uint32_t canvasSlot{};
 
         /** @brief Creates every authored canvas tree in source order using the sole allocator and bounded depth. */
         Result<std::vector<UiReloadCanvas>> BuildCanvases(const CookedUiDocument &document, RuntimeUiInstanceId instance);
         /** @brief Derives owned style, presentation and paint inputs before moving the same source into its canonical generation. */
-        Result<RuntimeUiPaintSceneSourcePreparation> FinishSource(UiRuntimeAssetLoadResult loaded, UiCanvasAssetReference reference,
+        Result<RuntimeUiPaintSceneSourcePreparation> FinishSource(UiRuntimeAssetLoadResult loaded, const UiCanvasAssetReference &reference,
                                                                   Runtime::SceneRuntimeId scene, RuntimeUiInstanceId instance,
                                                                   std::vector<UiReloadCanvas> canvases, RuntimeStyleRegistry registry,
-                                                                  const UiResolvedScreenCanvas &resolved);
+                                                                  const UiResolvedScreenCanvas &resolved) const;
         /** @brief Lazily prepares the explicitly selected real kernel policy; failures leave the cache unpublished. */
         Result<void> PrepareKernel();
 
-        Result<RuntimeUiPaintSceneSourcePreparation> Build(UiRuntimeAssetLoadResult loaded, UiCanvasAssetReference reference,
+        Result<RuntimeUiPaintSceneSourcePreparation> Build(UiRuntimeAssetLoadResult loaded, const UiCanvasAssetReference &reference,
                                                            const Runtime::SceneRuntimeId scene);
-        Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(Runtime::RuntimeSceneService &scenes,
-                                                                           Assets::AssetRegistry &registry,
+        Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneService &scenes,
+                                                                           const Assets::AssetRegistry &registry,
                                                                            UiRuntimeAssetLoadService &loads,
-                                                                           std::optional<Assets::AssetCookTargetId> target,
-                                                                           const Runtime::RuntimeSceneView scene);
+                                                                           const std::optional<Assets::AssetCookTargetId> &target,
+                                                                           const Runtime::RuntimeSceneView &scene);
     };
 
     /** @copydoc RuntimeUiPaintProjectSources::Storage::Build */
     Result<RuntimeUiPaintSceneSourcePreparation> RuntimeUiPaintProjectSources::Storage::Build(UiRuntimeAssetLoadResult loaded,
-                                                                                              const UiCanvasAssetReference reference,
+                                                                                              const UiCanvasAssetReference &reference,
                                                                                               const Runtime::SceneRuntimeId scene) {
         using Built = Result<RuntimeUiPaintSceneSourcePreparation>;
         if (!host->Available() || !host->output)
@@ -268,16 +271,16 @@ namespace Horo::Application::Internal {
                                               elements.Value());
             if (tree.HasError())
                 return Result<std::vector<UiReloadCanvas>>::Failure(tree.ErrorValue());
-            canvases.push_back({authored.id, std::move(tree).Value()});
+            canvases.emplace_back(authored.id, std::move(tree).Value());
         }
         return Result<std::vector<UiReloadCanvas>>::Success(std::move(canvases));
     }
 
     /** @copydoc RuntimeUiPaintProjectSources::Storage::FinishSource */
     Result<RuntimeUiPaintSceneSourcePreparation> RuntimeUiPaintProjectSources::Storage::FinishSource(
-        UiRuntimeAssetLoadResult loaded, const UiCanvasAssetReference reference, const Runtime::SceneRuntimeId scene,
+        UiRuntimeAssetLoadResult loaded, const UiCanvasAssetReference &reference, const Runtime::SceneRuntimeId scene,
         const RuntimeUiInstanceId instance, std::vector<UiReloadCanvas> canvases, RuntimeStyleRegistry registry,
-        const UiResolvedScreenCanvas &resolved) {
+        const UiResolvedScreenCanvas &resolved) const {
         using Built = Result<RuntimeUiPaintSceneSourcePreparation>;
         auto selectedCanvas = std::ranges::find(canvases, reference.canvas, &UiReloadCanvas::id);
         auto &canvas = *selectedCanvas;
@@ -316,7 +319,7 @@ namespace Horo::Application::Internal {
     /** @copydoc RuntimeUiPaintProjectSources::Storage::PrepareKernel */
     Result<void> RuntimeUiPaintProjectSources::Storage::PrepareKernel() {
         if (!policy.kernel) {
-            auto prepared = [&]() -> Result<std::shared_ptr<const Render::CookedUiPaintKernel>> {
+            auto prepared = [&]() {
                 if (const auto *compiler = std::get_if<RuntimeUiPaintProjectCompiler>(&policy.source))
                     return PrepareProjectUiKernel(*compiler, host->cancellation.Token());
                 if (const auto *package = std::get_if<RuntimeUiPaintPackagedAssets>(&policy.source))
@@ -333,8 +336,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintProjectSources::Storage::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> RuntimeUiPaintProjectSources::Storage::Prepare(
-        Runtime::RuntimeSceneService &scenes, Assets::AssetRegistry &registry, UiRuntimeAssetLoadService &loads,
-        const std::optional<Assets::AssetCookTargetId> target, const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneService &scenes, const Assets::AssetRegistry &registry, UiRuntimeAssetLoadService &loads,
+        const std::optional<Assets::AssetCookTargetId> &target, const Runtime::RuntimeSceneView &scene) {
         using Prepared = Result<std::unique_ptr<Runtime::SceneActivationCandidate>>;
         std::vector<UiCanvasAssetReference> references;
         for (std::size_t slot = 0; slot < scene.SlotCount(); ++slot) {
@@ -358,7 +361,7 @@ namespace Horo::Application::Internal {
         const auto snapshot = registry.Snapshot();
         std::vector<RuntimeUiPaintSceneSourcePreparation> sources;
         sources.reserve(references.size());
-        for (const auto reference : references) {
+        for (const auto &reference : references) {
             auto request = loads.LoadAsync(snapshot, {reference, {}, target}, host->cancellation.Token());
             if (request.HasError())
                 return Prepared::Failure(request.ErrorValue());
@@ -403,7 +406,7 @@ namespace Horo::Application::Internal {
         class Participant final : public Runtime::SceneActivationParticipant {
         public:
             Participant(std::shared_ptr<Storage> source, Runtime::RuntimeSceneService &sceneOwner, Assets::AssetRegistry &assets,
-                        UiRuntimeAssetLoadService &loader, std::optional<Assets::AssetCookTargetId> cookTarget)
+                        UiRuntimeAssetLoadService &loader, const std::optional<Assets::AssetCookTargetId> &cookTarget)
                 : source_(std::move(source)), scenes_(sceneOwner), registry_(assets), loads_(loader), target_(cookTarget) {}
 
             Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &,
@@ -411,7 +414,7 @@ namespace Horo::Application::Internal {
                 return source_->Prepare(scenes_, registry_, loads_, target_, scene);
             }
 
-            Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PrepareRetirement(Runtime::RuntimeSceneView scene) override {
+            Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PrepareRetirement(const Runtime::RuntimeSceneView &scene) override {
                 return source_->port.PrepareScene({scene.RuntimeId(), {}}, {});
             }
 

@@ -20,11 +20,10 @@ namespace Horo::Application::Internal {
                 if (retired.HasError())
                     return Result<bool>::Failure(retired.ErrorValue());
             }
-            if (source->retiredProgram) {
-                const auto closed = source->retiredProgram->Shutdown();
-                if (closed.HasError())
+            if (source->programs.retired) {
+                if (const auto closed = source->programs.retired->Shutdown(); closed.HasError())
                     return Result<bool>::Failure(closed.ErrorValue());
-                source->retiredProgram.reset();
+                source->programs.retired.reset();
             }
             if (!source->retiring)
                 return Result<bool>::Success(true);
@@ -53,8 +52,9 @@ namespace Horo::Application::Internal {
     Result<RuntimeUiPaintComposition> RuntimeUiPaintHost::Compose(Render::RenderFrontend &frontend, Runtime::RuntimeDispatchSource dispatch,
                                                                   RuntimeUiService service) {
         auto state = std::make_shared<Detail::RuntimeUiPaintHostState>(std::move(service), std::move(dispatch), frontend);
-        return Result<RuntimeUiPaintComposition>::Success(
-            {std::unique_ptr<RuntimeUiPaintHost>{new RuntimeUiPaintHost{state}}, RuntimeUiPaintPort{std::move(state)}});
+        auto host = std::make_unique<RuntimeUiPaintHost>(ConstructionKey{}, state);
+        RuntimeUiPaintPort port{std::move(state)};
+        return Result<RuntimeUiPaintComposition>::Success({std::move(host), std::move(port)});
     }
 
     /** @copydoc RuntimeUiPaintHost::~RuntimeUiPaintHost */
@@ -68,8 +68,7 @@ namespace Horo::Application::Internal {
             return Unavailable();
         for (auto *source : state_->Sources())
             if (source && !source->started) {
-                const auto started = source->animation->Startup(state_->cancellation.Token());
-                if (started.HasError())
+                if (const auto started = source->animation->Startup(state_->cancellation.Token()); started.HasError())
                     return started;
                 source->started = true;
             }
@@ -127,8 +126,7 @@ namespace Horo::Application::Internal {
         state_->revoked = true;
         state_->cancellation.RequestCancellation();
         state_->service.Shutdown();
-        const auto retired = state_->Retire();
-        if (retired.HasError())
+        if (const auto retired = state_->Retire(); retired.HasError())
             state_->phase = RuntimeUiPaintHostPhase::Failed;
         state_->frontend = nullptr;
         state_->started = false;
@@ -182,20 +180,19 @@ namespace Horo::Application::Internal {
         for (auto &entry : state_->sceneSources)
             if (const auto result = collect(entry); result.HasError())
                 return Result<bool>::Failure(result.ErrorValue());
-        for (auto &entry : state_->retiredSources)
-            if (entry) {
-                if (const auto result = collect(entry); result.HasError())
-                    return Result<bool>::Failure(result.ErrorValue());
-            }
-        const auto active = state_->Sources();
-        if (std::ranges::any_of(active, [](auto *entry) {
+        for (auto &entry : state_->retiredSources) {
+            if (!entry)
+                continue;
+            if (const auto result = collect(entry); result.HasError())
+                return Result<bool>::Failure(result.ErrorValue());
+        }
+        if (const auto active = state_->Sources(); std::ranges::any_of(active, [](auto *entry) {
             return entry != nullptr;
         }))
             state_->phase = RuntimeUiPaintHostPhase::Active;
         else
             state_->phase = drained ? RuntimeUiPaintHostPhase::NoSource : RuntimeUiPaintHostPhase::Retiring;
-        const auto collected = state_->service.CollectRetired();
-        if (collected.HasError())
+        if (const auto collected = state_->service.CollectRetired(); collected.HasError())
             return Result<bool>::Failure(collected.ErrorValue());
         if (!drained)
             return Result<bool>::Success(false);

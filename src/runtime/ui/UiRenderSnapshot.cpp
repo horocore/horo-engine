@@ -405,17 +405,18 @@ namespace Horo::Runtime::Ui {
         if (!storage_)
             return;
         auto current = storage_->leases.load(std::memory_order_acquire);
-        for (;;) {
+        bool released = false;
+        while (!released) {
             if (current == 1) {
                 // Reserve the slot until its final source pin is gone; publishing zero first permits concurrent reuse.
                 if (!storage_->leases.compare_exchange_weak(current, std::numeric_limits<std::uint64_t>::max(), std::memory_order_acq_rel))
                     continue;
                 storage_->sourceFrame = {};
                 storage_->leases.store(0, std::memory_order_release);
-                break;
+                released = true;
+            } else {
+                released = storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_acq_rel);
             }
-            if (storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_acq_rel))
-                break;
         }
         storage_.reset();
     }
@@ -529,8 +530,8 @@ namespace Horo::Runtime::Ui {
                                                         const UiRenderProjection &projection, const UiAnimationFrameLease &frame) {
         if (!frame.MatchesSourceTree(tree))
             return Failure<UiRenderSnapshot>(UiErrors::HandleOwnerMismatch);
-        const auto &layout = frame.Layout().Descriptor();
-        if (frame.Clocks().updateSequence == 0 || layout.instance != descriptor.instance || layout.canvas != descriptor.canvas ||
+        if (const auto &layout = frame.Layout().Descriptor();
+            frame.Clocks().updateSequence == 0 || layout.instance != descriptor.instance || layout.canvas != descriptor.canvas ||
             layout.document != descriptor.document || layout.sources.document != descriptor.documentRevision ||
             layout.sources.tree != descriptor.treeRevision || layout.interaction != descriptor.interactionRevision)
             return Failure<UiRenderSnapshot>(UiErrors::RevisionStale);

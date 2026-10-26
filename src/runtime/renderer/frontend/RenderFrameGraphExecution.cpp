@@ -17,7 +17,7 @@
 namespace Horo::Render {
     namespace {
         /** @brief Resolves optional prepared transients without changing ownership or frame execution state. */
-        Result<Detail::RenderGraphTransientResourceSet *> ResolveOptionalTransient(Detail::RenderGraphTransientResourcePool &pool,
+        Result<Detail::RenderGraphTransientResourceSet *> ResolveOptionalTransient(const Detail::RenderGraphTransientResourcePool &pool,
                                                                                    RenderGraphTransientResourcesHandle handle,
                                                                                    const CompiledRenderGraphExecution &graph) {
             return handle.IsValid() ? pool.Resolve(handle, graph) : Result<Detail::RenderGraphTransientResourceSet *>::Success(nullptr);

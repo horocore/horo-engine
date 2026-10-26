@@ -8,7 +8,7 @@ namespace Horo::Render {
 
     /** @copydoc UiPaintProgram::Storage::Quad */
     Result<std::uint32_t> UiPaintProgram::Storage::Quad(Detail::UiPaintCpuFrame &frame, UiLogicalRect rect,
-                                                        const UiLogicalTransform &transform, bool targetUv) {
+                                                        const UiLogicalTransform &transform, bool targetUv) const {
         using Added = Result<std::uint32_t>;
         if (frame.vertices.size() + 4 > descriptor.capacity.vertices || frame.indices.size() + 6 > descriptor.capacity.indices)
             return Added::Failure(MakeError(UiPaintProgramErrors::Capacity));
@@ -20,10 +20,10 @@ namespace Horo::Render {
             static_cast<double>(descriptor.projection.pixelsPerDip.pixelUnits) / (64.0 * descriptor.projection.pixelsPerDip.logicalDips);
         constexpr std::array<std::array<float, 2>, 4> corners{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
         for (const auto uv : corners) {
-            const double x = static_cast<double>(rect.origin.x) + uv[0] * rect.extent.width;
-            const double y = static_cast<double>(rect.origin.y) + uv[1] * rect.extent.height;
-            const float px = static_cast<float>((m[0] * x + m[1] * y + m[4]) * scale + safe.x);
-            const float py = static_cast<float>((m[2] * x + m[3] * y + m[5]) * scale + safe.y);
+            const double x = static_cast<double>(rect.origin.x) + uv[0] * static_cast<double>(rect.extent.width);
+            const double y = static_cast<double>(rect.origin.y) + uv[1] * static_cast<double>(rect.extent.height);
+            const auto px = static_cast<float>((m[0] * x + m[1] * y + m[4]) * scale + safe.x);
+            const auto py = static_cast<float>((m[2] * x + m[3] * y + m[5]) * scale + safe.y);
             if (!std::isfinite(px) || !std::isfinite(py))
                 return Added::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
             frame.vertices.push_back(
@@ -39,12 +39,18 @@ namespace Horo::Render {
     /** @copydoc UiPaintProgram::Storage::Scissor */
     Result<UiPaintScissor> UiPaintProgram::Storage::Scissor(const UiRenderSnapshot &snapshot, std::uint32_t clip) const {
         const auto safe = descriptor.projection.ContentPixelRect();
-        double left = safe.x, top = safe.y, right = safe.x + safe.width, bottom = safe.y + safe.height;
+        double left = safe.x;
+        double top = safe.y;
+        double right = safe.x + safe.width;
+        double bottom = safe.y + safe.height;
         const double scale =
             static_cast<double>(descriptor.projection.pixelsPerDip.pixelUnits) / (64.0 * descriptor.projection.pixelsPerDip.logicalDips);
         std::uint32_t steps{};
         while (clip != NoUiRenderIndex) {
-            if (clip >= snapshot.Clips().size() || ++steps > MaximumUiRenderClips)
+            if (clip >= snapshot.Clips().size())
+                return Result<UiPaintScissor>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+            ++steps;
+            if (steps > MaximumUiRenderClips)
                 return Result<UiPaintScissor>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
             const auto &node = snapshot.Clips()[clip];
             left = std::max(left, safe.x + node.rect.origin.x * scale);
@@ -81,21 +87,22 @@ namespace Horo::Render {
         const auto resources = submission.geometry->SourceSnapshot().Resources();
         if (reference >= resources.size())
             return Result<std::uint32_t>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
-        const auto &source = resources[reference];
+        const auto &referenceSource = resources[reference];
         for (const auto &image : submission.images)
-            if (image.realization && image.realization->Source().asset == source.asset &&
-                image.realization->Source().revision == source.revision && image.realization->Source().role == source.role)
+            if (image.realization && image.realization->Source().asset == referenceSource.asset &&
+                image.realization->Source().revision == referenceSource.revision &&
+                image.realization->Source().role == referenceSource.role)
                 return Sample(slot, pass, image.texture);
         for (const auto &font : submission.fonts)
-            if (glyph && font.face && font.realization && font.face->SourceAsset() == source.asset &&
-                font.face->Revision().Value() == source.revision.Value() &&
+            if (glyph && font.face && font.realization && font.face->SourceAsset() == referenceSource.asset &&
+                font.face->Revision().Value() == referenceSource.revision.Value() &&
                 submission.atlas.PinsGlyph(*font.face, glyph->glyph, font.realization->Page(), glyph->uv))
                 return Sample(slot, pass, font.texture);
         return Result<std::uint32_t>::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
     }
 
     /** @copydoc UiPaintProgram::Storage::Draw */
-    Result<void> UiPaintProgram::Storage::Draw(Detail::UiPaintCpuFrame &frame, const UiPaintDraw &draw) {
+    Result<void> UiPaintProgram::Storage::Draw(Detail::UiPaintCpuFrame &frame, const UiPaintDraw &draw) const {
         if (frame.draws.size() >= descriptor.capacity.parameters || frame.draws.size() >= UiPaintLimits::MaximumDraws)
             return Result<void>::Failure(MakeError(UiPaintProgramErrors::Capacity));
         frame.parameters.push_back({.extent = {static_cast<float>(descriptor.projection.pixelExtent.width),

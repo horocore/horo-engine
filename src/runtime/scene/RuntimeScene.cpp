@@ -16,7 +16,7 @@
 
 namespace Horo::Runtime {
     /** @copydoc SceneActivationParticipant::PrepareRetirement */
-    Result<std::unique_ptr<SceneActivationCandidate>> SceneActivationParticipant::PrepareRetirement(RuntimeSceneView scene) {
+    Result<std::unique_ptr<SceneActivationCandidate>> SceneActivationParticipant::PrepareRetirement(const RuntimeSceneView &scene) {
         (void)scene;
         return Result<std::unique_ptr<SceneActivationCandidate>>::Success({});
     }
@@ -353,7 +353,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SceneStructuralParticipant::ValidateBaselines */
-    Result<void> SceneStructuralParticipant::ValidateBaselines(RuntimeSceneView,
+    Result<void> SceneStructuralParticipant::ValidateBaselines(const RuntimeSceneView &,
                                                                const std::span<const SceneBaselinePreparationView> baselines) const {
         if (Owner() == SceneStructuralOwner::Physics && std::ranges::any_of(baselines, [](const auto &baseline) {
             return !baseline.definition.TriggerVolumeEvidence().empty();

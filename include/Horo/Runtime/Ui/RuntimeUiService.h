@@ -119,7 +119,7 @@ namespace Horo::Runtime::Ui {
          * Foreign service, stale instance/reservation and retired animation owners reject before preparation. */
         [[nodiscard]] Result<UiAnimationReloadResult> Reload(RuntimeUiInstanceId instance, UiAnimationOwner &animation,
                                                              UiAnimationReloadPreparation preparation,
-                                                             const CancellationToken &cancellation = {});
+                                                             const CancellationToken &cancellation = {}) const;
         /** @brief Pins presentation data from the sole publisher without granting gameplay mutable owner access.
          * @param instance Exact host-admitted incarnation. @return Immutable generation lease or canonical failure.
          */

@@ -7,13 +7,19 @@ namespace Horo::Render {
         using namespace Detail;
         using namespace Runtime::Ui;
 
+        /** @brief The already resident buffers and physical target extent for one slot graph. */
+        struct ProgramGraphTarget final {
+            const UiPaintFrameBuffers &buffers;
+            FramebufferExtent extent;
+        };
+
         /** @brief Load-time graph assembly over one already owned resident slot; no source or native authority is duplicated. */
         class ProgramGraph final {
         public:
             ProgramGraph(UiPaintSlotProgram &slot, std::span<const RenderTextureHandle> external, std::span<const UiPaintMaskScope> masks,
-                         std::span<const UiOpacityGroup> groups, const UiPaintFrameBuffers &buffers, FramebufferExtent extent,
-                         std::shared_ptr<IResidentUiPaintKernel> primary, std::shared_ptr<IResidentUiPaintKernel> offscreen)
-                : slot_(slot), external_(external), masks_(masks), groups_(groups), buffers_(buffers), extent_(extent),
+                         std::span<const UiOpacityGroup> groups, ProgramGraphTarget target, std::shared_ptr<IResidentUiPaintKernel> primary,
+                         std::shared_ptr<IResidentUiPaintKernel> offscreen)
+                : slot_(slot), external_(external), masks_(masks), groups_(groups), buffers_(target.buffers), extent_(target.extent),
                   primary_(std::move(primary)), offscreen_(std::move(offscreen)) {}
 
             Result<void> Build() {
@@ -143,19 +149,18 @@ namespace Horo::Render {
                 return Usages(builder, pass, std::get<RenderGraphUiPaint>(slot_.workloads[index].workload));
             }
 
-            Result<void> Usages(RenderGraphBuilder &builder, RenderGraphPassRef pass, const RenderGraphUiPaint &paint) {
-                std::vector<RenderGraphResourceUsage> uses{{pass, paint.vertices, RenderGraphAccess::Read,
-                                                            RenderGraphUsageKind::VertexBuffer},
-                                                           {pass, paint.indices, RenderGraphAccess::Read,
-                                                            RenderGraphUsageKind::IndexBuffer},
-                                                           {pass, paint.parameters, RenderGraphAccess::Read,
-                                                            RenderGraphUsageKind::UniformBuffer}};
+            Result<void> Usages(RenderGraphBuilder &builder, RenderGraphPassRef pass, const RenderGraphUiPaint &paint) const {
+                using enum RenderGraphAccess;
+                using enum RenderGraphUsageKind;
+                std::vector<RenderGraphResourceUsage> uses{{pass, paint.vertices, Read, VertexBuffer},
+                                                           {pass, paint.indices, Read, IndexBuffer},
+                                                           {pass, paint.parameters, Read, UniformBuffer}};
                 if (paint.color.IsValid())
-                    uses.push_back({pass, paint.color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+                    uses.emplace_back(pass, paint.color, Write, ColorAttachment);
                 if (paint.stencil.IsValid())
-                    uses.push_back({pass, paint.stencil, RenderGraphAccess::Write, RenderGraphUsageKind::DepthStencilAttachment});
+                    uses.emplace_back(pass, paint.stencil, Write, DepthStencilAttachment);
                 for (const auto texture : paint.sampledResources)
-                    uses.push_back({pass, texture, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled});
+                    uses.emplace_back(pass, texture, Read, Sampled);
                 std::ranges::sort(uses, {}, [](const RenderGraphResourceUsage &use) {
                     return use.resource.value;
                 });
@@ -171,7 +176,8 @@ namespace Horo::Render {
             std::span<const UiOpacityGroup> groups_;
             UiPaintFrameBuffers buffers_;
             FramebufferExtent extent_;
-            std::shared_ptr<IResidentUiPaintKernel> primary_, offscreen_;
+            std::shared_ptr<IResidentUiPaintKernel> primary_;
+            std::shared_ptr<IResidentUiPaintKernel> offscreen_;
             std::array<RenderGraphResourceId, 3> bufferIds_;
             RenderGraphResourceId stencil_;
             std::vector<RenderGraphImportedState> initial_;
@@ -185,15 +191,20 @@ namespace Horo::Render {
         const FramebufferExtent extent{descriptor.projection.pixelExtent.width, descriptor.projection.pixelExtent.height};
         slot.surfaces.resize(source.masks.size() + source.prototype.Groups().size());
         for (auto &surface : slot.surfaces) {
-            const auto created = renderer.CreateTexture({.extent = extent,
-                                                         .format = RenderTextureFormat::Rgba16Float,
-                                                         .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment});
+            const auto created =
+                renderer.CreateOwnedUiPaintTexture(renderer.memoryConfig_.defaultResourceScope,
+                                                   {.extent = extent,
+                                                    .format = RenderTextureFormat::Rgba16Float,
+                                                    .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment},
+                                                   {}, retirement);
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
             surface = created.Value();
         }
         const auto stencil =
-            renderer.CreateTexture({.extent = extent, .format = stencilFormat, .usage = RenderTextureUsage::RenderAttachment});
+            renderer.CreateOwnedUiPaintTexture(renderer.memoryConfig_.defaultResourceScope,
+                                               {.extent = extent, .format = stencilFormat, .usage = RenderTextureUsage::RenderAttachment},
+                                               {}, retirement);
         if (stencil.HasError())
             return Result<void>::Failure(stencil.ErrorValue());
         slot.stencil = stencil.Value();
@@ -212,8 +223,8 @@ namespace Horo::Render {
     /** @copydoc UiPaintProgram::Storage::CompileSlot */
     Result<void> UiPaintProgram::Storage::CompileSlot(std::uint32_t index, const UiPaintFrameBuffers &buffers) {
         const FramebufferExtent extent{descriptor.projection.pixelExtent.width, descriptor.projection.pixelExtent.height};
-        ProgramGraph graph{native.slots[index], source.external, source.masks, source.prototype.Groups(), buffers, extent,
-                           native.primary,      native.offscreen};
+        ProgramGraph graph{native.slots[index], source.external, source.masks,    source.prototype.Groups(),
+                           {buffers, extent},   native.primary,  native.offscreen};
         return graph.Build();
     }
 }  // namespace Horo::Render

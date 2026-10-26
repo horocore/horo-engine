@@ -13,7 +13,7 @@ namespace Horo::Render {
          * later operation-journal eviction cannot require releasing its already-retired generation again.
          * Unknown outcomes leave the handle unchanged. No successful update/upload failure authorizes this transition. */
         template <class Handle>
-        [[nodiscard]] Result<void> ObserveUiPaintCreation(RenderFrontend &frontend, ResourceOperationId operation, Handle &handle) {
+        [[nodiscard]] Result<void> ObserveUiPaintCreation(const RenderFrontend &frontend, ResourceOperationId operation, Handle &handle) {
             static_assert(std::is_same_v<Handle, RenderBufferHandle> || std::is_same_v<Handle, RenderTextureHandle>);
             auto result = frontend.ResourceOperationResult(operation);
             if (result.HasError()) {

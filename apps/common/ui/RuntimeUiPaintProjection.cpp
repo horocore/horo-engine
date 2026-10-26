@@ -25,8 +25,8 @@ namespace Horo::Application::Internal {
                 auto row = rowFor(input.components[index].element);
                 if (row == rows.end() || row->component != NoUiRenderIndex)
                     return InvalidSource();
-                const auto *kind = UiElementCatalog::Find(row->source->type.Value());
-                if (!kind || (kind->surface && std::holds_alternative<UiSolidDraw>(input.components[index].payload)))
+                if (const auto *kind = UiElementCatalog::Find(row->source->type.Value());
+                    !kind || (kind->surface && std::holds_alternative<UiSolidDraw>(input.components[index].payload)))
                     return InvalidSource();
                 row->component = static_cast<std::uint32_t>(index);
             }
@@ -52,14 +52,14 @@ namespace Horo::Application::Internal {
         const auto &generation = *(source.Get() ? source.Get() : candidate);
         expectedInstance = &generation.Instance();
         instance = generation.Instance().InstanceId();
-        for (const auto &candidate : generation.Canvases())
-            if (candidate.id == declaration.canvas)
-                canvas = &candidate;
+        for (const auto &authoredCandidate : generation.Canvases())
+            if (authoredCandidate.id == declaration.canvas)
+                canvas = &authoredCandidate;
         const auto descriptors = generation.Instance().Canvases();
         const auto authoredCanvas = std::ranges::find(descriptors, declaration.canvas, &UiCanvasDescriptor::id);
         if (!canvas || authoredCanvas == descriptors.end())
             return InvalidSource();
-        authored = &*authoredCanvas;
+        authored = std::to_address(authoredCanvas);
         std::vector<UiElementHandle> order(descriptor.limits.transforms);
         const auto traversed = canvas->tree.Preorder(order);
         if (traversed.HasError())
@@ -75,7 +75,7 @@ namespace Horo::Application::Internal {
             });
             if (element == elements.end() || !UiElementCatalog::Find(element->type.Value()))
                 return InvalidSource();
-            Row row{.source = &*element, .element = order[index], .end = static_cast<std::uint32_t>(index + 1)};
+            Row row{.source = std::to_address(element), .element = order[index], .end = static_cast<std::uint32_t>(index + 1)};
             if (record.Value().parent.IsValid()) {
                 const auto parent = std::ranges::find_if(rows, [&](const auto &entry) {
                     return entry.element == record.Value().parent;
@@ -93,7 +93,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc RuntimeUiPaintProjection::Create */
-    Result<std::unique_ptr<RuntimeUiPaintProjection>> RuntimeUiPaintProjection::Create(RuntimeUiService &service,
+    Result<std::unique_ptr<RuntimeUiPaintProjection>> RuntimeUiPaintProjection::Create(const RuntimeUiService &service,
                                                                                        const RuntimeUiInstanceId instance,
                                                                                        RuntimeUiPaintDeclaration declaration,
                                                                                        const UiRenderExtractorDescriptor &descriptor) {
@@ -113,8 +113,8 @@ namespace Horo::Application::Internal {
     Result<std::unique_ptr<RuntimeUiPaintProjection>> RuntimeUiPaintProjection::PrepareReload(
         const UiReloadGeneration &candidate, RuntimeUiPaintDeclaration declaration, const UiRenderExtractorDescriptor &descriptor) {
         using Created = Result<std::unique_ptr<RuntimeUiPaintProjection>>;
-        const auto &source = candidate.Instance();
-        if (declaration.document != source.DocumentId() || declaration.revision != source.DocumentRevision() ||
+        if (const auto &source = candidate.Instance();
+            declaration.document != source.DocumentId() || declaration.revision != source.DocumentRevision() ||
             declaration.components.size() > descriptor.limits.commands || declaration.masks.size() > descriptor.limits.masks ||
             declaration.isolated.size() > descriptor.limits.groups || declaration.textRuns.size() > descriptor.limits.textRuns ||
             declaration.glyphs.size() > descriptor.limits.glyphs || declaration.resources.size() > descriptor.limits.resources)
@@ -124,8 +124,7 @@ namespace Horo::Application::Internal {
             return Created::Failure(extractor.ErrorValue());
         auto storage = std::make_unique<Storage>(UiReloadLease{}, std::move(declaration), std::move(extractor).Value(), descriptor);
         storage->candidate = &candidate;
-        const auto rows = storage->AdmitRows();
-        if (rows.HasError())
+        if (const auto rows = storage->AdmitRows(); rows.HasError())
             return Created::Failure(rows.ErrorValue());
         storage->commands.reserve(descriptor.limits.commands);
         storage->clips.reserve(descriptor.limits.clips);
@@ -178,7 +177,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc RuntimeUiPaintProjection::Extract */
-    Result<UiRenderSnapshot> RuntimeUiPaintProjection::Extract(RuntimeUiService &service, const UiAnimationFrameLease &frame) {
+    Result<UiRenderSnapshot> RuntimeUiPaintProjection::Extract(const RuntimeUiService &service, const UiAnimationFrameLease &frame) {
         auto current = service.Acquire(storage_->instance);
         if (current.HasError())
             return Result<UiRenderSnapshot>::Failure(current.ErrorValue());
@@ -191,8 +190,7 @@ namespace Horo::Application::Internal {
         if (layout.instance != tree.Instance() || layout.canvas != tree.Canvas() || layout.sources.tree != tree.Revision() ||
             layout.sources.document != tree.SourceDocumentRevision())
             return Result<UiRenderSnapshot>::Failure(MakeError(UiErrors::RevisionStale));
-        const auto built = storage_->Build({frame.Styles(), frame.Layout(), frame.Clipping()});
-        if (built.HasError())
+        if (const auto built = storage_->Build({frame.Styles(), frame.Layout(), frame.Clipping()}); built.HasError())
             return Result<UiRenderSnapshot>::Failure(built.ErrorValue());
         UiRenderSnapshotDescriptor descriptor{layout.instance,
                                               layout.canvas,

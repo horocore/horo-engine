@@ -172,6 +172,9 @@ namespace Horo::Render {
         void Shutdown() noexcept;
 
     private:
+        friend class RenderFrontend;
+        /** @brief Cancels an exact owned pending reservation without allocating a diagnostic on failure. */
+        [[nodiscard]] bool TryCancelReservation(RenderMemoryReservationId reservation) noexcept;
         class Impl;
         explicit RenderMemoryBudget(std::unique_ptr<Impl> implementation) noexcept;
         std::unique_ptr<Impl> implementation_;

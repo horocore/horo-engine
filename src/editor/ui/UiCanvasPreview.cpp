@@ -82,7 +82,7 @@ namespace Horo::Editor {
                         reference.asset = asset;
                 value.classes = result.classes.back();
                 result.inputs.emplace_back(value);
-                result.surfaces.push_back({value, descriptors[i].style, descriptors[i].intrinsic});
+                result.surfaces.emplace_back(value, descriptors[i].style, descriptors[i].intrinsic);
             }
             return Result<PreviewStyleInputs>::Success(std::move(result));
         }

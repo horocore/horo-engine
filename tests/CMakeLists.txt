@@ -3684,6 +3684,7 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/UiPaintLeaseTests.cpp
         unit/runtime/renderer/UiPaintFrameBufferPoolTests.cpp
         unit/runtime/renderer/UiPaintProgramTests.cpp
+        unit/runtime/renderer/UiPaintProgramLifetimeTests.cpp
         unit/runtime/renderer/UiPaintProgramBindingTests.cpp
 )
 

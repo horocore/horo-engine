@@ -77,7 +77,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
             const auto value = Dimension(styles, binding);
             if (value.HasError())
                 return Result<void>::Failure(value.ErrorValue());
-            if (!value.Value())
+            if (!value.Value().has_value())
                 continue;
             if (const auto applied = ApplyField(descriptor->style, binding.field, *value.Value()); applied.HasError())
                 return applied;

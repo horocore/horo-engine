@@ -70,8 +70,7 @@ namespace Horo::Application::Internal {
                 return Result<Json>::Failure(MakeError(InvalidDocument, "JSON document is empty or exceeds the byte limit."));
             try {
                 UniqueKeys keys;
-                const auto first = reinterpret_cast<const char *>(bytes.data());
-                auto document = Json::parse(first, first + bytes.size(), std::ref(keys));
+                auto document = Json::parse(bytes.begin(), bytes.end(), std::ref(keys));
                 if (!keys.valid)
                     return Result<Json>::Failure(MakeError(InvalidDocument, "JSON has duplicate fields or excessive nesting."));
                 return Result<Json>::Success(std::move(document));

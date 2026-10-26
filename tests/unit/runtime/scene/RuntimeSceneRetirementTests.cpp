@@ -99,7 +99,7 @@ namespace {
             return Result<std::unique_ptr<SceneActivationCandidate>>::Success(std::make_unique<ActiveRoot>(audit_));
         }
 
-        Result<std::unique_ptr<SceneActivationCandidate>> PrepareRetirement(RuntimeSceneView scene) override {
+        Result<std::unique_ptr<SceneActivationCandidate>> PrepareRetirement(const RuntimeSceneView &scene) override {
             audit_.events.emplace_back(Prepared);
             audit_.exactView = audit_.exactView && scene.IsCurrent() && scene.RuntimeId() == audit_.expected;
             audit_.retainedView = scene;

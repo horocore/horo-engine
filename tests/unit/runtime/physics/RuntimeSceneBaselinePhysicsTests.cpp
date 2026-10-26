@@ -106,7 +106,7 @@ namespace Horo::Physics {
                 return owner_->Owner();
             }
 
-            Result<void> ValidateBaselines(Runtime::RuntimeSceneView active,
+            Result<void> ValidateBaselines(const Runtime::RuntimeSceneView &active,
                                            std::span<const Runtime::SceneBaselinePreparationView> baselines) const override {
                 return owner_->ValidateBaselines(active, baselines);
             }

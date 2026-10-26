@@ -113,7 +113,7 @@ namespace Horo::Runtime::Ui {
             friend struct Detail::UiAnimationSourceReservation;
             explicit Prepared(std::shared_ptr<Storage> storage) noexcept;
             /** @brief Revokes unpublished derived access before releasing the canonical candidate facade. */
-            void Abandon() noexcept;
+            void Abandon() const noexcept;
             std::shared_ptr<Storage> storage_;
         };
 
@@ -231,7 +231,7 @@ namespace Horo::Runtime::Ui {
         };
 
         /** @brief Consumes the previously sealed canonical candidate without callbacks, allocation or validation failure. */
-        [[nodiscard]] UiSceneReconciliationResult CommitValidated(Prepared &prepared) noexcept;
+        [[nodiscard]] UiSceneReconciliationResult CommitValidated(const Prepared &prepared) noexcept;
         static_assert(std::is_same_v<decltype(std::declval<const OwnedState &>().Get()), const Storage *>);
         static_assert(std::is_same_v<decltype(std::declval<OwnedState &>().Get()), Storage *>);
         static_assert(!std::is_invocable_v<decltype(&OwnedState::OwnerPin), const OwnedState &>);

@@ -74,7 +74,7 @@ namespace Horo::Runtime {
         DerivedResources
     };
     /** @brief Host-only activation virtual contract revision; all host participants must rebuild together. */
-    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 3;
+    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 4;
     struct SceneInitialPlacement;
 
     /** @brief Detached subsystem state prepared for one aggregate runtime-scene candidate. */
@@ -194,7 +194,7 @@ namespace Horo::Runtime {
          * work or releases an already published transaction. Forced service shutdown skips this fallible hook: the active
          * activation candidate's Shutdown must revoke its scope and retain/drain outstanding leases independently.
          */
-        [[nodiscard]] virtual Result<std::unique_ptr<SceneActivationCandidate>> PrepareRetirement(RuntimeSceneView scene);
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneActivationCandidate>> PrepareRetirement(const RuntimeSceneView &scene);
     };
 
     namespace ScenePublicationDetail {
@@ -646,7 +646,7 @@ namespace Horo::Runtime {
     };
 
     /** @brief Host structural-participant virtual contract revision; external host implementations must rebuild. */
-    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 3;
+    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 4;
 
     /** @brief Application-composed subsystem participant for bounded Scene group transactions. */
     class SceneStructuralParticipant {
@@ -666,7 +666,7 @@ namespace Horo::Runtime {
          * @return Success or a typed failure preserving all owners. Default Physics ownership rejects unhandled trigger proof;
          * other owners may delegate to this no-op. No view or lease may be retained beyond this call.
          */
-        [[nodiscard]] virtual Result<void> ValidateBaselines(RuntimeSceneView active,
+        [[nodiscard]] virtual Result<void> ValidateBaselines(const RuntimeSceneView &active,
                                                              std::span<const SceneBaselinePreparationView> baselines) const;
         /** @brief Prepares detached additions/removals without exposing native state or running gameplay hooks.
          * @param active Existing Scene, borrowed only for this call.

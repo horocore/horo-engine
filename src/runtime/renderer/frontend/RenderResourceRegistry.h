@@ -23,6 +23,7 @@ namespace Horo::Render {
 }  // namespace Horo::Render
 
 namespace Horo::Render::Detail {
+    struct UiPaintOwnerRetirement;
     class IRenderExternalTextureSource;
     struct RenderExternalTextureFacts;
 
@@ -117,6 +118,14 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Fail(RenderResourceClass resourceClass, RenderResourceIdentity identity, Error error);
         [[nodiscard]] Result<void> Release(RenderResourceClass resourceClass, RenderResourceIdentity identity);
         [[nodiscard]] Result<void> CancelPending(RenderResourceClass resourceClass, RenderResourceIdentity identity);
+        /** @brief Attaches one admitted UI owner before its exact pending creation is published to a caller. */
+        void BindUiPaintOwner(ResourceReservation reservation, const std::shared_ptr<UiPaintOwnerRetirement> &owner) noexcept;
+        /** @brief Finds requested pending ownership without copying or constructing operation diagnostics. */
+        [[nodiscard]] std::optional<ResourceReservation> PendingUiPaintRetirement(RenderResourceIdentity identity) const noexcept;
+        /** @brief Marks one exact requested UI generation retiring; existing pins still gate native destruction. */
+        void RetireUiPaintResource(RenderResourceIdentity identity, ResourceOperationId operation) noexcept;
+        /** @brief Examines at most the configured retirement budget using a persistent cursor; pending uploads drain separately. */
+        void SweepUiPaintRetirements() noexcept;
         /** @brief Cancels a still-pending exact reservation using its pre-owned rollback error; terminal records are unchanged. */
         void RollbackPending(RenderResourceClass resourceClass, ResourceReservation reservation) noexcept;
         [[nodiscard]] Result<RenderResourceState> State(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
@@ -166,6 +175,7 @@ namespace Horo::Render::Detail {
 
         struct Entry {
             std::shared_ptr<const IRenderExternalTextureSource> externalSource;
+            std::shared_ptr<UiPaintOwnerRetirement> uiPaintOwner;
             RenderResourceClass resourceClass{RenderResourceClass::Buffer};
             RenderResourceState state{RenderResourceState::Retired};
             std::uint32_t generation{1};
@@ -315,6 +325,7 @@ namespace Horo::Render::Detail {
         std::vector<SubmissionPin> submissionPins_;
         std::vector<QueueProgress> queueProgress_;
         std::size_t completionScanCursor_{0};
+        std::size_t uiPaintRetirementCursor_{1};
         std::uint32_t pendingRequests_{0};
         std::uint32_t activeSubmissionPins_{0};
         bool acceptingRequests_{true};

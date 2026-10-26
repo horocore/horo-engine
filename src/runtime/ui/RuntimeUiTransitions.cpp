@@ -61,7 +61,7 @@ namespace Horo::Runtime::Ui {
         Result<void> AdmitAnimatedSceneTransition(
             const Detail::RuntimeUiServiceState &state, const UiSceneTransitionRequest &request,
             const std::span<const std::shared_ptr<Detail::UiAnimationSourceReservation>> coordinated = {},
-            const void *preparation = nullptr) {
+            const Detail::UiAnimationSourceReservation::Preparation *preparation = nullptr) {
             for (const auto &entry : state.animationSources) {
                 const auto source = entry.lock();
                 if (!source || source->retiring)
@@ -164,8 +164,8 @@ namespace Horo::Runtime::Ui {
             source.HasError())
             return source;
         for (const auto &source : candidate.animationSources) {
-            const auto *publisher = state->registry.Publisher(source->instance);
-            if (source->retiring || !publisher || !publisher->IsCurrent(source->generation))
+            if (const auto *publisher = state->registry.Publisher(source->instance);
+                source->retiring || !publisher || !publisher->IsCurrent(source->generation))
                 return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
             const auto descriptor = state->registry.Describe(source->instance);
             if (descriptor.HasError())

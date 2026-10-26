@@ -31,9 +31,9 @@ namespace Horo::Application::Internal {
                                                     .artifactKey = record->compiledArtifactKey,
                                                     .payload = {payload.begin(), payload.end()},
                                                     .reflection = std::move(record)};
-            auto kernel = std::make_shared<Render::CookedUiPaintKernel>(
-                Render::CookedUiPaintKernel{std::move(manifest), target, std::move(artifact), Render::RenderTextureFormat::Bgra8Unorm,
-                                            Render::RenderTextureFormat::Depth32FloatStencil8});
+            auto kernel = std::make_shared<Render::CookedUiPaintKernel>(std::move(manifest), target, std::move(artifact),
+                                                                        Render::RenderTextureFormat::Bgra8Unorm,
+                                                                        Render::RenderTextureFormat::Depth32FloatStencil8);
             if (const auto valid = Render::ValidateCookedUiPaintKernel(*kernel, target.backend); valid.HasError())
                 return Preparation::Failure(valid.ErrorValue());
             return Preparation::Success(std::move(kernel));

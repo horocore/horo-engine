@@ -12,8 +12,7 @@ namespace Horo::Runtime::Ui {
                                                       UiAnimationCanvasDefinition definition, const UiAnimationLimits limits) {
         if (!AnimationInternal::ValidLimits(limits))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
-        const auto *canvas = initial.Canvas(definition.canvas);
-        if (!canvas || !canvas->tree.WasIssuedBy(allocator))
+        if (const auto *canvas = initial.Canvas(definition.canvas); !canvas || !canvas->tree.WasIssuedBy(allocator))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationTargetStale));
         auto reserved =
             allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + limits.timelines + MaximumUiAnimationAttachments);
@@ -61,7 +60,7 @@ namespace Horo::Runtime::Ui {
         if (!AnimationInternal::ValidLimits(limits))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
         auto *generation = publisher.Current();
-        auto *canvas = generation ? generation->Canvas(definition.canvas) : nullptr;
+        const auto *canvas = generation ? generation->Canvas(definition.canvas) : nullptr;
         if (!canvas || !canvas->tree.WasIssuedBy(allocator))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationTargetStale));
         if (!range) {

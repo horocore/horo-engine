@@ -8,6 +8,12 @@ namespace Horo::Runtime {
     namespace {
         /** @brief Retains every detached retirement through validation and abandons only this operation on failure. */
         struct PreparedRetirement final {
+            PreparedRetirement() = default;
+            PreparedRetirement(const PreparedRetirement &) = delete;
+            PreparedRetirement &operator=(const PreparedRetirement &) = delete;
+            PreparedRetirement(PreparedRetirement &&) = delete;
+            PreparedRetirement &operator=(PreparedRetirement &&) = delete;
+
             ~PreparedRetirement() {
                 ScenePublicationDetail::ShutdownCandidates(candidates);
             }
@@ -18,7 +24,7 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneService::RetireActiveScene */
     Result<void> RuntimeSceneService::RetireActiveScene(const CancellationToken &cancellation) {
-        const auto admitted = [&]() -> Result<void> {
+        const auto admitted = [&]() {
             if (shutdownDeferred_)
                 return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
             if (cancellation.IsCancellationRequested())

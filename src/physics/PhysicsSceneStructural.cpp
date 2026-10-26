@@ -165,7 +165,7 @@ namespace Horo::Physics::Detail {
                 return Runtime::SceneStructuralOwner::Physics;
             }
 
-            Result<void> ValidateBaselines(const Runtime::RuntimeSceneView active,
+            Result<void> ValidateBaselines(const Runtime::RuntimeSceneView &active,
                                            const std::span<const Runtime::SceneBaselinePreparationView> baselines) const override {
                 if (!registration_->active || registration_->active->closed || !active.IsCurrent() ||
                     registration_->active->scene != active.RuntimeId() ||

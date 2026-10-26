@@ -46,10 +46,10 @@ namespace Horo::Render {
     /** @copydoc ValidateReflectedShaderArtifact */
     Result<void> ValidateReflectedShaderArtifact(const CompiledShaderArtifact &compiled, const ReflectedShaderArtifact &artifact) {
         try {
-            const bool supported =
-                (compiled.backend == ShaderTargetBackend::Vulkan && compiled.payloadFormat == ShaderPayloadFormat::SpirV16) ||
-                (compiled.backend == ShaderTargetBackend::Metal && compiled.payloadFormat == ShaderPayloadFormat::MetalLibrary24);
-            if (!supported || !ValidEnvelope(artifact) || compiled.backend != artifact.reflection.backend ||
+            if (const bool supported =
+                    (compiled.backend == ShaderTargetBackend::Vulkan && compiled.payloadFormat == ShaderPayloadFormat::SpirV16) ||
+                    (compiled.backend == ShaderTargetBackend::Metal && compiled.payloadFormat == ShaderPayloadFormat::MetalLibrary24);
+                !supported || !ValidEnvelope(artifact) || compiled.backend != artifact.reflection.backend ||
                 compiled.artifactKey != artifact.compiledArtifactKey || compiled.payload.empty() ||
                 compiled.payload.size() > 64U * 1024U * 1024U ||
                 ComputeSha256(std::as_bytes(std::span{compiled.payload})) != artifact.payloadDigest ||
@@ -110,8 +110,8 @@ namespace Horo::Render {
             if (normalized.HasError())
                 return Outcome::Failure(normalized.ErrorValue());
             artifact.reflection = normalized.Value();
-            const auto canonical = EncodeReflectedShaderArtifact(artifact);
-            if (canonical.HasError() || !std::ranges::equal(metadata, canonical.Value()))
+            if (const auto canonical = EncodeReflectedShaderArtifact(artifact);
+                canonical.HasError() || !std::ranges::equal(metadata, canonical.Value()))
                 return Outcome::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
             return Outcome::Success(std::move(artifact));
         } catch (const Json::exception &) {

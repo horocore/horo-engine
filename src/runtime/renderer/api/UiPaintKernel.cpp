@@ -29,9 +29,9 @@ namespace Horo::Render {
         Payload ReadEntry(const std::span<const std::uint8_t> bytes, std::size_t &cursor, const ShaderStage stage,
                           const std::string_view name) {
             const auto actualStage = Read<std::uint8_t>(bytes, cursor);
-            const auto size = Read<std::uint32_t>(bytes, cursor);
-            if (actualStage != static_cast<std::uint8_t>(stage) || size != name.size() || cursor > bytes.size() ||
-                name.size() > bytes.size() - cursor)
+            if (const auto size = Read<std::uint32_t>(bytes, cursor); actualStage != static_cast<std::uint8_t>(stage) ||
+                                                                      size != name.size() || cursor > bytes.size() ||
+                                                                      name.size() > bytes.size() - cursor)
                 return Invalid();
             for (const auto character : name)
                 if (bytes[cursor++] != static_cast<std::uint8_t>(character))
@@ -55,44 +55,43 @@ namespace Horo::Render {
 
     /** @copydoc UiPaintNativePayload */
     Result<std::span<const std::uint8_t>> UiPaintNativePayload(const CompiledShaderArtifact &artifact, const ShaderStage stage) {
+        using enum ShaderStage;
         const std::span<const std::uint8_t> bytes{artifact.payload.data(), artifact.payload.size()};
-        constexpr std::array<std::uint8_t, 8> magic{'H', 'O', 'R', 'O', 'S', 'H', 'D', 'R'};
-        if (bytes.size() < 18 || bytes.size() > 16U * 1024U * 1024U || !std::ranges::equal(bytes.first(8), magic) ||
-            (stage != ShaderStage::Vertex && stage != ShaderStage::Fragment))
+        if (constexpr std::array<std::uint8_t, 8> magic{'H', 'O', 'R', 'O', 'S', 'H', 'D', 'R'};
+            bytes.size() < 18 || bytes.size() > 16U * 1024U * 1024U || !std::ranges::equal(bytes.first(8), magic) ||
+            (stage != Vertex && stage != Fragment))
             return Invalid();
         std::size_t cursor = 8;
         const auto version = Read<std::uint32_t>(bytes, cursor);
         const auto backend = Read<std::uint8_t>(bytes, cursor);
         const auto format = Read<std::uint8_t>(bytes, cursor);
-        const auto count = Read<std::uint32_t>(bytes, cursor);
-        if (version != 1 || backend != static_cast<std::uint8_t>(artifact.backend) ||
-            format != static_cast<std::uint8_t>(artifact.payloadFormat) || count != 2)
+        if (const auto count = Read<std::uint32_t>(bytes, cursor); version != 1 || backend != static_cast<std::uint8_t>(artifact.backend) ||
+                                                                   format != static_cast<std::uint8_t>(artifact.payloadFormat) ||
+                                                                   count != 2)
             return Invalid();
-        auto vertex = ReadEntry(bytes, cursor, ShaderStage::Vertex, "PaintVertex");
+        auto vertex = ReadEntry(bytes, cursor, Vertex, "PaintVertex");
         if (vertex.HasError())
             return vertex;
-        auto fragment = ReadEntry(bytes, cursor, ShaderStage::Fragment, "PaintFragment");
+        auto fragment = ReadEntry(bytes, cursor, Fragment, "PaintFragment");
         if (fragment.HasError())
             return fragment;
         if (cursor != bytes.size())
             return Invalid();
-        return stage == ShaderStage::Vertex ? vertex : fragment;
+        return stage == Vertex ? vertex : fragment;
     }
 
     /** @copydoc MakeUiPaintShaderManifest */
     ShaderManifest MakeUiPaintShaderManifest(const ShaderTargetRequirement &target) {
+        using enum ShaderResourceKind;
+        using enum ShaderResourceAccess;
         ShaderManifest manifest{.schemaVersion = 1,
                                 .sourceIdentity = "horo/runtime/ui_paint.hlsl",
                                 .sourceRevision = 3,
                                 .entryPoints = {{ShaderStage::Vertex, "PaintVertex"}, {ShaderStage::Fragment, "PaintFragment"}}};
-        manifest.bindings = {{{1},
-                              ShaderResourceKind::UniformBuffer,
-                              ShaderResourceAccess::ReadOnly,
-                              1,
-                              ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment},
-                             {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{3}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{4}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}};
+        manifest.bindings = {{{1}, UniformBuffer, ReadOnly, 1, ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment},
+                             {{2}, SampledTexture, ReadOnly, 1, ShaderStageVisibility::Fragment},
+                             {{3}, SampledTexture, ReadOnly, 1, ShaderStageVisibility::Fragment},
+                             {{4}, Sampler, ReadOnly, 1, ShaderStageVisibility::Fragment}};
         manifest.targets = {target};
         return manifest;
     }

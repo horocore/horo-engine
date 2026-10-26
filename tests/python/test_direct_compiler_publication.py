@@ -168,8 +168,9 @@ def test_native_status_guards_require_uncancelled_successful_tooling(
 
 @pytest.mark.parametrize("expression", ["unknown()", "cancelled(True)", "cancelled(flag=True)", "obj.cancelled()"])
 def test_status_model_rejects_arbitrary_or_parameterized_calls(expression: str) -> None:
+    parsed = ast.parse(expression, mode="eval").body
     with pytest.raises(ValueError, match="Unexpected token-guard expression"):
-        boolean_value(ast.parse(expression, mode="eval").body, cancelled=False)
+        boolean_value(parsed, cancelled=False)
 
 
 def test_foreign_fork_sonar_policy_is_preserved() -> None:

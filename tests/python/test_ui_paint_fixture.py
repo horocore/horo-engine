@@ -39,6 +39,32 @@ def test_exact_same_run_qualification_data_is_accepted(handoff):
     assert FIXTURE.verify(root, ROOT) == expected
 
 
+@pytest.mark.parametrize("run", ["42", "1" + "0" * 19])
+def test_run_identity_accepts_only_bounded_ascii_decimal(monkeypatch, run):
+    expected = {"GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": run,
+                "GITHUB_RUN_ATTEMPT": "1", "GITHUB_REPOSITORY": "horocore/horo-engine"}
+    for key, value in expected.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(FIXTURE.subprocess, "check_output", lambda *args, **kwargs: "a" * 40)
+    assert FIXTURE.identity(ROOT) == expected
+
+
+@pytest.mark.parametrize("run", ["0", "01", "1" + "0" * 20, "1\u0662", "1\uff12"])
+def test_run_identity_rejects_noncanonical_decimal_before_checkout(monkeypatch, run):
+    for key, value in {"GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": run,
+                       "GITHUB_RUN_ATTEMPT": "1", "GITHUB_REPOSITORY": "horocore/horo-engine"}.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError, match="Invalid run identity"):
+        FIXTURE.identity(ROOT)
+
+
+def test_catalog_rejects_unclosed_repeated_entries_without_regex_backtracking(monkeypatch):
+    marker = "ApprovedShaderCompilerTool{ShaderCompilerTool::Dxc,"
+    monkeypatch.setattr(FIXTURE, "bounded", lambda *args: (marker * 1024).encode())
+    with pytest.raises(ValueError, match="Malformed canonical tool entry"):
+        FIXTURE.catalog(ROOT)
+
+
 @pytest.mark.parametrize("target", ["private/var", "/private/var"])
 def test_only_fixed_macos_system_alias_is_translated(monkeypatch, target):
     monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
@@ -252,6 +278,7 @@ def test_producer_rejects_unattested_executable_before_any_process_or_output(tmp
                           for role in ("Dxc", "SpirvTools", "SpirvCross")}}
     monkeypatch.setattr(FIXTURE, "expected_manifest", lambda source: metadata)
     monkeypatch.setattr(FIXTURE.platform, "machine", lambda: "x86_64")
+
     class HostRelease:
         @staticmethod
         def exists():

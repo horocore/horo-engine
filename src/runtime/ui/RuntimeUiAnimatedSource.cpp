@@ -7,7 +7,7 @@ namespace Horo::Runtime::Ui {
      * const CancellationToken &) */
     Result<UiAnimationReloadResult> RuntimeUiService::Reload(const RuntimeUiInstanceId instance, UiAnimationOwner &animation,
                                                              UiAnimationReloadPreparation preparation,
-                                                             const CancellationToken &cancellation) {
+                                                             const CancellationToken &cancellation) const {
         if (const auto checked = Detail::CheckOwner(state_); checked.HasError())
             return Result<UiAnimationReloadResult>::Failure(checked.ErrorValue());
         if (!animation.storage_ || !animation.storage_->publisher.Matches(state_, instance) ||

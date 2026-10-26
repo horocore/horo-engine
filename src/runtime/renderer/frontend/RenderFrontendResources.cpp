@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/RenderMemoryBudgetErrors.h"
 #include "RenderFrontendErrors.h"
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
@@ -227,33 +228,45 @@ namespace Horo::Render {
     Result<ResourceCreation<RenderBufferHandle>> RenderFrontend::CreateBuffer(const RenderMemoryScopeId scope,
                                                                               const RenderBufferDescriptor &descriptor,
                                                                               const std::span<const std::byte> initialData) {
+        return CreateOwnedUiPaintBuffer(scope, descriptor, initialData, {});
+    }
+
+    /** @copydoc RenderFrontend::AdmitUiPaintBufferRequest */
+    Result<void> RenderFrontend::AdmitUiPaintBufferRequest(const RenderBufferDescriptor &descriptor,
+                                                           const std::span<const std::byte> initialData) const {
         if (auto admission = RequireOpenOwner(); admission.HasError())
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(std::move(admission).ErrorValue());
+            return Result<void>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr)
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be created during an active frame."));
         if (ValidateRenderBufferDescriptor(descriptor).HasError())
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
                                   "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
         if (AdmitCurrentBufferDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::LightCulling)) ==
             ResourceDescriptorAdmission::Unsupported)
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this buffer usage combination: " +
                                       DescribeRenderBufferRequest(descriptor)));
         if (!backend_->Capabilities().supportsBufferResources)
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic buffers."));
         if (ValidateRenderBufferInitialData(descriptor, RenderBufferInitialDataView{initialData}).HasError())
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(
-                MakeFrontendError(FrontendErrors::ResourceBufferUploadSizeMismatch,
-                                  "The initial-data byte count must equal the buffer descriptor size."));
+            return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceBufferUploadSizeMismatch,
+                                                           "The initial-data byte count must equal the buffer descriptor size."));
         if (!resourceUploadQueue_->CanEnqueue(initialData.size()))
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(
-                MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
-                                  "The bounded upload arena has insufficient staging-byte or request capacity."));
+            return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
+                                                           "The bounded upload arena has insufficient staging-byte or request capacity."));
+        return Result<void>::Success();
+    }
 
+    /** @copydoc RenderFrontend::CreateOwnedUiPaintBuffer */
+    Result<ResourceCreation<RenderBufferHandle>> RenderFrontend::CreateOwnedUiPaintBuffer(
+        const RenderMemoryScopeId scope, const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
+        const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner) {
+        if (const auto valid = AdmitUiPaintBufferRequest(descriptor, initialData); valid.HasError())
+            return Result<ResourceCreation<RenderBufferHandle>>::Failure(valid.ErrorValue());
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Buffer, [this, &descriptor] {
             return backend_->QueryBufferMemoryCost(descriptor);
@@ -262,6 +275,8 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(admitted.ErrorValue());
         }
         const Detail::ResourceReservation &reservation = admitted.Value().resource;
+        if (owner)
+            resourceRegistry_->BindUiPaintOwner(reservation, owner);
         try {
             if (reservation.identity.slot >= buffers_.size())
                 buffers_.resize(static_cast<std::size_t>(reservation.identity.slot) + 1);
@@ -334,35 +349,49 @@ namespace Horo::Render {
     Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::CreateTexture(const RenderMemoryScopeId scope,
                                                                                 const RenderTextureDescriptor &descriptor,
                                                                                 const std::span<const std::byte> initialData) {
+        return CreateOwnedUiPaintTexture(scope, descriptor, initialData, {});
+    }
+
+    /** @copydoc RenderFrontend::AdmitUiPaintTextureRequest */
+    Result<void> RenderFrontend::AdmitUiPaintTextureRequest(const RenderTextureDescriptor &descriptor,
+                                                            const std::span<const std::byte> initialData) const {
         if (auto admission = RequireOpenOwner(); admission.HasError())
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(std::move(admission).ErrorValue());
+            return Result<void>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr)
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be created during an active frame."));
         if (ValidateRenderTextureDescriptor(descriptor).HasError())
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
                                   "The texture descriptor is structurally invalid: " + DescribeRenderTextureRequest(descriptor)));
         if (AdmitCurrentTextureDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::UiPaint)) ==
             ResourceDescriptorAdmission::Unsupported)
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this texture descriptor combination: " +
                                       DescribeRenderTextureRequest(descriptor)));
         if (!backend_->Capabilities().supportsTextureResources)
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic textures."));
         if (descriptor.format == RenderTextureFormat::Depth32FloatStencil8 && !backend_->Capabilities().support.Supports(descriptor))
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
         if (const auto baseLevelBytes = RenderTextureBaseLevelByteSize(descriptor);
             !baseLevelBytes.has_value() || (!initialData.empty() && initialData.size() != *baseLevelBytes))
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(
+            return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
                                   "Texture initial data must be empty or contain one complete tightly packed base level."));
         if (!resourceUploadQueue_->CanEnqueue(initialData.size()))
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(
-                MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
-                                  "The bounded upload arena has insufficient staging-byte or request capacity."));
+            return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
+                                                           "The bounded upload arena has insufficient staging-byte or request capacity."));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RenderFrontend::CreateOwnedUiPaintTexture */
+    Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::CreateOwnedUiPaintTexture(
+        const RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
+        const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner) {
+        if (const auto valid = AdmitUiPaintTextureRequest(descriptor, initialData); valid.HasError())
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(valid.ErrorValue());
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Texture, [this, &descriptor] {
             return backend_->QueryTextureMemoryCost(descriptor);
@@ -371,6 +400,8 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(admitted.ErrorValue());
         }
         const Detail::ResourceReservation &reservation = admitted.Value().resource;
+        if (owner)
+            resourceRegistry_->BindUiPaintOwner(reservation, owner);
         try {
             if (reservation.identity.slot >= textures_.size())
                 textures_.resize(static_cast<std::size_t>(reservation.identity.slot) + 1);
@@ -495,6 +526,34 @@ namespace Horo::Render {
         return replacement;
     }
 
+    /** @copydoc RenderFrontend::RetireOwnedUiPaintResource */
+    bool RenderFrontend::RetireOwnedUiPaintResource(const Detail::RenderResourceIdentity identity,
+                                                    const ResourceOperationId operation) noexcept {
+        if (std::this_thread::get_id() != preparationOwner_ || activeFrameScope_ != nullptr)
+            return false;
+        if (const auto pending = resourceRegistry_->PendingUiPaintRetirement(identity); pending && pending->operation == operation) {
+            if (const auto *request = resourceUploadQueue_->Find(identity); request && request->memoryReservation.IsValid()) {
+                if (!memoryBudget_->TryCancelReservation(request->memoryReservation))
+                    return false;
+            }
+            static_cast<void>(resourceUploadQueue_->Cancel(identity));
+        }
+        resourceRegistry_->RetireUiPaintResource(identity, operation);
+        static_cast<void>(resourceRegistry_->DrainRetirements());
+        static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
+        return true;
+    }
+
+    /** @copydoc RenderFrontend::RetireOwnedUiPaintBuffer */
+    void RenderFrontend::RetireOwnedUiPaintBuffer(const RenderBufferHandle handle, const ResourceOperationId operation) noexcept {
+        static_cast<void>(RetireOwnedUiPaintResource(Identity(handle), operation));
+    }
+
+    /** @copydoc RenderFrontend::RetireOwnedUiPaintTexture */
+    void RenderFrontend::RetireOwnedUiPaintTexture(const RenderTextureHandle handle, const ResourceOperationId operation) noexcept {
+        static_cast<void>(RetireOwnedUiPaintResource(Identity(handle), operation));
+    }
+
     /** @copydoc RenderFrontend::ProcessResourceRequests */
     Result<std::size_t> RenderFrontend::ProcessResourceRequests() {
         if (auto admission = RequireOpenOwner(); admission.HasError())
@@ -504,11 +563,25 @@ namespace Horo::Render {
                                                                   "Resource requests can only be processed at a frame boundary."));
         }
 
+        resourceRegistry_->SweepUiPaintRetirements();
+        std::size_t processedRequests = 0;
+        std::size_t processedBytes = 0;
         std::size_t completedRequests = 0;
         std::size_t completedBytes = 0;
-        while (!resourceUploadQueue_->Empty() && !resourceUploadQueue_->DrainLimitReached(completedRequests, completedBytes)) {
+        while (!resourceUploadQueue_->Empty() && !resourceUploadQueue_->DrainLimitReached(processedRequests, processedBytes)) {
             const Detail::RenderResourceUploadQueue::Request &request = resourceUploadQueue_->Front();
             const std::span<const std::byte> initialData = resourceUploadQueue_->FrontInitialData();
+            ++processedRequests;
+            processedBytes += initialData.size();
+            if (const auto pending = resourceRegistry_->PendingUiPaintRetirement(request.identity); pending) {
+                if (request.memoryReservation.IsValid() && !memoryBudget_->TryCancelReservation(request.memoryReservation)) {
+                    resourceUploadQueue_->CompleteBatch(completedRequests, completedBytes);
+                    return Result<std::size_t>::Failure(MakeError(RenderMemoryBudgetErrors::InvalidReservation));
+                }
+                resourceRegistry_->RetireUiPaintResource(request.identity, pending->operation);
+                resourceUploadQueue_->PopCancelled();
+                continue;
+            }
             completedBytes += initialData.size();
             const Result<std::uint64_t> created =
                 RealizeResourceRequest(*backend_, *memoryBudget_, *resourceRegistry_, request, initialData);

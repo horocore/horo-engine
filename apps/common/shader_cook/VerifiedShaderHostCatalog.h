@@ -12,7 +12,18 @@ namespace Horo::Application::Internal {
 
     /** @brief Only ArtifactVerifier-authenticated immutable snapshots can issue this existing compiler trust capability. */
     class VerifiedShaderHostCatalog final : public Render::IVerifiedShaderCompilerToolCatalog {
+        class ConstructionKey final {
+            friend class VerifiedShaderHostCatalog;
+            ConstructionKey() noexcept = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) noexcept = default;
+        };
+
     public:
+        /** @brief Factory-only construction after bounded catalog authentication and decoding. */
+        VerifiedShaderHostCatalog(ConstructionKey, Security::VerifiedArtifactEvidence evidence, std::string host,
+                                  std::vector<ShaderHostToolApproval> tools);
         /** @brief Authenticates exact bounded bytes before decoding any tool approvals.
          * @param bytes Immutable catalog snapshot, at most64KiB, schema1.
          * @param envelope Detached signature for these exact bytes.
@@ -32,7 +43,6 @@ namespace Horo::Application::Internal {
         ~VerifiedShaderHostCatalog() override = default;
 
     private:
-        VerifiedShaderHostCatalog(Security::VerifiedArtifactEvidence evidence, std::string host, std::vector<ShaderHostToolApproval> tools);
         Security::VerifiedArtifactEvidence evidence_;
         std::string host_;
         std::vector<ShaderHostToolApproval> tools_;

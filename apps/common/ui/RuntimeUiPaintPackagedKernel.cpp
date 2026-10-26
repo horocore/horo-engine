@@ -21,7 +21,10 @@ namespace Horo::Application::Internal {
             const auto directory = canonicalRoot / "shaders/runtime";
             const auto path = directory / filename;
             const auto resolved = std::filesystem::canonical(path, error);
-            if (error || resolved != path || !std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error)
+            if (error || resolved != path)
+                return Bytes::Failure(MakeError(Render::ShaderCompilerPipelineErrors::ScratchIoFailed));
+            const auto status = std::filesystem::symlink_status(path, error);
+            if (error || !std::filesystem::is_regular_file(status))
                 return Bytes::Failure(MakeError(Render::ShaderCompilerPipelineErrors::ScratchIoFailed));
             const auto size = std::filesystem::file_size(path, error);
             if (error || size == 0 || size > maximum)

@@ -10,13 +10,14 @@ namespace Horo::Runtime::Ui::Detail {
 
     /** @brief Owner-thread source reservation; service keeps weak entries, derived owner keeps the only admission pin. */
     struct UiAnimationSourceReservation final {
+        /** @brief Exact internal candidate identity; exposed only inside the friend-owned reservation implementation. */
+        using Preparation = UiSceneReconciliation::Prepared::Storage;
         RuntimeUiInstanceId instance;
         UiCanvasId canvas;
         UiReloadLease generation; /**< Exact source pin fences canonical entry reclamation even before the first derived frame. */
         bool retiring{};
         bool unpublished{};
-        std::weak_ptr<UiSceneReconciliation::Prepared::Storage>
-            preparation; /**< Exact unpublished canonical candidate, never a caller nonce. */
+        std::weak_ptr<Preparation> preparation; /**< Exact unpublished canonical candidate, never a caller nonce. */
     };
 
     /** @brief Private source access preserving either standalone ownership or the sole service-owned publisher. */

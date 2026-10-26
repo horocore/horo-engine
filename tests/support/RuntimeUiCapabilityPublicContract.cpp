@@ -26,7 +26,7 @@ static_assert(std::is_copy_constructible_v<RuntimeUiCommandResult>);
 
 using CoordinatedServiceReload = Horo::Result<UiAnimationReloadResult> (RuntimeUiService::*)(RuntimeUiInstanceId, UiAnimationOwner &,
                                                                                              UiAnimationReloadPreparation,
-                                                                                             const Horo::CancellationToken &);
+                                                                                             const Horo::CancellationToken &) const;
 static_assert(std::is_same_v<decltype(static_cast<CoordinatedServiceReload>(&RuntimeUiService::Reload)), CoordinatedServiceReload>);
 using ServiceAnimationCreate = Horo::Result<UiAnimationOwner> (*)(RuntimeUiService &, RuntimeUiInstanceId, UiElementSlotAllocator &,
                                                                   RuntimeStyleRegistry, UiStyleResolver, UiAnimationCanvasDefinition,

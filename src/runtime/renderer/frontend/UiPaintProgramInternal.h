@@ -1,7 +1,9 @@
 #pragma once
+
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
 #include "Horo/Runtime/Render/UiPaintProgram.h"
 #include "UiPaintFrontendState.h"
+#include "UiPaintOwnerRetirement.h"
 #include "UiRenderSubmissionRetention.h"
 
 #include <optional>
@@ -14,11 +16,14 @@ namespace Horo::Render {
         inline constexpr std::uint32_t NoPaintRole = UINT32_MAX;
 
         struct UiPaintMaskScope final {
-            std::uint32_t leaf{NoPaintRole}, boundary{NoPaintRole}, parent{NoPaintRole};
+            std::uint32_t leaf{NoPaintRole};
+            std::uint32_t boundary{NoPaintRole};
+            std::uint32_t parent{NoPaintRole};
         };
 
         struct UiPaintPassRange final {
-            std::uint32_t offset{}, count{};
+            std::uint32_t offset{};
+            std::uint32_t count{};
         };
 
         /** @brief Bounded copies of existing issued provenance, never a second resource or source publisher. */
@@ -39,7 +44,8 @@ namespace Horo::Render {
 
             std::array<Image, MaximumUiSubmissionImages> images;
             std::array<Font, MaximumUiSubmissionFonts> fonts;
-            std::size_t imageCount{}, fontCount{};
+            std::size_t imageCount{};
+            std::size_t fontCount{};
             Runtime::Ui::UiGlyphAtlasFrameId atlasFrame;
             Runtime::Ui::UiGlyphAtlasRevision atlasRevision;
             /** @brief Copies already validated finite immutable provenance before native slot publication. */
@@ -118,24 +124,31 @@ namespace Horo::Render {
             Detail::UiPaintSourceShape prototype;
             std::vector<RenderTextureHandle> external;
             std::vector<Detail::UiPaintMaskScope> masks;
-            std::vector<std::uint32_t> commandScopes, groupScopes;
-        } source;
+            std::vector<std::uint32_t> commandScopes;
+            std::vector<std::uint32_t> groupScopes;
+        };
+
+        SourceRoles source;
 
         struct NativePreparation final {
             std::unique_ptr<UiPaintFrameBufferPool> buffers;
-            std::shared_ptr<IResidentUiPaintKernel> primary, offscreen;
+            std::shared_ptr<IResidentUiPaintKernel> primary;
+            std::shared_ptr<IResidentUiPaintKernel> offscreen;
             std::vector<Detail::UiPaintSlotProgram> slots;
-        } native;
+        };
+
+        NativePreparation native;
 
         UiPaintProgramDescriptor descriptor;
         std::weak_ptr<Detail::UiPaintFrontendState> frontend;
+        std::shared_ptr<Detail::UiPaintOwnerRetirement> retirement{std::make_shared<Detail::UiPaintOwnerRetirement>()};
         std::shared_ptr<const Detail::UiPaintProgramIdentity> identity;
-        std::thread::id owner;
+        std::thread::id owner{std::this_thread::get_id()};
         bool closed{};
         Detail::UiRenderSubmissionRetention validation;
 
         Storage(const Runtime::Ui::UiRenderSnapshot &prototype, const UiPaintProgramDescriptor &policy)
-            : source{.prototype = Detail::UiPaintSourceShape{prototype}}, descriptor(policy), owner(std::this_thread::get_id()) {}
+            : source{.prototype = Detail::UiPaintSourceShape{prototype}}, descriptor(policy) {}
 
         [[nodiscard]] Result<void> BuildRoles();
         [[nodiscard]] Result<std::uint32_t> MaskScope(std::uint32_t leaf, std::uint32_t group);
@@ -160,16 +173,18 @@ namespace Horo::Render {
                                               const Runtime::Ui::UiRenderSnapshot &snapshot, UiPaintDraw draw, std::uint32_t scope,
                                               std::uint32_t pass);
         [[nodiscard]] Result<std::uint32_t> Quad(Detail::UiPaintCpuFrame &candidate, Runtime::Ui::UiLogicalRect rect,
-                                                 const Runtime::Ui::UiLogicalTransform &transform, bool targetUv);
-        [[nodiscard]] Result<std::uint32_t> Fullscreen(Detail::UiPaintCpuFrame &candidate);
-        [[nodiscard]] Result<void> Draw(Detail::UiPaintCpuFrame &candidate, const UiPaintDraw &draw);
+                                                 const Runtime::Ui::UiLogicalTransform &transform, bool targetUv) const;
+        [[nodiscard]] Result<std::uint32_t> Fullscreen(Detail::UiPaintCpuFrame &candidate) const;
+        [[nodiscard]] Result<void> Draw(Detail::UiPaintCpuFrame &candidate, const UiPaintDraw &draw) const;
         [[nodiscard]] Result<UiPaintScissor> Scissor(const Runtime::Ui::UiRenderSnapshot &snapshot, std::uint32_t clip) const;
         [[nodiscard]] Result<std::uint32_t> Sample(const Detail::UiPaintSlotProgram &slot, std::uint32_t pass,
                                                    RenderGraphResourceId resource) const;
         [[nodiscard]] Result<std::uint32_t> SourceSample(const Detail::UiPaintSlotProgram &slot, std::uint32_t pass,
                                                          const UiRenderSubmission &submission, std::uint32_t reference,
                                                          const Runtime::Ui::UiPositionedGlyph *glyph = nullptr) const;
-        void Publish(Detail::UiPaintSlotProgram &slot, Detail::UiPaintCpuFrame &frame, std::uint64_t revision) noexcept;
+        void Publish(Detail::UiPaintSlotProgram &slot, Detail::UiPaintCpuFrame &frame, std::uint64_t revision) const noexcept;
         [[nodiscard]] Result<void> Shutdown();
+        /** @brief Requests nonallocating registry-owned retirement; immediate native cleanup remains owner-boundary-only. */
+        void RetireNative() noexcept;
     };
 }  // namespace Horo::Render

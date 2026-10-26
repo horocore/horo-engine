@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Render/RenderMemoryBudget.h"
 #include "RenderExternalImages.h"
 #include "RenderFrontendErrors.h"
+#include "UiPaintOwnerRetirement.h"
 
 #include <algorithm>
 #include <array>
@@ -195,6 +196,7 @@ namespace Horo::Render::Detail {
         entry.backendInstance = 0;
         entry.memoryAllocation.reset();
         entry.memoryReservation = {};
+        entry.uiPaintOwner.reset();
         entry.nativeLease = {};
         entry.nativeDestroyRequested = false;
         entry.memoryRetirementBegun = false;
@@ -363,6 +365,53 @@ namespace Horo::Render::Detail {
             return Result<RenderResourceState>::Failure(validated.ErrorValue());
         }
         return Result<RenderResourceState>::Success(slots_.At(validated.Value()).state);
+    }
+
+    /** @copydoc RenderResourceRegistry::BindUiPaintOwner */
+    void RenderResourceRegistry::BindUiPaintOwner(const ResourceReservation reservation,
+                                                  const std::shared_ptr<UiPaintOwnerRetirement> &owner) noexcept {
+        assert(slots_.FindExact(reservation.identity) && slots_.FindExact(reservation.identity)->state == RenderResourceState::Pending &&
+               slots_.FindExact(reservation.identity)->operation == reservation.operation);
+        slots_.At(reservation.identity.slot).uiPaintOwner = owner;
+    }
+
+    /** @copydoc RenderResourceRegistry::PendingUiPaintRetirement */
+    std::optional<ResourceReservation> RenderResourceRegistry::PendingUiPaintRetirement(
+        const RenderResourceIdentity identity) const noexcept {
+        const Entry *entry = slots_.FindExact(identity);
+        if (!entry || entry->state != RenderResourceState::Pending || !entry->uiPaintOwner || !entry->uiPaintOwner->Requested())
+            return std::nullopt;
+        return ResourceReservation{identity, entry->operation};
+    }
+
+    /** @copydoc RenderResourceRegistry::RetireUiPaintResource */
+    void RenderResourceRegistry::RetireUiPaintResource(const RenderResourceIdentity identity,
+                                                       const ResourceOperationId operation) noexcept {
+        const Entry *entry = slots_.FindExact(identity);
+        if (!entry || entry->operation != operation || !entry->uiPaintOwner || !entry->uiPaintOwner->Requested())
+            return;
+        if (entry->state == RenderResourceState::Pending) {
+            RollbackPending(entry->resourceClass, {identity, operation});
+            return;
+        }
+        if (entry->state == RenderResourceState::Ready)
+            slots_.At(identity.slot).state = RenderResourceState::Retiring;
+        QueueRetirementIfEligible(identity.slot);
+    }
+
+    /** @copydoc RenderResourceRegistry::SweepUiPaintRetirements */
+    void RenderResourceRegistry::SweepUiPaintRetirements() noexcept {
+        if (slots_.Size() <= 1)
+            return;
+        const auto maximum = std::min<std::size_t>(limits_.retirementDrainBudget, slots_.Size() - 1);
+        for (std::size_t examined = 0; examined < maximum; ++examined) {
+            if (uiPaintRetirementCursor_ >= slots_.Size())
+                uiPaintRetirementCursor_ = 1;
+            const auto slot = uiPaintRetirementCursor_++;
+            const Entry &entry = slots_.At(slot);
+            if (entry.state == RenderResourceState::Ready && entry.uiPaintOwner && entry.uiPaintOwner->Requested())
+                RetireUiPaintResource({owner_, static_cast<std::uint32_t>(slot), entry.generation}, entry.operation);
+        }
     }
 
     /** @copydoc RenderResourceRegistry::RollbackPending */
@@ -637,6 +686,7 @@ namespace Horo::Render::Detail {
         entry.dependencies.clear();
         entry.backendInstance = 0;
         entry.externalSource.reset();
+        entry.uiPaintOwner.reset();
         entry.memoryAllocation.reset();
         entry.operation = {};
         entry.state = RenderResourceState::Retired;

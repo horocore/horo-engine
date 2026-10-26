@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "UiPaintFrontendState.h"
+#include "UiPaintOwnerRetirement.h"
 
 #include <limits>
 #include <new>
@@ -15,12 +16,24 @@ namespace Horo::Render {
     }
 
     /** @copydoc UiPaintFrameBufferPool::UiPaintFrameBufferPool */
-    UiPaintFrameBufferPool::UiPaintFrameBufferPool(RenderFrontend &frontend, UiPaintFrameBudget budget, std::uint32_t slots,
+    UiPaintFrameBufferPool::UiPaintFrameBufferPool(const RenderFrontend &frontend, UiPaintFrameBudget budget, std::uint32_t slots,
                                                    ConstructionKey)
-        : frontendState_(frontend.uiPaintFrontendState_), budget_(budget), count_(slots), owner_(std::this_thread::get_id()) {}
+        : frontendState_(frontend.uiPaintFrontendState_), retirement_(std::make_shared<Detail::UiPaintOwnerRetirement>()), budget_(budget),
+          count_(slots), owner_(std::this_thread::get_id()) {}
 
     UiPaintFrameBufferPool::~UiPaintFrameBufferPool() {
-        static_cast<void>(Shutdown());
+        retirement_->Request();
+        if (std::this_thread::get_id() != owner_)
+            return;
+        const auto state = frontendState_.lock();
+        if (!state || !state->frontend)
+            return;
+        for (std::size_t slot = 0; slot < count_; ++slot) {
+            const std::array handles{slots_[slot].vertices, slots_[slot].indices, slots_[slot].parameters};
+            for (std::size_t index = 0; index < handles.size(); ++index)
+                if (handles[index].IsValid())
+                    state->frontend->RetireOwnedUiPaintBuffer(handles[index], operations_[slot][index]);
+        }
     }
 
     /** @copydoc UiPaintFrameBufferPool::Create */
@@ -47,9 +60,11 @@ namespace Horo::Render {
                 auto &buffers = pool->slots_[slot];
                 const std::array destinations{&buffers.vertices, &buffers.indices, &buffers.parameters};
                 for (std::size_t index = 0; index < bytes.size(); ++index) {
-                    const auto created =
-                        frontend.CreateBuffer({.byteSize = bytes[index], .usage = usages[index], .access = RenderBufferAccess::HostVisible},
-                                              {});
+                    const auto created = frontend.CreateOwnedUiPaintBuffer(frontend.memoryConfig_.defaultResourceScope,
+                                                                           {.byteSize = bytes[index],
+                                                                            .usage = usages[index],
+                                                                            .access = RenderBufferAccess::HostVisible},
+                                                                           {}, pool->retirement_);
                     if (created.HasError())
                         return Creation::Failure(created.ErrorValue());
                     *destinations[index] = created.Value().handle;

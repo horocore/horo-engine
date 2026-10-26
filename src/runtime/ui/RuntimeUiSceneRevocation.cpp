@@ -40,13 +40,10 @@ namespace Horo::Runtime::Ui {
         for (auto &entry : storage_.Get()->active) {
             if (!entry)
                 continue;
-            if (entry->descriptor.owner.scene == scene) {
-                if (!std::exchange(entry->sceneRevoked, true))
-                    changed = true;
-            } else if (entry->descriptor.providerScene == scene) {
-                if (!std::exchange(entry->providerRevoked, true))
-                    changed = true;
-            }
+            if (entry->descriptor.owner.scene == scene)
+                changed = !std::exchange(entry->sceneRevoked, true) || changed;
+            else if (entry->descriptor.providerScene == scene)
+                changed = !std::exchange(entry->providerRevoked, true) || changed;
         }
         for (const auto &weak : storage_.Get()->preparations) {
             const auto candidate = weak.lock();
@@ -84,20 +81,28 @@ namespace Horo::Runtime::Ui {
         for (auto &action : state_->actions)
             if (action.occupied && matching(action.instance))
                 action.sceneRevoked = true;
+        const auto retireIncoming = [scene](const std::shared_ptr<Detail::UiAnimationSourceReservation> &source) {
+            const auto prepared = source->preparation.lock();
+            if (!prepared)
+                return;
+            for (auto &incoming : prepared->incoming) {
+                if (incoming.descriptor.owner.scene != scene)
+                    continue;
+                incoming.sceneRevoked = true;
+                source->retiring = true;
+            }
+        };
         for (const auto &weak : state_->animationSources) {
             const auto source = weak.lock();
             if (!source)
                 continue;
-            const auto slot = state_->registry.storage_.Get()->Find(source->instance);
-            if (slot < state_->registry.storage_.Get()->active.size()) {
+            if (const auto slot = state_->registry.storage_.Get()->Find(source->instance);
+                slot < state_->registry.storage_.Get()->active.size()) {
                 const auto &entry = *state_->registry.storage_.Get()->active[slot];
                 if (entry.descriptor.owner.scene == scene || entry.descriptor.providerScene == scene)
                     source->retiring = true;
             }
-            if (const auto prepared = source->preparation.lock())
-                for (auto &incoming : prepared->incoming)
-                    if (incoming.descriptor.owner.scene == scene)
-                        source->retiring = incoming.sceneRevoked = true;
+            retireIncoming(source);
         }
         state_->registry.RevokeScene(scene, state_->dispatching || state_->scenePublication);
         state_->sceneRevocationsPending = true;

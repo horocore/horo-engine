@@ -76,7 +76,19 @@ namespace Horo::Render {
     class UiPaintProgram final {
         struct Storage;
 
+        class ConstructionKey final {
+            friend class UiPaintProgram;
+            ConstructionKey() noexcept = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) noexcept = default;
+        };
+
     public:
+        /** @brief Factory-only construction with an already validated private storage owner.
+         * @param key Unforgeable factory construction permission.
+         * @param storage Complete private preparation transferred to this owner. */
+        UiPaintProgram(ConstructionKey, std::unique_ptr<Storage> storage) noexcept;
         /** @brief Prepares complete immutable pass structure and finite resident frame slots.
          * @param frontend Selected initialized renderer; preparation runs on its owner outside an active frame.
          * @param descriptor Exact resolved projection and finite product bounds.
@@ -140,7 +152,6 @@ namespace Horo::Render {
          * @param cancellation Source preparation fence. @return Complete native preparation or original failure. */
         [[nodiscard]] Result<void> PrepareNative(RenderFrontend &frontend, const CookedUiPaintKernel &kernel,
                                                  const CancellationToken &cancellation);
-        explicit UiPaintProgram(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;
     };
 }  // namespace Horo::Render
