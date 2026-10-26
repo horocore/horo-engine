@@ -7,6 +7,8 @@
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/ShaderReflectionCookTestSupport.h"
 
+#include <utility>
+
 namespace Horo::Tests::OpenXRApplication {
     /** @brief Keeps native shader callbacks alive until the real resource owner has retired all programs. */
     struct ShaderDriverScope final {
@@ -35,15 +37,15 @@ namespace Horo::Tests::OpenXRApplication {
 
         Result<RenderNative::VulkanEditorDevice> QueryDevice() const override {
             auto device = PreparedGraphicsPort::QueryDevice();
-            if (device.HasValue()) {
-                auto &value = device.Value();
-                value.device = OpenXR::NativeHandle<VkDevice>(1);
-                value.graphicsQueue = native_.commandState.queues[0].native;
-                value.graphicsFamily = native_.commandState.queues[0].family;
-                value.deviceResolver = &Render::VulkanGraphTest::GraphResolver;
-                value.graphicsIdentity = native_.commandState.queues[0].identity;
-            }
-            return device;
+            if (device.HasError())
+                return device;
+            auto value = std::move(device).Value();
+            value.device = OpenXR::NativeHandle<VkDevice>(1);
+            value.graphicsQueue = native_.commandState.queues[0].native;
+            value.graphicsFamily = native_.commandState.queues[0].family;
+            value.deviceResolver = &Render::VulkanGraphTest::GraphResolver;
+            value.graphicsIdentity = native_.commandState.queues[0].identity;
+            return Result<RenderNative::VulkanEditorDevice>::Success(std::move(value));
         }
 
         Result<RenderNative::VulkanFrameRetentionSlot> FrameSlot(const Render::FrameToken frame) const override {

@@ -84,7 +84,8 @@ namespace Horo::Tests::OpenXRApplication {
                 }
                 REQUIRE(bridge.Attach(*activeGraphics));
                 REQUIRE(renderers.Seal().HasValue());
-                frontend = RequireValue(Render::RenderFrontend::Create(renderers, Render::RenderBackendId{render ? "vulkan" : "null"}));
+                frontend = RequireValue(Render::RenderFrontend::Create(renderers, Render::RenderBackendId{render ? "vulkan" : "null"},
+                                                                       Render::RenderBackendConfig{}));
                 Editor::EditorVulkanViewportCook viewportCook;
                 if (render) {
                     const auto cooked = ApplicationVulkanFixture::Cook(false);

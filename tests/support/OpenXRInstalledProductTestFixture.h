@@ -3,6 +3,7 @@
  * @brief Real signed archive/install/native-gate fixture for the application-owned OpenXR lifecycle.
  * @details Callers destroy every session and loaded native child before this fixture and its script parents.
  */
+#include "Horo/Packages/PackageRequest.h"
 #include "Horo/Security/SecurityErrors.h"
 #include "HostSignatureDocument.h"
 #include "OpenXRInstalledBindings.h"
@@ -84,7 +85,7 @@ namespace Horo::Tests::OpenXRProduct {
                                                                         [signature = loaderSignature](const std::filesystem::path &path)
                                                                             -> Result<Security::DetachedSignatureEnvelope> {
                 if (path.filename() != "libopenxr_loader.so")
-                    return Result<Security::DetachedSignatureEnvelope>::Failure(MakeError(Security::SecurityErrors::MissingEvidence));
+                    return Result<Security::DetachedSignatureEnvelope>::Failure(MakeError(Horo::SecurityErrors::MissingEvidence));
                 return Result<Security::DetachedSignatureEnvelope>::Success(signature);
             });
             const auto deployment = Deployment(loaderSignature.artifactDigest).dump();
