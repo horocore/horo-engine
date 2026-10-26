@@ -3096,6 +3096,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/PrefabAssetBrowserRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
             unit/editor/PlayTopologyModalTests.cpp
+            unit/editor/BuildReleaseModalRenderTests.cpp
             unit/editor/NavigationBakeRenderTests.cpp
     )
 

@@ -209,9 +209,9 @@ namespace Horo::Editor {
                     }),
             Submenu("web_workspace.menu.build",
                     {
-                        Command("web_workspace.menu.build_job"),
+                        Command("web_workspace.menu.build_job", EditorMenuAction::OpenBuild, true),
                         Command("web_workspace.menu.run_tests"),
-                        Command("web_workspace.menu.prepare_release"),
+                        Command("web_workspace.menu.prepare_release", EditorMenuAction::OpenRelease, true),
                         Command("web_workspace.menu.publish_candidate"),
                     }),
             Submenu("web_workspace.menu.help", {Command("web_workspace.menu.documentation")}),

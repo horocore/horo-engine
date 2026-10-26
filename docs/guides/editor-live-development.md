@@ -1,5 +1,38 @@
 # Local editor UI iteration
 
+The Build Job menu entry opens a separate **Build** request/activity modal based
+on Mock Studio's `BuildDesign.tsx` and `WorkflowActivity.tsx`. Its form selects
+product, workflow and target; starting a supported native compilation shows real
+service phases and correlated build output. The current host supports Compile
+Only for Game Runtime gameplay modules on the host platform/architecture.
+Playable packaging, cooking, saved profiles, post-build tests and launching are
+not connected; unsupported requests cannot start. Closing or keeping a job in
+the background never cancels it. Reopening reconnects to the host-retained job.
+
+Activity keeps the stages, summary and footer fixed; only the log container
+scrolls. Active stages and busy indicators animate using editor motion tokens
+and stop for terminal jobs. A host-owned provider polls the retained build every
+250 ms. While its modal is closed, the status bar shows the current phase and
+only service-provided progress; clicking it reopens the existing job. Completion,
+failure and cancellation remove the busy contribution. The modal does not own
+this provider or cancel work when it closes.
+
+Prepare Release follows Mock Studio's `ReleaseDesign.tsx`: a sectioned request
+form, a separate review table, and service-backed activity. Identity, target and
+content, quality gates, security and local output stay in a transient modal
+form. Review never submits an execution plan. The preparation-stage strip reads
+service observations; there is no simulated job
+progress, package inventory, signing identity or publication destination.
+Release preparation remains unavailable until host preflight and execution
+adapters are composed. Editing form preferences never executes scripts, creates
+artifacts or publishes a candidate. Build and Release have distinct menu surfaces
+and live drawing registrations.
+
+Draft and review views omit the activity summary. Review groups are paginated
+below the table; only the table supplies its border. Modal wheel events are
+delivered directly to ImGui and clear queued workspace scrolling, so form input
+does not inherit the workspace's smoothing tail.
+
 The Debug editor can watch the selected custom theme without a C++ rebuild:
 
 ```powershell

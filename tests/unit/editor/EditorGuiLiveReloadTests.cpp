@@ -9,6 +9,7 @@
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdarg>
@@ -17,26 +18,45 @@
 #include <filesystem>
 #include <fstream>
 #include <imgui_internal.h>
+#include <mutex>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 namespace {
     using namespace Horo::Editor;
 
     struct CompilerLog : ICompilerLogger {
+        // Compiler output arrives on RCC++'s reader thread; assertions run after completion.
+        std::mutex mutex;
+        std::vector<std::string> output;
+
+        void Capture(const char *format, va_list args) {
+            std::array<char, 4096> text{};
+            std::vsnprintf(text.data(), text.size(), format, args);
+            std::lock_guard lock(mutex);
+            if (std::strcmp(format, "%s") == 0)
+                output.emplace_back(text.data());
+        }
+
         void LogError(const char *format, ...) override {
             va_list args;
             va_start(args, format);
-            std::vfprintf(stderr, format, args);
+            Capture(format, args);
             va_end(args);
         }
 
-        void LogWarning(const char *, ...) override {}
+        void LogWarning(const char *format, ...) override {
+            va_list args;
+            va_start(args, format);
+            Capture(format, args);
+            va_end(args);
+        }
 
         void LogInfo(const char *format, ...) override {
             va_list args;
             va_start(args, format);
-            std::vfprintf(stderr, format, args);
+            Capture(format, args);
             va_end(args);
         }
     };
@@ -170,6 +190,16 @@ TEST_CASE("Registered GUI modules share one host and retain state across partial
     Configure(runtime, build.path);
     Compile(runtime, 0);
     REQUIRE(runtime.LoadCompiledModule());
+    {
+        std::lock_guard lock(logger.mutex);
+        REQUIRE_FALSE(logger.output.empty());
+        for (const auto &line : logger.output) {
+            INFO(line);
+            CHECK_FALSE(line.empty());
+            CHECK(line.find_first_of("\r\n") == std::string::npos);
+            CHECK(line.find("warning D9025") == std::string::npos);
+        }
+    }
     REQUIRE(static_cast<bool>(GuiLive::Find<decltype(DrawWelcomeView)>(&registry, GuiLive::EntryId<&DrawWelcomeView>())));
     REQUIRE(static_cast<bool>(
         GuiLive::Find<GuiLive::MethodSignature<&IWorkspacePanel::DrawPanel>>(&registry, GuiLive::TypeId(typeid(GlobalDockPanel)))));

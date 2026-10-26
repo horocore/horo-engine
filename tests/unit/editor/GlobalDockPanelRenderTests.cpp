@@ -162,6 +162,9 @@ namespace {
         static_cast<void>(smoother.Consume(1.0F / 60.0F));
         smoother.Queue(0.0F, -1.0F);
         REQUIRE((smoother.Consume(1.0F / 60.0F).vertical < 0.0F));
+        smoother.Queue(1.0F, -1.0F);
+        smoother.Reset();
+        REQUIRE(smoother.Consume(1.0F / 60.0F).IsEmpty());
     }
 
     TEST_CASE("Default workspace composes module-provided global dock panes", "[unit][editor][gui]") {

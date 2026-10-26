@@ -1600,7 +1600,7 @@ namespace Horo::Editor {
                 ObserveSurfaceRecoveryEvent(event);
                 if (const bool smoothWheel = event.type == SDL_EVENT_MOUSE_WHEEL &&
                                              event.wheel.windowID == SDL_GetWindowID(p_->presentation.window) &&
-                                             (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
+                                             !p_->modalHost.HasOpenModal() && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
                     smoothWheel) {
                     scrollSource_ = event.wheel.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse;
                     scrollSmoother_.Queue(-event.wheel.x, event.wheel.y);
@@ -1655,6 +1655,9 @@ namespace Horo::Editor {
                     if (const Result<void> guiBegun = p_->presentation.guiRenderer.BeginFrame(); guiBegun.HasError()) {
                         return guiBegun;
                     }
+                    // Modal controls follow the wheel directly; workspace momentum must not leak into them.
+                    if (p_->modalHost.HasOpenModal())
+                        scrollSmoother_.Reset();
                     if (const EditorScrollDelta scrollDelta = scrollSmoother_.Consume(ImGui::GetIO().DeltaTime); !scrollDelta.IsEmpty()) {
                         ImGui::GetIO().AddMouseSourceEvent(scrollSource_);
                         ImGui::GetIO().AddMouseWheelEvent(scrollDelta.horizontal, scrollDelta.vertical);
@@ -2332,6 +2335,7 @@ namespace Horo::Editor {
                                                                    &p.operationServices.operationStore};
             Application::GameplayBuildEnvironment gameplayBuildEnvironment{
                 .gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR,
+                .cmakeExecutable = HORO_GAMEPLAY_CMAKE_EXECUTABLE,
                 .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER},
             };
             SystemWallClock wallClock;

@@ -25,16 +25,24 @@ namespace Horo::Editor {
         void LogCompiler(const Log::Level level, const char *format, std::va_list arguments) {
             std::array<char, 4096> text{};
             static_cast<void>(std::vsnprintf(text.data(), text.size(), format, arguments));
-            const auto last = std::string_view{text.data()}.find_last_not_of("\r\n");
-            if (last == std::string_view::npos)
-                return;
-            text[last + 1] = '\0';
-            if (level == Log::Level::Error)
-                LOG_ERROR("editor.live_ui", "%s", text.data());
-            else if (level == Log::Level::Warn)
-                LOG_WARN("editor.live_ui", "%s", text.data());
-            else
-                LOG_INFO("editor.live_ui", "%s", text.data());
+            char *line = text.data();
+            for (char *cursor = line;; ++cursor) {
+                const char delimiter = *cursor;
+                if (delimiter != '\r' && delimiter != '\n' && delimiter != '\0')
+                    continue;
+                *cursor = '\0';
+                if (cursor != line) {
+                    if (level == Log::Level::Error)
+                        LOG_ERROR("editor.live_ui", "%s", line);
+                    else if (level == Log::Level::Warn)
+                        LOG_WARN("editor.live_ui", "%s", line);
+                    else
+                        LOG_INFO("editor.live_ui", "%s", line);
+                }
+                if (delimiter == '\0')
+                    break;
+                line = cursor + 1;
+            }
         }
 
         struct CompilerLogger final : ICompilerLogger {
@@ -89,7 +97,12 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(failed));
         }
         std::error_code directoryError;
-        std::filesystem::create_directories(HORO_LIVE_UI_BUILD_DIR, directoryError);
+        // RCC++ does not track every transitive header. Never reuse objects from
+        // a different host build after a signature or object-layout change.
+        const auto hostRevision = std::filesystem::last_write_time(HORO_GUI_LIVE_HOST_IMAGE, directoryError);
+        const auto intermediate = std::filesystem::path{HORO_LIVE_UI_BUILD_DIR} / std::to_string(hostRevision.time_since_epoch().count());
+        if (!directoryError)
+            std::filesystem::create_directories(intermediate, directoryError);
         if (directoryError) {
             const ErrorCodeDescriptor failed{.domain = ErrorDomainId{"horo.editor.live_ui"},
                                              .code = ErrorCode{"live_ui.build_directory_unavailable"},
@@ -97,7 +110,7 @@ namespace Horo::Editor {
                                              .summary = "Unable to create the RCC++ development build directory."};
             return Result<void>::Failure(MakeError(failed));
         }
-        state_->runtime->SetIntermediateDir(HORO_LIVE_UI_BUILD_DIR);
+        state_->runtime->SetIntermediateDir(intermediate.string().c_str());
         std::ifstream includes{HORO_GUI_LIVE_INCLUDE_FILE};
         std::string include;
         while (std::getline(includes, include)) {

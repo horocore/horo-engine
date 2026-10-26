@@ -29,12 +29,16 @@
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Runtime/Input.h"
 #include "NavigationErrors.h"
+#include "editor/modals/build_release/BuildActivity.h"
+#include "editor/modals/build_release/BuildModal.h"
+#include "editor/modals/build_release/BuildReleaseModal.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/status_bar/EditorStatusBar.h"
 #include "editor/update/UpdateExperienceSession.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <algorithm>
+#include <cmath>
 #include <imgui.h>
 
 namespace Horo::Editor {
@@ -232,6 +236,15 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::InitializeStatusItems */
     void GuiScreenHost::InitializeStatusItems(const RendererAvailabilitySnapshot &rendererAvailability) {
+        static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = BackgroundBuildStatusId,
+                                                                                  .alignment = EditorStatusBarAlignment::Left,
+                                                                                  .priority = 90,
+                                                                                  .order = 35,
+                                                                                  .maxWidth = 240,
+                                                                                  .presentation = EditorStatusItemPresentation::Plain,
+                                                                                  .interactive = true,
+                                                                                  .actionId = BackgroundBuildActionId},
+                                                       EditorStatusItemContent{.available = false}));
         static_cast<void>(
             statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.navigation",
                                                                     .labelKey = "status.navigation.label",
@@ -402,6 +415,8 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::SetCurrentProjectRoot */
     void GuiScreenHost::SetCurrentProjectRoot(const std::filesystem::path &root) {
+        if (currentProjectRoot_ != root)
+            nativeBuildSession_.reset();
         if (extensionPageStore_)
             extensionPageStore_->SetProject(root);
         currentProjectRoot_ = root;
@@ -567,6 +582,18 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::OnUpdate(float dt) {
+        if (!shutdown_ && localization_ && std::isfinite(dt) && dt > 0) {
+            buildStatusElapsed_ += dt;
+            if (buildStatusElapsed_ >= 0.25F) {
+                buildStatusElapsed_ = 0;
+                std::optional<Application::GameplayBuildSnapshot> build;
+                if (auto *builds = services_.TryGet<Application::GameplayBuildService>(); builds && nativeBuildSession_)
+                    build = builds->Query(*nativeBuildSession_);
+                const bool modalVisible = modalHost_ && dynamic_cast<const BuildModal *>(modalHost_->TopModal()) != nullptr;
+                static_cast<void>(statusItemRegistry_.Update(BackgroundBuildStatusId, BackgroundBuildStatus(build ? &*build : nullptr,
+                                                                                                            *localization_, modalVisible)));
+            }
+        }
         if (auto *audio = services_.TryGet<IAudioComponentPreview>())
             static_cast<void>(audio->Pump());
         if (!shutdown_ && context_.updates != nullptr)
@@ -650,6 +677,8 @@ namespace Horo::Editor {
                                                      EditorStatusBarContext{activeStatusPanelIds_}, interactionEnabled);
             if (invocation.has_value() && engineEvents_ != nullptr) {
                 engineEvents_->Publish(*invocation);
+                if (invocation->itemId == BackgroundBuildStatusId && invocation->actionId == BackgroundBuildActionId)
+                    DispatchMenuInvocation({EditorMenuAction::OpenBuild});
             }
         }
         if (pendingRequirement_.has_value() && pendingTarget_.has_value()) {
@@ -690,6 +719,29 @@ namespace Horo::Editor {
     void GuiScreenHost::DispatchMenuInvocation(const EditorMenuInvocation &invocation) {
         using enum EditorMenuAction;
         switch (invocation.action) {
+            case OpenBuild:
+            case OpenRelease:
+                if (modalHost_ && !modalHost_->HasOpenModal()) {
+                    const auto *environment = services_.TryGetConst<Application::GameplayBuildEnvironment>();
+                    Application::GameplayBuildRequest request{.projectRoot = activeRoute_.kind == GuiRouteKind::EditorWorkspace
+                                                                                 ? currentProjectRoot_
+                                                                                 : std::filesystem::path{},
+                                                              .environment =
+                                                                  environment ? *environment : Application::GameplayBuildEnvironment{}};
+                    std::unique_ptr<EditorModal> modal;
+                    if (invocation.action == OpenBuild)
+                        modal = std::make_unique<BuildModal>(context_, std::move(request),
+                                                             services_.TryGet<Application::GameplayBuildService>(), nativeBuildSession_,
+                                                             services_.TryGetConst<IBuildOutputQuery>());
+                    else
+                        modal = std::make_unique<BuildReleaseModal>(context_, BuildReleasePage::Release, std::move(request),
+                                                                    services_.TryGet<Application::GameplayBuildService>(),
+                                                                    nativeBuildSession_, services_.TryGet<IBuildReleaseJobs>());
+                    const auto opened = modalHost_->OpenRoot(std::move(modal));
+                    if (opened.HasError())
+                        LOG_WARN("editor.build", "Build/release modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
+                }
+                return;
             case NewProject:
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::ProjectCreation, ProjectCreationRouteParameters{}}));
                 return;

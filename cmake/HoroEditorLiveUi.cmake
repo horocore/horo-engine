@@ -189,6 +189,7 @@ function(horo_attach_gui_live_host target)
         HORO_GUI_LIVE_INCLUDE_FILE="${HORO_GUI_LIVE_DIR}/includes.txt"
         HORO_GUI_LIVE_FLAGS_FILE="${HORO_GUI_LIVE_DIR}/${target}.rsp"
         HORO_GUI_LIVE_HOST_IMPORT="$<TARGET_LINKER_FILE:${target}>"
+        HORO_GUI_LIVE_HOST_IMAGE="$<TARGET_FILE:${target}>"
         HORO_LIVE_UI_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}/live-ui")
 endfunction()
 horo_attach_gui_live_host(HoroEditor)

@@ -3596,6 +3596,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/play_topology/PlayTopologyModal.cpp
             editor/modals/source_document/SourceDocumentCloseModal.cpp
             editor/modals/packages/PackageModal.cpp
+            editor/modals/build_release/BuildReleaseModal.cpp
+            editor/modals/build_release/BuildModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
             editor/modals/prefab_creation/PrefabCreationModal.cpp

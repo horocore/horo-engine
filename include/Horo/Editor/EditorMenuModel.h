@@ -28,6 +28,8 @@ namespace Horo::Editor {
         ExitApplication,
         CreatePrimitive,
         ManagePackages,
+        OpenBuild,
+        OpenRelease,
     };
 
     /** @brief Typed command emitted by every platform menu adapter. */

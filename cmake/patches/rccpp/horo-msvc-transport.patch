@@ -1,45 +1,43 @@
 diff --git a/Aurora/RuntimeCompiler/Compiler_PlatformWindows.cpp b/Aurora/RuntimeCompiler/Compiler_PlatformWindows.cpp
-index 88bc98d..5019add 100644
 --- a/Aurora/RuntimeCompiler/Compiler_PlatformWindows.cpp
 +++ b/Aurora/RuntimeCompiler/Compiler_PlatformWindows.cpp
 @@ -32,0 +33,2 @@
 +// Modified by Horo Engine: own compiler subprocesses and join the output transport.
 +#include <atomic>
-@@ -56 +58 @@ void GetPathsOfVisualStudioInstalls( std::vector<VSVersionInfo>* pVersions, ICom
+@@ -56 +58 @@
 -void ReadAndHandleOutputThread( LPVOID arg );
 +unsigned __stdcall ReadAndHandleOutputThread( void* arg );
-@@ -64 +66 @@ struct CmdProcess
+@@ -64 +66 @@
 -	void WriteInput(std::string& input);
 +	void WriteInput(const std::string& input);
-@@ -71 +73,4 @@ struct CmdProcess
+@@ -71 +73,4 @@
 -	volatile bool		m_bIsComplete;
 +	std::atomic<bool>   m_bIsComplete;
 +    std::atomic<bool>   m_stopping{false};
 +    HANDLE             m_ReaderThread{NULL};
 +    HANDLE             m_ProcessJob{NULL};
-@@ -422,0 +428,4 @@ void GetPathsOfVisualStudioInstalls( std::vector<VSVersionInfo>* pVersions, ICom
+@@ -422,0 +428,4 @@
 +    case 1941:
 +    case 1942:
 +    case 1943:
 +    case 1944:
-@@ -466 +474,0 @@ void GetPathsOfVisualStudioInstalls( std::vector<VSVersionInfo>* pVersions, ICom
+@@ -466 +474,0 @@
 -				cmdProc.InitialiseProcess();
-@@ -468,0 +477 @@ void GetPathsOfVisualStudioInstalls( std::vector<VSVersionInfo>* pVersions, ICom
+@@ -468,0 +477 @@
 +				cmdProc.InitialiseProcess();
-@@ -481 +490 @@ void GetPathsOfVisualStudioInstalls( std::vector<VSVersionInfo>* pVersions, ICom
+@@ -481 +490 @@
 -					                         " -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
 +					                         " -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
-@@ -485 +494,5 @@ void GetPathsOfVisualStudioInstalls( std::vector<VSVersionInfo>* pVersions, ICom
+@@ -485 +494,5 @@
 -				WaitForSingleObject( cmdProc.m_CmdProcessInfo.hProcess, 2000 ); // max 2 secs
 +                if (WaitForSingleObject(cmdProc.m_CmdProcessInfo.hProcess, 10000) != WAIT_OBJECT_0 ||
 +                    WaitForSingleObject(cmdProc.m_ReaderThread, 5000) != WAIT_OBJECT_0) {
 +                    if (pLogger) pLogger->LogWarning("VS discovery output did not complete within its deadline\n");
 +                    continue;
 +                }
-@@ -535 +548 @@ void GetPathsOfVisualStudioInstalls( std::vector<VSVersionInfo>* pVersions, ICom
+@@ -535,56 +548,68 @@
 -void ReadAndHandleOutputThread( LPVOID arg )
-+unsigned __stdcall ReadAndHandleOutputThread( void* arg )
-@@ -537,54 +550,38 @@ void ReadAndHandleOutputThread( LPVOID arg )
+-{
 -	CmdProcess* pCmdProc = (CmdProcess*)arg;
 -
 -	CHAR lpBuffer[1024];
@@ -94,14 +92,31 @@ index 88bc98d..5019add 100644
 -			}
 -		}
 -	}
++unsigned __stdcall ReadAndHandleOutputThread( void* arg )
++{
 +    auto* process = static_cast<CmdProcess*>(arg);
 +    char bytes[4096];
 +    std::string pending;
 +    const auto emit = [process](const std::string& value) {
 +        if (process->m_bStoreCmdOutput)
 +            process->m_CmdOutput += value;
-+        else if (process->m_pLogger && !value.empty())
-+            process->m_pLogger->LogInfo("%s", value.c_str());
++        else if (process->m_pLogger) {
++            size_t start = 0;
++            while (start < value.size()) {
++                const auto end = value.find_first_of("\r\n", start);
++                const auto line = value.substr(start, end == std::string::npos ? end : end - start);
++                if (!line.empty()) {
++                    if (line.find("error ") != std::string::npos)
++                        process->m_pLogger->LogError("%s", line.c_str());
++                    else if (line.find("warning ") != std::string::npos)
++                        process->m_pLogger->LogWarning("%s", line.c_str());
++                    else
++                        process->m_pLogger->LogInfo("%s", line.c_str());
++                }
++                if (end == std::string::npos) break;
++                start = end + 1;
++            }
++        }
 +    };
 +    while (!process->m_stopping.load()) {
 +        DWORD count = 0;
@@ -124,15 +139,28 @@ index 88bc98d..5019add 100644
 +            }
 +            process->m_bIsComplete.store(true);
 +        }
-+        // Retain a possible split completion token between pipe reads.
++        // Pipe reads are arbitrary byte chunks, not log records. Keep the partial
++        // line and any split completion token until the next read.
 +        const auto retained = c_CompletionToken.size() - 1;
-+        if (pending.size() > retained) {
-+            emit(pending.substr(0, pending.size() - retained));
-+            pending.erase(0, pending.size() - retained);
++        while (pending.size() > retained) {
++            const auto safe = pending.size() - retained;
++            const auto newline = pending.find_first_of("\r\n");
++            size_t count = 0;
++            if (newline != std::string::npos && newline < safe)
++                count = newline + 1;
++            else if (safe > 3072) {
++                // Bound unterminated output without splitting a UTF-8 code point.
++                count = 3072;
++                while (count && (static_cast<unsigned char>(pending[count]) & 0xc0) == 0x80)
++                    --count;
++            }
++            if (!count) break;
++            emit(pending.substr(0, count));
++            pending.erase(0, count);
 +        }
 +    }
 +    return 0;
-@@ -615,125 +612,51 @@ void CmdProcess::InitialiseProcess()
+@@ -615,129 +640,55 @@
 -	//init compile process
 -	STARTUPINFOW				si;
 -	ZeroMemory(&si, sizeof(si));
@@ -258,6 +286,10 @@ index 88bc98d..5019add 100644
 -	{
 -		CloseHandle( hErrorWrite );
 -	}
+-}
+-
+-
+-void CmdProcess::WriteInput( std::string& input )
 +    STARTUPINFOW startup{};
 +    startup.cb = sizeof(startup);
 +    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
@@ -309,10 +341,11 @@ index 88bc98d..5019add 100644
 +        fail();
 +        return;
 +    }
-@@ -743 +666 @@ ERROR_EXIT:
--void CmdProcess::WriteInput( std::string& input )
++}
++
++
 +void CmdProcess::WriteInput( const std::string& input )
-@@ -752,3 +675,23 @@ void CmdProcess::CleanupProcessAndPipes()
+@@ -752,3 +703,23 @@
 -	// do not reset m_bIsComplete and other members here, just process and pipes and 
 -    if( !m_PathTempCLCommandFile.m_string.empty() && m_PathTempCLCommandFile.Exists() )
 -    {
@@ -339,7 +372,7 @@ index 88bc98d..5019add 100644
 +    m_CmdProcessInputWrite = NULL;
 +    m_CmdProcessOutputRead = NULL;
 +    if (!m_PathTempCLCommandFile.m_string.empty() && m_PathTempCLCommandFile.Exists()) {
-@@ -758,12 +700,0 @@ void CmdProcess::CleanupProcessAndPipes()
+@@ -758,12 +728,0 @@
 -
 -	if( m_CmdProcessInfo.hProcess )
 -	{

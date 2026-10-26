@@ -29,6 +29,8 @@ horo_register_live_gui(GlobalDock editor/screens/workspace/panels/global_dock/Gl
 horo_register_live_gui(InputMapping editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp Horo::Editor::InputMappingPanel::DrawPanel MEMBER BASE Horo::Editor::IWorkspacePanel)
 
 # Built-in modal and embedded-pane presentation groups.
+horo_register_live_gui(BuildReleaseModal editor/modals/build_release/BuildReleaseModal.cpp Horo::Editor::BuildReleaseModal::Draw MEMBER BASE Horo::Editor::EditorModal)
+horo_register_live_gui(BuildModal editor/modals/build_release/BuildModal.cpp Horo::Editor::BuildModal::Draw MEMBER BASE Horo::Editor::EditorModal)
 horo_register_live_gui(AssetImportModal editor/modals/asset_import/AssetImportModal.cpp Horo::Editor::AssetImportModal::Draw MEMBER BASE Horo::Editor::EditorModal)
 horo_register_live_gui(EditorPageModal editor/modals/extension_pages/EditorPageModal.cpp Horo::Editor::EditorPageModal::Draw MEMBER BASE Horo::Editor::EditorModal)
 horo_register_live_gui(GameplayBehaviorFilenameModal editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp Horo::Editor::GameplayBehaviorFilenameModal::Draw MEMBER BASE Horo::Editor::EditorModal)

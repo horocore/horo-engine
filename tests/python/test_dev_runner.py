@@ -846,6 +846,7 @@ def test_exports_host_functions_without_marking_executable_as_dll(tmp_path):
     assert "?GImGui@@3PEAUImGuiContext@@EA DATA" in exports
     assert "CreateWindow" not in exports
     flags = output.with_suffix(".rsp").read_text()
+    assert not any(flag.startswith("/EH") for flag in flags.splitlines())
     assert "/DHORO_GUI_RUNTIME_COMPILATION=1" in flags
     assert "-DDEBUG" in flags
 

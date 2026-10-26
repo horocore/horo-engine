@@ -292,6 +292,7 @@ namespace Horo::Editor {
         std::optional<ProjectCreationOperationId> activeCreationId_;
         std::optional<EditorRendererRestartRequest> rendererRestartRequest_;
         std::filesystem::path currentProjectRoot_;
+        std::optional<std::uint64_t> nativeBuildSession_;
         bool closeRequested_{false};
         bool gameplayClosePending_{};
         bool navigationBusy_{false};
@@ -302,6 +303,7 @@ namespace Horo::Editor {
         std::optional<LeaveRequirement> pendingRequirement_;
         std::optional<LeaveTarget> pendingTarget_;
         std::size_t resolutionAttemptCount_{0};
+        float buildStatusElapsed_{}; /**< Host-owned polling remains active after the build modal closes. */
     };
 
 }  // namespace Horo::Editor

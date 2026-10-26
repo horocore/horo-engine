@@ -3958,7 +3958,8 @@ def _generate_gui_live_bridge(database: Path, output: Path, image: str):
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text('EXPORTS\n' + ''.join(f'    {name}\n' for name in sorted(exports)), encoding='utf-8')
     definitions = re.findall(r'(?:^|\s)([-/]D(?:"[^"\n]+"|\S+))', gui[0]['command'])
-    flags = [ '/std:c++20', '/utf-8', '/EHsc', '/D_DEBUG', '/DNOMINMAX', '/DHORO_GUI_RUNTIME_COMPILATION=1', '/DIMGUI_API=__declspec(dllimport)', *definitions]
+    # RCC++ selects /EHa for its protected runtime calls; do not override it with /EHsc.
+    flags = [ '/std:c++20', '/utf-8', '/D_DEBUG', '/DNOMINMAX', '/DHORO_GUI_RUNTIME_COMPILATION=1', '/DIMGUI_API=__declspec(dllimport)', *definitions]
     output.with_suffix('.rsp').write_text('\n'.join(flags) + '\n', encoding='utf-8')
     print(f'Generated {len(exports)} private GUI host imports for {image}')
 
