@@ -71,7 +71,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<bool> Close();
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
                                                const Editor::EditorXrSceneSourcePort &geometry) override;
-        [[nodiscard]] Result<void> UpdateScene(Runtime::RuntimeSceneView scene) override;
+        [[nodiscard]] Result<void> UpdateScene(const Runtime::RuntimeSceneView &scene) override;
         [[nodiscard]] Result<void> SetPlayState(Editor::EditorPlayState state) override;
         [[nodiscard]] Result<void> DetachInput() override;
         void RevokeInput() noexcept override;

@@ -136,7 +136,7 @@ namespace {
             published = false;
         }
 
-        Result<void> UpdateScene(Runtime::RuntimeSceneView) override {
+        Result<void> UpdateScene(const Runtime::RuntimeSceneView &) override {
             return Result<void>::Success();
         }
 

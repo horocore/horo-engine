@@ -57,9 +57,12 @@ namespace Horo::Tests::OpenXRApplication {
             std::unique_ptr<Host::OpenXRPlayHost> play;
             bool admission{true};
 
-            explicit ApplicationFixture(const bool render = false) {
+            explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5) {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
+                REQUIRE(bindings->poses.empty());
+                // This zero-pose Play composition reserves five canonical spaces before native activation.
+                request.invocation.emplace(SettingKey{"xr.limits.spaces"}, ConfigurationInputValue{maximumSpaces, std::nullopt});
                 REQUIRE(configuration.ResolveAndCommit(request).HasValue());
                 const auto settings = RequireValue(XR::ResolveXRProjectSettings(configuration.Snapshot()));
                 session = std::make_unique<Host::OpenXRApplicationSession>(Host::OpenXRApplicationAuthorities{configuration, *product.host,
@@ -234,6 +237,20 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.script.native.failInstanceRetirement = false;
         REQUIRE(fixture.session->Close().HasValue());
         CHECK(fixture.script.native.liveInstances == 0);
+    }
+
+    TEST_CASE("Actual application Play rejects an immutable space budget below its canonical reservation", "[xr][application][play]") {
+        ApplicationFixture fixture{true, 2};
+        fixture.CreatePlay();
+        REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
+        const auto input = fixture.InputPort();
+        REQUIRE(fixture.play->AttachInput(input, fixture.source.Port()).HasValue());
+        auto participant = fixture.play->MakeSceneParticipant();
+        const auto prepared = participant->Prepare(fixture.definition, fixture.scene->View());
+        REQUIRE(prepared.HasError());
+        CHECK(prepared.ErrorValue().code.Value() == XR::XRErrors::CapacityExceeded.code.Value());
+        CHECK_FALSE(fixture.play->UsesXrScene());
+        CHECK(fixture.play->PresentationState() == Host::OpenXRPlayPresentation::Pending);
     }
 
     TEST_CASE("Actual application Play remains inactive until canonical scene and renderer preparation succeed",

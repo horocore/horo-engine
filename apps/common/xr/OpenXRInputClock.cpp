@@ -181,7 +181,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         const auto quantum = fixedStep_.ToNanoseconds();
         if (quantum <= 0 || (facts.committedTick && facts.committedDuration != fixedStep_) ||
-            facts.committedTick > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() / quantum))
+            facts.committedTick > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)() / quantum))
             return Outcome::Failure(MakeError(XR::XRErrors::CapacityExceeded));
         auto native = Current();
         if (native.HasError())

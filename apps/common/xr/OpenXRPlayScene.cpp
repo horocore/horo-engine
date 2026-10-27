@@ -94,7 +94,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRPlayHost::UpdateScene */
-    Result<void> OpenXRPlayHost::UpdateScene(const Runtime::RuntimeSceneView scene) {
+    Result<void> OpenXRPlayHost::UpdateScene(const Runtime::RuntimeSceneView &scene) {
         if (auto lane = Lane(); lane.HasError())
             return lane;
         if (!scene_ || !scene_->published || scene_->retiring || scene_->scene != scene.RuntimeId())
