@@ -249,6 +249,32 @@ def produce(args):
     verify(args.root, args.source)
 
 
+def installed_apple_tool(tool):
+    """Attest only xcrun-selected tools and Apple's same-directory metallib alias."""
+    advertised = Path(subprocess.check_output([XCRUN, "-sdk", "macosx", "--find", tool],
+                                             text=True, timeout=10).strip())
+    path = absolute_data_path(advertised)
+    if path.name != tool:
+        raise ValueError("Unexpected installed Apple tool name")
+    alias = None
+    if path.is_symlink():
+        alias = os.readlink(path)
+        if tool != "metallib" or alias != "air-lld":
+            raise ValueError("Unexpected installed Apple tool alias")
+        path = path.parent / alias
+    return {"path": str(advertised), "physical_path": str(path), "alias": alias,
+            "sha256": digest(bounded(path, 256 * 1024 * 1024))}
+
+
+def run_apple_tool(tool, arguments, installed):
+    """Recheck the advertised alias and its physical bytes around fixed xcrun dispatch."""
+    if installed_apple_tool(tool) != installed[tool]:
+        raise ValueError("Apple executable changed before qualification")
+    run([XCRUN, "-sdk", "macosx", tool, *arguments])
+    if installed_apple_tool(tool) != installed[tool]:
+        raise ValueError("Apple executable changed during qualification")
+
+
 def apple(args):
     manifest = verify(args.root, args.source)  # Complete validation before tooling or output publication.
     bindings = native_bindings(args.root)
@@ -256,11 +282,7 @@ def apple(args):
     if args.xcrun != Path(XCRUN):
         raise ValueError("Only the selected installed Apple tool dispatcher is admitted")
     bounded(args.xcrun)
-    installed = {}
-    for tool in ("metal", "metallib"):
-        path = Path(subprocess.check_output([XCRUN, "-sdk", "macosx", "--find", tool],
-                                           text=True, timeout=10).strip())
-        installed[tool] = {"path": str(path), "sha256": digest(bounded(path, 256 * 1024 * 1024))}
+    installed = {tool: installed_apple_tool(tool) for tool in ("metal", "metallib")}
     manifest["apple_tools"] = installed
     manifest["apple_sdk"] = subprocess.check_output([XCRUN, "-sdk", "macosx", "--show-sdk-path"],
                                                     text=True, timeout=10).strip()
@@ -270,14 +292,14 @@ def apple(args):
     for entry, _, _ in STAGES:
         air = args.output / (entry + ".air")
         library = args.output / (entry + ".metallib")
-        run([str(args.xcrun), "-sdk", "macosx", "metal", *APPLE_OPTIONS,
-             "-c", str(args.root / (entry + MSL_SUFFIX)), "-o", str(air)])
+        run_apple_tool("metal", [*APPLE_OPTIONS, "-c", str(args.root / (entry + MSL_SUFFIX)),
+                                 "-o", str(air)], installed)
         bounded(air)
-        run([str(args.xcrun), "-sdk", "macosx", "metallib", str(air), "-o", str(library)])
+        run_apple_tool("metallib", [str(air), "-o", str(library)], installed)
         if bounded(library)[:4] != b"MTLB":
             raise ValueError("Apple linker did not produce a native Metal library")
-    for evidence in installed.values():
-        if digest(bounded(Path(evidence["path"]), 256 * 1024 * 1024)) != evidence["sha256"]:
+    for tool, evidence in installed.items():
+        if installed_apple_tool(tool) != evidence:
             raise ValueError("Apple executable changed during qualification")
     manifest["apple_libraries"] = {entry: digest(bounded(args.output / (entry + ".metallib"))) for entry, _, _ in STAGES}
     for entry, _, _ in STAGES:
