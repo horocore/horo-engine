@@ -128,20 +128,18 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(native.resources.InitializeShaders(properties, Render::RenderAdapterId{"vulkan:test"}, ::Resolve, 11, true).HasValue());
         }
 
-        /** @brief Structurally admitted entry-point modules for scripted native calls, never GPU execution evidence. */
-        static std::vector<std::uint8_t> Code(const Render::ShaderStage stage, const bool multiview) {
-            std::vector<std::uint32_t> words{0x07230203,
-                                             0x00010600,
-                                             0,
-                                             2,
-                                             0,
-                                             (5U << 16) | 15U,
-                                             stage == Render::ShaderStage::Vertex ? 0U : 4U,
-                                             1,
-                                             stage == Render::ShaderStage::Vertex ? 0x614d5356U : 0x614d5350U,
-                                             0x00006e69};
-            if (multiview && stage == Render::ShaderStage::Vertex)
-                words.insert(words.end(), {(4U << 16) | 71U, 1, 11, 9});
+        /** @brief Structurally admitted App multipass stages with no Layer output, never GPU execution evidence. */
+        static std::vector<std::uint8_t> Code(const Render::ShaderStage stage) {
+            const std::vector<std::uint32_t> words{0x07230203,
+                                                   0x00010600,
+                                                   0,
+                                                   2,
+                                                   0,
+                                                   (5U << 16) | 15U,
+                                                   stage == Render::ShaderStage::Vertex ? 0U : 4U,
+                                                   1,
+                                                   stage == Render::ShaderStage::Vertex ? 0x614d5356U : 0x614d5350U,
+                                                   0x00006e69};
             const auto bytes = std::as_bytes(std::span{words});
             std::vector<std::uint8_t> result(bytes.size());
             std::ranges::transform(bytes, result.begin(), [](const std::byte value) {
@@ -151,10 +149,9 @@ namespace Horo::Tests::OpenXRApplication {
         }
 
         static ShaderCook::CookFixture Cook(const bool multiview) {
-            const std::array stages{Render::ShaderArtifactStage{Render::ShaderStage::Vertex, "VSMain",
-                                                                Code(Render::ShaderStage::Vertex, multiview)},
+            const std::array stages{Render::ShaderArtifactStage{Render::ShaderStage::Vertex, "VSMain", Code(Render::ShaderStage::Vertex)},
                                     Render::ShaderArtifactStage{Render::ShaderStage::Fragment, "PSMain",
-                                                                Code(Render::ShaderStage::Fragment, multiview)}};
+                                                                Code(Render::ShaderStage::Fragment)}};
             return ShaderCook::CookFixture{multiview ? ShaderCook::MultiviewEvidence() : ShaderCook::Evidence(), stages, multiview};
         }
     };

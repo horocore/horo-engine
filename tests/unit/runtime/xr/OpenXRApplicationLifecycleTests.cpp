@@ -97,12 +97,9 @@ namespace Horo::Tests::OpenXRApplication {
                 if (render) {
                     REQUIRE(viewport->Initialize().HasValue());
                     const auto cooked = ApplicationVulkanFixture::Cook(true);
-                    REQUIRE(viewport
-                                ->PrepareXrProgram(
-                                    RequireValue(Editor::LoadEditorVulkanMultiviewCook(cooked.compiled.payload,
-                                                                                       RequireValue(Render::EncodeReflectedShaderArtifact(
-                                                                                           cooked.reflected)))))
-                                .HasValue());
+                    RequireValue(viewport->PrepareXrProgram(RequireValue(
+                        Editor::LoadEditorVulkanMultiviewCook(cooked.compiled.payload,
+                                                              RequireValue(Render::EncodeReflectedShaderArtifact(cooked.reflected))))));
                 }
             }
 
@@ -140,9 +137,9 @@ namespace Horo::Tests::OpenXRApplication {
             }
 
             void Prepare() {
-                REQUIRE(session->PrepareDiscovery().HasValue());
-                REQUIRE(session->AttachGraphics(*activeGraphics, bridge).HasValue());
-                REQUIRE(session->PrepareSession().HasValue());
+                RequireValue(session->PrepareDiscovery());
+                RequireValue(session->AttachGraphics(*activeGraphics, bridge));
+                RequireValue(session->PrepareSession());
             }
 
             void CreatePlay() {

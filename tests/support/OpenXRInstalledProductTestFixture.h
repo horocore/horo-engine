@@ -21,9 +21,17 @@ namespace Horo::Tests::OpenXRProduct {
     using Json = nlohmann::json;
 
     template <typename T> T RequireValue(Result<T> result) {
+        INFO((result.HasError() ? result.ErrorValue().code.Value() : std::string_view{}));
         INFO((result.HasError() ? result.ErrorValue().message : "fixture operation succeeded"));
         REQUIRE(result.HasValue());
         return std::move(result).Value();
+    }
+
+    /** @brief Requires the real preparation result while retaining its typed failure diagnostics. */
+    inline void RequireValue(Result<void> result) {
+        INFO((result.HasError() ? result.ErrorValue().code.Value() : std::string_view{}));
+        INFO((result.HasError() ? result.ErrorValue().message : "fixture operation succeeded"));
+        REQUIRE(result.HasValue());
     }
 
     inline std::span<const std::byte> TextBytes(const std::string_view text) {
