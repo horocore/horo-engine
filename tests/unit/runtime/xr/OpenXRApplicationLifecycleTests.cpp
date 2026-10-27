@@ -365,12 +365,16 @@ namespace Horo::Tests::OpenXRApplication {
         auto scene = PublishPlay(fixture);
         fixture.script.clock.sample = 1;
         const auto sampler = RequireValue(fixture.frontend->CreateSampler({}));
+        const auto cooked = ApplicationVulkanFixture::Cook(true);
+        const auto layout = RequireValue(Render::PrepareMaterialBindingLayout(cooked.reflected.reflection));
+        REQUIRE(RequireValue(Render::ComputeMaterialParameterBufferByteSize(layout, {1})) == 2612);
         REQUIRE(fixture.frontend->ProcessResourceRequests().HasValue());
         REQUIRE(fixture.frontend->ResourceOperationResult(sampler.operation).HasValue());
 
         REQUIRE(fixture.play->PrepareRenderFrame(1).Value());
         auto frame = RequireValue(fixture.frontend->BeginFrame({1, {8, 8}}));
         REQUIRE(fixture.play->ExecuteRenderFrame(frame, {}).HasValue());
+        CHECK(fixture.vulkan->port.multiviewUniformWrites > 0);
         const auto mirror = fixture.play->MirrorView(1);
         REQUIRE(mirror.IsValid());
         CHECK_FALSE(fixture.play->MirrorView(2).IsValid());

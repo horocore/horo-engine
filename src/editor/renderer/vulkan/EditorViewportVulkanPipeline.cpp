@@ -105,7 +105,16 @@ namespace Horo::Editor {
             return Result<void>::Failure(bytes.ErrorValue());
         if (bytes.Value() == 0 || bytes.Value() > MaximumUniformBytes)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportShaderContractInvalid));
-        program.uniformBytes = bytes.Value();
+        const auto nativeBytes = Render::Detail::RenderFrontendResourceAccess::MaterialParameterBufferBytes(frontend_,
+                                                                                                            {.pipeline = program.pipeline,
+                                                                                                             .layout = program.layout},
+                                                                                                            {1});
+        if (nativeBytes.HasError())
+            return Result<void>::Failure(nativeBytes.ErrorValue());
+        if (nativeBytes.Value() < bytes.Value() || nativeBytes.Value() > MaximumUniformBytes)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportShaderContractInvalid));
+        program.parameterBytes = bytes.Value();
+        program.uniformBytes = nativeBytes.Value();
         auto materials = MaterialBindingTable::Create(program.pipeline.owner, frontend_,
                                                       {.maximumGenerations = device_.frames * (RenderMaterialPass::MaximumDraws + 1)});
         if (materials.HasError())

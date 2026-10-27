@@ -33,6 +33,8 @@ namespace Horo::Tests::OpenXRApplication {
     /** @brief Forwards frame-slot and uniform writes to the same graph/resource owner; WSI remains unavailable. */
     class GraphGraphicsPort final : public PreparedGraphicsPort {
     public:
+        std::size_t multiviewUniformWrites{};
+
         explicit GraphGraphicsPort(Render::VulkanGraphTest::NativeGraphFixture &native) : native_(native) {}
 
         Result<RenderNative::VulkanEditorDevice> QueryDevice() const override {
@@ -56,6 +58,13 @@ namespace Horo::Tests::OpenXRApplication {
                                       const std::span<const std::byte> bytes) override {
             if (!native_.graph.CanWriteFrameInputs(frame))
                 return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+            REQUIRE((bytes.size() == 1296 || bytes.size() == 2624));
+            if (bytes.size() == 2624) {
+                CHECK(std::ranges::all_of(bytes.subspan(2612), [](const std::byte value) {
+                    return value == std::byte{};
+                }));
+                ++multiviewUniformWrites;
+            }
             return native_.resources.WriteHostFrameBuffer(instance, bytes);
         }
 

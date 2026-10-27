@@ -444,10 +444,10 @@ namespace Horo::Editor {
                                               singleLayerRouting, scratch);
             if (packed.HasError())
                 return fail(packed.ErrorValue());
-            if (packed.Value() != xrShader_.uniformBytes)
+            if (packed.Value() != xrShader_.parameterBytes)
                 return fail(MakeError(RendererErrors::ViewportInvalidScene));
             auto uploaded = bridge_.Port()->WriteFrameBuffer(frame.Token(), xrDrawSlots_[0][instance].instance,
-                                                             std::span{scratch}.first(packed.Value()));
+                                                             std::span{scratch}.first(xrShader_.uniformBytes));
             if (uploaded.HasError())
                 return fail(uploaded.ErrorValue());
         }

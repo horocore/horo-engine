@@ -141,7 +141,8 @@ namespace Horo::Editor {
             Render::RenderPipelineHandle pipeline, overlayPipeline;
             Render::MaterialBindingLayout layout;
             std::unique_ptr<Render::MaterialBindingTable> materials;
-            std::size_t uniformBytes{};
+            std::size_t parameterBytes{}; /**< Exact logical packing extent, excluding native block tail padding. */
+            std::size_t uniformBytes{};   /**< Selected backend's allocation, binding and full-upload extent. */
         };
 
         [[nodiscard]] Result<void> CreatePipeline();
