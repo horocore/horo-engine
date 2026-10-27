@@ -20,17 +20,30 @@ namespace Horo::Tests::OpenXRProduct {
     namespace Host = Horo::Application::Internal;
     using Json = nlohmann::json;
 
+    /** @brief Keeps every immutable typed cause visible when a real lifecycle boundary wraps a renderer/package failure. */
+    inline std::string ErrorText(const Error &error) {
+        std::string text;
+        for (const auto *current = &error; current; current = current->cause.Get()) {
+            if (!text.empty())
+                text += " <- ";
+            text += current->domain.Value();
+            text += "/";
+            text += current->code.Value();
+            text += ": ";
+            text += current->message;
+        }
+        return text;
+    }
+
     template <typename T> T RequireValue(Result<T> result) {
-        INFO((result.HasError() ? result.ErrorValue().code.Value() : std::string_view{}));
-        INFO((result.HasError() ? result.ErrorValue().message : "fixture operation succeeded"));
+        INFO((result.HasError() ? ErrorText(result.ErrorValue()) : "fixture operation succeeded"));
         REQUIRE(result.HasValue());
         return std::move(result).Value();
     }
 
     /** @brief Requires the real preparation result while retaining its typed failure diagnostics. */
     inline void RequireValue(Result<void> result) {
-        INFO((result.HasError() ? result.ErrorValue().code.Value() : std::string_view{}));
-        INFO((result.HasError() ? result.ErrorValue().message : "fixture operation succeeded"));
+        INFO((result.HasError() ? ErrorText(result.ErrorValue()) : "fixture operation succeeded"));
         REQUIRE(result.HasValue());
     }
 

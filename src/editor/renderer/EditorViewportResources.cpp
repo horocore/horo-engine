@@ -37,6 +37,20 @@ namespace Horo::Editor {
             return Result<bool>::Failure(state.ErrorValue());
         }
 
+        /** @brief Preserves a failed cold operation instead of interpreting a non-ready state as pending. */
+        template <typename Handle>
+        [[nodiscard]] Result<bool> ColdResourceReady(const Render::RenderFrontend &frontend, const Handle handle,
+                                                     const Render::ResourceOperationId operation) {
+            const auto ready = ResourceReady(frontend, handle, operation);
+            if (ready.HasError() || ready.Value() || !handle.IsValid() || !operation.IsValid())
+                return ready;
+            const auto completed = frontend.ResourceOperationResult(operation);
+            if (completed.HasError() &&
+                completed.ErrorValue().code.Value() != Render::FrontendErrors::ResourceOperationPending.code.Value())
+                return Result<bool>::Failure(completed.ErrorValue());
+            return ready;
+        }
+
         template <typename Handle, typename Create>
         [[nodiscard]] Result<bool> AdvanceResource(Render::RenderFrontend &frontend, Handle &handle, Render::ResourceOperationId &operation,
                                                    Create &&create) {
@@ -76,6 +90,84 @@ namespace Horo::Editor {
 
     EditorViewportResources::EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig &config) noexcept
         : frontend_(&frontend), config_(config) {}
+
+    /** @copydoc EditorViewportResources::PrepareMeshesCold */
+    Result<void> EditorViewportResources::PrepareMeshesCold(const std::span<const EditorViewportMeshResourceView> resources) {
+        const auto queued = frontend_->UploadSnapshot().pendingRequests;
+        constexpr std::size_t RequestsPerMesh = 3;  // Two buffers, then their dependent mesh.
+        if (resources.size() > ((std::numeric_limits<std::size_t>::max)() - queued) / RequestsPerMesh)
+            return Result<void>::Failure(MakeError(Render::FrontendErrors::ResourceUploadCapacityExceeded));
+        const auto maximumDrains = queued + resources.size() * RequestsPerMesh;
+        for (std::size_t remaining = maximumDrains; remaining > 0; --remaining) {
+            const auto ready = AdvanceColdMeshes(resources);
+            if (ready.HasError())
+                return Result<void>::Failure(ready.ErrorValue());
+            if (ready.Value())
+                return Result<void>::Success();
+            const auto before = frontend_->UploadSnapshot().pendingRequests;
+            if (before == 0)
+                break;
+            const auto processed = frontend_->ProcessResourceRequests();
+            if (processed.HasError())
+                return Result<void>::Failure(processed.ErrorValue());
+            if (processed.Value() == 0 && frontend_->UploadSnapshot().pendingRequests >= before)
+                break;
+        }
+        const auto ready = AdvanceColdMeshes(resources);
+        if (ready.HasError())
+            return Result<void>::Failure(ready.ErrorValue());
+        return ready.Value() ? Result<void>::Success() : Result<void>::Failure(MakeError(Render::FrontendErrors::ResourceOperationPending));
+    }
+
+    /** @copydoc EditorViewportResources::AdvanceColdMeshes */
+    Result<bool> EditorViewportResources::AdvanceColdMeshes(const std::span<const EditorViewportMeshResourceView> resources) {
+        // Observe stored failures before incremental advancement can replace their identity with a pending observation.
+        const auto observed = ColdMeshesReady(resources);
+        if (observed.HasError())
+            return observed;
+        if (auto prepared = SynchronizeMeshes(resources); prepared.HasError())
+            return Result<bool>::Failure(prepared.ErrorValue());
+        return ColdMeshesReady(resources);
+    }
+
+    /** @copydoc EditorViewportResources::ColdMeshesReady */
+    Result<bool> EditorViewportResources::ColdMeshesReady(const std::span<const EditorViewportMeshResourceView> resources) const {
+        bool ready = true;
+        for (const auto &source : resources) {
+            const auto active = meshes_.find(source.handle.id.value);
+            if (active == meshes_.end()) {
+                ready = false;
+                continue;
+            }
+            const ResidentMesh *resident = &active->second;
+            const bool exact = resident->sourceGeneration == source.handle.generation;
+            if (!exact) {
+                const auto pending = pendingMeshes_.find(source.handle.id.value);
+                if (pending == pendingMeshes_.end()) {
+                    ready = false;
+                    continue;
+                }
+                resident = &pending->second;
+            }
+            const auto vertices = ColdResourceReady(*frontend_, resident->vertexBuffer, resident->vertexOperation);
+            if (vertices.HasError())
+                return vertices;
+            const auto indices = ColdResourceReady(*frontend_, resident->indexBuffer, resident->indexOperation);
+            if (indices.HasError())
+                return indices;
+            const auto mesh = ColdResourceReady(*frontend_, resident->mesh, resident->meshOperation);
+            if (mesh.HasError())
+                return mesh;
+            if (!exact || !vertices.Value() || !indices.Value() || !mesh.Value()) {
+                ready = false;
+                continue;
+            }
+            if (resident->descriptor.vertexBuffer != resident->vertexBuffer || resident->descriptor.indexBuffer != resident->indexBuffer ||
+                resident->descriptor.vertexCount != source.vertices.size() || resident->descriptor.indexCount != source.indices.size())
+                return Result<bool>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
+        }
+        return Result<bool>::Success(ready);
+    }
 
     Result<std::optional<Render::RenderTargetHandle>> EditorViewportResources::Prepare(const Render::RenderSceneView &scene,
                                                                                        const EditorViewportExtent requestedExtent) {
