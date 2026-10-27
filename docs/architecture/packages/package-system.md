@@ -676,12 +676,21 @@ QuarantinedPackage
 
 `PackageCacheStore` accepts only an absolute cache root resolved by the host and
 uses the host's durable filesystem service for same-filesystem publication and
-process-safe digest locks. A verified archive is written to staging, made
-read-only, atomically moved to `by-hash/sha256/<digest>/archive.horopkg`, then
-read back and independently verified before publication succeeds. A concurrent
+process-safe digest locks. A verified archive is exclusively written to private
+staging, atomically moved to `by-hash/sha256/<digest>/archive.horopkg`, restricted
+to read-only mode, then read back and independently verified before publication
+succeeds and the digest lock is released. Private staging remains owner-writable
+until replacement so failed transactions can unlink only their newly-created
+entry without changing permissions on a preexisting or hard-linked path. A concurrent
 publish, read, or cleanup for the same digest fails with a retryable busy result;
 loaded archives own their byte snapshot, so later cleanup cannot invalidate a
 consumer.
+
+Optional `publisher-envelope.bin` storage holds only the existing detached
+signature model, never a trusted-root snapshot or an `installPermitted` decision.
+Signed cache hits must reverify that exact envelope and archive under current
+publisher policy and time; see [Package Restore](package-restore.md#persisted-detached-publisher-evidence)
+for format, transaction, and legacy-cache migration behavior.
 
 Reads reject links, non-regular files, oversized bytes, malformed archives, and
 digest mismatches. Readable corrupt entries are atomically moved out of the

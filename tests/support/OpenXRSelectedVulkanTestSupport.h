@@ -1,11 +1,15 @@
 #pragma once
 /** @file OpenXRSelectedVulkanTestSupport.h @brief Existing official graphics-requirements script; no native device qualification. */
-#include "OpenXRSelectedVulkanBinding.h"
+#include "OpenXRNativeSession.h"
 
 #include <algorithm>
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
+#include <vulkan/vulkan.h>
+
+// OpenXR extension declarations require the official Vulkan types above.
+#include <openxr/openxr_platform.h>
 
 namespace Horo::Tests::OpenXR {
     using namespace Horo::XR::OpenXRInternal;

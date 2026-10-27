@@ -1,3 +1,4 @@
+#include "OpenXRSelectedVulkanBinding.h"
 #include "OpenXRSelectedVulkanTestSupport.h"
 
 #include <algorithm>

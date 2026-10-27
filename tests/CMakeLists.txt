@@ -144,6 +144,21 @@ target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderPara
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiInspectionPublicContract.cpp)
 target_sources(HoroInputPublicHeaderConsumer PRIVATE support/InputCollectionPublicContract.cpp)
+target_sources(HoroPackagesPublicHeaderConsumer PRIVATE support/PackageCachePublicContract.cpp)
+target_sources(HoroSecurityEnvelopePublicHeaderConsumer PRIVATE support/SecurityEnvelopePublicContract.cpp)
+add_test(NAME HoroSecurityEnvelopeSdkContract COMMAND "${CMAKE_COMMAND}"
+    "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
+    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/security-envelope-sdk-contract"
+    "-DCONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/support/SecurityEnvelopePublicContract.cpp"
+    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}" "-DBUILD_CONFIG=$<CONFIG>" "-DGENERATOR=${CMAKE_GENERATOR}"
+    "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}" "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}"
+    "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}" "-DCMAKE_CXX_FLAGS_DEBUG=${CMAKE_CXX_FLAGS_DEBUG}"
+    "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}" "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunSecurityEnvelopeSdkContract.cmake")
+set_tests_properties(HoroSecurityEnvelopeSdkContract PROPERTIES LABELS "architecture;security;sdk;headless" TIMEOUT 90)
+
 target_sources(HoroCharacterInputPublicHeaderConsumer PRIVATE support/DesiredMotionPublicContract.cpp)
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
@@ -211,9 +226,12 @@ add_executable(HoroPackageValidationTests
     unit/packages/PackageCacheTests.cpp
     unit/packages/PackageFileManifestTests.cpp
     unit/packages/PackageRestoreTests.cpp
+    unit/packages/PackageSignedOfflineRestoreTests.cpp
     unit/packages/PackagePublisherVerificationTests.cpp)
 target_sources(HoroPackageValidationTests PRIVATE unit/packages/HostSignatureDocumentTests.cpp)
 target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::PackageSecurity HoroEngine::Platform HoroHostSignatureDocuments nlohmann_json::nlohmann_json miniz)
+target_include_directories(HoroPackageValidationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroPackageValidationTests PRIVATE MbedTLS::mbedcrypto)
 horo_register_catch_test(HoroPackageValidationTests LABELS "packages;headless")
 
 if (HORO_ENABLE_IMGUI_UI_TESTS)
@@ -1569,7 +1587,9 @@ if(HORO_BUILD_XR_OPENXR)
         unit/runtime/xr/OpenXRPoseSamplingTests.cpp
         unit/runtime/xr/OpenXRSwapchainTests.cpp unit/runtime/xr/OpenXRFrameCompositorTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
+    target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface
+        HoroOpenXRApplicationClock Vulkan::Headers)
+    target_compile_definitions(HoroXROpenXRTests PRIVATE XR_USE_GRAPHICS_API_VULKAN)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
 
     add_library(HoroXROpenXRHostInterfaceConsumer OBJECT public_headers/OpenXRHostInterfaceConsumer.cpp)

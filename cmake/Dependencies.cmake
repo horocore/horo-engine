@@ -416,9 +416,10 @@ if(HORO_BUILD_RENDER_OPENGL)
     )
 endif()
 
-if(HORO_BUILD_RENDER_VULKAN)
-    # Vulkan headers are a pinned private build dependency. Runtime loading stays
-    # behind the host-owned loader lease and never requires an installed SDK.
+if(HORO_BUILD_RENDER_VULKAN OR (BUILD_TESTING AND HORO_BUILD_XR_OPENXR))
+    # Canonical OpenXR test dispatch also needs the official Vulkan extension
+    # declarations when its renderer is disabled. This SDK-only dependency does
+    # not enable renderer targets or runtime loading outside the host loader lease.
     set(HORO_VULKAN_HEADERS_REVISION "29f979ee5aa58b7b005f805ea8df7a855c39ff37")
     set(VULKAN_HEADERS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(

@@ -1,4 +1,4 @@
-#include "support/OpenXRActionBindingTestSupport.h"
+#include "support/OpenXRApplicationNativeScriptTestSupport.h"
 
 #include <cmath>
 
@@ -64,79 +64,60 @@ namespace Horo::Tests::OpenXRAction {
             }
         };
 
-        /** @brief Official native presentation dispatch with independently controlled complete count/validity evidence. */
-        struct PresentationScript final {
-            static inline thread_local PresentationScript *active{};
-            XrViewStateFlags flags{XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT |
-                                   XR_VIEW_STATE_POSITION_TRACKED_BIT | XR_VIEW_STATE_ORIENTATION_TRACKED_BIT};
-            std::uint32_t count{2};
-            XrTime time{};
-            XrSpace reference{};
-            bool malformedFov{};
-            bool staleAfterLocate{};
-
-            PresentationScript() {
-                REQUIRE(active == nullptr);
-                active = this;
-            }
-
-            ~PresentationScript() {
-                active = nullptr;
-            }
-
-            static XRAPI_ATTR XrResult XRAPI_CALL Locate(XrSession session, const XrViewLocateInfo *info, XrViewState *state,
-                                                         std::uint32_t capacity, std::uint32_t *count, XrView *views) {
-                REQUIRE(session != XR_NULL_HANDLE);
-                REQUIRE(info->type == XR_TYPE_VIEW_LOCATE_INFO);
-                REQUIRE(info->viewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
-                REQUIRE(info->space != XR_NULL_HANDLE);
-                REQUIRE(capacity == 2);
-                active->time = info->displayTime;
-                active->reference = info->space;
-                state->viewStateFlags = active->flags;
-                *count = active->count;
-                for (std::uint32_t index = 0; index < std::min(capacity, active->count); ++index) {
-                    REQUIRE(views[index].type == XR_TYPE_VIEW);
-                    views[index].pose = {{0, 0, 0, 1}, {index == 0 ? -0.032F : 0.032F, 0, 0}};
-                    views[index].fov = {-0.8F, 0.9F, 0.7F, -0.6F};
-                    if (active->malformedFov)
-                        views[index].fov.angleLeft = std::numeric_limits<float>::quiet_NaN();
-                }
-                if (active->staleAfterLocate)
-                    Script::active->stale = true;
-                return Script::Record("locate-views");
-            }
-
-            static XRAPI_ATTR XrResult XRAPI_CALL Enumerate(XrInstance instance, XrSystemId system, XrViewConfigurationType type,
-                                                            std::uint32_t capacity, std::uint32_t *count, XrViewConfigurationView *views) {
-                REQUIRE(instance != XR_NULL_HANDLE);
-                REQUIRE(system != XR_NULL_SYSTEM_ID);
-                REQUIRE(type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
-                *count = 2;
-                if (capacity) {
-                    REQUIRE(capacity == 2);
-                    for (std::uint32_t index = 0; index < capacity; ++index) {
-                        REQUIRE(views[index].type == XR_TYPE_VIEW_CONFIGURATION_VIEW);
-                        views[index].recommendedImageRectWidth = views[index].maxImageRectWidth = 640;
-                        views[index].recommendedImageRectHeight = views[index].maxImageRectHeight = 480;
-                    }
-                }
-                return XR_SUCCESS;
-            }
-
-            static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance instance, const char *name, PFN_xrVoidFunction *output) {
-                if (std::string_view{name} == "xrEnumerateViewConfigurationViews") {
-                    *output = std::bit_cast<PFN_xrVoidFunction>(&Enumerate);
-                    return XR_SUCCESS;
-                }
-                if (std::string_view{name} == "xrLocateViews" && Script::active->absent != name) {
-                    *output = std::bit_cast<PFN_xrVoidFunction>(&Locate);
-                    return XR_SUCCESS;
-                }
-                return ActionScript::GetProc(instance, name, output);
-            }
-        };
     }  // namespace
+
+    TEST_CASE("OpenXR application dispatch composes canonical projection and preserves missing-entry rejection", "[xr][native][poses]") {
+        OpenXRApplication::ApplicationNativeScript script;
+        const auto instance = NativeHandle<XrInstance>(1);
+        PFN_xrVoidFunction function{};
+        SECTION("Missing projection entry remains unavailable") {
+            script.native.absent = "xrLocateViews";
+            function = std::bit_cast<PFN_xrVoidFunction>(&PresentationScript::Locate);
+            CHECK(OpenXRApplication::ApplicationNativeScript::Resolve(instance, "xrLocateViews", &function) ==
+                  XR_ERROR_FUNCTION_UNSUPPORTED);
+            CHECK(function == nullptr);
+        }
+        SECTION("Canonical projection callback preserves observed evidence") {
+            REQUIRE(OpenXRApplication::ApplicationNativeScript::Resolve(instance, "xrLocateViews", &function) == XR_SUCCESS);
+            REQUIRE(function == std::bit_cast<PFN_xrVoidFunction>(&PresentationScript::Locate));
+            const auto locate = std::bit_cast<PFN_xrLocateViews>(function);
+            XrViewLocateInfo info{XR_TYPE_VIEW_LOCATE_INFO};
+            info.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+            info.displayTime = 100;
+            info.space = NativeHandle<XrSpace>(2);
+            XrViewState state{XR_TYPE_VIEW_STATE};
+            std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
+            std::uint32_t count{};
+            REQUIRE(locate(NativeHandle<XrSession>(3), &info, &state, 2, &count, views.data()) == XR_SUCCESS);
+            CHECK(count == 2);
+            CHECK(script.presentation.time == info.displayTime);
+            CHECK(script.presentation.reference == info.space);
+            CHECK(state.viewStateFlags == script.presentation.flags);
+            CHECK(views[0].pose.position.x == -0.032F);
+            CHECK(views[1].pose.position.x == 0.032F);
+            CHECK(views[0].fov.angleLeft == -0.8F);
+        }
+    }
+
+    TEST_CASE("OpenXR application dispatch retains Census view dimensions before presentation fallback", "[xr][native][poses]") {
+        OpenXRApplication::ApplicationNativeScript script;
+        const auto instance = NativeHandle<XrInstance>(1);
+        PFN_xrVoidFunction function{};
+        REQUIRE(OpenXRApplication::ApplicationNativeScript::Resolve(instance, "xrEnumerateViewConfigurationViews", &function) ==
+                XR_SUCCESS);
+        REQUIRE(function == std::bit_cast<PFN_xrVoidFunction>(&OpenXR::CensusScript::Views));
+        const auto enumerate = std::bit_cast<PFN_xrEnumerateViewConfigurationViews>(function);
+        std::array<XrViewConfigurationView, 2> views{{{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}}};
+        std::uint32_t count{};
+        REQUIRE(enumerate(instance, 1, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &count, views.data()) == XR_SUCCESS);
+        REQUIRE(count == 2);
+        for (const auto &view : views) {
+            CHECK(view.recommendedImageRectWidth == 1024);
+            CHECK(view.recommendedImageRectHeight == 1024);
+            CHECK(view.maxImageRectWidth == 2048);
+            CHECK(view.maxImageRectHeight == 2048);
+        }
+    }
 
     TEST_CASE("OpenXR native pose observation discovers actual sources before runtime device identity admission", "[xr][native][poses]") {
         TrackingFixture fixture;
