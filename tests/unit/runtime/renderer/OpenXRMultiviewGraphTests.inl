@@ -20,7 +20,8 @@ public:
         return graphics_.Validate(candidate);
     }
 
-    Horo::Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system, PFN_xrGetInstanceProcAddr dispatch) override {
+    Horo::Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system,
+                                                    NativeXR::NativeOpenXRDispatch dispatch) override {
         return graphics_.Prepare(instance, system, dispatch);
     }
 

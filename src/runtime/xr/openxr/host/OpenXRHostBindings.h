@@ -11,6 +11,14 @@
 #include <openxr/openxr.h>
 
 namespace Horo::XR::OpenXRInternal {
+    /** @brief Synchronous official-ABI resolver borrowed from the same retained native loader/instance.
+     * @details This value owns no native object or authority. The existing loader/session owner outlives
+     * every binding; null is rejected before mutation. No type-erased callable, allocation or alternate resolver is added.
+     */
+    struct NativeOpenXRDispatch final {
+        PFN_xrGetInstanceProcAddr getProc{}; /**< Exact official resolver, retaining its native calling convention. */
+    };
+
     /**
      * @brief Host-owned private graphics port; never selects a renderer or creates an implicit headless session.
      *
@@ -48,7 +56,7 @@ namespace Horo::XR::OpenXRInternal {
          * @post On failure, the bridge retains no newly prepared resources. Returned storage lives until Release.
          */
         [[nodiscard]] virtual Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system,
-                                                                        PFN_xrGetInstanceProcAddr dispatch) = 0;
+                                                                        NativeOpenXRDispatch dispatch) = 0;
 
         /**
          * @brief Releases the binding/device borrow after native session destruction.

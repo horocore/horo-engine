@@ -4,6 +4,7 @@
 #include "OpenXRApplicationSession.h"
 
 #include <algorithm>
+#include <format>
 #include <limits>
 #include <string>
 
@@ -13,7 +14,7 @@ namespace Horo::Application::Internal {
 
     namespace {
         /** @brief Resolves the complete projection/event protocol on the same prepared native instance. */
-        Result<void> ValidateProjectionProtocol(PFN_xrGetInstanceProcAddr getProc_, XrInstance instance) {
+        template <typename Resolver> Result<void> ValidateProjectionProtocol(const Resolver &getProc_, XrInstance instance) {
             constexpr std::array protocol{"xrWaitFrame",
                                           "xrBeginFrame",
                                           "xrEndFrame",
@@ -32,10 +33,9 @@ namespace Horo::Application::Internal {
                 PFN_xrVoidFunction function{};
                 const auto result = getProc_(instance, name, &function);
                 if (result != XR_SUCCESS || !function)
-                    return Result<void>::Failure(
-                        MakeError(XRErrors::OperationUnavailable, std::string{name} +
-                                                                      " unavailable during actual projection preparation (XrResult " +
-                                                                      std::to_string(result) + ")"));
+                    return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable,
+                                                           std::format("{} unavailable during actual projection preparation (XrResult {})",
+                                                                       name, static_cast<std::int32_t>(result))));
             }
             return Result<void>::Success();
         }
@@ -135,8 +135,7 @@ namespace Horo::Application::Internal {
         const auto observedSystem = native_->PreparedSystem({*preflight_, selection_.attempt});
         if (observedSystem.HasError())
             return Outcome::Failure(observedSystem.ErrorValue());
-        const auto selected = Editor::EditorVulkanXrViewportAccess::Device(viewport);
-        if (selected.HasError())
+        if (const auto selected = Editor::EditorVulkanXrViewportAccess::Device(viewport); selected.HasError())
             return Outcome::Failure(selected.ErrorValue());
         if (auto graphics = graphics_.ValidatePreparation(); graphics.HasError())
             return Outcome::Failure(graphics.ErrorValue());
@@ -168,8 +167,8 @@ namespace Horo::Application::Internal {
         if (targets.HasError())
             return Outcome::Failure(targets.ErrorValue());
         const auto &budget = settings_.Limits();
-        const auto preparedActions = bindings.schema.actions.size() + bindings.poses.size();
-        if (preparedActions > budget.maximumActions || budget.maximumSpaces < 5 + bindings.poses.size() ||
+        if (const auto preparedActions = bindings.schema.actions.size() + bindings.poses.size();
+            preparedActions > budget.maximumActions || budget.maximumSpaces < 5 + bindings.poses.size() ||
             budget.maximumActions > XRActionBindingLimits::MaximumActions || budget.maximumDevices > 3 ||
             budget.maximumSpaces > XRHardLimits::MaximumSpaces)
             return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));

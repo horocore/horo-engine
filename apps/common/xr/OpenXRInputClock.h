@@ -17,13 +17,16 @@ namespace Horo::Application::Internal {
     public:
         /** @brief Borrows the native parent; no native operation or allocation is performed. */
         explicit OpenXRInputClock(XR::OpenXRInternal::OpenXRNativeSession &native) noexcept;
+        OpenXRInputClock(const OpenXRInputClock &) = delete;
+        OpenXRInputClock &operator=(const OpenXRInputClock &) = delete;
         /** @brief Binds actual successful native/session and scheduler identities before interactive input.
          * @param source SAME RuntimeHost dispatch issuer, bound while it is idle.
          * @param fixedStep SAME immutable config value supplied to RuntimeHost::Create.
-         * @param getProc Official resolver retained by the selected native instance/loader.
+         * @param dispatch Official resolver retained by the selected native instance/loader.
          * @return Success or original admission/native failure; failed binding leaves Read unavailable.
          */
-        [[nodiscard]] Result<void> Bind(Runtime::RuntimeDispatchSource source, Duration fixedStep, PFN_xrGetInstanceProcAddr getProc);
+        [[nodiscard]] Result<void> Bind(Runtime::RuntimeDispatchSource source, Duration fixedStep,
+                                        XR::OpenXRInternal::NativeOpenXRDispatch dispatch);
         /** @brief Seals the SAME idle scheduler/config during actual App composition before ScreenStart.
          * @param source Canonical existing RuntimeHost issuer, idle on its owner lane.
          * @param fixedStep Exact immutable config supplied at its creation.
@@ -31,12 +34,12 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> PrepareScheduler(Runtime::RuntimeDispatchSource source, Duration fixedStep);
         /** @brief Binds the actual issued native session during the canonical Scene/resource preparation stage.
-         * @param getProc Official resolver from the retained actual instance.
+         * @param dispatch Official resolver from the retained actual instance.
          * @return Original native/currentness failure; scheduler identity/config cannot be replaced here.
          * @pre PrepareScheduler succeeded while idle. This stage may occur inside that SAME scheduler's Scene phase;
          * it authorizes no cutoff by itself. Read still requires exact opaque BuildInputSnapshot evidence.
          */
-        [[nodiscard]] Result<void> BindNative(PFN_xrGetInstanceProcAddr getProc);
+        [[nodiscard]] Result<void> BindNative(XR::OpenXRInternal::NativeOpenXRDispatch dispatch);
         /** @brief Drops one exact drained native binding while preserving the SAME scheduler and simulation epoch.
          * @param session Exact previously bound candidate; foreign/stale identities cannot unbind a replacement.
          * @return Success or typed owner/reentry/stale failure, with no native call or tick/config mutation.

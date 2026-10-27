@@ -37,7 +37,7 @@ namespace Horo::Tests::OpenXR {
                 return graphics_.Validate(candidate);
             }
 
-            Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system, PFN_xrGetInstanceProcAddr dispatch) override {
+            Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system, NativeOpenXRDispatch dispatch) override {
                 auto prepared = graphics_.Prepare(instance, system, dispatch);
                 request_.candidate = {};
                 return prepared;

@@ -5,6 +5,16 @@
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
+        /** @brief Converts authored base-to-World calibration into the same rigid inverse native offset. */
+        Result<XrPosef> CalibratedWorldPose(const Math::Transform &world) {
+            const auto rotation = world.rotation.TryNormalized();
+            if (rotation.HasError())
+                return Result<XrPosef>::Failure(rotation.ErrorValue());
+            const auto inverse = rotation.Value().Inverse();
+            const auto position = inverse.Rotate(-world.translation);
+            return Result<XrPosef>::Success({{inverse.x, inverse.y, inverse.z, inverse.w}, {position.x, position.y, position.z}});
+        }
+
         /** @brief Preserves exact native space creation/retirement evidence. */
         Error SpaceFailure(const char *phase, const XrResult result) {
             return MakeError(XRErrors::OperationUnavailable,
@@ -16,7 +26,8 @@ namespace Horo::XR::OpenXRInternal {
     Result<void> OpenXRActionBindings::PrepareSpaces() {
         if (!tracking_.request)
             return Result<void>::Success();
-        if (!preparation_ && native_.maximumSpaces < tracking_.actions.size() + 2 + tracking_.request->worldFromBase.has_value())
+        if (!preparation_ &&
+            native_.maximumSpaces < tracking_.actions.size() + 2 + (tracking_.request->worldFromBase.has_value() ? 1U : 0U))
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         const auto reference =
             tracking_.request->base == XRSpaceKind::Stage ? XR_REFERENCE_SPACE_TYPE_STAGE : XR_REFERENCE_SPACE_TYPE_LOCAL;
@@ -35,14 +46,11 @@ namespace Horo::XR::OpenXRInternal {
         if (tracking_.request->worldFromBase) {
             // OpenXR expects the pose of the NEW World origin expressed in the native base.
             // Authored calibration maps base -> World, so the creation offset is its rigid inverse.
-            const auto &world = *tracking_.request->worldFromBase;
-            const auto rotation = world.rotation.TryNormalized();
-            if (rotation.HasError())
-                return Result<void>::Failure(rotation.ErrorValue());
-            const auto inverse = rotation.Value().Inverse();
-            const auto position = inverse.Rotate(-world.translation);
+            const auto pose = CalibratedWorldPose(*tracking_.request->worldFromBase);
+            if (pose.HasError())
+                return Result<void>::Failure(pose.ErrorValue());
             info.referenceSpaceType = reference;
-            info.poseInReferenceSpace = {{inverse.x, inverse.y, inverse.z, inverse.w}, {position.x, position.y, position.z}};
+            info.poseInReferenceSpace = pose.Value();
             result = dispatch_.createReference(native_.session, &info, &tracking_.world);
             if (XR_FAILED(result) || tracking_.world == XR_NULL_HANDLE)
                 return Result<void>::Failure(
@@ -120,8 +128,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<XRCoordinateSpace>::Failure(lane.ErrorValue());
         if (sampling_)
             return Result<XRCoordinateSpace>::Failure(MakeError(XRErrors::OperationIncompatible));
-        const auto current = Current(session);
-        if (current.HasError())
+        if (const auto current = Current(session); current.HasError())
             return Result<XRCoordinateSpace>::Failure(current.ErrorValue());
         if (tracking_.world == XR_NULL_HANDLE || !tracking_.worldIdentity.id.IsValid())
             return Result<XRCoordinateSpace>::Failure(MakeError(XRErrors::OperationUnavailable));
@@ -134,8 +141,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<XrSpace>::Failure(lane.ErrorValue());
         if (sampling_)
             return Result<XrSpace>::Failure(MakeError(XRErrors::OperationIncompatible));
-        const auto current = Current(space.id.session);
-        if (current.HasError())
+        if (const auto current = Current(space.id.session); current.HasError())
             return Result<XrSpace>::Failure(current.ErrorValue());
         if (tracking_.world == XR_NULL_HANDLE || space != tracking_.worldIdentity)
             return Result<XrSpace>::Failure(MakeError(XRErrors::IdentityStale));

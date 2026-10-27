@@ -3,16 +3,20 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <format>
 #include <string>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
         /** @brief Revokes the owner-lane foreign-call reservation even when a test/native callback throws. */
         struct DispatchScope final {
+            DispatchScope(const DispatchScope &) = delete;
+            DispatchScope &operator=(const DispatchScope &) = delete;
+
             bool &active;
 
             explicit DispatchScope(bool &value) noexcept : active(value) {
-                active = true;
+                value = true;
             }
 
             ~DispatchScope() {
@@ -21,13 +25,12 @@ namespace Horo::XR::OpenXRInternal {
         };
 
         /** @brief Loads one official ABI function without keeping a temporary or foreign resolver owner. */
-        template <typename Function>
-        Result<void> Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance, const char *name, Function &output) {
+        template <typename Function, typename Resolver>
+        Result<void> Resolve(const Resolver &getProc, XrInstance instance, const char *name, Function &output) {
             PFN_xrVoidFunction raw{};
-            const auto result = getProc(instance, name, &raw);
-            if (result != XR_SUCCESS || !raw)
-                return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable,
-                                                       std::string{name} + " unavailable (XrResult " + std::to_string(result) + ")"));
+            if (const auto result = getProc(instance, name, &raw); result != XR_SUCCESS || !raw)
+                return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, std::format("{} unavailable (XrResult {})", name,
+                                                                                                   static_cast<std::int32_t>(result))));
             output = std::bit_cast<Function>(raw);
             return Result<void>::Success();
         }
@@ -39,7 +42,8 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRSessionEvents::Failure */
     Error OpenXRSessionEvents::Failure(const char *operation, const XrResult result) {
-        return MakeError(XRErrors::OperationUnavailable, std::string{operation} + " failed (XrResult " + std::to_string(result) + ")");
+        return MakeError(XRErrors::OperationUnavailable,
+                         std::format("{} failed (XrResult {})", operation, static_cast<std::int32_t>(result)));
     }
 
     /** @copydoc OpenXRSessionEvents::Current */
@@ -56,7 +60,8 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRSessionEvents::Bind */
-    Result<void> OpenXRSessionEvents::Bind(PFN_xrGetInstanceProcAddr getProc, std::span<OpenXRSwapchain *const> swapchains) {
+    Result<void> OpenXRSessionEvents::Bind(NativeOpenXRDispatch dispatch, std::span<OpenXRSwapchain *const> swapchains) {
+        const auto getProc = dispatch.getProc;
         if (std::this_thread::get_id() != lane_ || dispatching_ || session_.IsValid() || !getProc)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         DispatchScope scope{dispatching_};
@@ -87,7 +92,7 @@ namespace Horo::XR::OpenXRInternal {
         dispatch_ = candidate;
         session_ = selected;
         incarnation_ = native.Value().incarnation;
-        std::copy(swapchains.begin(), swapchains.end(), swapchains_.begin());
+        std::ranges::copy(swapchains, swapchains_.begin());
         swapchainCount_ = swapchains.size();
         return Result<void>::Success();
     }
@@ -115,22 +120,21 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         observed_ = event.state;
         switch (event.state) {
+            using enum Horo::XR::XRSessionEvent;
             case XR_SESSION_STATE_READY:
-                return sessions_->ApplyEvent(session_, XRSessionEvent::Ready);
+                return sessions_->ApplyEvent(session_, Ready);
             case XR_SESSION_STATE_VISIBLE:
-                return sessions_->ApplyEvent(session_, sessions_->Snapshot().state == XRSessionState::Focused
-                                                           ? XRSessionEvent::FocusLost
-                                                           : XRSessionEvent::BecameVisible);
+                return sessions_->ApplyEvent(session_, sessions_->Snapshot().state == XRSessionState::Focused ? FocusLost : BecameVisible);
             case XR_SESSION_STATE_FOCUSED:
-                return sessions_->ApplyEvent(session_, XRSessionEvent::BecameFocused);
+                return sessions_->ApplyEvent(session_, BecameFocused);
             case XR_SESSION_STATE_SYNCHRONIZED:
                 if (sessions_->Snapshot().state == XRSessionState::Visible || sessions_->Snapshot().state == XRSessionState::Focused)
-                    return sessions_->ApplyEvent(session_, XRSessionEvent::VisibilityLost);
+                    return sessions_->ApplyEvent(session_, VisibilityLost);
                 return Result<void>::Success();
             case XR_SESSION_STATE_STOPPING:
-                return sessions_->ApplyEvent(session_, XRSessionEvent::Stopping);
+                return sessions_->ApplyEvent(session_, Stopping);
             case XR_SESSION_STATE_LOSS_PENDING:
-                return sessions_->ApplyEvent(session_, XRSessionEvent::SessionLost);
+                return sessions_->ApplyEvent(session_, SessionLost);
             default:
                 return Result<void>::Success();
         }
@@ -175,7 +179,7 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRSessionEvents::ProcessEvent */
-    Result<void> OpenXRSessionEvents::ProcessEvent(const XrEventDataBuffer &buffer, XrSession session,
+    Result<void> OpenXRSessionEvents::ProcessEvent(const XrEventDataBuffer &buffer, const XrSession_T *session,
                                                    NativeSessionEventObservation &observation) {
         if (buffer.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             XrEventDataSessionStateChanged state;

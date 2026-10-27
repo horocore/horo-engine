@@ -66,6 +66,12 @@ add_library(HoroEngine::HostErrors ALIAS HoroHostErrors)
 target_compile_features(HoroHostErrors PUBLIC cxx_std_20)
 target_link_libraries(HoroHostErrors PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
 
+# Data-only detached envelope ownership; importing it never links verification or crypto providers.
+add_library(HoroSecurityEnvelope INTERFACE)
+add_library(HoroEngine::SecurityEnvelope ALIAS HoroSecurityEnvelope)
+target_compile_features(HoroSecurityEnvelope INTERFACE cxx_std_20)
+target_link_libraries(HoroSecurityEnvelope INTERFACE HoroEngine::Foundation)
+
 add_library(HoroSecurity STATIC
         security/AgentPolicy.cpp
         security/SecurityErrors.cpp
@@ -76,7 +82,7 @@ add_library(HoroSecurity STATIC
 )
 add_library(HoroEngine::Security ALIAS HoroSecurity)
 target_compile_features(HoroSecurity PUBLIC cxx_std_20)
-target_link_libraries(HoroSecurity PUBLIC HoroEngine::Foundation PRIVATE MbedTLS::mbedcrypto)
+target_link_libraries(HoroSecurity PUBLIC HoroEngine::Foundation HoroEngine::SecurityEnvelope PRIVATE MbedTLS::mbedcrypto)
 
 add_library(HoroCliHost STATIC
         cli/CliCommandRegistry.cpp
@@ -332,6 +338,7 @@ target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEng
 
 add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp
+        packages/cache/PackageCachePublisherEnvelope.cpp
         packages/resolver/PackageDependencyResolver.cpp
         packages/resolver/PackageLockfile.cpp
         packages/resolver/PackageRequest.cpp
@@ -342,7 +349,7 @@ add_library(HoroPackages STATIC
 )
 add_library(HoroEngine::Packages ALIAS HoroPackages)
 target_compile_features(HoroPackages PUBLIC cxx_std_20)
-target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
+target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation HoroEngine::SecurityEnvelope PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
 
 add_library(HoroPackageSecurity STATIC
         packages/restore/GameplaySourceLibrary.cpp

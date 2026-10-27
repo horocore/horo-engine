@@ -50,6 +50,10 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @brief Prepared immutable native image with generation-fenced acquisition identity, never allocation ownership. */
     struct OpenXRVulkanSwapchainImages::Source final : Render::Detail::IVulkanExternalTextureSource {
+        Source() = default;
+        Source(const Source &) = delete;
+        Source &operator=(const Source &) = delete;
+
         OpenXRSwapchain *owner{};
         IOpenXRGraphicsBinding *graphics{};
         const XrGraphicsBindingVulkanKHR *binding{};
@@ -281,8 +285,8 @@ namespace Horo::XR::OpenXRInternal {
         const auto &source = sources_[index];
         const auto &prepared = source->request;
         const auto &left = prepared.texture;
-        const auto &right = request.texture;
-        if (prepared.target != request.target || prepared.role != request.role || prepared.foveation != request.foveation ||
+        if (const auto &right = request.texture;
+            prepared.target != request.target || prepared.role != request.role || prepared.foveation != request.foveation ||
             left.dimension != right.dimension || left.extent != right.extent || left.format != right.format ||
             left.mipCount != right.mipCount || left.layerCount != right.layerCount || left.sampleCount != right.sampleCount ||
             left.usage != right.usage || left.depth != right.depth || source->views.attachment == VK_NULL_HANDLE)

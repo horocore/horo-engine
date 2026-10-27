@@ -2,7 +2,9 @@
 #include "PackageArchiveTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
+#include <functional>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -45,6 +47,7 @@ namespace {
     class DenyingFileSystem final : public Horo::DurableFileSystem {
     public:
         enum class Failure {
+            None,
             Write,
             Replace
         };
@@ -68,6 +71,19 @@ namespace {
             if (failure_ == Failure::Write)
                 return Horo::Result<void>::Failure(Horo::MakeError(InjectedPermissionFailure));
             return native_.WriteDurable(path, bytes);
+        }
+
+        std::function<void(const std::filesystem::path &)> beforePrivateWrite;
+        std::vector<std::filesystem::path> privateWrites;
+
+        Horo::Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
+                                               const std::filesystem::perms permissions) override {
+            privateWrites.push_back(path);
+            if (beforePrivateWrite)
+                beforePrivateWrite(path);
+            if (failure_ == Failure::Write)
+                return Horo::Result<void>::Failure(Horo::MakeError(InjectedPermissionFailure));
+            return native_.WritePrivateDurable(path, bytes, created, permissions);
         }
 
         Horo::Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
@@ -108,6 +124,32 @@ namespace {
         Horo::NativeDurableFileSystem files;
         PackageCacheStore store;
     };
+
+    void CheckOwnerPrivate(const std::filesystem::path &path) {
+        const auto permissions = std::filesystem::status(path).permissions();
+        CHECK((permissions & std::filesystem::perms::owner_read) != std::filesystem::perms::none);
+        CHECK((permissions & std::filesystem::perms::owner_write) != std::filesystem::perms::none);
+#ifndef _WIN32
+        CHECK((permissions & (std::filesystem::perms::group_all | std::filesystem::perms::others_all)) == std::filesystem::perms::none);
+#endif
+    }
+
+    Horo::Security::DetachedSignatureEnvelope Envelope(const ValidatedPackageArchive &archive) {
+        return {.publisherId = "com.horo.tests",
+                .keyId = "cache-test",
+                .artifactDigest = archive.Digest(),
+                .signature = std::vector<std::byte>(64, std::byte{7})};
+    }
+
+    std::filesystem::path EvidencePath(const CacheFixture &fixture, const Horo::Sha256Digest &digest) {
+        return ActivePath(fixture.temporary.Path(), digest).parent_path() / "publisher-envelope.bin";
+    }
+
+    std::string EvidenceBytes(const std::filesystem::path &path) {
+        std::ifstream input{path, std::ios::binary};
+        REQUIRE(input.good());
+        return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    }
 
     TEST_CASE("Package cache atomically publishes, reverifies, snapshots and cleans entries", "[packages][cache]") {
         CacheFixture fixture;
@@ -238,5 +280,174 @@ namespace {
         const auto result = store.Quarantine(bytes, PackageQuarantineReason::InvalidArchive);
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == "packages.cache.resource_limit");
+    }
+
+    TEST_CASE("Package cache persists inert detached evidence and removes it with its archive", "[packages][cache][publisher]") {
+        CacheFixture fixture;
+        const auto archive = VerifiedArchive();
+        const auto signature = Envelope(archive);
+        REQUIRE(fixture.store.Publish(archive, signature).HasValue());
+        CheckOwnerPrivate(EvidencePath(fixture, archive.Digest()));
+        auto loaded = fixture.store.LoadWithPublisherEvidence(archive.Digest());
+        REQUIRE(loaded.HasValue());
+        REQUIRE(loaded.Value());
+        REQUIRE(loaded.Value()->signature);
+        CHECK(loaded.Value()->signature->signature == signature.signature);
+        CHECK(loaded.Value()->signature->publisherId == signature.publisherId);
+        CHECK(loaded.Value()->archive.Digest() == archive.Digest());
+        REQUIRE(fixture.store.Remove(archive.Digest()).HasValue());
+        CHECK_FALSE(std::filesystem::exists(EvidencePath(fixture, archive.Digest())));
+        CHECK(loaded.Value()->archive.Digest() == archive.Digest());  // Owned snapshot survives removal.
+    }
+
+    TEST_CASE("Package cache rejects malformed versioned publisher storage before returning evidence", "[packages][cache][security]") {
+        CacheFixture fixture;
+        const auto archive = VerifiedArchive();
+        REQUIRE(fixture.store.Publish(archive, Envelope(archive)).HasValue());
+        const auto path = EvidencePath(fixture, archive.Digest());
+        auto bytes = EvidenceBytes(path);
+        const auto variant = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
+        switch (variant) {
+            case 0:
+                bytes.pop_back();
+                break;
+            case 1:
+                bytes.push_back('x');
+                break;
+            case 2:
+                bytes[5] = 2;
+                break;  // Unknown storage version.
+            case 3:
+                bytes[8] = 2;
+                break;  // Unknown algorithm.
+            case 4:
+                bytes[47] = 0;
+                break;  // Invalid required publisher identity.
+            case 5:
+                bytes[15] ^= 1;
+                break;  // Differently bound archive digest.
+            case 6:
+                bytes[9] = bytes[10] = static_cast<char>(0xff);
+                break;
+            case 7:
+                bytes.resize(2049);
+                break;
+        }
+        std::filesystem::permissions(path, std::filesystem::perms::owner_write, std::filesystem::perm_options::add);
+        std::ofstream output{path, std::ios::binary | std::ios::trunc};
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        output.close();
+        CHECK(fixture.store.LoadWithPublisherEvidence(archive.Digest()).HasError());
+        CHECK(fixture.store.Load(archive.Digest()).HasValue());  // Legacy unsigned archive API is unchanged.
+    }
+
+    TEST_CASE("Package cache retains previous publisher bytes when evidence writes fail", "[packages][cache][atomic]") {
+        CacheFixture fixture;
+        const auto archive = VerifiedArchive();
+        auto signature = Envelope(archive);
+        REQUIRE(fixture.store.Publish(archive, signature).HasValue());
+        const auto original = EvidenceBytes(EvidencePath(fixture, archive.Digest()));
+        signature.keyId = "rotated-key";
+        const auto failure = GENERATE(DenyingFileSystem::Failure::Write, DenyingFileSystem::Failure::Replace);
+        DenyingFileSystem denied{fixture.files, failure};
+        auto store = CreateStore(denied, fixture.temporary.Path());
+        CHECK(store.Publish(archive, signature).HasError());
+        CHECK(EvidenceBytes(EvidencePath(fixture, archive.Digest())) == original);
+        CheckOwnerPrivate(EvidencePath(fixture, archive.Digest()));
+        REQUIRE(denied.privateWrites.size() == 1);
+        CHECK_FALSE(std::filesystem::exists(denied.privateWrites.front()));
+    }
+
+    TEST_CASE("Package cache publisher operations reject hostile evidence files and redirects", "[packages][cache][security]") {
+        CacheFixture fixture;
+        const auto archive = VerifiedArchive();
+        REQUIRE(fixture.store.Publish(archive).HasValue());
+        const auto path = EvidencePath(fixture, archive.Digest());
+        SECTION("directory entry") {
+            std::filesystem::create_directory(path);
+            CHECK(fixture.store.Publish(archive, Envelope(archive)).HasError());
+            CHECK(fixture.store.LoadWithPublisherEvidence(archive.Digest()).HasError());
+        }
+        SECTION("redirect") {
+            const auto target = fixture.temporary.Path() / "preserve";
+            {
+                std::ofstream output{target};
+                output << "unchanged";
+            }
+            std::error_code error;
+            std::filesystem::create_symlink(target, path, error);
+            if (error)
+                SKIP("Host cannot create the requested symbolic-link fixture: " << error.message());
+            CHECK(fixture.store.Publish(archive, Envelope(archive)).HasError());
+            CHECK(fixture.store.LoadWithPublisherEvidence(archive.Digest()).HasError());
+            CHECK(EvidenceBytes(target) == "unchanged");
+        }
+    }
+
+    TEST_CASE("Package cache quarantining corrupt archive bytes also retires detached evidence", "[packages][cache][quarantine]") {
+        CacheFixture fixture;
+        const auto archive = VerifiedArchive();
+        REQUIRE(fixture.store.Publish(archive, Envelope(archive)).HasValue());
+        const auto path = ActivePath(fixture.temporary.Path(), archive.Digest());
+        std::filesystem::permissions(path, std::filesystem::perms::owner_write, std::filesystem::perm_options::add);
+        {
+            std::ofstream output{path, std::ios::binary | std::ios::trunc};
+            output << "poisoned";
+        }
+        CHECK(fixture.store.LoadWithPublisherEvidence(archive.Digest()).HasError());
+        CHECK_FALSE(std::filesystem::exists(path));
+        CHECK_FALSE(std::filesystem::exists(EvidencePath(fixture, archive.Digest())));
+    }
+
+    TEST_CASE("Package cache exclusive archive and envelope stages preserve preexisting hard-link victims", "[packages][cache][security]") {
+        CacheFixture fixture;
+        const auto archive = VerifiedArchive();
+        const bool publisherStage = GENERATE(false, true);
+        if (publisherStage)
+            REQUIRE(fixture.store.Publish(archive).HasValue());
+        const auto victim = fixture.temporary.Path() / "victim";
+        {
+            std::ofstream output{victim};
+            output << "preserve victim bytes";
+        }
+        const auto originalPermissions = std::filesystem::status(victim).permissions();
+        DenyingFileSystem attacked{fixture.files, DenyingFileSystem::Failure::None};
+        std::optional<std::filesystem::path> linkedStage;
+        attacked.beforePrivateWrite = [&](const std::filesystem::path &path) {
+            if (path.filename().string().find(publisherStage ? ".publisher." : ".archive.") == std::string::npos)
+                return;
+            std::filesystem::create_hard_link(victim, path);
+            linkedStage = path;
+        };
+        auto store = CreateStore(attacked, fixture.temporary.Path());
+        CHECK(store.Publish(archive, Envelope(archive)).HasError());
+        REQUIRE(linkedStage);
+        CHECK(EvidenceBytes(victim) == "preserve victim bytes");
+        CHECK(std::filesystem::status(victim).permissions() == originalPermissions);
+        CHECK(std::filesystem::equivalent(*linkedStage, victim));  // Unowned preexisting paths are not cleaned up.
+    }
+
+    TEST_CASE("Package cache replacement and corrupt-entry quarantine do not mutate linked destination victims",
+              "[packages][cache][security]") {
+        CacheFixture fixture;
+        const auto archive = VerifiedArchive();
+        const bool publisherEntry = GENERATE(false, true);
+        if (publisherEntry)
+            REQUIRE(fixture.store.Publish(archive).HasValue());
+        const auto victim = fixture.temporary.Path() / "destination-victim";
+        {
+            std::ofstream output{victim};
+            output << "preserve destination bytes";
+        }
+        const auto permissions = std::filesystem::status(victim).permissions();
+        const auto entry =
+            publisherEntry ? EvidencePath(fixture, archive.Digest()) : ActivePath(fixture.temporary.Path(), archive.Digest());
+        std::filesystem::create_directories(entry.parent_path());
+        std::filesystem::create_hard_link(victim, entry);
+        REQUIRE(fixture.store.Publish(archive, Envelope(archive)).HasValue());
+        CHECK(EvidenceBytes(victim) == "preserve destination bytes");
+        CHECK(std::filesystem::status(victim).permissions() == permissions);
+        CHECK_FALSE(std::filesystem::equivalent(victim, entry));
+        CheckOwnerReadOnly(ActivePath(fixture.temporary.Path(), archive.Digest()));
     }
 }  // namespace

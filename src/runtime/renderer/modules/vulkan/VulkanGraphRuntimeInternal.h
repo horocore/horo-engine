@@ -148,10 +148,21 @@ namespace Horo::Render::Detail {
 
         /** @brief Stack-only suffix transaction; successful ticket admission transfers debt to the canonical abort owner. */
         struct GuiPreparationRollback final {
+            GuiPreparationRollback(Impl &owner, VulkanCommandRetention &retention, std::size_t updates, std::size_t barriers,
+                                   std::size_t resources, RenderGraphExecutionRange buffers, RenderGraphExecutionRange external)
+                : graph(owner), pins(retention), updateCount(updates), barrierCount(barriers), resourceCount(resources),
+                  bufferBarriers(buffers), externalBarriers(external) {}
+
+            GuiPreparationRollback(const GuiPreparationRollback &) = delete;
+            GuiPreparationRollback &operator=(const GuiPreparationRollback &) = delete;
+
             Impl &graph;
             VulkanCommandRetention &pins;
-            const std::size_t updateCount, barrierCount, resourceCount;
-            const RenderGraphExecutionRange bufferBarriers, externalBarriers;
+            const std::size_t updateCount;
+            const std::size_t barrierCount;
+            const std::size_t resourceCount;
+            const RenderGraphExecutionRange bufferBarriers;
+            const RenderGraphExecutionRange externalBarriers;
             bool committed{};
             /** @brief Restores only this unsent attempt's suffix and ranges, preserving prior scene state and pins. */
             ~GuiPreparationRollback() noexcept;

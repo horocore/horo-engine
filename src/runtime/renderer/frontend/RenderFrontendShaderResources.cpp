@@ -304,6 +304,22 @@ namespace Horo::Render {
         return frontend.BackendInstance(sampler);
     }
 
+    /** @copydoc Detail::RenderFrontendResourceAccess::MaterialParameterBufferBytes */
+    Result<std::size_t> Detail::RenderFrontendResourceAccess::MaterialParameterBufferBytes(const RenderFrontend &frontend,
+                                                                                           const MaterialBindingDescriptor &descriptor,
+                                                                                           const ShaderBindingId binding) {
+        if (std::this_thread::get_id() != frontend.preparationOwner_)
+            return Result<std::size_t>::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
+        if (frontend.closing_)
+            return Result<std::size_t>::Failure(MakeError(FrontendErrors::Closing));
+        if (frontend.activeFrameScope_)
+            return Result<std::size_t>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
+        const auto pipeline = frontend.BackendInstance(descriptor.pipeline);
+        if (pipeline.HasError())
+            return Result<std::size_t>::Failure(pipeline.ErrorValue());
+        return frontend.backend_->QueryMaterialParameterBufferSize(pipeline.Value(), descriptor, binding);
+    }
+
     /** @copydoc RenderFrontend::Realize */
     Result<std::unique_ptr<IResidentMaterialBinding>> RenderFrontend::Realize(const MaterialBindingDescriptor &descriptor) {
         using Realization = Result<std::unique_ptr<IResidentMaterialBinding>>;

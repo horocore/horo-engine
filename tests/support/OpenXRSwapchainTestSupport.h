@@ -7,8 +7,10 @@
 #include <bit>
 
 #if defined(XR_USE_GRAPHICS_API_VULKAN)
-#include <openxr/openxr_platform.h>
 #include <vulkan/vulkan.h>
+
+// OpenXR platform declarations require the Vulkan types above.
+#include <openxr/openxr_platform.h>
 #endif
 
 namespace Horo::Tests::OpenXR {

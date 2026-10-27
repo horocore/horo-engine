@@ -17,10 +17,13 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Clears the operation fence on success, native error and foreign callback exception. */
         struct SamplingGuard final {
+            SamplingGuard(const SamplingGuard &) = delete;
+            SamplingGuard &operator=(const SamplingGuard &) = delete;
+
             bool &active;
 
             explicit SamplingGuard(bool &value) noexcept : active(value) {
-                active = true;
+                value = true;
             }
 
             ~SamplingGuard() {
@@ -32,8 +35,7 @@ namespace Horo::XR::OpenXRInternal {
         template <typename State, typename Function>
         Result<State> ReadState(Function function, const XrSession session, const XrActionStateGetInfo &info, const XrStructureType type) {
             State state{type};
-            const auto result = function(session, &info, &state);
-            if (result != XR_SUCCESS)
+            if (const auto result = function(session, &info, &state); result != XR_SUCCESS)
                 return Result<State>::Failure(SamplingFailure("sample action", result));
             if (state.type != type || state.next != nullptr || (state.isActive != XR_TRUE && state.isActive != XR_FALSE))
                 return Result<State>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
@@ -126,11 +128,12 @@ namespace Horo::XR::OpenXRInternal {
         const XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action.native, hands_[role]};
         const XRTrackedActionRecord record{.device = device.id, .bindingIndex = bindingIndex};
         switch (action.type) {
-            case Input::ActionValueType::Digital:
+            using enum Horo::Input::ActionValueType;
+            case Digital:
                 return ReadBoolean(info, record);
-            case Input::ActionValueType::Axis1D:
+            case Axis1D:
                 return ReadFloat(info, record);
-            case Input::ActionValueType::Axis2D:
+            case Axis2D:
                 return ReadVector(info, record);
         }
         return Result<XRTrackedActionRecord>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
@@ -150,8 +153,7 @@ namespace Horo::XR::OpenXRInternal {
         if (prepared.HasError())
             return Result<NativeScalarActionSamples>::Failure(prepared.ErrorValue());
         SamplingGuard guard{sampling_};
-        const auto current = Current(session);
-        if (current.HasError())
+        if (const auto current = Current(session); current.HasError())
             return Result<NativeScalarActionSamples>::Failure(current.ErrorValue());
         const auto profiles = Profiles(session);
         if (profiles.HasError())
@@ -159,8 +161,8 @@ namespace Horo::XR::OpenXRInternal {
         NativeScalarActionSamples result;
         for (const auto &candidate : std::span{prepared.Value().entries}.first(prepared.Value().count)) {
             const auto role = candidate.action->role == XRTrackedDeviceRole::LeftController ? 0U : 1U;
-            const auto profile = profiles.Value()[role].profile;
-            if (candidate.profile != profile && !(profile.value == 0 && candidate.fallback && candidate.profile == fallbackProfile_))
+            if (const auto profile = profiles.Value()[role].profile;
+                candidate.profile != profile && !(profile.value == 0 && candidate.fallback && candidate.profile == fallbackProfile_))
                 return Result<NativeScalarActionSamples>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
             auto sample = ReadScalar(*candidate.action, candidate.device, candidate.bindingIndex);
             if (sample.HasError())

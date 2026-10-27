@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import textwrap
 
 import pytest
@@ -260,7 +259,8 @@ def test_auxiliary_restore_survives_debug_failure_without_relaxing_primary_publi
     ("true", "true", True), ("true", "false", True),
 ])
 def test_dependency_only_checkpoint_avoids_flush_without_hiding_compiler_failures(
-    tmp_path: Path, compiler: str, dependency: str, flush: bool,
+    tmp_path: Path, pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch,
+    compiler: str, dependency: str, flush: bool,
 ) -> None:
     action = (ROOT / ".github/actions/save-native-cache/action.yml").read_text(encoding="utf-8")
     block = action.split("    - name: Flush and report compiler cache\n", 1)[1].split("\n    - name:", 1)[0]
@@ -272,7 +272,9 @@ def test_dependency_only_checkpoint_avoids_flush_without_hiding_compiler_failure
     host_bash = shutil.which("bash")
     assert host_bash is not None
     bash = Path(host_bash).resolve(strict=True)
-    assert bash.is_absolute() and bash.is_file() and os.access(bash, os.X_OK)
+    assert bash.is_absolute()
+    assert bash.is_file()
+    assert os.access(bash, os.X_OK)
     executable = tmp_path / "sccache"
     calls = tmp_path / "calls"
     executable.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$CACHE_CALLS"\n'
@@ -280,12 +282,12 @@ def test_dependency_only_checkpoint_avoids_flush_without_hiding_compiler_failure
     executable.chmod(0o700)
     if selected:
         script = textwrap.dedent(block.split("      run: |\n", 1)[1])
-        environment = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
-                           RUNNER_PLATFORM="Windows", CACHE_CALLS=str(calls))
-        # Only the reviewed repository action body and fixed test-owned cache executable are dispatched.
-        completed = subprocess.run([str(bash), "-e", "-o", "pipefail", "-c", script],
-                                   env=environment, capture_output=True, check=False, shell=False, timeout=5)
-        assert completed.returncode == 2
+        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+        monkeypatch.setenv("RUNNER_PLATFORM", "Windows")
+        monkeypatch.setenv("CACHE_CALLS", str(calls))
+        # The fixed fake cache command spawns no children; pytester bounds and reaps the Bash process.
+        completed = pytester.run(str(bash), "-e", "-o", "pipefail", "-c", script, timeout=5)
+        assert completed.ret == 2
         assert calls.read_text(encoding="utf-8").splitlines() == ["--show-stats", "--stop-server"]
     else:
         assert not calls.exists()

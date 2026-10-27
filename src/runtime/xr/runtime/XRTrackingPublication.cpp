@@ -2,29 +2,29 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 namespace Horo::XR::RuntimeInternal {
     namespace {
         /** @brief Checks only the deliberately supported initial physical source profile. */
         bool CapabilitiesMatch(const XRTrackedDeviceRole role, const XRTrackedDeviceCapabilities &capabilities) {
+            using enum Horo::XR::XRTrackedDeviceCapability;
             const bool head = role == XRTrackedDeviceRole::Head;
             const bool controller = role == XRTrackedDeviceRole::LeftController || role == XRTrackedDeviceRole::RightController;
-            return capabilities.Has(XRTrackedDeviceCapability::HeadPose) == head &&
-                   (capabilities.Has(XRTrackedDeviceCapability::GripPose) || capabilities.Has(XRTrackedDeviceCapability::AimPose)) ==
-                       controller &&
-                   !capabilities.Has(XRTrackedDeviceCapability::PalmPose) && !capabilities.Has(XRTrackedDeviceCapability::TrackerPose) &&
-                   !capabilities.Has(XRTrackedDeviceCapability::Haptics);
+            return capabilities.Has(HeadPose) == head && (capabilities.Has(GripPose) || capabilities.Has(AimPose)) == controller &&
+                   !capabilities.Has(PalmPose) && !capabilities.Has(TrackerPose) && !capabilities.Has(Haptics);
         }
 
         /** @brief Maps only the supported normalized physical role/pose pairs, never a default capability. */
         std::optional<XRTrackedDeviceCapability> SourceCapability(const TrackingSourceEvidence &source) noexcept {
+            using enum Horo::XR::XRTrackedDeviceCapability;
             if (source.role == XRTrackedDeviceRole::Head && source.kind == XRTrackedPoseKind::Head)
-                return XRTrackedDeviceCapability::HeadPose;
+                return HeadPose;
             if (source.role == XRTrackedDeviceRole::LeftController || source.role == XRTrackedDeviceRole::RightController) {
                 if (source.kind == XRTrackedPoseKind::Grip)
-                    return XRTrackedDeviceCapability::GripPose;
+                    return GripPose;
                 if (source.kind == XRTrackedPoseKind::Aim)
-                    return XRTrackedDeviceCapability::AimPose;
+                    return AimPose;
             }
             return std::nullopt;
         }
@@ -38,13 +38,13 @@ namespace Horo::XR::RuntimeInternal {
             if (sources.size() > 5)
                 return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
             for (std::size_t index = 0; index < sources.size(); ++index) {
+                using enum Horo::XR::XRPoseComponentValidity;
                 const auto &source = sources[index];
                 const auto &pose = source.pose;
-                const bool located = pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
-                                     pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
-                const bool velocity = pose.components.linearVelocityMetersPerSecond.validity != XRPoseComponentValidity::Invalid ||
-                                      pose.components.angularVelocityRadiansPerSecond.validity != XRPoseComponentValidity::Invalid;
-                if (!SourceCapability(source) || (!source.active && (located || velocity)) ||
+                const bool located = pose.components.positionMeters.validity != Invalid || pose.components.orientation.validity != Invalid;
+                if (const bool velocity = pose.components.linearVelocityMetersPerSecond.validity != Invalid ||
+                                          pose.components.angularVelocityRadiansPerSecond.validity != Invalid;
+                    !SourceCapability(source) || (!source.active && (located || velocity)) ||
                     (source.role == XRTrackedDeviceRole::Head && source.active != located) ||
                     std::ranges::any_of(sources.first(index), [&](const TrackingSourceEvidence &prior) {
                     return prior.role == source.role && prior.kind == source.kind;
@@ -68,6 +68,7 @@ namespace Horo::XR::RuntimeInternal {
         /** @brief Collects one role's normalized observation without mutating device generations or committed snapshots. */
         std::optional<DeviceUpdate> CollectDeviceUpdate(std::span<const TrackingSourceEvidence> sources, XRTrackedDeviceRole role,
                                                         const XRTrackedDeviceRecord *prior) {
+            using enum Horo::XR::XRTrackedDeviceState;
             auto capabilities = prior == nullptr ? XRTrackedDeviceCapabilities{} : prior->capabilities;
             bool observed = false;
             bool located = false;
@@ -81,9 +82,9 @@ namespace Horo::XR::RuntimeInternal {
             }
             if (!observed && prior == nullptr)
                 return std::nullopt;
-            auto state = located ? XRTrackedDeviceState::Tracked : XRTrackedDeviceState::TrackingLost;
-            if (!observed && prior != nullptr && prior->state == XRTrackedDeviceState::Disconnected)
-                state = XRTrackedDeviceState::Disconnected;
+            auto state = located ? Tracked : TrackingLost;
+            if (!observed && prior != nullptr && prior->state == Disconnected)
+                state = Disconnected;
             return DeviceUpdate{role, state, capabilities};
         }
     }  // namespace
@@ -166,7 +167,7 @@ namespace Horo::XR::RuntimeInternal {
         constexpr std::array roles{XRTrackedDeviceRole::Head, XRTrackedDeviceRole::LeftController, XRTrackedDeviceRole::RightController};
         for (const auto role : roles) {
             const auto prior = std::ranges::find(existing, role, &XRTrackedDeviceRecord::role);
-            const auto update = CollectDeviceUpdate(sources, role, prior == existing.end() ? nullptr : &*prior);
+            const auto update = CollectDeviceUpdate(sources, role, prior == existing.end() ? nullptr : std::to_address(prior));
             if (!update)
                 continue;
             if (prior == existing.end()) {
@@ -207,7 +208,7 @@ namespace Horo::XR::RuntimeInternal {
             auto sample = XRPoseSample::Create(evidence.pose, session_, origin_);
             if (sample.HasError())
                 return Result<void>::Failure(sample.ErrorValue());
-            poses_.push_back({evidence.device, evidence.kind, std::move(sample).Value()});
+            poses_.emplace_back(evidence.device, evidence.kind, std::move(sample).Value());
         }
         std::ranges::sort(poses_, {}, [](const XRTrackedPoseRecord &pose) {
             return std::pair{pose.device, pose.kind};
@@ -222,8 +223,8 @@ namespace Horo::XR::RuntimeInternal {
         current_.reset();
         if (auto admitted = lifecycle_->Admit(session_, request.focus == XRTrackingFocusState::Focused); admitted.HasError())
             return admitted;
-        const auto lifecycle = lifecycle_->Snapshot();
-        if ((request.focus == XRTrackingFocusState::Focused) != lifecycle.admitsActions || !request.time.runtimeSample.IsValid() ||
+        if (const auto lifecycle = lifecycle_->Snapshot();
+            (request.focus == XRTrackingFocusState::Focused) != lifecycle.admitsActions || !request.time.runtimeSample.IsValid() ||
             !request.time.simulation || !request.time.simulation->IsValid() || request.time.renderPrediction || request.origin != origin_ ||
             revision_ == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
@@ -259,9 +260,8 @@ namespace Horo::XR::RuntimeInternal {
     const XRTrackingSnapshot *XRTrackingPublication::Current() const noexcept {
         if (std::this_thread::get_id() != lane_ || !current_)
             return nullptr;
-        const auto snapshot = lifecycle_->Snapshot();
-        if (snapshot.session != session_ || !snapshot.admitsFrames ||
-            (current_->Focus() == XRTrackingFocusState::Focused && !snapshot.admitsActions))
+        if (const auto snapshot = lifecycle_->Snapshot(); snapshot.session != session_ || !snapshot.admitsFrames ||
+                                                          (current_->Focus() == XRTrackingFocusState::Focused && !snapshot.admitsActions))
             return nullptr;
         return &*current_;
     }

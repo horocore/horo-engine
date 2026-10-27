@@ -19,6 +19,8 @@ namespace Horo::Editor {
          * @return No host for ordinary desktop, a complete retained host, or the original trust/install/admission failure.
          * @details All three --xr-host-roots, --xr-host-catalog and --xr-host-catalog-signature paths are required together.
          * Roots are an independent explicit operator/installer approval, never inferred from the signed catalog/project.
+         * After trust admission, startup prepares only the existing canonical cache's native and xr-native children;
+         * files and redirects are rejected before the unchanged package lifecycle and native extraction gates.
          * The startup-only wait for existing package jobs is bounded to ten seconds; no native library is opened here.
          * @throws std::bad_alloc Cold startup allocation failure, after RAII cancels/joins any admitted package work.
          */

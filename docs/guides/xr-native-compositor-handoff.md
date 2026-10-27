@@ -409,3 +409,57 @@ zero-layer tail when no CPU mirror extraction was admitted. It creates no deskto
 frame scope, replacement camera or successful projection receipt in that path.
 The native pacing and acquisition calls are the same owners as the visible path;
 no second counter or presentation clock is introduced.
+
+
+### Application clock ownership
+
+The noninstalled `HoroOpenXRApplicationClock` target owns the single production
+`OpenXRInputClock.cpp` implementation and its staged private host header. It depends
+on the existing native-session host interface and Runtime scheduler contracts, and
+has no renderer selection or Vulkan device ownership. `HoroOpenXRApplicationHost`
+links this same library instead of compiling a second copy. XR-off compositions
+create neither target; headless XR tests may exercise the actual host-platform
+clock conversion without enabling a concrete renderer.
+
+The clock tests use official scripted conversion dispatch on the existing native
+owner and real scheduler callback evidence. Such tests prove lifecycle and time-domain
+behavior; they do not qualify a platform OpenXR runtime, Vulkan application linkage,
+or headset operation. After this ownership change, hosted application qualification
+must include the six remaining application TUs plus the same clock library and the
+real application consumer/editor link.
+
+
+### Borrowed native dispatch migration
+
+`NativeOpenXRDispatch` is the single noninstalled value for an official OpenXR
+resolver borrowed from the already retained loader/instance. It replaces the
+compositor-specific value at the existing native host boundary. Clock binding,
+event binding, presentation action preparation and graphics preparation consume
+this same value. Callers pass `{resolver}`; implementations retain the exact official
+PFN ABI and perform the same null/currentness checks. This migration adds no
+callable owner, heap allocation, native factory, session issuer or installed API.
+
+The affected application calls and native graphics/event/pose/clock fixtures migrate
+in the same batch. Existing native calling conventions and loader retention remain
+part of the regression obligations; a generic `std::function` is not substituted
+for an official foreign ABI function pointer.
+
+The noninstalled clock ownership graph is enforced in `HoroDependencyPolicy.cmake`,
+including the XR-disabled absence check. `HoroOpenXRApplicationClockConsumer` compiles
+only the staged clock header and its declared usage requirements; the clock tests
+build that consumer before exercising the same production clock library. This is
+compile-only boundary evidence, not an additional runtime test or native-device claim.
+
+### Const Input collection query migration
+
+`InputRouter::ActionCollection` is a const query because it reads the current
+routing, configuration and player assignment to return the same weak collection
+port. It retains the existing owner-thread and lifetime/context validation;
+querying does not register a source or change the cutoff ledger. Ordinary calls
+through mutable routers keep working. Code storing an exact pointer-to-member
+must use the const-qualified function type, and Input consumers must recompile.
+`InputCollectionPublicContract.cpp` checks use through a const router; the existing
+player-assignment collection regression now queries through a const reference
+before and after assignment, then exercises normal commit and stale-assignment
+rejection. `Append`, `Commit`, `Cancel` and mirror revocation retain their mutable
+cutoff/publication command contracts.

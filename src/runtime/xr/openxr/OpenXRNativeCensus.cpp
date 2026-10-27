@@ -128,8 +128,8 @@ namespace Horo::XR::OpenXRInternal {
             census.configurationCount = count.Value();
             if (!Unique(census.configurations, census.configurationCount))
                 return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Duplicate native view configuration"));
-            const auto configurations = std::span{census.configurations}.first(census.configurationCount);
-            if (std::ranges::find(configurations, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) == configurations.end())
+            if (const auto configurations = std::span{census.configurations}.first(census.configurationCount);
+                std::ranges::find(configurations, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) == configurations.end())
                 return Outcome::Success(census);  // Actual non-stereo discovery; the product must reject its unsupported profile.
             if (const auto primary = ReadPrimary(owner, census); primary.HasError())
                 return Outcome::Failure(primary.ErrorValue());

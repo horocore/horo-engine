@@ -1,6 +1,7 @@
 #include "OpenXRInputClock.h"
 
 #include <bit>
+#include <format>
 #include <limits>
 #include <string>
 #if defined(_WIN32)
@@ -30,10 +31,13 @@ namespace Horo::Application::Internal {
 #endif
         /** @brief Clears only the synchronous native-call reservation, including exception/reentry failure paths. */
         struct ReadScope final {
+            ReadScope(const ReadScope &) = delete;
+            ReadScope &operator=(const ReadScope &) = delete;
+
             bool &active;
 
             explicit ReadScope(bool &value) noexcept : active(value) {
-                active = true;
+                value = true;
             }
 
             ~ReadScope() {
@@ -70,11 +74,16 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRInputClock::Bind */
     Result<void> OpenXRInputClock::Bind(Runtime::RuntimeDispatchSource source, const Duration fixedStep,
-                                        PFN_xrGetInstanceProcAddr getProc) {
+                                        XR::OpenXRInternal::NativeOpenXRDispatch dispatch) {
         if (auto prepared = PrepareScheduler(std::move(source), fixedStep); prepared.HasError())
             return prepared;
 
         struct SchedulerRollback final {
+            SchedulerRollback(Runtime::RuntimeDispatchSource &owner, Duration &fixedStep) noexcept : source(owner), step(fixedStep) {}
+
+            SchedulerRollback(const SchedulerRollback &) = delete;
+            SchedulerRollback &operator=(const SchedulerRollback &) = delete;
+
             Runtime::RuntimeDispatchSource &source;
             Duration &step;
             bool committed{};
@@ -85,15 +94,18 @@ namespace Horo::Application::Internal {
                     step = {};
                 }
             }
-        } rollback{source_, fixedStep_};
+        };
 
-        auto bound = BindNative(getProc);
+        SchedulerRollback rollback{source_, fixedStep_};
+
+        auto bound = BindNative(dispatch);
         rollback.committed = bound.HasValue();
         return bound;
     }
 
     /** @copydoc OpenXRInputClock::BindNative */
-    Result<void> OpenXRInputClock::BindNative(PFN_xrGetInstanceProcAddr getProc) {
+    Result<void> OpenXRInputClock::BindNative(XR::OpenXRInternal::NativeOpenXRDispatch dispatch) {
+        const auto getProc = dispatch.getProc;
         const auto status = source_.BindingStatus();
         if (std::this_thread::get_id() != lane_ || reading_ || convert_ || !getProc || fixedStep_.ToNanoseconds() <= 0 ||
             (status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Reentrant))
@@ -106,11 +118,10 @@ namespace Horo::Application::Internal {
         if (!native_->HasExtension(ConversionExtension))
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
         PFN_xrVoidFunction converter{};
-        const auto result = getProc(native.Value().instance, ConversionFunction, &converter);
-        if (result != XR_SUCCESS || !converter)
+        if (const auto result = getProc(native.Value().instance, ConversionFunction, &converter); result != XR_SUCCESS || !converter)
             return Result<void>::Failure(
                 MakeError(XR::XRErrors::OperationUnavailable,
-                          std::string{ConversionFunction} + " unavailable (XrResult " + std::to_string(result) + ")"));
+                          std::format("{} unavailable (XrResult {})", ConversionFunction, static_cast<std::int32_t>(result))));
         auto fenced = native_->Borrow(selected);
         if (fenced.HasError())
             return Result<void>::Failure(fenced.ErrorValue());
@@ -139,19 +150,22 @@ namespace Horo::Application::Internal {
         using Outcome = Result<XR::XRRuntimeTime>;
         XrTime sample{};
 #if defined(_WIN32)
-        LARGE_INTEGER counter{};
-        if (!QueryPerformanceCounter(&counter))
-            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
-        const auto result = std::bit_cast<PFN_xrConvertWin32PerformanceCounterToTimeKHR>(convert_)(instance, &counter, &sample);
+        using NativeCounter = LARGE_INTEGER;
+        using NativeCounterConversion = PFN_xrConvertWin32PerformanceCounterToTimeKHR;
 #else
-        timespec counter{};
-        if (clock_gettime(CLOCK_MONOTONIC, &counter) != 0)
-            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
-        const auto result = std::bit_cast<PFN_xrConvertTimespecTimeToTimeKHR>(convert_)(instance, &counter, &sample);
+        using NativeCounter = timespec;
+        using NativeCounterConversion = PFN_xrConvertTimespecTimeToTimeKHR;
 #endif
-        if (result != XR_SUCCESS)
-            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable,
-                                              std::string{ConversionFunction} + " failed (XrResult " + std::to_string(result) + ")"));
+        NativeCounter counter{};
+#if defined(_WIN32)
+        if (!QueryPerformanceCounter(&counter))
+#else
+        if (clock_gettime(CLOCK_MONOTONIC, &counter) != 0)
+#endif
+            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        if (const auto result = std::bit_cast<NativeCounterConversion>(convert_)(instance, &counter, &sample); result != XR_SUCCESS)
+            return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable, std::format("{} failed (XrResult {})", ConversionFunction,
+                                                                                              static_cast<std::int32_t>(result))));
         return XR::XRRuntimeTime::Create(sample);
     }
 
@@ -167,7 +181,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         const auto quantum = fixedStep_.ToNanoseconds();
         if (quantum <= 0 || (facts.committedTick && facts.committedDuration != fixedStep_) ||
-            facts.committedTick > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() / quantum))
+            facts.committedTick > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)() / quantum))
             return Outcome::Failure(MakeError(XR::XRErrors::CapacityExceeded));
         auto native = Current();
         if (native.HasError())
@@ -177,10 +191,10 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(sample.ErrorValue());
         if (auto fence = Current(); fence.HasError())
             return Outcome::Failure(fence.ErrorValue());
-        Runtime::RuntimeDispatchFacts after;
-        if (context.dispatchEvidence.Read(source_, Runtime::RuntimePhase::BuildInputSnapshot, after) !=
-                Runtime::RuntimeDispatchStatus::Valid ||
-            after.frame != facts.frame || after.committedTick != facts.committedTick || after.committedAttempt != facts.committedAttempt)
+        if (Runtime::RuntimeDispatchFacts after; context.dispatchEvidence.Read(source_, Runtime::RuntimePhase::BuildInputSnapshot, after) !=
+                                                     Runtime::RuntimeDispatchStatus::Valid ||
+                                                 after.frame != facts.frame || after.committedTick != facts.committedTick ||
+                                                 after.committedAttempt != facts.committedAttempt)
             return Outcome::Failure(MakeError(XR::XRErrors::IdentityStale));
         auto simulation = XR::XRSimulationTime::Create(static_cast<std::int64_t>(facts.committedTick) * quantum);
         if (simulation.HasError())

@@ -15,6 +15,15 @@ namespace Horo::Render::Detail {
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderPipelineHandle pipeline);
         /** @brief Borrows an exact ready sampler for selected-backend integrations and native qualification only. */
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderSamplerHandle sampler);
+        /** @brief Queries native block storage through the selected backend on the cold preparation owner thread.
+         * @param frontend Selected frontend whose pipeline generation must remain ready.
+         * @param descriptor Pipeline and exact reflected logical layout; resource values are not required for this query.
+         * @param binding Uniform block whose native storage extent is required.
+         * @return Backend-owned padded extent, or an admission, stale identity or native layout error.
+         */
+        [[nodiscard]] static Result<std::size_t> MaterialParameterBufferBytes(const RenderFrontend &frontend,
+                                                                              const MaterialBindingDescriptor &descriptor,
+                                                                              ShaderBindingId binding);
         /** @brief Retains a buffer generation until one accepted queue completion. */
         [[nodiscard]] static Result<void> TrackSubmission(RenderFrontend &frontend, RenderBufferHandle buffer,
                                                           RenderTimelinePoint completion);

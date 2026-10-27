@@ -33,10 +33,12 @@ namespace Horo::Editor {
         [[nodiscard]] virtual Result<void> AttachInput(const Input::InputActionCollection &input,
                                                        const EditorXrSceneSourcePort &geometry) = 0;
         /** @brief Updates owned presentation values from the actual canonical Play Scene, without retaining its borrow.
-         * @param scene Exact active occurrence whose entities were captured by the Scene participant.
+         * @param scene Exact active occurrence whose entities were captured by the Scene participant; borrowed only for this call.
+         * @details Implementations and overrides take a const reference and copy presentation values into owned storage
+         * before returning. They must not retain the view or invoke a callback that can invalidate it during the update.
          * @return Original source/mapping/transform failure; no camera, native call or Input publication occurs.
          */
-        [[nodiscard]] virtual Result<void> UpdateScene(Runtime::RuntimeSceneView scene) = 0;
+        [[nodiscard]] virtual Result<void> UpdateScene(const Runtime::RuntimeSceneView &scene) = 0;
         /** @brief Observes the actual existing Play state without inventing another Play lifecycle.
          * @param state Exact canonical controller projection, including Paused/Stopping/Failed.
          * @return Original native/admission outcome; failure closes this adapter's Input producer before returning.

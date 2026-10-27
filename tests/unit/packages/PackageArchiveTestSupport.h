@@ -5,6 +5,7 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -59,6 +60,35 @@ namespace Horo::Tests::Packages {
 
         std::filesystem::path path_;
     };
+
+    /** @brief Returns the bounded central-directory position for one existing fixture entry. */
+    inline std::size_t CentralOffset(const std::vector<std::byte> &bytes, const mz_uint index) {
+        mz_zip_archive zip{};
+        REQUIRE(mz_zip_reader_init_mem(&zip, bytes.data(), bytes.size(), 0));
+        mz_zip_archive_file_stat stat{};
+        REQUIRE(mz_zip_reader_file_stat(&zip, index, &stat));
+        const auto offset = zip.m_central_directory_file_ofs + stat.m_central_dir_ofs;
+        REQUIRE(mz_zip_reader_end(&zip));
+        return static_cast<std::size_t>(offset);
+    }
+
+    /** @brief Writes one bounded little-endian central-directory field in a test archive. */
+    inline void Write32(std::vector<std::byte> &bytes, const std::size_t offset, const std::uint32_t value) {
+        for (unsigned index = 0; index < 4; ++index) {
+            bytes.at(offset + index) = static_cast<std::byte>((value >> (8 * index)) & 0xff);
+        }
+    }
+
+    /** @brief Sets only one exact entry's UNIX mode before archive verification and signing. */
+    inline void SetArchiveFileUnixMode(std::vector<std::byte> &bytes, const std::string &path, const std::uint16_t mode) {
+        mz_zip_archive zip{};
+        REQUIRE(mz_zip_reader_init_mem(&zip, bytes.data(), bytes.size(), 0));
+        const auto index = mz_zip_reader_locate_file(&zip, path.c_str(), nullptr, MZ_ZIP_FLAG_CASE_SENSITIVE);
+        REQUIRE(index >= 0);
+        REQUIRE(mz_zip_reader_end(&zip));
+        constexpr std::size_t externalAttributesOffset = 38;
+        Write32(bytes, CentralOffset(bytes, static_cast<mz_uint>(index)) + externalAttributesOffset, std::uint32_t{mode} << 16);
+    }
 
     inline std::vector<std::byte> FinalizeArchive(mz_zip_archive &zip);
 

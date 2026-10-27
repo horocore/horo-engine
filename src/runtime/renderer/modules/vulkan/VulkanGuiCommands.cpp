@@ -81,9 +81,9 @@ namespace Horo::Render::Detail {
     /** @copydoc VulkanGraphRuntime::Impl::ValidateGuiSubmission */
     Result<void> VulkanGraphRuntime::Impl::ValidateGuiSubmission(const GuiCompositionRequest &request,
                                                                  const VulkanGuiOutput &output) const {
-        auto *pins = lifecycle.pins;
-        if (request.frame != lifecycle.frame || !guiPrepared || guiRecorded || !request.submission || pins == nullptr ||
-            request.lease != pins->lease || !output.image || !output.view || !output.renderFinished || !output.extent.IsValid())
+        if (const auto *pins = lifecycle.pins; request.frame != lifecycle.frame || !guiPrepared || guiRecorded || !request.submission ||
+                                               pins == nullptr || request.lease != pins->lease || !output.image || !output.view ||
+                                               !output.renderFinished || !output.extent.IsValid())
             return Result<void>::Failure(Invalid("GUI encoding requires the exact admitted frame, lease and acquired WSI output."));
         const auto &admitted = *guiSubmission;
         const auto &submissionIdentity = *request.submission;

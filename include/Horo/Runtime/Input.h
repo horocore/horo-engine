@@ -694,9 +694,11 @@ namespace Horo::Input {
          * @param context Exact live context; registration cannot name another context.
          * @param assignedDevice Optional currently connected gamepad whose existing player assignment is copied, never changed.
          * @return Assignment-bound port or typed inactive/invalid failure. An empty device binds unfiltered host input.
-         * @post No XR/native dependency or alternate commit owner is introduced. */
+         * @pre Query on the router's owner thread; const access preserves the existing lifetime/context fences.
+         * @post Returns a weak port without registering a source, changing assignments or consuming input.
+         * No XR/native dependency or alternate commit owner is introduced. */
         [[nodiscard]] Result<InputActionCollection> ActionCollection(const InputContextToken &context,
-                                                                     std::optional<GamepadDeviceId> assignedDevice = std::nullopt);
+                                                                     std::optional<GamepadDeviceId> assignedDevice = std::nullopt) const;
         /** @brief Cancels any capture still held after its initiating button release was delivered to handlers. */
         void EndFrame() noexcept;
         /** @brief Registers a context until the returned move-only token is destroyed. */

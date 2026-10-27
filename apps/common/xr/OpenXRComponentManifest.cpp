@@ -71,7 +71,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Converts finite version and identity fields, rejecting overflow before constructing the manifest. */
-        Result<OpenXRComponentManifest> Decode(const Json &root, const Sha256Digest descriptorDigest) {
+        Result<OpenXRComponentManifest> Decode(const Json &root, const Sha256Digest &descriptorDigest) {
             const auto contract = Version(root.at("contractVersion"));
             const auto minimum = Version(root.at("loaderVersions").at("minimum"));
             const auto maximum = Version(root.at("loaderVersions").at("maximum"));

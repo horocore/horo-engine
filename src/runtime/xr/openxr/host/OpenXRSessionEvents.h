@@ -31,7 +31,7 @@ namespace Horo::XR::OpenXRInternal {
          * @return Success or original native/currentness/capacity failure; failed binding publishes no dispatch.
          * @pre Same control lane; no prior binding. The canonical lifecycle already published the exact session.
          */
-        [[nodiscard]] Result<void> Bind(PFN_xrGetInstanceProcAddr getProc, std::span<OpenXRSwapchain *const> swapchains);
+        [[nodiscard]] Result<void> Bind(NativeOpenXRDispatch dispatch, std::span<OpenXRSwapchain *const> swapchains);
         /** @brief Consumes bounded official events and progresses legal native session begin/exit/end.
          * @param wantsPlay Existing typed Play owner reduced only to whether it requests an active native session.
          * @return Observed notifications or original failure; no event is synthesized to make a session available.
@@ -48,10 +48,11 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> StateChanged(const XrEventDataSessionStateChanged &event);
         [[nodiscard]] Result<void> Progress(bool wantsPlay);
         /** @brief Applies one fenced native event through the same canonical lifecycle and accumulates value-only notices.
-         * @param buffer Actual native event. @param session Same current native session. @param observation Bounded poll result.
+         * @param buffer Actual native event. @param session Same current opaque native session, compared only; never dereferenced or passed
+         * to native dispatch. @param observation Bounded poll result.
          * @return Original lifecycle/event-loss error, retaining native cleanup debt.
          */
-        [[nodiscard]] Result<void> ProcessEvent(const XrEventDataBuffer &buffer, XrSession session,
+        [[nodiscard]] Result<void> ProcessEvent(const XrEventDataBuffer &buffer, const XrSession_T *session,
                                                 NativeSessionEventObservation &observation);
 
         [[nodiscard]] bool ImagesRetired() const noexcept;
@@ -62,7 +63,9 @@ namespace Horo::XR::OpenXRInternal {
             PFN_xrBeginSession begin{};
             PFN_xrEndSession end{};
             PFN_xrRequestExitSession requestExit{};
-        } dispatch_;
+        };
+
+        Dispatch dispatch_;
 
         OpenXRNativeSession *native_;
         XRSessionLifecycle *sessions_;

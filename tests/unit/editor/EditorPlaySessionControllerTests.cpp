@@ -136,7 +136,7 @@ namespace {
             published = false;
         }
 
-        Result<void> UpdateScene(Runtime::RuntimeSceneView) override {
+        Result<void> UpdateScene(const Runtime::RuntimeSceneView &) override {
             return Result<void>::Success();
         }
 
@@ -177,7 +177,8 @@ namespace {
 
             Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
                                                                                const Runtime::RuntimeSceneView &scene) override {
-                const auto candidate = scene;
+                // Preserve the original value snapshot before the source provider can reenter its caller.
+                const Runtime::RuntimeSceneView candidate = scene;
                 if (host_.failPreparation)
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
                         MakeError(Gameplay::GameplayErrors::GameplayPlayBlocked));

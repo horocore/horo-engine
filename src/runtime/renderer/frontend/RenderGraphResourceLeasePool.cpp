@@ -231,38 +231,38 @@ namespace Horo::Render::Detail {
         if (resources.size() > RenderGraphLimits::HardMaxResources) {
             return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
         }
-        for (auto &lease : leases_) {
-            if (lease.active) {
-                continue;
-            }
-            lease.active = true;
-            const auto rollback = [](Lease *pending) {
-                pending->Release();
-            };
-            std::unique_ptr<Lease, decltype(rollback)> transaction{&lease, rollback};
-            if (templateBinding) {
-                templateBinding->bound_ = false;
-                templateBinding->inFlight_ = true;
-                lease.templateBinding = std::move(templateBinding);
-            }
-            lease.transient = transient;
-            if (transient != nullptr)
-                transient->inFlight = true;
-            for (const auto &resource : resources) {
-                if (const auto pinned = lease.PinResource(resource, transient); pinned.HasError()) {
-                    return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
-                }
-            }
-            if (ui != nullptr) {
-                if (const auto captured = lease.ui.front().source.Capture(*ui, resources); captured.HasError()) {
-                    return Result<IRenderGraphResourceLease *>::Failure(captured.ErrorValue());
-                }
-                lease.uiCount = 1;
-            }
-            if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
-                return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
-            return Result<IRenderGraphResourceLease *>::Success(transaction.release());
+        const auto available = std::ranges::find_if(leases_, [](const Lease &candidate) {
+            return !candidate.active;
+        });
+        if (available == leases_.end())
+            return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        auto &lease = *available;
+        lease.active = true;
+        const auto rollback = [](Lease *pending) {
+            pending->Release();
+        };
+        std::unique_ptr<Lease, decltype(rollback)> transaction{&lease, rollback};
+        if (templateBinding) {
+            templateBinding->bound_ = false;
+            templateBinding->inFlight_ = true;
+            lease.templateBinding = std::move(templateBinding);
         }
-        return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        lease.transient = transient;
+        if (transient != nullptr)
+            transient->inFlight = true;
+        for (const auto &resource : resources) {
+            if (const auto pinned = lease.PinResource(resource, transient); pinned.HasError()) {
+                return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
+            }
+        }
+        if (ui != nullptr) {
+            if (const auto captured = lease.ui.front().source.Capture(*ui, resources); captured.HasError()) {
+                return Result<IRenderGraphResourceLease *>::Failure(captured.ErrorValue());
+            }
+            lease.uiCount = 1;
+        }
+        if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
+            return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
+        return Result<IRenderGraphResourceLease *>::Success(transaction.release());
     }
 }  // namespace Horo::Render::Detail

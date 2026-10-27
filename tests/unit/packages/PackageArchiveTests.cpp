@@ -44,20 +44,32 @@ namespace {
         return Horo::Tests::Packages::FinalizeArchive(zip);
     }
 
-    std::size_t CentralOffset(const std::vector<std::byte> &bytes, const mz_uint index) {
-        mz_zip_archive zip{};
-        REQUIRE(mz_zip_reader_init_mem(&zip, bytes.data(), bytes.size(), 0));
-        mz_zip_archive_file_stat stat{};
-        REQUIRE(mz_zip_reader_file_stat(&zip, index, &stat));
-        const auto offset = zip.m_central_directory_file_ofs + stat.m_central_dir_ofs;
-        REQUIRE(mz_zip_reader_end(&zip));
-        return static_cast<std::size_t>(offset);
-    }
+    using Horo::Tests::Packages::CentralOffset;
+    using Horo::Tests::Packages::Write32;
 
-    void Write32(std::vector<std::byte> &bytes, const std::size_t offset, const std::uint32_t value) {
-        for (unsigned index = 0; index < 4; ++index) {
-            bytes.at(offset + index) = static_cast<std::byte>((value >> (8 * index)) & 0xff);
-        }
+    TEST_CASE("Package executable inventory requires matching regular-file ZIP metadata", "[packages][archive][permissions]") {
+        auto files = Files();
+        const std::string nativePath{"native/loader.so"};
+        files.push_back({nativePath, "verified native artifact bytes"});
+        auto inventory = Inventory(files);
+        inventory["files"].back()["executable"] = true;
+        auto archive = Archive(files, inventory);
+        CHECK(ValidatedPackageArchive::Verify(archive).HasError());
+
+        Horo::Tests::Packages::SetArchiveFileUnixMode(archive, nativePath, 0100755);
+        const auto verified = ValidatedPackageArchive::Verify(archive);
+        REQUIRE(verified.HasValue());
+        CHECK(verified.Value().Digest() == Horo::ComputeSha256(archive));
+        const auto native = std::ranges::find_if(verified.Value().Manifest().Entries(), [&](const auto &entry) {
+            return entry.id.path.Value() == nativePath;
+        });
+        REQUIRE(native != verified.Value().Manifest().Entries().end());
+        CHECK(native->executable);
+
+        Horo::Tests::Packages::SetArchiveFileUnixMode(archive, nativePath, 0100644);
+        const auto mismatch = ValidatedPackageArchive::Verify(archive);
+        REQUIRE(mismatch.HasError());
+        CHECK(mismatch.ErrorValue().code.Value() == "packages.archive.inventory_mismatch");
     }
 
     TEST_CASE("Package archive verifies complete contents and retains an immutable snapshot", "[packages][archive]") {

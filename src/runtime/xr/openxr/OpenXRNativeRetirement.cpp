@@ -6,7 +6,7 @@ namespace Horo::XR::OpenXRInternal {
         class RetirementOperation final {
         public:
             explicit RetirementOperation(bool &active) noexcept : active_(active) {
-                active_ = true;
+                active = true;
             }
 
             ~RetirementOperation() {
@@ -68,20 +68,21 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::RetireSession */
     Result<void> OpenXRNativeSession::RetireSession() {
+        using enum Horo::XR::OpenXRInternal::OpenXRNativeSession::DiscoveryPhase;
         if (controlThread_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        if (retirementCall_ || !discovery_ || discovery_->phase == DiscoveryPhase::Retiring ||
-            discovery_->phase == DiscoveryPhase::Preparing || discovery_->phase == DiscoveryPhase::PreparingSession)
+        if (retirementCall_ || !discovery_ || discovery_->phase == Retiring || discovery_->phase == Preparing ||
+            discovery_->phase == PreparingSession)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const RetirementOperation operation{retirementCall_};
-        discovery_->phase = DiscoveryPhase::RetiringSession;
+        discovery_->phase = RetiringSession;
         owner_ = {};
         preparing_ = {};
         retainedPreflight_.reset();
         retainedPlan_.reset();
         if (auto retired = DestroySession(); retired.HasError())
             return retired;
-        discovery_->phase = DiscoveryPhase::Prepared;
+        discovery_->phase = Prepared;
         return Result<void>::Success();
     }
 }  // namespace Horo::XR::OpenXRInternal

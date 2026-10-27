@@ -1,5 +1,4 @@
 #pragma once
-
 #include "RenderMemoryTestSupport.h"
 #include "runtime/renderer/modules/vulkan/VulkanResourceRuntime.h"
 
@@ -7,8 +6,10 @@
 #include <array>
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
+#include <map>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace Horo::Render::VulkanResourceTest {
     template <typename Handle> [[nodiscard]] Handle NativeHandle(const std::uintptr_t value) noexcept {
@@ -27,6 +28,9 @@ namespace Horo::Render::VulkanResourceTest {
         VkMemoryRequirements bufferRequirements{.size = 64, .alignment = 16, .memoryTypeBits = 1};
         VkMemoryRequirements imageRequirements{.size = 256, .alignment = 16, .memoryTypeBits = 1};
         std::array<std::byte, 4096> mapped{};
+        bool sizedAllocations{}; /**< Opt-in full viewport fixture: retain exact native allocation byte bounds. */
+        std::map<VkBuffer, VkDeviceSize> bufferSizes;
+        std::map<VkDeviceMemory, std::vector<std::byte>> allocations;
         int createBufferCount{0};
         int destroyBufferCount{0};
         int createImageCount{0};
@@ -59,21 +63,29 @@ namespace Horo::Render::VulkanResourceTest {
         NativeResourceState state;
     };
 
-    inline VKAPI_ATTR VkResult VKAPI_CALL FakeCreateBuffer(VkDevice, const VkBufferCreateInfo *, const VkAllocationCallbacks *,
+    inline VKAPI_ATTR VkResult VKAPI_CALL FakeCreateBuffer(VkDevice, const VkBufferCreateInfo *info, const VkAllocationCallbacks *,
                                                            VkBuffer *buffer) {
         ++nativeResources->createBufferCount;
         if (nativeResources->createBufferResult != VK_SUCCESS)
             return nativeResources->createBufferResult;
         *buffer = NativeHandle<VkBuffer>(10 + nativeResources->createBufferCount);
+        if (nativeResources->sizedAllocations)
+            nativeResources->bufferSizes.emplace(*buffer, info->size);
         return VK_SUCCESS;
     }
 
-    inline VKAPI_ATTR void VKAPI_CALL FakeDestroyBuffer(VkDevice, VkBuffer, const VkAllocationCallbacks *) {
+    inline VKAPI_ATTR void VKAPI_CALL FakeDestroyBuffer(VkDevice, VkBuffer buffer, const VkAllocationCallbacks *) {
         ++nativeResources->destroyBufferCount;
+        nativeResources->bufferSizes.erase(buffer);
     }
 
-    inline VKAPI_ATTR void VKAPI_CALL FakeGetBufferMemoryRequirements(VkDevice, VkBuffer, VkMemoryRequirements *requirements) {
+    inline VKAPI_ATTR void VKAPI_CALL FakeGetBufferMemoryRequirements(VkDevice, VkBuffer buffer, VkMemoryRequirements *requirements) {
         *requirements = nativeResources->bufferRequirements;
+        if (nativeResources->sizedAllocations) {
+            const auto bytes = nativeResources->bufferSizes.at(buffer);
+            requirements->size =
+                std::max(requirements->size, (bytes + requirements->alignment - 1) / requirements->alignment * requirements->alignment);
+        }
     }
 
     inline VKAPI_ATTR VkResult VKAPI_CALL FakeCreateImage(VkDevice, const VkImageCreateInfo *, const VkAllocationCallbacks *,
@@ -93,17 +105,20 @@ namespace Horo::Render::VulkanResourceTest {
         *requirements = nativeResources->imageRequirements;
     }
 
-    inline VKAPI_ATTR VkResult VKAPI_CALL FakeAllocateMemory(VkDevice, const VkMemoryAllocateInfo *, const VkAllocationCallbacks *,
+    inline VKAPI_ATTR VkResult VKAPI_CALL FakeAllocateMemory(VkDevice, const VkMemoryAllocateInfo *info, const VkAllocationCallbacks *,
                                                              VkDeviceMemory *memory) {
         ++nativeResources->allocateCount;
         if (nativeResources->allocateResult != VK_SUCCESS)
             return nativeResources->allocateResult;
-        *memory = NativeHandle<VkDeviceMemory>(13);
+        *memory = NativeHandle<VkDeviceMemory>(nativeResources->sizedAllocations ? 1000 + nativeResources->allocateCount : 13);
+        if (nativeResources->sizedAllocations)
+            nativeResources->allocations.emplace(*memory, std::vector<std::byte>(info->allocationSize));
         return VK_SUCCESS;
     }
 
-    inline VKAPI_ATTR void VKAPI_CALL FakeFreeMemory(VkDevice, VkDeviceMemory, const VkAllocationCallbacks *) {
+    inline VKAPI_ATTR void VKAPI_CALL FakeFreeMemory(VkDevice, VkDeviceMemory memory, const VkAllocationCallbacks *) {
         ++nativeResources->freeCount;
+        nativeResources->allocations.erase(memory);
     }
 
     inline VKAPI_ATTR VkResult VKAPI_CALL FakeBindBufferMemory(VkDevice, VkBuffer, VkDeviceMemory, VkDeviceSize) {
@@ -114,11 +129,18 @@ namespace Horo::Render::VulkanResourceTest {
         return nativeResources->bindImageResult;
     }
 
-    inline VKAPI_ATTR VkResult VKAPI_CALL FakeMapMemory(VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkMemoryMapFlags,
-                                                        void **data) {
+    inline VKAPI_ATTR VkResult VKAPI_CALL FakeMapMemory(VkDevice, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize size,
+                                                        VkMemoryMapFlags, void **data) {
         if (nativeResources->mapResult != VK_SUCCESS)
             return nativeResources->mapResult;
-        *data = nativeResources->mapped.data();
+        if (nativeResources->sizedAllocations) {
+            auto &bytes = nativeResources->allocations.at(memory);
+            REQUIRE(offset <= bytes.size());
+            REQUIRE((size == VK_WHOLE_SIZE || size <= bytes.size() - offset));
+            *data = bytes.data() + offset;
+        } else {
+            *data = nativeResources->mapped.data();
+        }
         return VK_SUCCESS;
     }
 

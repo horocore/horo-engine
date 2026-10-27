@@ -11,11 +11,6 @@
 #include <thread>
 
 namespace Horo::XR::OpenXRInternal {
-    /** @brief Borrowed official loader dispatch; its session/loader owner must outlive the bound compositor. */
-    struct NativeCompositorDispatch final {
-        PFN_xrGetInstanceProcAddr getProc{}; /**< Official ABI resolver; null is rejected before binding any state. */
-    };
-
     /** @brief Host-owned exact reference-space borrow; native lifetime remains with the selected space owner. */
     class IOpenXRCompositionSpace {
     public:
@@ -94,7 +89,7 @@ namespace Horo::XR::OpenXRInternal {
          * @param dispatch Official loader dispatch retained by session. @param pacing Finite supported queue policy.
          * @param colorSpace Explicit runtime compositor primaries, requiring XR_FB_color_space for non-default.
          * @return Success or typed unsupported/invalid/native failure without publishing a partial adapter. */
-        [[nodiscard]] Result<void> Bind(NativeCompositorDispatch dispatch, const NativeFramePacingPolicy &pacing,
+        [[nodiscard]] Result<void> Bind(NativeOpenXRDispatch dispatch, const NativeFramePacingPolicy &pacing,
                                         NativeCompositorColorSpace colorSpace = NativeCompositorColorSpace::RuntimeDefault);
         /** @brief Reserves before native wait and preserves every successful native wait obligation.
          * @return Frame status plus exact debt identity, or native wait failure after cancelling only its reservation. */

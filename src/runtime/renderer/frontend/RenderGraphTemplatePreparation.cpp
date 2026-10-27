@@ -22,7 +22,7 @@ namespace Horo::Render::Detail {
             return Outcome::Failure(MakeError(RenderGraphErrors::CapacityExceeded));
         // A typed private declaration, never a forged public resident identity or a generic validation bypass.
         const RenderGraphResourceId resource{builder.owner_, static_cast<std::uint32_t>(builder.resources_.size() + 1)};
-        builder.resources_.push_back({resource, RenderGraphResourceKind::Texture, RenderGraphResourceClass::External, std::monostate{}});
+        builder.resources_.emplace_back(resource, RenderGraphResourceKind::Texture, RenderGraphResourceClass::External, std::monostate{});
         builder.exportedResources_.push_back(0);
         return Outcome::Success({resource, descriptor, acquired, requiredFinal, deviceIncarnation});
     }
@@ -65,10 +65,9 @@ namespace Horo::Render::Detail {
                  read.role != RenderGraphUsageKind::UniformBuffer))
                 return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
             const auto index = read.resource.value - 1;
-            const auto &resource = graph.Resources()[index];
-            if (selected[index] || resource.kind != RenderGraphResourceKind::Buffer ||
-                resource.resourceClass != RenderGraphResourceClass::Persistent ||
-                !std::holds_alternative<RenderBufferHandle>(resource.binding))
+            if (const auto &resource = graph.Resources()[index]; selected[index] || resource.kind != RenderGraphResourceKind::Buffer ||
+                                                                 resource.resourceClass != RenderGraphResourceClass::Persistent ||
+                                                                 !std::holds_alternative<RenderBufferHandle>(resource.binding))
                 return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
             selected[index] = 1;
             if (std::ranges::count_if(graph.Usages(),
@@ -115,8 +114,8 @@ namespace Horo::Render::Detail {
             std::vector<RenderGraphImportedState> imports{residentStates.begin(), residentStates.end()};
             std::vector<RenderGraphFinalState> finals;
             for (const auto &slot : slots) {
-                imports.push_back({slot.resource, slot.acquired, RenderGraphInitialContents::Preserved});
-                finals.push_back({slot.resource, slot.requiredFinal});
+                imports.emplace_back(slot.resource, slot.acquired, RenderGraphInitialContents::Preserved);
+                finals.emplace_back(slot.resource, slot.requiredFinal);
             }
             auto schedule = CompileRenderGraph(graph);
             if (schedule.HasError())
