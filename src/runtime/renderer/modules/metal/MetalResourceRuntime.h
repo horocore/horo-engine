@@ -19,7 +19,14 @@ namespace Horo::Render::Detail {
         MetalResourceRuntime(const MetalResourceRuntime &) = delete;
         MetalResourceRuntime &operator=(const MetalResourceRuntime &) = delete;
 
-        void Initialize(void *device, void *commandQueue) noexcept;
+        void Initialize(void *device, void *commandQueue, std::uint64_t deviceIncarnation = 0) noexcept;
+        /** @brief Publishes one exact mapped VFX uniform generation after its canonical native uses retire. */
+        [[nodiscard]] Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update);
+        /** @brief Validates exact native material, geometry, target and accepted VFX slot publication. */
+        [[nodiscard]] Result<void> ValidateVfxWorkload(const RenderGraphVfx &workload, const RenderGraphExecutionRequest &request) const;
+        /** @brief Encodes admitted indexed instancing on the existing retained command buffer. */
+        [[nodiscard]] Result<void> ExecuteVfxWorkload(void *commands, const RenderGraphVfx &workload,
+                                                      const RenderGraphExecutionRequest &request);
         /** @brief Mutates only a complete reusable native frame slot; pending native references reject before writes. */
         [[nodiscard]] Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update);
         /** @brief Loads an exact cooked Metal library and validates the fixed culling compute ABI before native publication. */

@@ -1119,6 +1119,9 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/MultiviewShaderParameters.h
     Horo/Runtime/Render/MultiviewExtractionErrors.h
 Horo/Runtime/Render/RenderWorldSnapshot.h
+Horo/Runtime/Render/VfxDrawData.h
+    Horo/Runtime/Render/VfxShaderParameters.h
+    Horo/Runtime/Render/VfxFrameUpload.h
 Horo/Runtime/Render/VfxGraphWorkload.h
 Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/LightCulling.h

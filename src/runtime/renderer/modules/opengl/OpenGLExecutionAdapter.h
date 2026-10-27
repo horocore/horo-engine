@@ -35,6 +35,12 @@ namespace Horo::Render::Detail {
          * @return Free slot or typed backpressure/synchronization failure.
          */
         [[nodiscard]] Result<std::size_t> AdmitFrameSlot(std::size_t slotCount);
+        /** @brief Polls the existing completion authority for every recorded buffer use without waiting.
+         * @param slots Bit mask of the eight existing frame slots that consumed this buffer.
+         * @return True only after all referenced native fences and transferred leases retire; false means retry.
+         * @pre No active frame is recording; the owning backend context is current.
+         */
+        [[nodiscard]] Result<bool> AreFrameSlotsRetired(std::uint8_t slots);
         /** @brief Fences all preceding context work and nonblockingly flushes it.
          * @param slot Slot reserved by AdmitFrameSlot for the active frame.
          * @return False if fence creation fails; failure remains sticky until Reset.

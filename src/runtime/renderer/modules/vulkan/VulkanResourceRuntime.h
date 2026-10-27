@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "VulkanCommandRuntime.h"
 #include "VulkanExternalImages.h"
 #include "VulkanShaderRuntime.h"
@@ -67,6 +68,14 @@ namespace Horo::Render::Detail {
     struct VulkanGuiBuffer {
         VulkanGraphResource resource;
         VkDeviceMemory memory{};
+    };
+
+    /** @brief Borrowed publication facts from the canonical native buffer generation, independent of graph state copies. */
+    struct VulkanVfxPublication {
+        VkBuffer buffer{};
+        std::uint64_t revision{};
+        std::uint32_t instances{};
+        bool published{};
     };
 
     class VulkanMaterialCapture;
@@ -152,6 +161,13 @@ namespace Horo::Render::Detail {
          * @pre Caller admits the exact active canonical frame and verifies BufferCompletion before writing.
          * No index/storage usage, allocation, submission or completion authority is introduced. */
         [[nodiscard]] Result<void> WriteHostFrameBuffer(std::uint64_t instance, std::span<const std::byte> bytes);
+        /** @brief Publishes one exact prepared VFX block after the command owner proves all prior buffer uses retired. */
+        [[nodiscard]] Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update, const bool &closing);
+        /** @brief Reads accepted publication from the exact live native buffer generation without allocation. */
+        [[nodiscard]] Result<VulkanVfxPublication> VfxPublication(std::uint64_t instance) const;
+        /** @brief Checks a borrowed VFX material against the existing shader owner's live pipeline and reflected schema. */
+        [[nodiscard]] Result<void> ValidateVfxMaterial(const VulkanPreparedMaterialBinding &material,
+                                                       const MaterialBindingLayout &layout) const;
         /** @brief Captures/pins an exact whole color sample, optional sampler and declared base-level staging source.
          * @param source Frontend-resolved identities. @param retention Existing bounded frame pins.
          * @return Validated same-device native sample, before any encoding. */

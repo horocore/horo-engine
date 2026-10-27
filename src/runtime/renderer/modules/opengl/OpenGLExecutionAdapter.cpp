@@ -117,6 +117,21 @@ namespace Horo::Render::Detail {
         return Result<std::size_t>::Success(*available);
     }
 
+    /** @copydoc OpenGLExecutionAdapter::AreFrameSlotsRetired */
+    Result<bool> OpenGLExecutionAdapter::AreFrameSlotsRetired(const std::uint8_t slots) {
+        if (synchronizationFailed_)
+            return SynchronizationFailure<bool>();
+        bool retired = true;
+        for (std::size_t slot = 0; slot < frameFences_.size(); ++slot) {
+            if ((slots & (1U << slot)) == 0)
+                continue;
+            if (!PollFrameSlot(slot))
+                return SynchronizationFailure<bool>();
+            retired = retired && frameFences_[slot] == 0 && frameLeases_[slot] == nullptr;
+        }
+        return Result<bool>::Success(retired);
+    }
+
     /** @copydoc OpenGLExecutionAdapter::FenceFrame */
     bool OpenGLExecutionAdapter::FenceFrame(const std::size_t slot) noexcept {
         const std::uintptr_t replacement = functions_.sync.fence();

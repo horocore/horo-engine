@@ -17,3 +17,4 @@ static_assert(std::is_same_v<decltype(Horo::Application::ShaderBuildRequest{}.op
 
 static_assert(std::is_same_v<decltype(Horo::Render::ShaderCompilerAdapterOutput{}.reflection),
                              std::shared_ptr<const Horo::Render::ReflectedShaderArtifact>>);
+static_assert(Horo::Render::ShaderIntermediateEnvironment::Vulkan12SpirV15 != Horo::Render::ShaderIntermediateEnvironment::Vulkan13SpirV16);

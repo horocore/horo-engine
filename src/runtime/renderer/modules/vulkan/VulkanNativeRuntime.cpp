@@ -462,6 +462,10 @@ namespace Horo::Render {
                 return graph_.ExecuteMaterialPass(request);
             }
 
+            Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update) override {
+                return graph_.UpdateVfxFrame(update);
+            }
+
 #include "VulkanNativeEditorDelegation.inl"
 
             Result<void> SubmitFrame(const FrameToken frame) override {

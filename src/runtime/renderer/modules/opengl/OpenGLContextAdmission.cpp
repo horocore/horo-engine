@@ -51,6 +51,7 @@ namespace Horo::Render::Detail {
                  {OffscreenTargets, BufferResources, MeshResources, TextureResources, RenderTargetResources})
                 snapshot.features.Enable(capability);
             snapshot.formats.usages[static_cast<std::size_t>(Rgba8Unorm)] = Sampled | RenderAttachment;
+            snapshot.formats.usages[static_cast<std::size_t>(Rgba16Float)] = Sampled | RenderAttachment;
             snapshot.formats.usages[static_cast<std::size_t>(Depth24Stencil8)] = RenderAttachment;
             snapshot.formats.usages[static_cast<std::size_t>(Depth32Float)] = Sampled | RenderAttachment;
             snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;

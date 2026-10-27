@@ -1,11 +1,16 @@
+#include "../../unit/runtime/renderer/RenderGraphTestUtils.h"
 #include "OpenGLBackendModule.h"
 #include "OpenGLMaterialExecution.h"
 #include "OpenGLMaterialFixture.h"
+#include "OpenGLMaterialSmokeHost.h"
 #include "OpenGLRenderBackendErrors.h"
 #include "OpenGLSwapIntervalAdmission.h"
 #include "RenderFrontendResourceAccess.h"
+#include "renderer/RenderBackendDrainTestSupport.h"
 
 #include <SDL3/SDL.h>
+#include <cmath>
+#include <exception>
 #include <glad/gl.h>
 #include <iostream>
 #include <memory>
@@ -178,9 +183,9 @@ namespace Horo::Render::OpenGLMaterialSmoke {
             GLint64 range = 0;
             glGetInteger64i_v(GL_UNIFORM_BUFFER_SIZE, 0, &range);
             CHECK(range == 32);
-            glGetIntegeri_v(GL_SAMPLER_BINDING, 1, &value);
-            CHECK(value == static_cast<GLint>(sampler));
             glActiveTexture(GL_TEXTURE1);
+            glGetIntegerv(GL_SAMPLER_BINDING, &value);
+            CHECK(value == static_cast<GLint>(sampler));
             glGetIntegerv(GL_TEXTURE_BINDING_2D, &value);
             CHECK(value == static_cast<GLint>(texture));
             glActiveTexture(GL_TEXTURE3);
@@ -288,12 +293,6 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         REQUIRE(glGetError() == GL_NO_ERROR);
     }
 
-    /** @brief Separates software contract coverage from actual hardware qualification. */
-    enum class MaterialEvidence {
-        HardwareQualification,
-        SoftwareCapableCoverage
-    };
-
     /** @brief Creates the actual Core context; hardware evidence additionally rejects software identities. */
     std::unique_ptr<RenderFrontend> PrepareFrontend(Port &port, const MaterialEvidence evidence) {
         RenderBackendRegistry registry;
@@ -321,8 +320,8 @@ namespace Horo::Render::OpenGLMaterialSmoke {
 
     void VerifyDrawAndRetirement(RenderFrontend &frontend);
 
-    /** @brief Runs the identical pixel, hostile state and deferred-retirement contract in both evidence lanes. */
-    void VerifyMaterialContract(const MaterialEvidence evidence) {
+    /** @copydoc WithNativeFrontend */
+    void WithNativeFrontend(const MaterialEvidence evidence, void (*verify)(RenderFrontend &)) {
         REQUIRE(SDL_Init(SDL_INIT_VIDEO));
         const auto quit = [](const int *) noexcept {
             SDL_Quit();
@@ -339,8 +338,82 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         REQUIRE(window);
         Port port{*window};
         auto frontend = PrepareFrontend(port, evidence);
-        VerifyDrawAndRetirement(*frontend);
+        std::exception_ptr failure;
+        try {
+            verify(*frontend);
+        } catch (...) {
+            // Preserve foreign test/assertion exceptions while the real context and owner remain alive for teardown.
+            failure = std::current_exception();
+        }
+        glFinish();  // Bounded native-test teardown only; never added to the production frame path.
+        Test::RequireDrainedOwner(*frontend);
         frontend.reset();
+        if (failure)
+            std::rethrow_exception(failure);
+    }
+
+    /** @brief Reads the actual depth/stencil result and verifies restored depth/scissor state without ending the active frame. */
+    void CheckDepthGraphOutput(const GLuint nativeTarget, const GLint readFramebuffer) {
+        GLboolean mask{};
+        GLdouble clear{};
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &mask);
+        glGetDoublev(GL_DEPTH_CLEAR_VALUE, &clear);
+        CHECK(mask == GL_FALSE);
+        CHECK(clear == 0.625);
+        CHECK(glIsEnabledi(GL_SCISSOR_TEST, 0) == GL_TRUE);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, nativeTarget);
+        GLfloat depth{};
+        GLuint stencil{};
+        glReadPixels(32, 16, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+        glReadPixels(32, 16, 1, 1, GL_STENCIL_INDEX, GL_UNSIGNED_INT, &stencil);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(readFramebuffer));
+        CHECK(std::abs(depth - 0.375F) < 0.00001F);
+        CHECK(stencil == 7);
+    }
+
+    /** @brief Verifies actual depth-only graph pixels and preserved stencil/mask/clear state; readback is test-only. */
+    void VerifyDepthGraph(RenderFrontend &frontend, const OpenGLMaterialTests::TargetFixture &target) {
+        auto builder = Test::RequireBuilder();
+        const auto texture = Test::RequireResource(builder.ImportTexture(target.depth.texture, RenderGraphResourceClass::Persistent));
+        const auto pass = Test::RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        Test::RequireUsage(builder, {pass, texture, RenderGraphAccess::Write, RenderGraphUsageKind::DepthStencilAttachment});
+        const auto graph = Test::RequireGraph(builder);
+        const auto schedule = Test::RequireSchedule(graph);
+        const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+        const std::array initial{RenderGraphImportedState{texture,
+                                                          {.access = RenderGraphSynchronizationAccess::ReadWrite,
+                                                           .operation = RenderGraphSynchronizationOperation::DepthStencilAttachment,
+                                                           .scope = RenderGraphPipelineScope::Graphics,
+                                                           .layout = RenderGraphTextureLayout::DepthStencilAttachment,
+                                                           .queue = {1}}}};
+        const auto sync = SynthesizeRenderGraphSynchronization(graph, schedule, queues, initial);
+        REQUIRE(sync.HasValue());
+        const auto execution = CompileRenderGraphExecution(graph, schedule, sync.Value(), queues);
+        REQUIRE(execution.HasValue());
+        const std::array workloads{RenderGraphPassWorkload{pass, RenderGraphDepthAttachment{texture, 0.375F}}};
+        const auto nativeTarget = Detail::RenderFrontendResourceAccess::BackendInstance(frontend, target.target);
+        REQUIRE(nativeTarget.HasValue());
+        GLint framebuffer{}, readFramebuffer{};
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+        const GLboolean scissor = glIsEnabledi(GL_SCISSOR_TEST, 0);
+        glDisablei(GL_SCISSOR_TEST, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(nativeTarget.Value()));
+        constexpr GLint marker = 7;
+        glClearBufferiv(GL_STENCIL, 0, &marker);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(framebuffer));
+        glDepthMask(GL_FALSE);
+        glClearDepth(0.625);
+        glEnablei(GL_SCISSOR_TEST, 0);
+        auto begun = frontend.BeginFrame({.frameNumber = 3, .outputExtent = {64, 32}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        REQUIRE(frame.ExecuteGraph(execution.Value(), workloads).HasValue());
+        CheckDepthGraphOutput(static_cast<GLuint>(nativeTarget.Value()), readFramebuffer);
+        REQUIRE(frame.Present().HasValue());
+        if (!scissor)
+            glDisablei(GL_SCISSOR_TEST, 0);
+        REQUIRE(glGetError() == GL_NO_ERROR);
     }
 
     /** @brief Verifies exact drawing and completion-owned retirement against one admitted real frontend. */
@@ -352,7 +425,11 @@ namespace Horo::Render::OpenGLMaterialSmoke {
             REQUIRE(begun.HasValue());
             auto frame = std::move(begun).Value();
             std::array draws{RenderMaterialDraw{draw.mesh, draw.material}};
-            REQUIRE(frame.ExecuteMaterialPass({draw.target.target, {64, 32}, {}, 1.0F, draws}).HasValue());
+            const auto executed = frame.ExecuteMaterialPass({draw.target.target, {64, 32}, {}, 1.0F, draws});
+            if (executed.HasError())
+                std::cerr << "Native material failure " << executed.ErrorValue().domain.Value() << '/' << executed.ErrorValue().code.Value()
+                          << ": " << executed.ErrorValue().message << '\n';
+            REQUIRE(executed.HasValue());
             caller.Check();
             // Readback is explicitly test-only and may synchronize; the normal consumer never waits for native completion.
             CheckPixels(static_cast<GLuint>(draw.targetObject));
@@ -378,16 +455,17 @@ namespace Horo::Render::OpenGLMaterialSmoke {
         draw.table.reset();
         REQUIRE(frontend.ReleaseShaderModule(draw.pipeline.vertex).HasValue());
         REQUIRE(frontend.ReleaseShaderModule(draw.pipeline.fragment).HasValue());
+        VerifyDepthGraph(frontend, draw.target);
         REQUIRE(glGetError() == GL_NO_ERROR);
     }
 
     TEST_CASE("Prepared native OpenGL material renders exact pixels and restores caller state",
               "[gpu][display][opengl][material][hardware-qualification]") {
-        VerifyMaterialContract(MaterialEvidence::HardwareQualification);
+        WithNativeFrontend(MaterialEvidence::HardwareQualification, VerifyDrawAndRetirement);
     }
 
     TEST_CASE("Software-capable OpenGL material coverage verifies exact pixels and restores caller state",
               "[display][opengl][material][software-coverage]") {
-        VerifyMaterialContract(MaterialEvidence::SoftwareCapableCoverage);
+        WithNativeFrontend(MaterialEvidence::SoftwareCapableCoverage, VerifyDrawAndRetirement);
     }
 }  // namespace Horo::Render::OpenGLMaterialSmoke

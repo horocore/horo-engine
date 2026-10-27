@@ -348,6 +348,7 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::~RenderFrontend */
     RenderFrontend::~RenderFrontend() {
+        vfxFrontendState_.reset();
         uiPaintFrontendState_.reset();
         try {
             const auto begun = BeginShutdown();
@@ -392,6 +393,7 @@ namespace Horo::Render {
         if (drained_)
             return Result<void>::Success();
         closing_ = true;
+        vfxFrontendState_.reset();
         static_cast<void>(inspectionFeed_.Shutdown());
         if (activeFrameScope_ != nullptr) {
             activeFrameScope_->Abort();

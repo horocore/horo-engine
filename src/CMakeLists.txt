@@ -2494,6 +2494,10 @@ target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
 target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
 add_library(HoroRenderApi STATIC
+        runtime/renderer/api/VfxDrawData.cpp
+        runtime/renderer/api/VfxShaderParameters.cpp
+        runtime/renderer/api/VfxFrameUpload.cpp
+        runtime/renderer/api/VfxGraphValidation.cpp
         runtime/renderer/api/MultiviewSceneExtraction.cpp
         runtime/renderer/api/MultiviewGraphWorkload.cpp
         runtime/renderer/api/MultiviewShaderParameters.cpp
@@ -2581,7 +2585,8 @@ target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation PRIVATE HoroFo
 # Portable normalization of actual tool evidence; runtime value/identity consumers remain in RenderApi.
 add_library(HoroShaderReflectionCookInternal STATIC
     runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp
-    runtime/renderer/shader_cook/UiPaintMetalReflectionNormalization.cpp)
+    runtime/renderer/shader_cook/UiPaintMetalReflectionNormalization.cpp
+    runtime/renderer/shader_cook/VfxMetalReflectionNormalization.cpp)
 target_compile_features(HoroShaderReflectionCookInternal PUBLIC cxx_std_20)
 target_include_directories(HoroShaderReflectionCookInternal PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shader_cook/include>")
@@ -2663,7 +2668,10 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderGraphTemplateBinding.cpp
         runtime/renderer/frontend/RenderSubmissionAllocator.cpp
         runtime/renderer/frontend/RenderFrontendVfx.cpp
+        runtime/renderer/frontend/RenderFrontendVfxDraws.cpp
+        runtime/renderer/frontend/RenderFrontendVfxResources.cpp
         runtime/renderer/frontend/LightCullingPreparation.cpp
+        runtime/renderer/frontend/VfxPreparation.cpp
         runtime/renderer/frontend/LightFrameBufferPool.cpp
         runtime/renderer/frontend/UiPaintFrameBufferPool.cpp
         runtime/renderer/frontend/UiPaintProgram.cpp
@@ -2805,6 +2813,7 @@ if (HORO_BUILD_RENDER_OPENGL)
             runtime/renderer/modules/opengl/OpenGLExecutionState.cpp
         runtime/renderer/modules/opengl/OpenGLExecutionAdapter.cpp
         runtime/renderer/modules/opengl/OpenGLGraphWorkloads.cpp
+        runtime/renderer/modules/opengl/OpenGLVfxGraphWorkloads.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackend.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendErrors.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendResources.inl
@@ -2847,6 +2856,8 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalLightCullingKernel.mm
             runtime/renderer/modules/metal/MetalUiPaintKernel.mm
             runtime/renderer/modules/metal/MetalUiPaintUpload.mm
+            runtime/renderer/modules/metal/MetalVfxFrameUpload.mm
+            runtime/renderer/modules/metal/MetalVfxGraph.mm
             runtime/renderer/modules/metal/MetalUiPaintCommands.mm
             runtime/renderer/modules/metal/MetalLightFrameUpload.mm
             runtime/renderer/modules/metal/MetalRuntime.mm
@@ -2945,6 +2956,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
             runtime/renderer/modules/vulkan/VulkanMaterialCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxCommands.cpp
             runtime/renderer/modules/vulkan/VulkanMultiviewEncoding.cpp
             runtime/renderer/modules/vulkan/VulkanMultiviewPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphBarriers.cpp

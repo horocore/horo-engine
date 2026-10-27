@@ -33,6 +33,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] std::size_t UiRetentionStorageBytes() const noexcept;
         /** @brief Observes the actual configured capture inventory in one canonical completion lease. */
         [[nodiscard]] std::size_t MaximumUiCaptures() const noexcept;
+        /** @brief Prepares VFX captures on the existing completion leases before activation; all leases must be idle. */
+        [[nodiscard]] Result<void> PrepareVfxRetention(std::size_t maximumCaptures);
+        /** @brief Reports actual cold VFX capture capacity across the existing completion slots. */
+        [[nodiscard]] std::size_t VfxRetentionStorageBytes() const noexcept;
         /** @brief Acquires a bounded lease, rolling back every acquired pin on failure. */
         [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources,
                                                                   UiRenderSubmission *ui = nullptr,
@@ -87,10 +91,13 @@ namespace Horo::Render::Detail {
             void RollbackPins(std::size_t initialPins) noexcept;
             /** @brief Retains exact multiview mesh/material/view generations using this existing completion lease. */
             [[nodiscard]] Result<void> PinMultiview(const RenderGraphMultiview &workload);
+            /** @brief Pins exact VFX mesh/target generations and retains the immutable source/order/slot revision. */
+            [[nodiscard]] Result<void> PinVfx(const RenderGraphVfx &workload);
             std::shared_ptr<RenderGraphTemplateBindingState> templateBinding;
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;
+            std::vector<RenderGraphVfx> vfx; /**< Host-budgeted cold capacity; no frame admission allocation. */
 
             struct UiCapture final {
                 UiRenderSubmissionRetention source;

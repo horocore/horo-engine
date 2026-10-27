@@ -45,6 +45,7 @@ namespace Horo::Render::Detail {
         if (update.cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(UiPaintFrameErrors::Cancelled));
         // All three destinations are now admitted; mapped copies cannot produce a partially published slot.
+        buffers[2]->vfxPublished = false;  // An ordinary uniform write revokes any earlier VFX publication on this generation.
         std::memcpy(buffers[0]->buffer.contents, update.vertices.data(), update.vertices.size_bytes());
         std::memcpy(buffers[1]->buffer.contents, update.indices.data(), update.indices.size_bytes());
         auto *parameters = static_cast<std::byte *>(buffers[2]->buffer.contents);

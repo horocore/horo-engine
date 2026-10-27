@@ -48,6 +48,7 @@ namespace Horo::Render::Detail {
         barriers.clear();
         updates.clear();
         submissions.clear();
+        vfxDraws.clear();
         identities.clear();
         for (std::size_t index = 0; index < request.resources.size(); ++index)
             identities.push_back(bindings[index].state);
@@ -138,6 +139,7 @@ namespace Horo::Render::Detail {
                                                        VulkanCommandRetention &pins) {
         const auto &pass = request.graph.Passes()[index];
         auto &prepared = passes[index];
+        prepared.vfxDraws = {};
         const auto usages = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
         for (const auto &usage : usages) {
             const auto resourceIndex = usage.resource.value - 1;
@@ -158,8 +160,15 @@ namespace Horo::Render::Detail {
             if (const auto admitted = multiview.Prepare(request, *scene, bindings, *resources, pins); admitted.HasError())
                 return admitted;
         }
+        if (std::holds_alternative<RenderGraphVfx>(request.workloads[index].workload)) {
+            if (const auto *queue = Queue(pass.queue); !queue || !queue->supportsGraphics)
+                return Result<void>::Failure(Unsupported("VFX encoding requires the admitted graphics queue."));
+            if (const auto admitted = PrepareVfx(request, index, pins); admitted.HasError())
+                return admitted;
+        }
         if (auto workload = ValidateWorkload(request.workloads[index].workload, pass.queue); workload.HasError())
             return workload;
+        prepared.before.count = barriers.size() - prepared.before.offset;
         for (const auto &usage : usages) {
             const auto resourceIndex = usage.resource.value - 1;
             if (states[resourceIndex].logical.queue != pass.queue)

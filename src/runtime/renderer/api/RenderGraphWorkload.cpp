@@ -59,6 +59,8 @@ namespace Horo::Render {
                 return ValidateUiPaintWorkload(request, pass, *paint).HasValue();
             if (std::holds_alternative<RenderGraphMultiview>(workload))
                 return true;  // The outer admission preserves the original typed multiview failure before recording uses.
+            if (std::holds_alternative<RenderGraphVfx>(workload))
+                return true;  // Exact issued publication and semantic uses are checked before alias recording.
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
                 return MatchesLightCulling(request, pass, *culling);
             if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
@@ -292,8 +294,9 @@ namespace Horo::Render {
         std::size_t multiviewCount = 0;
         for (std::size_t index = 0; index < request.workloads.size(); ++index) {
             const auto &binding = request.workloads[index];
-            if (std::holds_alternative<RenderGraphVfx>(binding.workload))
-                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
+            if (const auto *vfx = std::get_if<RenderGraphVfx>(&binding.workload))
+                if (const auto valid = ValidateVfxGraphWorkload(request, graph.Passes()[index], *vfx); valid.HasError())
+                    return valid;
             if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
                 if (++multiviewCount > 1)
                     return Result<void>::Failure(

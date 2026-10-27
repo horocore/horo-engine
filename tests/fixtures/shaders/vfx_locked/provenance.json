@@ -1,0 +1,112 @@
+{
+  "purpose": "Authentic locked-tool text fixtures for normalization/cook regression; not compiled native libraries, adapter integration, GPU or performance evidence.",
+  "source": "assets/shaders/runtime/vfx_instanced.hlsl",
+  "sourceSha256": "dbc116b947641994ba6c099dbf3be0ebf95c9ff3267cf4afac623d838f58e86a",
+  "tools": {
+    "bin/dxc": "b1bfa493d5c780b94c20b8b5f5aed50d1c4d03339cd55f496bd223eedeec1734",
+    "lib/libdxcompiler.so": "be01593d3ff635fca6f20b044aa49c777f6409e50a28fb0242a0c87272620b62",
+    "lib/libdxil.so": "e74c02162cd553a0ceab041937d749cfd6ab9adf919142603ff5fc55af222c73",
+    "spirv-cross": "335caee5ce86daefc3dee5e13100c2118a1a1cccb183a8c6df817090e0cbb976",
+    "spirv-val": "85367fefdb7e93ae45654255ac2b7f8dc7056b6df78a6fdeb03ce395c7477239"
+  },
+  "hostImage": "sha256:42527649dbc4f9197a6073f426f488cbff0e9cc9f2afce32d91c383e4875634a",
+  "commonDxcFlags": [
+    "-nologo",
+    "-HV",
+    "2021",
+    "-Ges",
+    "-Zpc",
+    "-Gis",
+    "-O3",
+    "-spirv",
+    "-fvk-use-gl-layout"
+  ],
+  "variants": {
+    "vs": {
+      "entry": "VSMain",
+      "profile": "vs_6_0"
+    },
+    "ps": {
+      "entry": "PSMain",
+      "profile": "ps_6_0"
+    },
+    "masked-ps": {
+      "entry": "PSMain",
+      "profile": "ps_6_0",
+      "defines": [
+        "HORO_VFX_MASKED=1"
+      ]
+    }
+  },
+  "profiles": {
+    "metal": {
+      "intermediate": "vulkan1.3",
+      "validator": "vulkan1.3",
+      "cross": [
+        "--msl",
+        "--msl-version",
+        "20400",
+        "--msl-decoration-binding"
+      ],
+      "cookContractRevision": 3
+    },
+    "gl": {
+      "intermediate": "vulkan1.2",
+      "validator": "vulkan1.2",
+      "cross": [
+        "--version",
+        "410",
+        "--no-es",
+        "--no-420pack-extension",
+        "--no-support-nonzero-baseinstance"
+      ],
+      "cookContractRevision": 3,
+      "perStageCross": {
+        "vs": [
+          "--rename-interface-variable",
+          "out",
+          "0",
+          "horo_vfx_uv",
+          "--rename-interface-variable",
+          "out",
+          "1",
+          "horo_vfx_color"
+        ],
+        "ps": [
+          "--rename-interface-variable",
+          "in",
+          "0",
+          "horo_vfx_uv",
+          "--rename-interface-variable",
+          "in",
+          "1",
+          "horo_vfx_color"
+        ],
+        "masked-ps": [
+          "--rename-interface-variable",
+          "in",
+          "0",
+          "horo_vfx_uv",
+          "--rename-interface-variable",
+          "in",
+          "1",
+          "horo_vfx_color"
+        ]
+      },
+      "reflectionNames": "Same-SPIR-V Cross JSON retains intermediate names; actual GLSL declarations provide native names, reconciled by stage/direction/location/type."
+    }
+  },
+  "files": {
+    "masked-ps.glsl": "1efae763df70f44d9d9e57ec594efdb47cf76840ee470b634910a86b44550f02",
+    "masked-ps.metal": "9a8dfb004bf6c7280ecb96f50d315ce41183fc374a957bdddba60fb61d829e2a",
+    "masked-ps.reflection.json": "dce4c958bdb014913103f843ca0aa876aa3ab0a9100d4dbfce208830b266ff82",
+    "ps.glsl": "016ee1f33a543cc470f24d72f4795d0c4a4f8fdbb9679457b8f1a81947077914",
+    "ps.metal": "8c12bce2fd804848858d3f36e201fef482c19a1e7e257b9e295de1895bfb0f8d",
+    "ps.reflection.json": "57ad3f41df81c62708fdf260bf554017d15ef31eb31885b6d0f764ff2d434484",
+    "vs.glsl": "843435e98e4873e7a276de9975550bd4b60e46b0aca94ed4020b7b96a9dc3867",
+    "vs.metal": "9a7bea954f7798c597e1b7714a9302483b7e15a5227352ec98e8fbef90c31a27",
+    "vs.reflection.json": "e011b06799687501ee71cfa4f928f2e0120b8317e7f787715880dc6774ac5517"
+  },
+  "captureReceiptSha256": "e34f7d21f9021c93c2a22f90be1f1b04e616935f78200ba43e32f9bb366c5aba",
+  "proofBoundary": "Authentic locked-tool translation/layout text only; engine adapter integration, native artifact/device/GPU and performance require separate qualification."
+}

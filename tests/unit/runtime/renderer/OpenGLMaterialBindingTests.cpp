@@ -1,5 +1,7 @@
 #include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "AllocationProbe.h"
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
+#include "Horo/Vfx/VfxWorld.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLMaterialFixture.h"
 #include "OpenGLRenderBackendErrors.h"
@@ -7,8 +9,11 @@
 #include "OpenGLResourceGraphTestSupport.h"
 #include "RenderFrontendErrors.h"
 #include "RenderFrontendResourceAccess.h"
+#include "RenderTransientGraphTestSupport.h"
 #include "TypedIdentityTestSupport.h"
 
+#include <functional>
+#include <limits>
 #include <optional>
 
 namespace Horo::Render::OpenGLResourceTests {
@@ -30,6 +35,12 @@ namespace Horo::Render::OpenGLMaterialTests {
         bool failDraw{}, throwDraw{}, failLink{};
         DrawException exception{DrawException::None};
         bool allocationWindow{};
+        std::size_t uniformBytes{16}, uploads{}, uniformQueries{};
+        std::uint32_t instances{};
+        bool failUpload{};
+        std::function<void()> onUniformQuery;
+        std::function<void()> onUpload;
+        std::function<void()> onDraw;
     };
 
     thread_local NativeState native;
@@ -107,6 +118,12 @@ namespace Horo::Render::OpenGLMaterialTests {
                                        std::span<const Detail::OpenGLMaterialDrawCommand> commands) {
         using enum DrawException;
         native.draws += commands.size();
+        for (const auto &command : commands)
+            native.instances += command.instanceCount;
+        if (native.onDraw) {
+            auto callback = std::move(native.onDraw);
+            callback();
+        }
         native.allocationWindow = true;
         if (native.exception == Standard)
             throw std::length_error{"native material metadata"};
@@ -120,7 +137,7 @@ namespace Horo::Render::OpenGLMaterialTests {
     }
 
     Detail::OpenGLCommandFunctions Functions() {
-        auto functions = OpenGLResourceTests::ResourceProbeFunctions();
+        auto functions = OpenGLResourceTests::GraphProbeFunctions();
         functions.shaders = ShaderFunctions();
         functions.pipelines = {.isAvailable = []() noexcept {
             return true;
@@ -141,7 +158,12 @@ namespace Horo::Render::OpenGLMaterialTests {
             return 0;
         }};
         functions.materials = {.uniformBlockSize = [](std::uint32_t, const std::string &) {
-            return Result<std::size_t>::Success(16);
+            ++native.uniformQueries;
+            if (native.onUniformQuery) {
+                auto callback = std::move(native.onUniformQuery);
+                callback();
+            }
+            return Result<std::size_t>::Success(native.uniformBytes);
         }, .textureComparison = [](std::uint32_t, const std::string &) {
             return Result<bool>::Success(false);
         }, .uniformOffsetAlignment = []() {
@@ -152,12 +174,22 @@ namespace Horo::Render::OpenGLMaterialTests {
         }, .queryFeatures = []() {
             return Result<Detail::OpenGLMaterialContextFeatures>::Success({1, 8, false});
         }, .execute = &ExecuteNativeMaterial};
+        functions.buffers.bufferSubData = [](std::uint32_t, std::span<const std::byte>) noexcept {
+            ++native.uploads;
+            if (native.onUpload) {
+                auto callback = std::move(native.onUpload);
+                callback();
+            }
+            if (native.failUpload)
+                OpenGLBackendTests::commandState.error = 0x0502;
+        };
         return functions;
     }
 
     std::unique_ptr<RenderFrontend> Create(OpenGLResourceTests::ResourcePresentationPort &port) {
         native = {};
         OpenGLResourceTests::resourceCommandState = {};
+        OpenGLResourceTests::graphCommandState = {};
         OpenGLBackendTests::commandState = {};
         RenderBackendRegistry registry;
         REQUIRE(Detail::RegisterOpenGLRenderBackendWithFunctions(registry, port, {}, Functions()).HasValue());
@@ -477,4 +509,9 @@ namespace Horo::Render::OpenGLMaterialTests {
         CHECK(native.programsDeleted == 1);
         CHECK(native.shadersDeleted == 2);
     }
+
+#include "OpenGLVfxFrameTests.inl"
+
+// Draw preparation consumes the material/slot fixture declarations from the preceding chunk.
+#include "OpenGLVfxDrawPreparationTests.inl"
 }  // namespace Horo::Render::OpenGLMaterialTests

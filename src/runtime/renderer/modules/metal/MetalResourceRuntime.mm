@@ -126,12 +126,13 @@ namespace Horo::Render::Detail {
         Shutdown();
     }
 
-    void MetalResourceRuntime::Initialize(void *device, void *commandQueue) noexcept {
+    void MetalResourceRuntime::Initialize(void *device, void *commandQueue, const std::uint64_t deviceIncarnation) noexcept {
         if (impl_->lightKernelIncarnation == std::numeric_limits<std::uint64_t>::max())
             impl_->lightKernelIdentityExhausted = true;
         else
             ++impl_->lightKernelIncarnation;
         impl_->device = (__bridge id<MTLDevice>)device;
+        impl_->deviceIncarnation = deviceIncarnation;
         impl_->commandQueue = (__bridge id<MTLCommandQueue>)commandQueue;
     }
 
@@ -181,8 +182,12 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to allocate a resident buffer."));
         }
-        auto *instance = new (std::nothrow)
-            MetalBufferInstance{.buffer = buffer, .usage = descriptor.usage, .pool = placement.pool, .block = placement.block};
+        auto *instance = new (std::nothrow) MetalBufferInstance{.buffer = buffer,
+                                                                .usage = descriptor.usage,
+                                                                .descriptor = descriptor,
+                                                                .deviceIncarnation = impl_->deviceIncarnation,
+                                                                .pool = placement.pool,
+                                                                .block = placement.block};
         if (instance == nullptr) {
             [buffer makeAliasable];
             impl_->DiscardEmptyHeap(placement);
@@ -208,7 +213,8 @@ namespace Horo::Render::Detail {
         const Result<void> validBindings = ValidateMetalMeshBindings(descriptor, vertex->usage, index->usage);
         if (validBindings.HasError())
             return Result<std::uint64_t>::Failure(validBindings.ErrorValue());
-        auto *instance = new (std::nothrow) MetalMeshInstance{.vertexBuffer = vertex->buffer, .indexBuffer = index->buffer};
+        auto *instance =
+            new (std::nothrow) MetalMeshInstance{.vertexBuffer = vertex->buffer, .indexBuffer = index->buffer, .descriptor = descriptor};
         if (instance != nullptr)
             instance->lifetime = std::move(lifetime);
         return impl_->TrackInstance(instance, impl_->meshes, "Metal mesh identity allocation failed.");
@@ -274,6 +280,8 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to create a resident texture view."));
         auto *instance = new (std::nothrow) MetalTextureViewInstance{.texture = view,
+                                                                     .sourceTexture = source->texture,
+                                                                     .descriptor = descriptor,
                                                                      .format = descriptor.format,
                                                                      .aspect = descriptor.aspect,
                                                                      .usage = source->descriptor.usage};
@@ -300,6 +308,9 @@ namespace Horo::Render::Detail {
         auto *instance = new (std::nothrow) MetalRenderTargetInstance{
             .colorTexture = color.Value() == nullptr ? nil : color.Value()->texture,
             .depthTexture = depth.Value() == nullptr ? nil : depth.Value()->texture,
+            .colorSourceTexture = color.Value() == nullptr ? nil : color.Value()->sourceTexture,
+            .depthSourceTexture = depth.Value() == nullptr ? nil : depth.Value()->sourceTexture,
+            .descriptor = descriptor,
         };
         if (instance != nullptr)
             instance->lifetime = std::move(lifetime);
@@ -362,5 +373,6 @@ namespace Horo::Render::Detail {
         [impl_->submittedUploads removeAllObjects];
         impl_->commandQueue = nil;
         impl_->device = nil;
+        impl_->deviceIncarnation = 0;
     }
 }  // namespace Horo::Render::Detail

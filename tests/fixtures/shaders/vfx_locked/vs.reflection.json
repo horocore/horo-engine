@@ -1,0 +1,95 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "VSMain",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_10" : {
+            "name" : "type.VfxInstances",
+            "members" : [
+                {
+                    "name" : "ClipFromLocal",
+                    "type" : "mat4",
+                    "array" : [
+                        128
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "InstanceColor",
+                    "type" : "vec4",
+                    "array" : [
+                        128
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 8192,
+                    "array_stride" : 16
+                }
+            ]
+        },
+        "_11" : {
+            "name" : "type.VfxMaterial",
+            "members" : [
+                {
+                    "name" : "Tint",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "AlphaCutoff",
+                    "type" : "float",
+                    "offset" : 16
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "in.var.POSITION",
+            "location" : 0
+        },
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD0",
+            "location" : 2
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec2",
+            "name" : "out.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "vec4",
+            "name" : "out.var.COLOR0",
+            "location" : 1
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_10",
+            "name" : "type.VfxInstances",
+            "block_size" : 10240,
+            "set" : 0,
+            "binding" : 0
+        },
+        {
+            "type" : "_11",
+            "name" : "type.VfxMaterial",
+            "block_size" : 20,
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}

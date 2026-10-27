@@ -27,7 +27,7 @@ namespace Horo::Render::Detail {
     Result<MetalMaterialSlot> MetalResourceRuntime::Impl::ResolveMaterialResource(ShaderResourceKind kind,
                                                                                   const MaterialResidentResource &resident,
                                                                                   std::size_t requiredBufferBytes) const {
-        MetalMaterialSlot slot{.kind = resident.kind, .offset = resident.offset};
+        MetalMaterialSlot slot{.kind = resident.kind, .offset = resident.offset, .byteCount = resident.byteCount};
         switch (kind) {
             case ShaderResourceKind::UniformBuffer: {
                 auto *buffer = Decode<MetalBufferInstance>(resident.instance);
@@ -50,6 +50,7 @@ namespace Horo::Render::Detail {
                         MakeError(MetalBackendErrors::ResourceIdentityInvalid,
                                   "Material texture view must be an exact resident sampled 2D single-sample generation."));
                 slot.texture = view->texture;
+                slot.sourceTexture = view->sourceTexture;
                 break;
             }
             case ShaderResourceKind::Sampler: {
@@ -82,6 +83,8 @@ namespace Horo::Render::Detail {
             return Outcome::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
         auto table = std::make_unique<MetalMaterialBinding>();
         table->owner = impl_.get();
+        table->deviceIncarnation = impl_->deviceIncarnation;
+        table->sourcePipeline = native;
         table->pipeline = native->pipeline;
         table->depth = native->depth;
         table->state = native->state;

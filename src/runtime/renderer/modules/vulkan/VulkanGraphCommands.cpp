@@ -8,7 +8,7 @@ namespace Horo::Render::Detail {
 
     /** @brief Validates native descriptor roles and contents before recording; unsupported adjacent capabilities remain explicit. */
     Result<void> VulkanGraphRuntime::Impl::ValidateWorkload(const RenderGraphWorkload &workload, const RenderQueueId queue) {
-        if (std::holds_alternative<RenderGraphMultiview>(workload))
+        if (std::holds_alternative<RenderGraphMultiview>(workload) || std::holds_alternative<RenderGraphVfx>(workload))
             return Result<void>::Success();  // Complete native scene admission is performed with the full request in PreparePass.
         if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
             return ValidateDepthAttachment(*depth, queue);
@@ -141,7 +141,10 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(std::move(buffer).ErrorValue());
             for (std::size_t pass = submission.passes.offset; pass < submission.passes.offset + submission.passes.count; ++pass) {
                 Barriers(buffer.Value(), passes[pass].before);
-                Encode(buffer.Value(), request.workloads[pass].workload);
+                if (std::holds_alternative<RenderGraphVfx>(request.workloads[pass].workload))
+                    EncodeVfx(buffer.Value(), pass);
+                else
+                    Encode(buffer.Value(), request.workloads[pass].workload);
                 Barriers(buffer.Value(), passes[pass].after);
             }
             if (auto finished = commands.Finish(submission.ticket); finished.HasError())

@@ -100,6 +100,7 @@ namespace Horo::Render::Detail {
         OpenGLBindObjectFunction bindBuffer{nullptr};
         OpenGLBufferDataFunction bufferData{nullptr};
         void (*copyBufferSubData)(std::uint32_t, std::uint32_t, std::size_t, std::size_t, std::size_t) noexcept {nullptr};
+        void (*bufferSubData)(std::uint32_t, std::span<const std::byte>) noexcept {nullptr};
     };
 
     struct OpenGLVertexArrayFunctions {
@@ -135,6 +136,7 @@ namespace Horo::Render::Detail {
         OpenGLViewportFunction viewport{nullptr};
         OpenGLClearColorFunction clearColor{nullptr};
         OpenGLClearFunction clear{nullptr};
+        bool (*clearDepthBuffer)(float) noexcept {nullptr}; /**< Optional depth-only clear preserving the caller's mask/value state. */
         OpenGLStateFunctions state;
         OpenGLSyncFunctions sync;
         OpenGLBufferFunctions buffers;

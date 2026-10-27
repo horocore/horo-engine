@@ -8,12 +8,18 @@
 #include "OpenGLBackendModule.h"
 
 #include <array>
+#include <functional>
 #include <memory>
+
+namespace Horo::Render::Detail {
+    struct OpenGLCommandFunctions;
+}
 
 namespace Horo::Render::OpenGLResourceTests {
     class ResourcePresentationPort final : public IOpenGLPresentationPort {
     public:
-        bool throwOnMakeCurrent{false}; /**< Owner-scoped exception injection before backend lease transfer. */
+        bool throwOnMakeCurrent{false};      /**< Owner-scoped exception injection before backend lease transfer. */
+        std::function<void()> onMakeCurrent; /**< One-shot synchronous owner reentry; never real context evidence. */
 
         Result<void> CreateContext(const OpenGLContextDescriptor &) override {
             return Result<void>::Success();
@@ -22,6 +28,10 @@ namespace Horo::Render::OpenGLResourceTests {
         Result<void> MakeCurrent() override {
             if (throwOnMakeCurrent)
                 throw std::bad_alloc{};
+            if (onMakeCurrent) {
+                auto callback = std::move(onMakeCurrent);
+                callback();
+            }
             return Result<void>::Success();
         }
 
@@ -67,8 +77,13 @@ namespace Horo::Render::OpenGLResourceTests {
         std::size_t emptyBufferBytes{0};
         int attachments{0};
         std::array<std::uint32_t, 2> attachedTextures{};
+        std::array<std::uint32_t, 2> attachmentPoints{};
         bool framebufferComplete{true};
         bool failBufferAllocation{false};
+        std::int32_t imageInternalFormat{};
+        std::uint32_t imageFormat{};
+        std::uint32_t imageType{};
+        std::size_t imageBytes{};
     };
 
     struct GraphCommandState {
@@ -77,10 +92,17 @@ namespace Horo::Render::OpenGLResourceTests {
         std::array<std::array<std::uint32_t, 2>, 4> copies{};
         std::size_t copyCount{};
         bool failCopy{};
+        std::uint32_t depthClears{};
+        float depthValue{};
+        std::int32_t depthFramebuffer{};
+        bool failDepthClear{};
     };
 
     extern ResourceCommandState resourceCommandState;
     extern GraphCommandState graphCommandState;
+
+    /** @brief Returns the complete deterministic graph/resource dispatch; never creates a real context. */
+    [[nodiscard]] Detail::OpenGLCommandFunctions GraphProbeFunctions() noexcept;
 
     /**
      * @brief Composes the real backend with deterministic native resource and completion dispatch.

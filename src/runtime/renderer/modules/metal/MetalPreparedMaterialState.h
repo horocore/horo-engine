@@ -42,16 +42,20 @@ namespace Horo::Render::Detail {
         MaterialResidentResourceKind kind{MaterialResidentResourceKind::Buffer};
         __strong id<MTLBuffer> buffer{nil};
         __strong id<MTLTexture> texture{nil};
+        __strong id<MTLTexture> sourceTexture{nil};
         __strong id<MTLSamplerState> sampler{nil};
         ShaderStageVisibility stages{ShaderStageVisibility::None};
         std::uint32_t binding{0};
         std::size_t offset{0};
+        std::size_t byteCount{0};
     };
 
     /** @brief Owner-created immutable native table; frontend lease pins placed backing until completion. */
     class MetalMaterialBinding final : public IResidentMaterialBinding {
     public:
         const void *owner{nullptr};
+        std::uint64_t deviceIncarnation{};
+        MetalGraphicsPipeline *sourcePipeline{nullptr}; /**< Borrowed metadata pinned by the canonical frontend material lease. */
         __strong id<MTLRenderPipelineState> pipeline{nil};
         __strong id<MTLDepthStencilState> depth{nil};
         RenderGraphicsPipelineState state;

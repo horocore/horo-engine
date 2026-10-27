@@ -12,7 +12,7 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
         if (owner != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::WrongThread));
-        if (admission && (lifecycle.closing || lifecycle.failedSubmission))
+        if (admission && (lifecycle.closing || lifecycle.failedSubmission || lifecycle.uploadingVfx))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         return Result<void>::Success();
     }
@@ -50,12 +50,14 @@ namespace Horo::Render::Detail {
             used.resize(RenderGraphLimits::HardMaxResources);
             discarded.resize(RenderGraphLimits::HardMaxResources);
             passes.resize(RenderGraphLimits::HardMaxPasses);
+            vfxDraws.reserve(MaximumVfxGraphDraws);
             barriers.reserve(RenderGraphLimits::HardMaxUsages * 3);
             updates.reserve(RenderGraphLimits::HardMaxUsages);
             submissions.reserve(RenderGraphSubmissionLimits::MaximumSubmissions);
             retention.resize(frames);
             for (auto &pins : retention)
-                pins.resources.reserve(RenderGraphLimits::HardMaxResources + MultiviewExtractionLimits::HardMaximumInstances * 3);
+                pins.resources.reserve(RenderGraphLimits::HardMaxResources +
+                                       (MultiviewExtractionLimits::HardMaximumInstances + MaximumVfxGraphDraws) * 3);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::ResourceCreationFailed, "Bounded graph storage allocation failed."));
@@ -224,6 +226,39 @@ namespace Horo::Render::Detail {
             impl_->Abort();
     }
 
+    /** @copydoc VulkanGraphRuntime::UpdateVfxFrame */
+    Result<void> VulkanGraphRuntime::UpdateVfxFrame(const NativeVfxFrameUpdate &update) {
+        if (const auto access = impl_->Access(); access.HasError())
+            return access;
+        if (impl_->lifecycle.frame.IsValid() || update.deviceIncarnation != impl_->deviceIncarnation)
+            return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+
+        struct UploadScope final {
+            bool &active;
+
+            ~UploadScope() {
+                active = false;
+            }
+        };
+
+        impl_->lifecycle.uploadingVfx = true;
+        const UploadScope scope{impl_->lifecycle.uploadingVfx};
+        const auto completion = impl_->resources->BufferCompletion(update.instance);
+        if (completion.HasError())
+            return Result<void>::Failure(completion.ErrorValue());
+        if (completion.Value().IsValid()) {
+            const auto retired =
+                impl_->commands.Observe({.completion = completion.Value(), .expectedDeviceIncarnation = update.deviceIncarnation});
+            if (retired.HasError())
+                return Result<void>::Failure(retired.ErrorValue());
+            if (!retired.Value())
+                return Result<void>::Failure(MakeError(VfxFrameErrors::Pending));
+        }
+        if (impl_->lifecycle.closing)
+            return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+        return impl_->resources->UpdateVfxFrame(update, impl_->lifecycle.closing);
+    }
+
     /** @copydoc VulkanGraphRuntime::ObserveSubmission */
     Result<bool> VulkanGraphRuntime::ObserveSubmission(const RenderCpuWait &wait) {
         if (auto access = impl_->Access(false); access.HasError())
@@ -258,6 +293,8 @@ namespace Horo::Render::Detail {
             return Result<RenderBackendDrainProgress>::Failure(std::move(access).ErrorValue());
         if (!impl_->lifecycle.closing)
             return Result<RenderBackendDrainProgress>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+        if (impl_->lifecycle.uploadingVfx)
+            return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Pending);
         auto drained = impl_->commands.PollDrain();
         if (drained.HasValue() && drained.Value() == RenderBackendDrainProgress::Drained) {
             for (const auto &pins : impl_->retention)

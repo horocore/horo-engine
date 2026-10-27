@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "VulkanShaderRuntimeInternal.h"
 
 #include <map>
@@ -149,9 +150,27 @@ namespace Horo::Render::Detail {
             auto backing = resolve(resident, kind);
             if (backing.HasError())
                 return Result<void>::Failure(backing.ErrorValue());
-            table.resources.push_back(backing.Value());
+            auto retained = std::move(backing).Value();
+            retained.binding = logical.binding;
+            retained.offset = resident.offset;
+            retained.byteCount = resident.byteCount;
+            table.resources.push_back(std::move(retained));
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanShaderRuntime::ValidateVfxMaterial */
+    Result<void> VulkanShaderRuntime::ValidateVfxMaterial(const VulkanPreparedMaterialBinding &material, const std::uint64_t pipelineId,
+                                                          const MaterialBindingLayout &layout) const {
+        const auto pipeline = impl_->pipelines.find(pipelineId);
+        if (!impl_->Ready() || pipeline == impl_->pipelines.end() || material.owner != &impl_->ownerIdentity ||
+            material.deviceIncarnation == 0 || material.deviceIncarnation != impl_->ownerIdentity.deviceIncarnation ||
+            material.pipelineBacking.get() != pipeline->second.get() || material.pipeline != pipeline->second->handle ||
+            material.layout != pipeline->second->layout || !SameLayout(layout, pipeline->second->material) ||
+            VfxShaderParameterBytes(layout).HasError())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        const auto bytes = impl_->ParameterBytes(layout, VfxShaderParameterIds::Instances);
+        return bytes.HasError() ? Result<void>::Failure(bytes.ErrorValue()) : Result<void>::Success();
     }
 
     /** @copydoc VulkanShaderRuntime::RealizeResolved */
@@ -174,6 +193,7 @@ namespace Horo::Render::Detail {
             table->layout = pipeline->layout;
             table->deviceIncarnation = impl_->ownerIdentity.deviceIncarnation;
             table->state = pipeline->state;
+            table->pipelineIdentity = id;
             table->pipelineBacking = impl_->pipelines.at(id);
             table->resources.reserve(resources.size());
             table->samplerBackings.reserve(resources.size());

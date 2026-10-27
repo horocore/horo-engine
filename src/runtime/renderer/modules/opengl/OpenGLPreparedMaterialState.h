@@ -32,6 +32,7 @@ namespace Horo::Render::Detail {
     public:
         const IRenderBackend *owner{nullptr};
         std::uint32_t program{0};
+        std::uint64_t deviceIncarnation{};
         std::array<OpenGLMaterialSlot, 128> slots;
         std::size_t count{0};
     };
@@ -44,6 +45,13 @@ namespace Horo::Render::Detail {
         RenderTextureFormat colorFormat{RenderTextureFormat::Rgba8Unorm};
         std::optional<RenderTextureFormat> depthFormat;
         std::uint32_t sampleCount{1};
+    };
+
+    /** @brief One canonical mesh descriptor plus the exact buffer objects captured by its native vertex array. */
+    struct OpenGLPreparedMesh final {
+        RenderMeshDescriptor descriptor;
+        std::uint32_t vertices{};
+        std::uint32_t indices{};
     };
 
     /** @brief Checks every cooked packing/placement fact, not only a caller-supplied interface digest. */
@@ -72,10 +80,21 @@ namespace Horo::Render::Detail {
 
     /** @brief Holds one concrete backend's prepared metadata without introducing another resource lifetime authority. */
     struct OpenGLPreparedMaterialState {
+        /** @brief Preparation-owned write admission for host-visible uniform buffers; existing frame fences own completion. */
+        struct UniformFrameUse final {
+            std::uint8_t frames{};
+            std::uint64_t revision{};
+            std::size_t blockBytes{};
+            std::uint32_t instanceCount{};
+            bool published{false};
+            std::uint64_t deviceIncarnation{};
+        };
+
+        std::unordered_map<std::uint32_t, UniformFrameUse> uniformFrameUses;
         std::unordered_map<std::uint32_t, OpenGLShaderModule> shaderModules;
         std::unordered_map<std::uint32_t, OpenGLGraphicsPipeline> graphicsPipelines;
         std::unordered_map<std::uint32_t, RenderSamplerDescriptor> samplerDescriptors;
-        std::unordered_map<std::uint32_t, RenderMeshDescriptor> meshDescriptors;
+        std::unordered_map<std::uint32_t, OpenGLPreparedMesh> meshDescriptors;
         std::unordered_map<std::uint32_t, OpenGLMaterialTarget> materialTargets;
 
         /** @brief Clears native preparation in program/sampler/shader order after the owner drains completion and before context

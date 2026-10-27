@@ -4,6 +4,7 @@
  */
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/StandardPbrPassPlan.h"
+#include "Horo/Runtime/Render/VfxDrawData.h"
 
 #include <array>
 #include <optional>
@@ -13,7 +14,24 @@ namespace Horo::Render {
     struct VfxSchedulingBudget final {
         std::uint32_t maximumInstances{};
         std::uint32_t retainedViewSlots{};
-        std::size_t maximumBytes{}; /**< Bound for prepared slot records, six orders and shared radix scratch. */
+        std::size_t maximumBytes{};   /**< Bound for prepared slot records, six orders and shared radix scratch. */
+        std::uint32_t maximumDraws{}; /**< Optional native draw capacity per stage, derived from the host scene draw budget. */
+    };
+
+    /** @brief Host-selected canonical material/mesh slot for one exact order run; contains no backend selection.
+     * @details Billboard geometry is an authored centered unit quad. Instanced mesh must equal the extracted batch mesh.
+     * Slots are uniquely owned while preparing; move/retain one host handle rather than adding facade copies.
+     */
+    struct VfxGraphDrawBinding final {
+        VfxGraphStage stage{VfxGraphStage::OpaqueForward};
+        std::uint32_t firstOrder{};
+        RenderMeshHandle mesh;
+        RenderTargetHandle target;
+        RenderGraphResourceId vertices;
+        RenderGraphResourceId indices;
+        RenderGraphResourceId parameters;
+        RenderGraphResourceId sampledTexture;
+        std::shared_ptr<PreparedVfxFrameSlot> slot;
     };
 
     /** @brief Frozen recipe/view inputs for one graph's VFX contribution.

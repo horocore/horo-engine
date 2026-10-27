@@ -59,8 +59,14 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] constexpr bool SameBinding(const ShaderResourceBinding &declared, const ShaderReflectedBinding &reflected) noexcept {
+            const auto observed = static_cast<unsigned>(reflected.stages);
+            const auto maximum = static_cast<unsigned>(declared.stages);
+            constexpr auto known =
+                static_cast<unsigned>(ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment | ShaderStageVisibility::Compute);
+            const bool visibility =
+                reflected.active ? observed != 0 && (observed & ~known) == 0 && (observed & ~maximum) == 0 : observed == maximum;
             return declared.id == reflected.id && declared.kind == reflected.kind && declared.access == reflected.access &&
-                   declared.arrayCount == reflected.arrayCount && declared.stages == reflected.stages;
+                   declared.arrayCount == reflected.arrayCount && visibility;
         }
 
         [[nodiscard]] constexpr bool SameParameter(const ShaderParameter &declared, const ShaderReflectedParameter &reflected) noexcept {

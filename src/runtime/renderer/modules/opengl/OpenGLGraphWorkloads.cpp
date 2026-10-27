@@ -4,6 +4,7 @@
 #include "OpenGLExecutionState.h"
 #include "OpenGLRenderBackendErrors.h"
 
+#include <cmath>
 #include <glad/gl.h>
 #include <limits>
 #include <memory>
@@ -26,6 +27,7 @@ namespace Horo::Render::Detail {
         public:
             explicit DrawTargetRestore(const OpenGLCommandFunctions &functions) noexcept : functions_(functions) {
                 functions_.state.getInteger(GL_DRAW_FRAMEBUFFER_BINDING, std::span{&framebuffer_, 1});
+                functions_.state.getInteger(GL_READ_FRAMEBUFFER_BINDING, std::span{&readFramebuffer_, 1});
             }
 
             DrawTargetRestore(const DrawTargetRestore &) = delete;
@@ -35,11 +37,13 @@ namespace Horo::Render::Detail {
 
             ~DrawTargetRestore() noexcept {
                 functions_.state.bindDrawFramebuffer(static_cast<std::uint32_t>(framebuffer_));
+                functions_.framebuffers.bindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<std::uint32_t>(readFramebuffer_));
             }
 
         private:
             const OpenGLCommandFunctions &functions_;
             std::int32_t framebuffer_{};
+            std::int32_t readFramebuffer_{};
         };
 
         /** @brief Restores buffer-copy bindings on every command and error path. */
@@ -87,14 +91,31 @@ namespace Horo::Render::Detail {
         [[nodiscard]] bool ValidColor(const RenderGraphColorAttachment &color, const RenderGraphExecutionRequest &request,
                                       const OpenGLGraphResources &resources) {
             const auto texture = resources.textures.find(Instance(color.texture, request));
-            return texture != resources.textures.end() && !texture->second.destroyRequested && texture->second.graphFramebuffer != 0;
+            return texture != resources.textures.end() && !texture->second.destroyRequested && texture->second.graphFramebuffer != 0 &&
+                   (texture->second.descriptor.format == RenderTextureFormat::Rgba8Unorm ||
+                    texture->second.descriptor.format == RenderTextureFormat::Rgba16Float);
+        }
+
+        /** @brief Admits only a prepared whole depth attachment with representable normalized clear data. */
+        [[nodiscard]] bool ValidDepth(const RenderGraphDepthAttachment &depth, const RenderGraphExecutionRequest &request,
+                                      const OpenGLGraphResources &resources) {
+            const auto texture = resources.textures.find(Instance(depth.texture, request));
+            return texture != resources.textures.end() && !texture->second.destroyRequested && texture->second.graphFramebuffer != 0 &&
+                   (texture->second.descriptor.format == RenderTextureFormat::Depth32Float ||
+                    texture->second.descriptor.format == RenderTextureFormat::Depth24Stencil8) &&
+                   std::isfinite(depth.clearDepth) && depth.clearDepth >= 0 && depth.clearDepth <= 1;
         }
 
         /** @brief Validates one workload against resolved native resources before submission. */
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources,
                                                     const Workload &workload) {
-            if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment> || std::is_same_v<Workload, RenderGraphMultiview>) {
+            if constexpr (std::is_same_v<Workload, RenderGraphVfx>) {
+                return ValidateOpenGLVfxWorkload(request, resources, workload);
+            } else if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment>) {
+                if (!ValidDepth(workload, request, resources))
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+            } else if constexpr (std::is_same_v<Workload, RenderGraphMultiview>) {
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
             } else if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
                 return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
@@ -131,7 +152,8 @@ namespace Horo::Render::Detail {
     }  // namespace
 
     /** @copydoc CreateOpenGLGraphFramebuffer */
-    Result<std::uint32_t> CreateOpenGLGraphFramebuffer(const OpenGLCommandFunctions &functions, const std::uint32_t texture) {
+    Result<std::uint32_t> CreateOpenGLGraphFramebuffer(const OpenGLCommandFunctions &functions, const std::uint32_t texture,
+                                                       const RenderTextureAspect aspect) {
         DrawTargetRestore restore{functions};
         std::uint32_t framebuffer{};
         const auto destroy = [&functions](const std::uint32_t *object) {
@@ -141,9 +163,13 @@ namespace Horo::Render::Detail {
         std::unique_ptr<std::uint32_t, decltype(destroy)> rollback{&framebuffer, destroy};
         functions.framebuffers.generateFramebuffers(1, &framebuffer);
         if (framebuffer != 0) {
-            functions.framebuffers.bindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
-            functions.framebuffers.framebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0);
-            functions.framebuffers.drawBuffer(GL_COLOR_ATTACHMENT0);
+            functions.framebuffers.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            const auto attachment = aspect == RenderTextureAspect::Color   ? GL_COLOR_ATTACHMENT0
+                                    : aspect == RenderTextureAspect::Depth ? GL_DEPTH_ATTACHMENT
+                                                                           : GL_DEPTH_STENCIL_ATTACHMENT;
+            functions.framebuffers.framebufferTexture(GL_DRAW_FRAMEBUFFER, attachment, texture, 0);
+            functions.framebuffers.drawBuffer(aspect == RenderTextureAspect::Color ? GL_COLOR_ATTACHMENT0 : GL_NONE);
+            functions.framebuffers.readBuffer(aspect == RenderTextureAspect::Color ? GL_COLOR_ATTACHMENT0 : GL_NONE);
         }
         if (framebuffer == 0 || functions.framebuffers.checkFramebuffer(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE ||
             functions.state.error() != GL_NO_ERROR)
@@ -153,7 +179,8 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc ValidateOpenGLGraphWorkloads */
-    Result<void> ValidateOpenGLGraphWorkloads(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources) {
+    Result<void> ValidateOpenGLGraphWorkloads(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources,
+                                              const OpenGLCommandFunctions &functions) {
         if (!request.submissions.empty())
             return Result<void>::Failure(
                 MakeError(OpenGLBackendErrors::UnsupportedResourceOperation, "OpenGL explicit graph submissions are not implemented."));
@@ -178,6 +205,8 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid));
         }
         for (const auto &binding : request.workloads) {
+            if (std::holds_alternative<RenderGraphDepthAttachment>(binding.workload) && !functions.clearDepthBuffer)
+                return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
             const auto valid = std::visit([&request, &resources]<typename Workload>(const Workload &workload) {
                 return ValidateWorkload(request, resources, workload);
             }, binding.workload);
@@ -193,6 +222,13 @@ namespace Horo::Render::Detail {
         if (functions.state.error() != GL_NO_ERROR)
             return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
         for (const auto &binding : request.workloads) {
+            if (const auto *vfx = std::get_if<RenderGraphVfx>(&binding.workload)) {
+                if (const auto encoded = ExecuteOpenGLVfxWorkload(request, resources, functions, *vfx); encoded.HasError())
+                    return encoded;
+                if (functions.state.error() != GL_NO_ERROR)
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
+                continue;
+            }
             const bool encoded = std::visit([&]<typename Workload>(const Workload &workload) {
                 if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
                     CopyBindingsRestore restore{functions};
@@ -201,6 +237,20 @@ namespace Horo::Render::Detail {
                     functions.buffers.copyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, workload.sourceOffset,
                                                         workload.destinationOffset, workload.byteCount);
                     return true;
+                } else if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment>) {
+                    const auto &texture = resources.textures.at(Instance(workload.texture, request));
+                    const auto framebuffer = texture.graphFramebuffer;
+                    const auto extent = texture.descriptor.extent;
+                    OpenGLExecutionState state{functions};
+                    if (!state.Apply(extent) || (resources.accepting && !*resources.accepting))
+                        return false;
+                    functions.state.bindDrawFramebuffer(framebuffer);
+                    if (resources.accepting && !*resources.accepting)
+                        return false;
+                    functions.state.drawBuffer(GL_NONE);
+                    if (resources.accepting && !*resources.accepting)
+                        return false;
+                    return functions.clearDepthBuffer(workload.clearDepth);
                 } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
                     const auto &texture = resources.textures.at(Instance(workload.texture, request));
                     return EncodeColor(workload.operations, texture.descriptor.extent, texture.graphFramebuffer, functions);
@@ -210,7 +260,7 @@ namespace Horo::Render::Detail {
                     return true;
                 }
             }, binding.workload);
-            if (!encoded || functions.state.error() != GL_NO_ERROR)
+            if (!encoded || (resources.accepting && !*resources.accepting) || functions.state.error() != GL_NO_ERROR)
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
         }
         return Result<void>::Success();

@@ -1,9 +1,53 @@
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "MetalColorAttachmentEncoding.h"
 #include "MetalLightCullingKernel.h"
 #include "MetalResourceRuntimeInternal.h"
 
+#include <cmath>
+
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Clears one admitted depth/stencil attachment and resets the reusable pass descriptor before returning. */
+        Result<void> EncodeDepthAttachment(id<MTLCommandBuffer> commands, MetalTextureInstance *texture, MTLRenderPassDescriptor *pass,
+                                           const double clearDepth) {
+            pass.depthAttachment.texture = texture->texture;
+            pass.depthAttachment.loadAction = MTLLoadActionClear;
+            pass.depthAttachment.storeAction = MTLStoreActionStore;
+            pass.depthAttachment.clearDepth = clearDepth;
+            const bool stencil = texture->descriptor.format == RenderTextureFormat::Depth24Stencil8 ||
+                                 texture->descriptor.format == RenderTextureFormat::Depth32FloatStencil8;
+            if (stencil) {
+                pass.stencilAttachment.texture = texture->texture;
+                pass.stencilAttachment.loadAction = MTLLoadActionClear;
+                pass.stencilAttachment.storeAction = MTLStoreActionStore;
+                pass.stencilAttachment.clearStencil = 0;
+            }
+            id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
+            pass.depthAttachment.texture = nil;
+            pass.stencilAttachment.texture = nil;
+            if (encoder == nil)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::CommandSubmissionFailed));
+            [encoder endEncoding];
+            return Result<void>::Success();
+        }
+
+        /** @brief Encodes one validated native copy; the caller records both completion-owned resource uses. */
+        Result<void> EncodeBufferCopy(id<MTLCommandBuffer> commands, MetalBufferInstance *source, MetalBufferInstance *destination,
+                                      const RenderGraphBufferCopy &copy) {
+            id<MTLBlitCommandEncoder> encoder = [commands blitCommandEncoder];
+            if (encoder == nil) {
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::CommandSubmissionFailed, "Metal graph copy encoder creation failed."));
+            }
+            [encoder copyFromBuffer:source->buffer
+                       sourceOffset:copy.sourceOffset
+                           toBuffer:destination->buffer
+                  destinationOffset:copy.destinationOffset
+                               size:copy.byteCount];
+            [encoder endEncoding];
+            return Result<void>::Success();
+        }
+
         /** @brief Finds only an exact graph-local resource binding; never guesses by slot or native address. */
         [[nodiscard]] std::uint64_t GraphInstance(const RenderGraphResourceId id,
                                                   const std::span<const RenderGraphResourceInstance> resources) {
@@ -124,6 +168,21 @@ namespace Horo::Render::Detail {
     /** @copydoc MetalResourceRuntime::ValidateGraphWorkload */
     Result<void> MetalResourceRuntime::ValidateGraphWorkload(const RenderGraphWorkload &workload,
                                                              const std::span<const RenderGraphResourceInstance> resources) const {
+        if (std::holds_alternative<RenderGraphVfx>(workload))
+            return Result<void>::Failure(
+                MakeError(VfxFrameErrors::Unavailable, "VFX requires the full captured mesh, target and publication request."));
+        if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
+            const auto *texture = LiveGraphInstance(depth->texture, resources, impl_->textures);
+            if (!texture || !std::isfinite(depth->clearDepth) || depth->clearDepth < 0 || depth->clearDepth > 1 ||
+                !HasTextureUsage(texture->descriptor.usage, RenderTextureUsage::RenderAttachment) ||
+                texture->descriptor.dimension != RenderTextureDimension::TwoD || texture->descriptor.mipCount != 1 ||
+                texture->descriptor.layerCount != 1 || texture->descriptor.sampleCount != 1 ||
+                (!MetalTextureAspectMatches(texture->descriptor.format, RenderTextureAspect::Depth) &&
+                 !MetalTextureAspectMatches(texture->descriptor.format, RenderTextureAspect::DepthStencil)) ||
+                impl_->vfxPass == nil)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+            return Result<void>::Success();
+        }
         if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
             return ValidateGraphLightCulling(*culling, resources, impl_->buffers, impl_->lightKernelOwner.get(),
                                              impl_->lightKernelIncarnation, impl_->lightKernelIdentityExhausted);
@@ -144,7 +203,12 @@ namespace Horo::Render::Detail {
         if (commands == nil) {
             return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
         }
-        if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload)) {
+        if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
+            auto *texture = Decode<MetalTextureInstance>(GraphInstance(depth->texture, resources));
+            if (const auto encoded = EncodeDepthAttachment(commands, texture, impl_->vfxPass, depth->clearDepth); encoded.HasError())
+                return encoded;
+            Impl::TrackUse(texture->use, commands);
+        } else if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload)) {
             const std::array ids{culling->lights, culling->clusters, culling->membership, culling->references};
             std::array<MetalBufferInstance *, 4> buffers{};
             for (std::size_t index = 0; index < ids.size(); ++index)
@@ -169,17 +233,8 @@ namespace Horo::Render::Detail {
         } else if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
             auto *source = Decode<MetalBufferInstance>(GraphInstance(copy->source, resources));
             auto *destination = Decode<MetalBufferInstance>(GraphInstance(copy->destination, resources));
-            id<MTLBlitCommandEncoder> encoder = [commands blitCommandEncoder];
-            if (encoder == nil) {
-                return Result<void>::Failure(
-                    MakeError(MetalBackendErrors::CommandSubmissionFailed, "Metal graph copy encoder creation failed."));
-            }
-            [encoder copyFromBuffer:source->buffer
-                       sourceOffset:copy->sourceOffset
-                           toBuffer:destination->buffer
-                  destinationOffset:copy->destinationOffset
-                               size:copy->byteCount];
-            [encoder endEncoding];
+            if (const auto encoded = EncodeBufferCopy(commands, source, destination, *copy); encoded.HasError())
+                return encoded;
             Impl::TrackUse(source->use, commands);
             Impl::TrackUse(destination->use, commands);
         }
@@ -192,7 +247,7 @@ namespace Horo::Render::Detail {
                                                                                id<MTLCommandBuffer> commands, id<MTLTexture> primary) {
         if (const auto valid = ValidateGraphWorkload(workload, resources); valid.HasError())
             return Result<MetalRecordedOperation>::Failure(valid.ErrorValue());
-        if (std::holds_alternative<RenderGraphLightCulling>(workload))
+        if (std::holds_alternative<RenderGraphLightCulling>(workload) || std::holds_alternative<RenderGraphDepthAttachment>(workload))
             return Result<MetalRecordedOperation>::Failure(
                 MakeError(LightCullingErrors::Unsupported, "Light compute currently requires owner-thread graph encoding."));
         MetalRecordedOperation operation{.workload = workload, .commands = commands};

@@ -17,6 +17,8 @@ namespace Horo::Render::Detail {
         RenderResourceNativeLifetime lifetime;
         __strong id<MTLBuffer> buffer{nil};
         RenderBufferUsage usage{RenderBufferUsage::None};
+        RenderBufferDescriptor descriptor;
+        std::uint64_t deviceIncarnation{};
         RenderMemoryPoolId pool;
         RenderMemoryBlockId block;
         MetalResidentUse use;
@@ -24,12 +26,16 @@ namespace Horo::Render::Detail {
         LightCullingDispatch lightTableDispatch;
         std::uint64_t uiPaintRevision{};
         std::uint32_t uiPaintVertices{}, uiPaintIndices{}, uiPaintParameters{};
+        std::uint64_t vfxRevision{};
+        std::uint32_t vfxInstances{};
+        bool vfxPublished{false};
     };
 
     struct MetalMeshInstance {
         RenderResourceNativeLifetime lifetime;
         __strong id<MTLBuffer> vertexBuffer{nil};
         __strong id<MTLBuffer> indexBuffer{nil};
+        RenderMeshDescriptor descriptor;
     };
 
     struct MetalTextureInstance {
@@ -44,6 +50,8 @@ namespace Horo::Render::Detail {
     struct MetalTextureViewInstance {
         RenderResourceNativeLifetime lifetime;
         __strong id<MTLTexture> texture{nil};
+        __strong id<MTLTexture> sourceTexture{nil};
+        RenderTextureViewDescriptor descriptor;
         RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm};
         RenderTextureAspect aspect{RenderTextureAspect::Color};
         RenderTextureUsage usage{RenderTextureUsage::None};
@@ -53,6 +61,9 @@ namespace Horo::Render::Detail {
         RenderResourceNativeLifetime lifetime;
         __strong id<MTLTexture> colorTexture{nil};
         __strong id<MTLTexture> depthTexture{nil};
+        __strong id<MTLTexture> colorSourceTexture{nil};
+        __strong id<MTLTexture> depthSourceTexture{nil};
+        RenderTargetDescriptor descriptor;
     };
 }  // namespace Horo::Render::Detail
 #endif

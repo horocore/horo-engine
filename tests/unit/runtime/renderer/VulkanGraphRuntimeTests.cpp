@@ -9,6 +9,23 @@ namespace {
 #include "VulkanMaterialCommandTests.inl"
 #include "VulkanMultiviewCommandTests.inl"
 
+    TEST_CASE("Vulkan VFX publication rejects active recording and closed admission without native writes or waits",
+              "[unit][runtime][renderer][vulkan][vfx]") {
+        NativeGraphFixture fixture;
+        VfxFrameWriteStatus status{VfxFrameWriteStatus::NotStarted};
+        NativeVfxFrameUpdate update{.instance = 999, .revision = 1, .instanceCount = 1, .writeStatus = &status, .deviceIncarnation = 11};
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        REQUIRE(fixture.graph.UpdateVfxFrame(update).HasError());
+        CHECK(status == VfxFrameWriteStatus::NotStarted);
+        CHECK(fixture.commandState.state.waitCalls == 0);
+        CHECK(fixture.encoded.draws == 0);
+        fixture.graph.AbortFrame({1});
+        REQUIRE(fixture.graph.BeginShutdown().HasValue());
+        REQUIRE(fixture.graph.UpdateVfxFrame(update).HasError());
+        CHECK(status == VfxFrameWriteStatus::NotStarted);
+        CHECK(fixture.commandState.state.waitCalls == 0);
+    }
+
     TEST_CASE("Vulkan graph encoding emits real copy commands and matched family ownership barriers",
               "[unit][runtime][renderer][vulkan][graph]") {
         NativeGraphFixture fixture;

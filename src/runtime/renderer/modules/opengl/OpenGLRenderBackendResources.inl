@@ -46,6 +46,7 @@ Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const Material
     auto material = std::make_unique<Detail::OpenGLMaterialBinding>();
     material->owner = this;
     material->program = program->first;
+    material->deviceIncarnation = capabilities_.support.deviceIncarnation;
     for (std::size_t index = 0; index < resources.size(); ++index) {
         const auto &logical = descriptor.resources[index];
         const auto &resident = resources[index];
@@ -147,7 +148,8 @@ Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphic
             MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
                       "Graphics pipeline references stale native modules or a different cooked artifact/interface/target."));
     if (descriptor.state.viewRouting != RenderViewRouting::SingleView || descriptor.state.sampleCount != 1 ||
-        descriptor.state.colorFormat != RenderTextureFormat::Rgba8Unorm ||
+        (descriptor.state.colorFormat != RenderTextureFormat::Rgba8Unorm &&
+         descriptor.state.colorFormat != RenderTextureFormat::Rgba16Float) ||
         (descriptor.state.depthFormat && *descriptor.state.depthFormat != RenderTextureFormat::Depth24Stencil8 &&
          *descriptor.state.depthFormat != RenderTextureFormat::Depth32Float) ||
         !descriptor.manifest.inlineConstants.empty() || !descriptor.manifest.specializationInputs.empty())
@@ -378,9 +380,9 @@ Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescripto
                           "usage."));
     const auto payload = RenderTextureBaseLevelByteSize(descriptor);
     auto required = payload.has_value() ? ConservativeRequirement(*payload) : std::nullopt;
-    const bool graphColor = capabilities_.supportsExactTransientResourceReuse && descriptor.format == RenderTextureFormat::Rgba8Unorm &&
-                            HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment);
-    if (graphColor && required.has_value()) {
+    const bool graphAttachment =
+        capabilities_.supportsExactTransientResourceReuse && HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment);
+    if (graphAttachment && required.has_value()) {
         constexpr std::size_t attachmentEstimate = 256;
         required = *required <= std::numeric_limits<std::size_t>::max() - attachmentEstimate ? std::optional{*required + attachmentEstimate}
                                                                                              : std::nullopt;
@@ -434,9 +436,13 @@ Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, con
     try {
         buffers_.insert(buffer);
         bufferDescriptors_.insert_or_assign(buffer, descriptor);
+        if (descriptor.access == RenderBufferAccess::HostVisible && HasBufferUsage(descriptor.usage, RenderBufferUsage::Uniform))
+            prepared_.uniformFrameUses.emplace(buffer, Detail::OpenGLPreparedMaterialState::UniformFrameUse{
+                                                           .deviceIncarnation = capabilities_.support.deviceIncarnation});
     } catch (...) {  // NOSONAR(cpp:S2738)
         buffers_.erase(buffer);
         bufferDescriptors_.erase(buffer);
+        prepared_.uniformFrameUses.erase(buffer);
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL buffer tracking allocation failed."));
     }
@@ -487,7 +493,8 @@ Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const s
     functions_.buffers.bindBuffer(GL_ARRAY_BUFFER, 0);
     try {
         meshes_.insert(vertexArray);
-        prepared_.meshDescriptors.emplace(vertexArray, descriptor);
+        prepared_.meshDescriptors.emplace(vertexArray, Detail::OpenGLPreparedMesh{descriptor, static_cast<std::uint32_t>(vertexBuffer),
+                                                                                  static_cast<std::uint32_t>(indexBuffer)});
     } catch (...) {  // NOSONAR(cpp:S2738)
         meshes_.erase(vertexArray);
         prepared_.meshDescriptors.erase(vertexArray);
@@ -549,9 +556,14 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
     });
     functions_.textures.bindTexture(GL_TEXTURE_2D, 0);
     std::uint32_t graphFramebuffer{};
-    if (capabilities_.supportsExactTransientResourceReuse && textureDescriptor.format == RenderTextureFormat::Rgba8Unorm &&
+    if (capabilities_.supportsExactTransientResourceReuse &&
         HasTextureUsage(textureDescriptor.usage, RenderTextureUsage::RenderAttachment)) {
-        const auto attachment = Detail::CreateOpenGLGraphFramebuffer(functions_, texture);
+        const auto aspect =
+            (textureDescriptor.format == RenderTextureFormat::Rgba8Unorm || textureDescriptor.format == RenderTextureFormat::Rgba16Float)
+                ? RenderTextureAspect::Color
+            : textureDescriptor.format == RenderTextureFormat::Depth24Stencil8 ? RenderTextureAspect::DepthStencil
+                                                                               : RenderTextureAspect::Depth;
+        const auto attachment = Detail::CreateOpenGLGraphFramebuffer(functions_, texture, aspect);
         if (attachment.HasError()) {
             functions_.textures.deleteTextures(1, &texture);
             RetireNativeLifetime(NativeResourceKind::Texture, texture);
@@ -716,8 +728,10 @@ Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descripto
 void DestroyBuffer(const std::uint64_t backendInstance) noexcept override {
     if (!IsOwnerThread())
         return;
-    if (backendInstance <= std::numeric_limits<std::uint32_t>::max())
+    if (backendInstance <= std::numeric_limits<std::uint32_t>::max()) {
         bufferDescriptors_.erase(static_cast<std::uint32_t>(backendInstance));
+        prepared_.uniformFrameUses.erase(static_cast<std::uint32_t>(backendInstance));
+    }
     DeleteTrackedObject(functions_.buffers.deleteBuffers, buffers_, backendInstance);
     RetireNativeLifetime(NativeResourceKind::Buffer, backendInstance);
 }

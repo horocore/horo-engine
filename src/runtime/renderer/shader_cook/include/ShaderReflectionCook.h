@@ -29,4 +29,24 @@ namespace Horo::Render {
                                                                                      const ShaderTargetRequirement &target,
                                                                                      std::span<const SpirvReflectionStage> stages,
                                                                                      std::span<const std::string> translations);
+    /** @brief Validates the canonical VFX interface against same-operation Cross JSON and generated MSL.
+     * @param manifest Exact canonical VFX logical manifest. @param target Selected Metal requirement.
+     * @param stages Actual intermediate reflection for the selected stages.
+     * @param translations Actual MSL from those same translations, in vertex/fragment order.
+     * @return Normalized proven native layout or typed rejection of unsupported or ambiguous evidence.
+     */
+    [[nodiscard]] Result<NormalizedShaderReflection> NormalizeVfxMetalReflection(const ShaderManifest &manifest,
+                                                                                 const ShaderTargetRequirement &target,
+                                                                                 std::span<const SpirvReflectionStage> stages,
+                                                                                 std::span<const std::string> translations);
+    /** @brief Validates canonical VFX semantics against same-operation Cross JSON and generated GLSL410.
+     * @param manifest Exact canonical VFX interface. @param target Selected OpenGL requirement.
+     * @param stages Actual intermediate reflection documents. @param translations Their actual GLSL410 translations.
+     * @return Proven std140 packing and actual link names with finite Horo-assigned slots; native realization
+     * independently validates linked members and actual device limits before installing those bindings.
+     */
+    [[nodiscard]] Result<NormalizedShaderReflection> NormalizeVfxOpenGLReflection(const ShaderManifest &manifest,
+                                                                                  const ShaderTargetRequirement &target,
+                                                                                  std::span<const SpirvReflectionStage> stages,
+                                                                                  std::span<const std::string> translations);
 }  // namespace Horo::Render

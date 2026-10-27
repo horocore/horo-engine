@@ -58,10 +58,10 @@ namespace Horo::Render::OpenGLMaterialTests {
     inline RenderGraphicsPipelineDescriptor PipelineDescriptor(RenderFrontend &frontend, RenderShaderModuleHandle vertex,
                                                                RenderShaderModuleHandle fragment, const ShaderManifest &manifest,
                                                                const ShaderTargetRequirement &target,
-                                                               const NormalizedShaderReflection &reflection, const Sha256Digest &artifact) {
+                                                               const NormalizedShaderReflection &reflection, const Sha256Digest &artifact,
+                                                               const RenderGraphicsPipelineState &state = {}) {
         const auto identity = frontend.QueryPipelineDeviceIdentity();
         REQUIRE(identity.HasValue());
-        const RenderGraphicsPipelineState state{};
         const auto stateDigest = ComputeRenderGraphicsPipelineStateDigest(state);
         REQUIRE(stateDigest.HasValue());
         const auto &device = identity.Value();
@@ -86,22 +86,12 @@ namespace Horo::Render::OpenGLMaterialTests {
     }
 
     /** @brief Prepares exact cooked GLSL and final-target reflection through the real frontend admission transactions. */
-    inline PipelineFixture PreparePipeline(RenderFrontend &frontend) {
-        const ShaderTargetRequirement target{.backend = ShaderTargetBackend::OpenGL,
-                                             .payloadFormat = ShaderPayloadFormat::Glsl410,
-                                             .descriptorVersion = 1,
-                                             .interfaceSchemaVersion = 1,
-                                             .maximumBindings = 16,
-                                             .maximumInlineConstantBytes = 128};
-        const auto manifest = MaterialManifest(target);
-        const auto candidate = MaterialReflection();
+    inline PipelineFixture PreparePipelineSources(RenderFrontend &frontend, const ShaderTargetRequirement &target,
+                                                  const ShaderManifest &manifest, const ShaderReflectionCandidate &candidate,
+                                                  const std::string_view vertexSource, const std::string_view fragmentSource,
+                                                  const RenderGraphicsPipelineState &state = {}) {
         const auto reflection = NormalizeShaderReflection(manifest, target, candidate);
         REQUIRE(reflection.HasValue());
-        constexpr std::string_view vertexSource = "#version 410 core\nlayout(location=0) in vec3 Position;out vec2 UV;void "
-                                                  "main(){UV=(Position.xy+vec2(1))*0.5;gl_Position=vec4(Position,1);}";
-        constexpr std::string_view fragmentSource =
-            "#version 410 core\nin vec2 UV;layout(location=0) out vec4 Color;layout(std140) uniform Material{vec4 Tint;};uniform sampler2D "
-            "Albedo;void main(){Color=texture(Albedo,UV)*Tint;}";
         const std::array stages{ShaderArtifactStage{ShaderStage::Vertex, "VertexMain", {vertexSource.begin(), vertexSource.end()}},
                                 ShaderArtifactStage{ShaderStage::Fragment, "FragmentMain", {fragmentSource.begin(), fragmentSource.end()}}};
         const auto package = PackageShaderArtifactStages(target.backend, target.payloadFormat, stages, 64U * 1024U * 1024U);
@@ -115,8 +105,8 @@ namespace Horo::Render::OpenGLMaterialTests {
                                                            reflection.Value().interfaceCompatibility},
                                                           package.Value());
         REQUIRE(fragment.HasValue());
-        auto descriptor =
-            PipelineDescriptor(frontend, vertex.Value().handle, fragment.Value().handle, manifest, target, reflection.Value(), artifact);
+        auto descriptor = PipelineDescriptor(frontend, vertex.Value().handle, fragment.Value().handle, manifest, target, reflection.Value(),
+                                             artifact, state);
         const auto pipeline = frontend.CreateGraphicsPipeline(descriptor);
         if (pipeline.HasError()) {
             INFO("Pipeline admission: " << pipeline.ErrorValue().domain.Value() << '/' << pipeline.ErrorValue().code.Value() << ": "
@@ -127,6 +117,22 @@ namespace Horo::Render::OpenGLMaterialTests {
         const auto layout = PrepareMaterialBindingLayout(reflection.Value());
         REQUIRE(layout.HasValue());
         return {vertex.Value().handle, fragment.Value().handle, pipeline.Value().handle, layout.Value(), std::move(descriptor)};
+    }
+
+    /** @brief Preserves the existing material fixture through the shared exact source/manifest admission. */
+    inline PipelineFixture PreparePipeline(RenderFrontend &frontend) {
+        const ShaderTargetRequirement target{.backend = ShaderTargetBackend::OpenGL,
+                                             .payloadFormat = ShaderPayloadFormat::Glsl410,
+                                             .descriptorVersion = 1,
+                                             .interfaceSchemaVersion = 1,
+                                             .maximumBindings = 16,
+                                             .maximumInlineConstantBytes = 128};
+        constexpr std::string_view vertex = "#version 410 core\nlayout(location=0) in vec3 Position;out vec2 UV;void "
+                                            "main(){UV=(Position.xy+vec2(1))*0.5;gl_Position=vec4(Position,1);}";
+        constexpr std::string_view fragment =
+            "#version 410 core\nin vec2 UV;layout(location=0) out vec4 Color;layout(std140) uniform Material{vec4 Tint;};uniform sampler2D "
+            "Albedo;void main(){Color=texture(Albedo,UV)*Tint;}";
+        return PreparePipelineSources(frontend, target, MaterialManifest(target), MaterialReflection(), vertex, fragment);
     }
 
     /** @brief Creates a ready indexed fullscreen triangle through admitted generic resource preparation. */

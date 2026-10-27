@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "RenderFrameGraphResources.h"
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
@@ -10,6 +11,7 @@
 #include "RenderMultiviewResources.h"
 #include "RenderResourceRegistry.h"
 #include "RenderSubmissionAllocator.h"
+#include "VfxSchedulingStorage.h"
 
 #include <algorithm>
 #include <memory>
@@ -32,11 +34,26 @@ namespace Horo::Render {
             if (explicitSubmissions && !backend.Capabilities().supportsExplicitGraphSubmissions)
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
                                                        "The selected backend does not implement explicit graph submissions."));
-            if (std::ranges::any_of(workloads, [](const auto &workload) {
+            if (!backend.Capabilities().support.features.Supports(RenderCapability::VfxForwardInstancing) &&
+                std::ranges::any_of(workloads, [](const auto &workload) {
                 return std::holds_alternative<RenderGraphVfx>(workload.workload);
             }))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
             return Result<void>::Success();
+        }
+
+        /** @brief Retains the canonical VFX scratch owner only when this graph needs it and no callback already borrows it. */
+        Result<std::shared_ptr<Detail::VfxSchedulingStorage>> SelectVfxResolutionStorage(
+            const std::span<const RenderGraphPassWorkload> workloads, const std::shared_ptr<Detail::VfxSchedulingStorage> &storage) {
+            using Selection = Result<std::shared_ptr<Detail::VfxSchedulingStorage>>;
+            const auto hasVfx = std::ranges::any_of(workloads, [](const auto &entry) {
+                return std::holds_alternative<RenderGraphVfx>(entry.workload);
+            });
+            if (!hasVfx)
+                return Selection::Success(nullptr);
+            if (!storage || storage->resolvingGraph)
+                return Selection::Failure(MakeError(VfxFrameErrors::Pending));
+            return Selection::Success(storage);
         }
     }  // namespace
 
@@ -99,33 +116,82 @@ namespace Horo::Render {
                 Abort();
                 return Result<void>::Failure(selectedTransient.ErrorValue());
             }
-            auto *transient = selectedTransient.Value();
-            const auto resolved = Detail::ResolveFrameGraphResources(graph, *owner_->resourceRegistry_, transient);
-            if (resolved.HasError()) {
-                Abort();
-                return Result<void>::Failure(resolved.ErrorValue());
-            }
-            const auto multiview = Detail::ResolveMultiviewResources(workloads, *owner_->resourceRegistry_);
-            if (multiview.HasError()) {
-                Abort();
-                return Result<void>::Failure(multiview.ErrorValue());
-            }
-            const auto leased =
-                role == RenderGraphExecutionRole::UiComposition
-                    ? owner_->graphResourceLeases_->AcquireUi(graph.Resources(), *ui, transient, completionLease_, workloads)
-                    : owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads, graph.templateBinding_);
-            if (leased.HasError()) {
-                Abort();
-                return Result<void>::Failure(leased.ErrorValue());
-            }
-            return ExecuteLeasedGraph({frame_, graph, workloads, resolved.Value().View(), leased.Value(), transient != nullptr, nullptr,
-                                       submissions, std::span{multiview.Value().meshes}.first(multiview.Value().meshCount),
-                                       std::span{multiview.Value().views}.first(multiview.Value().viewCount), role},
-                                      submissionHistory);
+            return EncodeResolvedGraph(graph, workloads, ui, selectedTransient.Value(), submissions, role, submissionHistory);
         } catch (...) {  // NOSONAR(cpp:S2738) Frame ownership must recover across an arbitrary backend exception.
             Abort();
             return Result<void>::Failure(MakeError(FrontendErrors::FrameException));
         }
+    }
+
+    /** @copydoc RenderFrameScope::EncodeResolvedGraph */
+    Result<void> RenderFrameScope::EncodeResolvedGraph(const CompiledRenderGraphExecution &graph,
+                                                       const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
+                                                       Detail::RenderGraphTransientResourceSet *transient,
+                                                       const std::span<const RenderGraphQueueSubmission> submissions,
+                                                       const RenderGraphExecutionRole role,
+                                                       const Detail::RenderSubmissionAllocator &submissionHistory) {
+        const auto resolved = Detail::ResolveFrameGraphResources(graph, *owner_->resourceRegistry_, transient);
+        if (resolved.HasError()) {
+            Abort();
+            return Result<void>::Failure(resolved.ErrorValue());
+        }
+        const auto multiview = Detail::ResolveMultiviewResources(workloads, *owner_->resourceRegistry_);
+        if (multiview.HasError()) {
+            Abort();
+            return Result<void>::Failure(multiview.ErrorValue());
+        }
+        return EncodeGraphBindings({frame_,
+                                    graph,
+                                    workloads,
+                                    resolved.Value().View(),
+                                    nullptr,
+                                    transient != nullptr,
+                                    nullptr,
+                                    submissions,
+                                    std::span{multiview.Value().meshes}.first(multiview.Value().meshCount),
+                                    std::span{multiview.Value().views}.first(multiview.Value().viewCount),
+                                    role,
+                                    {}},
+                                   ui, transient, submissionHistory);
+    }
+
+    /** @copydoc RenderFrameScope::EncodeGraphBindings */
+    Result<void> RenderFrameScope::EncodeGraphBindings(RenderGraphExecutionRequest request, UiRenderSubmission *ui,
+                                                       Detail::RenderGraphTransientResourceSet *transient,
+                                                       const Detail::RenderSubmissionAllocator &submissionHistory) {
+        const auto selectedVfx = SelectVfxResolutionStorage(request.workloads, owner_->vfxScheduling_);
+        if (selectedVfx.HasError()) {
+            Abort();
+            return Result<void>::Failure(selectedVfx.ErrorValue());
+        }
+        const auto vfxStorage = selectedVfx.Value();
+        const auto clearVfxResolution = [](Detail::VfxSchedulingStorage *storage) noexcept {
+            storage->resolvingGraph = false;
+        };
+        std::unique_ptr<Detail::VfxSchedulingStorage, decltype(clearVfxResolution)> vfxResolution{vfxStorage.get(), clearVfxResolution};
+        std::span<const RenderGraphMeshInstance> meshes = request.meshes;
+        std::span<const RenderGraphTargetInstance> targets;
+        if (vfxStorage) {
+            vfxStorage->resolvingGraph = true;
+            if (const auto resolvedVfx = owner_->ResolveVfxGraphResources(request.workloads, meshes, meshes, targets);
+                resolvedVfx.HasError()) {
+                Abort();
+                return resolvedVfx;
+            }
+        }
+        const auto leased =
+            request.role == RenderGraphExecutionRole::UiComposition
+                ? owner_->graphResourceLeases_->AcquireUi(request.graph.Resources(), *ui, transient, completionLease_, request.workloads)
+                : owner_->graphResourceLeases_->Acquire(request.graph.Resources(), ui, transient, request.workloads,
+                                                        request.graph.templateBinding_);
+        if (leased.HasError()) {
+            Abort();
+            return Result<void>::Failure(leased.ErrorValue());
+        }
+        request.lease = leased.Value();
+        request.meshes = meshes;
+        request.targets = targets;
+        return ExecuteLeasedGraph(request, submissionHistory);
     }
 
     /** @copydoc RenderFrameScope::ExecuteGraph(const CompiledRenderGraphExecution &, std::span<const RenderGraphPassWorkload>,

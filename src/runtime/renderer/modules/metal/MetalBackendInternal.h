@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "MetalBackendModule.h"
 #include "MetalDeviceCapabilities.h"
 #include "MetalRenderBackendErrors.h"
@@ -14,6 +15,21 @@ namespace Horo::Render::Detail {
     class IMetalRuntime : public IRenderResourceBackend, public IMaterialBindingBackend {
     public:
         ~IMetalRuntime() override = default;
+
+        /** @brief Unsupported runtimes cannot publish an issued native VFX slot. */
+        [[nodiscard]] virtual Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &) {
+            return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+        }
+
+        /** @brief Default injected runtimes explicitly decline native VFX draw admission. */
+        [[nodiscard]] virtual Result<void> ValidateVfxWorkload(const RenderGraphVfx &, const RenderGraphExecutionRequest &) const {
+            return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+        }
+
+        /** @brief Default injected runtimes never treat an unencoded VFX draw as success. */
+        [[nodiscard]] virtual Result<void> ExecuteVfxWorkload(const RenderGraphVfx &, const RenderGraphExecutionRequest &) {
+            return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+        }
 
         /** @brief Unsupported injected runtimes never claim frame-slot upload completion. */
         [[nodiscard]] virtual Result<void> UpdateLightFrame(const NativeLightFrameUpdate &) {

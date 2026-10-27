@@ -108,6 +108,8 @@ namespace Horo::Render {
 
     private:
         friend class Horo::Vfx::VfxRenderExtractor;
+        friend class PreparedVfxFrameSlot;
+        friend class RenderFrontend;
         std::shared_ptr<const RenderWorldFrameData> data_;
     };
 }  // namespace Horo::Render

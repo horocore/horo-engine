@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "OpenGLPipelineRealization.h"
 #include "OpenGLRenderBackendErrors.h"
 #include "OpenGLShaderRealization.h"
@@ -9,6 +10,119 @@
 #include <limits>
 #include <new>
 #include <string_view>
+#include <vector>
+
+namespace {
+    /** @brief Supplies only logical/reflected inputs for the pure production attribute admission, never a GPU pipeline or issuer. */
+    Horo::Render::RenderGraphicsPipelineDescriptor VfxAttributeDescriptor() {
+        using namespace Horo::Render;
+        RenderGraphicsPipelineDescriptor descriptor;
+        descriptor.target = {.backend = ShaderTargetBackend::OpenGL,
+                             .payloadFormat = ShaderPayloadFormat::Glsl410,
+                             .descriptorVersion = 1,
+                             .interfaceSchemaVersion = 1,
+                             .maximumBindings = 4};
+        descriptor.manifest = MakeVfxShaderManifest(descriptor.target);
+        descriptor.reflection.backend = ShaderTargetBackend::OpenGL;
+        descriptor.reflection.interfaceSchemaVersion = 1;
+        const auto schema = ComputeShaderInterfaceCompatibilityId(descriptor.manifest);
+        REQUIRE(schema.HasValue());
+        descriptor.reflection.interfaceCompatibility = schema.Value();
+        descriptor.reflection.stageInterface = {{ShaderStage::Vertex, ShaderInterfaceDirection::Input, 0, ShaderValueType::Float32, 1, 3, 1,
+                                                 "in_var_POSITION"},
+                                                {ShaderStage::Vertex, ShaderInterfaceDirection::Input, 2, ShaderValueType::Float32, 1, 2, 1,
+                                                 "in_var_TEXCOORD0"}};
+        return descriptor;
+    }
+}  // namespace
+
+TEST_CASE("VFX driver instance builtin does not consume a MeshVertex stream location", "[render][opengl][reflection][vfx]") {
+    using namespace Horo::Render;
+    auto descriptor = VfxAttributeDescriptor();
+    std::vector<Detail::OpenGLVertexAttribute> attributes{{"in_var_TEXCOORD0", 0x8B50, 1, 2},
+                                                          {"in_var_POSITION", 0x8B51, 1, 0},
+                                                          {"gl_InstanceID", 0x1404, 1, 1}};
+    SECTION("Apple reports builtin at numeric normal location") {}
+    SECTION("Driver reports builtin without a physical location") {
+        attributes.back().location = -1;
+    }
+    SECTION("Driver omits builtin from attribute enumeration") {
+        attributes.pop_back();
+    }
+    SECTION("A real normal at slot one remains an independent physical input") {
+        descriptor.reflection.stageInterface.insert(descriptor.reflection.stageInterface.begin() + 1,
+                                                    {ShaderStage::Vertex, ShaderInterfaceDirection::Input, 1, ShaderValueType::Float32, 1,
+                                                     3, 1, "normal"});
+        attributes.push_back({"normal", 0x8B51, 1, 1});
+    }
+    CHECK(Detail::ValidateOpenGLVertexAttributes(attributes, descriptor).HasValue());
+}
+
+TEST_CASE("VFX native attribute admission rejects malformed builtins and every missing or foreign user input",
+          "[render][opengl][reflection][vfx]") {
+    auto descriptor = VfxAttributeDescriptor();
+    std::vector<Horo::Render::Detail::OpenGLVertexAttribute> attributes{{"in_var_TEXCOORD0", 0x8B50, 1, 2},
+                                                                        {"in_var_POSITION", 0x8B51, 1, 0},
+                                                                        {"gl_InstanceID", 0x1404, 1, 1}};
+    SECTION("Unknown builtin") {
+        attributes.back().name = "gl_VertexID";
+    }
+    SECTION("Builtin with vector type") {
+        attributes.back().type = 0x8B53;
+    }
+    SECTION("Builtin with array extent") {
+        attributes.back().arrayCount = 2;
+    }
+    SECTION("Duplicate builtin") {
+        attributes.push_back(attributes.back());
+    }
+    CHECK(Horo::Render::Detail::ValidateOpenGLVertexAttributes(attributes, descriptor).HasError());
+}
+
+TEST_CASE("VFX native attribute admission rejects missing foreign and malformed canonical user inputs",
+          "[render][opengl][reflection][vfx]") {
+    auto descriptor = VfxAttributeDescriptor();
+    std::vector<Horo::Render::Detail::OpenGLVertexAttribute> attributes{{"in_var_TEXCOORD0", 0x8B50, 1, 2},
+                                                                        {"in_var_POSITION", 0x8B51, 1, 0},
+                                                                        {"gl_InstanceID", 0x1404, 1, 1}};
+    SECTION("Missing UV input") {
+        attributes.erase(attributes.begin());
+    }
+    SECTION("Wrong UV native shape") {
+        attributes.front().type = 0x8B51;
+    }
+    SECTION("Wrong UV array extent") {
+        attributes.front().arrayCount = 2;
+    }
+    SECTION("Wrong physical UV slot") {
+        attributes.front().location = 1;
+    }
+    SECTION("Wrong native user name") {
+        attributes.front().name = "foreign_uv";
+    }
+    SECTION("Duplicate user location") {
+        attributes.front() = attributes[1];
+    }
+    SECTION("Extra user input") {
+        attributes.push_back({"extra", 0x8B51, 1, 1});
+    }
+    SECTION("Foreign logical schema") {
+        descriptor.manifest.parameters.front().arrayCount = 127;
+    }
+    SECTION("Old VFX cook revision") {
+        descriptor.manifest.sourceRevision = 2;
+    }
+    SECTION("Matching label cannot replace canonical typed identity") {
+        descriptor.manifest.bindings.front().arrayCount = 2;
+    }
+    SECTION("Foreign reflection backend") {
+        descriptor.reflection.backend = Horo::Render::ShaderTargetBackend::Vulkan;
+    }
+    SECTION("Foreign reflection schema version") {
+        descriptor.reflection.interfaceSchemaVersion = 2;
+    }
+    CHECK(Horo::Render::Detail::ValidateOpenGLVertexAttributes(attributes, descriptor).HasError());
+}
 
 TEST_CASE("OpenGL reflected vector types preserve portable row and column shapes", "[render][opengl][reflection]") {
     using namespace Horo::Render;

@@ -39,6 +39,8 @@ namespace Horo::Render::Detail {
         struct Pass {
             RenderGraphExecutionRange before;
             RenderGraphExecutionRange after;
+            VulkanMaterialTarget vfxTarget;
+            RenderGraphExecutionRange vfxDraws;
         };
 
         struct Update {
@@ -75,10 +77,12 @@ namespace Horo::Render::Detail {
         struct MaterialDraw {
             VulkanMaterialMesh mesh;
             const VulkanPreparedMaterialBinding *material{};
+            std::uint32_t instances{1};
         };
 
         std::array<MaterialDraw, RenderMaterialPass::MaximumDraws> materialDraws;
         VulkanMaterialTarget materialTarget;
+        std::vector<MaterialDraw> vfxDraws; /**< Cold-reserved against the canonical whole-scene draw ceiling. */
         std::uint64_t deviceIncarnation{};
         VulkanCommandRuntime commands;
         VulkanMultiviewRecorder multiview;
@@ -103,6 +107,7 @@ namespace Horo::Render::Detail {
             bool recorded{false};
             bool closing{false};
             bool failedSubmission{false};
+            bool uploadingVfx{false}; /**< Owner-thread native map borrow; closing revokes admission before retirement. */
         };
 
         Lifecycle lifecycle;
@@ -213,6 +218,18 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> MaterialState(const VulkanGraphResource &resource, RenderGraphLogicalState next,
                                                  const RenderQueueSubmission &submission, bool requireContents);
         void EncodeMaterial(VkCommandBuffer command, const RenderMaterialExecutionRequest &request) const noexcept;
+        /** @brief Captures exact published VFX draws into bounded per-pass native encoding scratch. */
+        [[nodiscard]] Result<void> PrepareVfx(const RenderGraphExecutionRequest &request, std::size_t pass, VulkanCommandRetention &pins);
+        /** @brief Admits exact instance/sample roles and prepares immutable constant state through the canonical graph owner. */
+        [[nodiscard]] Result<void> PrepareVfxMaterialBindings(const MaterialBindingDescriptor &descriptor,
+                                                              const VulkanPreparedMaterialBinding &material, const VfxPreparedDraw &source,
+                                                              const VulkanMaterialTarget &target);
+        /** @brief Validates one native material/mesh/instance generation before any command ticket is recorded. */
+        [[nodiscard]] Result<MaterialDraw> PrepareVfxDraw(const RenderGraphExecutionRequest &request, const RenderGraphVfx &workload,
+                                                          const VfxPreparedDraw &source, const VulkanMaterialTarget &target,
+                                                          VulkanCommandRetention &pins);
+        /** @brief Encodes one fully captured forward VFX pass through the existing pipeline and descriptor owner. */
+        void EncodeVfx(VkCommandBuffer command, std::size_t pass) const noexcept;
         void Abort() noexcept;
 
         [[nodiscard]] static Error Invalid(const char *reason) {

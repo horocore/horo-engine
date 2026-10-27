@@ -33,6 +33,7 @@
 namespace Horo::Render {
     struct RenderGraphExecutionRequest;
     struct NativeUiPaintFrameUpdate;
+    struct NativeVfxFrameUpdate;
     class IRenderGraphResourceLease;
     struct RenderGraphLeaseTransfer;
     struct RenderShaderModuleDescriptor;
@@ -606,6 +607,12 @@ namespace Horo::Render {
          * @param update Exact resolved residents and synchronous immutable CPU data.
          * @return Typed unsupported/busy/invalid failure preserving prior accepted revision, or complete success. */
         [[nodiscard]] virtual Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update);
+        /** @brief Publishes a complete reusable VFX uniform slot after exact native completion admission.
+         * @param update Resolved uniform generation and finite borrowed canonical packed blocks.
+         * @return Complete success or original typed unsupported/pending/invalid failure; no wait or fallback.
+         * @details Outside active-frame recording; failed admission preserves the previous bytes and revision.
+         */
+        [[nodiscard]] virtual Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update);
 
         /**
          * @brief Updates a reusable frame slot only after all prior native buffer use has completed.

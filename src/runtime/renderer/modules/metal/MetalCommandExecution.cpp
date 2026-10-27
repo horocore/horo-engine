@@ -36,8 +36,12 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(
                 MakeError(MetalBackendErrors::InvalidExecutionPlan, "Graph operation, bindings or declared resource uses are invalid."));
         for (const auto &binding : request.workloads) {
-            if (std::holds_alternative<RenderGraphDepthAttachment>(binding.workload) ||
-                std::holds_alternative<RenderGraphMultiview>(binding.workload))
+            if (const auto *vfx = std::get_if<RenderGraphVfx>(&binding.workload)) {
+                if (const auto valid = runtime.ValidateVfxWorkload(*vfx, request); valid.HasError())
+                    return valid;
+                continue;
+            }
+            if (std::holds_alternative<RenderGraphMultiview>(binding.workload))
                 return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
             if (const auto valid = runtime.ValidateGraphWorkload(binding.workload, request.resources); valid.HasError()) {
                 return valid;
@@ -52,6 +56,13 @@ namespace Horo::Render::Detail {
             return valid;
         }
         for (const auto &binding : request.workloads) {
+            if (const auto *vfx = std::get_if<RenderGraphVfx>(&binding.workload)) {
+                if (const auto encoded = runtime.ExecuteVfxWorkload(*vfx, request); encoded.HasError()) {
+                    runtime.AbortFrame();
+                    return encoded;
+                }
+                continue;
+            }
             if (const auto encoded = runtime.ExecuteGraphWorkload(binding.workload, request.resources); encoded.HasError()) {
                 runtime.AbortFrame();
                 return encoded;

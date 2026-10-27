@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "ShaderCompilerRoute.h"
 #include "ShaderCompilerToolchainSupport.h"
 
@@ -36,6 +37,66 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         }
     }  // namespace
 
+    /** @copydoc AdmitRasterCookInterface */
+    Result<bool> AdmitRasterCookInterface(const ShaderCompilerInvocation &invocation) {
+        const auto canonicalVfx = MakeVfxShaderManifest(invocation.target.requirement);
+        const auto expectedVfx = ComputeShaderInterfaceCompatibilityId(canonicalVfx);
+        const auto actual = ComputeShaderInterfaceCompatibilityId(invocation.manifest);
+        if (expectedVfx.HasError() || actual.HasError())
+            return Result<bool>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        const bool vfxInterface = expectedVfx.Value() == actual.Value();
+        if (vfxInterface && invocation.manifest.sourceRevision != canonicalVfx.sourceRevision)
+            return Result<bool>::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
+        if (vfxInterface && invocation.target.requirement.backend == ShaderTargetBackend::OpenGL &&
+            invocation.target.intermediateEnvironment != ShaderIntermediateEnvironment::Vulkan12SpirV15)
+            return Result<bool>::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
+        return Result<bool>::Success(vfxInterface);
+    }
+
+    /** @copydoc RasterTranslationArguments */
+    std::vector<std::string> RasterTranslationArguments(const ShaderEntryPoint &entry, const std::filesystem::path &spirvPath,
+                                                        const std::filesystem::path &nativePath, const bool metal,
+                                                        const bool vfxInterface) {
+        std::vector<std::string> arguments{spirvPath.string(),
+                                           "--output",
+                                           nativePath.string(),
+                                           "--entry",
+                                           entry.name,
+                                           "--stage",
+                                           std::string{StageName(entry.stage)}};
+        if (metal)
+            arguments.insert(arguments.end(), {"--msl", "--msl-version", "20400"});
+        else
+            arguments.insert(arguments.end(), {"--version", "410", "--no-es", "--no-420pack-extension"});
+        if (vfxInterface)
+            arguments.emplace_back(metal ? "--msl-decoration-binding" : "--no-support-nonzero-baseinstance");
+        if (vfxInterface && !metal) {
+            // Monolithic GLSL410 links stage varyings by name. The native location alone does not
+            // reconcile DXC's distinct in_var/out_var prefixes on the supported Mac GL profile.
+            constexpr std::array names{"horo_vfx_uv", "horo_vfx_color"};
+            for (std::size_t location = 0; location < names.size(); ++location)
+                arguments.insert(arguments.end(), {"--rename-interface-variable", entry.stage == ShaderStage::Vertex ? "out" : "in",
+                                                   std::to_string(location), names[location]});
+        }
+        return arguments;
+    }
+
+    /** @copydoc NormalizeCapturedRasterReflection */
+    Result<NormalizedShaderReflection> NormalizeCapturedRasterReflection(const ShaderCompilerInvocation &invocation,
+                                                                         const std::vector<SpirvReflectionStage> &stages,
+                                                                         const std::vector<std::string> &translations) {
+        const auto &target = invocation.target.requirement;
+        if (target.backend == ShaderTargetBackend::OpenGL)
+            return NormalizeVfxOpenGLReflection(invocation.manifest, target, stages, translations);
+        const auto expected = ComputeShaderInterfaceCompatibilityId(MakeVfxShaderManifest(target));
+        const auto actual = ComputeShaderInterfaceCompatibilityId(invocation.manifest);
+        if (expected.HasError() || actual.HasError())
+            return Result<NormalizedShaderReflection>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        if (expected.Value() == actual.Value())
+            return NormalizeVfxMetalReflection(invocation.manifest, target, stages, translations);
+        return NormalizeUiPaintMetalReflection(invocation.manifest, target, stages, translations);
+    }
+
     /** @copydoc ValidateUiPaintMetalReflection */
     Result<void> ValidateUiPaintMetalReflection(const ShaderCompilerReflectionRequest &request,
                                                 const ShaderCompilerToolInstallation *cross) {
@@ -49,6 +110,41 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         }
         if (const auto &identity = request.tool;
             !cross || cross->identity.release != identity.release || cross->identity.buildDigest != identity.buildDigest)
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateRasterReflection */
+    Result<void> ValidateRasterReflection(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
+                                          const ShaderCompilerReflectionRequest &request, const ShaderCompilerToolInstallation *cross) {
+        const auto expected = ComputeShaderInterfaceCompatibilityId(MakeVfxShaderManifest(target));
+        const auto actual = ComputeShaderInterfaceCompatibilityId(manifest);
+        if (expected.HasError() || actual.HasError())
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        if (target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL)
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        if (expected.Value() != actual.Value()) {
+            if (target.backend == ShaderTargetBackend::OpenGL)
+                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+            return ValidateUiPaintMetalReflection(request, cross);
+        }
+        const std::array<ShaderReflectionBindingName, 4>
+            names{ShaderReflectionBindingName{{1}, "VfxInstances", {{{1}, "ClipFromLocal"}, {{2}, "InstanceColor"}}},
+                  ShaderReflectionBindingName{{2}, "VfxMaterial", {{{3}, "Tint"}, {{4}, "AlphaCutoff"}}},
+                  ShaderReflectionBindingName{{3}, "BaseColor", {}}, ShaderReflectionBindingName{{4}, "BaseColorSampler", {}}};
+        if (request.names.size() != names.size())
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto &given = request.names[index], &wanted = names[index];
+            if (given.id != wanted.id || given.name != wanted.name || given.parameters.size() != wanted.parameters.size())
+                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+            for (std::size_t member = 0; member < wanted.parameters.size(); ++member)
+                if (given.parameters[member].id != wanted.parameters[member].id ||
+                    given.parameters[member].name != wanted.parameters[member].name)
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        }
+        if (!cross || request.tool.tool != ShaderCompilerTool::SpirvCross || cross->identity.release != request.tool.release ||
+            cross->identity.buildDigest != request.tool.buildDigest)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
         return Result<void>::Success();
     }
