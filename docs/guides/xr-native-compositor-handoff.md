@@ -297,6 +297,21 @@ the XR mirror accessor returns only the actual admitted first-eye sample.
 These new source paths require their next owning compile, CPU regressions and
 warmed-allocation measurement; they do not constitute native execution evidence.
 
+`EditorViewportResources::PrepareMeshesCold` is the explicit load-time admission
+for this graph. It advances the existing resident buffer-to-mesh dependency
+stages through the same frontend upload queue, with at most the initial queued
+request count plus three requests per incoming mesh worth of CPU drain calls.
+Per-drain request/byte limits remain effective; no GPU completion is awaited.
+Success requires the exact requested generation, Ready buffers and mesh, and
+their actual descriptors before graph imports. A stalled/exhausted preparation
+returns typed pending while retaining its partial resources; completed failures
+preserve their original error. Pending work may resume; failed partial resources
+remain with the existing viewport owner until its explicit `Shutdown` recovery.
+XR graph retirement cannot clear unrelated or unstarted shared viewport state.
+Canonical frontend cancellation/retirement keeps queued references alive. The
+incremental desktop `Prepare` and `PrepareMeshes`
+contracts are unchanged; the selected XR graph caller migrates to the cold method.
+
 
 ### Camera-free selected Play geometry and Scene ownership
 

@@ -310,10 +310,8 @@ namespace Horo::Editor {
             acquired.layout != RenderGraphTextureLayout::ColorAttachment ||
             requiredFinal.layout != RenderGraphTextureLayout::ColorAttachment)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-        if (auto prepared = resources_.PrepareMeshes(meshes); prepared.HasError())
+        if (auto prepared = resources_.PrepareMeshesCold(meshes); prepared.HasError())
             return prepared;
-        if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
-            return Result<void>::Failure(processed.ErrorValue());
         if (const auto support = ResolveMultiviewCapabilities(frontend_.Capabilities().support);
             !support.multipass || !support.indexedShaders || support.maximumViews < 2)
             return Result<void>::Failure(

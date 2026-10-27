@@ -110,6 +110,18 @@ namespace Horo::Tests::OpenXRApplication {
             ApplicationFixture(const ApplicationFixture &) = delete;
             ApplicationFixture &operator=(const ApplicationFixture &) = delete;
 
+            /** @brief Delivers real scripted stop events only after the production owner actually requested native exit. */
+            Result<bool> ClosePlay() {
+                if (!play)
+                    return Result<bool>::Success(true);
+                const auto closed = play->Close();
+                if (closed.HasError() || closed.Value() || !script.events.running || script.events.exits == 0)
+                    return closed;
+                script.events.Push(XR_SESSION_STATE_STOPPING);
+                script.events.Push(XR_SESSION_STATE_IDLE);
+                return play->Close();
+            }
+
             ~ApplicationFixture() {
                 // Clear only test-injected failure controls. The real owners still perform every native release.
                 script.native.fail = {};
@@ -117,11 +129,14 @@ namespace Horo::Tests::OpenXRApplication {
                 script.native.failInstanceRetirement = false;
                 script.census.fail = {};
                 script.graphics.failure = XR_SUCCESS;
+                script.frames.waitResult = XR_SUCCESS;
+                script.frames.beginResult = XR_SUCCESS;
+                script.frames.endResult = XR_SUCCESS;
                 if (vulkan)
                     vulkan->native.commandState.state.Complete();
                 if (play) {
                     static_cast<void>(play->ProgressRenderTail());
-                    auto closed = play->Close();
+                    auto closed = ClosePlay();
                     if (closed.HasError() || !closed.Value())
                         std::terminate();
                     play.reset();
@@ -368,6 +383,9 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(fixture.play->ProgressRenderTail().HasValue());
             CHECK(fixture.script.frames.layers == 0);
             scene->Shutdown();
+            REQUIRE(RequireValue(fixture.ClosePlay()));
+            CHECK(fixture.script.events.exits == 1);
+            CHECK(fixture.script.events.ends == 1);
             return;
         }
         const auto prepared = fixture.play->PrepareRenderFrame(1);
@@ -375,6 +393,11 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK_FALSE(fixture.play->MirrorView(1).IsValid());
         static_cast<void>(fixture.play->ProgressRenderTail());
         scene->Shutdown();
+        fixture.script.frames.waitResult = XR_SUCCESS;
+        fixture.script.frames.beginResult = XR_SUCCESS;
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK(fixture.script.events.exits == 1);
+        CHECK(fixture.script.events.ends == 1);
     }
 
     TEST_CASE("Real installed Play retains its acquired first eye through actual scene and GUI queue completion",
@@ -420,5 +443,9 @@ namespace Horo::Tests::OpenXRApplication {
         retirement->Publish();
         scene->Shutdown();
         REQUIRE(fixture.play->ProgressRenderTail().HasValue());
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK(fixture.script.events.exits == 1);
+        CHECK(fixture.script.events.ends == 1);
+        CHECK(fixture.script.native.liveSessions == 0);
     }
 }  // namespace Horo::Tests::OpenXRApplication

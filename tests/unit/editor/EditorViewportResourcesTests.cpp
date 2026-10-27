@@ -1,7 +1,9 @@
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/RenderGraph.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/renderer/EditorViewportResources.h"
+#include "runtime/renderer/frontend/RenderFrontendErrors.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -46,11 +48,11 @@ namespace {
 
     thread_local ImageResolverFixture *ImageResolverFixture::active_ = nullptr;
 
-    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateFrontend() {
+    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateFrontend(const RenderResourceUploadLimits &uploadLimits = {}) {
         RenderBackendRegistry registry;
         REQUIRE(RegisterNullRenderBackend(registry).HasValue());
         REQUIRE(registry.Seal().HasValue());
-        auto created = RenderFrontend::Create(registry, RenderBackendId{"null"}, RenderBackendConfig{});
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"null"}, RenderBackendConfig{}, uploadLimits);
         REQUIRE(created.HasValue());
         return std::move(created).Value();
     }
@@ -94,6 +96,71 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("Cold mesh preparation admits exact ready buffers and mesh before graph imports", "[unit][headless][renderer][resource]") {
+    auto frontend = CreateFrontend();
+    SECTION("default canonical drain limits") {
+        REQUIRE(frontend->UploadSnapshot().acceptingRequests);
+    }
+    SECTION("one request per canonical drain") {
+        frontend = CreateFrontend({.maximumRequestsPerDrain = 1});
+    }
+    auto resources = CreateResources(*frontend);
+    MeshSceneFixture fixture;
+    const auto scene = fixture.Scene(1);
+    REQUIRE(resources.PrepareMeshesCold(scene.meshResources).HasValue());
+    const auto mesh = resources.FindMesh(41);
+    REQUIRE(mesh);
+    REQUIRE(mesh->mesh.IsValid());
+    const auto meshState = frontend->ResourceState(mesh->mesh);
+    const auto vertexState = frontend->ResourceState(mesh->descriptor.vertexBuffer);
+    const auto indexState = frontend->ResourceState(mesh->descriptor.indexBuffer);
+    REQUIRE(meshState.HasValue());
+    REQUIRE(vertexState.HasValue());
+    REQUIRE(indexState.HasValue());
+    CHECK(meshState.Value() == RenderResourceState::Ready);
+    CHECK(vertexState.Value() == RenderResourceState::Ready);
+    CHECK(indexState.Value() == RenderResourceState::Ready);
+    CHECK(mesh->descriptor.vertexCount == fixture.vertices.size());
+    CHECK(mesh->descriptor.indexCount == fixture.indices.size());
+    auto created = RenderGraphBuilder::Create({.maxPasses = 1, .maxResources = 2, .maxUsages = 2, .maxDependencies = 1});
+    REQUIRE(created.HasValue());
+    auto builder = std::move(created).Value();
+    const auto vertices = builder.ImportBuffer(mesh->descriptor.vertexBuffer, RenderGraphResourceClass::Persistent);
+    const auto indices = builder.ImportBuffer(mesh->descriptor.indexBuffer, RenderGraphResourceClass::Persistent);
+    const auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
+    REQUIRE(vertices.HasValue());
+    REQUIRE(indices.HasValue());
+    REQUIRE(pass.HasValue());
+    const auto vertexUse = builder.AddUsage({pass.Value(), vertices.Value(), RenderGraphAccess::Read, RenderGraphUsageKind::VertexBuffer});
+    const auto indexUse = builder.AddUsage({pass.Value(), indices.Value(), RenderGraphAccess::Read, RenderGraphUsageKind::IndexBuffer});
+    REQUIRE(vertexUse.HasValue());
+    REQUIRE(indexUse.HasValue());
+    REQUIRE(builder.Finalize().HasValue());
+    const auto replacementScene = fixture.Scene(2);
+    REQUIRE(resources.PrepareMeshesCold(replacementScene.meshResources).HasValue());
+    const auto replacement = resources.FindMesh(41);
+    REQUIRE(replacement);
+    CHECK(replacement->mesh != mesh->mesh);
+    CHECK(replacement->descriptor.vertexBuffer != mesh->descriptor.vertexBuffer);
+    resources.Shutdown();
+}
+
+TEST_CASE("Cold mesh preparation preserves canonical partial rollback and shutdown safety", "[unit][headless][renderer][resource]") {
+    auto frontend = CreateFrontend({.maximumRequestsPerDrain = 1, .maximumPendingRequests = 1});
+    auto resources = CreateResources(*frontend);
+    MeshSceneFixture fixture;
+    const auto scene = fixture.Scene(1);
+    const auto prepared = resources.PrepareMeshesCold(scene.meshResources);
+    REQUIRE(prepared.HasError());
+    CHECK(prepared.ErrorValue().code.Value() == FrontendErrors::ResourceUploadCapacityExceeded.code.Value());
+    CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+    CHECK(frontend->UploadSnapshot().cancelledRequestCount == 1);
+    resources.Shutdown();
+    REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+    CHECK(frontend->UploadSnapshot().cancelledRequestCount == 1);
+}
 
 TEST_CASE("Headless viewport resources replace resize generations atomically", "[unit][headless][renderer][resource]") {
     ImageResolverFixture imageResolver;
