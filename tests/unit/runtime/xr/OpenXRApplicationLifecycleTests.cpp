@@ -48,6 +48,7 @@ namespace Horo::Tests::OpenXRApplication {
                 RequireValue(Editor::ConvertSceneDocumentToRuntime(document.Snapshot(), Runtime::SceneDefinitionId{1}))};
             std::unique_ptr<Runtime::RuntimeScene> scene{RequireValue(Runtime::RuntimeScene::Create(definition, {1}))};
             Input::InputRouter router;
+            Input::InputContextToken inputContext; /**< Outlives all session/play borrowers and is destroyed before its router. */
             std::shared_ptr<const Host::OpenXRApplicationBindings> bindings{product.ReadBindings()};
             std::unique_ptr<Host::OpenXRApplicationSession> session;
             Render::RenderBackendRegistry renderers;
@@ -162,8 +163,8 @@ namespace Horo::Tests::OpenXRApplication {
                      true,
                      {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}}};
                 REQUIRE(router.SetActionMap(registered).HasValue());
-                const auto context = router.PushContext(Input::InputContextId{"gameplay"}, Input::InputContextKind::Gameplay);
-                return RequireValue(router.ActionCollection(context));
+                inputContext = router.PushContext(Input::InputContextId{"gameplay"}, Input::InputContextKind::Gameplay);
+                return RequireValue(router.ActionCollection(inputContext));
             }
         };
     }  // namespace

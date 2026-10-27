@@ -1,6 +1,8 @@
 #include "EditorOpenXRBootstrap.h"
 #include "support/OpenXRInstalledProductTestFixture.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace Horo::Editor::Tests {
     namespace {
         using Horo::Tests::OpenXRProduct::InstalledProductFixture;
@@ -20,8 +22,13 @@ namespace Horo::Editor::Tests {
         InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER};
         auto arguments = fixture.BootstrapArguments();
         fixture.RetireInstaller();
+        const auto cache = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        REQUIRE_FALSE(std::filesystem::exists(cache / "native"));
+        REQUIRE_FALSE(std::filesystem::exists(cache / "xr-native"));
         auto bootstrap = RequireValue(StartInstalled(fixture, arguments));
         REQUIRE(bootstrap);
+        CHECK(std::filesystem::is_directory(cache / "native"));
+        CHECK(std::filesystem::is_directory(cache / "xr-native"));
         const auto &services = bootstrap->Services();
         REQUIRE(services.packages);
         REQUIRE(services.bindings);
@@ -39,6 +46,32 @@ namespace Horo::Editor::Tests {
         bootstrap.reset();
         // A copied package capability is closed before its borrowed executable jobs/files disappear.
         CHECK(retained->InstalledRecord(fixture.Root(), generation).HasError());
+    }
+
+    TEST_CASE("Executable XR bootstrap rejects files and redirects in its owned native cache parents",
+              "[xr][host][bootstrap][install][security]") {
+        InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER};
+        auto arguments = fixture.BootstrapArguments();
+        fixture.RetireInstaller();
+        const auto cache = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        RequireValue(fixture.files.CreateDirectoryPath(cache, DirectoryCreationMode::Single));
+        const auto child = cache / GENERATE("native", "xr-native");
+        const auto redirected = std::filesystem::canonical(fixture.storage.Path()) / "redirect-target";
+        SECTION("regular file") {
+            std::ofstream output{child, std::ios::binary};
+            output << "preserve";
+            output.close();
+            REQUIRE(StartInstalled(fixture, arguments).HasError());
+            std::ifstream input{child, std::ios::binary};
+            CHECK(std::string(std::istreambuf_iterator<char>{input}, {}) == "preserve");
+        }
+        SECTION("directory redirect") {
+            RequireValue(fixture.files.CreateDirectoryPath(redirected, DirectoryCreationMode::Single));
+            std::filesystem::create_directory_symlink(redirected, child);
+            REQUIRE(StartInstalled(fixture, arguments).HasError());
+            CHECK(std::filesystem::is_symlink(child));
+            CHECK(std::filesystem::is_empty(redirected));
+        }
     }
 
     TEST_CASE("Executable signed XR bootstrap rejects independent root and catalog tampering before native discovery",

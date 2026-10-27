@@ -29,6 +29,39 @@ namespace Horo::Editor {
             return MakeError(XR::XRErrors::OperationUnavailable, message);
         }
 
+        /** @brief Admits an existing canonical directory without following a leaf redirect. */
+        Result<void> AdmitCacheDirectory(const NativeDurableFileSystem &files, const std::filesystem::path &path) {
+            const auto entry = files.InspectEntry(path);
+            if (entry.HasError())
+                return Result<void>::Failure(entry.ErrorValue());
+            if (!entry.Value() || entry.Value()->kind != FileEntryKind::Directory)
+                return Result<void>::Failure(BootstrapError("XR cache storage must be an existing directory, never a file or redirect."));
+            std::error_code error;
+            if (std::filesystem::canonical(path, error) != path || error)
+                return Result<void>::Failure(BootstrapError("XR cache storage must retain its exact canonical host-owned location."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Prepares only the verified bootstrap's two owned children before strict package admission. */
+        Result<void> PrepareNativeCacheParents(NativeDurableFileSystem &files, const std::filesystem::path &cache) {
+            if (auto admitted = AdmitCacheDirectory(files, cache); admitted.HasError())
+                return admitted;
+            for (const char *name : {"native", "xr-native"}) {
+                const auto child = cache / name;
+                const auto entry = files.InspectEntry(child);
+                if (entry.HasError())
+                    return Result<void>::Failure(entry.ErrorValue());
+                if (!entry.Value()) {
+                    const auto created = files.CreateDirectoryPath(child, DirectoryCreationMode::Single);
+                    if (created.HasError())
+                        return Result<void>::Failure(created.ErrorValue());
+                }
+                if (auto admitted = AdmitCacheDirectory(files, child); admitted.HasError())
+                    return admitted;
+            }
+            return AdmitCacheDirectory(files, cache);
+        }
+
         /** @brief Parses the actual process's three independent host inputs once, rejecting duplicate/partial requests. */
         Result<HostArguments> ParseHostArguments(const std::span<char *> arguments) {
             HostArguments parsed;
@@ -225,6 +258,8 @@ namespace Horo::Editor {
         /** @brief Composes ONE canonical package authority, then copies only verified installed physical declarations. */
         Result<void> Initialize(const std::filesystem::path &project, const std::filesystem::path &cache,
                                 const Runtime::SceneObjectId trackingRoot) {
+            if (auto prepared = PrepareNativeCacheParents(files, cache); prepared.HasError())
+                return prepared;
             auto platform = Application::Internal::NativePackagePlatform();
             if (platform.HasError())
                 return Result<void>::Failure(platform.ErrorValue());

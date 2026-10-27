@@ -68,6 +68,33 @@ namespace Horo::Input {
         CHECK(moved.Validate().HasError());
     }
 
+    TEST_CASE("Input collection rejects expired scoped contexts and accepts retained context owners", "[unit][input][collection]") {
+        Fixture fixture;
+        const std::array actions{fixture.action};
+        SECTION("expired local owner") {
+            InputActionCollection expired;
+            InputActionSourceToken source;
+            {
+                auto local = fixture.router.PushContext(fixture.action.context, InputContextKind::Gameplay);
+                auto borrowed = fixture.router.ActionCollection(local);
+                REQUIRE(borrowed.HasValue());
+                expired = borrowed.Value();
+                auto registered = expired.RegisterSource(actions);
+                REQUIRE(registered.HasValue());
+                source = std::move(registered).Value();
+                REQUIRE(source.Validate().HasValue());
+            }
+            CHECK(source.Validate().HasError());
+            CHECK(expired.RegisterSource(actions).HasError());
+        }
+        SECTION("retained fixture owner") {
+            auto retained = fixture.Port();
+            auto source = retained.RegisterSource(actions);
+            REQUIRE(source.HasValue());
+            REQUIRE(source.Value().Validate().HasValue());
+        }
+    }
+
     TEST_CASE("Input source validation rejects expired router without dereferencing retired storage", "[unit][input][collection]") {
         InputActionSourceToken retained;
         {
