@@ -478,3 +478,42 @@ player-assignment collection regression now queries through a const reference
 before and after assignment, then exercises normal commit and stale-assignment
 rejection. `Append`, `Commit`, `Cancel` and mirror revocation retain their mutable
 cutoff/publication command contracts.
+
+### Complete-view depth admission
+
+The Vulkan viewport previously requested two-layer depth through ordinary
+`CreateTexture`, whose implemented frontend envelope is deliberately single-layer.
+The matching viewport now calls the noninstalled
+`RenderFrontendResourceAccess::CreateMultiviewDepth`. This cold-only operation fixes
+the descriptor to Depth32Float, attachment-only, empty initial data, one mip and one
+sample; its view count must fit the selected backend's existing complete-view limit.
+It queues through the same frontend registry, memory scopes/budget and upload owner.
+Pending, failed, replacement-generation and deferred-retirement rules remain unchanged.
+
+Vulkan initialization queries the exact D32/2D/optimal/depth-attachment image tuple.
+The published complete-view count intersects implemented views, framebuffer layers,
+physical array layers and the queried format's array limit. Missing query dispatch
+or a native query failure retains its typed error; an unsupported tuple advertises
+no complete views. No native query runs during ordinary frames. Where complete views
+are available, the common `maxTextureDimension2D` bound conservatively intersects the
+queried depth extent. Existing `RenderResourceLimits::Supports` consumers and texture
+admission diagnostics therefore see a tighter common bound, never an increased limit.
+
+Only the Vulkan viewport depth caller migrates; ordinary `CreateTexture`, sampled
+materials and UI-paint creation keep their previous admission policy. Other backends
+must explicitly implement and publish the same complete-view contract before this
+operation is available. No public fields, native handles, new header owners or backend
+selection rules are introduced. Rebuild frontend/public-header consumers and the real
+installed-host fixture consumer. Portable tests prove owner/phase rejection, descriptor
+policy, budget rollback and generation lifecycle; Vulkan query and layered-storage
+tests plus installed lifecycle execution still require the actual Vulkan test graph.
+
+The XR graph retains each returned depth/view creation pair. Retirement uses normal
+frontend release first and recognizes completed rollback only when that exact stored
+operation is terminal failed and release reports its generation already stale. Live
+prefixes still release normally; unknown journals and other release errors remain
+errors. This permits a fresh XR graph generation after already-completed depth rollback
+without clearing unrelated viewport resources or changing ordinary release behavior.
+Other retained cold-mesh failure state still requires the explicit full-owner recovery
+described above. Native depth/view failure, successful-prefix retirement and retry are
+covered through the actual viewport owner; this remains fake-dispatch, not GPU proof.

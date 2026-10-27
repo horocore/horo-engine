@@ -729,6 +729,12 @@ synchronization, N-view semantics, completion evidence and deferred retirement. 
 handles remain private, and XROpenXR retains acquire/release/end-frame ownership. A
 backend may use multipass or native multiview internally, but cannot omit/reorder views
 or claim an unqualified greater-than-two configuration.
+The existing `maxMultiviewViews` limit denotes a complete view workload, including
+owned single-sample Depth32Float attachment layers. A shader-routing feature bit
+alone does not grant that storage. Matching integrations admit it through the
+noninstalled frontend resource-access boundary and the same registry, budget,
+upload and retirement owners. Ordinary texture creation retains its current
+single-layer envelope; unsupported peers return a typed failure without fallback.
 The common module metadata, window requirements, editor lifecycle, generic mesh
 snapshot, target handles, submission contract, and parity test harness are shared.
 

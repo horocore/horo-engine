@@ -1,6 +1,7 @@
 #include "VulkanNativeRuntime.h"
 
 #include "VulkanGraphRuntime.h"
+#include "VulkanMultiviewDepthSupport.h"
 #include "VulkanPresentationRuntime.h"
 #include "VulkanRenderBackendErrors.h"
 #include "VulkanResourceConversions.h"
@@ -574,15 +575,32 @@ namespace Horo::Render {
             };
 
             /** @brief Intersects actual enabled draw/layer dispatch with the selected device's framebuffer layer limit. */
-            void PublishMultiviewCapabilities(const VkPhysicalDeviceProperties &properties) {
+            Result<void> PublishMultiviewCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties) {
                 auto &snapshot = resourceCapabilities_;
                 const auto multiview = graph_.MultiviewSupport();
                 if (multiview.indexedShaders) {
                     snapshot.features.Enable(RenderCapability::ViewIndexedShaders);
-                    snapshot.limits.maxMultiviewViews = std::min(multiview.maximumViews, properties.limits.maxFramebufferLayers);
+                    const RenderTextureDescriptor depth{.extent = {1, 1},
+                                                        .format = RenderTextureFormat::Depth32Float,
+                                                        .usage = RenderTextureUsage::RenderAttachment};
+                    if (snapshot.formats.Supports(depth)) {
+                        const auto query =
+                            LoadInstanceFunction<PFN_vkGetPhysicalDeviceImageFormatProperties>(dispatch_.getInstanceProcAddr, instance_,
+                                                                                               "vkGetPhysicalDeviceImageFormatProperties");
+                        const auto admitted = Detail::QueryMultiviewDepthLimits(device, query, multiview.maximumViews, properties.limits);
+                        if (admitted.HasError()) {
+                            snapshot = {};
+                            return Result<void>::Failure(admitted.ErrorValue());
+                        }
+                        snapshot.limits.maxMultiviewViews = admitted.Value().maximumViews;
+                        if (admitted.Value().maximumViews != 0)
+                            snapshot.limits.maxTextureDimension2D =
+                                std::min(snapshot.limits.maxTextureDimension2D, admitted.Value().maximumExtent2D);
+                    }
                 }
                 if (multiview.instancedTargetRouting)
                     snapshot.features.Enable(RenderCapability::InstancedViewRouting);
+                return Result<void>::Success();
             }
 
             /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
@@ -605,7 +623,6 @@ namespace Horo::Render {
                      {RenderCapability::BufferResources, RenderCapability::MeshResources, RenderCapability::TextureResources,
                       RenderCapability::RenderTargetResources, RenderCapability::OffscreenTargets})
                     snapshot.features.Enable(capability);
-                PublishMultiviewCapabilities(properties);
                 const auto query = LoadInstanceFunction<PFN_vkGetPhysicalDeviceFormatProperties>(dispatch_.getInstanceProcAddr, instance_,
                                                                                                  "vkGetPhysicalDeviceFormatProperties");
                 if (query == nullptr) {
@@ -631,7 +648,7 @@ namespace Horo::Render {
                         usage = usage | CopyDestination;
                     snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
                 }
-                return Result<void>::Success();
+                return PublishMultiviewCapabilities(device, properties);
             }
 
             template <typename Property, typename Enumerator, typename Name>
@@ -902,6 +919,31 @@ namespace Horo::Render {
     }  // namespace
 
     namespace Detail {
+        /** @copydoc QueryMultiviewDepthLimits */
+        Result<VulkanMultiviewDepthLimits> QueryMultiviewDepthLimits(const VkPhysicalDevice device,
+                                                                     const PFN_vkGetPhysicalDeviceImageFormatProperties query,
+                                                                     const std::uint32_t implementedViews,
+                                                                     const VkPhysicalDeviceLimits &limits) {
+            if (implementedViews == 0)
+                return Result<VulkanMultiviewDepthLimits>::Success({});
+            if (query == nullptr)
+                return Result<VulkanMultiviewDepthLimits>::Failure(MissingEntryPoint("vkGetPhysicalDeviceImageFormatProperties"));
+            VkImageFormatProperties format{};
+            const auto result = query(device, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+                                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 0, &format);
+            if (result == VK_ERROR_FORMAT_NOT_SUPPORTED)
+                return Result<VulkanMultiviewDepthLimits>::Success({});
+            if (result != VK_SUCCESS)
+                return Result<VulkanMultiviewDepthLimits>::Failure(NativeFailure("vkGetPhysicalDeviceImageFormatProperties", result));
+            if (format.maxMipLevels == 0 || format.maxExtent.depth == 0 || (format.sampleCounts & VK_SAMPLE_COUNT_1_BIT) == 0)
+                return Result<VulkanMultiviewDepthLimits>::Success({});
+            const auto views =
+                std::min({implementedViews, 32U, limits.maxFramebufferLayers, limits.maxImageArrayLayers, format.maxArrayLayers});
+            const auto extent = std::min({limits.maxImageDimension2D, format.maxExtent.width, format.maxExtent.height});
+            return Result<VulkanMultiviewDepthLimits>::Success(views == 0 || extent == 0 ? VulkanMultiviewDepthLimits{}
+                                                                                         : VulkanMultiviewDepthLimits{views, extent});
+        }
+
         std::shared_ptr<IVulkanRuntimePort> CreateVulkanNativeRuntime(IVulkanLoaderPort &loaderPort,
                                                                       VulkanEditorGraphicsBridge *editorBridge) {
             if (editorBridge && editorBridge->Port())

@@ -1,3 +1,4 @@
+#include "EditorVulkanXrViewportAccess.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "OpenXRApplicationSession.h"
@@ -447,5 +448,52 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.events.exits == 1);
         CHECK(fixture.script.events.ends == 1);
         CHECK(fixture.script.native.liveSessions == 0);
+    }
+}  // namespace Horo::Tests::OpenXRApplication
+
+namespace Horo::Tests::OpenXRApplication {
+    TEST_CASE("Actual XR viewport retires failed depth prefixes and admits a fresh preparation", "[xr][vulkan][host][lifecycle]") {
+        ApplicationFixture fixture{true};
+        auto &frontend = *fixture.frontend;
+        auto &state = fixture.vulkan->native.resourceState.state;
+        const auto baseline = frontend.MemorySnapshot();
+        int failingCall = 1;
+        SECTION("depth native realization") {}
+        SECTION("first eye view") {
+            failingCall = 2;
+        }
+        SECTION("second eye view after a successful prefix") {
+            failingCall = 3;
+        }
+        state.failCreateViewCall = state.createViewCount + failingCall;
+        const auto device = OpenXRProduct::RequireValue(Editor::EditorVulkanXrViewportAccess::Device(*fixture.viewport));
+        const Render::RenderTextureDescriptor color{.extent = {8, 8},
+                                                    .layerCount = 2,
+                                                    .usage =
+                                                        Render::RenderTextureUsage::RenderAttachment | Render::RenderTextureUsage::Sampled};
+        const Render::RenderGraphLogicalState acquired{Render::RenderGraphSynchronizationAccess::ReadWrite,
+                                                       Render::RenderGraphSynchronizationOperation::ColorAttachment,
+                                                       Render::RenderGraphPipelineScope::Graphics,
+                                                       Render::RenderGraphTextureLayout::ColorAttachment, device.graphicsIdentity};
+        auto final = acquired;
+        final.scope = Render::RenderGraphPipelineScope::External;
+        const auto failed = fixture.viewport->PrepareXrGraph({}, color, acquired, final);
+        INFO((failed.HasError() ? OpenXRProduct::ErrorText(failed.ErrorValue()) : "unexpected successful injected realization"));
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().code.Value() == Render::VulkanBackendErrors::ResourceCreationFailed.code.Value());
+        const auto original = failed.ErrorValue();
+        state.failCreateViewCall = 0;
+        REQUIRE(Editor::EditorVulkanXrViewportAccess::Retire(*fixture.viewport).HasValue());
+        CHECK(frontend.UploadSnapshot().pendingRequests == 0);
+        CHECK(frontend.MemorySnapshot().reservationCount == baseline.reservationCount);
+        CHECK(frontend.MemorySnapshot().allocationCount == baseline.allocationCount);
+        CHECK(frontend.MemorySnapshot().committedBackingBytes == baseline.committedBackingBytes);
+        REQUIRE(fixture.viewport->PrepareXrGraph({}, color, acquired, final).HasValue());
+        CHECK(failed.ErrorValue().code.Value() == original.code.Value());
+        CHECK(failed.ErrorValue().message == original.message);
+        REQUIRE(Editor::EditorVulkanXrViewportAccess::Retire(*fixture.viewport).HasValue());
+        CHECK(frontend.MemorySnapshot().allocationCount == baseline.allocationCount);
+        CHECK(frontend.MemorySnapshot().committedBackingBytes == baseline.committedBackingBytes);
+        CHECK(fixture.vulkan->native.commandState.state.waitCalls == 0);
     }
 }  // namespace Horo::Tests::OpenXRApplication

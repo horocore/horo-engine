@@ -1,6 +1,7 @@
 #include "EditorViewportRendererVulkan.h"
 #include "Horo/Runtime/Render/MultiviewShaderParameters.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "RenderFrontendResourceAccess.h"
 #include "RenderGraphTemplate.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "host/EditorVulkanXrMirrorProjection.h"
@@ -68,8 +69,8 @@ namespace Horo::Editor {
         Detail::RenderGraphExternalTextureSlot color;
         RenderGraphResourceId depth;
         RenderGraphPassRef pass;
-        RenderTextureHandle depthTexture;
-        std::array<RenderTextureViewHandle, 2> depthViews{};
+        ResourceCreation<RenderTextureHandle> depthTexture;
+        std::array<ResourceCreation<RenderTextureViewHandle>, 2> depthViews{};
         FramebufferExtent extent;
 
         struct Geometry final {
@@ -101,27 +102,25 @@ namespace Horo::Editor {
 
         /** @brief Cold-creates depth storage and views, retaining every successful prefix for owner teardown. */
         Result<void> PrepareDepth(RenderFrontend &frontend, const RenderTextureDescriptor &colorDescriptor) {
-            auto createdDepth =
-                frontend.CreateTexture(RenderMemoryScopes::ViewportResources, {.extent = colorDescriptor.extent,
-                                                                               .format = RenderTextureFormat::Depth32Float,
-                                                                               .layerCount = 2,
-                                                                               .usage = RenderTextureUsage::RenderAttachment});
+            auto createdDepth = Detail::RenderFrontendResourceAccess::CreateMultiviewDepth(frontend, RenderMemoryScopes::ViewportResources,
+                                                                                           colorDescriptor.extent,
+                                                                                           static_cast<std::uint32_t>(depthViews.size()));
             if (createdDepth.HasError())
                 return Result<void>::Failure(createdDepth.ErrorValue());
-            depthTexture = createdDepth.Value().handle;
+            depthTexture = createdDepth.Value();
             if (auto processed = frontend.ProcessResourceRequests(); processed.HasError())
                 return Result<void>::Failure(processed.ErrorValue());
             if (auto ready = frontend.ResourceOperationResult(createdDepth.Value().operation); ready.HasError())
                 return ready;
             for (std::uint32_t layer = 0; layer < depthViews.size(); ++layer) {
-                auto view = frontend.CreateTextureView({.texture = depthTexture,
+                auto view = frontend.CreateTextureView({.texture = depthTexture.handle,
                                                         .format = RenderTextureFormat::Depth32Float,
                                                         .aspect = RenderTextureAspect::Depth,
                                                         .baseLayer = layer,
                                                         .layerCount = 1});
                 if (view.HasError())
                     return Result<void>::Failure(view.ErrorValue());
-                depthViews[layer] = view.Value().handle;
+                depthViews[layer] = view.Value();
                 if (auto processed = frontend.ProcessResourceRequests(); processed.HasError())
                     return Result<void>::Failure(processed.ErrorValue());
                 if (auto ready = frontend.ResourceOperationResult(view.Value().operation); ready.HasError())
@@ -149,7 +148,7 @@ namespace Horo::Editor {
             if (external.HasError())
                 return Result<RenderGraphBuilder>::Failure(external.ErrorValue());
             this->color = external.Value();
-            auto importedDepth = builder.ImportTexture(depthTexture, RenderGraphResourceClass::Persistent);
+            auto importedDepth = builder.ImportTexture(depthTexture.handle, RenderGraphResourceClass::Persistent);
             if (importedDepth.HasError())
                 return Result<RenderGraphBuilder>::Failure(importedDepth.ErrorValue());
             this->depth = importedDepth.Value();
@@ -280,7 +279,8 @@ namespace Horo::Editor {
                                slots[instance].material};
             }
             for (std::uint32_t view = 0; view < targets.size(); ++view)
-                targets[view] = {color.resource, depth, eyeViews[view], depthViews[view], {0, 0, extent.width, extent.height}, view, view};
+                targets[view] = {color.resource, depth, eyeViews[view], depthViews[view].handle, {0, 0, extent.width, extent.height},
+                                 view,           view};
         }
     };
 
@@ -486,14 +486,15 @@ namespace Horo::Editor {
         if (!xrGraph_)
             return Result<void>::Success();
         for (auto &view : xrGraph_->depthViews) {
-            if (!view.IsValid())
+            if (!view.handle.IsValid())
                 continue;
-            if (auto released = frontend_.ReleaseTextureView(view); released.HasError())
+            if (auto released = Detail::RenderFrontendResourceAccess::RetireCreation(frontend_, view); released.HasError())
                 return released;
             view = {};
         }
-        if (xrGraph_->depthTexture.IsValid()) {
-            if (auto released = frontend_.ReleaseTexture(xrGraph_->depthTexture); released.HasError())
+        if (xrGraph_->depthTexture.handle.IsValid()) {
+            if (auto released = Detail::RenderFrontendResourceAccess::RetireCreation(frontend_, xrGraph_->depthTexture);
+                released.HasError())
                 return released;
             xrGraph_->depthTexture = {};
         }
@@ -507,10 +508,10 @@ namespace Horo::Editor {
         if (!xrGraph_)
             return;
         for (auto view : xrGraph_->depthViews)
-            if (view.IsValid())
-                static_cast<void>(frontend_.ReleaseTextureView(view));
-        if (xrGraph_->depthTexture.IsValid())
-            static_cast<void>(frontend_.ReleaseTexture(xrGraph_->depthTexture));
+            if (view.handle.IsValid())
+                static_cast<void>(frontend_.ReleaseTextureView(view.handle));
+        if (xrGraph_->depthTexture.handle.IsValid())
+            static_cast<void>(frontend_.ReleaseTexture(xrGraph_->depthTexture.handle));
         xrGraph_.reset();
     }
 }  // namespace Horo::Editor

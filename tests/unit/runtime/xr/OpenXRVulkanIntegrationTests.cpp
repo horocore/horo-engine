@@ -3,6 +3,7 @@
 #include "OpenXRMultiviewGraph.h"
 #include "OpenXRSwapchainTestSupport.h"
 #include "OpenXRVulkanSwapchain.h"
+#include "RenderFrontendResourceAccess.h"
 #include "TypedIdentityTestSupport.h"
 #include "VulkanExternalGraphBackendTestSupport.h"
 #include "runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.h"
