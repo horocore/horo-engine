@@ -5394,6 +5394,7 @@ if (HORO_BUILD_RENDER_VULKAN)
     )
     target_link_libraries(HoroRenderVulkanTests PRIVATE
             Catch2::Catch2WithMain
+            HoroRenderFrontendResourceAccessInternal
             HoroRenderVulkanHostInterface
             HoroEngine::RenderFrontend
             HoroEngine::RenderVulkan

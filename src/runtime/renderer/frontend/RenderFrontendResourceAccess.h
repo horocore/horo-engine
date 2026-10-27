@@ -7,6 +7,29 @@ namespace Horo::Render::Detail {
     /** @brief Internal adapter used by matching integrations without publishing native resource identity. */
     class RenderFrontendResourceAccess final {
     public:
+        /** @brief Cold-admits owned depth backing for an explicitly supported complete multiview workload.
+         * @param frontend Selected frontend whose owner thread must be open and outside a frame.
+         * @param scope Canonical memory scope charged for this resource.
+         * @param extent Exact single-sample depth extent.
+         * @param viewCount Complete view count, bounded by the selected backend's effective multiview support.
+         * @return Pending Depth32Float attachment storage with one layer per view, or the original admission/budget error.
+         * @details Uses the ordinary registry, upload queue, generation and retirement owners. It admits no initial data,
+         * sampled usage, arbitrary array format or native handle. Ordinary CreateTexture admission is unchanged.
+         */
+        [[nodiscard]] static Result<ResourceCreation<RenderTextureHandle>> CreateMultiviewDepth(RenderFrontend &frontend,
+                                                                                                RenderMemoryScopeId scope,
+                                                                                                FramebufferExtent extent,
+                                                                                                std::uint32_t viewCount);
+        /** @brief Retires an owned creation, recognizing only its already-retired failed operation as complete.
+         * @param frontend Same canonical creation owner.
+         * @param creation Unmodified handle/operation pair returned by this frontend's creation request.
+         * @return Ordinary release result, or success when that exact failed request was already rolled back.
+         * @details Live generations, pending retirement and unknown/evicted journals retain their original errors.
+         */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderTextureHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend,
+                                                         const ResourceCreation<RenderTextureViewHandle> &creation);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderBufferHandle buffer);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderMeshHandle mesh);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderTextureViewHandle view);

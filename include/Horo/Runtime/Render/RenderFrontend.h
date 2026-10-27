@@ -889,6 +889,14 @@ namespace Horo::Render {
         [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateOwnedUiPaintTexture(
             RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, std::span<const std::byte> initialData,
             const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner);
+        /** @brief Admits exact complete-view depth storage for the noninstalled matching integration only. */
+        [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateMultiviewDepthTexture(RenderMemoryScopeId scope,
+                                                                                                FramebufferExtent extent,
+                                                                                                std::uint32_t viewCount);
+        /** @brief Queues a previously admitted owned texture through the canonical budget, registry and upload owners. */
+        [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> QueueOwnedTexture(
+            RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, std::span<const std::byte> initialData,
+            const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner);
         /** @brief Tries immediate owner-boundary cleanup; deferred requests remain registry-owned. */
         void RetireOwnedUiPaintBuffer(RenderBufferHandle handle, ResourceOperationId operation) noexcept;
         /** @brief Tries immediate owner-boundary cleanup; deferred requests remain registry-owned. */

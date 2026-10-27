@@ -1,11 +1,44 @@
 #include "RenderFrontendResourceAccess.h"
 
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "RenderFrontendErrors.h"
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
 
 namespace Horo::Render {
+    namespace {
+        /** @brief A stale generation is forgettable only when its own creation journal proves canonical rollback. */
+        bool CreationRolledBack(const RenderFrontend &frontend, const Result<void> &released, const ResourceOperationId operation) {
+            if (!released.HasError() || released.ErrorValue().code.Value() != FrontendErrors::ResourceStale.code.Value() ||
+                !operation.IsValid())
+                return false;
+            const auto state = frontend.ResourceOperationState(operation);
+            return state.HasValue() && state.Value() == RenderResourceOperationState::Failed;
+        }
+    }  // namespace
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+    Result<void> Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &frontend,
+                                                                      const ResourceCreation<RenderTextureHandle> &creation) {
+        auto released = frontend.ReleaseTexture(creation.handle);
+        return CreationRolledBack(frontend, released, creation.operation) ? Result<void>::Success() : std::move(released);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureViewHandle> &)
+     */
+    Result<void> Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &frontend,
+                                                                      const ResourceCreation<RenderTextureViewHandle> &creation) {
+        auto released = frontend.ReleaseTextureView(creation.handle);
+        return CreationRolledBack(frontend, released, creation.operation) ? Result<void>::Success() : std::move(released);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::CreateMultiviewDepth */
+    Result<ResourceCreation<RenderTextureHandle>> Detail::RenderFrontendResourceAccess::CreateMultiviewDepth(
+        RenderFrontend &frontend, const RenderMemoryScopeId scope, const FramebufferExtent extent, const std::uint32_t viewCount) {
+        return frontend.CreateMultiviewDepthTexture(scope, extent, viewCount);
+    }
+
     /** @copydoc RenderFrontend::UploadSnapshot */
     RenderResourceUploadSnapshot RenderFrontend::UploadSnapshot() const noexcept {
         return resourceUploadQueue_->Snapshot();

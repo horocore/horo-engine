@@ -35,6 +35,16 @@ namespace Horo::Tests::RenderFrontendTesting {
             if (incarnation.HasError())
                 return Result<void>::Failure(incarnation.ErrorValue());
             capabilities_.support.deviceIncarnation = incarnation.Value();
+            if (lifecycleState.completeMultiviewViews != 0) {
+                capabilities_.support.capabilityRevision = 1;
+                capabilities_.support.features.Enable(RenderCapability::ViewIndexedShaders);
+                capabilities_.support.features.Enable(RenderCapability::TextureResources);
+                capabilities_.support.limits.maxTextureDimension2D = 128;
+                capabilities_.support.limits.maxMultiviewViews = lifecycleState.completeMultiviewViews;
+                capabilities_.support.formats.sampleCountMask = std::uint64_t{1} << 1;
+                capabilities_.support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] =
+                    RenderTextureUsage::RenderAttachment;
+            }
             if (lifecycleState.uiPaint.enabled) {
                 capabilities_.support.features.Enable(RenderCapability::UiPaint);
                 capabilities_.support.features.Enable(RenderCapability::TextureResources);
@@ -79,10 +89,13 @@ namespace Horo::Tests::RenderFrontendTesting {
             return CompleteResourceCreation();
         }
 
-        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, const std::span<const std::byte> initialData,
+        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
                                             const RenderMemoryPlacement &, RenderResourceNativeLifetime lifetime = {}) override {
             ++lifecycleState.createTextureCount;
+            lifecycleState.lastTextureDescriptor = descriptor;
             lifecycleState.lastTextureInitialData.assign(initialData.begin(), initialData.end());
+            if (lifecycleState.textureCreationFailure)
+                return Result<std::uint64_t>::Failure(*lifecycleState.textureCreationFailure);
             return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
         }
 
