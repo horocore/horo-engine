@@ -86,13 +86,13 @@ namespace Horo::Render::Detail {
 
     /** @copydoc PreparedRenderGraphTemplate::Bind */
     Result<const CompiledRenderGraphExecution *> PreparedRenderGraphTemplate::Bind(
-        RenderFrontend &frontend, const std::size_t instance, const std::span<const RenderGraphExternalTextureBinding> bindings) {
+        const RenderFrontend &frontend, const std::size_t instance, const std::span<const RenderGraphExternalTextureBinding> bindings) {
         return Bind(frontend, instance, bindings, reads_.declarations);
     }
 
     /** @copydoc PreparedRenderGraphTemplate::Bind */
     Result<const CompiledRenderGraphExecution *> PreparedRenderGraphTemplate::Bind(
-        RenderFrontend &frontend, const std::size_t instance, const std::span<const RenderGraphExternalTextureBinding> bindings,
+        const RenderFrontend &frontend, const std::size_t instance, const std::span<const RenderGraphExternalTextureBinding> bindings,
         const std::span<const RenderGraphOptionalRead> reads) {
         using Outcome = Result<const CompiledRenderGraphExecution *>;
         if (std::this_thread::get_id() != lane_ || lane_ != frontend.preparationOwner_ || frontend.activeFrameScope_ || frontend.closing_ ||

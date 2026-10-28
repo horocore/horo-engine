@@ -507,7 +507,7 @@ namespace Horo::Editor {
     void EditorViewportRendererVulkan::ReleaseXrGraph() noexcept {
         if (!xrGraph_)
             return;
-        for (auto view : xrGraph_->depthViews)
+        for (const auto &view : xrGraph_->depthViews)
             if (view.handle.IsValid())
                 static_cast<void>(frontend_.ReleaseTextureView(view.handle));
         if (xrGraph_->depthTexture.handle.IsValid())

@@ -127,13 +127,13 @@ namespace Horo::Application::Internal {
          * @param port Existing workspace context/player-bound collection; cannot create actions or assignments.
          * @param router SAME application router whose live Actions are the sole semantic schema authority.
          * @param bindings Explicit installer-owned immutable physical catalog retained through Play retirement.
-         * @param tracking Current canonical origin and observed native base space, supplied by the actual scene host.
+         * @param tracking Current canonical origin and native base; snapshotted before foreign admission/loader callbacks.
          * @return Resolved declaration/profile/Input outcome; failures retain native debt for explicit Close.
          * @post No Horo session or binding revision is predicted and no snapshot/Input value can be published.
          */
         [[nodiscard]] Result<void> PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
                                                 const OpenXRApplicationBindings &bindings,
-                                                XR::OpenXRInternal::NativeTrackingSpaceRequest tracking);
+                                                const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
         /** @brief Binds the same prepared native children/Input reservation during canonical resource preparation.
          * @param candidate Actual candidate issued by XRSessionLifecycle and already activated on the SAME native session.
          * @param coordinator Candidate's sole canonical binding publication/revision owner.

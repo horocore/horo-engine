@@ -24,7 +24,9 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::PrepareInput */
     Result<void> OpenXRApplicationSession::PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
                                                         const OpenXRApplicationBindings &bindings,
-                                                        const NativeTrackingSpaceRequest tracking) {
+                                                        const NativeTrackingSpaceRequest &tracking) {
+        // Retain the caller's original tracking plan before admission and loader callbacks can reenter foreign code.
+        const NativeTrackingSpaceRequest admittedTracking = tracking;
         if (auto current = Current(); current.HasError())
             return current;
         if (input_.native || input_.projection || input_.bindings)
@@ -35,8 +37,8 @@ namespace Horo::Application::Internal {
         if (discovery.HasError())
             return Result<void>::Failure(discovery.ErrorValue());
         input_.native = std::make_unique<OpenXRActionBindings>(*native_);
-        auto plan =
-            bindings.Prepare(*input_.native, {*preflight_, selection_.attempt}, {discovery.Value().getProc}, router.Actions(), tracking);
+        auto plan = bindings.Prepare(*input_.native, {*preflight_, selection_.attempt}, {discovery.Value().getProc}, router.Actions(),
+                                     admittedTracking);
         if (plan.HasError())
             return Result<void>::Failure(plan.ErrorValue());
         const auto profiles = input_.native->PreparedProfiles({*preflight_, selection_.attempt});

@@ -6,11 +6,13 @@
 #include <cmath>
 
 namespace Horo::Editor {
-    /** @copydoc EditorViewportRendererVulkan::WriteParameter */
-    Result<void> EditorViewportRendererVulkan::WriteParameter(const std::span<std::byte> bytes, const Render::ShaderParameterId parameter,
-                                                              const std::span<const float> values) const {
-        const auto entry = std::ranges::find(shader_.layout.parameters, parameter, &Render::ShaderReflectedParameter::id);
-        if (entry == shader_.layout.parameters.end() || !entry->active || entry->arrayCount == 0 ||
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteParameter */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::WriteParameter(const Render::MaterialBindingLayout &layout,
+                                                                                const std::span<std::byte> bytes,
+                                                                                const Render::ShaderParameterId parameter,
+                                                                                const std::span<const float> values) {
+        const auto entry = std::ranges::find(layout.parameters, parameter, &Render::ShaderReflectedParameter::id);
+        if (entry == layout.parameters.end() || !entry->active || entry->arrayCount == 0 ||
             entry->type != Render::ShaderValueType::Float32 ||
             values.size() != std::size_t{entry->rows} * entry->columns * entry->arrayCount || !std::ranges::all_of(values, [](float value) {
             return std::isfinite(value);
@@ -35,8 +37,10 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorViewportRendererVulkan::WriteLighting */
-    Result<void> EditorViewportRendererVulkan::WriteLighting(const std::span<std::byte> bytes, const Render::RenderSceneView &scene) const {
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteLighting */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::WriteLighting(const Render::MaterialBindingLayout &layout,
+                                                                               const std::span<std::byte> bytes,
+                                                                               const Render::RenderSceneView &scene) {
         std::array<float, Render::MaximumForwardLights * 4> positions{}, directions{}, colors{}, cones{};
         for (std::size_t index = 0; index < scene.lights.size(); ++index) {
             const auto &light = scene.lights[index];
@@ -51,16 +55,19 @@ namespace Horo::Editor {
         }
         const std::array<std::span<const float>, 4> parameters{positions, directions, colors, cones};
         for (std::size_t index = 0; index < parameters.size(); ++index)
-            if (const auto written = WriteParameter(bytes, {static_cast<std::uint32_t>(index + 6)}, parameters[index]); written.HasError())
+            if (const auto written = WriteParameter(layout, bytes, {static_cast<std::uint32_t>(index + 6)}, parameters[index]);
+                written.HasError())
                 return written;
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorViewportRendererVulkan::WriteDraw */
-    Result<void> EditorViewportRendererVulkan::WriteDraw(const Render::FrameToken frame, const DrawSlot &slot,
-                                                         const Render::RenderStaticMeshInstance &instance,
-                                                         const Render::RenderSceneView &scene) {
-        const auto extent = resources_.AllocatedExtent();
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteDraw */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::WriteDraw(Render::Detail::VulkanEditorGraphicsBridge &bridge,
+                                                                           const ShaderResources &program,
+                                                                           const EditorViewportExtent extent,
+                                                                           const Render::FrameToken frame, const DrawSlot &slot,
+                                                                           const Render::RenderStaticMeshInstance &instance,
+                                                                           const Render::RenderSceneView &scene) {
         auto mvp = BuildRenderMvp(scene.camera, instance.localToWorld, static_cast<float>(extent.width) / extent.height,
                                   Math::ClipDepthRange::ZeroToOne);
         if (mvp.HasError())
@@ -81,14 +88,15 @@ namespace Horo::Editor {
         const std::array camera{scene.camera.position.x, scene.camera.position.y, scene.camera.position.z,
                                 static_cast<float>(scene.lights.size())};
         std::array<std::byte, MaximumUniformBytes> storage{};
-        const auto bytes = std::span{storage}.first(shader_.uniformBytes);
+        const auto bytes = std::span{storage}.first(program.uniformBytes);
         const std::array<std::span<const float>, 5> parameters{clipFromLocal.values, normal.values, instance.localToWorld.values, tint,
                                                                camera};
         for (std::size_t index = 0; index < parameters.size(); ++index)
-            if (const auto written = WriteParameter(bytes, {static_cast<std::uint32_t>(index + 1)}, parameters[index]); written.HasError())
+            if (const auto written = WriteParameter(program.layout, bytes, {static_cast<std::uint32_t>(index + 1)}, parameters[index]);
+                written.HasError())
                 return written;
-        if (const auto written = WriteLighting(bytes, scene); written.HasError())
+        if (const auto written = WriteLighting(program.layout, bytes, scene); written.HasError())
             return written;
-        return bridge_.Port()->WriteFrameBuffer(frame, slot.instance, bytes);
+        return bridge.Port()->WriteFrameBuffer(frame, slot.instance, bytes);
     }
 }  // namespace Horo::Editor

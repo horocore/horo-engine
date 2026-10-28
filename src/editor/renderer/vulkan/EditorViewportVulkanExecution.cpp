@@ -123,7 +123,9 @@ namespace Horo::Editor {
             if (!mesh)
                 return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
             const auto &draw = slots_[slot.Value().index].draws[index];
-            if (const auto written = WriteDraw(frame.Token(), draw, instance, pass.scene); written.HasError())
+            if (const auto written =
+                    ProgramResources::WriteDraw(bridge_, shader_, resources_.AllocatedExtent(), frame.Token(), draw, instance, pass.scene);
+                written.HasError())
                 return written;
             preparedDraws_[index] = {mesh->mesh, draw.material};
         }

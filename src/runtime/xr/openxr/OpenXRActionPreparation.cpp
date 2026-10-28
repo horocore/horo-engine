@@ -35,7 +35,7 @@ namespace Horo::XR::OpenXRInternal {
         owner_ = session;
         if (const auto prepared = PrepareTransaction(request, native_.maximumActions); prepared.HasError())
             return prepared;
-        if (const auto spaces = BindSpaces(session); spaces.HasError()) {
+        if (const auto spaces = tracking_.BindSpaces(session); spaces.HasError()) {
             (void)Close();
             return spaces;
         }
@@ -86,7 +86,7 @@ namespace Horo::XR::OpenXRInternal {
         if (tracking_.request &&
             current.Value().maximumSpaces < tracking_.actions.size() + 2 + (tracking_.request->worldFromBase.has_value() ? 1U : 0U))
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (auto spaces = BindSpaces(session); spaces.HasError())
+        if (auto spaces = tracking_.BindSpaces(session); spaces.HasError())
             return spaces;
         native_ = current.Value();
         owner_ = session;
@@ -111,10 +111,10 @@ namespace Horo::XR::OpenXRInternal {
         };
         Result<void> prepared = Result<void>::Success();
         try {
-            prepared = ValidatePosePaths(request, maximumActions);
+            prepared = tracking_.ValidatePosePaths(request, maximumActions);
             if (prepared.HasValue()) {
                 tracking_.request = request.tracking;
-                prepared = Resolve(request, native_.instance);
+                prepared = dispatch_.Resolve(request, native_.instance);
             }
             if (prepared.HasValue())
                 prepared = Prepare(request, maximumActions);

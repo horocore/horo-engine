@@ -38,7 +38,7 @@ namespace Horo::Render::Detail {
             throw std::bad_alloc{};
         }
 
-        void Deallocate(std::byte *address) noexcept {
+        void Deallocate(const std::byte *address) noexcept {
             // Destruction follows the same render-owner completion poll lane as native retirement.
             if (std::this_thread::get_id() != owner_)
                 std::terminate();

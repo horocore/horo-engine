@@ -1563,6 +1563,7 @@ if(HORO_BUILD_XR_OPENXR)
         unit/runtime/xr/OpenXRInstalledHostCatalogTests.cpp)
     target_link_libraries(HoroOpenXRProductHostTests PRIVATE HoroOpenXRProductHost HoroHostSignatureDocuments
         nlohmann_json::nlohmann_json MbedTLS::mbedcrypto)
+    target_include_directories(HoroOpenXRProductHostTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     if(TARGET HoroEditorOpenXRBootstrap)
         target_sources(HoroOpenXRProductHostTests PRIVATE unit/runtime/xr/EditorOpenXRBootstrapTests.cpp)
         target_link_libraries(HoroOpenXRProductHostTests PRIVATE HoroEditorOpenXRBootstrap)

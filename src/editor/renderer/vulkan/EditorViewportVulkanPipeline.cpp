@@ -3,40 +3,41 @@
 #include "editor/renderer/EditorRendererErrors.h"
 
 namespace Horo::Editor {
-    /** @copydoc EditorViewportRendererVulkan::CreatePipeline */
-    Result<void> EditorViewportRendererVulkan::CreatePipeline() {
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreatePipeline */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreatePipeline(Render::RenderFrontend &frontend, ShaderResources &program,
+                                                                                const std::uint32_t frames) {
         using namespace Render;
-        const auto encoded = EncodeReflectedShaderArtifact(shader_.metadata);
+        const auto encoded = EncodeReflectedShaderArtifact(program.metadata);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
-        const auto checked = LoadEditorVulkanViewportCook(shader_.payload, encoded.Value());
+        const auto checked = LoadEditorVulkanViewportCook(program.payload, encoded.Value());
         if (checked.HasError())
             return Result<void>::Failure(checked.ErrorValue());
-        if (auto stages = CreateProgramStages(shader_); stages.HasError())
+        if (auto stages = CreateProgramStages(frontend, program); stages.HasError())
             return stages;
         const RenderGraphicsPipelineState state{.cull = RenderCullMode::None, .depthFormat = RenderTextureFormat::Depth32Float};
-        const auto pipeline = CreatePipelineState(state);
+        const auto pipeline = CreatePipelineState(frontend, program, EditorVulkanViewportShaderManifest(), state);
         if (pipeline.HasError())
             return Result<void>::Failure(pipeline.ErrorValue());
-        shader_.pipeline = pipeline.Value();
+        program.pipeline = pipeline.Value();
         auto overlayState = state;
         overlayState.depthWrite = false;
-        const auto overlay = CreatePipelineState(overlayState);
+        const auto overlay = CreatePipelineState(frontend, program, EditorVulkanViewportShaderManifest(), overlayState);
         if (overlay.HasError())
             return Result<void>::Failure(overlay.ErrorValue());
-        shader_.overlayPipeline = overlay.Value();
-        return CreateMaterialLayout(shader_.metadata.reflection);
+        program.overlayPipeline = overlay.Value();
+        return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
     }
 
-    /** @copydoc EditorViewportRendererVulkan::CreateProgramStages */
-    Result<void> EditorViewportRendererVulkan::CreateProgramStages(ShaderResources &program) {
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateProgramStages */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateProgramStages(Render::RenderFrontend &frontend,
+                                                                                     ShaderResources &program) {
         using namespace Render;
         const auto target = EditorVulkanViewportShaderTarget();
         const auto &reflection = program.metadata.reflection;
         const auto stage = [&](const ShaderStage kind, const char *entry) {
-            return frontend_.CreateShaderModule({target, kind, entry, program.metadata.cookedArtifactKey,
-                                                 reflection.interfaceCompatibility},
-                                                program.payload);
+            return frontend.CreateShaderModule({target, kind, entry, program.metadata.cookedArtifactKey, reflection.interfaceCompatibility},
+                                               program.payload);
         };
         const auto vertex = stage(ShaderStage::Vertex, "VSMain");
         if (vertex.HasError())
@@ -49,19 +50,14 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorViewportRendererVulkan::CreatePipelineState */
-    Result<Render::RenderPipelineHandle> EditorViewportRendererVulkan::CreatePipelineState(
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreatePipelineState */
+    Result<Render::RenderPipelineHandle> EditorViewportRendererVulkan::ProgramResources::CreatePipelineState(
+        Render::RenderFrontend &frontend, const ShaderResources &program, const Render::ShaderManifest &manifest,
         const Render::RenderGraphicsPipelineState &state) {
-        return CreatePipelineState(shader_, EditorVulkanViewportShaderManifest(), state);
-    }
-
-    /** @copydoc EditorViewportRendererVulkan::CreatePipelineState */
-    Result<Render::RenderPipelineHandle> EditorViewportRendererVulkan::CreatePipelineState(
-        const ShaderResources &program, const Render::ShaderManifest &manifest, const Render::RenderGraphicsPipelineState &state) {
         using namespace Render;
         const auto target = EditorVulkanViewportShaderTarget();
         const auto &reflection = program.metadata.reflection;
-        const auto device = frontend_.QueryPipelineDeviceIdentity();
+        const auto device = frontend.QueryPipelineDeviceIdentity();
         if (device.HasError())
             return Result<RenderPipelineHandle>::Failure(device.ErrorValue());
         const auto stateKey = ComputeRenderGraphicsPipelineStateDigest(state);
@@ -81,20 +77,17 @@ namespace Horo::Editor {
                                                        reflection.interfaceCompatibility,
                                                        stateKey.Value()};
         const auto pipeline =
-            frontend_.CreateGraphicsPipeline({program.vertex, program.fragment, manifest, target, reflection, state, compatibility});
+            frontend.CreateGraphicsPipeline({program.vertex, program.fragment, manifest, target, reflection, state, compatibility});
         if (pipeline.HasError())
             return Result<RenderPipelineHandle>::Failure(pipeline.ErrorValue());
         return Result<RenderPipelineHandle>::Success(pipeline.Value().handle);
     }
 
-    /** @copydoc EditorViewportRendererVulkan::CreateMaterialLayout */
-    Result<void> EditorViewportRendererVulkan::CreateMaterialLayout(const Render::NormalizedShaderReflection &reflection) {
-        return CreateMaterialLayout(shader_, reflection);
-    }
-
-    /** @copydoc EditorViewportRendererVulkan::CreateMaterialLayout */
-    Result<void> EditorViewportRendererVulkan::CreateMaterialLayout(ShaderResources &program,
-                                                                    const Render::NormalizedShaderReflection &reflection) {
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateMaterialLayout */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateMaterialLayout(Render::RenderFrontend &frontend,
+                                                                                      ShaderResources &program,
+                                                                                      const Render::NormalizedShaderReflection &reflection,
+                                                                                      const std::uint32_t frames) {
         using namespace Render;
         const auto layout = PrepareMaterialBindingLayout(reflection);
         if (layout.HasError())
@@ -105,7 +98,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(bytes.ErrorValue());
         if (bytes.Value() == 0 || bytes.Value() > MaximumUniformBytes)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportShaderContractInvalid));
-        const auto nativeBytes = Render::Detail::RenderFrontendResourceAccess::MaterialParameterBufferBytes(frontend_,
+        const auto nativeBytes = Render::Detail::RenderFrontendResourceAccess::MaterialParameterBufferBytes(frontend,
                                                                                                             {.pipeline = program.pipeline,
                                                                                                              .layout = program.layout},
                                                                                                             {1});
@@ -115,49 +108,46 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(RendererErrors::ViewportShaderContractInvalid));
         program.parameterBytes = bytes.Value();
         program.uniformBytes = nativeBytes.Value();
-        auto materials = MaterialBindingTable::Create(program.pipeline.owner, frontend_,
-                                                      {.maximumGenerations = device_.frames * (RenderMaterialPass::MaximumDraws + 1)});
+        auto materials = MaterialBindingTable::Create(program.pipeline.owner, frontend,
+                                                      {.maximumGenerations = frames * (RenderMaterialPass::MaximumDraws + 1)});
         if (materials.HasError())
             return Result<void>::Failure(materials.ErrorValue());
         program.materials = std::move(materials).Value();
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorViewportRendererVulkan::CreateDrawSlots */
-    Result<void> EditorViewportRendererVulkan::CreateDrawSlots() {
-        for (std::uint32_t slot = 0; slot < device_.frames; ++slot)
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateDrawSlots */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateDrawSlots(Render::RenderFrontend &frontend,
+                                                                                 const ShaderResources &program, std::span<FrameSlot> slots,
+                                                                                 const std::uint32_t frames) {
+        for (std::uint32_t slot = 0; slot < frames; ++slot)
             for (std::size_t index = 0; index < Render::RenderMaterialPass::MaximumDraws; ++index) {
-                const auto created = CreateUniformSlot(slots_[slot].draws[index],
-                                                       slot * (Render::RenderMaterialPass::MaximumDraws + 1) + index + 1, shader_.pipeline);
+                const auto created = CreateUniformSlot(frontend, program, slots[slot].draws[index],
+                                                       slot * (Render::RenderMaterialPass::MaximumDraws + 1) + index + 1, program.pipeline);
                 if (created.HasError())
                     return created;
             }
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorViewportRendererVulkan::CreateUniformSlot */
-    Result<void> EditorViewportRendererVulkan::CreateUniformSlot(DrawSlot &draw, const std::uint64_t material,
-                                                                 const Render::RenderPipelineHandle pipeline) {
-        return CreateUniformSlot(shader_, draw, material, pipeline);
-    }
-
-    /** @copydoc EditorViewportRendererVulkan::CreateUniformSlot */
-    Result<void> EditorViewportRendererVulkan::CreateUniformSlot(const ShaderResources &program, DrawSlot &draw,
-                                                                 const std::uint64_t material,
-                                                                 const Render::RenderPipelineHandle pipeline) {
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot(Render::RenderFrontend &frontend,
+                                                                                   const ShaderResources &program, DrawSlot &draw,
+                                                                                   const std::uint64_t material,
+                                                                                   const Render::RenderPipelineHandle pipeline) {
         using namespace Render;
         const std::array<std::byte, MaximumUniformBytes> zero{};
-        const auto buffer = frontend_.CreateBuffer(RenderMemoryScopes::ViewportResources,
-                                                   {program.uniformBytes, RenderBufferUsage::Uniform, RenderBufferAccess::HostVisible},
-                                                   std::span{zero}.first(program.uniformBytes));
+        const auto buffer = frontend.CreateBuffer(RenderMemoryScopes::ViewportResources,
+                                                  {program.uniformBytes, RenderBufferUsage::Uniform, RenderBufferAccess::HostVisible},
+                                                  std::span{zero}.first(program.uniformBytes));
         if (buffer.HasError())
             return Result<void>::Failure(buffer.ErrorValue());
         draw.buffer = buffer.Value().handle;
-        if (const auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
+        if (const auto processed = frontend.ProcessResourceRequests(); processed.HasError())
             return Result<void>::Failure(processed.ErrorValue());
-        if (const auto ready = frontend_.ResourceOperationResult(buffer.Value().operation); ready.HasError())
+        if (const auto ready = frontend.ResourceOperationResult(buffer.Value().operation); ready.HasError())
             return ready;
-        const auto native = Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend_, draw.buffer);
+        const auto native = Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, draw.buffer);
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
         draw.instance = native.Value();
@@ -188,19 +178,21 @@ namespace Horo::Editor {
             return Result<void>::Failure(admitted.ErrorValue());
         xrShader_.payload = std::move(cooked.payload);
         xrShader_.metadata = std::move(cooked.metadata);
-        if (auto stages = CreateProgramStages(xrShader_); stages.HasError())
+        if (auto stages = ProgramResources::CreateProgramStages(frontend_, xrShader_); stages.HasError())
             return stages;
         const RenderGraphicsPipelineState state{.cull = RenderCullMode::None, .depthFormat = RenderTextureFormat::Depth32Float};
-        const auto pipeline = CreatePipelineState(xrShader_, EditorVulkanMultiviewShaderManifest(), state);
+        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, xrShader_, EditorVulkanMultiviewShaderManifest(), state);
         if (pipeline.HasError())
             return Result<void>::Failure(pipeline.ErrorValue());
         xrShader_.pipeline = pipeline.Value();
-        if (auto layout = CreateMaterialLayout(xrShader_, xrShader_.metadata.reflection); layout.HasError())
+        if (auto layout = ProgramResources::CreateMaterialLayout(frontend_, xrShader_, xrShader_.metadata.reflection, device_.frames);
+            layout.HasError())
             return layout;
         for (std::uint32_t slot = 0; slot < device_.frames; ++slot)
             for (std::size_t index = 0; index < RenderMaterialPass::MaximumDraws; ++index)
-                if (auto prepared = CreateUniformSlot(xrShader_, xrDrawSlots_[slot][index],
-                                                      slot * RenderMaterialPass::MaximumDraws + index + 1, xrShader_.pipeline);
+                if (auto prepared =
+                        ProgramResources::CreateUniformSlot(frontend_, xrShader_, xrDrawSlots_[slot][index],
+                                                            slot * RenderMaterialPass::MaximumDraws + index + 1, xrShader_.pipeline);
                     prepared.HasError())
                     return prepared;
         return Result<void>::Success();

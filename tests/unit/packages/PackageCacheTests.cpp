@@ -6,6 +6,7 @@
 #include <fstream>
 #include <functional>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 
 namespace {
     using Horo::Packages::PackageCacheStore;
@@ -96,7 +97,23 @@ namespace {
             return native_.AtomicReplace(prepared, destination);
         }
 
+        enum class CleanupFailure {
+            None,
+            Result,
+            StandardException,
+            ForeignException
+        };
+        CleanupFailure cleanupFailure{};
+        std::size_t cleanupAttempts{};
+
         Horo::Result<void> RemoveDurable(const std::filesystem::path &path) override {
+            ++cleanupAttempts;
+            if (cleanupFailure == CleanupFailure::Result)
+                return Horo::Result<void>::Failure(Horo::MakeError(InjectedPermissionFailure));
+            if (cleanupFailure == CleanupFailure::StandardException)
+                throw std::runtime_error{"injected cleanup failure"};
+            if (cleanupFailure == CleanupFailure::ForeignException)
+                throw 7;
             return native_.RemoveDurable(path);
         }
 
@@ -356,6 +373,29 @@ namespace {
         CheckOwnerPrivate(EvidencePath(fixture, archive.Digest()));
         REQUIRE(denied.privateWrites.size() == 1);
         CHECK_FALSE(std::filesystem::exists(denied.privateWrites.front()));
+    }
+
+    TEST_CASE("Package cache cleanup failures preserve the original publication error and prior evidence", "[packages][cache][atomic]") {
+        CacheFixture fixture;
+        const auto archive = VerifiedArchive();
+        auto signature = Envelope(archive);
+        REQUIRE(fixture.store.Publish(archive, signature).HasValue());
+        const auto original = EvidenceBytes(EvidencePath(fixture, archive.Digest()));
+        DenyingFileSystem denied{fixture.files, DenyingFileSystem::Failure::Replace};
+        denied.cleanupFailure = GENERATE(DenyingFileSystem::CleanupFailure::Result, DenyingFileSystem::CleanupFailure::StandardException,
+                                         DenyingFileSystem::CleanupFailure::ForeignException);
+        auto store = CreateStore(denied, fixture.temporary.Path());
+        signature.keyId = "unpublished-key";
+        const auto result = store.Publish(archive, signature);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == "packages.cache.io_failed");
+        REQUIRE(result.ErrorValue().cause);
+        CHECK(result.ErrorValue().cause.Get()->code.Value() == "test.permission_denied");
+        CHECK(denied.cleanupAttempts == 1);
+        CHECK(EvidenceBytes(EvidencePath(fixture, archive.Digest())) == original);
+        REQUIRE(denied.privateWrites.size() == 1);
+        CHECK(std::filesystem::is_regular_file(denied.privateWrites.front()));
+        CHECK(fixture.store.LoadWithPublisherEvidence(archive.Digest()).HasValue());
     }
 
     TEST_CASE("Package cache publisher operations reject hostile evidence files and redirects", "[packages][cache][security]") {

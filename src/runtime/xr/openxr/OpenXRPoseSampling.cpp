@@ -107,40 +107,42 @@ namespace Horo::XR::OpenXRInternal {
         }
     }  // namespace
 
-    /** @copydoc OpenXRActionBindings::Locate */
-    Result<XRPoseDescriptor> OpenXRActionBindings::Locate(const XrSpace source, const XRCoordinateSpace &identity,
-                                                          const XRTimeEvidence &time) const {
+    /** @copydoc OpenXRActionBindings::Tracking::Locate */
+    Result<XRPoseDescriptor> OpenXRActionBindings::Tracking::Locate(const TrackingContext &context, const XrSpace source,
+                                                                    const XRCoordinateSpace &identity, const XRTimeEvidence &time) const {
         XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
         XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &velocity};
-        if (const auto result = dispatch_.locate(source, tracking_.base, time.runtimeSample.Nanoseconds(), &location); result != XR_SUCCESS)
+        if (const auto result = context.DispatchTable().locate(source, base, time.runtimeSample.Nanoseconds(), &location);
+            result != XR_SUCCESS)
             return Result<XRPoseDescriptor>::Failure(PoseFailure("locate tracking space", result));
         if (auto valid = ValidateLocation(location, velocity); valid.HasError())
             return Result<XRPoseDescriptor>::Failure(valid.ErrorValue());
-        const XRPoseDescriptor descriptor{owner_,
+        const XRPoseDescriptor descriptor{context.Session(),
                                           identity,
-                                          tracking_.baseIdentity,
+                                          baseIdentity,
                                           XRPosePurpose::SimulationInput,
                                           time,
                                           Components(location, velocity)};
-        const auto validated = XRPoseSample::Create(descriptor, owner_, tracking_.request->origin);
+        const auto validated = XRPoseSample::Create(descriptor, context.Session(), request->origin);
         return validated.HasError() ? Result<XRPoseDescriptor>::Failure(validated.ErrorValue())
                                     : Result<XRPoseDescriptor>::Success(descriptor);
     }
 
-    /** @copydoc OpenXRActionBindings::LocateAction */
-    Result<NativePoseObservation> OpenXRActionBindings::LocateAction(const PoseAction &action, const XRTimeEvidence &time) const {
+    /** @copydoc OpenXRActionBindings::Tracking::LocateAction */
+    Result<NativePoseObservation> OpenXRActionBindings::Tracking::LocateAction(const TrackingContext &context, const PoseAction &action,
+                                                                               const XRTimeEvidence &time) const {
         using Outcome = Result<NativePoseObservation>;
         const std::size_t role = action.role == XRTrackedDeviceRole::LeftController ? 0 : 1;
-        const XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action.native, hands_[role]};
+        const XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action.native, context.Hands()[role]};
         XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
-        if (const auto result = dispatch_.poseState(native_.session, &info, &state); result != XR_SUCCESS)
+        if (const auto result = context.DispatchTable().poseState(context.Native().session, &info, &state); result != XR_SUCCESS)
             return Outcome::Failure(PoseFailure("query pose action", result));
         if (state.type != XR_TYPE_ACTION_STATE_POSE || state.next != nullptr || (state.isActive != XR_TRUE && state.isActive != XR_FALSE))
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
-        XRPoseDescriptor descriptor{owner_, action.identity, tracking_.baseIdentity, XRPosePurpose::SimulationInput, time, {}};
+        XRPoseDescriptor descriptor{context.Session(), action.identity, baseIdentity, XRPosePurpose::SimulationInput, time, {}};
         const bool active = state.isActive == XR_TRUE;
         if (active) {
-            auto pose = Locate(action.space, action.identity, time);
+            auto pose = Locate(context, action.space, action.identity, time);
             if (pose.HasError())
                 return Outcome::Failure(pose.ErrorValue());
             descriptor = pose.Value();
@@ -148,9 +150,10 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success({action.role, action.kind, active, descriptor});
     }
 
-    /** @copydoc OpenXRActionBindings::AppendHeadObservation */
-    Result<void> OpenXRActionBindings::AppendHeadObservation(const XRTimeEvidence &time, NativePoseObservations &samples) const {
-        auto pose = Locate(tracking_.view, tracking_.viewIdentity, time);
+    /** @copydoc OpenXRActionBindings::Tracking::AppendHeadObservation */
+    Result<void> OpenXRActionBindings::Tracking::AppendHeadObservation(const TrackingContext &context, const XRTimeEvidence &time,
+                                                                       NativePoseObservations &samples) const {
+        auto pose = Locate(context, view, viewIdentity, time);
         if (pose.HasError())
             return Result<void>::Failure(pose.ErrorValue());
         const auto &components = pose.Value().components;
@@ -198,15 +201,15 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(current.ErrorValue());
         NativePoseObservations samples;
         if (AdmitsTrackingSource(currentDevices, devices.has_value(), XRTrackedDeviceRole::Head, XRTrackedDeviceCapability::HeadPose)) {
-            if (auto observed = AppendHeadObservation(time, samples); observed.HasError())
+            if (auto observed = tracking_.AppendHeadObservation(TrackingContext{*this}, time, samples); observed.HasError())
                 return Outcome::Failure(observed.ErrorValue());
         }
         for (const auto &action : tracking_.actions) {
-            const auto capability =
-                action.kind == XRTrackedPoseKind::Grip ? XRTrackedDeviceCapability::GripPose : XRTrackedDeviceCapability::AimPose;
-            if (!AdmitsTrackingSource(currentDevices, devices.has_value(), action.role, capability))
+            if (const auto capability =
+                    action.kind == XRTrackedPoseKind::Grip ? XRTrackedDeviceCapability::GripPose : XRTrackedDeviceCapability::AimPose;
+                !AdmitsTrackingSource(currentDevices, devices.has_value(), action.role, capability))
                 continue;
-            auto pose = LocateAction(action, time);
+            auto pose = tracking_.LocateAction(TrackingContext{*this}, action, time);
             if (pose.HasError())
                 return Outcome::Failure(pose.ErrorValue());
             samples.records_[samples.count_++] = pose.Value();
@@ -246,17 +249,18 @@ namespace Horo::XR::OpenXRInternal {
         return Result<NativePoseSamples>::Success(result);
     }
 
-    /** @copydoc OpenXRActionBindings::PresentationReference */
-    Result<XRPoseDescriptor> OpenXRActionBindings::PresentationReference(const XRTimeEvidence &time) const {
+    /** @copydoc OpenXRActionBindings::Tracking::PresentationReference */
+    Result<XRPoseDescriptor> OpenXRActionBindings::Tracking::PresentationReference(const TrackingContext &context,
+                                                                                   const XRTimeEvidence &time) const {
         XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
         XrSpaceLocation reference{XR_TYPE_SPACE_LOCATION, &velocity};
-        if (const auto transformed = dispatch_.locate(tracking_.base, tracking_.world, time.renderPrediction->Nanoseconds(), &reference);
+        if (const auto transformed = context.DispatchTable().locate(base, world, time.renderPrediction->Nanoseconds(), &reference);
             transformed != XR_SUCCESS)
             return Result<XRPoseDescriptor>::Failure(PoseFailure("locate presentation reference in World", transformed));
         if (auto valid = ValidateLocation(reference, velocity); valid.HasError())
             return Result<XRPoseDescriptor>::Failure(valid.ErrorValue());
-        return Result<XRPoseDescriptor>::Success({owner_, tracking_.baseIdentity, tracking_.worldIdentity,
-                                                  XRPosePurpose::PresentationPrediction, time, Components(reference, velocity)});
+        return Result<XRPoseDescriptor>::Success(
+            {context.Session(), baseIdentity, worldIdentity, XRPosePurpose::PresentationPrediction, time, Components(reference, velocity)});
     }
 
     /** @copydoc OpenXRActionBindings::LocatePresentation */
@@ -290,7 +294,7 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(valid.ErrorValue());
         if (auto fenced = Current(session); fenced.HasError())
             return Outcome::Failure(fenced.ErrorValue());
-        auto reference = PresentationReference(time);
+        auto reference = tracking_.PresentationReference(TrackingContext{*this}, time);
         if (reference.HasError())
             return Outcome::Failure(reference.ErrorValue());
         output.flags = state.viewStateFlags;

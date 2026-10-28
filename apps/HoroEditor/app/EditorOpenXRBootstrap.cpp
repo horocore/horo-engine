@@ -36,8 +36,7 @@ namespace Horo::Editor {
                 return Result<void>::Failure(entry.ErrorValue());
             if (!entry.Value() || entry.Value()->kind != FileEntryKind::Directory)
                 return Result<void>::Failure(BootstrapError("XR cache storage must be an existing directory, never a file or redirect."));
-            std::error_code error;
-            if (std::filesystem::canonical(path, error) != path || error)
+            if (std::error_code error; std::filesystem::canonical(path, error) != path || error)
                 return Result<void>::Failure(BootstrapError("XR cache storage must retain its exact canonical host-owned location."));
             return Result<void>::Success();
         }
@@ -291,7 +290,7 @@ namespace Horo::Editor {
             }, &jobs});
             auto &configuration = services->configuration.invocation;
             const auto put = [&](const char *key, SettingValue value) {
-                configuration.try_emplace(SettingKey{key}, ConfigurationInputValue{std::move(value), std::nullopt});
+                configuration.try_emplace(SettingKey{key}, std::move(value), std::nullopt);
             };
             put("xr.enabled", true);
             put("xr.schema_version", XR::XRProjectSettingsSchemaVersion);

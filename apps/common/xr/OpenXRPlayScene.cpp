@@ -234,20 +234,20 @@ namespace Horo::Application::Internal {
                 host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings, tracking);
             prepared.HasError())
             return Result<void>::Failure(prepared.ErrorValue());
-        auto projection = host.composition_.session.PrepareProjection(host.composition_.frontend, host.composition_.viewport,
-                                                                      *host.composition_.bindings);
-        if (projection.HasError())
-            return Result<void>::Failure(projection.ErrorValue());
-        host.scene_->projection.emplace(std::move(projection).Value());
-        const auto &facts = *host.scene_->projection;
-        auto activated =
+        auto preparedProjection = host.composition_.session.PrepareProjection(host.composition_.frontend, host.composition_.viewport,
+                                                                              *host.composition_.bindings);
+        if (preparedProjection.HasError())
+            return Result<void>::Failure(preparedProjection.ErrorValue());
+        projection.emplace(std::move(preparedProjection).Value());
+        const auto &facts = *projection;
+        auto activatedSession =
             host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(), facts.plan);
-        if (activated.HasError())
-            return Result<void>::Failure(activated.ErrorValue());
-        host.scene_->activated = true;
-        if (host.scene_->session != activated.Value())
+        if (activatedSession.HasError())
+            return Result<void>::Failure(activatedSession.ErrorValue());
+        activated = true;
+        if (session != activatedSession.Value())
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        if (auto finished = host.FinishFrameResources(activated.Value(), facts.capabilities); finished.HasError())
+        if (auto finished = host.FinishFrameResources(activatedSession.Value(), facts.capabilities); finished.HasError())
             return Result<void>::Failure(finished.ErrorValue());
         if (auto valid = Validate(host); valid.HasError())
             return Result<void>::Failure(valid.ErrorValue());

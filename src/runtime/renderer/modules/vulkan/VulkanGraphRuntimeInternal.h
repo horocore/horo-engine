@@ -56,6 +56,22 @@ namespace Horo::Render::Detail {
         };
 
         struct Dispatch {
+            /** @brief Emits only an already admitted finite copy through this device's native dispatch.
+             * @param command Current recorder. @param operation Validated copy. @param resident Exact admitted resource bindings.
+             * @pre Every resource index and native descriptor was validated by the owning graph transaction.
+             */
+            void EncodeCopy(VkCommandBuffer command, const RenderGraphBufferCopy &operation,
+                            std::span<const VulkanGraphResource> resident) const noexcept;
+            /** @brief Emits a previously admitted whole-array color attachment without journal or retention mutation.
+             * @param command Current recorder. @param operation Validated color work. @param resident Exact admitted bindings.
+             */
+            void EncodeColor(VkCommandBuffer command, const RenderGraphColorAttachment &operation,
+                             std::span<const VulkanGraphResource> resident) const noexcept;
+            /** @brief Emits a previously admitted normalized depth clear without journal or retention mutation.
+             * @param command Current recorder. @param depth Validated depth work. @param resident Exact admitted bindings.
+             */
+            void EncodeDepthAttachment(VkCommandBuffer command, const RenderGraphDepthAttachment &depth,
+                                       std::span<const VulkanGraphResource> resident) const noexcept;
             PFN_vkCmdPipelineBarrier2 barrier{};
             PFN_vkCmdCopyBuffer2 copy{};
             PFN_vkCmdCopyBufferToImage2 copyImage{};
@@ -203,14 +219,8 @@ namespace Horo::Render::Detail {
                                                            const RenderGraphExecutionPass &pass);
         /** @brief Validates the whole-array native depth attachment before recording. */
         [[nodiscard]] Result<void> ValidateDepthAttachment(const RenderGraphDepthAttachment &depth, RenderQueueId queue);
-        /** @brief Encodes the admitted normalized depth clear without allocation. */
-        void EncodeDepthAttachment(VkCommandBuffer command, const RenderGraphDepthAttachment &depth) const noexcept;
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphWorkload &workload, RenderQueueId queue);
         [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
-        /** @brief Records one previously admitted finite native buffer copy. */
-        void EncodeCopy(VkCommandBuffer command, const RenderGraphBufferCopy &operation) const noexcept;
-        /** @brief Records one previously admitted whole-array native color attachment. */
-        void EncodeColor(VkCommandBuffer command, const RenderGraphColorAttachment &operation) const noexcept;
         void Encode(VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept;
         void Barriers(VkCommandBuffer command, RenderGraphExecutionRange range) const noexcept;
         [[nodiscard]] Result<void> ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const;

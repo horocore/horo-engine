@@ -11,10 +11,10 @@ Result<void> VulkanGraphRuntime::Impl::ValidateDepthAttachment(const RenderGraph
     return Result<void>::Success();
 }
 
-/** @brief Emits a normalized depth clear for every array slice of the actual registered runtime allocation. */
-void VulkanGraphRuntime::Impl::EncodeDepthAttachment(const VkCommandBuffer command,
-                                                     const RenderGraphDepthAttachment &depth) const noexcept {
-    const auto &binding = bindings[depth.texture.value - 1];
+/** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeDepthAttachment */
+void VulkanGraphRuntime::Impl::Dispatch::EncodeDepthAttachment(const VkCommandBuffer command, const RenderGraphDepthAttachment &depth,
+                                                               const std::span<const VulkanGraphResource> resident) const noexcept {
+    const auto &binding = resident[depth.texture.value - 1];
     const VkRenderingAttachmentInfo attachment{.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                                                .imageView = binding.colorView,
                                                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -27,6 +27,6 @@ void VulkanGraphRuntime::Impl::EncodeDepthAttachment(const VkCommandBuffer comma
                                                               binding.textureDescriptor.extent.height}},
                                     .layerCount = binding.textureDescriptor.layerCount,
                                     .pDepthAttachment = &attachment};
-    native.beginRendering(command, &operation);
-    native.endRendering(command);
+    beginRendering(command, &operation);
+    endRendering(command);
 }

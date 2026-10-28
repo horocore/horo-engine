@@ -44,8 +44,8 @@ namespace Horo::Editor {
             const auto ready = ResourceReady(frontend, handle, operation);
             if (ready.HasError() || ready.Value() || !handle.IsValid() || !operation.IsValid())
                 return ready;
-            const auto completed = frontend.ResourceOperationResult(operation);
-            if (completed.HasError() &&
+            if (const auto completed = frontend.ResourceOperationResult(operation);
+                completed.HasError() &&
                 completed.ErrorValue().code.Value() != Render::FrontendErrors::ResourceOperationPending.code.Value())
                 return Result<bool>::Failure(completed.ErrorValue());
             return ready;
@@ -98,20 +98,22 @@ namespace Horo::Editor {
         if (resources.size() > ((std::numeric_limits<std::size_t>::max)() - queued) / RequestsPerMesh)
             return Result<void>::Failure(MakeError(Render::FrontendErrors::ResourceUploadCapacityExceeded));
         const auto maximumDrains = queued + resources.size() * RequestsPerMesh;
-        for (std::size_t remaining = maximumDrains; remaining > 0; --remaining) {
+        bool progressing = true;
+        for (std::size_t remaining = maximumDrains; remaining > 0 && progressing; --remaining) {
             const auto ready = AdvanceColdMeshes(resources);
             if (ready.HasError())
                 return Result<void>::Failure(ready.ErrorValue());
             if (ready.Value())
                 return Result<void>::Success();
             const auto before = frontend_->UploadSnapshot().pendingRequests;
-            if (before == 0)
-                break;
-            const auto processed = frontend_->ProcessResourceRequests();
-            if (processed.HasError())
-                return Result<void>::Failure(processed.ErrorValue());
-            if (processed.Value() == 0 && frontend_->UploadSnapshot().pendingRequests >= before)
-                break;
+            if (before == 0) {
+                progressing = false;
+            } else {
+                const auto processed = frontend_->ProcessResourceRequests();
+                if (processed.HasError())
+                    return Result<void>::Failure(processed.ErrorValue());
+                progressing = processed.Value() != 0 || frontend_->UploadSnapshot().pendingRequests < before;
+            }
         }
         const auto ready = AdvanceColdMeshes(resources);
         if (ready.HasError())
@@ -122,8 +124,7 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportResources::AdvanceColdMeshes */
     Result<bool> EditorViewportResources::AdvanceColdMeshes(const std::span<const EditorViewportMeshResourceView> resources) {
         // Observe stored failures before incremental advancement can replace their identity with a pending observation.
-        const auto observed = ColdMeshesReady(resources);
-        if (observed.HasError())
+        if (const auto observed = ColdMeshesReady(resources); observed.HasError())
             return observed;
         if (auto prepared = SynchronizeMeshes(resources); prepared.HasError())
             return Result<bool>::Failure(prepared.ErrorValue());

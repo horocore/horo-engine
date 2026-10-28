@@ -40,10 +40,10 @@ namespace Horo::Render::Detail {
                                                        const RenderTextureDescriptor &texture,
                                                        const VulkanExternalNativeViews &prepared) noexcept {
             using enum RenderTextureViewDimension;
-            const bool full = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.baseLayer == 0 &&
-                              descriptor.layerCount == texture.layerCount &&
-                              descriptor.dimension == (texture.layerCount == 1 ? TwoD : TwoDArray);
-            if (full)
+            if (const bool full = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.baseLayer == 0 &&
+                                  descriptor.layerCount == texture.layerCount &&
+                                  descriptor.dimension == (texture.layerCount == 1 ? TwoD : TwoDArray);
+                full)
                 return prepared.attachment;
             const bool layer = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.layerCount == 1 &&
                                descriptor.baseLayer < prepared.layerCount && descriptor.baseLayer < prepared.layers.size() &&

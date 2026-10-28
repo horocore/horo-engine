@@ -13,7 +13,7 @@ namespace Horo::Application::Internal {
      */
     class OpenXRLoaderLease final {
         struct Files;
-        class RetainedLibrary;
+        struct RetainedLibrary;
 
     public:
         /** @brief Stages and opens exactly one already admitted first-party component, without runtime discovery.

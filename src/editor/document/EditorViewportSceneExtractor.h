@@ -72,8 +72,11 @@ namespace Horo::Editor {
         Math::Mat4 parentToWorld{Math::Mat4::Identity()};
     };
 
-    /** @brief Resolves world and parent matrices from an immutable runtime scene view. */
-    [[nodiscard]] Result<SceneObjectWorldTransforms> ResolveSceneObjectWorldTransforms(Runtime::RuntimeSceneView scene,
+    /** @brief Resolves world and parent matrices from an immutable runtime scene view.
+     * @param scene Borrowed only during this synchronous query; no view or callback escapes.
+     * @param object Exact authored object. @return Owned matrices or the original extraction error.
+     */
+    [[nodiscard]] Result<SceneObjectWorldTransforms> ResolveSceneObjectWorldTransforms(const Runtime::RuntimeSceneView &scene,
                                                                                        SceneObjectId object);
 
     /** @brief Explicit cold extraction policy; the desktop default preserves its original unbounded scene capacity. */
@@ -100,18 +103,23 @@ namespace Horo::Editor {
         Runtime::PrimitiveMeshCache &meshCache, const SceneDocumentSnapshot *document = nullptr,
         const EditorAssetMeshCache *assetMeshes = nullptr, bool respectEditorVisibility = true);
 
-    /** @brief Applies editor-owned transient transform overlays without mutating runtime state. */
-    [[nodiscard]] Result<void> ApplyEditorViewportTransformPreview(Runtime::RuntimeSceneView scene,
+    /** @brief Applies editor-owned transient transform overlays without mutating runtime state.
+     * @param scene Immutable view borrowed only during this synchronous query.
+     * @param previews Existing transient overlays. @param snapshot Owning viewport projection updated in place.
+     * @return Success or original validation/extraction failure; no Scene borrow is retained.
+     */
+    [[nodiscard]] Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView &scene,
                                                                    std::span<const SceneObjectTransformPreview> previews,
                                                                    EditorViewportSceneSnapshot &snapshot);
 
     /**
      * @brief Applies or clears one editor-owned transient Light-component overlay.
-     * @param scene Active immutable runtime scene.
+     * @param scene Active immutable view borrowed only during this synchronous query.
      * @param preview Light override, or null to restore authored runtime values.
      * @param snapshot Owning viewport snapshot updated in place.
      * @return Success, or a typed extraction error without a document mutation.
      */
-    [[nodiscard]] Result<void> ApplyEditorViewportLightPreview(Runtime::RuntimeSceneView scene, const SceneObjectLightPreview *preview,
+    [[nodiscard]] Result<void> ApplyEditorViewportLightPreview(const Runtime::RuntimeSceneView &scene,
+                                                               const SceneObjectLightPreview *preview,
                                                                EditorViewportSceneSnapshot &snapshot);
 }  // namespace Horo::Editor
