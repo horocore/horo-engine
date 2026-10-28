@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorSurfaceEventContext.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Editor/WorkspaceDockArea.h"
 #include "Horo/Runtime/Input.h"
 
@@ -66,7 +67,10 @@ namespace Horo::Editor {
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */
-    class IWorkspacePanel {
+    class IWorkspacePanel : public LocalizedGui {
+    protected:
+        using LocalizedGui::LocalizedGui;
+
     public:
         virtual ~IWorkspacePanel() = default;
 

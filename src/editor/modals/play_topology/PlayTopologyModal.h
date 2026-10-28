@@ -10,6 +10,9 @@ namespace Horo::Editor {
     /** @brief Owns only a transient draft; every persistence action passes through the application authority. */
     class PlayTopologyModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.play_topology"};
+
         /** @brief Borrow shared presentation services; own a project-scoped application store.
          * @param context Shared theme/localization. @param store Explicit host-composed persistence authority. */
         PlayTopologyModal(const EditorGuiContext &context, std::unique_ptr<Application::PlayTopologyStore> store);

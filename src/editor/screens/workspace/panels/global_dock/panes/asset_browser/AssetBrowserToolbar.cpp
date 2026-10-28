@@ -7,6 +7,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 
 #include <algorithm>
@@ -76,7 +77,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] const char *ViewLabelKey(const int index) noexcept {
-            return index == 0 ? "workspace.content_browser.view.grid" : "workspace.content_browser.view.list";
+            return index == 0 ? "view.grid" : "view.list";
         }
 
         [[nodiscard]] bool DrawToolbarButton(const ImVec2 position, const char *id, const Ui::UiIcon icon, const bool enabled,
@@ -165,7 +166,7 @@ namespace Horo::Editor {
             {
                 Theme::ScopedTextStyle textStyle{context.theme.fonts.sans, fontSize, Theme::FontPx::Sans};
                 static_cast<void>(ImGui::InputTextWithHint("##ContentBrowserSearch",
-                                                           context.localization.Get("editor", "workspace.content_browser.search").c_str(),
+                                                           AssetBrowserPane::kTextScope.Text(context.localization, "search").c_str(),
                                                            state.search.data(), state.search.size()));
             }
             ImGui::PopItemWidth();
@@ -207,7 +208,7 @@ namespace Horo::Editor {
                                {iconSize, iconSize}, Theme::U32(active || hovered ? Theme::Text() : Theme::Dim()),
                                context.theme.fonts.icon);
             if (hovered)
-                Ui::ShowTooltip(context.localization.Get("editor", ViewLabelKey(index)).c_str(), &context.theme.fonts);
+                Ui::ShowTooltip(AssetBrowserPane::kTextScope.Text(context.localization, ViewLabelKey(index)).c_str(), &context.theme.fonts);
             ImGui::PopID();
         }
 
@@ -241,7 +242,7 @@ namespace Horo::Editor {
                                {iconSize, iconSize}, Theme::U32(Theme::DarkText()), context.theme.fonts.icon);
             if (!compact) {
                 ImFont *font = ResolveFont(context.theme.fonts.sansCompact);
-                const std::string &label = context.localization.Get("editor", "workspace.content_browser.action.import");
+                const std::string &label = AssetBrowserPane::kTextScope.Text(context.localization, "action.import");
                 const float fontSize = GlobalDockLabelFontSize();
                 drawList->AddText(font, fontSize, {position.x + 29.0F * scale, position.y + (height - fontSize) * 0.5F},
                                   Theme::U32(Theme::DarkText()), label.c_str());
@@ -255,18 +256,18 @@ namespace Horo::Editor {
             float x = position.x;
             const auto button = [&](const char *id, const Ui::UiIcon icon, const bool enabled, const char *key,
                                     const EditorWorkspaceViewCommand action) {
-                if (const std::string &tooltip = context.localization.Get("editor", key);
+                if (const std::string &tooltip = AssetBrowserPane::kTextScope.Text(context.localization, key);
                     DrawToolbarButton({x, position.y}, id, icon, enabled, tooltip.c_str(), context.theme.fonts.icon))
                     command = AssetBrowserInteractionSession::Navigate(action);
                 x += layout.control + layout.gap;
             };
-            button("ContentBrowserBack", Ui::UiIcon::ArrowBack, viewModel.contentBrowserCanNavigateBack,
-                   "workspace.content_browser.navigation.back", EditorWorkspaceViewCommand::NavigateContentBrowserBack);
-            button("ContentBrowserForward", Ui::UiIcon::ArrowForward, viewModel.contentBrowserCanNavigateForward,
-                   "workspace.content_browser.navigation.forward", EditorWorkspaceViewCommand::NavigateContentBrowserForward);
+            button("ContentBrowserBack", Ui::UiIcon::ArrowBack, viewModel.contentBrowserCanNavigateBack, "navigation.back",
+                   EditorWorkspaceViewCommand::NavigateContentBrowserBack);
+            button("ContentBrowserForward", Ui::UiIcon::ArrowForward, viewModel.contentBrowserCanNavigateForward, "navigation.forward",
+                   EditorWorkspaceViewCommand::NavigateContentBrowserForward);
             button("ContentBrowserUp", Ui::UiIcon::ArrowUpward,
-                   viewModel.contentBrowser.absoluteCurrentPath != viewModel.contentBrowser.absoluteRootPath,
-                   "workspace.content_browser.navigation.up", EditorWorkspaceViewCommand::NavigateContentBrowserUp);
+                   viewModel.contentBrowser.absoluteCurrentPath != viewModel.contentBrowser.absoluteRootPath, "navigation.up",
+                   EditorWorkspaceViewCommand::NavigateContentBrowserUp);
             if (layout.narrow)
                 return x;
             ImGui::GetWindowDrawList()->AddLine({x, position.y + 5.0F * layout.scale}, {x, position.y + 25.0F * layout.scale},
@@ -279,7 +280,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::vector<std::string> BuildTypeLabels(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context) {
-            std::vector<std::string> labels{context.localization.Get("editor", "workspace.content_browser.filter.all_types")};
+            std::vector<std::string> labels{AssetBrowserPane::kTextScope.Text(context.localization, "filter.all_types")};
             for (const ContentBrowserEntry &entry : viewModel.contentBrowser.entries) {
                 if (entry.kind == ContentBrowserEntryKind::Asset && !entry.assetType.empty() &&
                     std::ranges::find(labels, entry.assetType) == labels.end())
@@ -316,8 +317,8 @@ namespace Horo::Editor {
 
         void DrawSortField(const ImVec2 position, const float width, AssetBrowserInteractionState &state, const EditorGuiContext &context) {
             using enum ContentBrowserSortField;
-            const std::array labels{context.localization.Get("editor", "workspace.content_browser.sort.name"),
-                                    context.localization.Get("editor", "workspace.content_browser.sort.type")};
+            const std::array labels{AssetBrowserPane::kTextScope.Text(context.localization, "sort.name"),
+                                    AssetBrowserPane::kTextScope.Text(context.localization, "sort.type")};
             const std::array items{labels[0].c_str(), labels[1].c_str()};
             int selectedIndex = state.sortField == Name ? 0 : 1;
             ImGui::SetCursorScreenPos(position);
@@ -343,7 +344,7 @@ namespace Horo::Editor {
             if (DrawImportButton({x, position.y}, layout.compact, context))
                 command = AssetBrowserInteractionSession::ImportHere(viewModel.contentBrowser.absoluteCurrentPath);
             x += layout.importWidth + layout.gap;
-            if (const std::string &tooltip = context.localization.Get("editor", "workspace.content_browser.action.create_folder");
+            if (const std::string &tooltip = AssetBrowserPane::kTextScope.Text(context.localization, "action.create_folder");
                 !DrawToolbarButton({x, position.y}, "ContentBrowserNewFolder", Ui::UiIcon::CreateNewFolder, true, tooltip.c_str(),
                                    context.theme.fonts.icon))
                 return;

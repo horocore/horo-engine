@@ -154,9 +154,9 @@ namespace Horo::Editor {
                                       EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         projectRoot_ = viewModel.projectRoot;
         const std::array labels{
-            context.localization.Get("editor", "workspace.input_mapping.actions").c_str(),
-            context.localization.Get("editor", "workspace.input_mapping.devices").c_str(),
-            context.localization.Get("editor", "workspace.input_mapping.profiles").c_str(),
+            InputMappingPanel::kTextScope.Text(context.localization, "actions").c_str(),
+            InputMappingPanel::kTextScope.Text(context.localization, "devices").c_str(),
+            InputMappingPanel::kTextScope.Text(context.localization, "profiles").c_str(),
         };
         const auto selected = static_cast<int>(page_);
         const int next = Ui::DrawDockTabs(labels, selected, context.theme.fonts);
@@ -181,7 +181,7 @@ namespace Horo::Editor {
             return;
         const auto actions = router_->Actions();
         if (actions.empty()) {
-            ImGui::TextUnformatted(context.localization.Get("editor", "workspace.input_mapping.no_actions").c_str());
+            ImGui::TextUnformatted(InputMappingPanel::kTextScope.Text(context.localization, "no_actions").c_str());
             return;
         }
         selectedAction_ = std::min(selectedAction_, actions.size() - 1);
@@ -202,10 +202,10 @@ namespace Horo::Editor {
     void InputMappingPanel::DrawActionTable(const std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context) {
         if (ImGui::BeginTable("##ActionMap", 4,
                               ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn(context.localization.Get("editor", "workspace.input_mapping.action").c_str());
-            ImGui::TableSetupColumn(context.localization.Get("editor", "workspace.input_mapping.type").c_str());
-            ImGui::TableSetupColumn(context.localization.Get("editor", "workspace.input_mapping.bindings").c_str());
-            ImGui::TableSetupColumn(context.localization.Get("editor", "workspace.input_mapping.status").c_str());
+            ImGui::TableSetupColumn(InputMappingPanel::kTextScope.Text(context.localization, "action").c_str());
+            ImGui::TableSetupColumn(InputMappingPanel::kTextScope.Text(context.localization, "type").c_str());
+            ImGui::TableSetupColumn(InputMappingPanel::kTextScope.Text(context.localization, "bindings").c_str());
+            ImGui::TableSetupColumn(InputMappingPanel::kTextScope.Text(context.localization, "status").c_str());
             ImGui::TableHeadersRow();
             for (std::size_t index = 0; index < actions.size(); ++index) {
                 const Input::ActionDescriptor &action = actions[index];
@@ -218,8 +218,8 @@ namespace Horo::Editor {
                 ImGui::TableSetColumnIndex(2);
                 ImGui::Text("%zu", BindingsFor(action, router_->Profile()).size());
                 ImGui::TableSetColumnIndex(3);
-                ImGui::TextUnformatted(action.required ? context.localization.Get("editor", "workspace.input_mapping.required").c_str()
-                                                       : context.localization.Get("editor", "workspace.input_mapping.optional").c_str());
+                ImGui::TextUnformatted(action.required ? InputMappingPanel::kTextScope.Text(context.localization, "required").c_str()
+                                                       : InputMappingPanel::kTextScope.Text(context.localization, "optional").c_str());
             }
             ImGui::EndTable();
         }
@@ -236,25 +236,25 @@ namespace Horo::Editor {
                                   binding.requiredModifiers.command ? "Cmd+" : "", binding.requiredModifiers.shift ? "Shift+" : "",
                                   binding.requiredModifiers.alt ? "Alt+" : "", KeyName(binding.key));
             else
-                ImGui::BulletText("%s %d", context.localization.Get("editor", "workspace.input_mapping.binding").c_str(),
+                ImGui::BulletText("%s %d", InputMappingPanel::kTextScope.Text(context.localization, "binding").c_str(),
                                   static_cast<int>(binding.kind));
             if (binding.kind == Input::BindingControlKind::GamepadAxis || binding.kind == Input::BindingControlKind::RawGamepadAxis) {
                 float deadzone = binding.deadzone;
                 ImGui::PushID(static_cast<int>(bindingIndex));
-                if (ImGui::SliderFloat(context.localization.Get("editor", "workspace.input_mapping.deadzone").c_str(), &deadzone, 0.0F,
-                                       0.95F, "%.2f")) {
+                if (ImGui::SliderFloat(InputMappingPanel::kTextScope.Text(context.localization, "deadzone").c_str(), &deadzone, 0.0F, 0.95F,
+                                       "%.2f")) {
                     UpdateBindingDeadzone(*router_, selectedAction, bindings, bindingIndex, deadzone, statusMessage_);
                 }
                 ImGui::PopID();
             }
         }
-        const std::string &rebind = context.localization.Get("editor", "workspace.input_mapping.rebind");
+        const std::string &rebind = InputMappingPanel::kTextScope.Text(context.localization, "rebind");
         if (Ui::Button({.label = rebind.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
             listeningAction_ = selectedAction.id;
             bindingCaptureContext_.Reset();
             bindingCaptureContext_ =
                 router_->PushContext(Input::InputContextId{"editor.input_binding_capture"}, Input::InputContextKind::FocusedGuiWidget);
-            statusMessage_ = context.localization.Get("editor", "workspace.input_mapping.press_key");
+            statusMessage_ = InputMappingPanel::kTextScope.Text(context.localization, "press_key");
         }
     }
 
@@ -263,25 +263,25 @@ namespace Horo::Editor {
             return;
         const auto &gamepads = router_->Snapshot().gamepads;
         if (gamepads.empty()) {
-            ImGui::TextUnformatted(context.localization.Get("editor", "workspace.input_mapping.no_devices").c_str());
+            ImGui::TextUnformatted(InputMappingPanel::kTextScope.Text(context.localization, "no_devices").c_str());
             return;
         }
         for (const Input::GamepadState &gamepad : gamepads) {
             const std::string cardId = std::format("device-{}", gamepad.id.slot);
             Ui::ScopedCard card(cardId.c_str(), {0.0F, 78.0F});
             ImGui::TextUnformatted(gamepad.name.c_str());
-            ImGui::Text("%s %u / %s %llu", context.localization.Get("editor", "workspace.input_mapping.slot").c_str(), gamepad.id.slot,
-                        context.localization.Get("editor", "workspace.input_mapping.generation").c_str(),
+            ImGui::Text("%s %u / %s %llu", InputMappingPanel::kTextScope.Text(context.localization, "slot").c_str(), gamepad.id.slot,
+                        InputMappingPanel::kTextScope.Text(context.localization, "generation").c_str(),
                         static_cast<unsigned long long>(gamepad.id.sessionGeneration));
             int assignment =
                 router_->PlayerForGamepad(gamepad.id).has_value() ? static_cast<int>(*router_->PlayerForGamepad(gamepad.id)) + 1 : 0;
-            const std::array<std::string, 5> assignmentLabels{context.localization.Get("editor", "workspace.input_mapping.unassigned"), "1",
+            const std::array<std::string, 5> assignmentLabels{InputMappingPanel::kTextScope.Text(context.localization, "unassigned"), "1",
                                                               "2", "3", "4"};
             const std::array<const char *, 5> assignmentItems{assignmentLabels[0].c_str(), assignmentLabels[1].c_str(),
                                                               assignmentLabels[2].c_str(), assignmentLabels[3].c_str(),
                                                               assignmentLabels[4].c_str()};
             ImGui::SetNextItemWidth(140.0F);
-            if (ImGui::Combo(context.localization.Get("editor", "workspace.input_mapping.player").c_str(), &assignment,
+            if (ImGui::Combo(InputMappingPanel::kTextScope.Text(context.localization, "player").c_str(), &assignment,
                              assignmentItems.data(), assignmentItems.size())) {
                 if (assignment == 0)
                     router_->UnassignGamepad(gamepad.id);
@@ -294,29 +294,29 @@ namespace Horo::Editor {
     void InputMappingPanel::DrawProfiles(const EditorGuiContext &context) {
         if (router_ == nullptr)
             return;
-        ImGui::Text("%s: %s", context.localization.Get("editor", "workspace.input_mapping.active_profile").c_str(),
+        ImGui::Text("%s: %s", InputMappingPanel::kTextScope.Text(context.localization, "active_profile").c_str(),
                     router_->Profile().profileId.c_str());
-        if (const std::string &save = context.localization.Get("editor", "workspace.input_mapping.save_profile");
+        if (const std::string &save = InputMappingPanel::kTextScope.Text(context.localization, "save_profile");
             Ui::Button({.label = save.c_str(), .font = context.theme.fonts.sans})) {
             Input::InputBindingProfile profile = router_->Profile();
             profile.profileId = "editor-global";
             const Result<void> result = Input::SaveBindingProfileAtomically(EditorProfilePath(), profile);
-            statusMessage_ = result.HasError() ? result.ErrorValue().message
-                                               : context.localization.Get("editor", "workspace.input_mapping.profile_saved");
+            statusMessage_ =
+                result.HasError() ? result.ErrorValue().message : InputMappingPanel::kTextScope.Text(context.localization, "profile_saved");
         }
         if (const auto projectProfile = ProjectUserProfilePath(); projectProfile.has_value()) {
             ImGui::SameLine();
-            const std::string &saveProject = context.localization.Get("editor", "workspace.input_mapping.save_project_profile");
+            const std::string &saveProject = InputMappingPanel::kTextScope.Text(context.localization, "save_project_profile");
             if (Ui::Button({.label = saveProject.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
                 Input::InputBindingProfile profile = router_->Profile();
                 profile.profileId = "project-user";
                 const Result<void> result = Input::SaveBindingProfileAtomically(*projectProfile, profile);
                 statusMessage_ = result.HasError() ? result.ErrorValue().message
-                                                   : context.localization.Get("editor", "workspace.input_mapping.project_profile_saved");
+                                                   : InputMappingPanel::kTextScope.Text(context.localization, "project_profile_saved");
             }
         }
         ImGui::SameLine();
-        const std::string &reload = context.localization.Get("editor", "workspace.input_mapping.reload_profile");
+        const std::string &reload = InputMappingPanel::kTextScope.Text(context.localization, "reload_profile");
         if (Ui::Button({.label = reload.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
             const Result<Input::InputBindingProfile> loaded = LoadComposedProfile();
             if (loaded.HasError())
@@ -324,7 +324,7 @@ namespace Horo::Editor {
             else if (const Result<void> applied = router_->SetProfile(loaded.Value()); applied.HasError())
                 statusMessage_ = applied.ErrorValue().message;
             else
-                statusMessage_ = context.localization.Get("editor", "workspace.input_mapping.profile_loaded");
+                statusMessage_ = InputMappingPanel::kTextScope.Text(context.localization, "profile_loaded");
         }
     }
 
@@ -368,7 +368,7 @@ namespace Horo::Editor {
                 existing->bindings = {binding};
             const Result<void> applied = router_->SetProfile(std::move(profile));
             statusMessage_ = applied.HasError() ? applied.ErrorValue().message
-                                                : context.localization.Get("editor", "workspace.input_mapping.binding_updated");
+                                                : InputMappingPanel::kTextScope.Text(context.localization, "binding_updated");
             listeningAction_.reset();
             bindingCaptureContext_.Reset();
         };

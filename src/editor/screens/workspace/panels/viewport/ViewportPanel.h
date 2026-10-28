@@ -15,6 +15,12 @@
 namespace Horo::Editor {
     class ViewportPanel final : public IWorkspacePanel {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.viewport"};
+
+        /** @brief Creates a surface with its required localization scope. */
+        ViewportPanel() : IWorkspacePanel(kTextScope) {}
+
         [[nodiscard]] std::string GetId() const override;
 
         [[nodiscard]] std::string GetDisplayName() const override;

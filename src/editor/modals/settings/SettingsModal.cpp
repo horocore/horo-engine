@@ -1,8 +1,9 @@
-#include "editor/modals/settings/SettingsModal.h"
+#include "Horo/Editor/SettingsModal.h"
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "SettingsModalInternal.h"
+#include "editor/modals/settings/SettingsModal.h"
 
 #include <imgui.h>
 
@@ -22,7 +23,7 @@ namespace Horo::Editor {
 
             st.modalFeedback.clear();
 
-            const std::string title = ctx.localization.Get("editor", "settings.title");
+            const std::string title = SettingsModal::kTextScope.Text(ctx.localization, "title");
             ScopedModalShell modal(
                 {
                     .id = "Settings",

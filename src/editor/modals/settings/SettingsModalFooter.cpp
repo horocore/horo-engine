@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -39,7 +40,7 @@ namespace Horo::Editor::SettingsModalInternal {
         else if (st.statusIsError)
             textColor = Err();
         ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-        const auto navigationHint = ctx.localization.Get("editor", "settings.navigation.save_policy_first");
+        const auto navigationHint = SettingsModal::kTextScope.Text(ctx.localization, "navigation.save_policy_first");
         const char *message =
             st.navigationProjectDraftDirty ? navigationHint.c_str() : "Apply writes user preferences to ~/.horo/editor_settings.json";
         if (hasFeedback)
@@ -61,7 +62,7 @@ namespace Horo::Editor::SettingsModalInternal {
         const float actionsW = restoreW + cancelW + applyW + gap * 2.0F;
         ImGui::SetCursorPos({ImGui::GetWindowWidth() - footerPaddingX - actionsW, centeredActionY});
         bool requestClose = false;
-        if (const std::string restoreDefaults = ctx.localization.Get("editor", "settings.restore_defaults");
+        if (const std::string restoreDefaults = SettingsModal::kTextScope.Text(ctx.localization, "restore_defaults");
             Button({.label = restoreDefaults.c_str(),
                     .size = {restoreW, actionH},
                     .variant = ButtonVariant::Secondary,
@@ -74,7 +75,7 @@ namespace Horo::Editor::SettingsModalInternal {
             st.statusIsError = false;
         }
         ImGui::SameLine(0.0F, gap);
-        if (const std::string cancelLabel = ctx.localization.Get("editor", "settings.cancel") + "###settings_cancel";
+        if (const std::string cancelLabel = SettingsModal::kTextScope.Text(ctx.localization, "cancel") + "###settings_cancel";
             Button({.label = cancelLabel.c_str(),
                     .size = {cancelW, actionH},
                     .variant = ButtonVariant::Secondary,
@@ -85,7 +86,7 @@ namespace Horo::Editor::SettingsModalInternal {
             requestClose = true;
         }
         ImGui::SameLine(0.0F, gap);
-        if (const std::string applyLabel = ctx.localization.Get("editor", "settings.apply") + "###settings_apply";
+        if (const std::string applyLabel = SettingsModal::kTextScope.Text(ctx.localization, "apply") + "###settings_apply";
             Button({.label = applyLabel.c_str(),
                     .size = {applyW, actionH},
                     .variant = ButtonVariant::Primary,

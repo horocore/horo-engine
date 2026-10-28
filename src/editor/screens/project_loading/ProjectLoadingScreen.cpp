@@ -56,8 +56,11 @@ namespace Horo::Editor {
 
         class ProjectLoadingScreen final : public GuiScreen {
         public:
+            /** @brief Catalog scope shared by this surface and its view helpers. */
+            static constexpr GuiLocalizationScope kTextScope = ProjectLoadingTextScope;
+
             explicit ProjectLoadingScreen(const EditorServiceRegistry &services)
-                : host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
+                : GuiScreen(kTextScope), host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
                   creationService_(services.Get<ProjectCreationService>()), openService_(services.Get<ProjectOpenService>()) {}
 
             ScreenId Id() const override {
@@ -161,7 +164,7 @@ namespace Horo::Editor {
                     return;
                 }
                 openOperation_.emplace(std::move(started).Value());
-                state_.statusText = context_.localization.Get("editor", "project_loading.status.inspecting");
+                state_.statusText = ProjectLoadingScreen::kTextScope.Text(context_.localization, "status.inspecting");
             }
 
             void UpdateCreation() {
@@ -170,7 +173,7 @@ namespace Horo::Editor {
                 if (!snapshot.has_value())
                     return;
                 state_.progress = snapshot->progress * 30.0F;
-                state_.statusText = context_.localization.Get("editor", "project_loading.status.creating");
+                state_.statusText = ProjectLoadingScreen::kTextScope.Text(context_.localization, "status.creating");
                 if (snapshot->state == ProjectCreationOperationState::Succeeded) {
                     host_.SetActiveCreationId(std::nullopt);
                     creationOperation_.reset();
@@ -178,8 +181,9 @@ namespace Horo::Editor {
                 } else if (snapshot->state == ProjectCreationOperationState::Failed) {
                     state_.hasFailed = true;
                     state_.canRetry = false;
-                    state_.statusText = snapshot->error.has_value() ? snapshot->error->message
-                                                                    : context_.localization.Get("editor", "project_loading.status.failed");
+                    state_.statusText = snapshot->error.has_value()
+                                            ? snapshot->error->message
+                                            : ProjectLoadingScreen::kTextScope.Text(context_.localization, "status.failed");
                 }
             }
 
@@ -204,7 +208,7 @@ namespace Horo::Editor {
                     if (!snapshot->readySession.has_value()) {
                         state_.hasFailed = true;
                         state_.canRetry = true;
-                        state_.statusText = context_.localization.Get("editor", "project_loading.status.failed");
+                        state_.statusText = ProjectLoadingScreen::kTextScope.Text(context_.localization, "status.failed");
                         return;
                     }
                     const auto navigated = host_.Navigate(

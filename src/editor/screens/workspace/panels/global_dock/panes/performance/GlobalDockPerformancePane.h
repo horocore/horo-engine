@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Editor/Localization/LocalizedGui.h"
+
 #include <array>
 
 struct ImVec2;
@@ -8,8 +10,14 @@ namespace Horo::Editor {
     struct EditorGuiContext;
 
     /** @brief Performance status story hosted by the global dock. */
-    class GlobalDockPerformancePane {
+    class GlobalDockPerformancePane : public LocalizedGui {
     public:
+        /** @brief Catalog scope for this embedded dock surface. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.global_dock.performance"};
+
+        /** @brief Creates a pane with its required localization scope. */
+        GlobalDockPerformancePane() : LocalizedGui(kTextScope) {}
+
         void Draw(const ImVec2 &contentOrigin, float contentWidth, const EditorGuiContext &context);
 
     private:

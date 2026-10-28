@@ -35,7 +35,8 @@ namespace {
 
     class RecordingWorkspacePanel final : public Horo::Editor::IWorkspacePanel {
     public:
-        RecordingWorkspacePanel(std::string id, const Horo::Editor::WorkspaceDockArea area) : id_{std::move(id)}, area_{area} {}
+        RecordingWorkspacePanel(std::string id, const Horo::Editor::WorkspaceDockArea area)
+            : IWorkspacePanel("test.RecordingWorkspacePanel"), id_{std::move(id)}, area_{area} {}
 
         [[nodiscard]] std::string GetId() const override {
             return id_;

@@ -13,6 +13,9 @@ namespace Horo::Editor {
     /** @brief Transient build presentation; the application service owns every job. */
     class BuildModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace"};
+
         /** @brief Borrows host capabilities and its retained build ID; all borrows outlive the modal. */
         BuildModal(const EditorGuiContext &context, Application::GameplayBuildRequest request, Application::GameplayBuildService *builds,
                    std::optional<std::uint64_t> &retainedBuild, const IBuildOutputQuery *output = nullptr);

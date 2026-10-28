@@ -1,7 +1,8 @@
-#include "editor/screens/welcome/WelcomeView.h"
+#include "WelcomeView.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiScreenHost.h"
+#include "editor/screens/welcome/WelcomeView.h"
 
 #include <Horo/Editor/Localization/ILocalizationService.h>
 #include <algorithm>
@@ -59,7 +60,7 @@ namespace Horo::Editor {
             if (project.compatibility.has_value()) {
                 versionText = project.compatibility->projectVersion.has_value()
                                   ? "Horo " + Application::FormatHoroVersion(project.compatibility->projectVersion->value)
-                                  : ctx.localization.Get("editor", "welcome.project.compatibility.version_unavailable");
+                                  : WelcomeTextScope.Text(ctx.localization, "project.compatibility.version_unavailable");
                 statusText = ctx.localization.Get("editor", CompatibilityLabelKey(*project.compatibility));
             }
 
@@ -212,7 +213,7 @@ namespace Horo::Editor {
                 ImFont *subtitleFont = ctx.theme.fonts.sans ? ctx.theme.fonts.sans : ImGui::GetFont();
                 const ImVec2 subtitlePos = ImGui::GetCursorScreenPos();
                 const float subtitlePx = TextPx::Caption();
-                const std::string subtitleText = ctx.localization.Get("editor", "welcome.subtitle");
+                const std::string subtitleText = WelcomeTextScope.Text(ctx.localization, "subtitle");
                 const char *subtitle = subtitleText.c_str();
                 ImGui::GetWindowDrawList()->AddText(subtitleFont, subtitlePx, subtitlePos, U32(Muted()), subtitle);
                 const ImVec2 subtitleSize = subtitleFont->CalcTextSizeA(subtitlePx, FLT_MAX, 0.0F, subtitle);
@@ -224,10 +225,10 @@ namespace Horo::Editor {
         /** @brief Draws welcome navigation actions and records the selected command. */
         void DrawWelcomeSidebarActions(const EditorGuiContext &ctx, WelcomeViewResult &result) {
             using enum Ui::ButtonVariant;
-            const std::string newProject = ctx.localization.Get("editor", "welcome.new_project") + "###welcome_new_project";
-            const std::string openProject = ctx.localization.Get("editor", "welcome.open_project") + "###welcome_open_project";
-            const std::string openSettings = ctx.localization.Get("editor", "welcome.open_settings") + "###welcome_open_settings";
-            const std::string pluginStore = ctx.localization.Get("editor", "welcome.plugin_store") + "###welcome_plugin_store";
+            const std::string newProject = WelcomeTextScope.Text(ctx.localization, "new_project") + "###welcome_new_project";
+            const std::string openProject = WelcomeTextScope.Text(ctx.localization, "open_project") + "###welcome_open_project";
+            const std::string openSettings = WelcomeTextScope.Text(ctx.localization, "open_settings") + "###welcome_open_settings";
+            const std::string pluginStore = WelcomeTextScope.Text(ctx.localization, "plugin_store") + "###welcome_plugin_store";
             if (DrawWelcomeActionButton(newProject.c_str(), Primary, ctx)) {
                 result.command = WelcomeViewCommand::NewProject;
             }
@@ -296,16 +297,16 @@ namespace Horo::Editor {
             const float gap = layout.gridGap;
             const float sortWidth = std::min(Ui::ScaledLayoutValue(200.0F), rowWidth * 0.44F);
             const float searchWidth = std::max(1.0F, rowWidth - sortWidth - gap);
-            const std::string &searchHint = ctx.localization.Get("editor", "welcome.search_projects");
+            const std::string &searchHint = WelcomeTextScope.Text(ctx.localization, "search_projects");
             const bool searchChanged =
                 Ui::InputTextControl("##welcome_project_search", state.search.data(), state.search.size(), ctx.theme.fonts,
                                      {.width = searchWidth / scale,
                                       .hint = searchHint.c_str(),
                                       .componentSize = Ui::ComponentSize::Medium});
             ImGui::SameLine(0.0F, gap);
-            const std::array<const char *, 3> sortItems{ctx.localization.Get("editor", "welcome.sort.last_edited").c_str(),
-                                                        ctx.localization.Get("editor", "welcome.sort.name").c_str(),
-                                                        ctx.localization.Get("editor", "welcome.sort.path").c_str()};
+            const std::array<const char *, 3> sortItems{WelcomeTextScope.Text(ctx.localization, "sort.last_edited").c_str(),
+                                                        WelcomeTextScope.Text(ctx.localization, "sort.name").c_str(),
+                                                        WelcomeTextScope.Text(ctx.localization, "sort.path").c_str()};
             ImGui::SetNextItemWidth(sortWidth);
             const bool sortChanged =
                 Ui::ComboControl("##welcome_project_sort", &state.sortSelection, sortItems.data(), static_cast<int>(sortItems.size()),
@@ -333,7 +334,7 @@ namespace Horo::Editor {
             ImGui::Dummy({0.0F, layout.sectionGap});
             {
                 ScopedTextStyle textStyle(ctx.theme.fonts.sansEmphasis, TextPx::Label(), FontPx::SansEmphasis);
-                const std::string whatsNewStr = ctx.localization.Get("editor", "welcome.whats_new");
+                const std::string whatsNewStr = WelcomeTextScope.Text(ctx.localization, "whats_new");
                 ImGui::TextDisabled("%s", whatsNewStr.c_str());
             }
             ImGui::Dummy({0.0F, layout.gridGap});
@@ -365,8 +366,8 @@ namespace Horo::Editor {
     WelcomeLayout ResolveWelcomeLayout(const GuiContentRegion &region) {
         const auto &tokens = Theme::GetActiveTokens();
         WelcomeLayout layout{tokens.sizes.welcomeSideWidth, tokens.spacing.sidebarPaddingX, tokens.spacing.sidebarPaddingY,
-                             tokens.spacing.bodyPaddingX, tokens.spacing.bodyPaddingY, tokens.spacing.cardPadding,
-                             tokens.spacing.gridGap, tokens.spacing.bodyPaddingY};
+                             tokens.spacing.bodyPaddingX,   tokens.spacing.bodyPaddingY,    tokens.spacing.cardPadding,
+                             tokens.spacing.gridGap,        tokens.spacing.bodyPaddingY};
         const float scale = std::max(tokens.sizes.uiScale, 0.01F);
         layout.sidebarWidth = std::clamp(layout.sidebarWidth, 120.0F * scale, std::max(120.0F * scale, region.width - 280.0F * scale));
         const float mainWidth = region.width - layout.sidebarWidth - 2.0F * layout.bodyPaddingX;

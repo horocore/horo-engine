@@ -153,16 +153,17 @@ namespace Horo::Editor {
             const float y = minimum.y + 6.0F * uiScale;
             result.createPressed =
                 DrawToolbarButton("##HierarchyCreateButton", ToolbarGlyph::Create, {minimum.x + 8.0F * uiScale, y}, true,
-                                  context.localization.Get("editor", "workspace.hierarchy.toolbar.create").c_str(), uiScale);
+                                  HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.toolbar.create").c_str(), uiScale);
             const float right = minimum.x + panelWidth - 8.0F * uiScale;
             static_cast<void>(DrawToolbarButton("##HierarchyOptionsButton", ToolbarGlyph::More, {right - buttonSize, y}, false,
-                                                context.localization.Get("editor", "workspace.hierarchy.toolbar.options").c_str(),
+                                                HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.toolbar.options").c_str(),
                                                 uiScale));
             static_cast<void>(DrawToolbarButton("##HierarchySortButton", ToolbarGlyph::Sort, {right - buttonSize * 2.0F - gap, y}, false,
-                                                context.localization.Get("editor", "workspace.hierarchy.toolbar.sort").c_str(), uiScale));
+                                                HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.toolbar.sort").c_str(),
+                                                uiScale));
             result.focusSearchPressed =
                 DrawToolbarButton("##HierarchyFilterButton", ToolbarGlyph::Filter, {right - buttonSize * 3.0F - gap * 2.0F, y}, false,
-                                  context.localization.Get("editor", "workspace.hierarchy.toolbar.filter").c_str(), uiScale);
+                                  HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.toolbar.filter").c_str(), uiScale);
             ImGui::SetCursorScreenPos({minimum.x, minimum.y + toolbarHeight});
             ImGui::Dummy({panelWidth, 0.0F});
             return result;
@@ -513,7 +514,7 @@ namespace Horo::Editor {
                 ImGui::SetKeyboardFocusHere();
                 requestSearchFocus_ = false;
             }
-            ImGui::InputTextWithHint("##HierarchySearch", context.localization.Get("editor", "workspace.hierarchy.search").c_str(),
+            ImGui::InputTextWithHint("##HierarchySearch", HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.search").c_str(),
                                      searchBuffer_.data(), searchBuffer_.size());
             searchActive = ImGui::IsItemActive();
         }
@@ -563,31 +564,33 @@ namespace Horo::Editor {
         }
         const bool editable = workspaceEligible && !frame.node.effectivelyLocked;
         if (editable &&
-            Ui::BeginContextSubmenu((context.localization.Get("editor", "workspace.create") + "###hierarchy_create_root").c_str(),
+            Ui::BeginContextSubmenu((HierarchyPanel::kTextScope.Text(context.localization, "create") + "###hierarchy_create_root").c_str(),
                                     context.theme.fonts)) {
             DrawCreateMenuItems(GetPrimitiveCreateMenuItems(), SceneObjectId{frame.node.id}, command, context);
             Ui::EndContextSubmenu();
         }
         Ui::ContextMenuSeparator();
         if (editable &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.hierarchy.rename") + "###hierarchy_action_rename").c_str(),
+            Ui::ContextMenuItem((HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.rename") + "###hierarchy_action_rename")
+                                    .c_str(),
                                 "F2", context.theme.fonts))
             BeginRename(frame.node.id);
-        if (editable &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.hierarchy.duplicate") + "###hierarchy_action_duplicate")
-                                    .c_str(),
-                                nullptr, context.theme.fonts))
+        if (editable && Ui::ContextMenuItem((HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.duplicate") +
+                                             "###hierarchy_action_duplicate")
+                                                .c_str(),
+                                            nullptr, context.theme.fonts))
             command = HierarchyEditSession::DuplicateCommand(frame.node.id);
-        if (editable &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.prefab.create.action") + "###hierarchy_create_prefab")
-                                    .c_str(),
-                                nullptr, context.theme.fonts)) {
+        if (editable && Ui::ContextMenuItem((HierarchyPanel::kTextScope.Text(context.localization, "prefab.create.action") +
+                                             "###hierarchy_create_prefab")
+                                                .c_str(),
+                                            nullptr, context.theme.fonts)) {
             command.command = EditorWorkspaceViewCommand::CreatePrefabFromSelection;
             command.objectPayload = SceneObjectId{frame.node.id};
         }
         Ui::ContextMenuSeparator();
         if (editable &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.hierarchy.delete") + "###hierarchy_action_delete").c_str(),
+            Ui::ContextMenuItem((HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.delete") + "###hierarchy_action_delete")
+                                    .c_str(),
                                 "Delete", context.theme.fonts, Ui::ContextMenuItemTone::Danger))
             pendingDelete = true;
         Ui::EndContextMenu();
@@ -648,7 +651,8 @@ namespace Horo::Editor {
             Ui::DrawEditorIcon(&frame.drawList, Ui::UiIcon::Tag, frame.geometry.lockMin, {iconSize, iconSize}, Theme::U32(Theme::Accent()),
                                context.theme.fonts.icon);
             if (ImGui::IsMouseHoveringRect(frame.geometry.lockMin, frame.geometry.lockMax))
-                Ui::ShowTooltip(context.localization.Get("editor", "workspace.hierarchy.prefab.overrides").c_str(), &context.theme.fonts);
+                Ui::ShowTooltip(HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.prefab.overrides").c_str(),
+                                &context.theme.fonts);
         }
         if (entry->failure) {
             Ui::DrawEditorIcon(&frame.drawList, Ui::UiIcon::Error, frame.geometry.visibilityMin, {iconSize, iconSize},
@@ -899,7 +903,7 @@ namespace Horo::Editor {
         if (viewModel.prefabHierarchyUnavailable) {
             Ui::ErrorText(viewModel.prefabHierarchyError
                               ? viewModel.prefabHierarchyError->message.c_str()
-                              : context.localization.Get("editor", "workspace.hierarchy.prefab.capacity").c_str(),
+                              : HierarchyPanel::kTextScope.Text(context.localization, "hierarchy.prefab.capacity").c_str(),
                           context.theme.fonts);
         }
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
@@ -943,7 +947,7 @@ namespace Horo::Editor {
         const float uiScale = Theme::GetActiveTokens().sizes.uiScale;
         const float tabHeight = kTabHeight * uiScale;
         const float toolbarHeight = kToolbarHeight * uiScale;
-        DrawHierarchyTab(ctx.localization.Get("editor", "workspace.panel.hierarchy").c_str(), ctx.theme.fonts, uiScale);
+        DrawHierarchyTab(HierarchyPanel::kTextScope.Text(ctx.localization, "panel.hierarchy").c_str(), ctx.theme.fonts, uiScale);
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
         ImGui::BeginChild("##HierarchyContent", ImVec2(size.x, size.y - tabHeight), false, ImGuiWindowFlags_NoSavedSettings);
@@ -993,7 +997,7 @@ namespace Horo::Editor {
             const ImVec2 zoneMax{rootDropMax.x - 12.0F * uiScale, rootDropMax.y - 10.0F * uiScale};
             DrawDashedRect(*drawList, zoneMin, zoneMax, Theme::U32(Theme::BorderStrong()), uiScale);
             ImFont *font = ResolveFont(ctx.theme.fonts.sans);
-            const std::string &label = ctx.localization.Get("editor", "workspace.hierarchy.drop_to_root");
+            const std::string &label = HierarchyPanel::kTextScope.Text(ctx.localization, "hierarchy.drop_to_root");
             const float fontSize = Theme::TextPx::Caption();
             const ImVec2 labelSize = font->CalcTextSizeA(fontSize, 100000.0F, 0.0F, label.c_str());
             drawList->AddText(font, fontSize,
@@ -1003,7 +1007,7 @@ namespace Horo::Editor {
         }
         if (Ui::BeginContextMenu("##HierarchyRootContext")) {
             if (interaction.workspaceEligible &&
-                Ui::BeginContextSubmenu((ctx.localization.Get("editor", "workspace.create") + "###hierarchy_create_root").c_str(),
+                Ui::BeginContextSubmenu((HierarchyPanel::kTextScope.Text(ctx.localization, "create") + "###hierarchy_create_root").c_str(),
                                         ctx.theme.fonts)) {
                 DrawCreateMenuItems(GetPrimitiveCreateMenuItems(), std::nullopt, cmd, ctx);
                 Ui::EndContextSubmenu();

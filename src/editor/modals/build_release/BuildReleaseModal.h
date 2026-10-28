@@ -27,6 +27,11 @@ namespace Horo::Editor {
      * work. */
     class BuildReleaseModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace"};
+        /** @brief Shared build/release status vocabulary, distinct from this form's workspace labels. */
+        static constexpr GuiLocalizationScope kReleaseTextScope{"workspace.build_release"};
+
         /** @brief Borrows host services and the retained build identity; all borrows
          * outlive the modal.
          * @param context Shared theme and localization.
@@ -83,8 +88,8 @@ namespace Horo::Editor {
         void Field(const char *key, std::string &value);
         /** @brief Draws a bounded choice from a closed localized option set. */
         void Choice(const char *key, int &value, std::initializer_list<const char *> options);
-        /** @brief Borrows a fully qualified localization key without constructing
-         * keys during drawing. */
+        /** @brief Resolves a workspace-relative form label without constructing
+         * a qualified lookup string during drawing. */
         [[nodiscard]] const std::string &Label(const char *key) const;
         /** @brief Refreshes bounded service observations without starting work. */
         void Refresh();

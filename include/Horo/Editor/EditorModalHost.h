@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Input.h"
 
@@ -10,7 +11,10 @@
 
 namespace Horo::Editor {
     class EditorModalHost;
-    namespace GuiLive { class IRegistry; }
+
+    namespace GuiLive {
+        class IRegistry;
+    }
 
     /** @brief Validated stable identity for an editor modal in the active stack. */
     class ModalId {
@@ -117,7 +121,10 @@ namespace Horo::Editor {
     };
 
     /** @brief Headless-capable contract for one editor modal workflow surface. */
-    class EditorModal {
+    class EditorModal : public LocalizedGui {
+    protected:
+        using LocalizedGui::LocalizedGui;
+
     public:
         virtual ~EditorModal() = default;
         [[nodiscard]] virtual ModalId Id() const = 0;

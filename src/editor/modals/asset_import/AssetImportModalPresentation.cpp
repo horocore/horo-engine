@@ -79,7 +79,7 @@ namespace Horo::Editor {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg2());
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PanelPadding, 0.0f});
             ImGui::BeginChild("ImportDestination", {0.0f, 54.0f}, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-            const auto label = Copy(modal.Localized("asset_import.destination", "Destination"));
+            const auto label = Copy(modal.Localized("destination", "Destination"));
             const ImVec2 barPosition = ImGui::GetWindowPos();
             const ImVec2 barSize = ImGui::GetWindowSize();
             const float centerY = barPosition.y + barSize.y * 0.5f;
@@ -106,7 +106,7 @@ namespace Horo::Editor {
             DrawDestinationPath(*drawList, fonts, projectName, path, assetRootName, x, centerY);
             ImGui::PopClipRect();
             ImGui::SetCursorScreenPos({buttonX, centerY - buttonHeight * 0.5f});
-            if (Button({.label = Copy(modal.Localized("asset_import.change", "Change...")).c_str(),
+            if (Button({.label = Copy(modal.Localized("change", "Change...")).c_str(),
                         .size = {buttonWidth, buttonHeight},
                         .variant = ButtonVariant::Secondary,
                         .enabled = !modal.ProjectRoot().empty()})) {
@@ -141,8 +141,8 @@ namespace Horo::Editor {
             const ImVec2 bottomRight{topLeft.x + width, topLeft.y + height};
             drawList->AddRectFilled(topLeft, bottomRight, ImGui::ColorConvertFloat4ToU32(Bg2()), 5.0f);
             DrawDashedBorder(drawList, topLeft, bottomRight, ImGui::ColorConvertFloat4ToU32(ImGui::IsItemHovered() ? Accent() : Border()));
-            const auto title = Copy(modal.Localized("asset_import.add_files", "Add more files"));
-            const auto hint = Copy(modal.Localized("asset_import.drop_hint", "Drag and drop files here or click to browse"));
+            const auto title = Copy(modal.Localized("add_files", "Add more files"));
+            const auto hint = Copy(modal.Localized("drop_hint", "Drag and drop files here or click to browse"));
             PushFont(fonts.sansCompact);
             const float titleWidth = ImGui::CalcTextSize(title.c_str()).x;
             const float hintWidth = ImGui::CalcTextSize(hint.c_str()).x;
@@ -173,7 +173,7 @@ namespace Horo::Editor {
             const bool remove = IconCloseButton(std::format("##RemoveImport{}", index).c_str(), {20.0f, 20.0f});
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered())
-                ShowTooltip(Copy(modal.Localized("asset_import.remove_file", "Remove from list")).c_str(), &fonts);
+                ShowTooltip(Copy(modal.Localized("remove_file", "Remove from list")).c_str(), &fonts);
             if (remove)
                 modal.RemoveItem(index);
         }
@@ -220,12 +220,12 @@ namespace Horo::Editor {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg1());
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PanelPadding, PanelPadding});
             ImGui::BeginChild("ImportFilePanel", {width, height}, true);
-            const auto heading = Copy(modal.Localized("asset_import.list_title", "Files"));
+            const auto heading = Copy(modal.Localized("list_title", "Files"));
             PushFont(fonts.sansEmphasis);
             ImGui::TextColored(Text(), "%s", heading.c_str());
             PopFont(fonts.sansEmphasis);
             PushFont(fonts.sansCompact);
-            const auto count = std::format("{} {}", modal.VisibleItemCount(), Copy(modal.Localized("asset_import.files", "files")));
+            const auto count = std::format("{} {}", modal.VisibleItemCount(), Copy(modal.Localized("files", "files")));
             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(count.c_str()).x);
             ImGui::TextColored(Dim(), "%s", count.c_str());
             PopFont(fonts.sansCompact);
@@ -243,7 +243,7 @@ namespace Horo::Editor {
                 DrawFileRow(modal, snapshot, index, fonts);
             }
             if (modal.VisibleItemCount() == 0) {
-                const auto empty = Copy(modal.Localized("asset_import.no_files", "No files in queue."));
+                const auto empty = Copy(modal.Localized("no_files", "No files in queue."));
                 const float textWidth = ImGui::CalcTextSize(empty.c_str()).x;
                 const ImVec2 available = ImGui::GetContentRegionAvail();
                 const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -307,16 +307,15 @@ namespace Horo::Editor {
             }
             if (summary.errors > 0)
                 ImGui::TextColored(ErrorColor, "%zu %s", summary.errors,
-                                   Copy(modal.Localized(summary.errors == 1 ? "asset_import.error" : "asset_import.errors",
-                                                        summary.errors == 1 ? "error" : "errors"))
+                                   Copy(modal.Localized(summary.errors == 1 ? "error" : "errors", summary.errors == 1 ? "error" : "errors"))
                                        .c_str());
             else if (summary.warnings > 0)
                 ImGui::TextColored(WarningColor, "%zu %s", summary.warnings,
-                                   Copy(modal.Localized(summary.warnings == 1 ? "asset_import.warning" : "asset_import.warnings",
+                                   Copy(modal.Localized(summary.warnings == 1 ? "warning" : "warnings",
                                                         summary.warnings == 1 ? "warning" : "warnings"))
                                        .c_str());
             else
-                ImGui::TextColored(Dim(), "%zu %s", modal.VisibleItemCount(), Copy(modal.Localized("asset_import.files", "files")).c_str());
+                ImGui::TextColored(Dim(), "%zu %s", modal.VisibleItemCount(), Copy(modal.Localized("files", "files")).c_str());
             if (summary.first) {
                 ImGui::SameLine(0.0f, 14.0f);
                 const ImVec2 divider = ImGui::GetCursorScreenPos();
@@ -336,15 +335,14 @@ namespace Horo::Editor {
             ImGui::SetCursorScreenPos({ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - cancelWidth - importWidth - 38.0f,
                                        footerCenterY - actionHeight * 0.5f});
             if (const bool complete = modal.IsImportComplete();
-                Button({.label = Copy(modal.Localized(complete ? "asset_import.done" : "asset_import.cancel", complete ? "Done" : "Cancel"))
-                                     .c_str(),
+                Button({.label = Copy(modal.Localized(complete ? "done" : "cancel", complete ? "Done" : "Cancel")).c_str(),
                         .size = {cancelWidth, actionHeight},
                         .variant = ButtonVariant::Secondary}))
                 result = ModalFrameResult::RequestClose(complete ? ModalCloseReason::Completed : ModalCloseReason::Cancelled);
             ImGui::SameLine(0.0f, 12.0f);
             const bool valid = modal.CanImportIncludedItems();
-            const auto label = std::format("{} {} {}", Copy(modal.Localized("asset_import.import", "Import")), modal.IncludedItemCount(),
-                                           Copy(modal.Localized("asset_import.assets", "Assets")));
+            const auto label = std::format("{} {} {}", Copy(modal.Localized("import", "Import")), modal.IncludedItemCount(),
+                                           Copy(modal.Localized("assets", "Assets")));
             if (Button(
                     {.label = label.c_str(), .size = {importWidth, actionHeight}, .variant = ButtonVariant::Primary, .enabled = valid})) {
                 modal.StartIncludedImport();
@@ -365,7 +363,7 @@ namespace Horo::Editor {
         using namespace AssetImportPresentationDetail;
         const auto &snapshot = modal.Snapshot();
         ModalFrameResult result = ModalFrameResult::None();
-        const auto title = Copy(modal.Localized("asset_import.title", "Import Assets"));
+        const auto title = Copy(modal.Localized("title", "Import Assets"));
         ScopedModalShell shell({.id = "Asset Import",
                                 .title = title.c_str(),
                                 .requestedSize = {1000.0f, 690.0f},
@@ -380,8 +378,7 @@ namespace Horo::Editor {
         ImGui::BeginChild("##ImportBody", {0.0f, shell.BodyHeight()}, false,
                           ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         ImGui::TextColored(Dim(), "%s",
-                           Copy(modal.Localized("asset_import.subtitle", "Add files to your project and configure how they are imported."))
-                               .c_str());
+                           Copy(modal.Localized("subtitle", "Add files to your project and configure how they are imported.")).c_str());
         ImGui::Dummy({0.0f, 4.0f});
         DrawDestination(modal, snapshot, fonts);
         ImGui::Dummy({0.0f, 6.0f});

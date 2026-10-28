@@ -1,4 +1,5 @@
 #include "Horo/Editor/GuiLiveReload.h"
+#include "Horo/Editor/SettingsModal.h"
 #include "NavigationSettingsDraft.h"
 
 #include <algorithm>
@@ -124,12 +125,11 @@ namespace Horo::Editor::SettingsModalInternal {
                 if (const auto policy = state.navigationSettings.Resolve()->Policy())
                     draft.policy = policy->Input();
                 else if (Ui::Button({.label = Text(ctx, "settings.navigation.create_policy").c_str()})) {
-                    Nav::NavigationProjectProfileInput profile{GuiLive::HostSymbol<&Nav::NavigationProjectProfileId::Create>()(1).Value(),
-                                                               GuiLive::HostSymbol<&Nav::NavigationProjectProfileRevision::Create>()(1).Value(),
-                                                               {64, 8, 128, 8, 1024 * 1024, 128 * 1024 * 1024, 8192},
-                                                               {Nav::NavigationQueryKind::Path,
-                                                                Nav::NavigationQualityLevel::Balanced,
-                                                                {1024, 128, 1000}}};
+                    Nav::NavigationProjectProfileInput
+                        profile{GuiLive::HostSymbol<&Nav::NavigationProjectProfileId::Create>()(1).Value(),
+                                GuiLive::HostSymbol<&Nav::NavigationProjectProfileRevision::Create>()(1).Value(),
+                                {64, 8, 128, 8, 1024 * 1024, 128 * 1024 * 1024, 8192},
+                                {Nav::NavigationQueryKind::Path, Nav::NavigationQualityLevel::Balanced, {1024, 128, 1000}}};
                     draft.policy = Application::NavigationProjectSettingsInput{1, definition.asset, "recast_detour", profile};
                     state.navigationProjectDraftDirty = true;
                 }
@@ -143,9 +143,9 @@ namespace Horo::Editor::SettingsModalInternal {
                 if (!previous ||
                     (previous->Input().revision != UINT64_MAX && previous->Input().runtimeProfile.revision.Value() != UINT64_MAX)) {
                     policy.revision = previous ? previous->Input().revision + 1 : 1;
-                    policy.runtimeProfile.revision =
-                        GuiLive::HostSymbol<&Nav::NavigationProjectProfileRevision::Create>()(previous ? previous->Input().runtimeProfile.revision.Value() + 1 : 1)
-                            .Value();
+                    policy.runtimeProfile.revision = GuiLive::HostSymbol<&Nav::NavigationProjectProfileRevision::Create>()(
+                                                         previous ? previous->Input().runtimeProfile.revision.Value() + 1 : 1)
+                                                         .Value();
                     auto result = state.navigationSettings.Resolve()->SavePolicy(policy);
                     if (result.HasError())
                         state.navigationStatus = result.ErrorValue().message;
@@ -232,7 +232,7 @@ namespace Horo::Editor::SettingsModalInternal {
     /** @copydoc DrawNavigationSettings */
     void DrawNavigationSettings(SettingsState &state, const EditorGuiContext &ctx) {
         if (!state.navigationSettings.Resolve()) {
-            ImGui::TextWrapped("%s", ctx.localization.Get("editor", "settings.navigation.unavailable").c_str());
+            ImGui::TextWrapped("%s", SettingsModal::kTextScope.Text(ctx.localization, "navigation.unavailable").c_str());
             if (!state.navigationStatus.empty())
                 ImGui::TextWrapped("%s", state.navigationStatus.c_str());
             return;
@@ -246,12 +246,12 @@ namespace Horo::Editor::SettingsModalInternal {
             return;
         }
         if (definitions.Value().empty()) {
-            ImGui::TextWrapped("%s", ctx.localization.Get("editor", "settings.navigation.no_definition").c_str());
+            ImGui::TextWrapped("%s", SettingsModal::kTextScope.Text(ctx.localization, "navigation.no_definition").c_str());
             return;
         }
         DefinitionChoices(draft, definitions.Value(), ctx);
         const auto &definition = definitions.Value()[static_cast<std::size_t>(draft.selectedDefinition)];
-        if (Ui::Button({.label = ctx.localization.Get("editor", "settings.navigation.open_definition").c_str()}))
+        if (Ui::Button({.label = SettingsModal::kTextScope.Text(ctx.localization, "navigation.open_definition").c_str()}))
             state.navigationSettings.Resolve()->RequestOpenDefinition(definition.asset);
         DrawNavigationPolicy(state, draft, ctx, definition);
         if (!state.navigationStatus.empty())

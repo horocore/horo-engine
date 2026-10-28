@@ -64,6 +64,9 @@ namespace Horo::Editor {
      */
     class AssetImportModal : public EditorModal {  // NOSONAR(cpp:S1820)
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"asset_import"};
+
         static constexpr std::uint64_t kModalId = 0x41534D504F525449ULL;
 
         /**
@@ -96,8 +99,19 @@ namespace Horo::Editor {
         /** @brief Returns retained terminal import operations, newest first. */
         [[nodiscard]] std::span<const OperationRecord> ImportHistory() const noexcept;
 
-        /** @brief Resolves presentation copy with a fallback for headless callers. */
+        /** @brief Resolves presentation copy relative to this modal's scope.
+         * @param key Relative asset-import key, without the asset_import prefix.
+         * @param fallback Text used when localization is absent or the message is missing.
+         * @return Borrowed catalog text or fallback; the originating storage must outlive use.
+         */
         [[nodiscard]] std::string_view Localized(std::string_view key, std::string_view fallback) const;
+
+        /** @brief Resolves a model/importer-owned canonical message without applying this modal's scope.
+         * @param key Complete catalog key supplied by the importer model.
+         * @param fallback Text used when localization is absent or the message is missing.
+         * @return Active translated text or the supplied fallback.
+         */
+        [[nodiscard]] std::string_view LocalizedCatalogMessage(std::string_view key, std::string_view fallback) const;
 
         /** @brief Sets the project root for asset destination paths. Call before BeginImport when known. */
         void SetProjectRoot(const std::filesystem::path &root) noexcept;

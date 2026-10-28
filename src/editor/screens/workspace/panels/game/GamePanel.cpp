@@ -32,7 +32,7 @@ namespace Horo::Editor {
         ImGui::BeginChild("##GameContent", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
         const bool selectedXr = viewModel.playViewSource == EditorPlayViewSource::SelectedXr;
         if (selectedXr)
-            ImGui::TextWrapped("%s", context.localization.Get("editor", "workspace.game.xr_mirror").c_str());
+            ImGui::TextWrapped("%s", GamePanel::kTextScope.Text(context.localization, "xr_mirror").c_str());
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = size.x;
         const float height = selectedXr ? std::max(0.0F, ImGui::GetContentRegionAvail().y) : size.y;
@@ -55,7 +55,7 @@ namespace Horo::Editor {
                                                  ImVec2(texture.u1, texture.v1));
         } else {
             const std::string &message =
-                !viewModel.playError.empty() ? viewModel.playError : context.localization.Get("editor", "workspace.game.idle");
+                !viewModel.playError.empty() ? viewModel.playError : GamePanel::kTextScope.Text(context.localization, "idle");
             const ImVec2 textSize = ImGui::CalcTextSize(message.c_str());
             ImGui::SetCursorScreenPos(
                 ImVec2(origin.x + std::max(0.0F, (width - textSize.x) * 0.5F), origin.y + std::max(0.0F, (height - textSize.y) * 0.5F)));

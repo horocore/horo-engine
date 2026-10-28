@@ -13,7 +13,7 @@
 namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::EditorWorkspaceScreen */
     EditorWorkspaceScreen::EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
-        : packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
+        : GuiScreen(kTextScope), packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
           modalHost_(services.Get<EditorModalHost>()), context_(services.GetConst<EditorGuiContext>()),
           contributions_{services.Get<WorkspacePanelRegistry>(), services.Get<EditorStatusItemRegistry>()},
           input_(services.Get<Input::InputRouter>()), xr_{services.TryGet<IEditorPlayXrHost>()},

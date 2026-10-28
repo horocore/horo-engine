@@ -13,35 +13,33 @@
 
 namespace Horo::Editor {
     namespace {
-        constexpr std::array ViewKeys{"workspace.global_dock.network.connections", "workspace.global_dock.network.replication",
-                                      "workspace.global_dock.network.rpc",         "workspace.global_dock.network.prediction",
-                                      "workspace.global_dock.network.interest",    "workspace.global_dock.network.trace"};
+        constexpr std::array ViewKeys{"connections", "replication", "rpc", "prediction", "interest", "trace"};
 
         /** @brief Returns closed localizable transport states; connectivity never implies gameplay admission. */
         const char *EventKey(const Network::NetworkTransportEventKind event) {
             using enum Network::NetworkTransportEventKind;
             switch (event) {
                 case ListenerReady:
-                    return "workspace.global_dock.network.event.listener";
+                    return "event.listener";
                 case Accepted:
-                    return "workspace.global_dock.network.event.accepted";
+                    return "event.accepted";
                 case Connected:
-                    return "workspace.global_dock.network.event.connected";
+                    return "event.connected";
                 case PacketReceived:
-                    return "workspace.global_dock.network.event.received";
+                    return "event.received";
                 case Closed:
-                    return "workspace.global_dock.network.event.closed";
+                    return "event.closed";
                 case Failed:
-                    return "workspace.global_dock.network.event.failed";
+                    return "event.failed";
             }
-            return "workspace.global_dock.network.unavailable";
+            return "unavailable";
         }
 
         /** @brief Formats transport evidence while preserving explicit gameplay admission. */
         std::string DescribeRecord(const Network::NetworkConnectionRecord &record, const EditorGuiContext &context) {
-            const char *key = record.gameplayAdmitted ? "workspace.global_dock.network.event.admitted" : EventKey(record.event);
+            const char *key = record.gameplayAdmitted ? "event.admitted" : EventKey(record.event);
             return std::format("{}:{} | {} | {}", record.connection.Slot(), record.connection.Generation(),
-                               context.localization.Get("editor", key), record.bytes);
+                               GlobalDockNetworkPane::kTextScope.Text(context.localization, key), record.bytes);
         }
 
         /** @brief Formats committed replication counts in legend order. */
@@ -57,10 +55,9 @@ namespace Horo::Editor {
 
         /** @brief Formats timing evidence while retaining unavailable and stale provenance. */
         std::string DescribeRecord(const Network::NetworkPredictionRecord &record, const EditorGuiContext &context) {
-            const char *key = record.hasMapping && !record.stale ? "workspace.global_dock.network.timing.measured"
-                                                                 : "workspace.global_dock.network.unavailable";
+            const char *key = record.hasMapping && !record.stale ? "timing.measured" : "unavailable";
             return std::format("{} / {} / {} | {}", record.localTick, record.serverTick, record.sampleAgeTicks,
-                               context.localization.Get("editor", key));
+                               GlobalDockNetworkPane::kTextScope.Text(context.localization, key));
         }
 
         /** @brief Formats owner-provided interest counts in legend order. */
@@ -71,12 +68,15 @@ namespace Horo::Editor {
         /** @brief Formats metadata-only capture entries with their localized evidence category. */
         std::string DescribeRecord(const Network::NetworkCaptureRecord &record, const EditorGuiContext &context) {
             return std::format("{} | {} | {}", record.sequence,
-                               context.localization.Get("editor", ViewKeys[static_cast<std::size_t>(record.kind)]), record.amount);
+                               GlobalDockNetworkPane::kTextScope.Text(context.localization,
+                                                                      ViewKeys[static_cast<std::size_t>(record.kind)]),
+                               record.amount);
         }
 
         /** @brief Draws the unfiltered legend for the selected evidence category. */
         void DrawLegend(const float width, const EditorGuiContext &context, const char *key) {
-            DrawGlobalDockWrappedText(width, context.localization.Get("editor", key), GlobalDockTone::Neutral, context.theme.fonts);
+            DrawGlobalDockWrappedText(width, GlobalDockNetworkPane::kTextScope.Text(context.localization, key), GlobalDockTone::Neutral,
+                                      context.theme.fonts);
         }
     }  // namespace
 
@@ -128,17 +128,17 @@ namespace Horo::Editor {
                                                                                                : GlobalDockTone::Neutral,
                                   context.theme.fonts);
         const auto &s = projection_.snapshot;
-        const auto &source = context.localization.Get("editor", "workspace.global_dock.network.source.identity");
+        const auto &source = GlobalDockNetworkPane::kTextScope.Text(context.localization, "source.identity");
         DrawGlobalDockWrappedText(width,
                                   std::format("{} {} / {} / {} / {} | {}", source, s.source.process, s.source.session, s.source.scene,
                                               s.source.sceneGeneration, s.revision),
                                   GlobalDockTone::Neutral, context.theme.fonts);
-        const std::array ProviderKeys{"workspace.global_dock.network.provider.unavailable",
-                                      "workspace.global_dock.network.provider.deterministic",
-                                      "workspace.global_dock.network.provider.native", "workspace.global_dock.network.provider.other"};
-        DrawGlobalDockWrappedText(width, context.localization.Get("editor", ProviderKeys[static_cast<std::size_t>(s.provider)]),
+        const std::array ProviderKeys{"provider.unavailable", "provider.deterministic", "provider.native", "provider.other"};
+        DrawGlobalDockWrappedText(width,
+                                  GlobalDockNetworkPane::kTextScope.Text(context.localization,
+                                                                         ProviderKeys[static_cast<std::size_t>(s.provider)]),
                                   GlobalDockTone::Neutral, context.theme.fonts);
-        const auto &hint = context.localization.Get("editor", "workspace.global_dock.network.search");
+        const auto &hint = GlobalDockNetworkPane::kTextScope.Text(context.localization, "search");
         (void)DrawGlobalDockSearchControl(ImGui::GetCursorScreenPos(), std::max(1.0F, width), "##NetworkSearch", search_, hint,
                                           context.theme.fonts);
         DrawEvidence(width, context);
@@ -161,20 +161,19 @@ namespace Horo::Editor {
         };
         for (std::size_t i = 0; i < ViewKeys.size(); ++i) {
             if (chip({.id = ViewKeys[i],
-                      .label = context.localization.Get("editor", ViewKeys[i]),
+                      .label = GlobalDockNetworkPane::kTextScope.Text(context.localization, ViewKeys[i]),
                       .active = static_cast<std::size_t>(view_) == i}))
                 view_ = static_cast<View>(i);
         }
         const bool disabled = !control_ || projection_.state != Application::NetworkDebuggerState::Live;
         if (const bool paused = projection_.snapshot.capturePaused;
             chip({.id = "NetworkPause",
-                  .label = context.localization.Get("editor", paused ? "workspace.global_dock.network.resume_capture"
-                                                                     : "workspace.global_dock.network.pause_capture"),
+                  .label = GlobalDockNetworkPane::kTextScope.Text(context.localization, paused ? "resume_capture" : "pause_capture"),
                   .disabled = disabled,
                   .icon = paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause}))
             Request(paused ? Network::NetworkCaptureAction::Resume : Network::NetworkCaptureAction::Pause);
         if (chip({.id = "NetworkClear",
-                  .label = context.localization.Get("editor", "workspace.global_dock.network.clear"),
+                  .label = GlobalDockNetworkPane::kTextScope.Text(context.localization, "clear"),
                   .disabled = disabled,
                   .icon = Ui::UiIcon::ClearAll}))
             Request(Network::NetworkCaptureAction::Clear);
@@ -199,7 +198,7 @@ namespace Horo::Editor {
             available = history.size != 0;
             for (std::size_t i = 0; i < history.size; ++i)
                 DrawEvidenceRow(width, context, std::to_string(i + 1), DescribeRecord(history.records[i], context));
-            DrawEvidenceRow(width, context, context.localization.Get("editor", "workspace.global_dock.network.history_evicted"),
+            DrawEvidenceRow(width, context, GlobalDockNetworkPane::kTextScope.Text(context.localization, "history_evicted"),
                             std::to_string(history.dropped));
         };
         switch (view_) {
@@ -207,19 +206,19 @@ namespace Horo::Editor {
                 totals(s.connections);
                 break;
             case View::Replication:
-                DrawLegend(width, context, "workspace.global_dock.network.replication_legend");
+                DrawLegend(width, context, "replication_legend");
                 totals(s.replication);
                 break;
             case View::Rpc:
-                DrawLegend(width, context, "workspace.global_dock.network.rpc_legend");
+                DrawLegend(width, context, "rpc_legend");
                 totals(s.rpc);
                 break;
             case View::Prediction:
-                DrawLegend(width, context, "workspace.global_dock.network.prediction_legend");
+                DrawLegend(width, context, "prediction_legend");
                 totals(s.prediction);
                 break;
             case View::Interest:
-                DrawLegend(width, context, "workspace.global_dock.network.interest_legend");
+                DrawLegend(width, context, "interest_legend");
                 totals(s.interest);
                 break;
             case View::Capture:
@@ -235,20 +234,18 @@ namespace Horo::Editor {
     void GlobalDockNetworkPane::DrawEvidence(const float width, const EditorGuiContext &context) const {
         const auto &s = projection_.snapshot;
         const auto text = [&context](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockNetworkPane::kTextScope.Text(context.localization, key);
         };
         ImGui::BeginChild("##NetworkEvidence", {std::max(1.0F, width), 0.0F}, false, ImGuiWindowFlags_NoSavedSettings);
-        DrawEvidenceRow(width, context, text("workspace.global_dock.network.metric.rtt"),
-                        s.metrics.rttAvailable ? std::to_string(s.metrics.rttMilliseconds)
-                                               : text("workspace.global_dock.network.unavailable"));
-        DrawEvidenceRow(width, context, text("workspace.global_dock.network.metric.receive"),
-                        s.metrics.enabled ? std::to_string(s.metrics.bytes[1][0]) : text("workspace.global_dock.network.unavailable"));
-        DrawEvidenceRow(width, context, text("workspace.global_dock.network.metric.send"),
-                        s.metrics.enabled ? std::to_string(s.metrics.bytes[0][0]) : text("workspace.global_dock.network.unavailable"));
-        DrawEvidenceRow(width, context, text("workspace.global_dock.network.dropped"), std::to_string(s.capture.dropped));
+        DrawEvidenceRow(width, context, text("metric.rtt"),
+                        s.metrics.rttAvailable ? std::to_string(s.metrics.rttMilliseconds) : text("unavailable"));
+        DrawEvidenceRow(width, context, text("metric.receive"),
+                        s.metrics.enabled ? std::to_string(s.metrics.bytes[1][0]) : text("unavailable"));
+        DrawEvidenceRow(width, context, text("metric.send"),
+                        s.metrics.enabled ? std::to_string(s.metrics.bytes[0][0]) : text("unavailable"));
+        DrawEvidenceRow(width, context, text("dropped"), std::to_string(s.capture.dropped));
         if (!DrawHistory(width, context))
-            DrawGlobalDockWrappedText(width, text("workspace.global_dock.network.unavailable"), GlobalDockTone::Neutral,
-                                      context.theme.fonts);
+            DrawGlobalDockWrappedText(width, text("unavailable"), GlobalDockTone::Neutral, context.theme.fonts);
         ImGui::EndChild();
     }
 }  // namespace Horo::Editor

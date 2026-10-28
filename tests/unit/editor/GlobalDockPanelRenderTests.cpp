@@ -39,6 +39,8 @@
 namespace {
     class TestGlobalDockPane final : public Horo::Editor::IGlobalDockPane {
     public:
+        TestGlobalDockPane() : IGlobalDockPane("test.global_dock") {}
+
         [[nodiscard]] std::string_view Id() const noexcept override {
             return "test.global_dock.custom";
         }

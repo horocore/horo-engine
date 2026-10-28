@@ -7,12 +7,12 @@ namespace Horo::Editor {
         /** @brief Draws the projection and view-size fields of the camera draft. */
         [[nodiscard]] bool DrawCameraProjectionProperties(InspectorObjectDraft &draft, const EditorGuiContext &context) {
             const std::array<const char *, 2> projectionEntries{
-                context.localization.Get("editor", "workspace.inspector.camera_projection_perspective").c_str(),
-                context.localization.Get("editor", "workspace.inspector.camera_projection_orthographic").c_str(),
+                InspectorPanel::kTextScope.Text(context.localization, "inspector.camera_projection_perspective").c_str(),
+                InspectorPanel::kTextScope.Text(context.localization, "inspector.camera_projection_orthographic").c_str(),
             };
             int projection = draft.camera->projection == Runtime::CameraProjection::Perspective ? 0 : 1;
             const bool projectionChanged =
-                Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.camera_projection").c_str(),
+                Ui::DrawComboPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.camera_projection").c_str(),
                                      "camera_projection", projection, projectionEntries, context.theme.fonts);
             if (projectionChanged)
                 draft.camera->projection =
@@ -22,7 +22,7 @@ namespace Horo::Editor {
             if (draft.camera->projection == Runtime::CameraProjection::Perspective) {
                 const bool fieldOfViewValid = IsValidFieldOfViewDegrees(draft.cameraFieldOfViewDegrees);
                 const Ui::PropertyEditResult fieldOfView =
-                    Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.camera_field_of_view").c_str(),
+                    Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.camera_field_of_view").c_str(),
                                          "camera_field_of_view", draft.cameraFieldOfViewDegrees, context.theme.fonts,
                                          Ui::FloatPropertyOptions{.speed = 0.25F, .error = !fieldOfViewValid, .format = "%.1f°"});
                 if (fieldOfView.changed)
@@ -32,7 +32,8 @@ namespace Horo::Editor {
                 const bool orthographicHeightValid =
                     std::isfinite(draft.camera->orthographicHeight) && draft.camera->orthographicHeight > 0.0F;
                 const Ui::PropertyEditResult orthographicHeight =
-                    Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.camera_orthographic_height").c_str(),
+                    Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.camera_orthographic_height")
+                                             .c_str(),
                                          "camera_orthographic_height", draft.camera->orthographicHeight, context.theme.fonts,
                                          Ui::FloatPropertyOptions{.speed = 0.05F, .error = !orthographicHeightValid});
                 committed = committed || orthographicHeight.committed;
@@ -45,13 +46,13 @@ namespace Horo::Editor {
             const bool nearPlaneValid = std::isfinite(draft.camera->nearPlane) && draft.camera->nearPlane > 0.0F &&
                                         std::isfinite(draft.camera->farPlane) && draft.camera->farPlane > draft.camera->nearPlane;
             const Ui::PropertyEditResult nearPlane =
-                Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.camera_near_plane").c_str(),
+                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.camera_near_plane").c_str(),
                                      "camera_near_plane", draft.camera->nearPlane, context.theme.fonts,
                                      Ui::FloatPropertyOptions{.speed = 0.01F, .error = !nearPlaneValid});
             const bool farPlaneValid = std::isfinite(draft.camera->farPlane) && draft.camera->farPlane > draft.camera->nearPlane;
             const Ui::PropertyEditResult farPlane =
-                Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.camera_far_plane").c_str(), "camera_far_plane",
-                                     draft.camera->farPlane, context.theme.fonts,
+                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.camera_far_plane").c_str(),
+                                     "camera_far_plane", draft.camera->farPlane, context.theme.fonts,
                                      Ui::FloatPropertyOptions{.speed = 1.0F, .error = !farPlaneValid});
             return nearPlane.committed || farPlane.committed;
         }
@@ -64,13 +65,14 @@ namespace Horo::Editor {
         /** @brief Draws the common kind, color, and intensity fields of the light draft. */
         [[nodiscard]] LightWidgetEdits DrawLightBaseProperties(InspectorObjectDraft &draft, const EditorGuiContext &context) {
             const std::array<const char *, 3> kindEntries{
-                context.localization.Get("editor", "workspace.inspector.light_kind_directional").c_str(),
-                context.localization.Get("editor", "workspace.inspector.light_kind_point").c_str(),
-                context.localization.Get("editor", "workspace.inspector.light_kind_spot").c_str(),
+                InspectorPanel::kTextScope.Text(context.localization, "inspector.light_kind_directional").c_str(),
+                InspectorPanel::kTextScope.Text(context.localization, "inspector.light_kind_point").c_str(),
+                InspectorPanel::kTextScope.Text(context.localization, "inspector.light_kind_spot").c_str(),
             };
             auto kind = static_cast<int>(draft.light->kind);
-            const bool kindChanged = Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.light_kind").c_str(),
-                                                          "light_kind", kind, kindEntries, context.theme.fonts);
+            const bool kindChanged =
+                Ui::DrawComboPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.light_kind").c_str(), "light_kind",
+                                     kind, kindEntries, context.theme.fonts);
             if (kindChanged)
                 draft.light->kind = static_cast<Runtime::LightKind>(kind);
 
@@ -79,15 +81,15 @@ namespace Horo::Editor {
                 return std::isfinite(component);
             });
             const Ui::PropertyEditResult colorEdit =
-                Ui::DrawColor3PropRow(context.localization.Get("editor", "workspace.inspector.light_color").c_str(), "light_color", color,
-                                      context.theme.fonts, !colorValid);
+                Ui::DrawColor3PropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.light_color").c_str(), "light_color",
+                                      color, context.theme.fonts, !colorValid);
             if (colorEdit.changed)
                 draft.light->color = {color[0], color[1], color[2]};
 
             const bool intensityValid = std::isfinite(draft.light->intensity) && draft.light->intensity >= 0.0F;
             const Ui::PropertyEditResult intensity =
-                Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.light_intensity").c_str(), "light_intensity",
-                                     draft.light->intensity, context.theme.fonts,
+                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.light_intensity").c_str(),
+                                     "light_intensity", draft.light->intensity, context.theme.fonts,
                                      Ui::FloatPropertyOptions{.speed = 0.05F, .error = !intensityValid});
             return {.changed = kindChanged || colorEdit.changed || intensity.changed,
                     .committed = kindChanged || colorEdit.committed || intensity.committed};
@@ -99,7 +101,7 @@ namespace Horo::Editor {
                 return {};
             const bool rangeValid = std::isfinite(draft.light->range) && draft.light->range >= 0.0F;
             const Ui::PropertyEditResult range =
-                Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.light_range").c_str(), "light_range",
+                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.light_range").c_str(), "light_range",
                                      draft.light->range, context.theme.fonts,
                                      Ui::FloatPropertyOptions{.speed = 0.1F, .error = !rangeValid});
             return {.changed = range.changed, .committed = range.committed};
@@ -113,8 +115,8 @@ namespace Horo::Editor {
                                     std::isfinite(draft.lightOuterConeDegrees) &&
                                     draft.lightOuterConeDegrees >= draft.lightInnerConeDegrees;
             const Ui::PropertyEditResult inner =
-                Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.light_inner_cone").c_str(), "light_inner_cone",
-                                     draft.lightInnerConeDegrees, context.theme.fonts,
+                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.light_inner_cone").c_str(),
+                                     "light_inner_cone", draft.lightInnerConeDegrees, context.theme.fonts,
                                      Ui::FloatPropertyOptions{.speed = 0.25F, .error = !innerValid, .format = "%.1f°"});
             if (inner.changed)
                 draft.light->innerConeRadians = draft.lightInnerConeDegrees * DegreesToRadians;
@@ -122,8 +124,8 @@ namespace Horo::Editor {
             const bool outerValid =
                 std::isfinite(draft.lightOuterConeDegrees) && draft.lightOuterConeDegrees >= draft.lightInnerConeDegrees;
             const Ui::PropertyEditResult outer =
-                Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.light_outer_cone").c_str(), "light_outer_cone",
-                                     draft.lightOuterConeDegrees, context.theme.fonts,
+                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.light_outer_cone").c_str(),
+                                     "light_outer_cone", draft.lightOuterConeDegrees, context.theme.fonts,
                                      Ui::FloatPropertyOptions{.speed = 0.25F, .error = !outerValid, .format = "%.1f°"});
             if (outer.changed)
                 draft.light->outerConeRadians = draft.lightOuterConeDegrees * DegreesToRadians;
@@ -137,15 +139,15 @@ namespace Horo::Editor {
             const InspectorCameraEdit cameraEdit = DrawCameraWidgets(context);
             ApplyCameraEdit(cameraEdit, object, command);
             DrawValidationMessageIfInvalid(m_editSession.IsCameraValid(),
-                                           context.localization.Get("editor", "workspace.inspector.camera_invalid"), context.theme.fonts,
-                                           8.0F);
+                                           InspectorPanel::kTextScope.Text(context.localization, "inspector.camera_invalid"),
+                                           context.theme.fonts, 8.0F);
         }
         if (object.components.light.has_value()) {
             const InspectorLightEdit lightEdit = DrawLightWidgets(context);
             ApplyLightEdit(lightEdit, object, command);
             DrawValidationMessageIfInvalid(m_editSession.IsLightValid(),
-                                           context.localization.Get("editor", "workspace.inspector.light_invalid"), context.theme.fonts,
-                                           8.0F);
+                                           InspectorPanel::kTextScope.Text(context.localization, "inspector.light_invalid"),
+                                           context.theme.fonts, 8.0F);
         }
         if (object.components.triggerVolume.has_value()) {
             const InspectorTriggerVolumeEdit triggerEdit = DrawTriggerVolumeWidgets(context);
@@ -156,7 +158,7 @@ namespace Horo::Editor {
             ApplyAudioSourceEdit(audioEdit, object, command);
             DrawAudioPreview(object, viewModel, command, context);
             DrawValidationMessageIfInvalid(m_editSession.IsAudioSourceValid(),
-                                           context.localization.Get("editor", "workspace.inspector.audio_source_invalid"),
+                                           InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_source_invalid"),
                                            context.theme.fonts, 8.0F);
         }
         if (object.components.characterController) {
@@ -164,14 +166,14 @@ namespace Horo::Editor {
                 !TryAdoptComponentRemoval(edit, object, command, ComponentType::CharacterController))
                 AdoptCommand(command, m_editSession.ApplyCharacterEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
             DrawValidationMessageIfInvalid(m_editSession.IsCharacterValid(),
-                                           context.localization.Get("editor", "workspace.inspector.character.invalid"), context.theme.fonts,
-                                           8.0F);
+                                           InspectorPanel::kTextScope.Text(context.localization, "inspector.character.invalid"),
+                                           context.theme.fonts, 8.0F);
         }
         if (object.components.audioListener.has_value()) {
             const InspectorAudioListenerEdit audioEdit = DrawAudioListenerWidgets(context);
             ApplyAudioListenerEdit(audioEdit, object, command);
             DrawValidationMessageIfInvalid(m_editSession.IsAudioListenerValid(),
-                                           context.localization.Get("editor", "workspace.inspector.audio_listener_invalid"),
+                                           InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_listener_invalid"),
                                            context.theme.fonts, 8.0F);
         }
         DrawPhysicsInspector(object, viewModel, command, context);
@@ -185,7 +187,7 @@ namespace Horo::Editor {
 
         Ui::Card card(Ui::CardProps{.id = "##CameraCard"});
         const ComponentTitleBarResult header =
-            DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.camera").c_str(),
+            DrawComponentTitleBar(card, InspectorPanel::kTextScope.Text(context.localization, "inspector.camera").c_str(),
                                   {.enabled = draft.camera->enabled}, context);
         if (header.resetRequested) {
             const bool enabled = draft.camera->enabled;
@@ -216,7 +218,7 @@ namespace Horo::Editor {
 
         Ui::Card card(Ui::CardProps{.id = "##LightCard"});
         const ComponentTitleBarResult header =
-            DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.light").c_str(),
+            DrawComponentTitleBar(card, InspectorPanel::kTextScope.Text(context.localization, "inspector.light").c_str(),
                                   {.enabled = draft.light->enabled}, context);
         if (header.resetRequested) {
             const bool enabled = draft.light->enabled;
@@ -256,7 +258,7 @@ namespace Horo::Editor {
 
         Ui::Card card(Ui::CardProps{.id = "##TriggerVolumeCard"});
         const ComponentTitleBarResult header =
-            DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.trigger_volume").c_str(),
+            DrawComponentTitleBar(card, InspectorPanel::kTextScope.Text(context.localization, "inspector.trigger_volume").c_str(),
                                   {.enabled = draft.triggerVolume->enabled}, context);
         if (header.resetRequested) {
             const bool enabled = draft.triggerVolume->enabled;
@@ -273,14 +275,14 @@ namespace Horo::Editor {
         ImGui::BeginDisabled(!draft.triggerVolume->enabled);
 
         const std::array<const char *, 4> shapeEntries{
-            context.localization.Get("editor", "workspace.inspector.trigger_volume_shape_box").c_str(),
-            context.localization.Get("editor", "workspace.inspector.trigger_volume_shape_sphere").c_str(),
-            context.localization.Get("editor", "workspace.inspector.trigger_volume_shape_capsule").c_str(),
-            context.localization.Get("editor", "workspace.inspector.trigger_volume_shape_plane").c_str(),
+            InspectorPanel::kTextScope.Text(context.localization, "inspector.trigger_volume_shape_box").c_str(),
+            InspectorPanel::kTextScope.Text(context.localization, "inspector.trigger_volume_shape_sphere").c_str(),
+            InspectorPanel::kTextScope.Text(context.localization, "inspector.trigger_volume_shape_capsule").c_str(),
+            InspectorPanel::kTextScope.Text(context.localization, "inspector.trigger_volume_shape_plane").c_str(),
         };
         auto shape = static_cast<int>(draft.triggerVolume->shape);
         const bool shapeChanged =
-            Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.trigger_volume_shape").c_str(),
+            Ui::DrawComboPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.trigger_volume_shape").c_str(),
                                  "trigger_volume_shape", shape, shapeEntries, context.theme.fonts);
         if (shapeChanged)
             draft.triggerVolume->shape = static_cast<Runtime::ColliderShapeType>(shape);

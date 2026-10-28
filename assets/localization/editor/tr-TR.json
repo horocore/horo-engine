@@ -2620,7 +2620,7 @@
     "workspace.content_browser.operation.reimport_unavailable": {"text": "Bu varlık yeniden içe aktarma kaynağını kaydetmiyor."},
     "workspace.content_browser.operation.reimport_importer_missing": {"text": "Bu varlıkta kayıtlı içe aktarıcı modülü kullanılamıyor."},
     "workspace.content_browser.operation.reimport_failed": {"text": "Varlık yeniden içe aktarılamadı; önceki payload korundu."},
-    "workspace.content_browser.operation.reveal_unavailable": {"text": "Dosya Yöneticisi entegrasyonu bu platformda kullanılamıyor."},
+    "workspace.content_browser.operation.reveal_unavailable": {"text": "Dosya Yöneticisi açılamadı. Masaüstü kullanılabilirliğini ve dosya izinlerini kontrol edin."},
     "workspace.content_browser.scenes": {"text": "sahneler"},
     "workspace.content_browser.models": {"text": "modeller"},
     "workspace.content_browser.textures": {"text": "dokular"},

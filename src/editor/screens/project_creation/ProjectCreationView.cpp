@@ -1,9 +1,10 @@
-#include "editor/screens/project_creation/ProjectCreationView.h"
+#include "ProjectCreationView.h"
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "editor/screens/project_creation/ProjectCreationView.h"
 
 #include <Horo/Editor/Localization/ILocalizationService.h>
 #include <algorithm>
@@ -25,17 +26,17 @@ namespace Horo::Editor {
         [[nodiscard]] std::string GetTemplateName(const int index, const EditorGuiContext &ctx) {
             switch (index) {
                 case 0:
-                    return ctx.localization.Get("editor", "project_creation.template.empty");
+                    return ProjectCreationTextScope.Text(ctx.localization, "template.empty");
                 case 1:
-                    return ctx.localization.Get("editor", "project_creation.template.3d_starter");
+                    return ProjectCreationTextScope.Text(ctx.localization, "template.3d_starter");
                 case 2:
-                    return ctx.localization.Get("editor", "project_creation.template.first_person");
+                    return ProjectCreationTextScope.Text(ctx.localization, "template.first_person");
                 case 3:
-                    return ctx.localization.Get("editor", "project_creation.template.package_based");
+                    return ProjectCreationTextScope.Text(ctx.localization, "template.package_based");
                 case 4:
-                    return ctx.localization.Get("editor", "project_creation.template.tech_demo");
+                    return ProjectCreationTextScope.Text(ctx.localization, "template.tech_demo");
                 case 5:
-                    return ctx.localization.Get("editor", "project_creation.template.custom");
+                    return ProjectCreationTextScope.Text(ctx.localization, "template.custom");
                 default:
                     return "Unknown";
             }
@@ -438,7 +439,7 @@ namespace Horo::Editor {
             {
                 ScopedTextStyle ts(ctx.theme.fonts.sansEmphasis, TextPx::Title(), FontPx::SansEmphasis);
                 ImGui::PushStyleColor(ImGuiCol_Text, Text());
-                const std::string title = ctx.localization.Get("editor", "project_creation.title");
+                const std::string title = ProjectCreationTextScope.Text(ctx.localization, "title");
                 ImGui::TextUnformatted(title.c_str());
                 ImGui::PopStyleColor();
             }
@@ -447,7 +448,7 @@ namespace Horo::Editor {
             {
                 ScopedTextStyle ts(ctx.theme.fonts.sansCompact, TextPx::Caption(), FontPx::SansCompact);
                 ImGui::PushStyleColor(ImGuiCol_Text, Dim());
-                const std::string subtitle = ctx.localization.Get("editor", "project_creation.subtitle");
+                const std::string subtitle = ProjectCreationTextScope.Text(ctx.localization, "subtitle");
                 ImGui::TextUnformatted(subtitle.c_str());
                 ImGui::PopStyleColor();
             }
@@ -515,14 +516,14 @@ namespace Horo::Editor {
             const ImVec2 sidePos = ImGui::GetWindowPos();
             auto *dl = ImGui::GetWindowDrawList();
 
-            const std::array<std::string, 4> stepLabelsStr = {ctx.localization.Get("editor", "project_creation.step.template.title"),
-                                                              ctx.localization.Get("editor", "project_creation.step.identity.title"),
-                                                              ctx.localization.Get("editor", "project_creation.step.settings.title"),
-                                                              ctx.localization.Get("editor", "project_creation.step.review.title")};
-            const std::array<std::string, 4> stepDescsStr = {ctx.localization.Get("editor", "project_creation.step.template.desc"),
-                                                             ctx.localization.Get("editor", "project_creation.step.identity.desc"),
-                                                             ctx.localization.Get("editor", "project_creation.step.settings.desc"),
-                                                             ctx.localization.Get("editor", "project_creation.step.review.desc")};
+            const std::array<std::string, 4> stepLabelsStr = {ProjectCreationTextScope.Text(ctx.localization, "step.template.title"),
+                                                              ProjectCreationTextScope.Text(ctx.localization, "step.identity.title"),
+                                                              ProjectCreationTextScope.Text(ctx.localization, "step.settings.title"),
+                                                              ProjectCreationTextScope.Text(ctx.localization, "step.review.title")};
+            const std::array<std::string, 4> stepDescsStr = {ProjectCreationTextScope.Text(ctx.localization, "step.template.desc"),
+                                                             ProjectCreationTextScope.Text(ctx.localization, "step.identity.desc"),
+                                                             ProjectCreationTextScope.Text(ctx.localization, "step.settings.desc"),
+                                                             ProjectCreationTextScope.Text(ctx.localization, "step.review.desc")};
 
             ImGui::SetCursorPos({SidebarPadX, SidebarPadY});
             for (int step = 1; step <= 4; ++step)
@@ -618,16 +619,16 @@ namespace Horo::Editor {
         void DrawStepTemplate(ProjectCreationController &controller, ProjectCreationViewState &st, const EditorGuiContext &ctx) {
             using namespace WizardLayout;
 
-            const std::array<std::string, 6> descsStr = {ctx.localization.Get("editor", "project_creation.template.empty.desc"),
-                                                         ctx.localization.Get("editor", "project_creation.template.3d_starter.desc"),
-                                                         ctx.localization.Get("editor", "project_creation.template.first_person.desc"),
-                                                         ctx.localization.Get("editor", "project_creation.template.package_based.desc"),
-                                                         ctx.localization.Get("editor", "project_creation.template.tech_demo.desc"),
-                                                         ctx.localization.Get("editor", "project_creation.template.custom.desc")};
+            const std::array<std::string, 6> descsStr = {ProjectCreationTextScope.Text(ctx.localization, "template.empty.desc"),
+                                                         ProjectCreationTextScope.Text(ctx.localization, "template.3d_starter.desc"),
+                                                         ProjectCreationTextScope.Text(ctx.localization, "template.first_person.desc"),
+                                                         ProjectCreationTextScope.Text(ctx.localization, "template.package_based.desc"),
+                                                         ProjectCreationTextScope.Text(ctx.localization, "template.tech_demo.desc"),
+                                                         ProjectCreationTextScope.Text(ctx.localization, "template.custom.desc")};
             const std::array<const char *, 6> kDescs = {descsStr[0].c_str(), descsStr[1].c_str(), descsStr[2].c_str(),
                                                         descsStr[3].c_str(), descsStr[4].c_str(), descsStr[5].c_str()};
 
-            const std::string chooseTitle = ctx.localization.Get("editor", "project_creation.step.template.choose");
+            const std::string chooseTitle = ProjectCreationTextScope.Text(ctx.localization, "step.template.choose");
             Ui::SectionTitle(chooseTitle.c_str(), ctx.theme.fonts);
             ImGui::Dummy({0.0F, 14.0F});
 
@@ -656,7 +657,7 @@ namespace Horo::Editor {
 
         void DrawProjectLocationField(ProjectCreationController &controller, ProjectCreationViewState &st, const EditorGuiContext &ctx,
                                       Input::InputRouter &inputRouter, const ProjectCreationDiagnostic *pathErr) {
-            const std::string locationLabel = ctx.localization.Get("editor", "project_creation.identity.location");
+            const std::string locationLabel = ProjectCreationTextScope.Text(ctx.localization, "identity.location");
             ImGui::PushID(locationLabel.c_str());
             ImGui::BeginGroup();
             Ui::FieldLabel(locationLabel.c_str(), ctx.theme.fonts);
@@ -668,7 +669,7 @@ namespace Horo::Editor {
                                        Ui::InputTextOptions{.error = pathErr != nullptr, .width = std::max(inputWidth, 1.0F)});
             controller.SetProjectPath(st.projectPath);
             ImGui::SameLine(0.0F, gapWidth);
-            const std::string selectPrompt = ctx.localization.Get("editor", "project_creation.identity.location.select");
+            const std::string selectPrompt = ProjectCreationTextScope.Text(ctx.localization, "identity.location.select");
             if (DrawFolderIconButton("##browse_location", buttonWidth, ctx, pathErr != nullptr)) {
                 auto nativeDialogContext = inputRouter.PushContext(Input::InputContextId{"editor.native_dialog.project_location"},
                                                                    Input::InputContextKind::NativeDialog);
@@ -684,7 +685,7 @@ namespace Horo::Editor {
             if (pathErr)
                 Ui::ErrorText(pathErr->message.c_str(), ctx.theme.fonts);
             else {
-                const std::string locationHint = ctx.localization.Get("editor", "project_creation.identity.location.hint");
+                const std::string locationHint = ProjectCreationTextScope.Text(ctx.localization, "identity.location.hint");
                 Ui::Hint(locationHint.c_str(), ctx.theme.fonts);
             }
             ImGui::EndGroup();
@@ -710,12 +711,12 @@ namespace Horo::Editor {
             if (pathErr == nullptr)
                 pathErr = pathErrWrt;
 
-            const std::string identityTitle = ctx.localization.Get("editor", "project_creation.step.identity.title");
+            const std::string identityTitle = ProjectCreationTextScope.Text(ctx.localization, "step.identity.title");
             Ui::SectionTitle(identityTitle.c_str(), ctx.theme.fonts);
             ImGui::Dummy({0.0F, 14.0F});
 
-            const std::string nameLabel = ctx.localization.Get("editor", "project_creation.identity.name");
-            const std::string nameHint = ctx.localization.Get("editor", "project_creation.identity.name.hint");
+            const std::string nameLabel = ProjectCreationTextScope.Text(ctx.localization, "identity.name");
+            const std::string nameHint = ProjectCreationTextScope.Text(ctx.localization, "identity.name.hint");
             DrawInputField(nameLabel.c_str(), st.projectName, 128, -1.0F, ctx,
                            DrawInputFieldOptions{.hint = nameHint.c_str(),
                                                  .error = nameErr != nullptr,
@@ -729,14 +730,14 @@ namespace Horo::Editor {
 
             ImGui::Dummy({0.0F, GridGap});
 
-            const std::string versionLabel = ctx.localization.Get("editor", "project_creation.identity.version");
-            const std::string versionHint = ctx.localization.Get("editor", "project_creation.identity.version.hint");
+            const std::string versionLabel = ProjectCreationTextScope.Text(ctx.localization, "identity.version");
+            const std::string versionHint = ProjectCreationTextScope.Text(ctx.localization, "identity.version.hint");
             DrawInputField(versionLabel.c_str(), st.projectVersion, 32, -1.0F, ctx, DrawInputFieldOptions{.hint = versionHint.c_str()});
             controller.SetProjectVersion(st.projectVersion);
 
             ImGui::Dummy({0.0F, GridGap});
 
-            const std::string sceneLabel = ctx.localization.Get("editor", "project_creation.identity.scene");
+            const std::string sceneLabel = ProjectCreationTextScope.Text(ctx.localization, "identity.scene");
             DrawInputField(sceneLabel.c_str(), st.defaultScene, 128, -1.0F, ctx);
             controller.SetDefaultScene(st.defaultScene);
         }
@@ -755,7 +756,7 @@ namespace Horo::Editor {
             const std::string &templateId = controller.Draft().templateId;
             if (templateId == "package-based") {
                 ScopedCard card("TcPkg", {0.0F, 0.0F}, CardPad, CardPad, Theme::Bg2(), true);
-                const std::string pkgTitle = ctx.localization.Get("editor", "project_creation.settings.package");
+                const std::string pkgTitle = ProjectCreationTextScope.Text(ctx.localization, "settings.package");
                 Ui::SectionTitle(pkgTitle.c_str(), ctx.theme.fonts);
                 ImGui::Dummy({0.0F, 8.0F});
                 const float colW = (ImGui::GetContentRegionAvail().x - GridGap) * 0.5F;
@@ -766,7 +767,7 @@ namespace Horo::Editor {
                 Ui::Hint("Specify the remote registry package and version lockfile to scaffold this project.", ctx.theme.fonts);
             } else if (templateId == "first-person") {
                 ScopedCard card("TcFp", {0.0F, 0.0F}, CardPad, CardPad, Theme::Bg2(), true);
-                const std::string fpTitle = ctx.localization.Get("editor", "project_creation.settings.first_person");
+                const std::string fpTitle = ProjectCreationTextScope.Text(ctx.localization, "settings.first_person");
                 Ui::SectionTitle(fpTitle.c_str(), ctx.theme.fonts);
                 ImGui::Dummy({0.0F, 8.0F});
                 const float colW = (ImGui::GetContentRegionAvail().x - GridGap) * 0.5F;
@@ -776,7 +777,7 @@ namespace Horo::Editor {
                 Ui::Hint("A first-person camera and kinematic character capsule will be generated in defaultScene.", ctx.theme.fonts);
             } else if (templateId == "tech-demo") {
                 ScopedCard card("TcDemo", {0.0F, 0.0F}, CardPad, CardPad, Theme::Bg2(), true);
-                const std::string demoTitle = ctx.localization.Get("editor", "project_creation.settings.tech_demo");
+                const std::string demoTitle = ProjectCreationTextScope.Text(ctx.localization, "settings.tech_demo");
                 Ui::SectionTitle(demoTitle.c_str(), ctx.theme.fonts);
                 ImGui::Dummy({0.0F, 8.0F});
                 CheckboxCss("Enable runtime observability and FPS overlays by default", &st.demoObservabilityOverlays, ctx);
@@ -784,7 +785,7 @@ namespace Horo::Editor {
                 CheckboxCss("Include high-detail benchmark scene and camera animation track", &st.demoBenchmarkScene, ctx);
             } else if (templateId == "custom") {
                 ScopedCard card("TcCustom", {0.0F, 0.0F}, CardPad, CardPad, Theme::Bg2(), true);
-                const std::string customTitle = ctx.localization.Get("editor", "project_creation.settings.custom");
+                const std::string customTitle = ProjectCreationTextScope.Text(ctx.localization, "settings.custom");
                 Ui::SectionTitle(customTitle.c_str(), ctx.theme.fonts);
                 ImGui::Dummy({0.0F, 8.0F});
                 CheckboxCss("Rendering Subsystem (Vulkan/OpenGL core pipeline)", &st.customSubsystems[0], ctx);
@@ -804,7 +805,7 @@ namespace Horo::Editor {
 
             {
                 ScopedCard card("RtCard", {0.0F, 0.0F}, CardPad, CardPad, Theme::Bg2(), true);
-                const std::string runtimeTitle = ctx.localization.Get("editor", "project_creation.settings.runtime");
+                const std::string runtimeTitle = ProjectCreationTextScope.Text(ctx.localization, "settings.runtime");
                 Ui::SectionTitle(runtimeTitle.c_str(), ctx.theme.fonts);
                 ImGui::Dummy({0.0F, 8.0F});
 
@@ -844,7 +845,7 @@ namespace Horo::Editor {
 
             {
                 ScopedCard card("TcCard", {0.0F, 0.0F}, CardPad, CardPad, Theme::Bg2(), true);
-                const std::string toolchainTitle = ctx.localization.Get("editor", "project_creation.settings.toolchain");
+                const std::string toolchainTitle = ProjectCreationTextScope.Text(ctx.localization, "settings.toolchain");
                 Ui::SectionTitle(toolchainTitle.c_str(), ctx.theme.fonts);
                 ImGui::Dummy({0.0F, 8.0F});
 
@@ -872,7 +873,7 @@ namespace Horo::Editor {
 
             {
                 ScopedCard card("OptCard", {0.0F, 0.0F}, CardPad, CardPad, Theme::Bg2(), true);
-                const std::string optTitle = ctx.localization.Get("editor", "project_creation.settings.optional");
+                const std::string optTitle = ProjectCreationTextScope.Text(ctx.localization, "settings.optional");
                 {
                     ScopedTextStyle ts(ctx.theme.fonts.sansEmphasis, Theme::TextPx::Title(), Theme::FontPx::SansEmphasis);
                     ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
@@ -976,7 +977,7 @@ namespace Horo::Editor {
                                                                 Theme::U32(Theme::AccentSoft()), Theme::U32(Theme::Bg2()),
                                                                 Theme::U32(Theme::Bg2()), Theme::U32(Theme::AccentSoft()));
 
-            const std::string projectLabel = ctx.localization.Get("editor", "project_creation.review.project");
+            const std::string projectLabel = ProjectCreationTextScope.Text(ctx.localization, "review.project");
             ImGui::SetCursorPos({18.0F, 16.0F});
             Ui::SectionTitle(projectLabel.c_str(), ctx.theme.fonts);
             ImGui::SetCursorPos({18.0F, 39.0F});
@@ -1016,7 +1017,7 @@ namespace Horo::Editor {
             ImGui::Dummy({0.0F, 12.0F});
             {
                 ScopedCard card("ReviewDirectory", {0.0F, 0.0F}, CardPad, 15.0F, Theme::Bg2(), true);
-                const std::string directoryTitle = ctx.localization.Get("editor", "project_creation.identity.directory");
+                const std::string directoryTitle = ProjectCreationTextScope.Text(ctx.localization, "identity.directory");
                 {
                     ScopedTextStyle ts(ctx.theme.fonts.sansEmphasis, Theme::TextPx::Title(), Theme::FontPx::SansEmphasis);
                     ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
@@ -1074,9 +1075,9 @@ namespace Horo::Editor {
             const float actionsW = isReview ? (backW + gap + createW) : (backW + gap + nextW);
             ImGui::SetCursorPos({footerW - 22.0F - actionsW, 10.0F});
 
-            const std::string backLabel = ctx.localization.Get("editor", "project_creation.back") + "###project_creation_back";
-            const std::string nextLabel = ctx.localization.Get("editor", "project_creation.next") + "###project_creation_next";
-            const std::string createLabel = ctx.localization.Get("editor", "project_creation.create") + "###project_creation_create";
+            const std::string backLabel = ProjectCreationTextScope.Text(ctx.localization, "back") + "###project_creation_back";
+            const std::string nextLabel = ProjectCreationTextScope.Text(ctx.localization, "next") + "###project_creation_next";
+            const std::string createLabel = ProjectCreationTextScope.Text(ctx.localization, "create") + "###project_creation_create";
             if (Ui::Button({.label = backLabel.c_str(),
                             .size = {backW, btnH},
                             .variant = Ui::ButtonVariant::Secondary,

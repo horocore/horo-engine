@@ -1,10 +1,10 @@
-#include "Horo/Editor/GuiLiveReload.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserGrid.h"
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
@@ -14,6 +14,7 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserCards.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserToolbar.h"
 
@@ -101,10 +102,7 @@ namespace Horo::Editor {
             ImGui::TextUnformatted(entry.displayName.c_str());
             const bool copy = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
             ImGui::TextColored(Theme::Dim(), "%s",
-                               localization
-                                   .Get("editor",
-                                        copy ? "workspace.content_browser.action.copy" : "workspace.content_browser.action.move_here")
-                                   .c_str());
+                               AssetBrowserPane::kTextScope.Text(localization, copy ? "action.copy" : "action.move_here").c_str());
             ImGui::EndDragDropSource();
         }
 
@@ -116,9 +114,8 @@ namespace Horo::Editor {
             drawList->AddLine({minimum.x + width - 1.0F, minimum.y}, {minimum.x + width - 1.0F, minimum.y + height},
                               Theme::U32(Theme::Border()));
             const std::array icons{Favorite, History, Storage, Package, AccountTree, Tag};
-            const std::array keys{"workspace.content_browser.location.favorites",    "workspace.content_browser.location.recent",
-                                  "workspace.content_browser.location.sources",      "workspace.content_browser.location.packages",
-                                  "workspace.content_browser.location.dependencies", "workspace.content_browser.location.tags"};
+            const std::array keys{"location.favorites", "location.recent",       "location.sources",
+                                  "location.packages",  "location.dependencies", "location.tags"};
             for (std::size_t index = 0; index < icons.size(); ++index) {
                 const ImVec2 position{minimum.x, minimum.y + 6.0F + static_cast<float>(index) * 32.0F};
                 ImGui::SetCursorScreenPos(position);
@@ -139,7 +136,7 @@ namespace Horo::Editor {
                 const ImU32 iconColor = Theme::U32(active || hovered ? Theme::Text() : Theme::Dim());
                 Ui::DrawEditorIcon(drawList, icons[index], iconPosition, {iconSize, iconSize}, iconColor, context.theme.fonts.icon);
                 if (hovered) {
-                    const std::string &tooltip = context.localization.Get("editor", keys[index]);
+                    const std::string &tooltip = AssetBrowserPane::kTextScope.Text(context.localization, keys[index]);
                     Ui::ShowTooltip(tooltip.c_str(), &context.theme.fonts);
                 }
                 ImGui::PopID();
@@ -149,23 +146,22 @@ namespace Horo::Editor {
         [[nodiscard]] std::string EntrySecondaryText(const ContentBrowserEntry &entry, const ILocalizationService &localization) {
             if (entry.kind == ContentBrowserEntryKind::Directory) {
                 const std::string &unit =
-                    localization.Get("editor", entry.containedItemCount == 1 ? "workspace.content_browser.count.item"
-                                                                             : "workspace.content_browser.count.items");
+                    AssetBrowserPane::kTextScope.Text(localization, entry.containedItemCount == 1 ? "count.item" : "count.items");
                 return std::format("{} {}", entry.containedItemCount, unit);
             }
             if (entry.previewError) {
                 const auto &migration = GuiLive::HostSymbol<&Prefab::PrefabErrors::MigrationRequired>();
                 const bool needsMigration = entry.previewError->domain.Value() == migration.domain.Value() &&
                                             entry.previewError->code.Value() == migration.code.Value();
-                return localization.Get("editor", needsMigration ? "workspace.content_browser.prefab.migration_required"
-                                                                 : "workspace.content_browser.preview.unavailable");
+                return AssetBrowserPane::kTextScope.Text(localization,
+                                                         needsMigration ? "prefab.migration_required" : "preview.unavailable");
             }
             if (entry.previewState == ContentBrowserPreviewState::Queued)
-                return localization.Get("editor", "workspace.content_browser.preview.queued");
+                return AssetBrowserPane::kTextScope.Text(localization, "preview.queued");
             if (!entry.registered)
-                return localization.Get("editor", "workspace.content_browser.asset.unregistered");
+                return AssetBrowserPane::kTextScope.Text(localization, "asset.unregistered");
             if (entry.IsPrefab())
-                return localization.Get("editor", "workspace.content_browser.prefab.type");
+                return AssetBrowserPane::kTextScope.Text(localization, "prefab.type");
             return entry.assetType;
         }
 
@@ -180,10 +176,10 @@ namespace Horo::Editor {
 
         [[nodiscard]] const char *EmptyGridMessageKey(const ContentBrowserDirectory &directory) noexcept {
             if (directory.loadState == ContentBrowserLoadState::Loading)
-                return "workspace.content_browser.loading";
+                return "loading";
             if (directory.loadState == ContentBrowserLoadState::Error)
-                return "workspace.content_browser.unavailable";
-            return directory.entries.empty() ? "workspace.content_browser.empty" : "workspace.content_browser.no_results";
+                return "unavailable";
+            return directory.entries.empty() ? "empty" : "no_results";
         }
 
         void DrawEmptyAssetGrid(const ImVec2 gridOrigin, const float gridWidth, const float gridY, const ContentBrowserDirectory &directory,

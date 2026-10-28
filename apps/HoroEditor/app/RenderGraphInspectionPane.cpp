@@ -11,39 +11,35 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr GuiLocalizationScope GraphTextScope{"render_graph"};
         constexpr std::size_t PageSize = 128;
-        constexpr std::array SectionKeys{"render_graph.passes", "render_graph.resources", "render_graph.lifetimes", "render_graph.barriers",
-                                         "render_graph.queues", "render_graph.culling",   "render_graph.timing"};
+        constexpr std::array SectionKeys{"passes", "resources", "lifetimes", "barriers", "queues", "culling", "timing"};
 
         /** @brief Resolves declared Horo vocabularies into localized presentation without backend-name branching. */
         template <typename Enum, std::size_t N>
         const std::string &EnumLabel(const Enum value, const std::array<const char *, N> &keys, const ILocalizationService &localization) {
             const auto index = static_cast<std::size_t>(value);
-            return localization.Get("editor", index < N ? keys[index] : "render_graph.unavailable");
+            return GraphTextScope.Text(localization, index < N ? keys[index] : "unavailable");
         }
 
         /** @brief Projects one immutable authored pass into localized cells. */
         Ui::TableRow PassRow(const Render::RenderGraphPass &pass, const ILocalizationService &localization) {
             return {{{std::to_string(pass.reference.id.value)},
-                     {EnumLabel(pass.kind, std::array{"render_graph.graphics", "render_graph.compute", "render_graph.copy"}, localization)},
-                     {EnumLabel(pass.queue, std::array{"render_graph.graphics", "render_graph.compute", "render_graph.transfer"},
-                                localization)},
-                     {EnumLabel(pass.cullPolicy, std::array{"render_graph.keep", "render_graph.allow_cull"}, localization)}}};
+                     {EnumLabel(pass.kind, std::array{"graphics", "compute", "copy"}, localization)},
+                     {EnumLabel(pass.queue, std::array{"graphics", "compute", "transfer"}, localization)},
+                     {EnumLabel(pass.cullPolicy, std::array{"keep", "allow_cull"}, localization)}}};
         }
 
         /** @brief Projects one immutable resource identity into localized cells. */
         Ui::TableRow ResourceRow(const Render::RenderGraphResource &resource, const ILocalizationService &localization) {
-            std::string binding = localization.Get("editor", "render_graph.none");
+            std::string binding = GraphTextScope.Text(localization, "none");
             std::visit([&]<typename Handle>(const Handle &handle) {
                 if constexpr (!std::is_same_v<Handle, std::monostate>)
                     binding = std::format("{}:{}:{}", handle.owner.value, handle.slot, handle.generation);
             }, resource.binding);
             return {{{std::to_string(resource.id.value)},
-                     {EnumLabel(resource.kind, std::array{"render_graph.buffer", "render_graph.texture"}, localization)},
-                     {EnumLabel(resource.resourceClass,
-                                std::array{"render_graph.external", "render_graph.persistent", "render_graph.transient",
-                                           "render_graph.history"},
-                                localization)},
+                     {EnumLabel(resource.kind, std::array{"buffer", "texture"}, localization)},
+                     {EnumLabel(resource.resourceClass, std::array{"external", "persistent", "transient", "history"}, localization)},
                      {std::move(binding)}}};
         }
 
@@ -51,10 +47,10 @@ namespace Horo::Editor {
         Ui::TableRow LifetimeRow(const Render::RenderGraphResourceLifetime &lifetime, const ILocalizationService &localization) {
             const bool used = lifetime.disposition == Render::RenderGraphLifetimeDisposition::Used;
             return {{{std::to_string(lifetime.resource.value)},
-                     {used ? std::to_string(lifetime.firstPass.id.value) : localization.Get("editor", "render_graph.unused")},
-                     {used ? std::to_string(lifetime.lastPass.id.value) : localization.Get("editor", "render_graph.unused")},
+                     {used ? std::to_string(lifetime.firstPass.id.value) : GraphTextScope.Text(localization, "unused")},
+                     {used ? std::to_string(lifetime.lastPass.id.value) : GraphTextScope.Text(localization, "unused")},
                      {used ? std::format("{} → {}", lifetime.firstUseIndex, lifetime.lastUseIndex)
-                           : localization.Get("editor", "render_graph.unused")}}};
+                           : GraphTextScope.Text(localization, "unused")}}};
         }
 
         /** @brief Projects one immutable logical transition into localized cells. */
@@ -62,14 +58,8 @@ namespace Horo::Editor {
             return {{{std::to_string(transition.resource.value)},
                      {std::format("{} → {}", transition.before.id.value, transition.after.id.value)},
                      {std::format("{} → {}",
-                                  EnumLabel(transition.oldState.access,
-                                            std::array{"render_graph.none", "render_graph.read", "render_graph.write",
-                                                       "render_graph.read_write"},
-                                            localization),
-                                  EnumLabel(transition.newState.access,
-                                            std::array{"render_graph.none", "render_graph.read", "render_graph.write",
-                                                       "render_graph.read_write"},
-                                            localization))},
+                                  EnumLabel(transition.oldState.access, std::array{"none", "read", "write", "read_write"}, localization),
+                                  EnumLabel(transition.newState.access, std::array{"none", "read", "write", "read_write"}, localization))},
                      {std::format("{} → {}", transition.oldState.queue.value, transition.newState.queue.value)}}};
         }
 
@@ -79,30 +69,31 @@ namespace Horo::Editor {
             return {{{std::to_string(pass.pass.id.value)},
                      {std::to_string(pass.queue.value)},
                      {std::to_string(index)},
-                     {localization.Get("editor", "render_graph.planned")}}};
+                     {GraphTextScope.Text(localization, "planned")}}};
         }
 
         /** @brief Projects one immutable culling decision into localized cells. */
         Ui::TableRow CullingRow(const Render::RenderGraphPassDisposition &pass, const ILocalizationService &localization) {
             return {{{std::to_string(pass.pass.id.value)},
-                     {EnumLabel(pass.disposition, std::array{"render_graph.retained", "render_graph.culled"}, localization)},
+                     {EnumLabel(pass.disposition, std::array{"retained", "culled"}, localization)},
                      {EnumLabel(pass.reason,
-                                std::array{"render_graph.reason.policy", "render_graph.reason.export", "render_graph.reason.import",
-                                           "render_graph.reason.external", "render_graph.reason.dependency", "render_graph.reason.producer",
-                                           "render_graph.reason.unused", "render_graph.reason.culled"},
+                                std::array{"reason.policy", "reason.export", "reason.import", "reason.external", "reason.dependency",
+                                           "reason.producer", "reason.unused", "reason.culled"},
                                 localization)},
-                     {localization.Get("editor", "render_graph.planned")}}};
+                     {GraphTextScope.Text(localization, "planned")}}};
         }
 
         /** @brief Draws source availability using the shared body-text contract. */
         void DrawStatus(const GlobalDockPaneDrawContext &context, const char *key, const ImVec4 color) {
-            Ui::WrappedText(context.contentWidth, context.gui.localization.Get("editor", key), color, context.gui.theme.fonts);
+            Ui::WrappedText(context.contentWidth, GraphTextScope.Text(context.gui.localization, key), color, context.gui.theme.fonts);
         }
 
         /** @brief Read-only optional pane: query/format work occurs only when the dock host draws this pane. */
         class GraphPane final : public IGlobalDockPane {
         public:
-            explicit GraphPane(RenderGraphInspectionQuery query) : query_(std::move(query)) {}
+            static constexpr GuiLocalizationScope kTextScope = GraphTextScope;
+
+            explicit GraphPane(RenderGraphInspectionQuery query) : IGlobalDockPane(kTextScope), query_(std::move(query)) {}
 
             std::string_view Id() const noexcept override {
                 return "horo.global_dock.render_graph";
@@ -177,47 +168,46 @@ namespace Horo::Editor {
                 case 5:
                     return CullingRow(snapshot_->Dispositions()[index], localization);
                 default:
-                    return {{{localization.Get("editor", "render_graph.timing")},
-                             {localization.Get("editor", "render_graph.unavailable")},
-                             {localization.Get("editor", "render_graph.unavailable")},
-                             {localization.Get("editor", "render_graph.planned")}}};
+                    return {{{GraphTextScope.Text(localization, "timing")},
+                             {GraphTextScope.Text(localization, "unavailable")},
+                             {GraphTextScope.Text(localization, "unavailable")},
+                             {GraphTextScope.Text(localization, "planned")}}};
             }
         }
 
         /** @brief Rebuilds only one finite page when source, language, section or page changes. */
         void GraphPane::RefreshRows(const ILocalizationService &localization) {
-            constexpr std::array
-                Headers{std::array{"render_graph.id", "render_graph.kind", "render_graph.queue_role", "render_graph.policy"},
-                        std::array{"render_graph.id", "render_graph.kind", "render_graph.class", "render_graph.binding"},
-                        std::array{"render_graph.id", "render_graph.first_pass", "render_graph.last_pass", "render_graph.use_interval"},
-                        std::array{"render_graph.id", "render_graph.pass_edge", "render_graph.access", "render_graph.queue_edge"},
-                        std::array{"render_graph.id", "render_graph.queue", "render_graph.order", "render_graph.coverage"},
-                        std::array{"render_graph.id", "render_graph.disposition", "render_graph.reason", "render_graph.coverage"},
-                        std::array{"render_graph.kind", "render_graph.cpu", "render_graph.gpu", "render_graph.coverage"}};
+            constexpr std::array Headers{std::array{"id", "kind", "queue_role", "policy"},
+                                         std::array{"id", "kind", "class", "binding"},
+                                         std::array{"id", "first_pass", "last_pass", "use_interval"},
+                                         std::array{"id", "pass_edge", "access", "queue_edge"},
+                                         std::array{"id", "queue", "order", "coverage"},
+                                         std::array{"id", "disposition", "reason", "coverage"},
+                                         std::array{"kind", "cpu", "gpu", "coverage"}};
             for (std::size_t column = 0; column < columns_.size(); ++column)
                 columns_[column] = {std::to_string(column),
-                                    localization.Get("editor", Headers[static_cast<std::size_t>(section_)][column])};
+                                    GraphTextScope.Text(localization, Headers[static_cast<std::size_t>(section_)][column])};
             rows_.clear();
             const std::size_t end = std::min(Count(), page_ * PageSize + PageSize);
             rows_.reserve(end - page_ * PageSize);
             for (std::size_t index = page_ * PageSize; index < end; ++index)
                 rows_.push_back(Row(index, localization));
             const auto &source = snapshot_->Context();
-            sourceLabel_ = std::format("{}: {}\n{}: {}\n{}: {}", localization.Get("editor", "render_graph.renderer"), source.renderer.value,
-                                       localization.Get("editor", "render_graph.frame"), source.frame.value,
-                                       localization.Get("editor", "render_graph.revision"), source.revision);
+            sourceLabel_ = std::format("{}: {}\n{}: {}\n{}: {}", GraphTextScope.Text(localization, "renderer"), source.renderer.value,
+                                       GraphTextScope.Text(localization, "frame"), source.frame.value,
+                                       GraphTextScope.Text(localization, "revision"), source.revision);
             dirty_ = false;
         }
 
         /** @brief Reads only the composed cached publication and handles unavailable/failed source state. */
         bool GraphPane::ReadPublication(const GlobalDockPaneDrawContext &context) {
             if (!query_) {
-                DrawStatus(context, "render_graph.no_capture", Theme::Muted());
+                DrawStatus(context, "no_capture", Theme::Muted());
                 return false;
             }
             const auto queried = query_();
             if (queried.HasError()) {
-                DrawStatus(context, "render_graph.query_failed", Theme::Err());
+                DrawStatus(context, "query_failed", Theme::Err());
                 return false;
             }
             if (snapshot_ != queried.Value()) {
@@ -226,7 +216,7 @@ namespace Horo::Editor {
                 dirty_ = true;
             }
             if (!snapshot_) {
-                DrawStatus(context, "render_graph.no_capture", Theme::Muted());
+                DrawStatus(context, "no_capture", Theme::Muted());
                 return false;
             }
             return true;
@@ -237,7 +227,7 @@ namespace Horo::Editor {
             const auto &localization = context.gui.localization;
             const auto &fonts = context.gui.theme.fonts;
             const auto text = [&](const char *key) -> const std::string & {
-                return localization.Get("editor", key);
+                return GraphTextScope.Text(localization, key);
             };
             std::array<const char *, SectionKeys.size()> labels{};
             for (std::size_t index = 0; index < labels.size(); ++index)
@@ -252,17 +242,13 @@ namespace Horo::Editor {
                 dirty_ = true;
             }
             const std::size_t pages = std::max(std::size_t{1}, (Count() + PageSize - 1) / PageSize);
-            if (Ui::Button({.label = text("render_graph.previous").c_str(),
-                            .size = {context.contentWidth, 0},
-                            .enabled = page_ > 0,
-                            .font = fonts.sans})) {
+            if (Ui::Button(
+                    {.label = text("previous").c_str(), .size = {context.contentWidth, 0}, .enabled = page_ > 0, .font = fonts.sans})) {
                 --page_;
                 dirty_ = true;
             }
-            if (Ui::Button({.label = text("render_graph.next").c_str(),
-                            .size = {context.contentWidth, 0},
-                            .enabled = page_ + 1 < pages,
-                            .font = fonts.sans})) {
+            if (Ui::Button(
+                    {.label = text("next").c_str(), .size = {context.contentWidth, 0}, .enabled = page_ + 1 < pages, .font = fonts.sans})) {
                 ++page_;
                 dirty_ = true;
             }
@@ -278,7 +264,7 @@ namespace Horo::Editor {
             DrawNavigation(context);
             if (dirty_)
                 RefreshRows(localization);
-            Ui::WrappedText(context.contentWidth, localization.Get("editor", "render_graph.planned"), Theme::Warn(), fonts);
+            Ui::WrappedText(context.contentWidth, GraphTextScope.Text(localization, "planned"), Theme::Warn(), fonts);
             Ui::WrappedText(context.contentWidth, sourceLabel_, Theme::Text(), fonts);
             for (auto &row : rows_)
                 for (auto &cell : row.cells)

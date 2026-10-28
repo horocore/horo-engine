@@ -60,6 +60,37 @@ The platform layer includes:
 - deterministic or in-memory test implementations
 - headless implementations where appropriate
 
+### Desktop file-manager integration
+
+`HoroPlatformDesktop` owns `Horo/Platform/FileManager.h` independently of the
+baseline `HoroPlatform` target. The graphical composition links this optional
+desktop adapter through `HoroGui`; headless builds retain the contract with a
+typed `file_manager.unavailable` implementation and no desktop dependencies.
+Call `RevealInFileManager` on the main thread after an explicit user action.
+Directories open themselves. Files are selected in Explorer/Finder; the Linux
+adapter opens the containing directory through the existing SDL desktop URI
+handler. Dispatch acceptance does not prove external-application completion.
+
+Common validation requires an existing absolute native regular file/directory,
+rejects embedded NULs and a symbolic link at the target, and does not reinterpret
+the path through the process locale or resolve it against the current directory.
+Project-root containment remains the caller's responsibility. Windows uses wide
+Shell APIs with scoped COM/PIDL ownership. macOS uses filesystem URLs and
+`NSWorkspace`. Linux percent-encodes path bytes into a local file URI; no platform
+builds shell command strings from a path. Native UI dependencies remain private
+to `HoroPlatformDesktop`. The editor logs typed native failures before presenting
+localized failure copy.
+
+This replaces the editor-menu-owned macOS reveal implementation and non-Apple
+stubs. Existing editor callers retain their private bool bridge; new portable
+callers link `HoroEngine::PlatformDesktop` and consume its typed result. Public
+header consumer coverage and filesystem/URI regression tests cover this boundary.
+Cross-platform native desktop behavior still requires tests on each OS.
+`HoroFileManagerTests` never launches desktop applications. For an explicit native
+check, build the opt-in `HoroFileManagerSmoke` target in a GUI build and invoke it
+with an existing absolute directory/file, including spaces and non-ASCII names.
+This helper is excluded from the default build and unattended CTest runs.
+
 Android application/activity lifecycle, replaceable native surfaces, runtime
 permissions, scoped storage, deployment, and resource-pressure specialization
 follow [Android Platform Host](./android-platform-host.md). Portable callers use

@@ -60,7 +60,7 @@ namespace Horo::Editor {
 
         class BuiltInPaneAdapter : public IGlobalDockPane {
         public:
-            explicit BuiltInPaneAdapter(const GlobalDockTab tab) : tab_{tab} {}
+            explicit BuiltInPaneAdapter(const GlobalDockTab tab) : IGlobalDockPane(GlobalDockPanel::kTextScope), tab_{tab} {}
 
             [[nodiscard]] std::string_view Id() const noexcept override {
                 return PaneMetadata(tab_).id;
@@ -192,7 +192,8 @@ namespace Horo::Editor {
         };
     }  // namespace
 
-    GlobalDockPanel::GlobalDockPanel(const GlobalDockTab activeTab) : activeTab_{activeTab}, activePaneId_{PaneId(activeTab)} {
+    GlobalDockPanel::GlobalDockPanel(const GlobalDockTab activeTab)
+        : IWorkspacePanel(kTextScope), activeTab_{activeTab}, activePaneId_{PaneId(activeTab)} {
         RegisterBuiltInPanes();
     }
 

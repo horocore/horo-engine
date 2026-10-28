@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/EditorGuiContext.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Editor/WelcomeController.h"
 
 #include <array>
@@ -9,6 +10,8 @@
 #include <vector>
 
 namespace Horo::Editor {
+    /** @brief Shared route-screen and view localization scope. */
+    inline constexpr GuiLocalizationScope WelcomeTextScope{"welcome"};
     struct GuiContentRegion;
 
     /** @brief Validated welcome geometry resolved from active design tokens each frame. */
@@ -23,7 +26,6 @@ namespace Horo::Editor {
         float sectionGap{};
         std::uint32_t newsColumns{2};
     };
-
 
     /** @brief Texture handles required by the welcome view renderer. */
     struct WelcomeViewAssets {

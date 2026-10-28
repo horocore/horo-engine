@@ -23,6 +23,9 @@ namespace Horo::Editor {
 
     class InspectorPanel final : public IWorkspacePanel {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace"};
+
         /** @brief Creates an unattached panel; contribution authority is borrowed only on attachment. */
         InspectorPanel();
         /** @brief Releases all cached restricted projections before attached host teardown. */

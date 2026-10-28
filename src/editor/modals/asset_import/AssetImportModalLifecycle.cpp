@@ -159,7 +159,7 @@ namespace Horo::Editor {
     AssetImportModal::AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs,
                                        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
                                        const AssetImportModalServices &services) noexcept
-        : m_fonts(fonts), m_jobs(jobs), m_catalog(std::move(catalog)), m_assetRegistry(services.assetRegistry),
+        : EditorModal(kTextScope), m_fonts(fonts), m_jobs(jobs), m_catalog(std::move(catalog)), m_assetRegistry(services.assetRegistry),
           m_operationStore(services.operationStore), m_localization(services.localization), m_nativeDialogs(services.nativeDialogs),
           m_inputRouter(services.inputRouter) {}
 
@@ -291,6 +291,14 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::Localized */
     std::string_view AssetImportModal::Localized(const std::string_view key, const std::string_view fallback) const {
+        if (m_localization == nullptr)
+            return fallback;
+        const std::string_view translated = LocalizedText(*m_localization, key);
+        return translated.starts_with("[missing:") ? fallback : translated;
+    }
+
+    /** @copydoc AssetImportModal::LocalizedCatalogMessage */
+    std::string_view AssetImportModal::LocalizedCatalogMessage(const std::string_view key, const std::string_view fallback) const {
         if (m_localization == nullptr)
             return fallback;
         const std::string_view translated = m_localization->Get("editor", key);

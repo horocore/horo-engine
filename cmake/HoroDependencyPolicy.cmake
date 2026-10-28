@@ -3,6 +3,7 @@ include_guard(GLOBAL)
 # This manifest is intentionally explicit: changing a first-party link edge must
 # update the architecture policy in the same review.
 horo_allow_target_dependencies(TARGET HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroPlatformDesktop DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroFoundationJsonInternal)
 horo_allow_target_dependencies(TARGET HoroPublicationLockInternal)
 horo_allow_target_dependencies(TARGET HoroHostErrors DEPENDENCIES HoroFoundation)
@@ -290,7 +291,7 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportOpenGL
 horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderMetal HoroRenderFrontend)
 horo_allow_target_dependencies(TARGET HoroGui
-    DEPENDENCIES HoroGuiLiveReloadInternal HoroThirdPartyRccpp HoroPackageApplication HoroEditorPackageAdapters HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions HoroEditorPlayXrHostInterface)
+    DEPENDENCIES HoroGuiLiveReloadInternal HoroThirdPartyRccpp HoroPackageApplication HoroEditorPackageAdapters HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions HoroEditorPlayXrHostInterface HoroPlatformDesktop)
 horo_allow_target_dependencies(TARGET HoroPackageContentStagingInternal
     DEPENDENCIES HoroPackageSecurity)
 horo_allow_target_dependencies(TARGET HoroPackageGameplayHost

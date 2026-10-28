@@ -1,5 +1,29 @@
 # GUI Design System
 
+## Required surface localization scopes
+
+Every `EditorModal`, `IWorkspacePanel`, `IGlobalDockPane`, and `GuiScreen` must explicitly initialize
+its shared `LocalizedGui` base with a `GuiLocalizationScope`. There is no default
+scope. Scopes are validated static literals, defined once by the owning surface
+and shared with its view helpers. Localization catalogs retain their existing
+canonical keys; surface code supplies keys relative to its declared scope.
+Embedded pane and inspector classes inherit `LocalizedGui` directly and declare
+their own vocabulary scope; generic dock adapters retain the dock's scope.
+
+The shared resolver always uses the caller's current localization authority.
+Surfaces must not cache translated string references across locale activation.
+Production scoped lookups compare segmented keys against the existing catalog
+without allocating a concatenated lookup key. Extension-provided messages and
+model-owned canonical message keys remain explicit external lookups.
+
+Presentation decisions use named functions, early returns, or exhaustive enum
+switches. Nested conditional operators are not used in modal, panel, or screen
+presentation. Simple two-way conditional expressions remain appropriate when
+they do not obscure state or ownership.
+
+See [GUI localization scope migration](../../guides/gui-localization-scope-migration.md)
+for the public constructor and localization adapter migration.
+
 ## Purpose
 
 The Horo graphical host uses Dear ImGui as its rendering toolkit and provides a

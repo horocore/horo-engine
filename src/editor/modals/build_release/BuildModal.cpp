@@ -11,6 +11,56 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Maps build lifecycle states to the three visible pipeline stages. */
+        int BuildStageIndex(const Application::GameplayBuildState state) {
+            using enum Application::GameplayBuildState;
+            switch (state) {
+                case Building:
+                    return 1;
+                case Validating:
+                case Succeeded:
+                    return 2;
+                default:
+                    return 0;
+            }
+        }
+
+        /** @brief Maps diagnostic stage identity to its visible pipeline position. */
+        int OutputStageIndex(const std::string_view stage) {
+            if (stage == "build")
+                return 1;
+            if (stage == "validate")
+                return 2;
+            return 0;
+        }
+
+        /** @brief Resolves build lifecycle feedback independently of widget construction. */
+        Ui::BadgeTone BuildBadgeTone(const Application::GameplayBuildState state) {
+            if (state == Application::GameplayBuildState::Succeeded)
+                return Ui::BadgeTone::Success;
+            if (BuildIsRunning(state))
+                return Ui::BadgeTone::Accent;
+            return Ui::BadgeTone::Error;
+        }
+
+        /** @brief Resolves stage feedback while retaining completed-stage precedence. */
+        ImVec4 BuildStageColor(const bool completed, const bool current, const bool running) {
+            if (completed)
+                return Theme::Ok();
+            if (current && !running)
+                return Theme::Err();
+            return Theme::Border();
+        }
+
+        /** @brief Resolves footer feedback for active, succeeded and failed builds. */
+        ImVec4 BuildStatusColor(const bool running, const bool succeeded) {
+            if (running)
+                return Theme::Accent();
+            if (succeeded)
+                return Theme::Ok();
+            return Theme::Err();
+        }
+
         constexpr int HostPlatform() {
 #if defined(_WIN32)
             return 0;
@@ -33,11 +83,12 @@ namespace Horo::Editor {
     BuildModal::BuildModal(const EditorGuiContext &context, Application::GameplayBuildRequest request,
                            Application::GameplayBuildService *builds, std::optional<std::uint64_t> &retainedBuild,
                            const IBuildOutputQuery *output)
-        : context_(context), request_(std::move(request)), builds_(builds), retainedBuild_(retainedBuild), output_(output),
-          platform_(HostPlatform()), architecture_(HostArchitecture()) {
-        configuration_ = request_.environment.configuration == "Release"          ? 2
-                         : request_.environment.configuration == "RelWithDebInfo" ? 1
-                                                                                  : 0;
+        : EditorModal(kTextScope), context_(context), request_(std::move(request)), builds_(builds), retainedBuild_(retainedBuild),
+          output_(output), platform_(HostPlatform()), architecture_(HostArchitecture()) {
+        if (request_.environment.configuration == "Release")
+            configuration_ = 2;
+        else if (request_.environment.configuration == "RelWithDebInfo")
+            configuration_ = 1;
     }
 
     ModalId BuildModal::Id() const {
@@ -63,7 +114,7 @@ namespace Horo::Editor {
     }
 
     const std::string &BuildModal::Text(const char *key) const {
-        return context_.localization.Get("editor", key);
+        return LocalizedText(context_.localization, key);
     }
 
     bool BuildModal::Running() const {
@@ -71,7 +122,9 @@ namespace Horo::Editor {
     }
 
     const char *BuildModal::Status() const {
-        return build_ ? Text(BuildStatusKey(build_->state)).c_str() : Text("workspace.build_release.draft_badge").c_str();
+        if (build_)
+            return context_.localization.Get("editor", BuildStatusKey(build_->state)).c_str();
+        return Text("build_release.draft_badge").c_str();
     }
 
     void BuildModal::Refresh() {
@@ -125,21 +178,19 @@ namespace Horo::Editor {
             ImGui::TableNextColumn();
         ImGui::BeginGroup();
         if (productRow)
-            Choice("workspace.build.product", product_,
-                   {"workspace.build_release.game_runtime", "workspace.build.dedicated_server", "workspace.build_release.engine_editor",
-                    "workspace.build.engine_cli", "workspace.build.sdk"});
+            Choice("build.product", product_,
+                   {"build_release.game_runtime", "build.dedicated_server", "build_release.engine_editor", "build.engine_cli",
+                    "build.sdk"});
         else
-            Choice("workspace.build_release.platform", platform_,
-                   {"workspace.build_release.windows", "workspace.build_release.macos", "workspace.build_release.linux"});
+            Choice("build_release.platform", platform_, {"build_release.windows", "build_release.macos", "build_release.linux"});
         ImGui::EndGroup();
         if (columns)
             ImGui::TableNextColumn();
         ImGui::BeginGroup();
         if (productRow)
-            Choice("workspace.build.workflow", workflow_,
-                   {"workspace.build.playable", "workspace.build.compile_only", "workspace.build.qa_package"});
+            Choice("build.workflow", workflow_, {"build.playable", "build.compile_only", "build.qa_package"});
         else
-            Choice("workspace.build_release.architecture", architecture_, {"workspace.build_release.x64", "workspace.build_release.arm64"});
+            Choice("build_release.architecture", architecture_, {"build_release.x64", "build_release.arm64"});
         ImGui::EndGroup();
         if (columns)
             ImGui::EndTable();
@@ -151,7 +202,7 @@ namespace Horo::Editor {
         float manageWidth{};
         {
             Theme::ScopedTextStyle textStyle(fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
-            manageWidth = ImGui::CalcTextSize(Text("workspace.build.manage_profiles").c_str()).x + metrics.paddingX * 2;
+            manageWidth = ImGui::CalcTextSize(Text("build.manage_profiles").c_str()).x + metrics.paddingX * 2;
         }
         const bool profileRow = ImGui::GetContentRegionAvail().x >= 500 &&
                                 ImGui::BeginTable("##BuildProfile", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX);
@@ -161,7 +212,7 @@ namespace Horo::Editor {
             ImGui::TableNextColumn();
         }
         ImGui::BeginGroup();
-        Choice("workspace.build.profile", profile_, {"workspace.build.host_profile"});
+        Choice("build.profile", profile_, {"build.host_profile"});
         ImGui::EndGroup();
         if (profileRow) {
             ImGui::TableNextColumn();
@@ -169,44 +220,46 @@ namespace Horo::Editor {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0F, ImGui::GetContentRegionAvail().x - manageWidth));
         }
         ImGui::BeginDisabled();
-        (void)Ui::Button(
-            {.label = Text("workspace.build.manage_profiles").c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans});
+        (void)Ui::Button({.label = Text("build.manage_profiles").c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans});
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            Ui::ShowTooltip(Text("workspace.build.profiles_unavailable").c_str(), &fonts);
+            Ui::ShowTooltip(Text("build.profiles_unavailable").c_str(), &fonts);
         if (profileRow)
             ImGui::EndTable();
         DrawTargetRow(true);
         DrawTargetRow(false);
-        Choice("workspace.build_release.configuration", configuration_,
-               {"workspace.build_release.development", "workspace.build_release.test_config", "workspace.build_release.shipping"});
+        Choice("build_release.configuration", configuration_,
+               {"build_release.development", "build_release.test_config", "build_release.shipping"});
         if (workflow_ != 1)
-            Choice("workspace.build.content", content_, {"workspace.build.all_content", "workspace.build.selected_content"});
+            Choice("build.content", content_, {"build.all_content", "build.selected_content"});
         ImGui::Spacing();
         const auto checkboxSpacing = ImGui::GetStyle().ItemSpacing;
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                             ImVec2{checkboxSpacing.x, checkboxSpacing.y + 4 * Theme::GetActiveTokens().sizes.uiScale});
-        (void)Ui::CheckboxControl(Text("workspace.build.test_after").c_str(), &testAfter_, fonts);
-        (void)Ui::CheckboxControl(Text("workspace.build.run_after").c_str(), &runAfter_, fonts);
+        (void)Ui::CheckboxControl(Text("build.test_after").c_str(), &testAfter_, fonts);
+        (void)Ui::CheckboxControl(Text("build.run_after").c_str(), &runAfter_, fonts);
         ImGui::PopStyleVar();
-        if (ImGui::CollapsingHeader(Text("workspace.build.advanced").c_str())) {
-            auto toolchain = request_.environment.cxxCompiler ? request_.environment.cxxCompiler->string()
-                                                              : Text("workspace.build_release.host_toolchain");
+        Ui::Card advanced({.id = "##BuildAdvanced", .defaultExpanded = false});
+        advanced.DrawTitleBar({.id = "##title", .title = Text("build.advanced").c_str(), .fonts = fonts});
+        if (advanced.BeginBody()) {
+            auto toolchain =
+                request_.environment.cxxCompiler ? request_.environment.cxxCompiler->string() : Text("build_release.host_toolchain");
             auto project = request_.projectRoot.string();
-            Ui::FieldLabel(Text("workspace.build_release.toolchain").c_str(), fonts);
+            Ui::FieldLabel(Text("build_release.toolchain").c_str(), fonts);
             ImGui::BeginDisabled();
             (void)Ui::InputTextControl("##BuildToolchain", toolchain, std::max<std::size_t>(1024, toolchain.size() + 1), fonts);
             ImGui::EndDisabled();
-            Ui::FieldLabel(Text("workspace.build_release.project").c_str(), fonts);
+            Ui::FieldLabel(Text("build_release.project").c_str(), fonts);
             ImGui::BeginDisabled();
             (void)Ui::InputTextControl("##BuildProject", project, std::max<std::size_t>(1024, project.size() + 1), fonts);
             ImGui::EndDisabled();
         }
-        Ui::Hint(Text("workspace.build.native_scope").c_str(), fonts);
+        advanced.Finish();
+        Ui::Hint(Text("build.native_scope").c_str(), fonts);
         if (!builds_ || request_.environment.gameplaySdkPackage.empty())
-            Ui::Hint(Text("workspace.build_release.build_unavailable").c_str(), fonts);
+            Ui::Hint(Text("build_release.build_unavailable").c_str(), fonts);
         if (request_.projectRoot.empty())
-            Ui::Hint(Text("workspace.build_release.no_project").c_str(), fonts);
+            Ui::Hint(Text("build_release.no_project").c_str(), fonts);
         if (error_)
             Ui::ErrorText(error_->message.c_str(), fonts);
     }
@@ -214,11 +267,7 @@ namespace Horo::Editor {
     void BuildModal::DrawSummary() {
         const auto &fonts = context_.theme.fonts;
         const bool wide = ImGui::GetContentRegionAvail().x >= 500;
-        const Ui::BadgeProps badge{.label = Status(),
-                                   .tone = build_->state == Application::GameplayBuildState::Succeeded ? Ui::BadgeTone::Success
-                                           : Running()                                                 ? Ui::BadgeTone::Accent
-                                                                                                       : Ui::BadgeTone::Error,
-                                   .leadingIndicator = true};
+        const Ui::BadgeProps badge{.label = Status(), .tone = BuildBadgeTone(build_->state), .leadingIndicator = true};
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{12, 2});
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2{0, 0});
         if (wide && !ImGui::BeginTable("##BuildSummary", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX)) {
@@ -238,8 +287,8 @@ namespace Horo::Editor {
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5);
         }
         ImGui::BeginGroup();
-        Ui::FieldLabel(Text("workspace.build_release.target").c_str(), fonts);
-        const auto target = request_.projectRoot.filename().string() + " · " + Text("workspace.build.compile_only");
+        Ui::FieldLabel(Text("build_release.target").c_str(), fonts);
+        const auto target = request_.projectRoot.filename().string() + " · " + Text("build.compile_only");
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, target, Theme::Text(), fonts);
         ImGui::EndGroup();
         if (wide)
@@ -249,15 +298,15 @@ namespace Horo::Editor {
 
     void BuildModal::DrawStages() {
         using enum Application::GameplayBuildState;
-        const std::array labels{Text("workspace.build_release.configuring").c_str(), Text("workspace.build.compile_only").c_str(),
-                                Text("workspace.build_release.validating").c_str()};
-        int active = build_->state == Building ? 1 : build_->state == Validating || build_->state == Succeeded ? 2 : 0;
+        const std::array labels{Text("build_release.configuring").c_str(), Text("build.compile_only").c_str(),
+                                Text("build_release.validating").c_str()};
+        int active = BuildStageIndex(build_->state);
         if (!Running()) {
             for (auto record = outputSnapshot_.records.rbegin(); record != outputSnapshot_.records.rend(); ++record) {
                 if (!build_->operationId || record->operationId != build_->operationId)
                     continue;
                 if (record->stage == "configure" || record->stage == "build" || record->stage == "validate") {
-                    active = record->stage == "build" ? 1 : record->stage == "validate" ? 2 : 0;
+                    active = OutputStageIndex(record->stage);
                     break;
                 }
             }
@@ -271,7 +320,7 @@ namespace Horo::Editor {
             const bool current = static_cast<int>(i) == active;
             const bool completed = build_->state == Succeeded || static_cast<int>(i) < active;
             auto *drawList = ImGui::GetWindowDrawList();
-            const auto color = completed ? Theme::Ok() : current && !Running() ? Theme::Err() : Theme::Border();
+            const auto color = BuildStageColor(completed, current, Running());
             drawList->AddRectFilled(pos, {pos.x + width, pos.y + 4}, Theme::U32(color), 2);
             if (current && Running()) {
                 const float segment = width * 0.3F;
@@ -316,11 +365,15 @@ namespace Horo::Editor {
         const auto &fonts = context_.theme.fonts;
         const auto &metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
         const bool running = !showDraft_ && Running();
-        const char *secondary = showDraft_ ? nullptr : Text(running ? "workspace.build_release.cancel" : "workspace.build.new_job").c_str();
-        const char *primary = Text(showDraft_ ? "workspace.build.title"
-                                   : running  ? "workspace.build.background"
-                                              : "workspace.build_release.close")
-                                  .c_str();
+        const char *secondary = nullptr;
+        if (!showDraft_)
+            secondary = Text(running ? "build_release.cancel" : "build.new_job").c_str();
+        const char *primaryKey = "build_release.close";
+        if (showDraft_)
+            primaryKey = "build.title";
+        else if (running)
+            primaryKey = "build.background";
+        const char *primary = Text(primaryKey).c_str();
         float width{};
         {
             Theme::ScopedTextStyle ts(fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
@@ -335,9 +388,7 @@ namespace Horo::Editor {
             ImGui::BeginChild("##BuildFooterStatus", {statusWidth, metrics.minimumHeight}, false,
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             const auto pos = ImGui::GetCursorScreenPos();
-            const auto color = running                                                                 ? Theme::Accent()
-                               : build_ && build_->state == Application::GameplayBuildState::Succeeded ? Theme::Ok()
-                                                                                                       : Theme::Err();
+            const auto color = BuildStatusColor(running, build_ && build_->state == Application::GameplayBuildState::Succeeded);
             const ImVec2 center{pos.x + 8, pos.y + metrics.minimumHeight * 0.5F};
             if (running)
                 Ui::DrawBusyIndicator(*ImGui::GetWindowDrawList(), center, 6, color);
@@ -389,13 +440,13 @@ namespace Horo::Editor {
                 error_ = started.ErrorValue();
         }
         if (showDraft_ && !ready && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            Ui::ShowTooltip(Text("workspace.build.native_scope").c_str(), &fonts);
+            Ui::ShowTooltip(Text("build.native_scope").c_str(), &fonts);
         return false;
     }
 
     ModalFrameResult BuildModal::Draw() {
         Ui::ScopedModalShell shell({.id = "BuildWorkflow",
-                                    .title = Text("workspace.build.title").c_str(),
+                                    .title = Text("build.title").c_str(),
                                     .requestedSize = {820, 700},
                                     .viewportPadding = 32,
                                     .minimumWidth = 280,
@@ -411,8 +462,7 @@ namespace Horo::Editor {
         ImGui::BeginChild("##BuildBody", {0, shell.BodyHeight()}, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         if (showDraft_) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{20, 12});
-            ImGui::BeginChild("##BuildForm", {0, 0}, false,
-                              ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            ImGui::BeginChild("##BuildForm", {0, 0}, false, ImGuiWindowFlags_AlwaysUseWindowPadding);
             DrawForm();
             ImGui::EndChild();
             ImGui::PopStyleVar();

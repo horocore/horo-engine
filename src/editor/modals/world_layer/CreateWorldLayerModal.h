@@ -14,6 +14,9 @@ namespace Horo::Editor {
     /** @brief Collects a name without owning a document; host callback commits one canonical source command. */
     class CreateWorldLayerModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.world_layers"};
+
         /** @brief Exact fenced host capability; failure keeps this draft open and preserves authored state. */
         using Create = std::function<Result<PartitionedWorldSnapshotLease>(std::string, const WorldDocumentFence &)>;
 

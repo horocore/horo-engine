@@ -2620,7 +2620,7 @@
     "workspace.content_browser.operation.reimport_unavailable": {"text": "This asset does not record a reimport source."},
     "workspace.content_browser.operation.reimport_importer_missing": {"text": "The importer module recorded by this asset is not available."},
     "workspace.content_browser.operation.reimport_failed": {"text": "The asset could not be reimported; the previous payload was preserved."},
-    "workspace.content_browser.operation.reveal_unavailable": {"text": "File Manager integration is unavailable on this platform."},
+    "workspace.content_browser.operation.reveal_unavailable": {"text": "Could not open File Manager. Check desktop availability and file permissions."},
     "workspace.content_browser.scenes": {"text": "scenes"},
     "workspace.content_browser.models": {"text": "models"},
     "workspace.content_browser.textures": {"text": "textures"},

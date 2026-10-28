@@ -297,6 +297,27 @@ target_include_directories(HoroPlatform
 )
 target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Security)
 target_link_libraries(HoroPlatform PRIVATE HoroRootedStorageNativeInternal)
+
+# Desktop integration is optional and never adds native UI dependencies to the baseline platform target.
+add_library(HoroPlatformDesktop STATIC platform/desktop/FileManager.cpp)
+add_library(HoroEngine::PlatformDesktop ALIAS HoroPlatformDesktop)
+target_compile_features(HoroPlatformDesktop PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformDesktop PUBLIC HoroEngine::Foundation)
+if (HORO_BUILD_EDITOR_GUI AND WIN32)
+    target_sources(HoroPlatformDesktop PRIVATE platform/desktop/FileManagerWindows.cpp)
+    target_link_libraries(HoroPlatformDesktop PRIVATE shell32 ole32)
+elseif (HORO_BUILD_EDITOR_GUI AND APPLE)
+    set(_HORO_FILE_MANAGER_MAC_SOURCE platform/desktop/FileManagerMac.mm)
+    set_source_files_properties(${_HORO_FILE_MANAGER_MAC_SOURCE} PROPERTIES
+            LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++")
+    target_sources(HoroPlatformDesktop PRIVATE ${_HORO_FILE_MANAGER_MAC_SOURCE})
+    target_link_libraries(HoroPlatformDesktop PRIVATE "-framework AppKit")
+elseif (HORO_BUILD_EDITOR_GUI AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(HoroPlatformDesktop PRIVATE platform/desktop/FileManagerLinux.cpp)
+    target_link_libraries(HoroPlatformDesktop PRIVATE ${HORO_SDL3_TARGET})
+else ()
+    target_sources(HoroPlatformDesktop PRIVATE platform/desktop/FileManagerUnsupported.cpp)
+endif ()
 target_include_directories(HoroPlatform PRIVATE
         "$<TARGET_PROPERTY:HoroPublicationLockInternal,INTERFACE_INCLUDE_DIRECTORIES>")
 
@@ -3788,6 +3809,7 @@ target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
         target_sources(HoroGui PRIVATE ${_HORO_EDITOR_MENU_MAC_SOURCE})
         target_link_libraries(HoroGui PRIVATE "-framework AppKit")
     endif ()
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformDesktop)
 endif ()
 
 add_library(HoroExtensions STATIC

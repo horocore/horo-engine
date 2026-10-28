@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -79,7 +80,7 @@ namespace Horo::Editor::SettingsModalInternal {
         const Extensions::ExtensionInventoryEntry *entry = FindSelectedExtension(st);
         if (entry == nullptr) {
             ImGui::PushStyleColor(ImGuiCol_Text, Muted());
-            ImGui::TextWrapped("%s", ctx.localization.Get("editor", "settings.extensions.select_prompt").c_str());
+            ImGui::TextWrapped("%s", SettingsModal::kTextScope.Text(ctx.localization, "extensions.select_prompt").c_str());
             ImGui::PopStyleColor();
             return;
         }
@@ -91,26 +92,26 @@ namespace Horo::Editor::SettingsModalInternal {
             ImGui::Dummy({0.0F, 12.0F});
         }
 
-        DrawExtensionDetailSection(ctx.localization.Get("editor", "settings.extensions.modules").c_str(), ctx, true);
+        DrawExtensionDetailSection(SettingsModal::kTextScope.Text(ctx.localization, "extensions.modules").c_str(), ctx, true);
         if (entry->modules.empty()) {
-            DrawExtensionDetailValue(ctx.localization.Get("editor", "settings.extensions.none").c_str(), ctx);
+            DrawExtensionDetailValue(SettingsModal::kTextScope.Text(ctx.localization, "extensions.none").c_str(), ctx);
         }
         for (const auto &entryModule : entry->modules) {
             const std::string moduleDescription = entryModule.kind + "  ·  v" + entryModule.version;
             DrawExtensionDetailRow(entryModule.id.c_str(), moduleDescription.c_str(), ctx);
         }
 
-        DrawExtensionDetailSection(ctx.localization.Get("editor", "settings.extensions.contributions").c_str(), ctx, false);
+        DrawExtensionDetailSection(SettingsModal::kTextScope.Text(ctx.localization, "extensions.contributions").c_str(), ctx, false);
         if (entry->contributions.empty()) {
-            DrawExtensionDetailValue(ctx.localization.Get("editor", "settings.extensions.none").c_str(), ctx);
+            DrawExtensionDetailValue(SettingsModal::kTextScope.Text(ctx.localization, "extensions.none").c_str(), ctx);
         }
         for (const auto &contribution : entry->contributions) {
             DrawExtensionDetailRow(contribution.type.c_str(), contribution.id.c_str(), ctx);
         }
 
-        DrawExtensionDetailSection(ctx.localization.Get("editor", "settings.extensions.tab.manifest").c_str(), ctx, false);
+        DrawExtensionDetailSection(SettingsModal::kTextScope.Text(ctx.localization, "extensions.tab.manifest").c_str(), ctx, false);
         if (entry->absoluteManifestPath.empty()) {
-            DrawExtensionDetailValue(ctx.localization.Get("editor", "settings.extensions.builtin_manifest").c_str(), ctx);
+            DrawExtensionDetailValue(SettingsModal::kTextScope.Text(ctx.localization, "extensions.builtin_manifest").c_str(), ctx);
         } else {
             DrawExtensionDetailValue(entry->absoluteManifestPath.string().c_str(), ctx);
         }
@@ -189,7 +190,7 @@ namespace Horo::Editor::SettingsModalInternal {
         Badge({.label = ("v" + entry.version).c_str(), .tone = Accent}, ctx.theme.fonts);
         Badge({.label = ctx.localization.Get("editor", originKey).c_str(), .tone = Neutral}, ctx.theme.fonts);
         if (entry.RestartRequired())
-            Badge({.label = ctx.localization.Get("editor", "settings.extensions.restart_required").c_str(), .tone = Warning},
+            Badge({.label = SettingsModal::kTextScope.Text(ctx.localization, "extensions.restart_required").c_str(), .tone = Warning},
                   ctx.theme.fonts);
         ImGui::PopClipRect();
     }
@@ -202,7 +203,7 @@ namespace Horo::Editor::SettingsModalInternal {
             if (Result<void> changed = inventory.SetEnabled(entry.packageId, enabled); changed.HasError()) {
                 st.modalFeedback = changed.ErrorValue().message;
             } else {
-                st.modalFeedback = ctx.localization.Get("editor", "settings.extensions.feedback.restart");
+                st.modalFeedback = SettingsModal::kTextScope.Text(ctx.localization, "extensions.feedback.restart");
             }
         }
         ImGui::SameLine(0.0F, 8.0F);
@@ -231,10 +232,11 @@ namespace Horo::Editor::SettingsModalInternal {
         {
             ScopedTextStyle heading(ctx.theme.fonts.sansEmphasis, TextPx::Label(), FontPx::SansEmphasis);
             ImGui::PushStyleColor(ImGuiCol_Text, Dim());
-            ImGui::TextUnformatted(ctx.localization.Get("editor", "settings.extensions.installed_heading").c_str());
+            ImGui::TextUnformatted(SettingsModal::kTextScope.Text(ctx.localization, "extensions.installed_heading").c_str());
             ImGui::PopStyleColor();
         }
-        const std::string totalLabel = std::format("{} {}", entries.size(), ctx.localization.Get("editor", "settings.extensions.total"));
+        const std::string totalLabel =
+            std::format("{} {}", entries.size(), SettingsModal::kTextScope.Text(ctx.localization, "extensions.total"));
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(totalLabel.c_str()).x);
         ImGui::PushStyleColor(ImGuiCol_Text, Muted());
@@ -245,7 +247,7 @@ namespace Horo::Editor::SettingsModalInternal {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{10.0F, 7.0F});
         st.pluginFilter.resize(std::min(st.pluginFilter.size(), std::size_t{127}));
         st.pluginFilter.resize(127, '\0');
-        const std::string filterHint = ctx.localization.Get("editor", "settings.extensions.filter");
+        const std::string filterHint = SettingsModal::kTextScope.Text(ctx.localization, "extensions.filter");
         ImGui::SetNextItemWidth(-1.0F);
         ImGui::InputTextWithHint("##extension-filter", filterHint.c_str(), st.pluginFilter.data(), st.pluginFilter.size() + 1);
         st.pluginFilter.resize(st.pluginFilter.find('\0'));
@@ -271,7 +273,7 @@ namespace Horo::Editor::SettingsModalInternal {
         }
         if (!drewAny) {
             ImGui::PushStyleColor(ImGuiCol_Text, Muted());
-            ImGui::TextUnformatted(ctx.localization.Get("editor", "settings.extensions.empty").c_str());
+            ImGui::TextUnformatted(SettingsModal::kTextScope.Text(ctx.localization, "extensions.empty").c_str());
             ImGui::PopStyleColor();
         }
 
@@ -311,7 +313,7 @@ namespace Horo::Editor::SettingsModalInternal {
         ImGui::SetNextItemWidth(std::max(120.0F, ImGui::GetContentRegionAvail().x - searchButtonWidth - 8.0F));
         st.marketplaceQuery.resize(std::min(st.marketplaceQuery.size(), std::size_t{127}));
         st.marketplaceQuery.resize(127, '\0');
-        const std::string searchHint = ctx.localization.Get("editor", "settings.extensions.marketplace.search");
+        const std::string searchHint = SettingsModal::kTextScope.Text(ctx.localization, "extensions.marketplace.search");
         const bool submitted = ImGui::InputTextWithHint("##marketplace-search", searchHint.c_str(), st.marketplaceQuery.data(),
                                                         st.marketplaceQuery.size() + 1, ImGuiInputTextFlags_EnterReturnsTrue);
         st.marketplaceQuery.resize(st.marketplaceQuery.find('\0'));
@@ -319,8 +321,9 @@ namespace Horo::Editor::SettingsModalInternal {
         const bool busy = marketplace.status == Extensions::ExtensionMarketplaceStatus::Searching ||
                           marketplace.status == Extensions::ExtensionMarketplaceStatus::Installing;
         ImGui::BeginDisabled(busy);
-        const bool searchClicked = ImGui::Button(ctx.localization.Get("editor", "settings.extensions.marketplace.search.action").c_str(),
-                                                 {searchButtonWidth, 0.0F});
+        const bool searchClicked =
+            ImGui::Button(SettingsModal::kTextScope.Text(ctx.localization, "extensions.marketplace.search.action").c_str(),
+                          {searchButtonWidth, 0.0F});
         ImGui::EndDisabled();
         ImGui::PopStyleVar();
         if ((submitted || searchClicked) && !busy)
@@ -331,7 +334,7 @@ namespace Horo::Editor::SettingsModalInternal {
     bool DrawMarketplaceStatus(const EditorGuiContext &ctx, const Extensions::ExtensionMarketplaceSnapshot &marketplace) {
         if (marketplace.status == Extensions::ExtensionMarketplaceStatus::Searching) {
             ImGui::PushStyleColor(ImGuiCol_Text, Muted());
-            ImGui::TextUnformatted(ctx.localization.Get("editor", "settings.extensions.marketplace.searching").c_str());
+            ImGui::TextUnformatted(SettingsModal::kTextScope.Text(ctx.localization, "extensions.marketplace.searching").c_str());
             ImGui::PopStyleColor();
             return false;
         }
@@ -343,7 +346,7 @@ namespace Horo::Editor::SettingsModalInternal {
         }
         if (marketplace.entries.empty() && marketplace.status != Extensions::ExtensionMarketplaceStatus::Error) {
             ImGui::PushStyleColor(ImGuiCol_Text, Muted());
-            ImGui::TextUnformatted(ctx.localization.Get("editor", "settings.extensions.marketplace.empty").c_str());
+            ImGui::TextUnformatted(SettingsModal::kTextScope.Text(ctx.localization, "extensions.marketplace.empty").c_str());
             ImGui::PopStyleColor();
             return false;
         }
@@ -405,7 +408,7 @@ namespace Horo::Editor::SettingsModalInternal {
     void DrawExtensionMarketplace(SettingsState &st, const EditorGuiContext &ctx) {
         if (st.extensionMarketplace == nullptr) {
             ImGui::PushStyleColor(ImGuiCol_Text, Err());
-            ImGui::TextWrapped("%s", ctx.localization.Get("editor", "settings.extensions.marketplace.unavailable").c_str());
+            ImGui::TextWrapped("%s", SettingsModal::kTextScope.Text(ctx.localization, "extensions.marketplace.unavailable").c_str());
             ImGui::PopStyleColor();
             return;
         }
@@ -432,7 +435,7 @@ namespace Horo::Editor::SettingsModalInternal {
     void DrawExtensionManager(SettingsState &st, const EditorGuiContext &ctx) {
         if (st.extensionInventory == nullptr) {
             ImGui::PushStyleColor(ImGuiCol_Text, Err());
-            ImGui::TextWrapped("%s", ctx.localization.Get("editor", "settings.extensions.unavailable").c_str());
+            ImGui::TextWrapped("%s", SettingsModal::kTextScope.Text(ctx.localization, "extensions.unavailable").c_str());
             ImGui::PopStyleColor();
             return;
         }

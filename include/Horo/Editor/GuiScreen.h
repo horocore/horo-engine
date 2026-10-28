@@ -3,6 +3,7 @@
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/GuiRoute.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Foundation/Diagnostics.h"
 #include "Horo/Foundation/Result.h"
 
@@ -123,7 +124,10 @@ namespace Horo::Editor {
     };
 
     /** @brief Abstract contract for a top-level GUI screen inside HoroEditor. */
-    class GuiScreen {
+    class GuiScreen : public LocalizedGui {
+    protected:
+        using LocalizedGui::LocalizedGui;
+
     public:
         virtual ~GuiScreen() = default;
 

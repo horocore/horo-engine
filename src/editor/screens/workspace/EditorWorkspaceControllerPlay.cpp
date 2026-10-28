@@ -117,10 +117,12 @@ namespace Horo::Editor {
             case Application::GameplayBuildState::Cancelled:
             case Application::GameplayBuildState::TimedOut: {
                 const std::string errorMsg = snapshot->error.has_value() ? snapshot->error->message : "Gameplay build failed.";
-                LOG_ERROR("editor.gameplay", "Gameplay build session #%" PRIu64 " %s: %s", *m_gameplayBuildSession,
-                          snapshot->state == Application::GameplayBuildState::Failed      ? "failed"
-                          : snapshot->state == Application::GameplayBuildState::Cancelled ? "was cancelled"
-                                                                                          : "timed out",
+                const char *outcome = "timed out";
+                if (snapshot->state == Application::GameplayBuildState::Failed)
+                    outcome = "failed";
+                else if (snapshot->state == Application::GameplayBuildState::Cancelled)
+                    outcome = "was cancelled";
+                LOG_ERROR("editor.gameplay", "Gameplay build session #%" PRIu64 " %s: %s", *m_gameplayBuildSession, outcome,
                           errorMsg.c_str());
                 m_gameplayBuildSession.reset();
                 if (m_playAfterGameplayBuild) {

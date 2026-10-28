@@ -59,7 +59,7 @@ namespace {
 
     class RecordingScreen final : public GuiScreen {
     public:
-        explicit RecordingScreen(ScreenStats &stats) : stats_(stats) {}
+        explicit RecordingScreen(ScreenStats &stats) : GuiScreen("test.RecordingScreen"), stats_(stats) {}
 
         RecordingScreen(const RecordingScreen &) = delete;
         RecordingScreen &operator=(const RecordingScreen &) = delete;

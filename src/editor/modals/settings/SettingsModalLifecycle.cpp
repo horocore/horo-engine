@@ -1,6 +1,6 @@
-#include "Horo/Editor/GuiLiveReload.h"
 #include "../extension_pages/EditorPageView.h"
 #include "Horo/Editor/EditorSettingsEvents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/Logging/LogContext.h"
@@ -15,7 +15,7 @@ namespace Horo::Editor {
                                  Extensions::ExtensionInventory *extensionInventory,
                                  Extensions::ExtensionMarketplaceService *extensionMarketplace, SettingsModalProjectOpening projects,
                                  SettingsModalPagePresentation pages)
-        : m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
+        : EditorModal(kTextScope), m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
           m_extensionMarketplace(extensionMarketplace),
           m_navigationSettings(projects.navigation ? projects.navigation->Borrow() : NavigationProjectSettingsSessionBorrow{}) {
         m_draft.collision.owner = std::move(projects.collision);

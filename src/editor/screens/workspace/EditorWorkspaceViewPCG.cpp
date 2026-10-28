@@ -11,6 +11,8 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr GuiLocalizationScope PCGTextScope{"workspace.pcg"};
+
         /** @brief Thin frame adapter; allocates a detached presentation request only when input changes. */
         struct CanvasFrame final {
             const PCGWorkspaceDocument &document;
@@ -22,7 +24,7 @@ namespace Horo::Editor {
             PCGAuthoringInspectorState *inspector{};
 
             std::string Text(const char *key) const {
-                return localization.Get("editor", key);
+                return PCGTextScope.Text(localization, key);
             }
 
             const PCGCanvasState &State() const {
@@ -50,47 +52,49 @@ namespace Horo::Editor {
                 const auto entry = std::ranges::find(palette, node.type, [](const auto &value) {
                     return value.prototype.type;
                 });
-                return entry == palette.end() ? Text("workspace.pcg.unknown") : localization.Get("editor", entry->labelKey);
+                return entry == palette.end() ? Text("unknown") : localization.Get("editor", entry->labelKey);
             }
         };
 
         /** @brief Performs toolbar navigation and source operations with shared keyboard-focusable controls. */
         void DrawTools(CanvasFrame &frame) {
-            if (frame.Button("workspace.documents.save", frame.document.snapshot.dirty))
+            if (Ui::Button({.label = frame.localization.Get("editor", "workspace.documents.save").c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .enabled = frame.document.snapshot.dirty,
+                            .font = frame.fonts.sans}))
                 frame.Edit().action = PCGEditorAction::Save;
             ImGui::SameLine();
-            if (frame.Button("workspace.pcg.undo"))
+            if (frame.Button("undo"))
                 frame.Edit().action = PCGEditorAction::Undo;
             ImGui::SameLine();
-            if (frame.Button("workspace.pcg.redo"))
+            if (frame.Button("redo"))
                 frame.Edit().action = PCGEditorAction::Redo;
-            if (frame.Button("workspace.pcg.reset_view")) {
+            if (frame.Button("reset_view")) {
                 auto &state = frame.Edit().presentation;
                 state.pan = {};
                 state.zoom = 1;
             }
             ImGui::SameLine();
-            if (frame.Button("workspace.pcg.focus", !frame.State().selection.empty())) {
+            if (frame.Button("focus", !frame.State().selection.empty())) {
                 const auto &state = frame.State();
                 const auto found = std::ranges::find(state.placements, state.selection.front(), &PCGNodePlacement::node);
                 if (found != state.placements.end())
                     frame.Edit().presentation.pan = {-found->position.x * state.zoom, -found->position.y * state.zoom};
             }
-            if (float zoom = frame.State().zoom; Ui::DrawFloatPropRow(frame.Text("workspace.pcg.zoom").c_str(), "##zoom", zoom, frame.fonts,
+            if (float zoom = frame.State().zoom; Ui::DrawFloatPropRow(frame.Text("zoom").c_str(), "##zoom", zoom, frame.fonts,
                                                                       {.speed = 0.01F, .minimum = 0.25F, .maximum = 2.0F})
                                                      .changed)
                 frame.Edit().presentation.zoom = std::clamp(zoom, 0.25F, 2.0F);
-            Ui::Hint(frame.Text("workspace.pcg.navigation_hint").c_str(), frame.fonts);
+            Ui::Hint(frame.Text("navigation_hint").c_str(), frame.fonts);
         }
 
         /** @brief Presents host recipes without deriving schemas from graph nodes or modifying source containers. */
         void DrawPalette(CanvasFrame &frame) {
-            Ui::SectionTitle(frame.Text("workspace.pcg.palette").c_str(), frame.fonts);
+            Ui::SectionTitle(frame.Text("palette").c_str(), frame.fonts);
             std::array<char, 129> filter{};
             const auto &current = frame.State().filter;
             std::ranges::copy(current, filter.begin());
-            if (Ui::InputTextControl("##palette_filter", filter.data(), filter.size(), frame.fonts,
-                                     {.hint = frame.Text("workspace.pcg.filter").c_str()}))
+            if (Ui::InputTextControl("##palette_filter", filter.data(), filter.size(), frame.fonts, {.hint = frame.Text("filter").c_str()}))
                 frame.Edit().presentation.filter = filter.data();
             for (const auto &entry : frame.palette) {
                 const auto label = frame.localization.Get("editor", entry.labelKey);
@@ -109,7 +113,7 @@ namespace Horo::Editor {
                 ImGui::PopID();
             }
             if (frame.palette.empty())
-                Ui::Hint(frame.Text("workspace.pcg.no_catalog").c_str(), frame.fonts);
+                Ui::Hint(frame.Text("no_catalog").c_str(), frame.fonts);
         }
 
         /** @brief Resolves an immutable pin's graph-space anchor for rendering directed edges. */
@@ -142,11 +146,11 @@ namespace Horo::Editor {
 
         /** @brief Draws typed pin endpoints; a completed connection is one exact semantic command. */
         void DrawPin(CanvasFrame &frame, const PCG::PCGGraphNode &node, const PCG::PCGGraphPin &pin, float width) {
-            constexpr std::array types{"points", "boolean", "signed", "unsigned", "scalar", "vector2", "vector3", "vector4"};
+            constexpr std::array types{"types.points", "types.boolean", "types.signed",  "types.unsigned",
+                                       "types.scalar", "types.vector2", "types.vector3", "types.vector4"};
             const bool output = pin.direction == PCG::PCGPinDirection::Output;
-            const auto direction = frame.Text(output ? "workspace.pcg.output" : "workspace.pcg.input");
-            const auto type =
-                frame.localization.Get("editor", std::string{"workspace.pcg.types."} + types[static_cast<std::size_t>(pin.type)]);
+            const auto direction = frame.Text(output ? "output" : "input");
+            const auto type = frame.Text(types[static_cast<std::size_t>(pin.type)]);
             const auto label = std::format("{} {} ({})###pin{}", direction, type, pin.id.Value(), pin.id.Value());
             if (Ui::Button({.label = label.c_str(),
                             .size = {width / Theme::GetActiveTokens().sizes.uiScale, 0},
@@ -279,12 +283,12 @@ namespace Horo::Editor {
         void DrawInspector(CanvasFrame &frame) {
             if (DrawAuthoringControls(frame))
                 return;
-            Ui::SectionTitle(frame.Text("workspace.pcg.inspector").c_str(), frame.fonts);
+            Ui::SectionTitle(frame.Text("inspector").c_str(), frame.fonts);
             if (frame.State().selection.empty()) {
-                Ui::Hint(frame.Text("workspace.pcg.select_hint").c_str(), frame.fonts);
+                Ui::Hint(frame.Text("select_hint").c_str(), frame.fonts);
                 return;
             }
-            if (frame.Button("workspace.pcg.remove"))
+            if (frame.Button("remove"))
                 frame.Edit().action = PCGEditorAction::RemoveSelection;
             for (const auto id : frame.State().selection) {
                 const auto &nodes = frame.document.snapshot.source->Data().nodes;
@@ -294,20 +298,20 @@ namespace Horo::Editor {
                 const auto key = std::to_string(id.Value());
                 ImGui::PushID(key.c_str());
                 Ui::LabeledSeparator(frame.NodeLabel(*node).c_str(), frame.fonts);
-                Ui::DrawPropRow(frame.Text("workspace.pcg.identity").c_str(), key.c_str(), frame.fonts);
-                Ui::DrawPropRow(frame.Text("workspace.pcg.version").c_str(),
-                                std::format("{}.{}", node->version.major, node->version.minor).c_str(), frame.fonts);
-                Ui::DrawPropRow(frame.Text("workspace.pcg.payload").c_str(), std::to_string(node->payload.size()).c_str(), frame.fonts);
+                Ui::DrawPropRow(frame.Text("identity").c_str(), key.c_str(), frame.fonts);
+                Ui::DrawPropRow(frame.Text("version").c_str(), std::format("{}.{}", node->version.major, node->version.minor).c_str(),
+                                frame.fonts);
+                Ui::DrawPropRow(frame.Text("payload").c_str(), std::to_string(node->payload.size()).c_str(), frame.fonts);
                 for (const auto &pin : node->pins)
                     DrawPin(frame, *node, pin, std::max(1.0F, ImGui::GetContentRegionAvail().x));
                 ImGui::PopID();
             }
-            Ui::LabeledSeparator(frame.Text("workspace.pcg.connections").c_str(), frame.fonts);
+            Ui::LabeledSeparator(frame.Text("connections").c_str(), frame.fonts);
             for (const auto &edge : frame.document.snapshot.source->Data().edges) {
                 if (const auto &selected = frame.State().selection; std::ranges::find(selected, edge.sourceNode) == selected.end() &&
                                                                     std::ranges::find(selected, edge.targetNode) == selected.end())
                     continue;
-                const auto label = std::format("{} {}:{} → {}:{}###edge{}", frame.Text("workspace.pcg.disconnect"), edge.sourceNode.Value(),
+                const auto label = std::format("{} {}:{} → {}:{}###edge{}", frame.Text("disconnect"), edge.sourceNode.Value(),
                                                edge.sourcePin.Value(), edge.targetNode.Value(), edge.targetPin.Value(), edge.id.Value());
                 if (Ui::Button({.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = frame.fonts.sans})) {
                     frame.Edit().action = PCGEditorAction::Disconnect;
@@ -319,6 +323,12 @@ namespace Horo::Editor {
         /** @brief Registered document contribution; mounting controls presentation admission, never source lifetime. */
         class PCGGraphWorkspacePanel final : public IWorkspacePanel {
         public:
+            /** @brief Catalog scope shared by this surface and its view helpers. */
+            static constexpr GuiLocalizationScope kTextScope = PCGTextScope;
+
+            /** @brief Creates a surface with its required localization scope. */
+            PCGGraphWorkspacePanel() : IWorkspacePanel(kTextScope) {}
+
             /** @copydoc IWorkspacePanel::GetId */
             std::string GetId() const override {
                 return std::string{PCGGraphPanelId};
@@ -397,10 +407,10 @@ namespace Horo::Editor {
         }
         DrawTools(frame);
         if (document.error) {
-            Ui::ErrorText(frame.Text("workspace.pcg.rejected").c_str(), frame.fonts);
+            Ui::ErrorText(frame.Text("rejected").c_str(), frame.fonts);
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, document.error->code.Value(), Theme::Muted(), frame.fonts);
         }
-        if (frame.State().connectingPin && frame.Button("workspace.pcg.cancel_connection"))
+        if (frame.State().connectingPin && frame.Button("cancel_connection"))
             CancelGesture(frame);
         const auto available = ImGui::GetContentRegionAvail();
         const float gap = Theme::GetActiveTokens().spacing.propertyRowGap;

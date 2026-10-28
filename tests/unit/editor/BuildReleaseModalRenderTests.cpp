@@ -145,6 +145,35 @@ namespace {
             return Result<void>::Success();
         }
     };
+
+    /** @brief Checks bounded disclosure geometry and keeps overflowing narrow forms scrollable. */
+    void CheckBuildFormDisclosure(BuildReleaseHarness &harness, const ImGuiWindow *form, const ImGuiWindow *advanced, const bool wide) {
+        CHECK((form->Flags & ImGuiWindowFlags_AlwaysVerticalScrollbar) == 0);
+        CHECK(std::abs(advanced->Pos.x - form->WorkRect.Min.x) < 0.5F);
+        CHECK(std::abs(advanced->Size.x - form->WorkRect.GetWidth()) < 0.5F);
+        if (wide) {
+            CHECK_FALSE(form->ScrollbarY);
+            CHECK(form->ScrollMax.y == 0);
+            const float collapsedHeight = advanced->Size.y;
+            const auto toggleAdvanced = [&] {
+                auto &io = ImGui::GetIO();
+                io.AddMousePosEvent(advanced->Pos.x + 12, advanced->Pos.y + 17);
+                io.AddMouseButtonEvent(0, true);
+                harness.Draw();
+                io.AddMouseButtonEvent(0, false);
+                harness.Draw();
+                harness.Draw();
+            };
+            toggleAdvanced();
+            CHECK(advanced->Size.y > collapsedHeight);
+            CHECK(form->ScrollMax.x == 0);
+            CHECK(advanced->ScrollMax.x == 0);
+            CHECK(std::abs(advanced->Size.x - form->WorkRect.GetWidth()) < 0.5F);
+            toggleAdvanced();
+        } else {
+            CHECK(form->ScrollMax.y > 0);
+        }
+    }
 }  // namespace
 
 TEST_CASE("Release request form and review fit localized modals without starting work", "[editor][gui][build_release]") {
@@ -283,7 +312,7 @@ TEST_CASE("Build request form is distinct from release tabs and fits localized n
     for (const auto *locale : {"en-US", "tr-TR"}) {
         REQUIRE(harness.localization.Prepare(LocaleTag{locale}));
         REQUIRE(harness.localization.ActivatePrepared());
-        for (const auto size : {ImVec2{320, 600}, ImVec2{1200, 900}}) {
+        for (const auto size : {ImVec2{320, 600}, ImVec2{874, 750}, ImVec2{1200, 900}}) {
             ImGui::GetIO().DisplaySize = size;
             REQUIRE(
                 harness.host
@@ -291,7 +320,10 @@ TEST_CASE("Build request form is distinct from release tabs and fits localized n
                     .HasValue());
             harness.Draw();
             harness.Draw();
+            harness.Draw();
             bool found{};
+            const ImGuiWindow *form{};
+            const ImGuiWindow *advanced{};
             for (auto *window : ImGui::GetCurrentContext()->Windows) {
                 const std::string_view name{window->Name};
                 if (!window->Active || name.find("BuildWorkflow") == std::string_view::npos)
@@ -300,9 +332,16 @@ TEST_CASE("Build request form is distinct from release tabs and fits localized n
                 CHECK(window->Size.x <= size.x);
                 CHECK(window->ScrollMax.x == 0);
                 CHECK(name.find("BuildReleaseTabs") == std::string_view::npos);
+                if (name.substr(name.rfind('/') + 1).starts_with("##BuildForm_"))
+                    form = window;
+                if (name.substr(name.rfind('/') + 1).starts_with("##BuildAdvanced_"))
+                    advanced = window;
                 found = true;
             }
             CHECK(found);
+            REQUIRE(form != nullptr);
+            REQUIRE(advanced != nullptr);
+            CheckBuildFormDisclosure(harness, form, advanced, size.x >= 874);
             CHECK_FALSE(harness.buildId.has_value());
             REQUIRE(harness.host.RequestClose(*harness.host.TopModalId(), ModalCloseReason::Cancelled).HasValue());
             harness.host.OnUpdate(0);

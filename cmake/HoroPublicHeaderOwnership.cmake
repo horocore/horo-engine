@@ -121,6 +121,10 @@ horo_configure_target_header_boundary(HoroMcpController PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 
+horo_configure_target_header_boundary(HoroPlatformDesktop PUBLIC_HEADERS
+    Horo/Platform/FileManager.h
+)
+
 horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
     Horo/Platform/NativePublicationFileSystem.h
     Horo/Platform/NativeFileSystemErrors.h
@@ -1297,6 +1301,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/Localization/ILocalizationService.h
     Horo/Editor/Localization/LocalizationService.h
     Horo/Editor/Localization/LocalizationTypes.h
+    Horo/Editor/Localization/LocalizedGui.h
     Horo/Editor/NotificationService.h
     Horo/Editor/ProjectCreationController.h
     Horo/Editor/ProjectCreationService.h

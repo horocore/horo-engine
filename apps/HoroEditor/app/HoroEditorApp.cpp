@@ -991,7 +991,7 @@ namespace Horo::Editor {
             const auto common = std::gcd(numerator, denominator);
             numerator /= common;
             denominator /= common;
-            if (numerator > std::numeric_limits<std::uint32_t>::max() || denominator > std::numeric_limits<std::uint32_t>::max())
+            if (numerator > (std::numeric_limits<std::uint32_t>::max)() || denominator > (std::numeric_limits<std::uint32_t>::max)())
                 return Scale::Failure(MakeError(Runtime::Ui::UiErrors::CanvasSpaceOverflow));
             return Scale::Success({static_cast<std::uint32_t>(numerator), static_cast<std::uint32_t>(denominator)});
         }

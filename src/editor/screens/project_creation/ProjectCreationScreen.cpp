@@ -20,8 +20,11 @@ namespace Horo::Editor {
     namespace {
         class ProjectCreationScreen final : public GuiScreen {
         public:
+            /** @brief Catalog scope shared by this surface and its view helpers. */
+            static constexpr GuiLocalizationScope kTextScope = ProjectCreationTextScope;
+
             explicit ProjectCreationScreen(const EditorServiceRegistry &services)
-                : host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
+                : GuiScreen(kTextScope), host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
                   creationService_(services.Get<ProjectCreationService>()), inputRouter_(services.Get<Input::InputRouter>()),
                   rendererAvailability_(services.GetConst<RendererAvailabilitySnapshot>()),
                   logoTexture_(services.TryGet<std::uintptr_t>() ? *services.TryGet<std::uintptr_t>() : 0),

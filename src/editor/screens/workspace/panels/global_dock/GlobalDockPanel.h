@@ -37,6 +37,9 @@ namespace Horo::Editor {
 
     class GlobalDockPanel final : public IWorkspacePanel {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.global_dock"};
+
         /** @brief Creates the global dock with an optional restored active tab. */
         explicit GlobalDockPanel(GlobalDockTab activeTab = GlobalDockTab::Assets);
 

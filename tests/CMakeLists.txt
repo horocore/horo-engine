@@ -2462,6 +2462,8 @@ if (HORO_BUILD_EDITOR_GUI)
     )
 endif ()
 add_executable(HoroEditorLocalizationServiceTests
+        support/AllocationProbe.cpp
+        unit/editor/GuiLocalizationScopeTests.cpp
         unit/editor/LocalizationServiceTests.cpp
         unit/editor/UiInspectorLocalizationTests.cpp
         unit/editor/NavigationInspectorLocalizationTests.cpp
@@ -2943,6 +2945,8 @@ if (HORO_BUILD_EDITOR_GUI)
             "${PROJECT_SOURCE_DIR}/tests/support"
             "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
     target_compile_features(HoroEditorWorkspaceControllerTests PRIVATE cxx_std_20)
+    # Unicode source fixtures must use the same source/execution encoding as the editor host.
+    target_compile_options(HoroEditorWorkspaceControllerTests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     target_compile_definitions(HoroEditorWorkspaceControllerTests PRIVATE
             HORO_EDITOR_AUDIO_SDL3=0
             HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
@@ -3377,6 +3381,20 @@ target_compile_features(HoroImmutableFileStorageTests PRIVATE cxx_std_20)
 target_link_libraries(HoroImmutableFileStorageTests PRIVATE HoroEngine::PlatformImmutableFileStorage Threads::Threads)
 target_include_directories(HoroImmutableFileStorageTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
+
+target_sources(HoroPlatformDesktopPublicHeaderConsumer PRIVATE support/FileManagerPublicContract.cpp)
+add_executable(HoroFileManagerTests unit/platform/FileManagerTests.cpp)
+target_compile_features(HoroFileManagerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroFileManagerTests PRIVATE HoroEngine::PlatformDesktop)
+target_include_directories(HoroFileManagerTests PRIVATE "${PROJECT_SOURCE_DIR}/src/platform/desktop")
+horo_register_catch_test(HoroFileManagerTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
+if (HORO_BUILD_EDITOR_GUI)
+    # Opens a real desktop window only when explicitly built and invoked by a person.
+    add_executable(HoroFileManagerSmoke EXCLUDE_FROM_ALL helpers/platform/FileManagerSmoke.cpp)
+    target_link_libraries(HoroFileManagerSmoke PRIVATE HoroEngine::PlatformDesktop)
+else ()
+    target_compile_definitions(HoroFileManagerTests PRIVATE HORO_FILE_MANAGER_HEADLESS=1)
+endif ()
 
 add_executable(HoroPlatformTests
         support/AllocationProbe.cpp

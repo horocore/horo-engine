@@ -1,8 +1,8 @@
-#include "Horo/Editor/GuiLiveReload.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 
 #include <algorithm>
@@ -50,7 +50,7 @@ namespace Horo::Editor {
 
     /** @copydoc PlayTopologyModal::PlayTopologyModal */
     PlayTopologyModal::PlayTopologyModal(const EditorGuiContext &context, std::unique_ptr<Application::PlayTopologyStore> store)
-        : context_(context), store_(std::move(store)) {}
+        : EditorModal(kTextScope), context_(context), store_(std::move(store)) {}
 
     ModalId PlayTopologyModal::Id() const {
         return ModalId{0x504C4159544F504FULL};
@@ -84,7 +84,7 @@ namespace Horo::Editor {
 
     /** @brief Fetch one complete localized string; dynamic suffixes come only from a closed compiled vocabulary. */
     const std::string &PlayTopologyModal::Text(const char *suffix) const {
-        return context_.localization.Get("editor", std::string{"workspace.play_topology."} + suffix);
+        return LocalizedText(context_.localization, suffix);
     }
 
     /** @brief Replace the transient draft from one immutable projection; cancellation never persists it. */

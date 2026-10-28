@@ -41,7 +41,7 @@ namespace Horo::Editor {
         // Header
         {
             Theme::ScopedTextStyle tsTitle(ctx.theme.fonts.sansEmphasis, Theme::TextPx::Title(), Theme::FontPx::SansEmphasis);
-            const std::string openingFmt = ctx.localization.Get("editor", "project_loading.title.opening");
+            const std::string openingFmt = ProjectLoadingTextScope.Text(ctx.localization, "title.opening");
             std::string titleText = openingFmt + " '" + state.projectName + "'";
             ImGui::TextUnformatted(titleText.c_str());
         }
@@ -113,13 +113,13 @@ namespace Horo::Editor {
                     cmd = Back;
                 else {
                     state.isCancelled = true;
-                    state.statusText = ctx.localization.Get("editor", "project_loading.status.cancelling");
+                    state.statusText = ProjectLoadingTextScope.Text(ctx.localization, "status.cancelling");
                     cmd = Cancel;
                 }
             }
             if (state.hasFailed && state.canRetry) {
                 ImGui::SameLine();
-                const auto backLabel = ctx.localization.Get("editor", "project_loading.action.back");
+                const auto backLabel = ProjectLoadingTextScope.Text(ctx.localization, "action.back");
                 if (Ui::Button({.label = backLabel.c_str(),
                                 .size = {kButtonSize.x, kButtonSize.y},
                                 .variant = Ui::ButtonVariant::Secondary,

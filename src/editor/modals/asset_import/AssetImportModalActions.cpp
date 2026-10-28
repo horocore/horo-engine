@@ -127,7 +127,7 @@ namespace Horo::Editor {
         {
             auto nativeDialogContext = m_inputRouter->PushContext(Input::InputContextId{"editor.native_dialog.asset_import_source"},
                                                                   Input::InputContextKind::NativeDialog);
-            selected = m_nativeDialogs->ChooseOpenFiles(Localized("asset_import.browse_sources", "Choose files to import"));
+            selected = m_nativeDialogs->ChooseOpenFiles(Localized("browse_sources", "Choose files to import"));
         }
         AddSourceFiles(selected);
     }
@@ -140,7 +140,7 @@ namespace Horo::Editor {
         {
             auto nativeDialogContext = m_inputRouter->PushContext(Input::InputContextId{"editor.native_dialog.asset_import_destination"},
                                                                   Input::InputContextKind::NativeDialog);
-            selected = m_nativeDialogs->ChooseFolder(Localized("asset_import.browse_destination", "Choose destination folder"));
+            selected = m_nativeDialogs->ChooseFolder(Localized("browse_destination", "Choose destination folder"));
         }
         if (!selected)
             return;

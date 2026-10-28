@@ -15,8 +15,8 @@ namespace Horo::Editor {
 
         /** @brief Uses the existing shared localized boolean row without a raw ImGui checkbox. */
         [[nodiscard]] bool Boolean(const char *key, bool &value, const EditorGuiContext &context) {
-            const std::array entries{context.localization.Get("editor", "workspace.value.off").c_str(),
-                                     context.localization.Get("editor", "workspace.value.on").c_str()};
+            const std::array entries{InspectorPanel::kTextScope.Text(context.localization, "value.off").c_str(),
+                                     InspectorPanel::kTextScope.Text(context.localization, "value.on").c_str()};
             int selected = value ? 1 : 0;
             const bool changed =
                 Ui::DrawComboPropRow(context.localization.Get("editor", key).c_str(), key, selected, entries, context.theme.fonts);
@@ -85,19 +85,19 @@ namespace Horo::Editor {
             bool changed = Boolean("workspace.inspector.character.preserve_speed", movement.preserveHorizontalSpeed, context);
             changed |= Boolean("workspace.inspector.character.dynamic_platform", movement.dynamicPlatformSupport, context);
             changed |= Boolean("workspace.inspector.character.platform_heading", movement.inheritPlatformHeading, context);
-            const auto slopes = std::array{context.localization.Get("editor", "workspace.inspector.character.stop").c_str(),
-                                           context.localization.Get("editor", "workspace.inspector.character.slide").c_str()};
+            const auto slopes = std::array{InspectorPanel::kTextScope.Text(context.localization, "inspector.character.stop").c_str(),
+                                           InspectorPanel::kTextScope.Text(context.localization, "inspector.character.slide").c_str()};
             if (auto slope = static_cast<int>(movement.steepSlopePolicy);
-                Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.steep_policy").c_str(),
+                Ui::DrawComboPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.character.steep_policy").c_str(),
                                      "steep_policy", slope, slopes, context.theme.fonts)) {
                 movement.steepSlopePolicy = static_cast<Character::CharacterSteepSlopePolicy>(slope);
                 changed = true;
             }
-            const auto leave = std::array{context.localization.Get("editor", "workspace.inspector.character.none").c_str(),
-                                          context.localization.Get("editor", "workspace.inspector.character.linear").c_str(),
-                                          context.localization.Get("editor", "workspace.inspector.character.point").c_str()};
+            const auto leave = std::array{InspectorPanel::kTextScope.Text(context.localization, "inspector.character.none").c_str(),
+                                          InspectorPanel::kTextScope.Text(context.localization, "inspector.character.linear").c_str(),
+                                          InspectorPanel::kTextScope.Text(context.localization, "inspector.character.point").c_str()};
             if (auto velocity = static_cast<int>(movement.platformLeaveVelocity);
-                Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.leave_velocity").c_str(),
+                Ui::DrawComboPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.character.leave_velocity").c_str(),
                                      "leave_velocity", velocity, leave, context.theme.fonts)) {
                 movement.platformLeaveVelocity = static_cast<Character::CharacterPlatformLeaveVelocityPolicy>(velocity);
                 changed = true;
@@ -129,8 +129,9 @@ namespace Horo::Editor {
         if (!draft.characterController)
             return {};
         Ui::Card card(Ui::CardProps{.id = "##CharacterControllerCard"});
-        const auto header = DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.character.title").c_str(),
-                                                  {.enabled = draft.characterController->enabled}, context);
+        const auto header =
+            DrawComponentTitleBar(card, InspectorPanel::kTextScope.Text(context.localization, "inspector.character.title").c_str(),
+                                  {.enabled = draft.characterController->enabled}, context);
         if (header.resetRequested) {
             draft.characterController = Runtime::CharacterControllerComponent{.id = draft.characterController->id,
                                                                               .enabled = draft.characterController->enabled,

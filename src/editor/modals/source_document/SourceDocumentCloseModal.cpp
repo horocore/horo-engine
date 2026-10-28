@@ -1,7 +1,7 @@
-#include "Horo/Editor/GuiLiveReload.h"
 #include "SourceDocumentCloseModal.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -9,8 +9,8 @@ namespace Horo::Editor {
     /** @copydoc SourceDocumentCloseModal::SourceDocumentCloseModal */
     SourceDocumentCloseModal::SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller,
                                                        std::weak_ptr<const void> lifetime, SourceSaveRequest request, std::string source)
-        : context_(context), controller_(&controller), lifetime_(std::move(lifetime)), request_(std::move(request)),
-          source_(std::move(source)) {}
+        : EditorModal(kTextScope), context_(context), controller_(&controller), lifetime_(std::move(lifetime)),
+          request_(std::move(request)), source_(std::move(source)) {}
 
     /** @copydoc SourceDocumentCloseModal::Id */
     ModalId SourceDocumentCloseModal::Id() const {
@@ -57,7 +57,7 @@ namespace Horo::Editor {
 
     /** @copydoc SourceDocumentCloseModal::Text */
     const std::string &SourceDocumentCloseModal::Text(const char *suffix) const {
-        return context_.localization.Get("editor", std::string{"workspace.documents."} + suffix);
+        return LocalizedText(context_.localization, suffix);
     }
 
     /** @copydoc SourceDocumentCloseModal::LogicalFooterHeight */

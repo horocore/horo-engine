@@ -1,4 +1,6 @@
 #pragma once
+
+#include "Horo/Editor/Localization/LocalizedGui.h"
 /** @file GlobalDockNetworkPane.h
  * @brief Presentation of immutable bounded runtime network diagnostics.
  */
@@ -12,8 +14,14 @@ namespace Horo::Editor {
     struct EditorGuiContext;
 
     /** @brief Narrow query/command client; owns only display selection and copied diagnostic evidence. */
-    class GlobalDockNetworkPane final {
+    class GlobalDockNetworkPane final : public LocalizedGui {
     public:
+        /** @brief Catalog scope for this embedded dock surface. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.global_dock.network"};
+
+        /** @brief Creates a pane with its required localization scope. */
+        GlobalDockNetworkPane() : LocalizedGui(kTextScope) {}
+
         /** @brief Borrows host-owned application capabilities through panel detachment.
          * @param query Optional source query. @param control Optional typed capture command capability. */
         void Attach(const Application::INetworkDebuggerQuery *query, Application::INetworkDebuggerControl *control) noexcept;

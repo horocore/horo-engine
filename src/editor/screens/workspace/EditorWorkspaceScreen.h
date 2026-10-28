@@ -135,6 +135,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @brief Owns workspace presentation and controller lifetime inside the GUI host. */
     class EditorWorkspaceScreen final : public GuiScreen {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace"};
+
         /** @brief Binds borrowed application capabilities before any project activation. */
         explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages);
         /** @brief Revokes any failed-enter XR connection before the existing context member is destroyed. */

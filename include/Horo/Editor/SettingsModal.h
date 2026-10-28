@@ -38,6 +38,9 @@ namespace Horo::Editor {
     /** @brief Host-owned editor settings workflow and its transient settings draft. */
     class SettingsModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"settings"};
+
         static constexpr std::uint64_t kModalId = 0x53455454494E4753ULL;
 
         /**

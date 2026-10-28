@@ -159,23 +159,23 @@ namespace Horo::Editor {
         bool DrawSourcePlayback(const EditorGuiContext &context, Runtime::AudioSourceComponent &source) {
             const bool gainValid = std::isfinite(source.playback.gain) && source.playback.gain >= 0.0F;
             const Ui::PropertyEditResult gainEdit =
-                Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_gain").c_str(),
+                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_source_gain").c_str(),
                                      "audio_source_gain", source.playback.gain, context.theme.fonts,
                                      Ui::FloatPropertyOptions{.speed = 0.01F, .error = !gainValid});
 
             const bool pitchValid = std::isfinite(source.playback.pitch) && source.playback.pitch > 0.0F && source.playback.pitch <= 8.0F;
             const Ui::PropertyEditResult pitchEdit =
-                Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_pitch").c_str(),
+                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_source_pitch").c_str(),
                                      "audio_source_pitch", source.playback.pitch, context.theme.fonts,
                                      Ui::FloatPropertyOptions{.speed = 0.01F, .error = !pitchValid});
 
             const std::array<const char *, 2> spatialEntries{
-                context.localization.Get("editor", "workspace.value.off").c_str(),
-                context.localization.Get("editor", "workspace.value.on").c_str(),
+                InspectorPanel::kTextScope.Text(context.localization, "value.off").c_str(),
+                InspectorPanel::kTextScope.Text(context.localization, "value.on").c_str(),
             };
             int spatialInt = source.playback.spatialMode == Audio::AudioSpatialMode::ThreeD ? 1 : 0;
             const bool spatialChanged =
-                Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_spatial").c_str(),
+                Ui::DrawComboPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_source_spatial").c_str(),
                                      "audio_source_spatial", spatialInt, spatialEntries, context.theme.fonts);
             if (spatialChanged)
                 source.playback.spatialMode = spatialInt != 0 ? Audio::AudioSpatialMode::ThreeD : Audio::AudioSpatialMode::TwoD;
@@ -225,7 +225,7 @@ namespace Horo::Editor {
 
         Ui::Card card(Ui::CardProps{.id = "##AudioSourceCard"});
         const ComponentTitleBarResult header =
-            DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.audio_source").c_str(),
+            DrawComponentTitleBar(card, InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_source").c_str(),
                                   {.enabled = draft.audioSource->enabled}, context);
         if (header.resetRequested) {
             const bool enabled = draft.audioSource->enabled;

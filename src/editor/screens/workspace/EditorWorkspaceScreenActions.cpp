@@ -22,7 +22,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
         /** @brief Formats bounded creation diagnostics after the workspace lifetime fence passes. */
         std::string PrefabCreationFailureMessage(const PrefabCreationOutcome *outcome, const ILocalizationService &localization) {
-            std::string message = localization.Get("editor", "workspace.prefab.create.failed");
+            std::string message = EditorWorkspaceScreen::kTextScope.Text(localization, "prefab.create.failed");
             if (!outcome)
                 return message;
             if (outcome->error)
@@ -36,7 +36,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             }
             if (count < outcome->boundaries.size())
                 message += std::format("\n{} {}", outcome->boundaries.size() - count,
-                                       localization.Get("editor", "workspace.prefab.create.more_diagnostics"));
+                                       EditorWorkspaceScreen::kTextScope.Text(localization, "prefab.create.more_diagnostics"));
             for (const auto &receipt : outcome->files)
                 if (receipt.recoveryError)
                     message += std::format("\n{}: {}", receipt.path.generic_string(), receipt.recoveryError->message);
@@ -189,7 +189,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         pfd::save_file dialog(std::string{context_.localization.Get("editor", copyOnly ? "workspace.scene_save_copy_as.title"
                                                                                        : "workspace.scene_save_as.title")},
                               dialogDefault,
-                              {std::string{context_.localization.Get("editor", "workspace.scene_save.file_type")}, "*.horo"});
+                              {std::string{EditorWorkspaceScreen::kTextScope.Text(context_.localization, "scene_save.file_type")},
+                               "*.horo"});
         const std::string selected = dialog.result();
         if (selected.empty()) {
             return true;
@@ -289,7 +290,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }));
         if (opened.HasError() && controller_)
             controller_->Notifications().Publish("world_layers", NotificationSeverity::Error,
-                                                 context_.localization.Get("editor", "workspace.world_layers.rejected"));
+                                                 EditorWorkspaceScreen::kTextScope.Text(context_.localization, "world_layers.rejected"));
     }
 
     /** @copydoc EditorWorkspaceScreen::OpenPrefabCreationModal */
@@ -301,7 +302,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             std::make_unique<PrefabCreationModal>(context_, captured.Value(), controller_->ViewModel().projectRoot,
                                                   [controller = controller_.get(), localization = &context_.localization,
                                                    lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_},
-                                                   expired = context_.localization.Get("editor", "workspace.prefab.create.expired")](
+                                                   expired = EditorWorkspaceScreen::kTextScope.Text(context_.localization,
+                                                                                                    "prefab.create.expired")](
                                                       PrefabCreationIntent intent) -> std::optional<std::string> {
             if (lifetime.expired())
                 return expired;
@@ -339,10 +341,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         const std::string baseName = SuggestGameplayBehaviorBaseName(*destination, kind);
-        const auto browse = [this](const std::string_view title) -> std::optional<std::filesystem::path> {
+        const auto browse = [this](const std::string_view title,
+                                   const std::filesystem::path &initialDirectory) -> std::optional<std::filesystem::path> {
             auto dialogContext = input_.router.PushContext(Input::InputContextId{"editor.native_dialog.behavior_destination"},
                                                            Input::InputContextKind::NativeDialog);
-            const std::string selected = pfd::select_folder(std::string{title}).result();
+            const std::string selected = pfd::select_folder(std::string{title}, initialDirectory.string()).result();
             return selected.empty() ? std::nullopt : std::optional{std::filesystem::path{selected}};
         };
         Result<void> opened =
