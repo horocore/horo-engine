@@ -62,6 +62,16 @@ admits no World borrow; stale session/origin/kind and retirement reject old borr
    Renderer/image leases before resetting the adapter and logical gate. Reset is
    never evidence of native success.
 
+The retained terminal native Begin/End error remains observable at the non-installed
+compositor boundary. Repeated frame calls keep their `OperationUnavailable`
+classification and carry that original error as their cause. `OpenXRPlayHost::Close`
+is an owner-lane recovery operation, even after closing blocks every new-work API:
+it recognizes only that retained fatal fault, revokes the same session to Lost,
+and progresses the existing image/queue/native cleanup without fabricating Begin,
+EndFrame or EndSession success. A cleanup failure retains its exact live prefixes
+for an idempotent Close retry; reset follows actual native destruction. The editor
+and fixture callers need no separate PollEvents call after Close has begun.
+
 The selected App owner treats Lost as destructive recovery, separately from normal
 STOPPING. It revokes its exact Scene/Input publication and closes new waits, while
 retaining the acquired image, compositor protocol and same scene/GUI completion
@@ -517,3 +527,18 @@ without clearing unrelated viewport resources or changing ordinary release behav
 Other retained cold-mesh failure state still requires the explicit full-owner recovery
 described above. Native depth/view failure, successful-prefix retirement and retry are
 covered through the actual viewport owner; this remains fake-dispatch, not GPU proof.
+
+### Multiview contents and same-frame mirror sampling
+
+The backend-neutral, non-installed `HoroRenderGraphContentsInternal` interface
+contains only the whole-attachment coverage proof used by the Vulkan graph owner
+and portable coverage tests. Actual native multiview CLEAR/STORE defines fresh
+color and depth contents independently, only when full rectangles cover every
+allocation layer and its sole mip. Partial rectangles, missing layers or extra
+mips cannot upgrade the whole-resource contents bit; previously defined contents
+remain defined. The proof changes only the existing planned state journal.
+Recording, abort and failed submission do not publish it. A successful canonical
+submission publishes the same journal; same-frame GUI reads the planned state and
+retains the exact scene/image lease through its tail. OpenGL, Metal and headless
+owners retain their own contents/submission authorities; this internal helper does
+not admit native operations or alter backend availability.

@@ -50,7 +50,9 @@ namespace Horo::XR::OpenXRInternal {
         if (thread_ != std::this_thread::get_id())
             return Result<NativeSessionBorrow>::Failure(
                 MakeError(XRErrors::OperationIncompatible, "XR compositor requires its control thread."));
-        if (!owner_.IsValid() || !wait_ || faulted_)
+        if (fault_)
+            return Result<NativeSessionBorrow>::Failure(WithCause(MakeError(XRErrors::OperationUnavailable), *fault_));
+        if (!owner_.IsValid() || !wait_)
             return Result<NativeSessionBorrow>::Failure(MakeError(XRErrors::OperationUnavailable));
         return session_->Borrow(owner_);
     }
@@ -158,13 +160,13 @@ namespace Horo::XR::OpenXRInternal {
         const XrFrameBeginInfo info{XR_TYPE_FRAME_BEGIN_INFO};
         const XrResult result = begin_(native.Value().session, &info);
         if (XR_FAILED(result)) {
-            faulted_ = true;
-            return Result<void>::Failure(NativeError("begin frame", result));
+            fault_ = NativeError("begin frame", result);
+            return Result<void>::Failure(*fault_);
         }
         begun_ = true;
         if (frames_->Begin(frame) != XRFrameStatus::Ok) {
-            faulted_ = true;
-            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+            fault_ = MakeError(XRErrors::IdentityStale);
+            return Result<void>::Failure(*fault_);
         }
         return Result<void>::Success();
     }
@@ -363,8 +365,8 @@ namespace Horo::XR::OpenXRInternal {
         const XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO, nullptr, nativeDisplayTime_, blend, layer ? 1U : 0U, layer ? &layer : nullptr};
         const XrResult result = end_(native.Value().session, &info);
         if (XR_FAILED(result)) {
-            faulted_ = true;
-            return Result<void>::Failure(NativeError("end frame", result));
+            fault_ = NativeError("end frame", result);
+            return Result<void>::Failure(*fault_);
         }
         const auto ended = frames_->End(frame, layer ? 1U : 0U);
         nativeFrame_ = {};
@@ -381,6 +383,11 @@ namespace Horo::XR::OpenXRInternal {
         if (!begun_ || frames_->ValidateEnd(frame, 0) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, nullptr);
+    }
+
+    /** @copydoc OpenXRFrameCompositor::RetainedFault */
+    const Error *OpenXRFrameCompositor::RetainedFault() const noexcept {
+        return thread_ == std::this_thread::get_id() && fault_ ? &*fault_ : nullptr;
     }
 
     /** @copydoc OpenXRFrameCompositor::BeginShutdown */
@@ -401,7 +408,7 @@ namespace Horo::XR::OpenXRInternal {
         begin_ = nullptr;
         end_ = nullptr;
         begun_ = false;
-        faulted_ = false;
+        fault_.reset();
         period_ = 0;
         nativeDisplayTime_ = 0;
         return Result<void>::Success();

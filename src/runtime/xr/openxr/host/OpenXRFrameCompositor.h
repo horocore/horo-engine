@@ -8,6 +8,7 @@
 #include "OpenXRSwapchain.h"
 
 #include <array>
+#include <optional>
 #include <thread>
 
 namespace Horo::XR::OpenXRInternal {
@@ -112,6 +113,11 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Ends runtime-disabled or explicitly aborted work with no layers after all image releases.
          * @param frame Exact begun frame. @return Native end result; failure retains debt for quiescent recovery. */
         [[nodiscard]] Result<void> EndEmpty(const XRFrameId &frame);
+        /** @brief Observes the original terminal native frame fault without native work or admission changes.
+         * @return Borrowed fault on the creating lane, otherwise null. The observation expires at quiescent reset.
+         * @pre Serialized host control; the caller retains this compositor through the synchronous observation.
+         */
+        [[nodiscard]] const Error *RetainedFault() const noexcept;
         /** @brief Closes new waits while retaining native frame and image release obligations.
          * @return Success or a typed wrong-thread failure without mutation. */
         [[nodiscard]] Result<void> BeginShutdown();
@@ -159,6 +165,6 @@ namespace Horo::XR::OpenXRInternal {
         PFN_xrEndFrame end_{};
         bool begun_{};
         bool closing_{};
-        bool faulted_{};
+        std::optional<Error> fault_;
     };
 }  // namespace Horo::XR::OpenXRInternal

@@ -67,6 +67,8 @@ namespace Horo::Application::Internal {
          * @return True only after actual frame/image/GUI/native retirement; false/error retains every parent for retry.
          * @pre Owner lane outside callbacks. No normal-frame wait or guessed completion; explicit App teardown
          * retains this owner and the selected device/loader until success. Repeated calls preserve original debt.
+         * A retained terminal compositor Begin/End fault revokes the SAME session to Lost before bounded cleanup;
+         * closing still rejects new work. Only actual native destruction permits the quiescent frame reset.
          */
         [[nodiscard]] Result<bool> Close();
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,

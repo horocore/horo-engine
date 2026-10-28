@@ -1,6 +1,7 @@
 #include "OpenXRPlayHost.h"
 
 #include "Horo/Foundation/Assertions.h"
+#include "OpenXRPlayFrameState.h"
 
 namespace Horo::Application::Internal {
     using namespace XR;
@@ -45,6 +46,10 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_ || busy_)
             return Result<bool>::Failure(MakeError(XRErrors::OperationIncompatible));
         closing_ = true;
+        // A failed native Begin/End cannot be retried as a successful zero-layer frame. The same host
+        // revokes admission and retains all image/queue prefixes until its existing Lost cleanup proves quiescence.
+        if (render_ && render_->compositor.RetainedFault())
+            RevokeEventAdmission();
         if (scene_)
             scene_->Retire(*this);
         RevokeInput();

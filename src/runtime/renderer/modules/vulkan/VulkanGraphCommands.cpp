@@ -1,15 +1,37 @@
+#include "RenderMultiviewAttachmentContents.h"
 #include "VulkanGraphRuntimeInternal.h"
 
 #include <algorithm>
 #include <type_traits>
 
 namespace Horo::Render::Detail {
+    namespace {
+        /** @brief Updates only admitted multiview attachment contents in the existing transactional scratch journal. */
+        void PrepareMultiviewContents(const RenderGraphMultiview &workload, const std::span<const VulkanGraphResource> bindings,
+                                      const std::span<VulkanGraphResourceState> states) {
+            // PreparePass already admitted the exact native targets. Keep this evidence in the same scratch
+            // journal as ordinary attachments: neither recording nor an aborted/failed submission publishes it.
+            for (const auto &target : workload.targets) {
+                for (const auto aspect : {MultiviewAttachmentAspect::Color, MultiviewAttachmentAspect::Depth}) {
+                    const auto resource = aspect == MultiviewAttachmentAspect::Color ? target.color : target.depth;
+                    if (!resource.IsValid())
+                        continue;
+                    const auto index = resource.value - 1;
+                    states[index].contentsDefined = MultiviewAttachmentContentsDefined(states[index].contentsDefined, workload, resource,
+                                                                                       bindings[index].textureDescriptor, aspect);
+                }
+            }
+        }
+    }  // namespace
+
 #include "VulkanGraphDepthAttachment.inl"
 
     /** @brief Validates native descriptor roles and contents before recording; unsupported adjacent capabilities remain explicit. */
     Result<void> VulkanGraphRuntime::Impl::ValidateWorkload(const RenderGraphWorkload &workload, const RenderQueueId queue) {
-        if (std::holds_alternative<RenderGraphMultiview>(workload))
-            return Result<void>::Success();  // Complete native scene admission is performed with the full request in PreparePass.
+        if (const auto *multiviewWork = std::get_if<RenderGraphMultiview>(&workload)) {
+            PrepareMultiviewContents(*multiviewWork, bindings, states);
+            return Result<void>::Success();
+        }
         if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
             return ValidateDepthAttachment(*depth, queue);
         if (std::holds_alternative<std::monostate>(workload))

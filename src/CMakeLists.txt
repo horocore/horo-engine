@@ -2711,6 +2711,12 @@ add_library(HoroRenderFrontend STATIC
 )
 add_library(HoroEngine::RenderFrontend ALIAS HoroRenderFrontend)
 
+# Backend-neutral proof only; native state and submission publication remain with the concrete backend.
+add_library(HoroRenderGraphContentsInternal INTERFACE)
+target_include_directories(HoroRenderGraphContentsInternal INTERFACE
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/graph_contents/include>")
+target_link_libraries(HoroRenderGraphContentsInternal INTERFACE HoroEngine::RenderApi)
+
 # Non-installed matching-backend adapter; expose only the existing typed resource access declaration.
 set(_horo_frontend_access_root "${CMAKE_CURRENT_BINARY_DIR}/internal/render-frontend-access")
 file(MAKE_DIRECTORY "${_horo_frontend_access_root}")
@@ -2965,7 +2971,7 @@ if (HORO_BUILD_RENDER_VULKAN)
     target_compile_features(HoroRenderVulkan PUBLIC cxx_std_20)
     target_link_libraries(HoroRenderVulkan
             PUBLIC HoroEngine::RenderBackendRegistry
-            PRIVATE Vulkan::Headers HoroRenderVulkanExternalImagesInterface HoroRenderVulkanHostInterface
+            PRIVATE Vulkan::Headers HoroRenderVulkanExternalImagesInterface HoroRenderVulkanHostInterface HoroRenderGraphContentsInternal
     )
 endif ()
 

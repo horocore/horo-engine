@@ -3748,6 +3748,7 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderSubmissionAllocatorTests.cpp
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
+        unit/runtime/renderer/RenderMultiviewContentsTests.cpp
         unit/runtime/renderer/RenderFrontendLifecycleTests.cpp
             unit/runtime/renderer/RenderFrontendGuiCompositionTests.cpp
         unit/runtime/renderer/RenderFrontendPresentationTests.cpp
@@ -3778,6 +3779,7 @@ target_include_directories(HoroRenderFrontendTests PRIVATE
 )
 target_link_libraries(HoroRenderFrontendTests
         PRIVATE
+        HoroRenderGraphContentsInternal
         HoroEngine::TerrainRenderIntegration
         HoroRenderGraphTemplateInterface
         HoroRenderExternalImagesInterface

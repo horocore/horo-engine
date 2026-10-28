@@ -136,7 +136,8 @@ namespace Horo::Tests::OpenXRApplication {
                 if (vulkan)
                     vulkan->native.commandState.state.Complete();
                 if (play) {
-                    static_cast<void>(play->ProgressRenderTail());
+                    const auto tail = play->ProgressRenderTail();
+                    INFO((tail.HasError() ? OpenXRProduct::ErrorText(tail.ErrorValue()) : "frame tail retired"));
                     auto closed = ClosePlay();
                     if (closed.HasError() || !closed.Value())
                         std::terminate();
@@ -366,18 +367,19 @@ namespace Horo::Tests::OpenXRApplication {
         auto scene = PublishPlay(fixture);
         fixture.script.clock.sample = 1;
         SECTION("native runtime declines rendering") {
+            INFO("native runtime declines rendering");
             fixture.script.frames.render = false;
         }
         SECTION("native wait failure retains no borrowed eye") {
+            INFO("native wait failure retains no borrowed eye");
             fixture.script.frames.waitResult = XR_ERROR_RUNTIME_FAILURE;
         }
-        SECTION("native frame begin failure") {
-            fixture.script.frames.beginResult = XR_ERROR_RUNTIME_FAILURE;
-        }
         SECTION("prediction misses actual converted deadline") {
+            INFO("prediction misses actual converted deadline");
             fixture.script.clock.sample = 100'000'000;
         }
         SECTION("successful acquisition is explicitly aborted before submission") {
+            INFO("successful acquisition is explicitly aborted before submission");
             REQUIRE(fixture.play->PrepareRenderFrame(1).Value());
             CHECK_FALSE(fixture.play->MirrorView(1).IsValid());
             REQUIRE(fixture.play->FinishGui(false).HasValue());
@@ -401,6 +403,32 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.events.ends == 1);
     }
 
+    TEST_CASE("Real installed Play recovers a terminal native begin fault through repeated bounded Close",
+              "[xr][application][play][frame][recovery]") {
+        ApplicationFixture fixture{true};
+        auto scene = PublishPlay(fixture);
+        fixture.script.clock.sample = 1;
+        fixture.script.frames.beginResult = XR_ERROR_RUNTIME_FAILURE;
+        const auto prepared = fixture.play->PrepareRenderFrame(1);
+        INFO((prepared.HasError() ? OpenXRProduct::ErrorText(prepared.ErrorValue()) : "unexpected preparation success"));
+        REQUIRE(prepared.HasError());
+        CHECK(prepared.ErrorValue().code.Value() == XR::XRErrors::OperationUnavailable.code.Value());
+        CHECK(prepared.ErrorValue().message.find("begin frame") != std::string::npos);
+        CHECK(fixture.script.frames.begins == 1);
+        CHECK(fixture.script.frames.ends == 0);
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+        CHECK(fixture.script.frames.ends == 0);
+        CHECK(fixture.script.events.ends == 0);
+        CHECK(fixture.script.events.exits == 0);
+        CHECK(fixture.script.native.liveSessions == 0);
+        CHECK(fixture.script.actions.liveSets == 0);
+        CHECK(fixture.script.actions.liveActions == 0);
+        CHECK(fixture.script.actions.tracking.spaces == 0);
+        CHECK(fixture.vulkan->native.commandState.state.waitCalls == 0);
+    }
+
     TEST_CASE("Real installed Play retains its acquired first eye through actual scene and GUI queue completion",
               "[xr][application][play][frame][gui]") {
         ApplicationFixture fixture{true};
@@ -421,7 +449,7 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(mirror.IsValid());
         CHECK_FALSE(fixture.play->MirrorView(2).IsValid());
         MirrorGui gui{fixture.vulkan->port, mirror.sampledView, sampler.handle};
-        REQUIRE(frame.ComposeGui(gui).HasValue());
+        RequireValue(frame.ComposeGui(gui));
         CHECK(gui.records == 1);
         REQUIRE(frame.Present().HasValue());
         REQUIRE(fixture.play->FinishGui(true).HasValue());

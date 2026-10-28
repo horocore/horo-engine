@@ -764,3 +764,13 @@ No-renderer repair routing: PASS
 
 Until this gate is met, backend selection remains an engineering/debug control
 and is not exposed as a completed Project Settings feature.
+
+For a multiview attachment CLEAR/STORE, planned whole-resource contents become
+defined only after full-extent writes cover every allocation layer and mip.
+Color and depth mappings are evaluated independently. Partial writes preserve
+prior contents evidence but cannot define fresh whole storage. The concrete
+backend retains this proof in its existing transactional graph state journal:
+recording is not publication, and aborted or failed submissions cannot publish
+planned contents. A same-frame GUI tail may consume the proven planned contents
+under the same completion lease. No backend may fabricate staging data to replace
+an actual attachment producer or infer contents merely from a declared Write use.
