@@ -207,7 +207,7 @@ namespace Horo::Application::Internal {
         }
 
         Result<XrSpace> Borrow(const XR::XRCoordinateSpace &space) const override {
-            return host.composition_.session.BorrowWorldSpace(space);
+            return host.composition_.session.BorrowPresentationReference(space);
         }
 
         /** @brief Retires only the exact candidate's frame/image/queue children through the same host.

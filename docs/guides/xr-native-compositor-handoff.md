@@ -32,6 +32,14 @@ only after successful native creation and canonical session binding. Its space
 budget is additional to Local/Stage, View and action spaces. An absent mapping
 admits no World borrow; stale session/origin/kind and retirement reject old borrows.
 
+Native projection views remain relative to the exact base used by `xrLocateViews`.
+The non-installed `BorrowPresentationReference` contract resolves only that complete
+current base identity for synchronous layer encoding. The application forwards the
+same identity without substituting the distinct calibrated World child. Eye and
+action identities grant no native reference borrow. Existing World consumers keep
+the stricter `BorrowWorldSpace` contract; neither operation admits stale generations,
+changed origins, foreign sessions or borrows after sampling/retirement begins.
+
 ## Explicit sequence
 
 1. Configure the existing frame gate, then bind official dispatch and finite pacing

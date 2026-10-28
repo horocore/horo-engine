@@ -454,11 +454,11 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(frame.Present().HasValue());
         REQUIRE(fixture.play->FinishGui(true).HasValue());
         CHECK_FALSE(fixture.play->MirrorView(1).IsValid());
-        REQUIRE(fixture.play->ProgressRenderTail().HasValue());
+        RequireValue(fixture.play->ProgressRenderTail());
         CHECK(fixture.script.swapchain.releases == 0);
         CHECK(fixture.script.frames.ends == 0);
         fixture.vulkan->native.commandState.state.Complete();
-        REQUIRE(fixture.play->ProgressRenderTail().HasValue());
+        RequireValue(fixture.play->ProgressRenderTail());
         CHECK(fixture.script.swapchain.releases == 1);
         CHECK(fixture.script.frames.ends == 1);
         CHECK(fixture.script.frames.layers == 1);

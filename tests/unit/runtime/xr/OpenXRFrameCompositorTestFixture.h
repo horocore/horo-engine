@@ -25,10 +25,11 @@ namespace Horo::Tests::OpenXR {
         class Spaces final : public IOpenXRCompositionSpace {
         public:
             bool stale{};
+            XRCoordinateSpace reference;
 
-            Result<XrSpace> Borrow(const XRCoordinateSpace &) const override {
-                return stale ? Result<XrSpace>::Failure(MakeError(XRErrors::IdentityStale))
-                             : Result<XrSpace>::Success(NativeHandle<XrSpace>(8));
+            Result<XrSpace> Borrow(const XRCoordinateSpace &space) const override {
+                return stale || space != reference ? Result<XrSpace>::Failure(MakeError(XRErrors::IdentityStale))
+                                                   : Result<XrSpace>::Success(NativeHandle<XrSpace>(8));
             }
         };
 
@@ -101,6 +102,7 @@ namespace Horo::Tests::OpenXR {
                 local = {.id = {session, {7, 1}},
                          .kind = XRSpaceKind::Local,
                          .worldOriginRevision = IdentityValue<XRWorldOriginRevision>(1)};
+                spaces.reference = local;
                 REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 2, 1}) == XRFrameStatus::Ok);
                 allocation = {.target = {session, {4, 1}},
                               .texture = {.extent = {800, 600},

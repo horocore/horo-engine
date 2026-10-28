@@ -147,4 +147,17 @@ namespace Horo::XR::OpenXRInternal {
             return Result<XrSpace>::Failure(MakeError(XRErrors::IdentityStale));
         return Result<XrSpace>::Success(tracking_.world);
     }
+
+    /** @copydoc OpenXRActionBindings::BorrowPresentationReference */
+    Result<XrSpace> OpenXRActionBindings::BorrowPresentationReference(const XRCoordinateSpace &space) const {
+        if (auto lane = ControlLane(); lane.HasError())
+            return Result<XrSpace>::Failure(lane.ErrorValue());
+        if (sampling_)
+            return Result<XrSpace>::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (const auto current = Current(space.id.session); current.HasError())
+            return Result<XrSpace>::Failure(current.ErrorValue());
+        if (tracking_.base == XR_NULL_HANDLE || space != tracking_.baseIdentity)
+            return Result<XrSpace>::Failure(MakeError(XRErrors::IdentityStale));
+        return Result<XrSpace>::Success(tracking_.base);
+    }
 }  // namespace Horo::XR::OpenXRInternal

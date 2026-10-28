@@ -172,6 +172,11 @@ namespace Horo::Application::Internal {
          * @return Fenced native borrow; no borrow survives another owner operation or retirement.
          */
         [[nodiscard]] Result<XrSpace> BorrowWorldSpace(const XR::XRCoordinateSpace &space) const;
+        /** @brief Borrows the current presentation base for synchronous native projection composition.
+         * @param space Exact complete reference identity returned by LocatePresentation.
+         * @return Fenced native base borrow, or original currentness/stale error; no borrow survives another owner operation.
+         */
+        [[nodiscard]] Result<XrSpace> BorrowPresentationReference(const XR::XRCoordinateSpace &space) const;
         /** @brief Samples complete actual primary views and calibrated reference at one native frame prediction.
          * @param candidate Exact active session. @param time Actual converted sample and runtime frame prediction, no simulation timestamp.
          * @return Fixed bounded native evidence using the SAME observed system view count; never synthesized cameras or availability.

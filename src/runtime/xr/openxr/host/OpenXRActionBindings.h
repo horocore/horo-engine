@@ -244,6 +244,12 @@ namespace Horo::XR::OpenXRInternal {
          * @return Synchronous native borrow or typed stale failure; no borrow survives owner retirement/reentry.
          */
         [[nodiscard]] Result<XrSpace> BorrowWorldSpace(const XRCoordinateSpace &space) const;
+        /** @brief Borrows the exact native base used by the current presentation view query.
+         * @param space Complete reference identity returned by LocatePresentation, never an eye or World identity.
+         * @return Synchronous native base borrow or original lane/currentness/stale failure.
+         * @pre No sampling operation is active; the borrow ends before another owner operation or retirement.
+         */
+        [[nodiscard]] Result<XrSpace> BorrowPresentationReference(const XRCoordinateSpace &space) const;
         /** @brief Quiescent idempotent reverse-order retirement; failed destruction retains exact handles for retry.
          * @return Success or native retirement failure. No further sync/profile query is admitted after Close begins.
          */

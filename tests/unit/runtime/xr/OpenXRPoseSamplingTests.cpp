@@ -213,6 +213,11 @@ namespace Horo::Tests::OpenXRAction {
         REQUIRE(located.Value().views[0].pose.position.x < 0);
         REQUIRE(located.Value().views[1].pose.position.x > 0);
         REQUIRE(located.Value().reference.kind == XRSpaceKind::Local);
+        const auto reference = located.Value().reference;
+        const auto borrowed = fixture.actions.owner.BorrowPresentationReference(reference);
+        REQUIRE(borrowed.HasValue());
+        CHECK(borrowed.Value() == native.reference);
+        CHECK(fixture.actions.owner.BorrowWorldSpace(reference).HasError());
         REQUIRE(located.Value().eyes[0].kind == XRSpaceKind::View);
         REQUIRE(located.Value().eyes[1].kind == XRSpaceKind::View);
         REQUIRE(located.Value().eyes[0].id != located.Value().eyes[1].id);
@@ -233,6 +238,42 @@ namespace Horo::Tests::OpenXRAction {
         REQUIRE(lost.Value().flags == 0);  // No stale/default pose-validity bit is synthesized.
         REQUIRE(fixture.actions.owner.Close().HasValue());
         REQUIRE(fixture.actions.owner.LocatePresentation(session, time, 2).HasError());
+        CHECK(fixture.actions.owner.BorrowPresentationReference(reference).HasError());
+    }
+
+    TEST_CASE("OpenXR presentation reference borrows reject every distinct owner identity", "[xr][native][views]") {
+        TrackingFixture fixture;
+        PresentationScript native;
+        REQUIRE(fixture.Prepare(Math::Transform{}).HasValue());
+        fixture.Activate(6);
+        const auto session = fixture.actions.session.Request().candidate;
+        REQUIRE(fixture.actions.owner.PreparePresentation({&PresentationScript::GetProc}).HasValue());
+        const XRTimeEvidence time{IdentityValue<XRRuntimeTime>(100), {}, IdentityValue<XRRenderPredictionTime>(200)};
+        const auto located = fixture.actions.owner.LocatePresentation(session, time, 2);
+        REQUIRE(located.HasValue());
+        auto stale = located.Value().reference;
+        SECTION("kind") {
+            stale.kind = XRSpaceKind::World;
+        }
+        SECTION("origin") {
+            stale.worldOriginRevision = IdentityValue<XRWorldOriginRevision>(2);
+        }
+        SECTION("session") {
+            ++stale.id.session.slot.generation;
+        }
+        SECTION("generation") {
+            ++stale.id.slot.generation;
+        }
+        SECTION("eye") {
+            stale = located.Value().eyes[0];
+        }
+        SECTION("calibrated World") {
+            const auto world = fixture.actions.owner.WorldSpace(session);
+            REQUIRE(world.HasValue());
+            stale = world.Value();
+        }
+        CHECK(fixture.actions.owner.BorrowPresentationReference(stale).HasError());
+        REQUIRE(fixture.actions.owner.Close().HasValue());
     }
 
     TEST_CASE("OpenXR presentation rejects incomplete malformed stale or cross-domain evidence atomically", "[xr][native][views]") {

@@ -185,6 +185,15 @@ namespace Horo::Application::Internal {
         return input_.native->BorrowWorldSpace(space);
     }
 
+    /** @copydoc OpenXRApplicationSession::BorrowPresentationReference */
+    Result<XrSpace> OpenXRApplicationSession::BorrowPresentationReference(const XRCoordinateSpace &space) const {
+        if (auto current = Current(); current.HasError())
+            return Result<XrSpace>::Failure(current.ErrorValue());
+        if (!input_.native)
+            return Result<XrSpace>::Failure(MakeError(XRErrors::OperationUnavailable));
+        return input_.native->BorrowPresentationReference(space);
+    }
+
     /** @copydoc OpenXRApplicationSession::LocatePresentation */
     Result<NativePresentationViews> OpenXRApplicationSession::LocatePresentation(const XRSessionId &candidate,
                                                                                  const XRTimeEvidence &time) const {
