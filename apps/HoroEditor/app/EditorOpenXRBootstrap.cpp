@@ -348,11 +348,11 @@ namespace Horo::Editor {
         auto impl = std::make_unique<Impl>(std::move(publishers).Value(), std::move(catalog).Value(), now.Value(), rootExpiry.Value());
         if (auto initialized = impl->Initialize(projectRoot, cacheRoot, trackingRoot); initialized.HasError())
             return Outcome::Failure(initialized.ErrorValue());
-        return Outcome::Success(std::unique_ptr<EditorOpenXRBootstrap>{new EditorOpenXRBootstrap{std::move(impl)}});
+        return Outcome::Success(std::make_unique<EditorOpenXRBootstrap>(ConstructionKey{}, std::move(impl)));
     }
 
     /** @copydoc EditorOpenXRBootstrap::EditorOpenXRBootstrap */
-    EditorOpenXRBootstrap::EditorOpenXRBootstrap(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    EditorOpenXRBootstrap::EditorOpenXRBootstrap(const ConstructionKey &, std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     /** @copydoc EditorOpenXRBootstrap::~EditorOpenXRBootstrap */
     EditorOpenXRBootstrap::~EditorOpenXRBootstrap() = default;

@@ -301,7 +301,8 @@ namespace Horo::Input {
     }
 
     /** @copydoc InputCollectionFrame::Append */
-    Result<void> InputCollectionFrame::Append(const InputActionSourceToken &source, const std::span<const CollectedActionValue> values) {
+    Result<void> InputCollectionFrame::Append(const InputActionSourceToken &source,
+                                              const std::span<const CollectedActionValue> values) const {
         const auto owner = owner_.lock();
         if (!owner || owner != source.owner_.lock())
             return Stale<void>();

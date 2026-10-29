@@ -11,7 +11,17 @@ namespace Horo::Editor {
      * Destruction is cold teardown: it cancels/joins its own package jobs while all borrowed authorities remain alive.
      */
     class EditorOpenXRBootstrap final {
+        struct Impl;
+
     public:
+        /** @brief Factory-only authority for adopting completed signed startup state. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class EditorOpenXRBootstrap;
+        };
+
+        /** @brief Adopts validated retained startup services without discovering or loading native code. */
+        EditorOpenXRBootstrap(const ConstructionKey &key, std::unique_ptr<Impl> impl) noexcept;
         /** @brief Parses only explicit host arguments and prepares one real verified offline package installation.
          * @param arguments Actual process arguments, including executable name.
          * @param projectRoot Explicit selected absolute project; package metadata is read only by the canonical host.
@@ -35,8 +45,6 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorOpenXRHostServices &Services() const noexcept;
 
     private:
-        struct Impl;
-        explicit EditorOpenXRBootstrap(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;
     };
 }  // namespace Horo::Editor

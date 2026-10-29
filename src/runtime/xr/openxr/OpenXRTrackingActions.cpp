@@ -39,12 +39,13 @@ namespace Horo::XR::OpenXRInternal {
             bindingRequest.posePaths.size() > XRActionBindingLimits::MaximumProfiles * 4)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (bindingRequest.tracking->worldFromBase) {
-            const auto &world = *bindingRequest.tracking->worldFromBase;
-            const auto rotation = world.rotation.TryNormalized();
-            if (!Math::IsFinite(world.translation) || !Math::IsFinite(world.scale) || std::abs(world.scale.x - 1.0F) > 0.00001F ||
-                std::abs(world.scale.y - 1.0F) > 0.00001F || std::abs(world.scale.z - 1.0F) > 0.00001F || rotation.HasError())
+            const auto &worldFromBase = *bindingRequest.tracking->worldFromBase;
+            const auto rotation = worldFromBase.rotation.TryNormalized();
+            if (!Math::IsFinite(worldFromBase.translation) || !Math::IsFinite(worldFromBase.scale) ||
+                std::abs(worldFromBase.scale.x - 1.0F) > 0.00001F || std::abs(worldFromBase.scale.y - 1.0F) > 0.00001F ||
+                std::abs(worldFromBase.scale.z - 1.0F) > 0.00001F || rotation.HasError())
                 return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
-            if (rotation.Value().Inverse().TryRotate(-world.translation).HasError())
+            if (rotation.Value().Inverse().TryRotate(-worldFromBase.translation).HasError())
                 return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         }
         std::size_t unique = 0;

@@ -2266,8 +2266,8 @@ namespace Horo::Editor {
 
         /** @brief Selects the existing XR package owner or composes the fallback against the same borrowed startup services. */
         Result<EditorPackageComposition> PrepareEditorPackages(RunEditorMainLoopParams &p, NativeDurableFileSystem &durableFiles,
-                                                               SteadyClock &clock, SystemWallClock &wallClock,
-                                                               Application::Internal::UnconfiguredPackageTrust &trust) {
+                                                               const SteadyClock &clock, const SystemWallClock &wallClock,
+                                                               const Application::Internal::UnconfiguredPackageTrust &trust) {
             using Output = Result<EditorPackageComposition>;
             auto platform = Application::Internal::NativePackagePlatform();
             if (platform.HasError())
@@ -2710,8 +2710,9 @@ namespace Horo::Editor {
         }
 #endif
         auto engineEvents = std::make_unique<EngineDataBus>();
-        auto configuration = std::unique_ptr<ConfigurationService>{
-            new ConfigurationService{CreateEditorConfigurationService(settings, engineEvents.get(), std::move(configurationSchema))}};
+        auto configuration =
+            std::make_unique<ConfigurationService>(CreateEditorConfigurationSchema(settings, std::move(configurationSchema)),
+                                                   engineEvents.get());
 #if defined(HORO_HAS_OPENXR_HOST)
         if (xrHost) {
             if (const auto resolved = configuration->ResolveAndCommit(xrHost->configuration); resolved.HasError()) {

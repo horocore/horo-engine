@@ -94,11 +94,12 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XR::XRErrors::LoaderPreflightCancelled));
         const auto retained = std::make_shared<RetainedLibrary>(files, std::move(native).Value());
         std::shared_ptr<const Platform::DynamicLibrary> library{retained, retained->native.get()};
-        return Outcome::Success(std::shared_ptr<const OpenXRLoaderLease>{new OpenXRLoaderLease{std::move(files), std::move(library)}});
+        return Outcome::Success(std::make_shared<OpenXRLoaderLease>(ConstructionKey{}, std::move(files), std::move(library)));
     }
 
     /** @copydoc OpenXRLoaderLease::OpenXRLoaderLease */
-    OpenXRLoaderLease::OpenXRLoaderLease(std::shared_ptr<const Files> files, std::shared_ptr<const Platform::DynamicLibrary> library)
+    OpenXRLoaderLease::OpenXRLoaderLease(const ConstructionKey &, std::shared_ptr<const Files> files,
+                                         std::shared_ptr<const Platform::DynamicLibrary> library)
         : files_(std::move(files)), library_(std::move(library)) {}
 
     /** @copydoc OpenXRLoaderLease::Library */

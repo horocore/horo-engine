@@ -110,14 +110,15 @@ namespace Horo::Input {
         auto port = fixture.Port();
         auto source = fixture.Source(port);
         auto frame = fixture.Frame(port, 1);
-        REQUIRE(frame.Append(source, pressed).HasValue());
+        const auto &producerFrame = frame;
+        REQUIRE(producerFrame.Append(source, pressed).HasValue());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
         REQUIRE(frame.Commit().HasValue());
         auto first = fixture.router.ReadAction(fixture.context, fixture.action.id);
         CHECK(first.down);
         CHECK(first.pressed);
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
-        CHECK(frame.Append(source, pressed).HasError());
+        CHECK(producerFrame.Append(source, pressed).HasError());
         CHECK(frame.Commit().HasError());
         auto missing = fixture.Frame(port, 2);
         REQUIRE(missing.Commit().HasValue());

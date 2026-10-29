@@ -75,7 +75,7 @@ namespace Horo::Editor {
         /** @brief Revokes the synchronous acquired-eye borrow without releasing native resources or selection intent.
          * @pre Render-owner lane; actual image/scene/GUI retirement remains with the canonical lease owner.
          */
-        void RevokeXrMirror() noexcept;
+        void RevokeXrMirror() const noexcept;
         /** @brief Polls the actual canonical graphics queue without waiting or declaring image/GUI completion.
          * @return Original observation error or successful zero-time queue poll. Image release still requires
          * the external acquisition owner's actual scene AND GUI retirement/final-state evidence.
@@ -175,8 +175,9 @@ namespace Horo::Editor {
             [[nodiscard]] static Result<void> WriteLighting(const Render::MaterialBindingLayout &layout, std::span<std::byte> bytes,
                                                             const Render::RenderSceneView &scene);
             /** @brief Writes the current draw through the existing bridge using the program ABI and viewport extent. */
-            [[nodiscard]] static Result<void> WriteDraw(Render::Detail::VulkanEditorGraphicsBridge &bridge, const ShaderResources &program,
-                                                        EditorViewportExtent extent, Render::FrameToken frame, const DrawSlot &slot,
+            [[nodiscard]] static Result<void> WriteDraw(const Render::Detail::VulkanEditorGraphicsBridge &bridge,
+                                                        const ShaderResources &program, EditorViewportExtent extent,
+                                                        Render::FrameToken frame, const DrawSlot &slot,
                                                         const Render::RenderStaticMeshInstance &instance,
                                                         const Render::RenderSceneView &scene);
         };

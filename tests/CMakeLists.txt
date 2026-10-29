@@ -1881,7 +1881,10 @@ target_include_directories(HoroCharacterSceneProductTests PRIVATE
 target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroNetworkProductHost HoroEngine::PhysicsTriggerVolumeHost HoroEngine::Platform
         nlohmann_json::nlohmann_json miniz)
 add_dependencies(HoroCharacterSceneProductTests horo-engine)
-horo_register_catch_test(HoroCharacterSceneProductTests LABELS "integration;character;scene;editor;headless;product")
+# The generated canonical case runs source/cooked CLI children for both scene sizes.
+# Four bounded 90-second children plus fixture setup must fit within the CTest budget.
+horo_register_catch_test(HoroCharacterSceneProductTests LABELS "integration;character;scene;editor;headless;product"
+        PROPERTIES TIMEOUT 420)
 
 add_executable(HoroProjectPhysicsCaptureBoundaryConsumer support/ProjectPhysicsCapturePublicHeaderConsumer.cpp)
 target_compile_features(HoroProjectPhysicsCaptureBoundaryConsumer PRIVATE cxx_std_20)

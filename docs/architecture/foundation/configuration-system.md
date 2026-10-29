@@ -76,6 +76,14 @@ values and machine-specific references.
 
 ## Schema
 
+Editor composition can call `CreateEditorConfigurationSchema` to complete and seal
+its module schema before allocating the immovable `ConfigurationService` directly
+with `std::make_unique`. The existing `CreateEditorConfigurationService` value factory
+delegates to the same schema preparation and keeps its return-value-elision contract;
+existing callers require no migration. Both paths preserve module descriptors,
+appearance defaults and the composition root's borrowed event bus. No move/copy
+operation is added to the mutex-owning authority.
+
 ```cpp
 struct SettingDescriptor {
     SettingKey key;

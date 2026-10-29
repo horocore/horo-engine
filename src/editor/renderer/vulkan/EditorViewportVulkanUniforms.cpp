@@ -62,7 +62,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteDraw */
-    Result<void> EditorViewportRendererVulkan::ProgramResources::WriteDraw(Render::Detail::VulkanEditorGraphicsBridge &bridge,
+    Result<void> EditorViewportRendererVulkan::ProgramResources::WriteDraw(const Render::Detail::VulkanEditorGraphicsBridge &bridge,
                                                                            const ShaderResources &program,
                                                                            const EditorViewportExtent extent,
                                                                            const Render::FrameToken frame, const DrawSlot &slot,

@@ -196,9 +196,11 @@ versions and runner labels may change without changing those contracts.
 
 ### Native macOS qualification runner
 
-The native macOS matrix entry can use a repository runner selected by the
-`HORO_MACOS_METAL_RUNNER` repository variable. Leave it unset to use
-`macos-latest`. Set it to a unique custom label only after verifying a native
+Normal pull-request and push jobs use `macos-latest`, so an unavailable custom
+runner cannot leave ordinary CI queued indefinitely. A manual dispatch can opt
+in with `use_macos_metal_runner` to the repository runner selected by the
+`HORO_MACOS_METAL_RUNNER` repository variable. An unset label uses the hosted
+runner. Set a unique custom label only after verifying a native
 Mac against the rendering architecture's device-family baseline and providing
 an interactive user session for presentation tests. Install Xcode's optional
 Metal Toolchain once during host provisioning with
@@ -206,10 +208,15 @@ Metal Toolchain once during host provisioning with
 `xcrun --sdk macosx metal --version`; `xcrun --find metal` can find a stub even
 when the component is missing. CI checks execution before restoring caches or
 building Debug, so an incomplete Xcode installation fails immediately. A successful device query
-alone does not qualify the engine's GPU tests.
+alone does not qualify the engine's GPU tests. On ephemeral GitHub-hosted Macs,
+CI installs a missing Metal Toolchain with the same Xcode command, within a
+ten-minute step budget, and verifies compiler execution again. Provisioned
+custom hosts must already have the component; CI does not modify their Xcode
+installation. The existing device query and GPU-test selection remain separate
+from compiler readiness.
 
-Only pushes, manual dispatches and same-repository pull requests can select
-this runner. Fork pull requests retain the hosted label. Installing a runner
+Only explicitly opted-in manual dispatches select this runner. Pushes and all
+pull requests retain the hosted label. Installing a runner
 therefore authorizes repository branch code on that host; do not assign this
 label to a general-purpose or differently qualified runner. Workflow routing
 alone is not a host access boundary: provision a host-owned

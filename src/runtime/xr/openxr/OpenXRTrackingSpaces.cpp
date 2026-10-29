@@ -68,8 +68,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(pose.ErrorValue());
         info.referenceSpaceType = request->base == XRSpaceKind::Stage ? XR_REFERENCE_SPACE_TYPE_STAGE : XR_REFERENCE_SPACE_TYPE_LOCAL;
         info.poseInReferenceSpace = pose.Value();
-        const auto result = context.DispatchTable().createReference(context.Native().session, &info, &world);
-        if (XR_FAILED(result) || world == XR_NULL_HANDLE)
+        if (const auto result = context.DispatchTable().createReference(context.Native().session, &info, &world);
+            XR_FAILED(result) || world == XR_NULL_HANDLE)
             return Result<void>::Failure(
                 SpaceFailure("create calibrated World reference space", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
         return Result<void>::Success();

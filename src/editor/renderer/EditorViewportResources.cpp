@@ -98,8 +98,10 @@ namespace Horo::Editor {
         if (resources.size() > ((std::numeric_limits<std::size_t>::max)() - queued) / RequestsPerMesh)
             return Result<void>::Failure(MakeError(Render::FrontendErrors::ResourceUploadCapacityExceeded));
         const auto maximumDrains = queued + resources.size() * RequestsPerMesh;
+        auto remaining = maximumDrains;
         bool progressing = true;
-        for (std::size_t remaining = maximumDrains; remaining > 0 && progressing; --remaining) {
+        while (remaining > 0 && progressing) {
+            --remaining;
             const auto ready = AdvanceColdMeshes(resources);
             if (ready.HasError())
                 return Result<void>::Failure(ready.ErrorValue());

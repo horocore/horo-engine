@@ -83,7 +83,7 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::AppendInput(const XRSessionLifecycle &sessions, const XRActionBindingCoordinator &coordinator,
                                                        RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                        const Runtime::FrameContext &context, const XRWorldOriginRevision origin,
-                                                       Input::InputCollectionFrame &frame) {
+                                                       const Input::InputCollectionFrame &frame) {
         // Revoke the prior sample BEFORE any foreign call: failure cannot revive an earlier opportunity.
         publication.Revoke();
         if (auto current = Current(); current.HasError())
@@ -132,7 +132,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::AppendPreparedInput */
     Result<void> OpenXRApplicationSession::AppendPreparedInput(const PreparedInputSample &sample,
                                                                XR::RuntimeInternal::XRTrackingPublication &publication,
-                                                               Input::InputCollectionFrame &frame) {
+                                                               const Input::InputCollectionFrame &frame) {
         const auto &[poses, actions, state, time, origin, bindingRevision] = sample;
         std::array<RuntimeInternal::TrackingPoseEvidence, 5> normalized{};
         std::size_t poseCount = 0;

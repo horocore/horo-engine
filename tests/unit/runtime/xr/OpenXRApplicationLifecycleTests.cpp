@@ -9,10 +9,15 @@
 #include "support/OpenXRInstalledProductTestFixture.h"
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
 
+#include <type_traits>
+
 extern "C" [[gnu::visibility("default")]] XRAPI_ATTR XrResult XRAPI_CALL HoroTestOpenXRResolve(XrInstance instance, const char *name,
                                                                                                PFN_xrVoidFunction *function) {
     return Horo::Tests::OpenXRApplication::ApplicationNativeScript::Resolve(instance, name, function);
 }
+
+static_assert(!std::is_default_constructible_v<Horo::Application::Internal::OpenXRPlayHost::ConstructionKey>);
+static_assert(!std::is_aggregate_v<Horo::Application::Internal::OpenXRPlayHost::ConstructionKey>);
 
 namespace Horo::Tests::OpenXRApplication {
     namespace {

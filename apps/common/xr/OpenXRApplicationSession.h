@@ -160,7 +160,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> AppendInput(const XR::XRSessionLifecycle &sessions, const XR::XRActionBindingCoordinator &coordinator,
                                                XR::RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                const Runtime::FrameContext &context, XR::XRWorldOriginRevision origin,
-                                               Input::InputCollectionFrame &frame);
+                                               const Input::InputCollectionFrame &frame);
         /** @brief Borrows the exact resolved preparation until input retirement; no native identity or sampling authority. */
         [[nodiscard]] const XR::XRResolvedActionBindings *PreparedBindings() const noexcept;
         /** @brief Returns the exact native-created calibrated World identity for the bound candidate.
@@ -238,7 +238,7 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> AppendPreparedInput(const PreparedInputSample &sample,
                                                        XR::RuntimeInternal::XRTrackingPublication &publication,
-                                                       Input::InputCollectionFrame &frame);
+                                                       const Input::InputCollectionFrame &frame);
 
         /** @brief Validates the same owner/attempt/device and complete native projection protocol before capability construction.
          * @param viewport Same selected renderer owner. @return Actual observed system or the original admission/stale/native error.

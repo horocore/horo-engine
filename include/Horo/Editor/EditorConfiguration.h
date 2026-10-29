@@ -33,6 +33,14 @@ namespace Horo::Editor {
      */
     [[nodiscard]] ModuleConfigurationContribution MakeEditorSettingsContribution(const EditorSettings &settings);
 
+    /** @brief Completes and seals the editor schema without constructing a configuration authority.
+     * @param settings Persisted appearance defaults for descriptors absent from the module schema.
+     * @param schema Active module schema; standalone callers may supply an empty schema.
+     * @return Owned sealed schema suitable for direct ConfigurationService construction.
+     * @pre Module descriptor registration is complete; schema validation failure is an invariant violation.
+     */
+    [[nodiscard]] ConfigurationSchema CreateEditorConfigurationSchema(const EditorSettings &settings, ConfigurationSchema schema = {});
+
     /**
      * @brief Builds the editor appearance configuration authority from persisted defaults.
      * @param settings Persisted editor settings whose appearance values initialize the schema.

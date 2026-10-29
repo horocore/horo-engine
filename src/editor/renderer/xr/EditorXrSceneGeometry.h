@@ -21,7 +21,17 @@ namespace Horo::Editor {
 
     /** @brief Owned exact Scene mapping and mesh leases, with cold bounded topology and allocation-free updates. */
     class PreparedEditorXrGeometry final {
+        struct Impl;
+
     public:
+        /** @brief Factory-only authority for adopting validated geometry through standard RAII allocation. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class EditorXrSceneSourcePort;
+        };
+
+        /** @brief Adopts complete cold geometry; only the capturing source port can issue the key. */
+        PreparedEditorXrGeometry(const ConstructionKey &key, std::unique_ptr<Impl> impl) noexcept;
         static constexpr std::size_t MaximumInstances = 128;
         static constexpr std::size_t MaximumSceneSlots = 4096;
         ~PreparedEditorXrGeometry();
@@ -51,8 +61,6 @@ namespace Horo::Editor {
 
     private:
         friend class EditorXrSceneSourcePort;
-        struct Impl;
-        explicit PreparedEditorXrGeometry(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;
     };
 

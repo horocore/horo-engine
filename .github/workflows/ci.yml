@@ -14,6 +14,11 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
     inputs:
+      use_macos_metal_runner:
+        description: Use the provisioned custom macOS Metal runner instead of GitHub hosted macOS
+        type: boolean
+        required: false
+        default: false
       save_allocation_diagnostics:
         description: Run bounded Windows Save allocation stack diagnostics
         type: boolean
@@ -388,7 +393,7 @@ jobs:
             launcher: ccache
             preset: ci-linux-debug
           - name: macOS / Clang
-            runner: ${{ vars.HORO_MACOS_METAL_RUNNER != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.HORO_MACOS_METAL_RUNNER || 'macos-latest' }}
+            runner: ${{ github.event_name == 'workflow_dispatch' && inputs.use_macos_metal_runner && vars.HORO_MACOS_METAL_RUNNER != '' && vars.HORO_MACOS_METAL_RUNNER || 'macos-latest' }}
             cc: clang
             cxx: clang++
             launcher: ccache
@@ -408,17 +413,17 @@ jobs:
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
 
+      - name: Prepare native macOS Metal compiler
+        if: matrix.name == 'macOS / Clang'
+        timeout-minutes: 10
+        run: bash .github/scripts/prepare_macos_toolchain.sh
+
       # Native publication requires a canonical parent. macOS TMPDIR may contain
       # /var aliases; establish the host temp root before tools and tests use it.
       - name: Canonicalize macOS temporary directory
         if: matrix.name == 'macOS / Clang'
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" != macOS ]]; then
-            echo '::error::The macOS qualification runner must be a native Mac.'
-            exit 1
-          fi
-          xcrun --sdk macosx metal --version
           python3 - <<'PYTHON'
           import os
           import pathlib

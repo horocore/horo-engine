@@ -2,6 +2,10 @@
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
 
 #include <thread>
+#include <type_traits>
+
+static_assert(!std::is_default_constructible_v<Horo::Editor::PreparedEditorXrGeometry::ConstructionKey>);
+static_assert(!std::is_aggregate_v<Horo::Editor::PreparedEditorXrGeometry::ConstructionKey>);
 
 namespace {
     using namespace Horo::Editor::SceneDocumentTestSupport;
