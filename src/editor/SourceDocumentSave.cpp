@@ -1,12 +1,49 @@
 #include "Horo/Foundation/Platform.h"
 #include "SourceDocumentInternal.h"
 
+#include <algorithm>
+#include <cmath>
 #include <new>
 #include <span>
 #include <type_traits>
 #include <utility>
 
 namespace Horo::Editor {
+    /** @copydoc SourceDocumentService::UpdateAutosave */
+    std::optional<Result<SourceSaveResult>> SourceDocumentService::UpdateAutosave(const float elapsedSeconds, const int delaySeconds,
+                                                                                  DurableFileSystem &files) {
+        if (const auto checked = storage_->Check(); checked.HasError())
+            return Result<SourceSaveResult>::Failure(checked.ErrorValue());
+        if (!std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F)
+            return std::nullopt;
+        for (auto &record : storage_->records) {
+            if (delaySeconds <= 0) {
+                record.autosaveElapsed = record.autosaveRetry = 0;
+                record.autosaveRevision = 0;
+                continue;
+            }
+            if (record.autosaveRevision != record.root->revision) {
+                record.autosaveRevision = record.root->revision;
+                record.autosaveDirty = SourceDocumentSnapshot{record.root}.Dirty();
+                record.autosaveElapsed = 0;
+            } else if (record.autosaveDirty) {
+                record.autosaveElapsed = std::min(300.0F, record.autosaveElapsed + elapsedSeconds);
+            }
+            record.autosaveRetry = std::max(0.0F, record.autosaveRetry - elapsedSeconds);
+        }
+        if (delaySeconds <= 0)
+            return std::nullopt;
+        for (auto &record : storage_->records) {
+            if (!record.autosaveDirty || record.autosaveRetry > 0 || record.autosaveElapsed < std::clamp(delaySeconds, 1, 300))
+                continue;
+            record.autosaveElapsed = 0;
+            auto result = Save({record.root->identity.instance, record.root->revision, std::nullopt}, files);
+            record.autosaveRetry = result.HasError() || result.Value().disposition != SourceSaveDisposition::Durable ? 30.0F : 0.0F;
+            return result;
+        }
+        return std::nullopt;
+    }
+
     static_assert(std::is_nothrow_move_constructible_v<SourceSaveResult>);
     static_assert(std::is_nothrow_move_assignable_v<Result<SourceSaveResult>>);
     static_assert(std::is_nothrow_move_assignable_v<Error>);

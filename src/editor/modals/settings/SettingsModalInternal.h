@@ -13,7 +13,7 @@ namespace Horo::Editor::SettingsModalInternal {
         constexpr float ModalW = 960.0F;
         constexpr float ModalH = 680.0F;
         constexpr float ViewportPad = 48.0F;
-        constexpr float HeaderH = 57.0F;
+        constexpr float HeaderH = 48.0F;
         constexpr float FooterH = Theme::Layout::FooterH;
         constexpr float NavW = 200.0F;
         constexpr float Radius = 4.0F;
@@ -33,6 +33,8 @@ namespace Horo::Editor::SettingsModalInternal {
         Plugins,
         Collision,
         ExtensionPages,
+        CodeEditorAppearance,
+        Keymaps,
     };
 
     struct NavItem {
@@ -80,6 +82,8 @@ namespace Horo::Editor::SettingsModalInternal {
 
     [[nodiscard]] bool ContainsCaseInsensitive(const char *text, const std::string &query);
 
+    /** @brief Draws a stable typed settings destination independently of its translated display label. */
+    void DrawNavItem(SettingsState &st, const NavItem &item, const EditorGuiContext &ctx);
     void DrawNavigationContent(SettingsState &st, const EditorGuiContext &ctx);
     void DrawNavigationSettings(SettingsState &state, const EditorGuiContext &context);
     void DrawContent(SettingsState &st, const EditorGuiContext &ctx);

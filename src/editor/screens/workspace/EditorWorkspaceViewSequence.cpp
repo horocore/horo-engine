@@ -1,4 +1,5 @@
 #include "Horo/Editor/DocumentRecoveryService.h"
+#include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/modals/settings/NavigationSettingsDraft.h"
@@ -12,36 +13,11 @@
 #include <span>
 
 namespace Horo::Editor {
-    namespace {
-        /** @brief Emits stable-neighbor reorder requests for the active document tab. */
-        void DrawDocumentReorderActions(const ILocalizationService &localization, const std::span<const WorkspaceDocumentTab> tabs,
-                                        const std::size_t index, EditorWorkspaceViewCommandData &outCommand) {
-            const auto instance = tabs[index].identity.instance;
-            ImGui::SameLine();
-            if (Ui::Button({.label = localization.Get("editor", "workspace.documents.move_left").c_str(),
-                            .variant = Ui::ButtonVariant::Secondary,
-                            .enabled = index > 0})) {
-                outCommand.command = EditorWorkspaceViewCommand::MoveWorkspaceDocument;
-                outCommand.documentInstance = instance;
-                outCommand.documentMoveBefore = tabs[index - 1].identity.instance;
-            }
-            ImGui::SameLine();
-            if (Ui::Button({.label = localization.Get("editor", "workspace.documents.move_right").c_str(),
-                            .variant = Ui::ButtonVariant::Secondary,
-                            .enabled = index + 1 < tabs.size()})) {
-                outCommand.command = EditorWorkspaceViewCommand::MoveWorkspaceDocument;
-                outCommand.documentInstance = instance;
-                outCommand.documentMoveBefore = index + 2 < tabs.size() ? std::optional{tabs[index + 2].identity.instance} : std::nullopt;
-            }
-        }
-    }  // namespace
-
     /** @copydoc EditorWorkspaceView::DocumentTabHeight */
     float EditorWorkspaceView::DocumentTabHeight(const WorkspaceDockArea area) const {
         if (area != WorkspaceDockArea::Document)
             return 0.0F;
-        const auto &tokens = Theme::GetActiveTokens();
-        return std::max(36.0F * tokens.sizes.uiScale, Theme::TextPx::Label() + tokens.spacing.propertyRowGap * 2.0F);
+        return Ui::DocumentTabHeight();
     }
 
     /** @copydoc EditorWorkspaceView::DrawDockContent */
@@ -76,7 +52,6 @@ namespace Horo::Editor {
                                                         EditorWorkspaceViewCommandData &outCommand) {
         const auto tabs = viewModel.workspacePanelHost.DocumentTabs();
         const auto active = viewModel.workspacePanelHost.ActiveDocument();
-        const auto &tokens = Theme::GetActiveTokens();
         for (std::size_t index = 0; index < tabs.size(); ++index) {
             const auto &tab = tabs[index];
             const auto instance = tab.identity.instance;
@@ -84,30 +59,19 @@ namespace Horo::Editor {
             ImGui::PushID(id.c_str());
             const std::string &path = tab.identity.key.source.Value();
             const auto separator = path.rfind('/');
-            const std::string title =
-                path.substr(separator == std::string::npos ? 0 : separator + 1) + (tab.dirty ? " *" : "") + "###document";
-            if (const float width = std::min(ImGui::CalcTextSize(title.c_str(), nullptr, true).x + tokens.spacing.propertyRowGap * 4.0F,
-                                             240.0F * tokens.sizes.uiScale);
-                Ui::Button({.label = title.c_str(),
-                            .size = {width, 0},
-                            .variant = active == instance ? Ui::ButtonVariant::Primary : Ui::ButtonVariant::Secondary,
-                            .font = m_context.theme.fonts.sans})) {
-                outCommand.command = EditorWorkspaceViewCommand::FocusWorkspaceDocument;
+            const std::string title = path.substr(separator == std::string::npos ? 0 : separator + 1) + (tab.dirty ? " *" : "");
+            const auto action =
+                Ui::DocumentTabButton("document", title.c_str(), m_context.localization.Get("editor", "workspace.documents.close").c_str(),
+                                      active == instance, m_context.theme.fonts);
+            if (action != Ui::DocumentTabAction::None) {
+                outCommand.command = action == Ui::DocumentTabAction::Close ? EditorWorkspaceViewCommand::CloseWorkspaceDocument
+                                                                            : EditorWorkspaceViewCommand::FocusWorkspaceDocument;
                 outCommand.documentInstance = instance;
             }
             if (ImGui::IsItemHovered())
                 Ui::ShowTooltip(path.c_str(), &m_context.theme.fonts);
             if (active == instance && active != m_lastPresentedDocument)
                 ImGui::SetScrollHereX(0.5F);
-            ImGui::SameLine();
-            if (const std::string close = m_context.localization.Get("editor", "workspace.documents.close") + "###close";
-                Ui::Button({.label = close.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = m_context.theme.fonts.sans})) {
-                outCommand.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument;
-                outCommand.documentInstance = instance;
-            }
-            if (active == instance) {
-                DrawDocumentReorderActions(m_context.localization, tabs, index, outCommand);
-            }
             ImGui::SameLine();
             ImGui::PopID();
         }
@@ -147,6 +111,7 @@ namespace Horo::Editor {
             outCommand.command = EditorWorkspaceViewCommand::SaveSourceDocument;
             outCommand.sourceSave = SourceSaveRequest{tab->identity.instance, source.Revision(), {}};
         }
+        ImGui::SameLine();
         const auto history = index < viewModel.sourceHistory.size() ? viewModel.sourceHistory[index] : SourceHistoryState{};
         DrawSourceEditor(tab->identity.instance, source, history, viewModel, outCommand);
         return true;
@@ -265,9 +230,12 @@ namespace Horo::Editor {
         auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
         const bool focus = m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();
-        auto intent =
-            widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent}, &m_context.theme.fonts);
-        outCommand.sourceTextInputOwned = widget.OwnsInput() || presentation->tools.OwnsInput();
+        auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent,
+                                   &m_context.settings.settings.keymap.profile,
+                                   static_cast<float>(m_context.settings.settings.codeFontSizePx), presentation->tools.HandledShortcut(),
+                                   &m_context.settings.settings.codeEditor, m_context.settings.settings.codeFontFamily},
+                                  &m_context.theme.fonts);
+        outCommand.sourceTextInputOwned = toolIntent.has_value() || widget.OwnsInput() || presentation->tools.OwnsInput();
         m_sourceSession.Presented(instance);
         if (toolIntent)
             intent = std::move(toolIntent);

@@ -1,5 +1,6 @@
 #include "EditorWorkspaceView.h"
 
+#include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiScreenHost.h"
@@ -10,9 +11,10 @@
 #include <array>
 #include <cstring>
 #include <format>
+#include <imgui_internal.h>
 
 namespace Horo::Editor {
-    constexpr float kMenuBarH = 32.0F;
+    constexpr float kMenuBarH = 44.0F;
     constexpr float kRecoveryBarH = 40.0F;
     constexpr float kActivityBarW = 42.0F;
     constexpr float kMinimumDocumentW = 120.0F;
@@ -555,30 +557,28 @@ namespace Horo::Editor {
             }
         }
 
-        /** @brief Place the localized profiles action only when it fits before the existing Play controls. */
-        void DrawPlayProfilesControl(const float playX, const bool idle, EditorWorkspaceViewCommandData &outCommand,
-                                     const EditorGuiContext &context) {
-            const std::string label = context.localization.Get("editor", "workspace.play_topology.button");
-            const auto metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Small);
-            float width{};
-            {
-                Theme::ScopedTextStyle textStyle(context.theme.fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
-                width = ImGui::CalcTextSize(label.c_str()).x + 2 * metrics.paddingX;
-            }
-            const float gap = Ui::ScaledLayoutValue(8);
-            const float x = playX - width - gap;
-            if (x < ImGui::GetCursorPosX() + gap)
+        /** @brief Draws stable transport slots from the canonical play lifecycle without selecting a runtime backend. */
+        /** @brief Presents cached project identity without overlapping the transport controls. */
+        void DrawProjectIdentity(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context) {
+            if (viewModel.projectName.empty())
                 return;
-            const float height = Ui::ScaledLayoutValue(26.0F);
-            ImGui::SetCursorPos({x, (ImGui::GetWindowHeight() - height) * 0.5F});
-            if (const std::string stableLabel = label + "###workspace_play_profiles";
-                Ui::Button({.label = stableLabel.c_str(),
-                            .size = {0.0F, 26.0F},
-                            .variant = Ui::ButtonVariant::Secondary,
-                            .enabled = idle,
-                            .font = context.theme.fonts.sans,
-                            .componentSize = Ui::ComponentSize::Small}))
-                outCommand.command = EditorWorkspaceViewCommand::OpenPlayTopologyProfiles;
+            const float gap = Ui::ScaledLayoutValue(8);
+            const float iconSize = Ui::ScaledLayoutValue(20);
+            const float available = ImGui::GetWindowWidth() - ImGui::GetCursorPosX() - Ui::ScaledLayoutValue(140);
+            const float width = std::min(ImGui::GetWindowWidth() * 0.25F, available);
+            if (width < iconSize + gap)
+                return;
+            ImGui::SetCursorPosY(0);
+            const ImVec2 start = ImGui::GetCursorScreenPos();
+            ImGui::Dummy({width, kMenuBarH});
+            auto *drawList = ImGui::GetWindowDrawList();
+            Ui::DrawEditorIcon(drawList, Ui::UiIcon::Folder, {start.x, start.y + (kMenuBarH - iconSize) * 0.5F}, {iconSize, iconSize},
+                               Theme::U32(Theme::Accent()));
+            const float y = start.y + (kMenuBarH - ImGui::GetTextLineHeight()) * 0.5F;
+            ImGui::RenderTextEllipsis(drawList, {start.x + iconSize + gap, y}, {start.x + width, y + ImGui::GetTextLineHeight()},
+                                      start.x + width, start.x + width, viewModel.projectName.c_str(), nullptr, nullptr);
+            if (ImGui::IsItemHovered())
+                Ui::ShowTooltip(viewModel.projectName.c_str(), &context.theme.fonts);
             ImGui::SameLine(0, gap);
         }
 
@@ -586,42 +586,63 @@ namespace Horo::Editor {
                               EditorWorkspaceViewCommandData &outCommand, const EditorGuiContext &context) {
             const bool idle = viewModel.playState == EditorPlayState::Idle || viewModel.playState == EditorPlayState::Failed;
             const bool paused = viewModel.playState == EditorPlayState::Paused;
-            float controlWidth = 130.0F;
-            if (idle)
-                controlWidth = 64.0F;
-            else if (paused)
-                controlWidth = 196.0F;
-            const float controlX = availableRight - controlWidth;
-            if (controlX < ImGui::GetCursorPosX() + 8.0F)
+            const bool playing = viewModel.playState == EditorPlayState::Playing;
+            const bool interactive = !viewModel.projectRoot.empty() && (idle || paused || playing);
+            const float gap = Ui::ScaledLayoutValue(4);
+            const float controlSize = Ui::ScaledLayoutValue(32);
+            const float transportWidth = controlSize * 3 + gap * 2;
+            const auto label = context.localization.Get("editor", "workspace.play_topology.button");
+            const auto metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Small);
+            float profileWidth{};
+            {
+                Theme::ScopedTextStyle text(context.theme.fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
+                profileWidth = ImGui::CalcTextSize(label.c_str()).x + metrics.paddingX * 2;
+            }
+            const float firstAvailable = ImGui::GetCursorPosX() + gap;
+            const bool showProfile = availableRight - firstAvailable >= transportWidth + profileWidth + gap * 3;
+            float width = transportWidth;
+            if (showProfile)
+                width += profileWidth + gap * 3;
+            if (availableRight - firstAvailable < transportWidth)
                 return;
-            DrawPlayProfilesControl(controlX, idle, outCommand, context);
-            ImGui::SetCursorPosX(controlX);
-            const auto drawButton = [&](const char *labelKey, const char *stableId, const bool enabled,
-                                        const EditorWorkspaceViewCommand command) {
-                const std::string label = context.localization.Get("editor", labelKey) + "###" + stableId;
-                ImGui::SetCursorPosY((ImGui::GetWindowHeight() - Ui::ScaledLayoutValue(26.0F)) * 0.5F);
-                if (Ui::Button({.label = label.c_str(),
-                                .size = {64.0F, 26.0F},
-                                .variant = Ui::ButtonVariant::Secondary,
-                                .enabled = enabled,
-                                .font = context.theme.fonts.sans,
-                                .componentSize = Ui::ComponentSize::Small})) {
+            const float x = std::clamp((ImGui::GetWindowWidth() - width) * 0.5F, firstAvailable, availableRight - width);
+            const float controlY = (ImGui::GetWindowHeight() - controlSize) * 0.5F;
+            ImGui::SetCursorPos({x, controlY});
+            const auto action = [&](const char *id, const Ui::IconButtonGlyph icon, const char *tooltipKey, const bool enabled,
+                                    const bool selected, const EditorWorkspaceViewCommand command) {
+                ImGui::SetCursorPosY(controlY);
+                const auto &tooltip = context.localization.Get("editor", tooltipKey);
+                if (Ui::IconButton({.id = id,
+                                    .glyph = icon,
+                                    .size = {32, 32},
+                                    .tooltip = tooltip.c_str(),
+                                    .enabled = enabled,
+                                    .componentSize = Ui::ComponentSize::Small,
+                                    .borderless = true,
+                                    .selected = selected}))
                     outCommand.command = command;
-                }
             };
-            const bool transition = viewModel.playState == EditorPlayState::Starting || viewModel.playState == EditorPlayState::Stopping;
-            if (idle) {
-                drawButton("web_workspace.toolbar.play", "workspace_play_play", !transition, EditorWorkspaceViewCommand::StartPlay);
-            } else if (paused) {
-                drawButton("workspace.play.resume", "workspace_play_resume", true, EditorWorkspaceViewCommand::ResumePlay);
-                ImGui::SameLine(0.0F, 2.0F);
-                drawButton("workspace.play.step", "workspace_play_step", true, EditorWorkspaceViewCommand::StepPlay);
-                ImGui::SameLine(0.0F, 2.0F);
-                drawButton("workspace.play.stop", "workspace_play_stop", true, EditorWorkspaceViewCommand::StopPlay);
-            } else {
-                drawButton("workspace.play.pause", "workspace_play_pause", !transition, EditorWorkspaceViewCommand::PausePlay);
-                ImGui::SameLine(0.0F, 2.0F);
-                drawButton("workspace.play.stop", "workspace_play_stop", !transition, EditorWorkspaceViewCommand::StopPlay);
+            action("workspace_play_toggle", idle ? Ui::IconButtonGlyph::Play : Ui::IconButtonGlyph::Stop,
+                   idle ? "web_workspace.toolbar.play" : "workspace.play.stop", interactive, !idle,
+                   idle ? EditorWorkspaceViewCommand::StartPlay : EditorWorkspaceViewCommand::StopPlay);
+            ImGui::SameLine(0, gap);
+            action("workspace_play_pause", paused ? Ui::IconButtonGlyph::Play : Ui::IconButtonGlyph::Pause,
+                   paused ? "workspace.play.resume" : "workspace.play.pause", interactive && (playing || paused), paused,
+                   paused ? EditorWorkspaceViewCommand::ResumePlay : EditorWorkspaceViewCommand::PausePlay);
+            ImGui::SameLine(0, gap);
+            action("workspace_play_step", Ui::IconButtonGlyph::Step, "workspace.play.step", interactive && paused, false,
+                   EditorWorkspaceViewCommand::StepPlay);
+            if (showProfile) {
+                ImGui::SameLine(0, gap * 3);
+                ImGui::SetCursorPosY((ImGui::GetWindowHeight() - Ui::ScaledLayoutValue(28)) * 0.5F);
+                const auto stableLabel = label + "###workspace_play_profiles";
+                if (Ui::Button({.label = stableLabel.c_str(),
+                                .size = {0, 28},
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .enabled = idle,
+                                .font = context.theme.fonts.sans,
+                                .componentSize = Ui::ComponentSize::Small}))
+                    outCommand.command = EditorWorkspaceViewCommand::OpenPlayTopologyProfiles;
             }
         }
 
@@ -640,16 +661,18 @@ namespace Horo::Editor {
 
     void EditorWorkspaceView::DrawMenuBar(const ImVec2 &display, const EditorWorkspaceViewModel &viewModel,
                                           EditorWorkspaceViewCommandData &outCommand) const {
+        Theme::ScopedTextStyle text(m_context.theme.fonts.sans, Theme::TextPx::Label(), Theme::FontPx::Sans);
         ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
         ImGui::SetNextWindowSize(ImVec2(display.x, kMenuBarH));
         ImGui::SetNextWindowBgAlpha(1.0F);
         ImGui::PushStyleColor(ImGuiCol_WindowBg, Theme::Bg0());
+        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, Theme::Bg0());
         ImGui::PushStyleColor(ImGuiCol_Border, Theme::Border());
         ImGui::PushStyleColor(ImGuiCol_PopupBg, Theme::Bg2());
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0F);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0F, 0.0F));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0F, 7.0F));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0F, std::max(0.0F, (kMenuBarH - ImGui::GetTextLineHeight()) * 0.5F)));
 
         ImGui::Begin("##MenuBar", nullptr,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
@@ -674,16 +697,8 @@ namespace Horo::Editor {
                 DrawFallbackMenus(viewModel, outCommand, m_context);
             }
 
-            const std::string version = std::format("Horo Engine {}", HORO_ENGINE_VERSION_STRING);
-            const float versionWidth = ImGui::CalcTextSize(version.c_str()).x;
-            const float versionX = display.x - versionWidth - 12.0F;
-            DrawPlayControls(versionX - 12.0F, viewModel, outCommand, m_context);
-            if (ImGui::GetCursorPosX() + 12.0F < versionX) {
-                ImGui::SetCursorPos({versionX, (ImGui::GetWindowHeight() - ImGui::GetTextLineHeight()) * 0.5F});
-                ImGui::PushStyleColor(ImGuiCol_Text, Theme::Dim());
-                ImGui::TextUnformatted(version.c_str());
-                ImGui::PopStyleColor();
-            }
+            DrawProjectIdentity(viewModel, m_context);
+            DrawPlayControls(display.x - Ui::ScaledLayoutValue(12), viewModel, outCommand, m_context);
 
             ImGui::EndMenuBar();
         }
@@ -693,7 +708,7 @@ namespace Horo::Editor {
                                             ImVec2(windowPos.x + display.x, windowPos.y + kMenuBarH - 1.0F), Theme::U32(Theme::Border()));
         ImGui::End();
         ImGui::PopStyleVar(4);
-        ImGui::PopStyleColor(3);
+        ImGui::PopStyleColor(4);
     }
 
     void EditorWorkspaceView::DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const {
@@ -917,42 +932,13 @@ namespace Horo::Editor {
         ImGui::PushID(panelId.c_str());
         const char *title =
             panel == panels.end() ? panelId.c_str() : m_context.localization.Get("editor", (*panel)->GetDisplayName()).c_str();
-        const auto &tokens = Theme::GetActiveTokens();
-        const float scale = tokens.sizes.uiScale;
-        const float tabHeight = DocumentTabHeight(WorkspaceDockArea::Document);
-        const float textInset = tokens.spacing.sidebarPaddingX;
-        Theme::ScopedTextStyle textStyle(m_context.theme.fonts.sans, Theme::TextPx::Label(), Theme::FontPx::Sans);
-        const float closeWidth = 24.0F * scale;
-        const bool closable = panelId != "horo.viewport";
-        const float tabWidth = ImGui::CalcTextSize(title).x + textInset * 2.0F + (closable ? closeWidth : 0.0F);
-        const ImVec2 tabMin = ImGui::GetCursorScreenPos();
-        const ImVec2 tabMax{tabMin.x + tabWidth, tabMin.y + tabHeight};
-        const bool clicked = ImGui::InvisibleButton("##DocumentTab", {tabWidth, tabHeight});
-        const bool hovered = ImGui::IsItemHovered();
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        ImVec4 tabSurface = hovered ? Theme::Hover() : Theme::Bg0();
-        if (active)
-            tabSurface = Theme::Bg2();
-        drawList->AddRectFilled(tabMin, tabMax, Theme::U32(tabSurface));
-        if (active)
-            drawList->AddRectFilled({tabMin.x, tabMax.y - 2.0F * scale}, tabMax, Theme::U32(Theme::Accent()));
-        const ImVec2 textSize = ImGui::CalcTextSize(title);
-        drawList->AddText({tabMin.x + textInset, tabMin.y + (tabHeight - textSize.y) * 0.5F}, Theme::U32(Theme::Text()), title);
-        if (closable) {
-            const ImVec2 closeCenter{tabMax.x - closeWidth * 0.5F, tabMin.y + tabHeight * 0.5F};
-            const float arm = 4.0F * scale;
-            drawList->AddLine({closeCenter.x - arm, closeCenter.y - arm}, {closeCenter.x + arm, closeCenter.y + arm},
-                              Theme::U32(Theme::Muted()), 1.5F * scale);
-            drawList->AddLine({closeCenter.x - arm, closeCenter.y + arm}, {closeCenter.x + arm, closeCenter.y - arm},
-                              Theme::U32(Theme::Muted()), 1.5F * scale);
-        }
-        if (clicked) {
-            if (closable && ImGui::GetMousePos().x >= tabMax.x - closeWidth) {
-                outCommand.command = EditorWorkspaceViewCommand::CloseWorkspacePanel;
-            } else {
-                outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
-                outCommand.targetIndex = 3;
-            }
+        const auto action =
+            Ui::DocumentTabButton("document", title, m_context.localization.Get("editor", "workspace.documents.close").c_str(), active,
+                                  m_context.theme.fonts, panelId != "horo.viewport");
+        if (action != Ui::DocumentTabAction::None) {
+            outCommand.command = action == Ui::DocumentTabAction::Close ? EditorWorkspaceViewCommand::CloseWorkspacePanel
+                                                                        : EditorWorkspaceViewCommand::ChangeActivePanel;
+            outCommand.targetIndex = 3;
             outCommand.stringPayload = panelId;
         }
         if (panel != panels.end())

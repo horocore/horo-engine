@@ -33,7 +33,6 @@ namespace Horo::Application::Internal {
     struct HostModuleSelection {
         HostKind host{HostKind::Headless};         /**< Host whose real linked module set is composed. */
         HostRenderer renderer{HostRenderer::None}; /**< Editor renderer selected before presentation creation. */
-        bool includeOpenTelemetry{false};          /**< Whether the optional OpenTelemetry module is linked. */
     };
 
     /**

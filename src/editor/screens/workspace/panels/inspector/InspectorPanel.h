@@ -2,6 +2,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
 #include "NavigationInspectorSession.h"
+#include "add_component/AddComponentRegistry.h"
 #include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
 #include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
 
@@ -62,10 +63,6 @@ namespace Horo::Editor {
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                               const EditorGuiContext &context);
-        /** @brief Stages explicit Physics creation in the existing add-component route without document publication. */
-        void DrawAddPhysicsComponents(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
-                                      const EditorGuiContext &context);
-
         /** @brief Draw cached portable Physics drafts and submit only explicit complete gestures to the host. */
         void DrawPhysicsInspector(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
@@ -103,6 +100,7 @@ namespace Horo::Editor {
         void DrawEmptyState(EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         static void AdoptCommand(EditorWorkspaceViewCommandData &destination, EditorWorkspaceViewCommandData source);
 
+        AddComponentRegistry m_addComponents;
         std::unique_ptr<InspectorContributionView> m_contributions;
         Input::InputRouter *m_inputRouter{nullptr};
         Input::InputContextToken *m_workspaceInputContext{}; /**< Borrowed only for this attachment. */

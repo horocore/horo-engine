@@ -512,11 +512,23 @@ namespace Horo::Extensions {
                                                  ExtensionContributionManifest &contribution) {
                 if (!value.is_object())
                     return Reject(path, "extension.manifest.invalid_type", "Contribution must be an object.");
-                if (!AllowFields(value, path, {"type", "id", "module"}))
+                if (!AllowFields(value, path, {"type", "id", "module", "resource"}))
                     return false;
                 if (!ReadString(value, "type", path, contribution.type, Limits().maximumIdentifierBytes, true) ||
                     !ReadId(value, "id", path, contribution.id) || !ReadId(value, "module", path, contribution.owningModule)) {
                     return false;
+                }
+                if (!ReadString(value, "resource", path, contribution.resource, Limits().maximumStringBytes, false))
+                    return false;
+                if (contribution.type == "editor.theme") {
+                    const auto &resource = contribution.resource;
+                    if (resource.empty() || resource.size() > 256 || resource.front() == '/' || resource.find("..") != std::string::npos ||
+                        resource.find('\\') != std::string::npos || resource.find(':') != std::string::npos || !resource.ends_with(".json"))
+                        return Reject(ChildPath(path, "resource"), "extension.manifest.invalid_resource",
+                                      "Theme resource must be a package-relative JSON path.");
+                } else if (!contribution.resource.empty()) {
+                    return Reject(ChildPath(path, "resource"), "extension.manifest.invalid_resource",
+                                  "This contribution does not accept a resource.");
                 }
                 return IsCanonicalContributionType(contribution.type, Limits().maximumIdentifierBytes) ||
                        Reject(ChildPath(path, "type"), "extension.manifest.invalid_identifier", "Contribution type is not canonical.");

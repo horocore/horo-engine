@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/design_system/components/EditorUiCustomResources.h"
+#include "editor/input/EditorInputActions.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 
 #include <algorithm>
@@ -209,13 +210,50 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ExtensionActivityView::SetInputAdmitted */
-    void ExtensionActivityView::SetInputAdmitted(const bool admitted) noexcept {
+    void ExtensionActivityView::SetInputAdmitted(const bool admitted) {
         inputAdmitted_ = admitted;
         for (auto &entry : entries_)
             if (entry.render)
                 Ui::ApplyEditorUiInput(*entry.render, admitted && entry.projection.surface.activity.enabled);
-        if (host_)
+        if (host_) {
             host_->SetInputAdmitted(admitted);
+            if (admitted && commandBindingsValid_ && !ImGui::GetIO().AppFocusLost)
+                for (const auto &command : commands_)
+                    for (const auto &binding : command.bindings) {
+                        const auto &modifiers = binding.requiredModifiers;
+                        if (ImGui::GetIO().WantTextInput && !modifiers.control && !modifiers.command && !modifiers.alt)
+                            continue;
+                        if (Ui::ShortcutPressed(std::span{&binding, 1})) {
+                            if (host_->QueueCommand(command.id).HasValue())
+                                ImGui::GetIO().InputQueueCharacters.resize(0);
+                            return;
+                        }
+                    }
+        }
+    }
+
+    /** @copydoc ExtensionActivityView::PrepareCommands */
+    void ExtensionActivityView::PrepareCommands() {
+        const auto surfaceRevision = host_->Registry().Revision();
+        if (commandSurfaceRevision_ == surfaceRevision && commandSettingsRevision_ == context_.settings.revision)
+            return;
+        commands_.clear();
+        std::vector<Input::ActionDescriptor> actions;
+        const auto &profile = context_.settings.settings.keymap.profile;
+        for (const auto &entry : host_->PreparedCommands()) {
+            std::vector<Input::InputBinding> defaults;
+            if (const auto binding = ParseEditorShortcut(entry.command.shortcut))
+                defaults.push_back(*binding);
+            actions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
+                               Input::InputContextId{kEditorWorkspaceInputContext}, false, defaults});
+            for (const auto &override : profile.overrides)
+                if (override.action.Value() == entry.command.id.value)
+                    defaults = override.bindings;
+            commands_.push_back({entry.command.id.value, std::move(defaults)});
+        }
+        commandBindingsValid_ = Input::ValidateBindingProfile(EditorKeymapActions(profile, actions), profile).IsValid();
+        commandSurfaceRevision_ = surfaceRevision;
+        commandSettingsRevision_ = context_.settings.revision;
     }
 
     void ExtensionActivityView::Update() {
@@ -223,6 +261,7 @@ namespace Horo::Editor {
             return;
         if (ImGui::GetCurrentContext())
             static_cast<void>(themeCapture_.Update(context_));
+        PrepareCommands();
         ApplyPendingMove();
         const auto revision = host_->Registry().Revision();
         const auto &locale = context_.settings.settings.languageTag;

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Mapping, Sequence
-from urllib.parse import ParseResult, quote, urlencode, urlparse
+from urllib.parse import quote, urlencode
 import argparse
 import asyncio
 import calendar
@@ -26,7 +26,6 @@ import re
 import shlex
 import shutil
 import signal
-import socket
 import struct
 import subprocess
 import sys
@@ -1196,8 +1195,11 @@ def notes_main(argv=None) -> int:
         entry = select_version(parse_changelog(args.source.read_text(encoding="utf-8")), args.version)
         snapshot = make_snapshot(entry, args.product)
         snapshot_path, header_path = generated_outputs()
-        snapshot_path.write_bytes(snapshot_bytes(snapshot))
-        header_path.write_text(render_header(snapshot), encoding="utf-8")
+        for path, content in ((snapshot_path, snapshot_bytes(snapshot)),
+                              (header_path, render_header(snapshot).encode("utf-8"))):
+            # Preserve timestamps so an unchanged configure does not rebuild Welcome.
+            if not path.exists() or path.read_bytes() != content:
+                path.write_bytes(content)
     except (OSError, UnicodeError, NotesError) as error:
         print(f"[release-notes] {error}", file=sys.stderr)
         return 1
@@ -2263,7 +2265,6 @@ DEFAULT_ENV_FILE_NAME = ".env.local"
 DEFAULT_ENV_FILE = REPOSITORY_ROOT / DEFAULT_ENV_FILE_NAME
 DEFAULT_BUILD_DIRECTORY = REPOSITORY_ROOT / "build" / "dev-editor"
 DEFAULT_CI_BUILD_DIRECTORY = REPOSITORY_ROOT / "build" / "ci"
-DEFAULT_OTLP_ENDPOINT = "http://127.0.0.1:4318"
 _ENVIRONMENT_KEY = re.compile(r"^[A-Za-z_]\w*$", re.ASCII)
 
 # Diagnostic Item String Constants (Sonar S1192)
@@ -2274,7 +2275,6 @@ _TOOLCHAIN_CLANG_FORMAT_NAME = "clang-format"
 _TOOLCHAIN_CCACHE_NAME = "ccache"
 _PYTHON_PYTEST_NAME = "pytest Module"
 _GRAPHICS_DISPLAY_NAME = "Interactive Display"
-_OBSERVABILITY_OTLP_NAME = "OTLP Collector"
 _SONAR_TOKEN_ENV_KEY = "HORO_SONAR_TOKEN"
 _SONAR_DEFAULT_COMPILE_COMMANDS = "build/ci/compile_commands.json"
 
@@ -2293,23 +2293,6 @@ class CheckStatus(Enum):
     WARN = "WARN"
     ERROR = "ERROR"
     INFO = "INFO"
-
-
-@dataclass(frozen=True)
-class Endpoint:
-    """Validated OTLP base endpoint and its TCP reachability address."""
-
-    url: str
-    host: str
-    port: int
-
-
-@dataclass(frozen=True)
-class DeveloperSettings:
-    """Resolved settings consumed only by this developer runner."""
-
-    otel_export_enabled: bool
-    endpoint: Endpoint
 
 
 @dataclass
@@ -2460,70 +2443,6 @@ def parse_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
-def parse_enabled(value: str, setting_name: str = "HORO_DEV_OTEL_EXPORT") -> bool:
-    """Parse the explicit ON/OFF developer switch."""
-    normalized = value.strip().upper()
-    if normalized == "ON":
-        return True
-    if normalized == "OFF":
-        return False
-    raise ConfigurationError(f"{setting_name} must be ON or OFF")
-
-
-def _validate_url_structure(parsed: ParseResult, setting_name: str) -> None:
-    """Validate protocol and general URL constraints."""
-    if parsed.scheme not in {"http", "https"}:
-        raise ConfigurationError(f"{setting_name} must use http or https")
-    if parsed.username is not None or parsed.password is not None:
-        raise ConfigurationError(f"{setting_name} must not include credentials")
-    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
-        raise ConfigurationError(f"{setting_name} must be a base URL without a path, query, or fragment")
-
-
-def validate_endpoint(value: str) -> Endpoint:
-    """Validate an OTLP HTTP base URL without sending protocol traffic."""
-    if any(character.isspace() for character in value) or "?" in value or "#" in value:
-        raise ConfigurationError("HORO_OTEL_ENDPOINT must not contain whitespace, a query, or a fragment")
-    try:
-        parsed = urlparse(value)
-        port = parsed.port
-    except ValueError as error:
-        raise ConfigurationError(f"HORO_OTEL_ENDPOINT is invalid: {error}") from error
-
-    _validate_url_structure(parsed, "HORO_OTEL_ENDPOINT")
-    if parsed.hostname is None or port is None:
-        raise ConfigurationError("HORO_OTEL_ENDPOINT must include a host and explicit port")
-    if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-        raise ConfigurationError("plaintext HORO_OTEL_ENDPOINT is allowed only for localhost")
-
-    return Endpoint(url=value.rstrip("/"), host=parsed.hostname, port=port)
-
-
-def load_settings(path: Path = DEFAULT_ENV_FILE, environ: Mapping[str, str] | None = None) -> DeveloperSettings:
-    """Resolve defaults, local configuration, then process-environment overrides."""
-    process_environment = os.environ if environ is None else environ
-    resolved = {
-        "HORO_DEV_OTEL_EXPORT": "OFF",
-        "HORO_OTEL_ENDPOINT": DEFAULT_OTLP_ENDPOINT,
-        **parse_dotenv(path),
-        **process_environment,
-    }
-    export_enabled = parse_enabled(resolved["HORO_DEV_OTEL_EXPORT"])
-    return DeveloperSettings(
-        otel_export_enabled=export_enabled,
-        endpoint=validate_endpoint(resolved["HORO_OTEL_ENDPOINT"] if export_enabled else DEFAULT_OTLP_ENDPOINT),
-    )
-
-
-def collector_is_reachable(endpoint: Endpoint, timeout_seconds: float = 0.5) -> bool:
-    """Check only whether a TCP listener is reachable at the configured address."""
-    try:
-        with socket.create_connection((endpoint.host, endpoint.port), timeout=timeout_seconds):
-            return True
-    except OSError:
-        return False
-
-
 def _compiler_cache_arguments(
     compiler_launcher: str | None,
     msvc_debug_information_format: str | None,
@@ -2541,7 +2460,6 @@ def _compiler_cache_arguments(
 
 
 def configure_command(
-    settings: DeveloperSettings | None = None,
     build_directory: Path = DEFAULT_BUILD_DIRECTORY,
     build_type: str = "Debug",
     testing: bool = False,
@@ -2549,7 +2467,6 @@ def configure_command(
     render_opengl: bool = True,
     render_metal: bool | None = None,
     telemetry: bool = True,
-    opentelemetry: bool | None = None,
     imgui_ui_tests: bool = False,
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
@@ -2558,8 +2475,6 @@ def configure_command(
     """Build the typed, parameterizable CMake configure command."""
     if render_metal is None:
         render_metal = sys.platform == "darwin" and editor_gui
-    if opentelemetry is None:
-        opentelemetry = settings.otel_export_enabled if settings else False
 
     command = [
         "cmake",
@@ -2575,7 +2490,6 @@ def configure_command(
         f"-DHORO_BUILD_RENDER_METAL={'ON' if render_metal else 'OFF'}",
         f"-DBUILD_TESTING={'ON' if testing else 'OFF'}",
         f"-DHORO_ENABLE_TELEMETRY={'ON' if telemetry else 'OFF'}",
-        f"-DHORO_ENABLE_OPENTELEMETRY={'ON' if opentelemetry else 'OFF'}",
         f"-DHORO_ENABLE_IMGUI_UI_TESTS={'ON' if imgui_ui_tests else 'OFF'}",
     ]
     command.extend(_compiler_cache_arguments(compiler_launcher, msvc_debug_information_format))
@@ -2608,18 +2522,6 @@ def editor_executable(build_directory: Path = DEFAULT_BUILD_DIRECTORY, platform_
     if platform_name == "win32":
         return build_directory / "apps" / "HoroEditor.exe"
     return build_directory / "apps" / "HoroEditor"
-
-
-def child_environment(settings: DeveloperSettings, environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Create the editor environment with an explicit export policy."""
-    child = dict(os.environ if environ is None else environ)
-    child.pop("HORO_OTEL_EXPORT_APPROVED", None)
-    child.pop("HORO_OTEL_ENDPOINT", None)
-    child.pop("HORO_DEV_OTEL_EXPORT", None)
-    if settings.otel_export_enabled:
-        child["HORO_OTEL_EXPORT_APPROVED"] = "1"
-        child["HORO_OTEL_ENDPOINT"] = settings.endpoint.url
-    return child
 
 
 class _RunnerConsole:
@@ -2675,7 +2577,7 @@ class _RunnerConsole:
         return code
 
 
-def print_summary(settings: DeveloperSettings, collector_status: str, build_directory: Path = DEFAULT_BUILD_DIRECTORY,
+def print_summary(build_directory: Path = DEFAULT_BUILD_DIRECTORY,
                   *, live_ui: bool = False, theme_file: Path | None = None) -> _RunnerConsole:
     """Print the effective non-secret developer configuration."""
     try:
@@ -2696,12 +2598,7 @@ def print_summary(settings: DeveloperSettings, collector_status: str, build_dire
     if theme_source:
         live_rows.append(("Theme file", theme_source))
     console.panel("LIVE DEVELOPMENT", live_rows)
-    diagnostics = [("OpenTelemetry", "ON" if settings.otel_export_enabled else "OFF")]
-    if settings.otel_export_enabled:
-        diagnostics.extend([("OTLP endpoint", settings.endpoint.url), ("Collector", collector_status)])
-    else:
-        diagnostics.append(("Collector", "not checked"))
-    console.panel("DIAGNOSTICS", diagnostics)
+    console.panel("DIAGNOSTICS", [("Logs / metrics / profiler", "LOCAL")])
     sys.stdout.flush()
     return console
 
@@ -2816,7 +2713,7 @@ def _configure_and_build(command: Sequence[str], build_directory: Path, target: 
         return 2
 
 
-def run_editor(settings: DeveloperSettings, editor_arguments: Sequence[str], build_directory: Path = DEFAULT_BUILD_DIRECTORY,
+def run_editor(editor_arguments: Sequence[str], build_directory: Path = DEFAULT_BUILD_DIRECTORY,
                theme_file: Path | None = None, live_ui: bool = False) -> int:
     """Configure, build, and launch HoroEditor without invoking a shell."""
     if theme_file is not None:
@@ -2824,23 +2721,13 @@ def run_editor(settings: DeveloperSettings, editor_arguments: Sequence[str], bui
         if not theme_file.is_file():
             print(f"error: theme file not found: {theme_file}", file=sys.stderr)
             return 2
-    if live_ui and sys.platform != "win32":
-        print("error: --live-ui currently requires native Windows x64 and MSVC", file=sys.stderr)
+    if live_ui and sys.platform not in ("win32", "darwin"):
+        print("error: --live-ui requires native Windows x64/MSVC or macOS/AppleClang", file=sys.stderr)
         return 2
-    collector_status = "not checked"
-    if settings.otel_export_enabled:
-        collector_status = "reachable" if collector_is_reachable(settings.endpoint) else "unreachable"
-    console = print_summary(settings, collector_status, build_directory, live_ui=live_ui, theme_file=theme_file)
-
-    if settings.otel_export_enabled and collector_status == "unreachable":
-        print(
-            f"warning: OpenTelemetry endpoint {settings.endpoint.host}:{settings.endpoint.port} is not reachable.\n"
-            "The editor will continue with local diagnostics only.",
-            file=sys.stderr,
-        )
+    console = print_summary(build_directory, live_ui=live_ui, theme_file=theme_file)
 
     build_code = _configure_and_build(
-        configure_command(settings, build_directory=build_directory,
+        configure_command(build_directory=build_directory,
                           extra_cmake_args=[f"-DHORO_EDITOR_LIVE_UI={'ON' if live_ui else 'OFF'}"]), build_directory, "HoroEditor", console=console
     )
     if build_code != 0:
@@ -2855,7 +2742,7 @@ def run_editor(settings: DeveloperSettings, editor_arguments: Sequence[str], bui
     console.stage(3, "Launch")
     if live_ui:
         print("  Live C++: save a registered GUI .cpp to recompile and reload.\n", flush=True)
-    environment = child_environment(settings)
+    environment = dict(os.environ)
     if theme_file is not None:
         environment["HORO_THEME_OVERRIDE"] = str(theme_file)
     return execute_subprocess(
@@ -2892,7 +2779,6 @@ def run_build(
         render_opengl=True,
         render_metal=(sys.platform == "darwin"),
         telemetry=True,
-        opentelemetry=True,
         imgui_ui_tests=imgui_ui_tests,
         compiler_launcher=compiler_launcher,
         msvc_debug_information_format=msvc_debug_information_format,
@@ -3274,8 +3160,8 @@ def check_platform_and_graphics(report: DoctorReport) -> None:
         _check_linux_graphics(report)
 
 
-def check_observability_and_services(report: DoctorReport, settings: DeveloperSettings | None) -> None:
-    """Check validity of developer settings and service reachability."""
+def check_local_configuration(report: DoctorReport) -> None:
+    """Check the optional local developer tool configuration without network access."""
     env_file = DEFAULT_ENV_FILE
     if env_file.exists():
         try:
@@ -3285,19 +3171,6 @@ def check_observability_and_services(report: DoctorReport, settings: DeveloperSe
             report.add("Configuration", DEFAULT_ENV_FILE_NAME, CheckStatus.ERROR, f"Syntax/validation error: {error}")
     else:
         report.add("Configuration", DEFAULT_ENV_FILE_NAME, CheckStatus.INFO, f"No local {DEFAULT_ENV_FILE_NAME} file (using defaults)")
-
-    if settings is None:
-        report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.WARN, "Settings could not be loaded due to configuration error")
-        return
-
-    if settings.otel_export_enabled:
-        reachable = collector_is_reachable(settings.endpoint)
-        if reachable:
-            report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.OK, f"Reachable at {settings.endpoint.url}")
-        else:
-            report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.WARN, f"Unreachable at {settings.endpoint.url} (fallback to local logs)")
-    else:
-        report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.INFO, "OpenTelemetry export disabled (HORO_DEV_OTEL_EXPORT=OFF)")
 
 
 def _find_sonar_scanner() -> Path | None:
@@ -3444,14 +3317,8 @@ def run_sonar(
     return execute_subprocess(command)
 
 
-def run_doctor(settings: DeveloperSettings | None = None) -> DoctorReport:
+def run_doctor() -> DoctorReport:
     """Execute all diagnostic checks and assemble the report."""
-    if settings is None:
-        try:
-            settings = load_settings()
-        except (ConfigurationError, OSError):
-            settings = None
-
     report = DoctorReport()
     check_compiler(report)
     check_cmake(report)
@@ -3459,12 +3326,12 @@ def run_doctor(settings: DeveloperSettings | None = None) -> DoctorReport:
     check_ccache(report)
     check_python_environment(report)
     check_platform_and_graphics(report)
-    check_observability_and_services(report, settings)
+    check_local_configuration(report)
     return report
 
 
 _EPILOG_EXAMPLES = """examples:
-  python3 scripts/dev.py doctor             Diagnose development toolchain and services
+  python3 scripts/dev.py doctor             Diagnose development toolchain and local configuration
   python3 scripts/dev.py test               Run unit and integration test suite
   python3 scripts/dev.py test Scene         Run tests matching 'Scene'
   python3 scripts/dev.py check              Run full CI-parity verification pass
@@ -3505,7 +3372,7 @@ def run_cache_prepare(parsed: argparse.Namespace) -> int:
         arguments = configure_command(
             build_directory=directory, build_type=parsed.type,
             testing=not parsed.no_testing, compiler_launcher=binding.launcher,
-            telemetry=True, opentelemetry=True,
+            telemetry=True,
             extra_cmake_args=parsed.cmake_arg,
         )
         arguments[2] = str(source)
@@ -3582,7 +3449,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="configure, build, and run a supported target")
     run.add_argument("target_or_args", nargs="*", default=[], help="target (default 'editor') or arguments forwarded")
     run.add_argument("--theme-file", type=Path, default=None, help="load and live-reload an external theme JSON in Debug")
-    run.add_argument("--live-ui", action="store_true", help="enable the RCC++ live GUI presentation (Windows x64 Debug)")
+    run.add_argument("--live-ui", action="store_true", help="enable the RCC++ live GUI presentation (Windows/MSVC or macOS/AppleClang Debug)")
 
     # doctor command
     doc = commands.add_parser("doctor", help="diagnose toolchain, graphics, and environment health")
@@ -3677,7 +3544,7 @@ def _handle_sonar(parsed: argparse.Namespace, extra_args: Sequence[str]) -> int:
     )
 
 
-def _handle_run(parsed: argparse.Namespace, settings: DeveloperSettings, extra_args: Sequence[str] | None = None) -> int:
+def _handle_run(parsed: argparse.Namespace, extra_args: Sequence[str] | None = None) -> int:
     """Handle run subcommand."""
     raw_args = list(parsed.target_or_args)
     if extra_args:
@@ -3687,14 +3554,14 @@ def _handle_run(parsed: argparse.Namespace, settings: DeveloperSettings, extra_a
     if raw_args and raw_args[0] == "--":
         raw_args.pop(0)
     try:
-        return run_editor(settings, raw_args, theme_file=parsed.theme_file, live_ui=parsed.live_ui)
+        return run_editor(raw_args, theme_file=parsed.theme_file, live_ui=parsed.live_ui)
     except KeyboardInterrupt:
         return 130
 
 
-def _handle_doctor(parsed: argparse.Namespace, settings: DeveloperSettings | None) -> int:
+def _handle_doctor(parsed: argparse.Namespace) -> int:
     """Handle doctor subcommand."""
-    report = run_doctor(settings)
+    report = run_doctor()
     if getattr(parsed, "json", False):
         print(json.dumps(report.to_dict(), indent=2))
     else:
@@ -3767,11 +3634,7 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
         return _handle_cache(parsed)
 
     if parsed.command == "doctor":
-        try:
-            doc_settings = load_settings()
-        except (ConfigurationError, OSError):
-            doc_settings = None
-        return _handle_doctor(parsed, doc_settings)
+        return _handle_doctor(parsed)
 
     if parsed.command == "format":
         _require_no_unparsed(parser, unparsed)
@@ -3829,14 +3692,7 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             extra_cmake_args=parsed.cmake_arg,
         )
 
-    # run command
-    try:
-        settings = load_settings()
-    except (ConfigurationError, OSError) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
-
-    return _handle_run(parsed, settings, unparsed)
+    return _handle_run(parsed, unparsed)
 
 
 def developer_main(arguments: Sequence[str] | None = None) -> int:
@@ -3936,11 +3792,15 @@ def _gui_live_symbols(path: Path):
         index += 1 + data[offset + storage + 1]
 
 
-def _generate_gui_live_bridge(database: Path, output: Path, image: str):
+def _generate_gui_live_bridge(database: Path, output: Path, image: str, target_platform: str = "win32"):
     entries = json.loads(database.read_text(encoding='utf-8'))
-    gui = [entry for entry in entries if 'HoroGui.dir' in entry['command']]
+    gui = [entry for entry in entries
+           if 'HoroGui.dir' in (entry.get('command') or ' '.join(entry.get('arguments', [])))]
     if not gui:
         raise ValueError('No HoroGui compile commands in the selected build')
+    if target_platform == "darwin":
+        _generate_gui_live_mac_flags(gui[0], output)
+        return
     exports = set()
     for entry in gui:
         match = re.search(r'(?:^|\s)/Fo(?:"([^"]+)"|(\S+))', entry['command'])
@@ -3964,6 +3824,25 @@ def _generate_gui_live_bridge(database: Path, output: Path, image: str):
     print(f'Generated {len(exports)} private GUI host imports for {image}')
 
 
+def _generate_gui_live_mac_flags(entry: dict, output: Path) -> None:
+    """Preserve the host's definitions, SDK, target architecture and C++ ABI."""
+    arguments = entry.get("arguments") or shlex.split(entry["command"])
+    flags = []
+    paired = {"-D", "-U", "-isysroot", "-arch", "-target", "--target", "-stdlib"}
+    iterator = iter(arguments[1:])
+    for argument in iterator:
+        if argument in paired:
+            try:
+                flags.extend((argument, next(iterator)))
+            except StopIteration as error:
+                raise ValueError(f"Missing GUI compiler argument after {argument}") from error
+        elif argument.startswith(("-D", "-U", "-std=", "-stdlib=", "-mmacosx-version-min=", "--sysroot=", "--target=")):
+            flags.append(argument)
+    flags.extend(("-std=c++20", "-DHORO_GUI_RUNTIME_COMPILATION=1"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Clang response files use double-quoted arguments, not shell quoting.
+    output.write_text("".join('"' + flag.replace('\\', '\\\\').replace('"', '\\"') + '"\n' for flag in flags), encoding="utf-8")
+
 
 def gui_live_bridge_main(argv=None) -> int:
     """Generate the private native GUI import bridge for a configured development host."""
@@ -3971,8 +3850,9 @@ def gui_live_bridge_main(argv=None) -> int:
     parser.add_argument("--compile-commands", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image", required=True)
+    parser.add_argument("--platform", choices=("win32", "darwin"), default="win32")
     args = parser.parse_args(argv)
-    _generate_gui_live_bridge(args.compile_commands, args.output, args.image)
+    _generate_gui_live_bridge(args.compile_commands, args.output, args.image, args.platform)
     return 0
 
 

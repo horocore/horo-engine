@@ -166,8 +166,7 @@ or `Hertz` values.
 This replaces free-form unit strings: count-like instruments map to `Count`,
 byte totals to `Bytes`, elapsed durations to `Seconds`, and device sample rates
 to `Hertz`; callers update the
-descriptor initializer, while the OpenTelemetry adapter emits the corresponding
-unit symbol.
+descriptor initializer, and local records retain the typed unit identity.
 Admission is capped at 256 registered instruments, 96 bytes per metric name,
 64 bytes per subsystem, 256 bytes per description, four dimensions per
 instrument, 48 bytes per dimension key, 16 allowed values per dimension, 32

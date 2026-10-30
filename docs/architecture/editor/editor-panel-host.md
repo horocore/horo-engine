@@ -1364,3 +1364,38 @@ metadata. Existing value/temporary call sites need no source migration, but
 consumers must rebuild for the changed C++ signatures; function-pointer adapters
 must use const-reference parameters. The staged public-header consumer exercises
 all five planners alongside the existing source service consumers.
+
+## Add Component contribution catalog
+
+The Inspector's private `AddComponentRegistry` owns only menu presentation
+metadata. Static definitions are composed explicitly from per-component files
+under `panels/inspector/add_component/definitions/`; there is no ambient registrar
+or registration during descriptor validation. Dynamic project behavior entries
+are projections of `ProjectGameplayRegistry`, fenced by project scope and owner
+publication revision and revoked on panel detach. They do not own schemas or
+implementation callbacks. Existing `Gameplay::ComponentRegistry` remains the
+serialization/inspection authority for project gameplay components.
+
+The generic menu resolves labels in the current locale and evaluates availability
+against the current selection/draft. Selection returns typed commands/intents;
+canonical controllers or detached Physics sessions retain mutation and admission
+ownership. Registry refreshes perform no filesystem discovery, and unchanged
+publication revisions do not rebuild metadata. Duplicate/invalid contributions
+fail before drawing, preserving the previous owned catalog for diagnostics.
+
+See [component menu registry](../../guides/editor-component-menu-registry.md) for
+static composition and project-script publication details.
+
+### Built-in Inspector field presentation
+
+Built-in standard component fields use target-private `InspectorFields::Schema<Model>`
+metadata under `panels/inspector/component_fields/definitions/`. This catalog binds
+static localization/control metadata to typed draft members, including current-model
+visibility/validation and display-unit conversion. Canonical component constructors
+remain the single source of default authored values. Metadata construction is inert;
+no field discovery invokes a registrar, service locator, backend or document mutation.
+The generic drawer returns change/commit events to the existing Inspector sessions;
+preview/cancellation, validation, history and Physics Apply/Discard authority remain
+unchanged. Composite source/identity/variant editors retain explicit typed adapters.
+Dynamic behavior fields and extension inspector declarations retain their existing
+schema/publication owners; this catalog is not a parallel serialization schema.

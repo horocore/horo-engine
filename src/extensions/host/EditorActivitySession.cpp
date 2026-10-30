@@ -204,6 +204,45 @@ namespace Horo::Extensions {
         return HORO_EXTENSION_SUCCESS;
     }
 
+    /** @brief Copies only explicitly declared command metadata, without executing module code. */
+    static bool CopyCommands(EditorActivitySession &session, const AssetImporterRegistrationSession &load,
+                             const HoroEditorActivityDescriptor &descriptor) {
+        if (descriptor.schemaVersion == 1)
+            return true;
+        if (descriptor.structSize < sizeof(HoroEditorActivityDescriptorV2) ||
+            std::ranges::find(load.extensionModule->requiredCapabilities, HORO_EDITOR_COMMAND_HOST_CAPABILITY) ==
+                load.extensionModule->requiredCapabilities.end())
+            return false;
+        const auto &extended = reinterpret_cast<const HoroEditorActivityDescriptorV2 &>(descriptor);
+        if (extended.commandCount > 64 || (extended.commandCount && !extended.commands))
+            return false;
+        for (std::uint32_t index = 0; index < extended.commandCount; ++index) {
+            const auto &input = extended.commands[index];
+            EditorActivitySession::Command command;
+            if (!Detail::CopyActivityText(input.id, command.descriptor.id.value) || !Detail::CopyActivityText(input.nodeId, command.node) ||
+                !Detail::CopyActivityText(input.actionId, command.action) ||
+                !Detail::CopyActivityText(input.labelKey, command.descriptor.labelLocalizationKey, 128) ||
+                !Detail::CopyActivityText(input.shortcut, command.descriptor.shortcut, 64) ||
+                !Declared(load, "editor.command", command.descriptor.id.value) || command.descriptor.id.value.starts_with("editor.") ||
+                std::ranges::none_of(session.messages, [&](const auto &message) {
+                return message.locale == "en-US" && message.key == command.descriptor.labelLocalizationKey;
+            }))
+                return false;
+            const bool action = std::ranges::any_of(session.form.nodes, [&](const auto &node) {
+                return std::visit([&](const auto &typed) {
+                    if constexpr (requires { typed.action; })
+                        return typed.base.id.value == command.node && typed.action.value == command.action;
+                    else
+                        return false;
+                }, node.payload);
+            });
+            if (!action)
+                return false;
+            session.commands.push_back(std::move(command));
+        }
+        return true;
+    }
+
     /** @brief Validates and copies one complete ABI contribution before admission. */
     static HoroExtensionStatus RegisterEditorActivityImpl(AssetImporterRegistrationSession &load,
                                                           const HoroEditorActivityDescriptor *descriptor,
@@ -213,7 +252,7 @@ namespace Horo::Extensions {
         try {
             if (!load.editorHost || !load.manifest || !load.extensionModule || !load.lifetime || !load.retirement ||
                 load.lifetime->ownerThread != std::this_thread::get_id() || descriptor->structSize < sizeof(HoroEditorActivityDescriptor) ||
-                descriptor->schemaVersion != HORO_EDITOR_ACTIVITY_SCHEMA_VERSION || descriptor->side > HORO_EDITOR_ACTIVITY_BOTTOM ||
+                (descriptor->schemaVersion != 1 && descriptor->schemaVersion != 2) || descriptor->side > HORO_EDITOR_ACTIVITY_BOTTOM ||
                 descriptor->group > 2 || descriptor->openByDefault > 1 || descriptor->messageCount > 128 ||
                 (descriptor->messageCount != 0 && descriptor->messages == nullptr))
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
@@ -225,7 +264,7 @@ namespace Horo::Extensions {
             if (const auto status = CopyDescriptors(session, load, descriptor, resource); status != HORO_EXTENSION_SUCCESS)
                 return status;
             if (CopyFormPermissions(session, descriptor) != HORO_EXTENSION_SUCCESS ||
-                CopyMessages(session, descriptor) != HORO_EXTENSION_SUCCESS)
+                CopyMessages(session, descriptor) != HORO_EXTENSION_SUCCESS || !CopyCommands(*session, load, *descriptor))
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             if (AdmitComposition(session, load, *descriptor) != HORO_EXTENSION_SUCCESS)
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
@@ -352,6 +391,28 @@ namespace Horo::Extensions {
         return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
     }
 
+    /** @copydoc EditorActivityHost::PreparedCommands */
+    std::span<const EditorActivityCommandProjection> EditorActivityHost::PreparedCommands() const noexcept {
+        return state_->preparedCommands;
+    }
+
+    /** @copydoc EditorActivityHost::QueueCommand */
+    Result<void> EditorActivityHost::QueueCommand(const std::string_view id) const {
+        const auto invocation = state_->commands.Invoke(id, {});
+        if (invocation.HasError())
+            return Result<void>::Failure(invocation.ErrorValue());
+        for (const auto &weak : state_->sessions) {
+            const auto session = weak.lock();
+            if (!session || session->activity.surface.provider != invocation.Value().provider)
+                continue;
+            for (const auto &command : session->commands)
+                if (command.descriptor.id.value == id)
+                    return QueueAction(session->activity.surface.provider, session->activity.surface.id, command.node, command.action,
+                                       session->revision);
+        }
+        return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
+    }
+
     /** @brief Finds the committed owner of a captured activity projection without invoking provider code. */
     static std::shared_ptr<EditorActivitySession> ProjectionOwner(const std::vector<std::weak_ptr<EditorActivitySession>> &sessions,
                                                                   const EditorSurfaceSnapshot &surface) {
@@ -401,6 +462,9 @@ namespace Horo::Extensions {
             return std::tie(a.activity->side, a.activity->group, a.placement.order, a.id) <
                    std::tie(b.activity->side, b.activity->group, b.placement.order, b.id);
         });
+        state_->preparedCommands.clear();
+        for (const auto &command : state_->commands.Snapshot())
+            state_->preparedCommands.push_back({command.command, command.provider});
         state_->preparedRevision = revision;
     }
 
@@ -427,6 +491,8 @@ namespace Horo::Extensions {
         for (const auto &weak : state_->sessions)
             if (const auto session = weak.lock())
                 session->Revoke();
+        state_->commands.BeginShutdown();
+        state_->preparedCommands.clear();
         state_->registry.BeginShutdown();
         state_->prepared.clear();
     }

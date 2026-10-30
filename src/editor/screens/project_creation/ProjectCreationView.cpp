@@ -83,6 +83,13 @@ namespace Horo::Editor {
             return 1;  // Default to 3D Starter
         }
 
+        /** @brief Removes trailing separators for folder identity comparisons without resolving symlinks or traversal. */
+        [[nodiscard]] std::filesystem::path FolderWithoutTrailingSeparators(std::filesystem::path folder) {
+            while (folder.has_relative_path() && folder.filename().empty())
+                folder = folder.parent_path();
+            return folder;
+        }
+
         void SynchronizePresentation(const ProjectCreationController &controller, ProjectCreationViewState &state,
                                      const RendererAvailabilitySnapshot &rendererAvailability) {
             if (state.initialized) {
@@ -90,7 +97,7 @@ namespace Horo::Editor {
             }
             const ProjectCreationDraft &draft = controller.Draft();
             state.projectName = draft.projectName;
-            state.projectPath = draft.projectPath;
+            state.projectParentDirectory = FolderWithoutTrailingSeparators(std::filesystem::path{draft.projectPath}).parent_path().string();
             state.projectVersion = draft.projectVersion;
             state.defaultScene = draft.defaultScene;
             state.targetFps = std::to_string(draft.targetFrameRate);
@@ -153,9 +160,9 @@ namespace Horo::Editor {
         /** @brief Reports whether a diagnostic prevents advancing past project identity input. */
         [[nodiscard]] bool IsIdentityBlockingDiagnostic(const ProjectCreationDiagnosticCode code) noexcept {
             using enum ProjectCreationDiagnosticCode;
-            constexpr std::array blockingDiagnostics{ProjectNameRequired,     ProjectNameContainsPathSeparator, ProjectPathRequired,
-                                                     ProjectPathOccupied,     ProjectPathNotDirectory,          ProjectPathInaccessible,
-                                                     ProjectParentNotWritable};
+            constexpr std::array blockingDiagnostics{ProjectNameRequired,      ProjectNameContainsPathSeparator, ProjectPathRequired,
+                                                     ProjectPathOccupied,      ProjectPathNotDirectory,          ProjectPathInaccessible,
+                                                     ProjectParentNotWritable, ProjectNameInvalidFolderName};
             return std::ranges::find(blockingDiagnostics, code) != blockingDiagnostics.end();
         }
 
@@ -166,6 +173,19 @@ namespace Horo::Editor {
             }
             return nullptr;
         }
+
+        /** @brief Host ImGui widget feedback, independent of draft validity and project authoring state. */
+        struct IdentityFeedback {
+            bool nameEdited{};
+            bool pathEdited{};
+
+            [[nodiscard]] bool Shows(const ProjectCreationDiagnosticCode code) const {
+                using enum ProjectCreationDiagnosticCode;
+                return code == ProjectNameRequired || code == ProjectNameContainsPathSeparator || code == ProjectNameInvalidFolderName
+                           ? nameEdited
+                           : pathEdited;
+            }
+        };
 
         [[nodiscard]] const ProjectCreationDiagnostic *CurrentStepDiagnostic(const int step, const ProjectCreationValidation &validation) {
             if (step == 1)
@@ -189,16 +209,10 @@ namespace Horo::Editor {
             return step == 3 && validation.IsValid();
         }
 
-        [[nodiscard]] bool DrawFolderIconButton(const char *id, const float width, const EditorGuiContext & /*ctx*/,
-                                                const bool error = false) {
+        [[nodiscard]] bool DrawFolderIconButton(const char *id, const ImVec2 size, const bool error = false) {
             ImGui::PushID(id);
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{10.0F, 7.0F});
-            const float height = ImGui::GetFrameHeight();
-            ImGui::PopStyleVar();
-
             const ImVec2 pos = ImGui::GetCursorScreenPos();
-            const ImVec2 size{width, height};
-            const bool clicked = ImGui::InvisibleButton("##btn", size);
+            const bool clicked = ImGui::InvisibleButton("##btn", size, ImGuiButtonFlags_EnableNav);
             const bool hovered = ImGui::IsItemHovered();
             const bool active = ImGui::IsItemActive();
 
@@ -206,7 +220,7 @@ namespace Horo::Editor {
             const ImVec4 bgColor = active ? Theme::AccentSoft() : Theme::Bg3();
             const ImVec4 hoverBgColor = hovered ? Theme::Hover() : bgColor;
             const ImU32 bgCol = Theme::U32(hoverBgColor);
-            const bool hasInteraction = active || hovered;
+            const bool hasInteraction = active || hovered || ImGui::IsItemFocused();
             const ImVec4 borderColor = error ? Theme::Err() : Theme::Border();
             const ImVec4 interactionBorderColor = hasInteraction ? Theme::Accent() : borderColor;
             const ImU32 borderCol = Theme::U32(interactionBorderColor);
@@ -317,6 +331,7 @@ namespace Horo::Editor {
             bool error = false;
             const char *errorText = nullptr;
             const char *inputId = "##value";
+            bool *edited = nullptr;
         };
 
         bool DrawInputField(const char *label, std::string &value, const size_t maxSize, const float width, const EditorGuiContext &ctx,
@@ -327,6 +342,8 @@ namespace Horo::Editor {
             ImGui::Dummy({0.0F, WizardLayout::FieldLabelGap});
             const bool changed = Ui::InputTextControl(opts.inputId, value, maxSize, ctx.theme.fonts,
                                                       Ui::InputTextOptions{.error = opts.error, .width = width});
+            if (opts.edited && ImGui::IsItemDeactivatedAfterEdit())
+                *opts.edited = true;
             if (opts.error && opts.errorText)
                 Ui::ErrorText(opts.errorText, ctx.theme.fonts);
             else if (opts.hint)
@@ -536,6 +553,21 @@ namespace Horo::Editor {
             ImGui::PopStyleColor();
         }
 
+        /** @brief Includes wrapped description height and equal top/bottom padding in each template row. */
+        float TemplateCardHeight(const EditorGuiContext &ctx, const int index, const float width, const char *description) {
+            using namespace WizardLayout;
+            ImFont *nameFont = ctx.theme.fonts.sans ? ctx.theme.fonts.sans : ImGui::GetFont();
+            ImFont *descriptionFont = ctx.theme.fonts.sansCompact ? ctx.theme.fonts.sansCompact : ImGui::GetFont();
+            const auto name = GetTemplateName(index, ctx);
+            const float nameHeight = nameFont->CalcTextSizeA(Theme::TextPx::Body(), FLT_MAX, 0.0F, name.c_str()).y;
+            const float descriptionHeight =
+                descriptionFont->CalcTextSizeA(Theme::TextPx::Caption(), FLT_MAX, std::max(1.0F, width - TemplatePad * 2.0F), description)
+                    .y;
+            return std::max(TemplateH, TemplatePad * 2.0F + nameHeight + descriptionHeight +
+                                           DesignSystem::SpacingFor(Theme::GetActiveTokens(), DesignSystem::SpacingSize::XS) +
+                                           ImGui::GetStyle().ItemSpacing.y * 2.0F);
+        }
+
         void DrawTemplateCardContent(const EditorGuiContext &ctx, const int index, const float cardW, const char *desc) {
             using namespace Theme;
             using namespace WizardLayout;
@@ -550,7 +582,7 @@ namespace Horo::Editor {
                 ImGui::Dummy({nameSize.x, nameSize.y});
             }
 
-            ImGui::Dummy({0.0F, 4.0F});
+            ImGui::Dummy({0.0F, DesignSystem::SpacingFor(GetActiveTokens(), DesignSystem::SpacingSize::XS)});
 
             {
                 ImFont *descFont = ctx.theme.fonts.sansCompact ? ctx.theme.fonts.sansCompact : ImGui::GetFont();
@@ -574,7 +606,7 @@ namespace Horo::Editor {
         }
 
         void DrawTemplateCard(ProjectCreationController &controller, ProjectCreationViewState &state, const EditorGuiContext &ctx,
-                              const int index, const int currentTemplateIndex, const float cardW, const char *desc) {
+                              const int index, const int currentTemplateIndex, const float cardW, const float cardH, const char *desc) {
             using namespace WizardLayout;
 
             ImGui::PushID(index);
@@ -586,7 +618,7 @@ namespace Horo::Editor {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? Theme::AccentSoft() : Theme::Bg2());
             ImGui::PushStyleColor(ImGuiCol_Border, selected ? Theme::Accent() : Theme::Border());
 
-            ImGui::BeginChild("TemplateCard", {cardW, TemplateH}, true,
+            ImGui::BeginChild("TemplateCard", {cardW, cardH}, true,
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_AlwaysUseWindowPadding |
                                   ImGuiWindowFlags_NoInputs);
             DrawTemplateCardContent(ctx, index, cardW, desc);
@@ -635,14 +667,20 @@ namespace Horo::Editor {
             const float cardW = (ImGui::GetContentRegionAvail().x - TemplateGap * 2.0F) / 3.0F;
             const int currentTemplateIndex = FindTemplateIndex(controller.Draft().templateId);
 
+            float rowHeight = TemplateH;
             for (int i = 0; i < 6; ++i) {
+                if (i % 3 == 0) {
+                    rowHeight = TemplateH;
+                    for (int column = i; column < i + 3; ++column)
+                        rowHeight = std::max(rowHeight, TemplateCardHeight(ctx, column, cardW, kDescs[column]));
+                }
                 if (i > 0 && i % 3 == 0) {
                     ImGui::Dummy({0.0F, TemplateGap});
                 } else if (i % 3 != 0) {
                     ImGui::SameLine(0.0F, TemplateGap);
                 }
 
-                DrawTemplateCard(controller, st, ctx, i, currentTemplateIndex, cardW, kDescs[i]);
+                DrawTemplateCard(controller, st, ctx, i, currentTemplateIndex, cardW, rowHeight, kDescs[i]);
             }
         }
 
@@ -655,8 +693,43 @@ namespace Horo::Editor {
             return nullptr;
         }
 
+        /** @brief Localizes folder-name validation at the presentation boundary. */
+        const std::string &DiagnosticMessage(const ProjectCreationDiagnostic &diagnostic, const EditorGuiContext &ctx) {
+            if (diagnostic.code == ProjectCreationDiagnosticCode::ProjectNameInvalidFolderName)
+                return ProjectCreationTextScope.Text(ctx.localization, "identity.name.invalid_folder");
+            return diagnostic.message;
+        }
+
+        /** @brief Follows name edits only while the destination is derived from the chosen parent. */
+        void SynchronizeProjectName(ProjectCreationController &controller, const ProjectCreationViewState &state) {
+            const auto &draft = controller.Draft();
+            const std::filesystem::path parent{state.projectParentDirectory};
+            const bool followsName = !parent.empty() && (draft.projectPath.empty() ||
+                                                         FolderWithoutTrailingSeparators(std::filesystem::path{draft.projectPath}) ==
+                                                             parent / std::filesystem::path{draft.projectName});
+            controller.SetProjectName(state.projectName);
+            if (followsName)
+                controller.SetProjectParentDirectory(parent);
+        }
+
+        /** @brief Treats a typed destination as exact, retaining automatic naming when its leaf matches the project name. */
+        void ApplyProjectFolderEdit(ProjectCreationController &controller, ProjectCreationViewState &state,
+                                    const std::string &projectFolder) {
+            const auto folder = FolderWithoutTrailingSeparators(std::filesystem::path{projectFolder});
+            if (state.projectName.empty()) {
+                state.projectParentDirectory = projectFolder;
+                controller.SetProjectParentDirectory(folder);
+                return;
+            }
+            state.projectParentDirectory.clear();
+            if (folder.filename() == std::filesystem::path{state.projectName})
+                state.projectParentDirectory = folder.parent_path().string();
+            controller.SetProjectPath(projectFolder);
+        }
+
         void DrawProjectLocationField(ProjectCreationController &controller, ProjectCreationViewState &st, const EditorGuiContext &ctx,
-                                      Input::InputRouter &inputRouter, const ProjectCreationDiagnostic *pathErr) {
+                                      Input::InputRouter &inputRouter, const ProjectCreationDiagnostic *pathErr,
+                                      IdentityFeedback &feedback) {
             const std::string locationLabel = ProjectCreationTextScope.Text(ctx.localization, "identity.location");
             ImGui::PushID(locationLabel.c_str());
             ImGui::BeginGroup();
@@ -665,40 +738,44 @@ namespace Horo::Editor {
             constexpr float buttonWidth = 38.0F;
             constexpr float gapWidth = 8.0F;
             const float inputWidth = ImGui::GetContentRegionAvail().x - (buttonWidth + gapWidth);
-            (void)Ui::InputTextControl("###project_creation_location", st.projectPath, 512, ctx.theme.fonts,
-                                       Ui::InputTextOptions{.error = pathErr != nullptr, .width = std::max(inputWidth, 1.0F)});
-            controller.SetProjectPath(st.projectPath);
+            std::string projectFolder = controller.Draft().projectPath;
+            if (projectFolder.empty())
+                projectFolder = st.projectParentDirectory;
+            if (Ui::InputTextControl("###project_creation_location", projectFolder, 512, ctx.theme.fonts,
+                                     Ui::InputTextOptions{.error = pathErr != nullptr, .width = std::max(inputWidth, 1.0F)}))
+                ApplyProjectFolderEdit(controller, st, projectFolder);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                feedback.pathEdited = true;
+            const ImVec2 inputMin = ImGui::GetItemRectMin();
+            const float inputHeight = ImGui::GetItemRectSize().y;
             ImGui::SameLine(0.0F, gapWidth);
+            ImGui::SetCursorScreenPos({ImGui::GetCursorScreenPos().x, inputMin.y});
             const std::string selectPrompt = ProjectCreationTextScope.Text(ctx.localization, "identity.location.select");
-            if (DrawFolderIconButton("##browse_location", buttonWidth, ctx, pathErr != nullptr)) {
+            if (DrawFolderIconButton("##browse_location", {buttonWidth, inputHeight}, pathErr != nullptr)) {
                 auto nativeDialogContext = inputRouter.PushContext(Input::InputContextId{"editor.native_dialog.project_location"},
                                                                    Input::InputContextKind::NativeDialog);
                 if (const auto selectedDir = OpenFolderSelectionDialog(selectPrompt.c_str())) {
-                    std::filesystem::path finalPath = *selectedDir;
-                    if (!st.projectName.empty() && finalPath.filename().string() != st.projectName)
-                        finalPath /= st.projectName;
-                    const std::string pathString = finalPath.string();
-                    st.projectPath = pathString.substr(0, 511);
-                    controller.SetProjectPath(st.projectPath);
+                    const std::string pathString = selectedDir->string();
+                    feedback.pathEdited = true;
+                    st.projectParentDirectory = pathString;
+                    controller.SetProjectParentDirectory(st.projectParentDirectory);
                 }
             }
             if (pathErr)
                 Ui::ErrorText(pathErr->message.c_str(), ctx.theme.fonts);
-            else {
-                const std::string locationHint = ProjectCreationTextScope.Text(ctx.localization, "identity.location.hint");
-                Ui::Hint(locationHint.c_str(), ctx.theme.fonts);
-            }
             ImGui::EndGroup();
             ImGui::PopID();
         }
 
         void DrawStepIdentity(ProjectCreationController &controller, ProjectCreationViewState &st, const EditorGuiContext &ctx,
-                              Input::InputRouter &inputRouter, const ProjectCreationValidation &validation) {
+                              Input::InputRouter &inputRouter, const ProjectCreationValidation &validation, IdentityFeedback &feedback) {
             using namespace WizardLayout;
 
             const auto *nameErrRequired = FindDiagnostic(validation, ProjectCreationDiagnosticCode::ProjectNameRequired);
             const auto *nameErrSep = FindDiagnostic(validation, ProjectCreationDiagnosticCode::ProjectNameContainsPathSeparator);
-            const auto *nameErr = nameErrRequired ? nameErrRequired : nameErrSep;
+            const auto *nameErrFolder = FindDiagnostic(validation, ProjectCreationDiagnosticCode::ProjectNameInvalidFolderName);
+            const auto *nameErr =
+                feedback.nameEdited ? (nameErrRequired ? nameErrRequired : (nameErrSep ? nameErrSep : nameErrFolder)) : nullptr;
 
             const auto *pathErrReq = FindDiagnostic(validation, ProjectCreationDiagnosticCode::ProjectPathRequired);
             const auto *pathErrOcc = FindDiagnostic(validation, ProjectCreationDiagnosticCode::ProjectPathOccupied);
@@ -711,6 +788,9 @@ namespace Horo::Editor {
             if (pathErr == nullptr)
                 pathErr = pathErrWrt;
 
+            if (!feedback.pathEdited || st.projectName.empty())
+                pathErr = nullptr;
+
             const std::string identityTitle = ProjectCreationTextScope.Text(ctx.localization, "step.identity.title");
             Ui::SectionTitle(identityTitle.c_str(), ctx.theme.fonts);
             ImGui::Dummy({0.0F, 14.0F});
@@ -720,13 +800,14 @@ namespace Horo::Editor {
             DrawInputField(nameLabel.c_str(), st.projectName, 128, -1.0F, ctx,
                            DrawInputFieldOptions{.hint = nameHint.c_str(),
                                                  .error = nameErr != nullptr,
-                                                 .errorText = nameErr ? nameErr->message.c_str() : nullptr,
-                                                 .inputId = "###project_creation_name"});
-            controller.SetProjectName(st.projectName);
+                                                 .errorText = nameErr ? DiagnosticMessage(*nameErr, ctx).c_str() : nullptr,
+                                                 .inputId = "###project_creation_name",
+                                                 .edited = &feedback.nameEdited});
+            SynchronizeProjectName(controller, st);
 
             ImGui::Dummy({0.0F, GridGap});
 
-            DrawProjectLocationField(controller, st, ctx, inputRouter, pathErr);
+            DrawProjectLocationField(controller, st, ctx, inputRouter, pathErr, feedback);
 
             ImGui::Dummy({0.0F, GridGap});
 
@@ -1030,7 +1111,8 @@ namespace Horo::Editor {
         }
 
         void DrawWizardFooter(const ProjectCreationController &controller, ProjectCreationViewState &st, const EditorGuiContext &ctx,
-                              const ProjectCreationValidation &validation, ProjectCreationViewCommand &outCommand) {
+                              const ProjectCreationValidation &validation, const IdentityFeedback &feedback,
+                              ProjectCreationViewCommand &outCommand) {
             using namespace WizardLayout;
 
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::Bg0());
@@ -1045,7 +1127,19 @@ namespace Horo::Editor {
             const ImVec2 dotCenter{footerPos.x + 22.0F + 4.0F, footerPos.y + 26.0F};
             const bool isValid = validation.IsValid();
             const ProjectCreationDiagnostic *stepDiagnostic = CurrentStepDiagnostic(st.step, validation);
-            dl->AddCircleFilled(dotCenter, 4.0F, Theme::U32(stepDiagnostic == nullptr ? Theme::Ok() : Theme::Err()), 16);
+            if (st.step == 2) {
+                stepDiagnostic = nullptr;
+                for (const auto &diagnostic : validation.diagnostics) {
+                    if (IsIdentityBlockingDiagnostic(diagnostic.code) && feedback.Shows(diagnostic.code)) {
+                        stepDiagnostic = &diagnostic;
+                        break;
+                    }
+                }
+            }
+            const auto indicatorColor = stepDiagnostic                            ? Theme::Err()
+                                        : CanAdvanceFromStep(st.step, validation) ? Theme::Ok()
+                                                                                  : Theme::Muted();
+            dl->AddCircleFilled(dotCenter, 4.0F, Theme::U32(indicatorColor), 16);
 
             ImGui::SetCursorPos({38.0F, 18.0F});
             {
@@ -1059,7 +1153,7 @@ namespace Horo::Editor {
                     ImGui::PopStyleColor();
                 } else {
                     ImGui::PushStyleColor(ImGuiCol_Text, Theme::Err());
-                    ImGui::Text("Template: %s \xC2\xB7 %s", templateName.c_str(), stepDiagnostic->message.c_str());
+                    ImGui::Text("Template: %s \xC2\xB7 %s", templateName.c_str(), DiagnosticMessage(*stepDiagnostic, ctx).c_str());
                     ImGui::PopStyleColor();
                 }
                 ImGui::PopStyleColor();
@@ -1128,6 +1222,7 @@ namespace Horo::Editor {
                                                        const EditorGuiContext &ctx, Input::InputRouter &inputRouter,
                                                        const RendererAvailabilitySnapshot &rendererAvailability,
                                                        const GuiContentRegion &contentRegion, const ImTextureID logo) {
+        const bool firstPresentation = !state.initialized;
         SynchronizePresentation(controller, state, rendererAvailability);
 
         const ProjectCreationValidation validation = controller.Validate();
@@ -1154,6 +1249,12 @@ namespace Horo::Editor {
 
         ProjectCreationViewCommand command = ProjectCreationViewCommand::None;
         ImGui::Begin("ProjectCreationScreen", nullptr, routeFlags);
+        // ImGui owns per-widget interaction history across module swaps; reset it for a new wizard.
+        ImGuiStorage *feedbackStorage = ImGui::GetStateStorage();
+        const ImGuiID nameFeedbackId = ImGui::GetID("###identity_name_edited");
+        const ImGuiID pathFeedbackId = ImGui::GetID("###identity_path_edited");
+        IdentityFeedback feedback{!firstPresentation && feedbackStorage->GetBool(nameFeedbackId),
+                                  !firstPresentation && feedbackStorage->GetBool(pathFeedbackId)};
 
         DrawWizardHeader(ctx, logo);
 
@@ -1175,7 +1276,7 @@ namespace Horo::Editor {
                 DrawStepTemplate(controller, state, ctx);
                 break;
             case 2:
-                DrawStepIdentity(controller, state, ctx, inputRouter, validation);
+                DrawStepIdentity(controller, state, ctx, inputRouter, validation, feedback);
                 break;
             case 3:
                 DrawStepSettings(controller, state, ctx, rendererAvailability);
@@ -1193,7 +1294,9 @@ namespace Horo::Editor {
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
 
-        DrawWizardFooter(controller, state, ctx, controller.Validate(), command);
+        DrawWizardFooter(controller, state, ctx, controller.Validate(), feedback, command);
+        feedbackStorage->SetBool(nameFeedbackId, feedback.nameEdited);
+        feedbackStorage->SetBool(pathFeedbackId, feedback.pathEdited);
 
         ImGui::End();
         ImGui::PopStyleColor(2);

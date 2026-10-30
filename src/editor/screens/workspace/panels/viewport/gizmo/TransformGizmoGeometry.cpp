@@ -94,35 +94,6 @@ namespace Horo::Editor {
             drawList.AddTriangleFilled(middle, tip, right, dark);
         }
 
-        /** @brief Draws a broad scale shaft and a shaded cube handle at the shared gizmo extent. */
-        void DrawScaleAxisHandle(ImDrawList &drawList, const ImVec2 center, const ImVec2 direction, const float length, const ImU32 color,
-                                 const bool highlighted) {
-            const ImU32 face = ShadeAxisColor(color, highlighted ? 1.25F : 1.0F);
-            const ImU32 light = ShadeAxisColor(face, 1.18F);
-            const ImU32 dark = ShadeAxisColor(face, 0.58F);
-            const ImVec2 handle = AlongAxis(center, direction, length - ScaleHandleHalfSize);
-            const float shaftLength = length - ScaleHandleHalfSize * 2.0F;
-            const ImVec2 shaftEnd = AlongAxis(center, direction, shaftLength);
-            drawList.AddLine(AlongAxis(center, direction, 9.0F), shaftEnd, dark, 8.0F);
-            drawList.AddLine(AlongAxis(center, direction, 9.0F, -1.0F), AlongAxis(center, direction, shaftLength - 1.0F, -1.0F), face,
-                             5.0F);
-            const std::array front{
-                AlongAxis(handle, direction, -ScaleHandleHalfSize, -ScaleHandleHalfSize),
-                AlongAxis(handle, direction, ScaleHandleHalfSize, -ScaleHandleHalfSize),
-                AlongAxis(handle, direction, ScaleHandleHalfSize, ScaleHandleHalfSize),
-                AlongAxis(handle, direction, -ScaleHandleHalfSize, ScaleHandleHalfSize),
-            };
-            constexpr ImVec2 depth{-3.0F, -3.0F};
-            std::array<ImVec2, 4> back{};
-            for (std::size_t corner = 0; corner < front.size(); ++corner)
-                back[corner] = {front[corner].x + depth.x, front[corner].y + depth.y};
-            drawList.AddQuadFilled(back[0], back[1], back[2], back[3], dark);
-            drawList.AddQuadFilled(back[0], back[1], front[1], front[0], light);
-            drawList.AddQuadFilled(back[1], back[2], front[2], front[1], dark);
-            drawList.AddQuadFilled(front[0], front[1], front[2], front[3], face);
-            drawList.AddPolyline(front.data(), static_cast<int>(front.size()), dark, ImDrawFlags_Closed, 1.5F);
-        }
-
         /** @brief Gives uniform scaling the same solid-handle treatment as the axis tips. */
         void DrawScaleHub(ImDrawList &drawList, const ImVec2 center, const bool highlighted) {
             const ImU32 face = highlighted ? Theme::U32(Theme::Text()) : ImGui::GetColorU32(ImVec4{0.78F, 0.81F, 0.86F, 1.0F});
@@ -332,6 +303,97 @@ namespace Horo::Editor {
             return true;
         }
 
+        /** @brief One front-facing projected cube face; the same polygon owns drawing and picking. */
+        struct ScaleHandleFace {
+            std::array<ImVec2, 4> corners;
+            float brightness{};
+        };
+
+        /** @brief A cube in the gizmo's equal-length 3D frame, projected with the pivot's shared screen scale. */
+        struct ScaleHandleCube {
+            std::array<ScaleHandleFace, 3> faces{};
+            std::size_t count{};
+        };
+
+        /** @brief Projects equal-edge corners and only camera-facing cube faces without per-axis screen normalization. */
+        [[nodiscard]] ScaleHandleCube ProjectScaleHandle(const TransformGizmoFrameGeometry &geometry, const int axis,
+                                                         const RotationScreenBasis &basis) {
+            std::array<ImVec2, 8> corners{};
+            const auto handleCenter = geometry.worldAxes[axis] * (GizmoExtentPixels - ScaleHandleHalfSize);
+            for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+                auto point = handleCenter;
+                for (int component = 0; component < 3; ++component)
+                    point =
+                        point + geometry.worldAxes[component] * ((corner & (1U << component)) ? ScaleHandleHalfSize : -ScaleHandleHalfSize);
+                corners[corner] = {geometry.center->x + Math::Dot(point, basis.right), geometry.center->y - Math::Dot(point, basis.up)};
+            }
+            constexpr std::array<std::array<int, 4>, 6> indices{{
+                {{0, 4, 6, 2}},
+                {{1, 3, 7, 5}},
+                {{0, 1, 5, 4}},
+                {{2, 6, 7, 3}},
+                {{0, 2, 3, 1}},
+                {{4, 5, 7, 6}},
+            }};
+            ScaleHandleCube cube;
+            for (std::size_t faceIndex = 0; faceIndex < indices.size(); ++faceIndex) {
+                const auto normal = geometry.worldAxes[faceIndex / 2] * (faceIndex % 2 ? 1.0F : -1.0F);
+                const float facing = Math::Dot(normal, basis.towardCamera);
+                if (facing <= 0.0001F)
+                    continue;
+                auto &face = cube.faces[cube.count++];
+                for (std::size_t corner = 0; corner < face.corners.size(); ++corner)
+                    face.corners[corner] = corners[indices[faceIndex][corner]];
+                // ImGui's antialiased convex fill requires clockwise screen-space winding.
+                float area{};
+                for (std::size_t corner = 0; corner < face.corners.size(); ++corner) {
+                    const auto &from = face.corners[corner];
+                    const auto &to = face.corners[(corner + 1) % face.corners.size()];
+                    area += from.x * to.y - from.y * to.x;
+                }
+                if (area < 0)
+                    std::reverse(face.corners.begin(), face.corners.end());
+                face.brightness =
+                    std::clamp(0.72F + 0.18F * facing + 0.18F * Math::Dot(normal, basis.up) - 0.10F * Math::Dot(normal, basis.right), 0.5F,
+                               1.15F);
+            }
+            return cube;
+        }
+
+        /** @brief Draws shaded 3D faces rather than a rotated screen square with a fixed depth offset. */
+        void DrawScaleAxisHandle(ImDrawList &drawList, const ImVec2 center, const ImVec2 direction, const float shaftLength,
+                                 const ScaleHandleCube &cube, const ImU32 color, const bool highlighted) {
+            const ImU32 face = ShadeAxisColor(color, highlighted ? 1.25F : 1.0F);
+            const ImU32 dark = ShadeAxisColor(face, 0.58F);
+            drawList.AddLine(AlongAxis(center, direction, 9.0F), AlongAxis(center, direction, shaftLength), dark, 8.0F);
+            drawList.AddLine(AlongAxis(center, direction, 9.0F, -1.0F), AlongAxis(center, direction, shaftLength, -1.0F), face, 5.0F);
+            for (std::size_t index = 0; index < cube.count; ++index) {
+                const auto &quad = cube.faces[index];
+                // Nearly edge-on faces have acute projected corners. ImGui's
+                // joined AA fringe can extend those corners into long spikes.
+                const auto flags = drawList.Flags;
+                drawList.Flags &= ~ImDrawListFlags_AntiAliasedFill;
+                drawList.AddQuadFilled(quad.corners[0], quad.corners[1], quad.corners[2], quad.corners[3],
+                                       ShadeAxisColor(face, quad.brightness));
+                drawList.Flags = flags;
+                for (std::size_t edge = 0; edge < quad.corners.size(); ++edge)
+                    drawList.AddLine(quad.corners[edge], quad.corners[(edge + 1) % quad.corners.size()], dark, 1.0F);
+            }
+        }
+
+        /** @brief Picks visible cube polygons and a bounded edge tolerance, including foreshortened side faces. */
+        [[nodiscard]] bool OverScaleHandle(const ImVec2 pointer, const ScaleHandleCube &cube) noexcept {
+            for (std::size_t face = 0; face < cube.count; ++face) {
+                const auto &corners = cube.faces[face].corners;
+                if (PointInQuad(pointer, corners))
+                    return true;
+                for (std::size_t edge = 0; edge < corners.size(); ++edge)
+                    if (DistanceToSegment(pointer, corners[edge], corners[(edge + 1) % corners.size()]) <= 3.0F)
+                        return true;
+            }
+            return false;
+        }
+
         /** @brief Draws camera-visible plane translation handles between pairs of move axes. */
         void DrawMovePlaneHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
                                   const std::array<ImU32, 3> &axisColors, const float centerPixelsPerWorldUnit) {
@@ -413,25 +475,21 @@ namespace Horo::Editor {
             const float axisLength = (move ? MoveExtentPixels : GizmoExtentPixels) * std::min(projectedLength, 1.0F);
             const ImVec2 end = AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength);
             const ImVec2 hitStart = AlongAxis(*geometry.center, geometry.screenDirections[axis], move ? 10.0F : 12.0F);
-            const ImVec2 scaleHandle = AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength - ScaleHandleHalfSize);
-            const ImVec2 hitEnd =
-                move ? end : AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength - ScaleHandleHalfSize * 2.0F);
+            const float scaleShaftLength = (GizmoExtentPixels - ScaleHandleHalfSize * 2.0F) * projectedLength;
+            const ImVec2 hitEnd = move ? end : AlongAxis(*geometry.center, geometry.screenDirections[axis], scaleShaftLength);
             const float distance = DistanceToSegment(request.pointer, hitStart, hitEnd);
-            const ImVec2 handleOffset{request.pointer.x - scaleHandle.x, request.pointer.y - scaleHandle.y};
-            const float alongHandle =
-                handleOffset.x * geometry.screenDirections[axis].x + handleOffset.y * geometry.screenDirections[axis].y;
-            const float acrossHandle =
-                handleOffset.y * geometry.screenDirections[axis].x - handleOffset.x * geometry.screenDirections[axis].y;
-            const bool overScaleHandle =
-                !move && std::fabs(alongHandle) <= ScaleHandleHalfSize + 3.0F && std::fabs(acrossHandle) <= ScaleHandleHalfSize + 3.0F;
+            const ScaleHandleCube cube = move ? ScaleHandleCube{} : ProjectScaleHandle(geometry, axis, screenBasis);
+            const bool overScaleHandle = !move && OverScaleHandle(request.pointer, cube);
             const bool active = request.activeAxis == axis;
             const bool hit = request.hovered && (distance <= (move ? 8.0F : 10.0F) || overScaleHandle);
             if (move)
                 DrawMoveAxisArrow(drawList, *geometry.center, geometry.screenDirections[axis], axisLength, axisColor, active || hit);
             else
-                DrawScaleAxisHandle(drawList, *geometry.center, geometry.screenDirections[axis], axisLength, axisColor, active || hit);
+                DrawScaleAxisHandle(drawList, *geometry.center, geometry.screenDirections[axis], scaleShaftLength, cube, axisColor,
+                                    active || hit);
             // A visible cube handle wins over another axis shaft crossing beneath it.
-            if (const float hitDistance = overScaleHandle ? -1.0F : distance; hit && hitDistance < hitState.closestDistance) {
+            if (const float hitDistance = overScaleHandle ? -1.0F : distance;
+                hit && (hitDistance < hitState.closestDistance || (overScaleHandle && hitDistance == hitState.closestDistance))) {
                 hitState.closestDistance = hitDistance;
                 geometry.hoveredAxis = axis;
             }
@@ -447,7 +505,14 @@ namespace Horo::Editor {
             if (centerPixelsPerWorldUnit.HasError())
                 return Result<void>::Failure(centerPixelsPerWorldUnit.ErrorValue());
             LinearHandleHitState hitState;
-            for (int axis = 0; axis < 3; ++axis) {
+            std::array axisOrder{0, 1, 2};
+            if (request.tool == EditorTransformTool::Scale)
+                std::sort(axisOrder.begin(), axisOrder.end(), [&](const int left, const int right) {
+                    const float leftDepth = Math::Dot(geometry.worldAxes[left], screenBasis.Value().towardCamera);
+                    const float rightDepth = Math::Dot(geometry.worldAxes[right], screenBasis.Value().towardCamera);
+                    return leftDepth < rightDepth || (leftDepth == rightDepth && left < right);
+                });
+            for (const int axis : axisOrder) {
                 const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry,
                                                                 LinearAxisHandleContext{
                                                                     .axis = axis,

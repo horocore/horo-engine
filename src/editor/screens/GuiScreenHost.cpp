@@ -8,6 +8,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/ProjectCreationService.h"
@@ -28,7 +29,9 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Runtime/Input.h"
+#include "LeaveConfirmationView.h"
 #include "NavigationErrors.h"
+#include "editor/input/EditorInputActions.h"
 #include "editor/modals/build_release/BuildActivity.h"
 #include "editor/modals/build_release/BuildModal.h"
 #include "editor/modals/build_release/BuildReleaseModal.h"
@@ -38,25 +41,30 @@
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <filesystem>
 #include <imgui.h>
 
 namespace Horo::Editor {
     namespace {
-        [[nodiscard]] const char *GetLeaveActionLabel(LeaveAction action) noexcept {
-            using enum LeaveAction;
+        /** @brief Resolves presentation keys without changing the host-owned action policy. */
+        [[nodiscard]] const char *LeaveActionKey(const LeaveAction action) noexcept {
             switch (action) {
-                case Discard:
-                    return "Discard & Leave";
-                case CancelOperation:
-                    return "Cancel Operation";
-                case Save:
-                    return "Save & Leave";
-                case Stay:
-                    return "Stay Here";
-                default:
-                    return "Action";
+                case LeaveAction::Save:
+                    return "save";
+                case LeaveAction::Discard:
+                    return "discard";
+                case LeaveAction::CancelOperation:
+                    return "cancel_operation";
+                case LeaveAction::KeepRunning:
+                    return "keep_running";
+                case LeaveAction::Wait:
+                    return "wait";
+                case LeaveAction::Stay:
+                    return "stay";
             }
+            return "stay";
         }
 
         /** @brief Registers built-in importers and publishes their typed activation outcome. */
@@ -99,8 +107,44 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Reads only admitted package resources during startup; links and escaping paths fail closed. */
+        std::vector<std::string> RegisterPackageThemes(const Extensions::ExtensionManifest &manifest) {
+            std::vector<std::string> registered;
+            std::error_code error;
+            const auto root = std::filesystem::canonical(manifest.rootPath, error);
+            if (error)
+                return registered;
+            for (const auto &contribution : manifest.contributions) {
+                if (contribution.type != "editor.theme")
+                    continue;
+                auto path = root;
+                bool valid = true;
+                const std::filesystem::path relative{contribution.resource};
+                if (relative.empty() || relative.is_absolute())
+                    continue;
+                for (const auto &component : relative) {
+                    path /= component;
+                    if (component == ".." || std::filesystem::is_symlink(std::filesystem::symlink_status(path, error)) || error) {
+                        valid = false;
+                        break;
+                    }
+                }
+                Theme::ThemeEntry theme;
+                if (!valid || !std::filesystem::is_regular_file(path, error) || error ||
+                    !Theme::LoadThemeFromJson(path.string().c_str(), theme)) {
+                    LOG_WARN("editor.extensions", "Package theme resource rejected: %s", contribution.id.c_str());
+                    continue;
+                }
+                theme.id = contribution.id;
+                if (Theme::RegisterPackageTheme(std::move(theme)))
+                    registered.push_back(contribution.id);
+            }
+            return registered;
+        }
+
         /** @brief Loads eligible user extensions and publishes their typed activation outcomes. */
-        void ActivateUserExtensions(Extensions::ExtensionManager &manager, Extensions::ExtensionInventory &inventory) {
+        std::vector<std::string> ActivateUserExtensions(Extensions::ExtensionManager &manager, Extensions::ExtensionInventory &inventory) {
+            std::vector<std::string> themes;
             for (const auto &extension : inventory.Entries()) {
                 if (extension.origin != Extensions::ExtensionOrigin::UserInstalled ||
                     extension.ActivationState().DesiredActivation() != Extensions::ExtensionDesiredActivation::Active)
@@ -112,9 +156,14 @@ namespace Horo::Editor {
                                                                         loaded.ErrorValue().message));
                     continue;
                 }
+                if (const auto *manifest = manager.LoadedManifest(extension.packageId)) {
+                    auto registered = RegisterPackageThemes(*manifest);
+                    themes.insert(themes.end(), registered.begin(), registered.end());
+                }
                 if (auto activated = inventory.MarkRuntimeActive(extension.packageId); activated.HasError())
                     LOG_ERROR("editor.extensions", "Extension activation state was rejected for '%s'.", extension.packageId.c_str());
             }
+            return themes;
         }
 
     }  // namespace
@@ -161,7 +210,7 @@ namespace Horo::Editor {
     /** @copydoc GuiScreenHost::InitializeExtensions */
     void GuiScreenHost::InitializeExtensions(const GuiScreenHostComposition &composition) {
         auto &jobs = composition.jobs;
-        std::vector<std::string> capabilities{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY};
+        std::vector<std::string> capabilities{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_COMMAND_HOST_CAPABILITY};
         importerCatalogCandidate_ = std::make_unique<Assets::AssetImporterCatalog>();
         const auto uiPolicy =
             composition.extensionUiPolicy.revision ? composition.extensionUiPolicy : Extensions::ExtensionAdmissionPolicy{.revision = 1};
@@ -187,7 +236,9 @@ namespace Horo::Editor {
                                                                                             .viewports = editorViewportHost_});
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
         if (extensionInventory_ != nullptr) {
-            ActivateUserExtensions(*extensionManager_, *extensionInventory_);
+            extensionThemeIds_ = ActivateUserExtensions(*extensionManager_, *extensionInventory_);
+            if (!context_.settings.settings.themeId.empty() && !Theme::SelectThemeById(context_.settings.settings.themeId))
+                LOG_WARN("editor.theme", "Saved package theme is unavailable: %s", context_.settings.settings.themeId.c_str());
             PublishRecoveryReasons(editorActivityHost_->Registry(), *extensionInventory_);
         }
         if (auto published = importerCatalogCandidate_->Publish(); published.HasValue())
@@ -336,6 +387,11 @@ namespace Horo::Editor {
             editorActivityHost_->BeginShutdown();
         if (extensionManager_)
             extensionManager_->UnloadAll();
+        for (const auto &id : extensionThemeIds_)
+            Theme::UnregisterPackageTheme(id);
+        extensionThemeIds_.clear();
+        if (settingsService_)
+            settingsService_->SetContributedInputActions({});
         (void)gameplayRetirements_->Close();
         services_.Clear();
     }
@@ -598,8 +654,22 @@ namespace Horo::Editor {
             static_cast<void>(audio->Pump());
         if (!shutdown_ && context_.updates != nullptr)
             context_.updates->Poll();
-        if (editorActivityHost_)
+        if (editorActivityHost_) {
             editorActivityHost_->Update();
+            const auto revision = editorActivityHost_->Registry().Revision();
+            if (settingsService_ && revision != extensionCommandRevision_) {
+                std::vector<Input::ActionDescriptor> actions;
+                for (const auto &entry : editorActivityHost_->PreparedCommands()) {
+                    std::vector<Input::InputBinding> defaults;
+                    if (const auto binding = ParseEditorShortcut(entry.command.shortcut))
+                        defaults.push_back(*binding);
+                    actions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
+                                       Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults)});
+                }
+                settingsService_->SetContributedInputActions(std::move(actions));
+                extensionCommandRevision_ = revision;
+            }
+        }
         UpdateExtensionPages();
         if (localization_ != nullptr) {
             static_cast<void>(
@@ -654,7 +724,8 @@ namespace Horo::Editor {
 
     void GuiScreenHost::Draw() {
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
-        const float contentHeight = std::max(0.0F, viewport->WorkSize.y - EditorStatusBar::Height);
+        const bool showStatusBar = activeRoute_.kind != GuiRouteKind::ProjectCreation;
+        const float contentHeight = std::max(0.0F, viewport->WorkSize.y - (showStatusBar ? EditorStatusBar::Height : 0.0F));
         const GuiContentRegion contentRegion{viewport->WorkPos.x, viewport->WorkPos.y, viewport->WorkSize.x, contentHeight};
 
         if (activeScreen_) {
@@ -670,7 +741,7 @@ namespace Horo::Editor {
             activeScreen_->CollectActivePanelIds(activeStatusPanelIds_);
         }
 
-        if (statusBar_) {
+        if (statusBar_ && showStatusBar) {
             const bool interactionEnabled = modalHost_ != nullptr && !modalHost_->HasOpenModal() && !pendingRequirement_.has_value();
             const auto invocation = statusBar_->Draw(ImVec2{contentRegion.x, contentRegion.y + contentRegion.height},
                                                      ImVec2{contentRegion.width, EditorStatusBar::Height},
@@ -703,7 +774,8 @@ namespace Horo::Editor {
                                                     collision.HasError() ? std::optional<Error>{collision.ErrorValue()} : std::nullopt,
                                             },
                                             SettingsModalPagePresentation{editorPageHost_,
-                                                                          extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr});
+                                                                          extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr,
+                                                                          editorActivityHost_});
         if (navigation.HasError())
             modal->Draft().navigationStatus = navigation.ErrorValue().message;
         return modal;
@@ -892,36 +964,122 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    void GuiScreenHost::PresentLeaveDialog(const LeaveRequirement &requirement, const LeaveTarget &target) {
-        ImGui::OpenPopup("Unsaved Changes");
-        const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
-        if (!ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            return;
+    /** @copydoc DrawLeaveConfirmation */
+    std::optional<LeaveAction> DrawLeaveConfirmation(const LeaveRequirement &requirement, const EditorGuiContext &context) {
+        static constexpr GuiLocalizationScope scope{"leave_confirmation"};
+        const auto text = [&](const char *key) -> const std::string & {
+            return scope.Text(context.localization, key);
+        };
+        const char *messageKey = "dirty_document";
+        const char *titleKey = "title";
+        switch (requirement.kind) {
+            case LeaveRequirementKind::UnsavedDraft:
+                messageKey = "unsaved_draft";
+                break;
+            case LeaveRequirementKind::RunningOperation:
+                messageKey = "running_operation";
+                titleKey = "operation_title";
+                break;
+            case LeaveRequirementKind::RecoveryDecision:
+                messageKey = "recovery";
+                break;
+            case LeaveRequirementKind::NativeDialogCompletion:
+                messageKey = "native_dialog";
+                break;
+            case LeaveRequirementKind::DirtyDocument:
+                break;
         }
-
-        if (requirement.kind == LeaveRequirementKind::UnsavedDraft) {
-            ImGui::Text("You have unsaved project creation changes.\nDo you want to discard them and leave?");
-        } else if (requirement.kind == LeaveRequirementKind::RunningOperation) {
-            ImGui::Text("A background operation is running.\nDo you want to cancel the operation and leave?");
-        } else {
-            ImGui::Text("This screen requires confirmation before leaving.");
-        }
-        ImGui::Separator();
-
-        std::optional<LeaveAction> selectedAction;
-        for (const auto action : requirement.allowedActions) {
-            if (ImGui::Button(GetLeaveActionLabel(action), ImVec2(140, 0))) {
-                ImGui::CloseCurrentPopup();
-                selectedAction = action;
+        const auto allowed = [&](const LeaveAction action) {
+            return std::ranges::find(requirement.allowedActions, action) != requirement.allowedActions.end();
+        };
+        const auto &fonts = context.theme.fonts;
+        const float scale = Theme::GetActiveTokens().sizes.uiScale;
+        const float width =
+            std::max(1.0F, std::min(Ui::ScaledLayoutValue(520), ImGui::GetMainViewport()->WorkSize.x - Ui::ScaledLayoutValue(32)));
+        const float inset = Ui::ScaledLayoutValue(20);
+        const float gap = Ui::ScaledLayoutValue(8);
+        const auto metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
+        constexpr std::array actions{LeaveAction::Discard, LeaveAction::CancelOperation, LeaveAction::KeepRunning, LeaveAction::Wait,
+                                     LeaveAction::Save};
+        std::array<float, actions.size()> widths{};
+        float totalWidth = 0;
+        int count = 0;
+        {
+            Theme::ScopedTextStyle style(fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
+            for (std::size_t index = 0; index < actions.size(); ++index) {
+                if (!allowed(actions[index]))
+                    continue;
+                widths[index] = ImGui::CalcTextSize(text(LeaveActionKey(actions[index])).c_str()).x + metrics.paddingX * 2;
+                totalWidth += widths[index] + (count++ != 0 ? gap : 0);
             }
-            ImGui::SameLine();
         }
-        ImGui::NewLine();
-        ImGui::EndPopup();
-        if (selectedAction.has_value()) {
-            ExecuteLeaveResolution(*selectedAction, requirement, target);
+        const bool stacked = totalWidth > std::max(1.0F, width - inset * 2);
+        const float footerHeight =
+            Ui::ScaledLayoutValue(24) + metrics.minimumHeight * (stacked ? count : 1) + (stacked ? std::max(0, count - 1) * gap : 0);
+        float bodyHeight = 0;
+        {
+            Theme::ScopedTextStyle style(fonts.sans, Theme::TextPx::Body(), Theme::FontPx::Sans);
+            bodyHeight = ImGui::CalcTextSize(text(messageKey).c_str(), nullptr, false, std::max(1.0F, width - inset * 2 - 1)).y +
+                         Ui::ScaledLayoutValue(32);
         }
+        std::optional<LeaveAction> selected;
+        {
+            Ui::ScopedModalShell shell({.id = "LeaveConfirmation",
+                                        .title = text(titleKey).c_str(),
+                                        .requestedSize = {520, (Ui::ScaledLayoutValue(38) + bodyHeight + footerHeight) / scale},
+                                        .viewportPadding = 32,
+                                        .minimumWidth = 240,
+                                        .minimumHeight = 120,
+                                        .headerHeight = 38,
+                                        .headerHorizontalPadding = 16,
+                                        .footerHeight = footerHeight / scale,
+                                        .showClose = allowed(LeaveAction::Stay),
+                                        .foregroundBorder = true,
+                                        .closeButtonVariant = Ui::CloseButtonVariant::Compact,
+                                        .titleFontSize = Theme::TextPx::Label(),
+                                        .modalPopup = true},
+                                       fonts);
+            if (!shell.IsOpen())
+                return std::nullopt;
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {inset, Ui::ScaledLayoutValue(16)});
+            ImGui::BeginChild("##LeaveBody", {0, shell.BodyHeight()}, false, ImGuiWindowFlags_AlwaysUseWindowPadding);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text(messageKey), Theme::Text(), fonts);
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            shell.BeginFooter({inset, Ui::ScaledLayoutValue(12)});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {gap, gap});
+            float x = ImGui::GetCursorPosX() + std::max(0.0F, ImGui::GetContentRegionAvail().x - totalWidth);
+            int drawn = 0;
+            for (std::size_t index = 0; index < actions.size(); ++index) {
+                if (!allowed(actions[index]))
+                    continue;
+                if (stacked)
+                    x = ImGui::GetCursorPosX() + std::max(0.0F, ImGui::GetContentRegionAvail().x - widths[index]);
+                else if (drawn != 0)
+                    ImGui::SameLine(0, gap);
+                ImGui::SetCursorPosX(x);
+                const auto action = actions[index];
+                if (Ui::Button({.label = text(LeaveActionKey(action)).c_str(),
+                                .variant = action == LeaveAction::Save ? Ui::ButtonVariant::Primary : Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans}))
+                    selected = action;
+                x += widths[index] + gap;
+                ++drawn;
+            }
+            ImGui::PopStyleVar();
+            shell.EndFooter();
+            if (allowed(LeaveAction::Stay) && (shell.CloseRequested() || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
+                selected = LeaveAction::Stay;
+            if (selected)
+                ImGui::CloseCurrentPopup();
+        }
+        return selected;
+    }
+
+    /** @copydoc GuiScreenHost::PresentLeaveDialog */
+    void GuiScreenHost::PresentLeaveDialog(const LeaveRequirement &requirement, const LeaveTarget &target) {
+        if (const auto action = DrawLeaveConfirmation(requirement, context_))
+            ExecuteLeaveResolution(*action, requirement, target);
     }
 
 }  // namespace Horo::Editor

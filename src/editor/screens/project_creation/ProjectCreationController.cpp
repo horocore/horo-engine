@@ -24,6 +24,11 @@ namespace Horo::Editor {
             return value.find('/') != std::string::npos || value.find('\\') != std::string::npos;
         }
 
+        /** @brief Rejects special components that cannot safely name a child project folder. */
+        [[nodiscard]] bool IsInvalidFolderName(const std::string_view value) {
+            return value == "." || value == ".." || value.find(':') != std::string_view::npos || value.find('\0') != std::string_view::npos;
+        }
+
         /**
          * @brief Checks if a file status contains any write permissions.
          * @param permissions Filesystem permissions to check.
@@ -133,6 +138,16 @@ namespace Horo::Editor {
     /** @copydoc ProjectCreationController::SetProjectPath */
     void ProjectCreationController::SetProjectPath(std::string projectPath) {
         draft_.projectPath = std::move(projectPath);
+    }
+
+    /** @copydoc ProjectCreationController::SetProjectParentDirectory */
+    void ProjectCreationController::SetProjectParentDirectory(const std::filesystem::path &parentDirectory) {
+        if (Text::IsBlank(parentDirectory.string()) || Text::IsBlank(draft_.projectName) || HasPathSeparator(draft_.projectName) ||
+            IsInvalidFolderName(draft_.projectName)) {
+            draft_.projectPath.clear();
+            return;
+        }
+        draft_.projectPath = (parentDirectory / std::filesystem::path{draft_.projectName}).string();
     }
 
     /** @copydoc ProjectCreationController::SetTemplateId */
@@ -272,6 +287,8 @@ namespace Horo::Editor {
             validation.diagnostics.emplace_back(ProjectNameRequired, "Project name is required.");
         } else if (HasPathSeparator(draft_.projectName)) {
             validation.diagnostics.emplace_back(ProjectNameContainsPathSeparator, "Project name must not contain path separators.");
+        } else if (IsInvalidFolderName(draft_.projectName)) {
+            validation.diagnostics.emplace_back(ProjectNameInvalidFolderName, "Project name must be a valid folder name.");
         }
 
         if (Text::IsBlank(draft_.projectPath)) {

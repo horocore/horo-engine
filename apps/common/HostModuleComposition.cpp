@@ -111,9 +111,9 @@ namespace Horo::Application::Internal {
     /** @copydoc DescribeHostModules */
     Result<std::vector<ModuleDescriptor>> DescribeHostModules(const HostModuleSelection &selection) {
         if (selection.host == HostKind::Headless) {
-            if (selection.renderer != HostRenderer::None || selection.includeOpenTelemetry) {
+            if (selection.renderer != HostRenderer::None) {
                 return InvalidSelection<std::vector<ModuleDescriptor>>(
-                    "The current headless host does not link an interactive renderer or OpenTelemetry module.");
+                    "The current headless host does not link an interactive renderer module.");
             }
             std::vector<ModuleDescriptor> modules;
             modules.reserve(9);
@@ -142,16 +142,12 @@ namespace Horo::Application::Internal {
         const auto &selectedModules = *selected;
         modules.push_back(Describe(std::string{selectedModules.renderer}, {"horo.render.backend_registry"}));
         modules.push_back(Describe(std::string{selectedModules.viewport}, {"horo.editor.viewport_scene", selectedModules.renderer}));
-        if (selection.includeOpenTelemetry)
-            modules.push_back(Describe("horo.observability.opentelemetry", {"horo.foundation"}));
 
         ModuleDescriptor host =
             Describe("horo.host.editor", {"horo.gui", "horo.editor.services", "horo.editor.render_extraction", "horo.render.frontend",
                                           "horo.runtime", "horo.runtime.scene", "horo.extensions", "horo.platform", "horo.input.sdl",
                                           "horo.application.project_migrations", selectedModules.viewport});
-        host.dependencies.push_back(ModuleDependency{.module = ModuleId{"horo.observability.opentelemetry"},
-                                                     .minimumVersion = kContractVersion,
-                                                     .kind = ModuleDependencyKind::Optional});
+
         modules.push_back(std::move(host));
         return Result<std::vector<ModuleDescriptor>>::Success(std::move(modules));
     }

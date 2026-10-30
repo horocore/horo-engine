@@ -177,7 +177,7 @@ namespace Horo::Editor {
         /** @brief Includes collision semantics and uncertain durability in the workspace leave guard. */
         [[nodiscard]] bool HasDirtyCollisionSettings() const noexcept;
         /** @brief Saves the exact collision draft with complete reference review. @return Original typed outcome. */
-        [[nodiscard]] Result<void> SaveCollisionSettings() const;
+        [[nodiscard]] Result<void> SaveCollisionSettings();
         /** @brief Revokes modal access before Scene owners retire. @param discardDirty Explicit discard decision.
          * @return Unchanged dirty rejection or successful owner shutdown. */
         [[nodiscard]] Result<void> ShutdownCollisionSettings(bool discardDirty = false);
@@ -410,6 +410,10 @@ namespace Horo::Editor {
          * @param intervalMinutes Zero disables autosave; positive values schedule recovery writes.
          */
         void UpdateAutosave(float elapsedSeconds, int intervalMinutes);
+        /** @brief Advances canonical source autosave with the committed idle-delay preference.
+         * @param elapsedSeconds Host update delta. @param delaySeconds Zero disables source saves.
+         */
+        void UpdateSourceAutosave(float elapsedSeconds, int delaySeconds);
         /**
          * @brief Schedules and drains non-blocking canonical scene identity inspections.
          * @param elapsedSeconds Owner-thread elapsed frame time.
@@ -531,6 +535,10 @@ namespace Horo::Editor {
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
         /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
         void RefreshPhysicsInspectorPort();
+        /** @brief Refreshes named committed collision profiles outside the frame draw path. */
+        void RefreshPhysicsProfiles();
+        /** @brief Projects registered Physics materials from the owner-pinned asset snapshot. */
+        void RefreshPhysicsMaterials();
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
         /** @brief Admit one atomic navigation gesture through existing document/history owners. */
         void ApplyNavigationInspectorCommand(const EditorWorkspaceViewCommandData &command);

@@ -383,7 +383,7 @@ if(HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditor
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
-        HoroEditor/app/EditorGuiLiveReload.cpp
+        HoroEditor/app/EditorWindowChrome.cpp
         HoroEditor/app/EditorNavigationBakeHost.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
@@ -395,10 +395,21 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
     )
 
+    if(APPLE)
+        target_sources(HoroEditor PRIVATE HoroEditor/app/EditorWindowChromeMac.mm)
+        set_source_files_properties(HoroEditor/app/EditorWindowChromeMac.mm PROPERTIES
+            LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++")
+        target_link_libraries(HoroEditor PRIVATE "-framework AppKit")
+    elseif(WIN32)
+        target_link_libraries(HoroEditor PRIVATE dwmapi)
+    endif()
+
     target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles)
+    include(HoroEditorGuiLiveReloadHost)
     if(HORO_EDITOR_LIVE_UI)
         include(HoroEditorLiveUi)
     endif()
+    horo_attach_gui_live_host(HoroEditor)
 
     if(APPLE)
         # SDL_GetBasePath resolves to Contents/Resources for an application bundle.
@@ -574,10 +585,6 @@ if(HORO_BUILD_EDITOR_GUI)
         target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
     endif()
 
-    if(HORO_ENABLE_OPENTELEMETRY)
-        target_compile_definitions(HoroEditor PRIVATE HORO_HAS_OPENTELEMETRY=1)
-        target_link_libraries(HoroEditor PRIVATE HoroEngine::OpenTelemetry)
-    endif()
 
     # Development composition: concrete backends are linked explicitly at the
     # executable boundary until RenderModuleHost owns installed-product loading.

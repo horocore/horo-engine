@@ -230,25 +230,6 @@ target_link_libraries(HoroModelProviderAdapters
         PUBLIC HoroEngine::ModelProvider
         PRIVATE nlohmann_json::nlohmann_json CURL::libcurl)
 
-if (HORO_ENABLE_OPENTELEMETRY)
-    add_library(HoroOpenTelemetry STATIC
-            foundation/telemetry/OpenTelemetrySink.cpp
-    )
-    add_library(HoroEngine::OpenTelemetry ALIAS HoroOpenTelemetry)
-    target_compile_features(HoroOpenTelemetry PUBLIC cxx_std_20)
-    target_include_directories(HoroOpenTelemetry
-            PUBLIC
-            ${PROJECT_SOURCE_DIR}/include
-    )
-    target_link_libraries(HoroOpenTelemetry
-            PUBLIC
-            HoroEngine::Foundation
-            PRIVATE
-            nlohmann_json::nlohmann_json
-            CURL::libcurl
-    )
-endif ()
-
 add_library(HoroPlatform STATIC
         platform/Platform.cpp
         platform/PlatformRead.cpp
@@ -3647,6 +3628,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/NavigationInspectorSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelNavigation.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
+            editor/screens/workspace/panels/inspector/add_component/AddComponentRegistry.cpp
+            editor/screens/workspace/panels/inspector/add_component/BuiltinAddComponentDefinitions.cpp
+            editor/screens/workspace/panels/inspector/add_component/AddComponentMenu.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsConstraint.cpp

@@ -387,4 +387,49 @@ namespace Horo::Editor {
         }
         return Scanner{language, text, limits}.Run();
     }
+
+    /** @copydoc PlanSourceLanguageNewline */
+    Result<SourceEditingPlan> PlanSourceLanguageNewline(const SourceDocumentSnapshot &source, const SourceEditingView &view) {
+        auto plain = PlanSourceNewline(source, view);
+        if (plain.HasError())
+            return plain;
+        const auto language = ClassifySourceLanguage(source.Identity().key.source.Value());
+        if (language == SourceLanguage::PlainText)
+            return plain;
+        const auto caret = std::min(view.anchor, view.caret);
+        const auto prefix = source.Text().substr(0, caret);
+        const auto lineBreak = prefix.find_last_of("\r\n");
+        const auto lineStart = lineBreak == std::string_view::npos ? 0 : lineBreak + 1;
+        const auto last = prefix.find_last_not_of(" \t\r\n");
+        if (last == std::string_view::npos || last < lineStart)
+            return plain;
+        const auto syntax = TokenizeSource(language, prefix);
+        if (syntax.fallback != SourceSyntaxFallback::None || syntax.RoleAt(last) == SourceSyntaxRole::Comment ||
+            syntax.RoleAt(last) == SourceSyntaxRole::String)
+            return plain;
+        bool opensBlock = prefix[last] == '{' || prefix[last] == '[' || prefix[last] == '(';
+        if (language == SourceLanguage::HoroScript) {
+            for (const auto &span : syntax.spans) {
+                if (span.begin < lineStart || span.role != SourceSyntaxRole::Keyword)
+                    continue;
+                const auto token = prefix.substr(span.begin, span.end - span.begin);
+                if (token == "function" || token == "then" || token == "do" || token == "repeat" || token == "else")
+                    opensBlock = true;
+            }
+        }
+        if (!opensBlock)
+            return plain;
+        auto insertion = plain.Value().insert + "    ";
+        const auto innerEnd = caret + insertion.size();
+        const auto tail = source.Text().substr(std::max(view.anchor, view.caret));
+        const auto next = tail.find_first_not_of(" \t");
+        if (next != std::string_view::npos && (tail[next] == '}' || tail[next] == ']' || tail[next] == ')'))
+            insertion += plain.Value().insert;
+        auto plan = PlanSourceReplacement(source, view, insertion);
+        if (plan.HasError())
+            return plan;
+        auto completed = std::move(plan).Value();
+        completed.after.anchor = completed.after.caret = innerEnd;
+        return Result<SourceEditingPlan>::Success(std::move(completed));
+    }
 }  // namespace Horo::Editor

@@ -3,11 +3,13 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/SettingsModal.h"
+#include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Network/NetworkProjectSettings.h"
 #include "SettingsModalInternal.h"
+#include "editor/input/EditorInputActions.h"
 
 #include <algorithm>
 #include <array>
@@ -33,13 +35,14 @@ namespace Horo::Editor::SettingsModalInternal {
         ImGui::PopStyleColor();
     }
 
+    /** @copydoc DrawNavItem */
     void DrawNavItem(SettingsState &st, const NavItem &item, const EditorGuiContext &ctx) {
         const bool active = st.activeTab == static_cast<int>(item.tab);
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         const float rowW = ImGui::GetContentRegionAvail().x;
-        constexpr float rowH = 38.0F;
+        constexpr float rowH = 32.0F;
 
-        ImGui::PushID(item.label);
+        ImGui::PushID(static_cast<int>(item.tab));
         ImGui::InvisibleButton("nav", {rowW, rowH});
         if (ImGui::IsItemClicked()) {
             if (st.activeTab != static_cast<int>(item.tab)) {
@@ -58,7 +61,7 @@ namespace Horo::Editor::SettingsModalInternal {
             dl->AddRectFilled(pos, {pos.x + 2.0F, pos.y + rowH}, U32(Accent()), 1.0F);
         }
 
-        ImGui::SetCursorScreenPos({pos.x + 12.0F, pos.y + 10.0F});
+        ImGui::SetCursorScreenPos({pos.x + 12.0F, pos.y + (rowH - TextPx::Label()) * 0.5F});
         {
             ScopedTextStyle ts(ctx.theme.fonts.sansEmphasis, TextPx::Label(), FontPx::SansEmphasis);
             ImGui::PushStyleColor(ImGuiCol_Text, active ? Accent() : Muted());
@@ -95,6 +98,11 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {general.c_str(), "G", General}, ctx);
         DrawNavItem(st, {appearance.c_str(), "A", Appearance}, ctx);
         DrawNavItem(st, {input.c_str(), "I", Input}, ctx);
+        const auto codeEditor = SettingsModal::kTextScope.Text(ctx.localization, "nav.code_editor");
+        const auto keymaps = SettingsModal::kTextScope.Text(ctx.localization, "nav.keymaps");
+        DrawNavGroup(codeEditor.c_str(), ctx);
+        DrawNavItem(st, {appearance.c_str(), "A", CodeEditorAppearance}, ctx);
+        DrawNavItem(st, {keymaps.c_str(), "K", Keymaps}, ctx);
         DrawNavGroup(engine.c_str(), ctx);
         DrawNavItem(st, {rendering.c_str(), "R", Rendering}, ctx);
         DrawNavItem(st, {SettingsModal::kTextScope.Text(ctx.localization, "collision.title").c_str(), "C", Collision}, ctx);
@@ -174,8 +182,6 @@ namespace Horo::Editor::SettingsModalInternal {
         const std::string customThemeDescription = SettingsModal::kTextScope.Text(ctx.localization, "appearance.custom_theme.description");
         const std::string accentLabel = SettingsModal::kTextScope.Text(ctx.localization, "appearance.accent_color");
         const std::string accentDescription = SettingsModal::kTextScope.Text(ctx.localization, "appearance.accent_color.description");
-        const std::string fontSizeLabel = SettingsModal::kTextScope.Text(ctx.localization, "appearance.code_font_size");
-        const std::string fontSizeDescription = SettingsModal::kTextScope.Text(ctx.localization, "appearance.code_font_size.description");
         SettingRow(colorThemeLabel.c_str(), colorThemeDescription.c_str(), ctx.theme.fonts, [&st, &ctx]() {
             const auto &themeList = GetThemeList();
             static std::vector<const char *> s_names;
@@ -191,6 +197,7 @@ namespace Horo::Editor::SettingsModalInternal {
             (void)ComboControl("##theme", &st.appearance.themeIndex, s_names.data(), count, ctx.theme.fonts);
             if (st.appearance.themeIndex != prev) {
                 // Defer: apply at start of next frame to avoid mid-frame style glitches
+                st.appearance.themeId = themeList[static_cast<std::size_t>(st.appearance.themeIndex)].id;
                 st.appearance.pendingThemeIndex = st.appearance.themeIndex;
                 st.dirty = true;
             }
@@ -201,11 +208,52 @@ namespace Horo::Editor::SettingsModalInternal {
         SettingRow(accentLabel.c_str(), accentDescription.c_str(), ctx.theme.fonts, [&st, &ctx]() {
             (void)ColorHexControl("accent-color", st.appearance.accentHex, 16, ctx.theme.fonts);
         });
+    }
+
+    /** @brief Presents source editor appearance using the same committed settings authority as the workspace. */
+    void DrawCodeEditorAppearance(SettingsState &st, const EditorGuiContext &ctx) {
+        const auto title = SettingsModal::kTextScope.Text(ctx.localization, "nav.code_editor");
+        SectionTitle(title.c_str(), ctx.theme.fonts);
+        const auto fontSizeLabel = SettingsModal::kTextScope.Text(ctx.localization, "appearance.code_font_size");
+        const auto fontSizeDescription = SettingsModal::kTextScope.Text(ctx.localization, "appearance.code_font_size.description");
         const std::string typoGroup = SettingsModal::kTextScope.Text(ctx.localization, "appearance.typography_group");
-        SettingGroup(typoGroup.c_str(), ctx.theme.fonts);
+        SettingGroup(typoGroup.c_str(), ctx.theme.fonts, true);
+        const auto familyLabel = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.font_family");
+        const auto familyDescription = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.font_family.description");
+        SettingRow(familyLabel.c_str(), familyDescription.c_str(), ctx.theme.fonts, [&] {
+            const auto &families = ctx.theme.fonts.codeFamilies;
+            int selected = 0;
+            for (std::size_t index = 0; index < families.size(); ++index)
+                if (families[index].name == st.appearance.codeFontFamily)
+                    selected = static_cast<int>(index);
+            const ComboItemSource source{.label = [&](int index) {
+                return families[static_cast<std::size_t>(index)].name.c_str();
+            }};
+            if (!families.empty() && ComboControl("##code-family", &selected, static_cast<int>(families.size()), source, ctx.theme.fonts))
+                st.appearance.codeFontFamily = families[static_cast<std::size_t>(selected)].name;
+        });
         SettingRow(fontSizeLabel.c_str(), fontSizeDescription.c_str(), ctx.theme.fonts, [&st, &ctx]() {
             (void)InputTextControl("##font-size", st.appearance.editorFontSize, 8, ctx.theme.fonts);
         });
+        const auto behavior = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.behavior");
+        SettingGroup(behavior.c_str(), ctx.theme.fonts);
+        for (const auto &entry : CodeEditorBooleanSettings()) {
+            const std::string key = std::string{"code_editor."} + entry.key;
+            const auto label = SettingsModal::kTextScope.Text(ctx.localization, key);
+            const auto description = SettingsModal::kTextScope.Text(ctx.localization, key + ".description");
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&] {
+                static_cast<void>(ToggleControl(entry.key, &(st.appearance.codeEditor.*entry.member), ctx.theme.fonts));
+            });
+        }
+        for (const auto &entry : CodeEditorIntegerSettings()) {
+            const std::string key = std::string{"code_editor."} + entry.key;
+            const auto label = SettingsModal::kTextScope.Text(ctx.localization, key);
+            const auto description = SettingsModal::kTextScope.Text(ctx.localization, key + ".description");
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&] {
+                SliderIntControl(entry.key, &(st.appearance.codeEditor.*entry.member), entry.minimum, entry.maximum,
+                                 SliderValueFormat::Integer, ctx.theme.fonts);
+            });
+        }
     }
 
     void DrawInput(SettingsState &st, const EditorGuiContext &ctx) {
@@ -228,14 +276,85 @@ namespace Horo::Editor::SettingsModalInternal {
         SettingRow(invertLabel.c_str(), invertDescription.c_str(), ctx.theme.fonts, [&st, &ctx]() {
             (void)ToggleControl("invert-y", &st.input.invertOrbitY, ctx.theme.fonts);
         });
+    }
 
+    /** @brief Edits registered commands without creating a second shortcut store. */
+    void DrawKeymaps(SettingsState &st, const EditorGuiContext &ctx) {
+        const auto title = SettingsModal::kTextScope.Text(ctx.localization, "nav.keymaps");
+        SectionTitle(title.c_str(), ctx.theme.fonts);
         const std::string mappingsGroup = SettingsModal::kTextScope.Text(ctx.localization, "input.mappings_group");
-        const std::string mappingsLabel = SettingsModal::kTextScope.Text(ctx.localization, "input.mappings_label");
         const std::string mappingsDescription = SettingsModal::kTextScope.Text(ctx.localization, "input.mappings_description");
         SettingGroup(mappingsGroup.c_str(), ctx.theme.fonts);
-        SettingRow(mappingsLabel.c_str(), mappingsDescription.c_str(), ctx.theme.fonts, []() {
-            // Intentionally empty: the mappings overview is read-only for now.
-        });
+        Ui::Hint(mappingsDescription.c_str(), ctx.theme.fonts);
+        auto &profile = st.input.keymap.profile;
+        std::vector<Input::ActionDescriptor> contributions;
+        if (st.extensionCommands)
+            for (const auto &entry : st.extensionCommands->PreparedCommands()) {
+                std::vector<Input::InputBinding> defaults;
+                if (const auto binding = ParseEditorShortcut(entry.command.shortcut))
+                    defaults.push_back(*binding);
+                contributions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
+                                         Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults)});
+            }
+        const auto actions = EditorKeymapActions(profile, contributions);
+        for (const auto &action : actions) {
+            if (action.valueType != Input::ActionValueType::Digital)
+                continue;
+            const auto &id = action.id.Value();
+            ImGui::PushID(id.c_str());
+            std::string label = id.starts_with("editor.") ? ctx.localization.Get("editor", "settings.keymap." + id) : id;
+            if (st.extensionCommands)
+                for (const auto &entry : st.extensionCommands->PreparedCommands())
+                    if (entry.command.id.value == id)
+                        label = st.extensionCommands->LocalizedText(entry.provider, entry.command.labelLocalizationKey,
+                                                                    ctx.settings.settings.languageTag);
+            auto bindings = std::span<const Input::InputBinding>{action.defaultBindings};
+            for (const auto &entry : profile.overrides)
+                if (entry.action == action.id)
+                    bindings = entry.bindings;
+            std::string chord;
+            if (!bindings.empty()) {
+                const auto preferred = std::ranges::find_if(bindings, [](const auto &binding) {
+                    return ImGui::GetIO().ConfigMacOSXBehaviors ? binding.requiredModifiers.command : binding.requiredModifiers.control;
+                });
+                chord = Ui::ShortcutLabel(preferred != bindings.end() ? *preferred : bindings.front());
+            }
+            const bool listening = st.input.recordingAction == id;
+            std::string button = chord;
+            if (listening)
+                button = SettingsModal::kTextScope.Text(ctx.localization, "keymap.recording");
+            else if (button.empty())
+                button = SettingsModal::kTextScope.Text(ctx.localization, "keymap.unassigned");
+            SettingRow(label.c_str(), "", ctx.theme.fonts, [&] {
+                if (Ui::Button({.label = button.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = ctx.theme.fonts.sans}))
+                    st.input.recordingAction = id;
+                ImGui::SameLine();
+                if (Ui::Button({.label = SettingsModal::kTextScope.Text(ctx.localization, "keymap.reset").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = ctx.theme.fonts.sans})) {
+                    std::erase_if(profile.overrides, [&](const auto &entry) {
+                        return entry.action == action.id;
+                    });
+                    st.input.recordingAction.clear();
+                }
+            });
+            if (listening) {
+                Input::InputBinding captured;
+                if (Ui::CaptureShortcut(captured)) {
+                    if (captured.key != Input::Key::Escape) {
+                        std::erase_if(profile.overrides, [&](const auto &entry) {
+                            return entry.action == action.id;
+                        });
+                        profile.overrides.push_back({action.id, {captured}});
+                    }
+                    st.input.recordingAction.clear();
+                }
+            }
+            ImGui::PopID();
+        }
+        const auto report = Input::ValidateBindingProfile(actions, profile);
+        if (!report.IsValid())
+            Ui::ErrorText(SettingsModal::kTextScope.Text(ctx.localization, "keymap.conflict").c_str(), ctx.theme.fonts);
     }
 
     void DrawRendering(SettingsState &st, const EditorGuiContext &ctx) {
@@ -382,6 +501,12 @@ namespace Horo::Editor::SettingsModalInternal {
                 break;
             case Input:
                 DrawInput(st, ctx);
+                break;
+            case CodeEditorAppearance:
+                DrawCodeEditorAppearance(st, ctx);
+                break;
+            case Keymaps:
+                DrawKeymaps(st, ctx);
                 break;
             case Rendering:
                 DrawRendering(st, ctx);

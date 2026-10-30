@@ -32,7 +32,8 @@ namespace Horo::Editor {
                                                                  CreateCallback onCreate)
         : EditorModal(kTextScope), context_(context), state_(kind, std::move(destination), std::move(baseName)),
           projectRoot_(std::move(projectRoot)),
-          luaDestination_(kind == GameplayBehaviorKind::Lua ? state_.Destination() : ProjectLayout::ScriptsRoot(projectRoot_)),
+          luaDestination_(kind == GameplayBehaviorKind::Lua ? std::filesystem::path{state_.Destination()}
+                                                            : ProjectLayout::ScriptsRoot(projectRoot_)),
           onBrowse_(std::move(onBrowse)), onCreate_(std::move(onCreate)) {}
 
     ModalId GameplayBehaviorFilenameModal::Id() const {

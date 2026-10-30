@@ -65,9 +65,18 @@ TEST_CASE("Editor startup upgrades legacy preferences and recent-project records
 TEST_CASE("Malformed or future editor user state remains untouched for explicit repair", "[release][user-state]") {
     TemporaryState state;
     Horo::NativeDurableFileSystem files;
-    Write(state.root / "state" / "editor_settings.json", R"({"schemaVersion":2,"editor":{}})");
+    std::string original;
+    SECTION("Future schema") {
+        original = R"({"schemaVersion":2,"editor":{}})";
+    }
+    SECTION("Malformed legacy JSON") {
+        original = R"({"editor":{"languageTag":"tr-TR",}})";
+    }
+    Write(state.root / "state" / "editor_settings.json", original);
     Write(state.root / "state" / "recent_projects.json", R"([{"name":"Example"}])");
-    CHECK(MigrateLegacyEditorUserState(state.root / "state", state.root / "cache", files).HasError());
-    CHECK(Read(state.root / "state" / "editor_settings.json") == R"({"schemaVersion":2,"editor":{}})");
+    const auto result = MigrateLegacyEditorUserState(state.root / "state", state.root / "cache", files);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().message.find("editor_settings.json") != std::string::npos);
+    CHECK(Read(state.root / "state" / "editor_settings.json") == original);
     CHECK(Read(state.root / "state" / "recent_projects.json") == R"([{"name":"Example"}])");
 }

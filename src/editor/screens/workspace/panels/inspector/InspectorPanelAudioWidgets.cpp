@@ -1,4 +1,6 @@
 #include "Horo/Editor/GuiLiveReload.h"
+#include "component_fields/definitions/AudioListenerFields.h"
+#include "component_fields/definitions/AudioSourceFields.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanelInternal.h"
 
 #include <algorithm>
@@ -14,16 +16,6 @@ namespace Horo::Editor {
         /** @brief Resolves localized audio-inspector copy without changing authored identity. */
         const char *Label(const EditorGuiContext &context, const char *key) {
             return context.localization.Get("editor", key).c_str();
-        }
-
-        /** @brief Adapts one typed boolean to the shared localized enum property. */
-        bool DrawFlag(const EditorGuiContext &context, const char *key, bool &value) {
-            const std::array entries{Label(context, "workspace.value.off"), Label(context, "workspace.value.on")};
-            int selected = value ? 1 : 0;
-            if (!Ui::DrawComboPropRow(Label(context, key), key, selected, entries, context.theme.fonts))
-                return false;
-            value = selected == 1;
-            return true;
         }
 
         /** @brief Edits a stable typed identity exactly; zero remains an explicit invalid draft. */
@@ -103,84 +95,13 @@ namespace Horo::Editor {
             return committed;
         }
 
-        /** @brief Edits finite priority and concurrency values through typed playback defaults. */
-        bool DrawAdmission(const EditorGuiContext &context, Audio::AudioSoundPlaybackDefaults &playback) {
-            std::uint64_t priority = playback.priority;
-            auto priorityEdit = Ui::DrawUnsignedPropRow(Label(context, "workspace.inspector.audio.priority"), "audio_priority", priority,
-                                                        context.theme.fonts, priority > Audio::MaximumAudioPriority);
-            if (priorityEdit.changed)
-                playback.priority = static_cast<Audio::AudioPriority>(
-                    std::min(priority, static_cast<std::uint64_t>(std::numeric_limits<Audio::AudioPriority>::max())));
-            std::uint64_t limit = playback.concurrency.maxInstances;
-            auto limitEdit = Ui::DrawUnsignedPropRow(Label(context, "workspace.inspector.audio.max_instances"), "audio_max_instances",
-                                                     limit, context.theme.fonts);
-            if (limitEdit.changed)
-                playback.concurrency.maxInstances =
-                    static_cast<std::uint16_t>(std::min(limit, static_cast<std::uint64_t>(std::numeric_limits<std::uint16_t>::max())));
-            bool committed = DrawOptionalIdentity(context, "workspace.inspector.audio.concurrency_group", playback.concurrency.group);
-            const std::array entries{Label(context, "workspace.inspector.audio.allow"),
-                                     Label(context, "workspace.inspector.audio.reject"),
-                                     Label(context, "workspace.inspector.audio.steal_oldest"),
-                                     Label(context, "workspace.inspector.audio.steal_quietest"),
-                                     Label(context, "workspace.inspector.audio.virtualize"),
-                                     Label(context, "workspace.inspector.audio.steal_priority"),
-                                     Label(context, "workspace.inspector.audio.steal_furthest"),
-                                     Label(context, "workspace.inspector.audio.replace")};
-            if (auto mode = static_cast<int>(playback.concurrency.mode);
-                Ui::DrawComboPropRow(Label(context, "workspace.inspector.audio.concurrency"), "audio_concurrency", mode, entries,
-                                     context.theme.fonts)) {
-                playback.concurrency.mode = static_cast<Audio::AudioConcurrencyMode>(mode);
-                committed = true;
-            }
-            return priorityEdit.committed || limitEdit.committed || committed;
-        }
-
-        /** @brief Edits persistent playback and scene-lifetime policy, independent of preview transport. */
-        bool DrawPlaybackPolicy(const EditorGuiContext &context, InspectorObjectDraft &draft) {
-            auto &source = *draft.audioSource;
-            bool committed = DrawSoundReference(context, draft);
-            committed = DrawOptionalIdentity(context, "workspace.inspector.audio.bus", source.playback.bus) || committed;
-            committed = DrawFlag(context, "workspace.inspector.audio.loop", source.playback.loop) || committed;
-            committed = DrawFlag(context, "workspace.inspector.audio.play_on_start", source.playback.playOnStart) || committed;
-            committed = DrawFlag(context, "workspace.inspector.audio.doppler", source.playback.enableDoppler) || committed;
-            committed = DrawAdmission(context, source.playback) || committed;
-            const std::array entries{Label(context, "workspace.inspector.audio.stop_unload"),
-                                     Label(context, "workspace.inspector.audio.keep_alive")};
-            if (auto lifecycle = static_cast<int>(source.sceneLifecycle);
-                Ui::DrawComboPropRow(Label(context, "workspace.inspector.audio.lifecycle"), "audio_lifecycle", lifecycle, entries,
-                                     context.theme.fonts)) {
-                source.sceneLifecycle = static_cast<Audio::AudioSceneLifecyclePolicy>(lifecycle);
-                committed = true;
-            }
-            return committed;
-        }
-
-        /** @brief Edits source amplitude, rate and spatial policy without touching preview state. */
-        bool DrawSourcePlayback(const EditorGuiContext &context, Runtime::AudioSourceComponent &source) {
-            const bool gainValid = std::isfinite(source.playback.gain) && source.playback.gain >= 0.0F;
-            const Ui::PropertyEditResult gainEdit =
-                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_source_gain").c_str(),
-                                     "audio_source_gain", source.playback.gain, context.theme.fonts,
-                                     Ui::FloatPropertyOptions{.speed = 0.01F, .error = !gainValid});
-
-            const bool pitchValid = std::isfinite(source.playback.pitch) && source.playback.pitch > 0.0F && source.playback.pitch <= 8.0F;
-            const Ui::PropertyEditResult pitchEdit =
-                Ui::DrawFloatPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_source_pitch").c_str(),
-                                     "audio_source_pitch", source.playback.pitch, context.theme.fonts,
-                                     Ui::FloatPropertyOptions{.speed = 0.01F, .error = !pitchValid});
-
-            const std::array<const char *, 2> spatialEntries{
-                InspectorPanel::kTextScope.Text(context.localization, "value.off").c_str(),
-                InspectorPanel::kTextScope.Text(context.localization, "value.on").c_str(),
-            };
-            int spatialInt = source.playback.spatialMode == Audio::AudioSpatialMode::ThreeD ? 1 : 0;
-            const bool spatialChanged =
-                Ui::DrawComboPropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.audio_source_spatial").c_str(),
-                                     "audio_source_spatial", spatialInt, spatialEntries, context.theme.fonts);
-            if (spatialChanged)
-                source.playback.spatialMode = spatialInt != 0 ? Audio::AudioSpatialMode::ThreeD : Audio::AudioSpatialMode::TwoD;
-
-            return gainEdit.committed || pitchEdit.committed || spatialChanged;
+        /** @brief Keeps typed asset/routing identity editing with its owning transaction adapters. */
+        bool DrawPlaybackReferences(const EditorGuiContext &context, InspectorObjectDraft &draft) {
+            const bool sound = DrawSoundReference(context, draft);
+            const bool bus = DrawOptionalIdentity(context, "workspace.inspector.audio.bus", draft.audioSource->playback.bus);
+            const bool group =
+                DrawOptionalIdentity(context, "workspace.inspector.audio.concurrency_group", draft.audioSource->playback.concurrency.group);
+            return sound || bus || group;
         }
 
         /** @brief Maps a typed preview failure to localized copy without changing its retained diagnostic. */
@@ -241,9 +162,9 @@ namespace Horo::Editor {
                     .removeRequested = header.removeRequested};
         ImGui::BeginDisabled(!draft.audioSource->enabled);
 
-        const bool playbackCommitted = DrawSourcePlayback(context, *draft.audioSource);
-        const bool policyCommitted = DrawPlaybackPolicy(context, draft);
-        const bool committed = policyCommitted || playbackCommitted || header.resetRequested || header.toggleEnabledRequested;
+        const auto fields = InspectorFields::Draw(*draft.audioSource, context);
+        const bool references = DrawPlaybackReferences(context, draft);
+        const bool committed = references || fields.committed || header.resetRequested || header.toggleEnabledRequested;
         ImGui::EndDisabled();
         card.Finish();
         return {.cancelRequested = cancelRequested, .committed = committed, .removeRequested = header.removeRequested};
@@ -264,22 +185,10 @@ namespace Horo::Editor {
         if (!card.BeginBody())
             return {cancelled, header.resetRequested || header.toggleEnabledRequested, header.removeRequested};
         ImGui::BeginDisabled(!listener->enabled);
-        std::uint64_t view = listener->view;
-        const auto viewEdit = Ui::DrawUnsignedPropRow(Label(context, "workspace.inspector.audio.listener_view"), "audio_listener_view",
-                                                      view, context.theme.fonts, view > 16);
-        if (viewEdit.changed)
-            listener->view =
-                static_cast<std::uint32_t>(std::min(view, static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())));
-        const auto priority = Ui::DrawIntegerPropRow(Label(context, "workspace.inspector.audio.priority"), "audio_listener_priority",
-                                                     listener->priority, context.theme.fonts);
-        const auto weight = Ui::DrawFloatPropRow(Label(context, "workspace.inspector.audio.listener_weight"), "audio_listener_weight",
-                                                 listener->weight, context.theme.fonts,
-                                                 {.speed = 0.01F, .error = !std::isfinite(listener->weight) || listener->weight <= 0.0F});
+        const auto fields = InspectorFields::Draw(*listener, context);
         ImGui::EndDisabled();
         card.Finish();
-        return {cancelled,
-                viewEdit.committed || priority.committed || weight.committed || header.resetRequested || header.toggleEnabledRequested,
-                header.removeRequested};
+        return {cancelled, fields.committed || header.resetRequested || header.toggleEnabledRequested, header.removeRequested};
     }
 
     /** @copydoc InspectorPanel::DrawAudioPreview */

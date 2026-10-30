@@ -11,6 +11,7 @@
 #include "EditorAudioPreviewHost.h"
 #include "EditorFrameAdmission.h"
 #include "EditorGuiLiveReload.h"
+#include "EditorGuiLiveReloadBuildConfig.h"
 #include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
@@ -24,6 +25,7 @@
 #include "EditorSurfaceLifecycleQualification.h"
 #endif
 #include "EditorUserStateMigration.h"
+#include "EditorWindowChrome.h"
 #include "EditorWorkerShutdown.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/HostObservability.h"
@@ -67,23 +69,20 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Platform.h"
-#include "Horo/Platform/NativeProjectReadFiles.h"
-#include "Horo/Platform/SecureRandom.h"
-#include "Horo/Runtime/Save/SaveTelemetry.h"
-#include "PackageHostPolicy.h"
-#include "PackageProjectHost.h"
-#include "RenderGraphInspectionPane.h"
-#if defined(HORO_HAS_OPENTELEMETRY)
-#include "Horo/Foundation/Telemetry/OpenTelemetrySink.h"
-#endif
 #include "Horo/Physics/PhysicsSceneActivation.h"
 #include "Horo/Platform/ExternalProcess.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Input.h"
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "HostModuleComposition.h"
+#include "PackageHostPolicy.h"
+#include "PackageProjectHost.h"
+#include "RenderGraphInspectionPane.h"
 #include "RuntimeUiPaintHost.h"
 #include "RuntimeUiPaintProjectSources.h"
 #include "editor/EditorServiceErrors.h"
@@ -482,6 +481,28 @@ namespace Horo::Editor {
                                                        Theme::FontPx::Sans, &sansCfg, ranges);
             f.monospaceEmphasis = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-SemiBold.ttf").c_str(),
                                                                Theme::FontPx::Sans, &sansCfg, ranges);
+            f.codeFamilies.push_back({"IBM Plex Mono", f.monospace, f.monospaceEmphasis});
+            // Native font discovery stays in the executable composition root. Only loaded
+            // atlas families are offered; the source widget never probes the filesystem.
+            const auto addFamily = [&](const char *name, const char *path) {
+                std::error_code error;
+                if (!std::filesystem::is_regular_file(path, error))
+                    return;
+                if (auto *face = io.Fonts->AddFontFromFileTTF(path, Theme::FontPx::Sans, &sansCfg, ranges))
+                    f.codeFamilies.push_back({name, face, face});
+            };
+#if defined(__APPLE__)
+            addFamily("Menlo", "/System/Library/Fonts/Menlo.ttc");
+            addFamily("SF Mono", "/System/Library/Fonts/SFNSMono.ttf");
+#elif defined(_WIN32)
+            if (const char *windows = std::getenv("WINDIR")) {
+                const auto font = std::filesystem::path{windows} / "Fonts" / "consola.ttf";
+                addFamily("Consolas", font.string().c_str());
+            }
+#else
+            addFamily("DejaVu Sans Mono", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf");
+            addFamily("Liberation Mono", "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf");
+#endif
             f.icon = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/MaterialSymbolsOutlined.ttf").c_str(), Theme::FontPx::Icon, &iconCfg,
                                                   iconRanges.data());
             if (f.sans)
@@ -532,22 +553,6 @@ namespace Horo::Editor {
             }
         }
 
-#if defined(HORO_HAS_OPENTELEMETRY)
-        [[nodiscard]] std::optional<std::string> ReadEnvironmentVariable(const char *name) {
-#if defined(_MSC_VER)
-            char *value = nullptr;
-            if (std::size_t size = 0; _dupenv_s(&value, &size, name) != 0 || value == nullptr)
-                return std::nullopt;
-            const std::unique_ptr<char, decltype(&std::free)> ownedValue{value, &std::free};
-            return std::string{ownedValue.get()};
-#else
-            if (const char *value = std::getenv(name); value != nullptr)
-                return std::string{value};
-            return std::nullopt;
-#endif
-        }
-#endif
-
         /** @brief Captures explicit host Physics ownership without claiming activation of an unknown world. */
         [[nodiscard]] CollisionActivationEvidence CaptureCollisionActivation(const Physics::PhysicsRuntimeMode mode) {
             CollisionActivationEvidence evidence{.revision = 1};
@@ -566,7 +571,7 @@ namespace Horo::Editor {
 #endif
         }
 
-        /** @brief Composes the editor's single local runtime and optional approved OTLP sink. */
+        /** @brief Composes the editor's single local logging, metrics and profiler runtime. */
         [[nodiscard]] std::unique_ptr<Application::HostObservabilitySession> InitializeEditorObservability() {
             Application::HostObservabilityConfiguration hostConfiguration{.logging = {.logDirectory = "~/.horo/logs",
                                                                                       .baseName = "horo-editor",
@@ -576,20 +581,6 @@ namespace Horo::Editor {
                                                                                        .engineVersion = HORO_ENGINE_VERSION_STRING,
                                                                                        .buildConfiguration = HORO_BUILD_CONFIGURATION,
                                                                                        .sourceRevision = HORO_SOURCE_REVISION}};
-#if defined(HORO_HAS_OPENTELEMETRY)
-            const std::optional<std::string> endpoint = ReadEnvironmentVariable("HORO_OTEL_ENDPOINT");
-            if (const std::optional<std::string> approval = ReadEnvironmentVariable("HORO_OTEL_EXPORT_APPROVED");
-                endpoint.has_value() && approval == "1") {
-                Telemetry::OpenTelemetryConfiguration exporterConfiguration;
-                exporterConfiguration.endpoint = *endpoint;
-                exporterConfiguration.serviceName = "horo-editor";
-                exporterConfiguration.exportApproved = true;
-                if (auto exporter = Telemetry::OpenTelemetrySink::Create(exporterConfiguration); exporter != nullptr)
-                    hostConfiguration.logging.additionalSinks.push_back(std::move(exporter));
-                else
-                    std::fprintf(stderr, "[Observability] approved OTLP configuration was rejected; continuing with local sinks\n");
-            }
-#endif
             hostConfiguration.summaries.push_back(&Runtime::SummarizeSaveTelemetry);
             auto session = Application::HostObservabilitySession::Start(std::move(hostConfiguration));
             if (session == nullptr)
@@ -1346,7 +1337,7 @@ namespace Horo::Editor {
             }
 
             Result<void> Startup(const CancellationToken &cancellation) override {
-                if (auto liveUi = liveGui_.Start(); liveUi.HasError())
+                if (auto liveUi = liveGui_.Start(BuildEditorGuiLiveReloadConfiguration()); liveUi.HasError())
                     return liveUi;
                 pacing_.hostCancellation = cancellation;
                 const auto timing = p_->presentation.renderFrontend.PollNativePresentTiming();
@@ -1638,6 +1629,9 @@ namespace Horo::Editor {
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
+                const auto surface = Theme::Bg0();
+                const auto text = Theme::Text();
+                windowChrome_.Update(*p_->presentation.window, {{surface.x, surface.y, surface.z}, {text.x, text.y, text.z}});
                 if (const auto updated = UpdatePacingSurface(); updated.HasError())
                     return updated;
                 const auto snapshot = pacing_.surface->Snapshot();
@@ -1672,6 +1666,12 @@ namespace Horo::Editor {
                 }
 
                 *settingsSnapshot_ = p_->settings.Snapshot();
+                if (settingsSnapshot_->revision != appliedKeymapRevision_) {
+                    const auto applied = p_->inputRouter.SetProfile(BuiltinEditorInputProfile(settingsSnapshot_->settings.keymap.profile));
+                    if (applied.HasError())
+                        LOG_ERROR("editor.input", "Unable to activate editor keymap: %s", applied.ErrorValue().message.c_str());
+                    appliedKeymapRevision_ = settingsSnapshot_->revision;
+                }
                 const float deltaSeconds = static_cast<float>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0F;
                 p_->modalHost.OnUpdate(deltaSeconds);
                 screenHost_->OnUpdate(deltaSeconds);
@@ -2061,7 +2061,9 @@ namespace Horo::Editor {
             GuiScreenHost *screenHost_{};
             EditorViewportSceneState *viewportSceneState_{};
             EditorSettingsSnapshot *settingsSnapshot_{};
+            std::uint64_t appliedKeymapRevision_{};
             Theme::LiveReload themeReload_;
+            EditorWindowChrome windowChrome_;
             EditorGuiLiveReload &liveGui_;
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
             EditorRuntimeAuthorities authorities_;
@@ -2646,31 +2648,14 @@ namespace Horo::Editor {
     [[nodiscard]] static Result<std::unique_ptr<ModuleHost>> ComposeEditorModules(const Application::Internal::HostRenderer renderer,
                                                                                   const EditorSettings &initialSettings) {
         const std::vector settingsContributions{MakeEditorSettingsContribution(initialSettings)};
-        return Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
-                                                          .renderer = renderer,
-#if defined(HORO_HAS_OPENTELEMETRY)
-                                                          .includeOpenTelemetry = true
-#else
-                                                          .includeOpenTelemetry = false
-#endif
-                                                         },
+        return Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor, .renderer = renderer},
                                                          settingsContributions);
     }
 
-    void ConfigureEditorInput(Input::InputRouter &inputRouter) {
-        if (const Result<void> installedInputActions = inputRouter.SetActionMap(BuildEditorInputActions());
-            installedInputActions.HasError())
-            LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installedInputActions.ErrorValue().message.c_str());
-        const std::filesystem::path editorInputProfile = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
-        if (std::error_code inputProfileError; std::filesystem::exists(editorInputProfile, inputProfileError) && !inputProfileError) {
-            const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(editorInputProfile);
-            if (loaded.HasError())
-                LOG_ERROR("editor.input", "Keeping default input bindings; unable to load '%s': %s", editorInputProfile.string().c_str(),
-                          loaded.ErrorValue().message.c_str());
-            else if (const Result<void> applied = inputRouter.SetProfile(loaded.Value()); applied.HasError())
-                LOG_ERROR("editor.input", "Keeping last valid input bindings; profile '%s' is invalid: %s",
-                          editorInputProfile.string().c_str(), applied.ErrorValue().message.c_str());
-        }
+    void ConfigureEditorInput(Input::InputRouter &inputRouter, const EditorSettings &settings) {
+        if (const auto installed = inputRouter.SetActionMap(BuildEditorInputActions(), BuiltinEditorInputProfile(settings.keymap.profile));
+            installed.HasError())
+            LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installed.ErrorValue().message.c_str());
     }
 
     struct PreparedEditorStartup final {
@@ -2932,7 +2917,10 @@ namespace Horo::Editor {
         return events.Subscribe<EditorSettingsChangedEvent>([&settings, &localization](const EditorSettingsChangedEvent &event) {
             if (event.phase == SettingsChangePhase::Committed || event.phase == SettingsChangePhase::Reverted) {
                 const EditorSettings committed = settings.Snapshot().settings;
-                Theme::SelectThemeByIndex(static_cast<int>(committed.themePreset));
+                if (committed.themeId.empty())
+                    Theme::SelectThemeByIndex(static_cast<int>(committed.themePreset));
+                else if (!Theme::SelectThemeById(committed.themeId))
+                    LOG_WARN("editor.theme", "Selected package theme is unavailable: %s", committed.themeId.c_str());
                 if (const auto loc = LocaleTag::Parse(committed.languageTag);
                     loc.has_value() && localization.ActiveLocale() != *loc && localization.Prepare(*loc)) {
                     (void)localization.ActivatePrepared();
@@ -2943,9 +2931,10 @@ namespace Horo::Editor {
     }
 
     /** @brief Installs editor input actions and a saved profile on the active SDL window. */
-    static void ConfigureEditorInput(SDL_Window &window, Input::SdlInputBackend &backend, Input::InputRouter &router) {
+    static void ConfigureEditorInput(SDL_Window &window, Input::SdlInputBackend &backend, Input::InputRouter &router,
+                                     const EditorSettings &settings) {
         backend.BindWindow(SDL_GetWindowID(&window));
-        ConfigureEditorInput(router);
+        ConfigureEditorInput(router, settings);
     }
 
     /** @brief Chooses the initial persistent route from validated startup options. */
@@ -3005,7 +2994,7 @@ namespace Horo::Editor {
 
         Input::SdlInputBackend inputBackend;
         Input::InputRouter inputRouter;
-        ConfigureEditorInput(launch.window, inputBackend, inputRouter);
+        ConfigureEditorInput(launch.window, inputBackend, inputRouter, launch.startup.settings);
         EditorModalHost modalHost{editorEvents, inputRouter};
         GuiRoute initialRoute = InitialEditorRoute(launch.startup);
         RunEditorMainLoopParams loopParams{launch.startup.options,
@@ -3036,11 +3025,13 @@ namespace Horo::Editor {
     [[nodiscard]] static bool MigrateStartupUserState() {
         NativeDurableFileSystem files;
         const auto settingsRoot = ResolveEditorSettingsPath().parent_path();
-        if (const auto cacheRoot = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo";
-            MigrateLegacyEditorUserState(settingsRoot, cacheRoot, files).HasValue())
+        const auto cacheRoot = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo";
+        const auto migration = MigrateLegacyEditorUserState(settingsRoot, cacheRoot, files);
+        if (migration.HasValue())
             return true;
-        LOG_ERROR("editor.user_state", "User-state migration needs repair before editor startup.");
-        std::fprintf(stderr, "User-state migration needs repair before editor startup.\n");
+        LOG_ERROR("editor.user_state", "User-state migration needs repair before editor startup: %s",
+                  migration.ErrorValue().message.c_str());
+        std::fprintf(stderr, "User-state migration needs repair before editor startup: %s\n", migration.ErrorValue().message.c_str());
         return false;
     }
 

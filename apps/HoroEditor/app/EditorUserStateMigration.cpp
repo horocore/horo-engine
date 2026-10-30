@@ -13,6 +13,12 @@ namespace Horo::Editor {
     namespace {
         using Json = nlohmann::json;
 
+        /** @brief Identifies the rejected user-state file without logging its contents. */
+        [[nodiscard]] Error InvalidState(const std::filesystem::path &path) {
+            return MakeError(Release::UserStateMigrationErrors::InvalidPlan,
+                             "Editor user state has invalid JSON or an unsupported schema. Path: " + path.generic_string());
+        }
+
         /** @brief Bounds legacy input before deriving exact content-addressed steps. */
         [[nodiscard]] Result<std::string> ReadLegacy(const std::filesystem::path &path) {
             std::error_code error;
@@ -67,13 +73,11 @@ namespace Horo::Editor {
                 return Result<void>::Failure(source.ErrorValue());
             const Json document = Json::parse(source.Value(), nullptr, false);
             if (document.is_discarded())
-                return Result<void>::Failure(MakeError(Release::UserStateMigrationErrors::InvalidPlan));
+                return Result<void>::Failure(InvalidState(path));
             std::string target;
             if (family == Release::UserStateFamily::Preferences && document.is_object()) {
                 if (document.contains("schemaVersion"))
-                    return document["schemaVersion"] == 1
-                               ? Result<void>::Success()
-                               : Result<void>::Failure(MakeError(Release::UserStateMigrationErrors::InvalidPlan));
+                    return document["schemaVersion"] == 1 ? Result<void>::Success() : Result<void>::Failure(InvalidState(path));
                 target = source.Value();
                 const auto opening = target.find('{');
                 target.insert(opening + 1U, document.empty() ? R"("schemaVersion":1)" : R"("schemaVersion":1,)");
@@ -83,7 +87,7 @@ namespace Horo::Editor {
                        document["schemaVersion"] == 1 && document.contains("entries") && document["entries"].is_array()) {
                 return Result<void>::Success();
             } else {
-                return Result<void>::Failure(MakeError(Release::UserStateMigrationErrors::InvalidPlan));
+                return Result<void>::Failure(InvalidState(path));
             }
             steps.push_back({family,
                              Release::UserStateMigrationAction::Transform,

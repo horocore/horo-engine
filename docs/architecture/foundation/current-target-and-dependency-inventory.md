@@ -89,7 +89,6 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 |---|---|---|---|
 | `HoroFoundation` (`HoroEngine::Foundation`) | Always | Owns Foundation primitives, canonical cross-subsystem asset cook-target identity, immutable host-published error-code registry snapshots, diagnostics, logging, telemetry facade, jobs, configuration, paths, hashing, strings, and shared `Math/**` contracts. Implementation is under `src/foundation/`. | None |
 | `HoroCliHost` (`HoroEngine::CliHost`) | Always | Owns inert CLI descriptors, bounded host-policy validation, immutable command registration, deterministic discovery/help, and the bounded typed pre-dispatch parser under `Cli/**`. Parsing consumes only explicit argv, resolved configuration snapshots, path-normalizer seams, and selected stdin. Typed capability-scoped dispatch and invocation-owned human/JSON/JSONL presentation consume the same canonical host error translation. | Foundation, HostErrors (public), nlohmann_json (private) |
-| `HoroOpenTelemetry` (`HoroEngine::OpenTelemetry`) | `HORO_ENABLE_OPENTELEMETRY` | Owns the optional OTLP sink and `Foundation/Telemetry/OpenTelemetrySink.h`; the concrete exporter dependencies are private. | Foundation (public) |
 | `HoroPlatform` (`HoroEngine::Platform`) | Always | Owns `Platform/**` dynamic-library and process contracts plus POSIX/Windows implementations. OS headers and `dl` are private. | Foundation (public) |
 | `HoroSecurityEnvelope` (`HoroEngine::SecurityEnvelope`) | Always | Owns only unchanged `SignatureAlgorithm` and `DetachedSignatureEnvelope` data under `Security/ArtifactSignatureEnvelope.h`; no verifier, trust store, I/O or crypto provider. | Foundation (interface) |
 | `HoroSecurity` (`HoroEngine::Security`) | Always | Owns security services, current trust verification and the private MbedTLS provider; `ArtifactSignature.h` reexports the neutral envelope header. | Foundation, SecurityEnvelope (public); mbedcrypto (private) |
@@ -155,6 +154,7 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 | `HoroEditorViewportOpenGL` (`HoroEngine::EditorViewportOpenGL`) | GUI and OpenGL | Owns the OpenGL ImGui/viewport/presentation bridge. Backend, SDL, GLAD, and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderOpenGL (public) |
 | `HoroEditorViewportMetal` (`HoroEngine::EditorViewportMetal`) | Apple, GUI, and Metal | Owns the Metal ImGui/viewport/presentation bridge. Objective-C++ and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderMetal (public) |
 | `HoroGui` (`HoroEngine::Gui`) | Editor GUI only | Owns ImGui screens, modals, panels, workspace controllers, and design-system implementation. ImGui is private, while all of `include/` and `src/` are exported as public include roots. | EditorServices, Foundation (public); EditorRenderExtraction and Extensions (private) |
+| `HoroEditorGuiLiveReloadHost` | Editor GUI only; RCC++ backend in explicit live-UI Debug builds | Non-installed internal owner of built-in development GUI compiler lifetime, typed host build inputs and frame-boundary module publication. Normal builds compile an inert implementation. | EditorServices; Gui, GuiLiveReloadInternal and ThirdPartyRccpp only when live UI is enabled |
 | `HoroHostModuleComposition` | Always | Non-installed application-host composition contract under `apps/common/`. It describes and activates the real linked module profiles and registers the Platform Services error domain for both hosts without exposing an SDK header. | Foundation, PlatformServices (public) |
 | `horo-engine` | Always | Terminal/headless composition root. It owns the backend-extension composition without linking GUI or renderer targets; CLI command and MCP target composition remain follow-up work. | Application, Extensions (private) |
 | `HoroEditor` | Editor GUI only | Graphical composition root. It selects GUI, editor services/extraction, runtime, extensions, platform, input, migrations, frontend, and enabled concrete viewport backends. | Composition-only private links |
@@ -175,7 +175,7 @@ There are 388 non-placeholder headers under `include/Horo/` at this snapshot:
 | `Destruction/` | 7 | DestructionApi and DestructionRuntime |
 | `Editor/` | 49 | EditorModel, EditorServices, and Gui |
 | `Extensions/` | 12 | Extensions |
-| `Foundation/` | 34 | Foundation, except the optional OpenTelemetry sink header |
+| `Foundation/` | 43 | Foundation |
 | `Gameplay/` | 17 | GameplayApi, GameplayRuntime, GameplayModuleHost, GameplayBuild, and GameplayLua |
 | `Math/` | 2 | Foundation |
 | `Navigation/` | 13 | NavigationApi and NavigationRuntime |
@@ -242,8 +242,7 @@ headless profile contains Foundation, Security, Platform, Assets, Application,
 Extensions, and the CLI host. The
 editor profile mirrors the real linked first-party module closure and selects
 exactly one concrete renderer and viewport adapter before window or presentation
-creation. Optional OpenTelemetry participation is derived from the same build
-selection that controls the executable link edge. Focused host-composition tests
+creation. Observability uses the shared local host session. Focused host-composition tests
 validate deterministic graph ordering, headless exclusion, concrete-backend
 selection, and rejection before activation of impossible host profiles.
 
@@ -309,8 +308,7 @@ Build System additionally documents `HoroEngine::RenderBackendRegistry`,
 five are implemented. Its `HoroEngine::TestSdk`, `EditorSourceEditor`, and
 `EditorGraphEditor` targets are planned and have no production target.
 
-Current but non-canonical targets are Transitional: OpenTelemetry,
-GameplayRuntime, GameplayModuleHost, GameplayLua, GameplayBuild, Input,
+Current but non-canonical targets are Transitional: GameplayRuntime, GameplayModuleHost, GameplayLua, GameplayBuild, Input,
 InputSdl, Extensions, HostModuleComposition, and the renderer registry. They represent useful real
 boundaries, but the canonical target lists must either adopt them or assign
 their responsibilities to another documented target.

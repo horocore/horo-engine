@@ -18,6 +18,7 @@ namespace Horo::Editor {
         : EditorModal(kTextScope), m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
           m_extensionMarketplace(extensionMarketplace),
           m_navigationSettings(projects.navigation ? projects.navigation->Borrow() : NavigationProjectSettingsSessionBorrow{}) {
+        m_draft.extensionCommands = std::move(pages.commands);
         m_draft.collision.owner = std::move(projects.collision);
         m_draft.collision.error = std::move(projects.collisionError);
         m_pagesUnsupported = pages.host && !pages.theme;
@@ -42,7 +43,10 @@ namespace Horo::Editor {
     }
 
     ModalClosePolicy SettingsModal::ClosePolicy() const {
-        return {.allowCloseButton = true, .allowEscape = true, .allowOutsideClick = false, .allowApplicationShutdown = true};
+        return {.allowCloseButton = true,
+                .allowEscape = m_draft.input.recordingAction.empty(),
+                .allowOutsideClick = false,
+                .allowApplicationShutdown = true};
     }
 
     Result<void> SettingsModal::OnOpen(EditorModalContext &context) {

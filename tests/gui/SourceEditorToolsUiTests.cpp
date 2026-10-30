@@ -94,7 +94,7 @@ namespace {
 
     /** @brief Tests search, selected replacement, history replay and a no-match query in the actual visible controls. */
     void SearchAndHistory(ImGuiTestContext *ctx, SourceToolsUi &fixture) {
-        Click(*ctx, "Find");
+        Click(*ctx, "workspace.source_edit.find/##icon-button");
         ctx->ItemInputValue("//**/##source-find-query", "alpha");
         Click(*ctx, "Next match");
         IM_CHECK_EQ(fixture.widget.Selection().anchor, 0U);
@@ -102,9 +102,9 @@ namespace {
         ctx->ItemInputValue("//**/##source-replacement", "beta");
         Click(*ctx, "Replace");
         IM_CHECK(fixture.source.Text() == "beta alpha\r\n  line\r\n");
-        Click(*ctx, "Undo");
+        Click(*ctx, "workspace.source_edit.undo/##icon-button");
         IM_CHECK(fixture.source.Text() == "alpha alpha\r\n  line\r\n");
-        Click(*ctx, "Redo");
+        Click(*ctx, "workspace.source_edit.redo/##icon-button");
         IM_CHECK(fixture.source.Text() == "beta alpha\r\n  line\r\n");
         ctx->ItemInputValue("//**/##source-find-query", "missing");
         const auto revision = fixture.source.Revision();
@@ -119,7 +119,7 @@ namespace {
         Click(*ctx, "Replace all");
         IM_CHECK(fixture.source.Text() == "beta A\r\n  line\r\n");
         Click(*ctx, "Close search");
-        Click(*ctx, "Go to line");
+        Click(*ctx, "workspace.source_edit.go_to/##icon-button");
         ctx->ItemInputValue("//**/##source-line-number", "2");
         const auto revision = fixture.source.Revision();
         ctx->ItemClick(fixture.applyLine);

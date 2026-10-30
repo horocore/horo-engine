@@ -1,6 +1,10 @@
-foreach(horo_rccpp_patch IN ITEMS
+set(horo_rccpp_patches
     "${CMAKE_CURRENT_LIST_DIR}/patches/rccpp/horo-msvc-transport.patch"
     "${CMAKE_CURRENT_LIST_DIR}/patches/rccpp/horo-gui-paths.patch")
+if(APPLE)
+    list(APPEND horo_rccpp_patches "${CMAKE_CURRENT_LIST_DIR}/patches/rccpp/horo-macos-protection.patch")
+endif()
+foreach(horo_rccpp_patch IN LISTS horo_rccpp_patches)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${horo_rccpp_patch}")
 find_package(Git REQUIRED)
 execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${horo_rccpp_SOURCE_DIR}" apply --reverse --check --unidiff-zero --ignore-space-change

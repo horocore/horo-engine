@@ -8,6 +8,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/SequenceDocument.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -17,6 +18,10 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace Horo::Input {
+    struct InputBinding;
+}
 
 namespace Horo::Editor::Ui {
 
@@ -216,6 +221,14 @@ namespace Horo::Editor::Ui {
     enum class IconButtonGlyph : std::uint8_t {
         Plus,
         Folder,
+        Undo,
+        Redo,
+        Search,
+        GoToLine,
+        Play,
+        Pause,
+        Stop,
+        Step,
     };
 
     /** @brief Input contract for a shared compact icon-only action. */
@@ -226,6 +239,8 @@ namespace Horo::Editor::Ui {
         const char *tooltip = "";
         bool enabled = true;
         ComponentSize componentSize = ComponentSize::Medium;
+        bool borderless = false; /**< Shows a surface only for hover, focus or press. */
+        bool selected = false;   /**< Persistent semantic selection, independent of pointer press. */
     };
 
     /**
@@ -234,6 +249,37 @@ namespace Horo::Editor::Ui {
      * @return True when the enabled action was activated.
      */
     [[nodiscard]] bool IconButton(const IconButtonProps &props);
+
+    /** @brief Result of a persistent document tab interaction. */
+    enum class DocumentTabAction {
+        None,
+        Focus,
+        Close
+    };
+
+    /** @brief Returns the shared height for pinned workspace surfaces and closable document tabs. @return Scaled tab-strip height. */
+    [[nodiscard]] float DocumentTabHeight();
+
+    /** @brief Draws a measured document tab with a padded trailing close target.
+     * @param id Stable document identity. @param label Visible title and optional dirty marker.
+     * @param closeLabel Localized close tooltip. @param selected Whether the document is active.
+     * @param fonts Shared typography. @param closable Whether to show the trailing close target.
+     * @return Focus, close, or no action.
+     */
+    [[nodiscard]] DocumentTabAction DocumentTabButton(const char *id, const char *label, const char *closeLabel, bool selected,
+                                                      const Theme::Fonts &fonts, bool closable = true);
+
+    /** @brief Tests configured keyboard chords against this ImGui frame, with exact modifier matching.
+     * @param bindings Effective action bindings. @param repeat Whether holding the key repeats the action.
+     * @return True for a matching keyboard press; pointer/gamepad bindings remain with InputRouter.
+     */
+    [[nodiscard]] bool ShortcutPressed(std::span<const Input::InputBinding> bindings, bool repeat = false);
+    /** @brief Captures one non-modifier keyboard key, including punctuation, for a Settings draft.
+     * @param binding Receives the complete physical chord on success. @return True only for a captured key.
+     */
+    [[nodiscard]] bool CaptureShortcut(Input::InputBinding &binding);
+    /** @brief Formats one binding using canonical Input glyph names. @param binding Chord to display. @return Readable chord label. */
+    [[nodiscard]] std::string ShortcutLabel(const Input::InputBinding &binding);
 
     // ── Typography primitives ────────────────────────────────────────────
 
@@ -246,8 +292,8 @@ namespace Horo::Editor::Ui {
      */
     void WrappedText(float width, std::string_view text, ImVec4 color, const Theme::Fonts &fonts);
 
-    /** @brief Draws an uppercase section label. */
-    void SectionTitle(const char *upperCaseLabel, const Theme::Fonts &fonts);
+    /** @brief Draws a section heading with its localized spelling and casing. */
+    void SectionTitle(const char *label, const Theme::Fonts &fonts);
 
     /** @brief Draws an uppercase field label. */
     void FieldLabel(const char *upperCaseLabel, const Theme::Fonts &fonts);
@@ -343,46 +389,79 @@ namespace Horo::Editor::Ui {
      *
      * Column 0 holds the label + optional description; column 1
      * invokes the control callback and has a fixed width of
-     * `Theme::Layout::ControlW`.
+     * `Theme::Layout::ControlW`. Descriptionless rows center the label against
+     * the measured control group and use equal theme-backed vertical padding.
+     * Described rows use compact supporting text (14 logical pixels at the default
+     * caption size), wrapped to their own column, without reducing primary labels or controls.
      */
     template <typename ControlFn> void SettingRow(const char *label, const char *description, const Theme::Fonts &f, ControlFn &&control) {
         ImGui::PushID(label);
-        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2{0.0F, 0.0F});
+        if (description == nullptr || description[0] == '\0') {
+            const auto &tokens = Theme::GetActiveTokens();
+            const float padding = DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Small);
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2{0, padding});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{ImGui::GetStyle().ItemSpacing.x, 0});
+            if (ImGui::BeginTable("row", 2, ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("info", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthFixed, Theme::Layout::ControlW);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(1);
+                ImGui::BeginGroup();
+                control();
+                ImGui::EndGroup();
+                const float controlHeight = ImGui::GetItemRectSize().y;
+                ImGui::TableSetColumnIndex(0);
+                // A table carries the previous cell's button baseline into this cell.
+                // Give the independently centered label its own text baseline.
+                ImGui::Dummy({0, 0});
+                Theme::ScopedTextStyle text(f.sans, Theme::TextPx::Body(), Theme::FontPx::Sans);
+                const float labelHeight = ImGui::CalcTextSize(label).y;
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(0.0F, (controlHeight - labelHeight) * 0.5F));
+                ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
+                ImGui::TextUnformatted(label);
+                ImGui::PopStyleColor();
+                ImGui::EndTable();
+            }
+            ImGui::PopStyleVar(2);
+            ImGui::PopID();
+            return;
+        }
+        const auto &tokens = Theme::GetActiveTokens();
+        const float rowPadding = DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Small);
+        const float hintGap = DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::XS);
+        // Settings supporting copy has an explicit compact role, independent of
+        // control/body typography. Keep its logical minimum readable at every scale.
+        constexpr float minimumHintPixels = 14.0F;
+        constexpr float hintToCaptionRatio = 14.0F / 18.0F;
+        const float hintPixels = std::max(minimumHintPixels * tokens.sizes.uiScale, Theme::TextPx::Caption() * hintToCaptionRatio);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2{0.0F, rowPadding});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{ImGui::GetStyle().ItemSpacing.x, hintGap});
         if (ImGui::BeginTable("row", 2, ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("info", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthFixed, Theme::Layout::ControlW);
             ImGui::TableNextRow();
-
             ImGui::TableSetColumnIndex(0);
             ImGui::BeginGroup();
             {
-                Theme::ScopedTextStyle ts(f.sans, Theme::TextPx::Body(), Theme::FontPx::Sans);
+                Theme::ScopedTextStyle text(f.sans, Theme::TextPx::Body(), Theme::FontPx::Sans);
                 ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
                 ImGui::TextUnformatted(label);
                 ImGui::PopStyleColor();
             }
-            if (description != nullptr && description[0] != '\0') {
-                Theme::ScopedTextStyle ts(f.sans, Theme::TextPx::Caption(), Theme::FontPx::Sans);
+            {
+                Theme::ScopedTextStyle text(f.sansCompact, hintPixels, Theme::FontPx::SansCompact);
                 ImGui::PushStyleColor(ImGuiCol_Text, Theme::Dim());
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 16.0F);
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::max(1.0F, ImGui::GetContentRegionAvail().x - hintGap));
                 ImGui::TextWrapped("%s", description);
                 ImGui::PopTextWrapPos();
                 ImGui::PopStyleColor();
             }
             ImGui::EndGroup();
-
             ImGui::TableSetColumnIndex(1);
             control();
-
             ImGui::EndTable();
         }
-        ImGui::PopStyleVar();
-
-        ImGui::Dummy({0.0F, 10.0F});
-        const ImVec2 p = ImGui::GetCursorScreenPos();
-        const float w = ImGui::GetContentRegionAvail().x;
-        ImGui::GetWindowDrawList()->AddLine({p.x, p.y}, {p.x + w, p.y}, Theme::U32(Theme::Border()), 1.0F);
-        ImGui::Dummy({0.0F, 10.0F});
+        ImGui::PopStyleVar(2);
         ImGui::PopID();
     }
 
@@ -640,14 +719,15 @@ namespace Horo::Editor::Ui {
         CloseButtonVariant closeButtonVariant = CloseButtonVariant::Default;
         float titleFontSize = Theme::TextPx::Title();
         ComponentSize componentSize = ComponentSize::Medium;
+        bool modalPopup = false; /**< Use native ImGui modal blocking for host-owned confirmation workflows. */
     };
 
     /**
      * @brief RAII modal window with shared positioning, title bar, body geometry,
      *        footer surface, and close action.
      *
-     * Exclusive focus and close policy remain owned by EditorModalHost. This
-     * component owns presentation only.
+     * EditorModalHost normally owns exclusive focus. Host-owned leave confirmations may
+     * opt into native popup blocking; their action/close policy remains with the host.
      */
     class ScopedModalShell {
     public:
@@ -663,6 +743,9 @@ namespace Horo::Editor::Ui {
 
         ScopedModalShell(const ScopedModalShell &) = delete;
         ScopedModalShell &operator=(const ScopedModalShell &) = delete;
+
+        /** @brief Returns whether the modal window opened; false requires skipping body/footer rendering. */
+        [[nodiscard]] bool IsOpen() const noexcept;
 
         /** @brief Returns the vertical space between title bar and footer. */
         [[nodiscard]] float BodyHeight() const noexcept;
@@ -690,6 +773,8 @@ namespace Horo::Editor::Ui {
         bool closeRequested_{};
         bool footerOpen_{};
         bool foregroundBorder_{};
+        bool modalPopup_{};
+        bool open_{true};
     };
 
     /** @brief Presentation configuration for a modal sidebar/content split. */
@@ -957,7 +1042,7 @@ namespace Horo::Editor::Ui {
 
     /**
      * @brief Draws a shared Inspector row for selecting one localized enum entry.
-     * @param label Localized property label.
+     * @param label Localized property label; empty omits the label column and fills the available width.
      * @param id Stable UI identity scoped by the caller.
      * @param value Mutable selected entry index.
      * @param entries Localized entries in typed enum order.
@@ -979,7 +1064,7 @@ namespace Horo::Editor::Ui {
 
     /**
      * @brief Draws a shared Inspector row for editing one floating-point value.
-     * @param label Localized property label.
+     * @param label Localized property label; empty omits the label column and fills the available width.
      * @param id Stable UI identity scoped by the caller.
      * @param value Mutable floating-point draft.
      * @param fonts Editor typography handles.
@@ -991,7 +1076,7 @@ namespace Horo::Editor::Ui {
 
     /**
      * @brief Draws a shared Inspector row for editing an RGB color.
-     * @param label Localized property label.
+     * @param label Localized property label; empty omits the label column and fills the available width.
      * @param id Stable UI identity scoped by the caller.
      * @param value Mutable red, green, and blue values.
      * @param fonts Editor typography handles.
@@ -1003,7 +1088,7 @@ namespace Horo::Editor::Ui {
 
     /**
      * @brief Draws a shared inspector row for editing three floating-point axis values.
-     * @param label Localized property label.
+     * @param label Localized property label; empty omits the label column and fills the available width.
      * @param id Stable UI identity scoped by the caller.
      * @param value Mutable X, Y, and Z values.
      * @param fonts Editor typography handles.

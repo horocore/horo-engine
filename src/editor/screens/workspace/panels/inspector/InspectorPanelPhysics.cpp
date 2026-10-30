@@ -60,7 +60,7 @@ namespace Horo::Editor {
             Ui::Card card({.id = "physics_compound_children"});
             card.DrawTitleBar(
                 {.id = "title", .title = Label(context, "workspace.physics.compound_children"), .fonts = context.theme.fonts});
-            if (card.BeginBody()) {
+            if (card.BeginBody() && BeginFields()) {
                 std::size_t editableCount = 0;
                 for (const auto &child : view.viewportColliders) {
                     if (child.body != body)
@@ -71,6 +71,7 @@ namespace Horo::Editor {
                 }
                 if (Action(context, "workspace.physics.edit_compound", editableCount != 0))
                     SelectCompoundChildren(body, view, command, editableCount);
+                EndFields();
             }
             card.Finish();
         }
@@ -81,26 +82,31 @@ namespace Horo::Editor {
                 return;
             Ui::Card card({.id = "physics_body"});
             card.DrawTitleBar({.id = "title", .title = Label(context, "workspace.physics.body"), .fonts = context.theme.fonts});
-            if (card.BeginBody()) {
+            if (card.BeginBody() && BeginFields()) {
                 session.Draft().dirty = Body(context, *session.Draft().body) || session.Draft().dirty;
                 if (Action(context, "workspace.physics.remove_body")) {
                     session.Draft().body.reset();
                     session.Draft().dirty = true;
                 }
+                EndFields();
             }
             card.Finish();
         }
 
         /** @brief Draw each collider in bounded authored order using stable index-local control scopes. */
-        void DrawColliders(PhysicsInspectorSession &session, const EditorGuiContext &context) {
+        void DrawColliders(PhysicsInspectorSession &session, const EditorGuiContext &context, const EditorWorkspaceViewModel &view) {
             for (std::size_t index = 0; index < session.Draft().colliders.size(); ++index) {
                 ImGui::PushID(static_cast<int>(index));
                 Ui::Card card({.id = "physics_collider"});
-                card.DrawTitleBar({.id = "title", .title = Label(context, "workspace.physics.collider"), .fonts = context.theme.fonts});
+                card.DrawTitleBar({.id = "title",
+                                   .title = Label(context, session.Draft().colliders[index].value.sensor ? "workspace.physics.add_trigger"
+                                                                                                         : "workspace.physics.collider"),
+                                   .fonts = context.theme.fonts});
                 bool remove = false;
-                if (card.BeginBody()) {
-                    session.Draft().dirty = Collider(context, session.Draft().colliders[index]) || session.Draft().dirty;
+                if (card.BeginBody() && BeginFields()) {
+                    session.Draft().dirty = Collider(context, session.Draft().colliders[index], view) || session.Draft().dirty;
                     remove = Action(context, "workspace.physics.remove_collider");
+                    EndFields();
                 }
                 card.Finish();
                 ImGui::PopID();
@@ -119,9 +125,10 @@ namespace Horo::Editor {
                 Ui::Card card({.id = "physics_constraint"});
                 card.DrawTitleBar({.id = "title", .title = Label(context, "workspace.physics.constraint"), .fonts = context.theme.fonts});
                 bool remove = false;
-                if (card.BeginBody()) {
+                if (card.BeginBody() && BeginFields()) {
                     session.Draft().dirty = Constraint(context, session.Draft().constraints[index]) || session.Draft().dirty;
                     remove = Action(context, "workspace.physics.remove_constraint");
+                    EndFields();
                 }
                 card.Finish();
                 ImGui::PopID();
@@ -133,23 +140,11 @@ namespace Horo::Editor {
             }
         }
 
-        /** @brief Stage additions without publishing incomplete body/collider or unresolved asset bindings. */
-        void DrawAdditions(PhysicsInspectorSession &session, const EditorGuiContext &context) {
-            if (!session.Draft().body && Action(context, "workspace.physics.add_body"))
-                session.AddBody();
-            if (Action(context, "workspace.physics.add_collider",
-                       session.Draft().colliders.size() < Runtime::MaximumPhysicsCollidersPerBody))
-                session.AddCollider();
-            if (Action(context, "workspace.physics.add_constraint",
-                       session.Draft().constraints.size() < Runtime::MaximumPhysicsConstraintsPerObject))
-                session.AddConstraint();
-        }
-
         /** @brief Cancellation wins over Apply in the same frame; requests remain detached until host admission. */
         void DrawActions(PhysicsInspectorSession &session, bool &inputError, const SceneObjectId object,
                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-            const bool apply =
-                Action(context, "workspace.physics.apply", session.Draft().dirty && command.command == EditorWorkspaceViewCommand::None);
+            const bool apply = Action(context, "workspace.physics.apply",
+                                      session.Draft().dirty && command.command == EditorWorkspaceViewCommand::None, true);
             if (const bool cancel =
                     Action(context, "workspace.physics.cancel", session.Draft().dirty) ||
                     (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
@@ -170,29 +165,6 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @copydoc InspectorPanel::DrawAddPhysicsComponents */
-    void InspectorPanel::DrawAddPhysicsComponents(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
-                                                  const EditorGuiContext &context) {
-        using namespace PhysicsInspectorWidgets;
-        const bool canEdit = viewModel.physicsContext.canEdit && !object.effectivelyLocked;
-        const auto item = [&](const char *key, const char *id, bool available) {
-            const auto label = std::string{Label(context, key)} + id;
-            return Ui::ContextMenuItem(label.c_str(), nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, {},
-                                       canEdit && available);
-        };
-        Ui::ContextMenuSeparator();
-        if (!canEdit)
-            Ui::Hint(Label(context, "workspace.physics.unavailable"), context.theme.fonts);
-        if (item("workspace.physics.add_body", "###inspector_physics_body", !m_physicsSession.Draft().body))
-            m_physicsSession.AddBody();
-        if (item("workspace.physics.add_collider", "###inspector_physics_collider",
-                 m_physicsSession.Draft().colliders.size() < Runtime::MaximumPhysicsCollidersPerBody))
-            m_physicsSession.AddCollider();
-        if (item("workspace.physics.add_constraint", "###inspector_physics_constraint",
-                 m_physicsSession.Draft().constraints.size() < Runtime::MaximumPhysicsConstraintsPerObject))
-            m_physicsSession.AddConstraint();
-    }
-
     /** @copydoc InspectorPanel::DrawPhysicsInspector */
     void InspectorPanel::DrawPhysicsInspector(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
                                               EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
@@ -204,18 +176,19 @@ namespace Horo::Editor {
             !m_physicsSession.Draft().dirty)
             return;
         Ui::FieldLabel(Label(context, "workspace.physics.title"), context.theme.fonts);
-        Ui::Hint(Label(context, "workspace.physics.authoring_only"), context.theme.fonts);
-        Stable(context, "workspace.physics.object_id", object.id.value);
+
         const bool canEdit = viewModel.physicsContext.canEdit && !object.effectivelyLocked;
         if (!canEdit)
             Ui::Hint(Label(context, "workspace.physics.unavailable"), context.theme.fonts);
         ImGui::BeginDisabled(!canEdit);
         DrawColliderHierarchy(object, viewModel, command, context);
         DrawBody(m_physicsSession, context);
-        DrawColliders(m_physicsSession, context);
+        DrawColliders(m_physicsSession, context, viewModel);
         DrawConstraints(m_physicsSession, context);
-        DrawAdditions(m_physicsSession, context);
-        DrawActions(m_physicsSession, m_physicsInputError, object.id, command, context);
+        if (m_physicsSession.Draft().dirty && BeginFields("physics_actions")) {
+            DrawActions(m_physicsSession, m_physicsInputError, object.id, command, context);
+            EndFields();
+        }
         ImGui::EndDisabled();
         if (m_physicsInputError)
             Ui::ErrorText(Label(context, "workspace.physics.invalid_identity"), context.theme.fonts);

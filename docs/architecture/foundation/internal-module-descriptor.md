@@ -115,7 +115,7 @@ linked into each executable into the descriptor graph consumed by `ModuleHost`:
 | Host profile | Required participation | Optional selection |
 |---|---|---|
 | `horo-engine` | Foundation, Application, linked backend-neutral Runtime (including Save), CLI host | None in the current implementation |
-| `HoroEditor` | The linked application, runtime, scene, asset, input, gameplay, editor, extension, GUI, and renderer-neutral modules | Exactly one compiled interactive renderer and viewport adapter; OpenTelemetry when linked |
+| `HoroEditor` | The linked application, runtime, scene, asset, input, gameplay, editor, extension, GUI, and renderer-neutral modules | Exactly one compiled interactive renderer and viewport adapter |
 
 The headless executable directly links Runtime to explicitly compose its Save
 observability registration and retained-log summary provider. Its inert runtime

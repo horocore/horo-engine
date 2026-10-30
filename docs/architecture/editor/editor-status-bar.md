@@ -3,8 +3,10 @@
 ## Purpose
 
 The editor status bar is the persistent bottom edge of the Horo Editor/IDE shell.
-It remains present when the active `GuiScreen` changes and is not owned by the
-Editor Workspace, a panel, or a document page.
+It remains present across ordinary `GuiScreen` changes and is not owned by the
+Editor Workspace, a panel, or a document page. `ProjectCreation` is the explicit
+exception: the wizard uses the full content region and its own Back/Next footer,
+while the host retains the registry without drawing or reserving the status bar.
 
 This document defines the current in-process registry contract and the boundary
 that future `editor.status_item` extension adapters must preserve.
@@ -16,7 +18,7 @@ Visual reference: [Editor Workspace](../../../mock-studio/designs.md#architectur
 - `GuiScreenHost` owns one `EditorStatusBar` and one
   `EditorStatusItemRegistry` for the editor process.
 - `GuiScreenHost` reserves the fixed status-bar height before calling the active
-  screen. Every `GuiScreen::Draw` receives the remaining `GuiContentRegion`.
+  screen, except on `ProjectCreation`, which receives the full `GuiContentRegion`.
 - Built-ins, first-party modules, and future plugin adapters contribute through
   the same typed registry.
 - A contributor supplies declarative, bounded state. It never receives an ImGui

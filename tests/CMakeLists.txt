@@ -2315,18 +2315,6 @@ add_executable(HoroHostObservabilityTests
 )
 target_compile_features(HoroHostObservabilityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroHostObservabilityTests PRIVATE HoroEngine::Application Threads::Threads)
-if (HORO_ENABLE_OPENTELEMETRY)
-    add_executable(HoroOpenTelemetryTests
-            unit/foundation/OpenTelemetrySinkTests.cpp
-    )
-    target_compile_features(HoroOpenTelemetryTests PRIVATE cxx_std_20)
-    target_link_libraries(HoroOpenTelemetryTests
-            PRIVATE
-            HoroEngine::OpenTelemetry
-            Threads::Threads
-            nlohmann_json::nlohmann_json
-    )
-endif ()
 add_executable(HoroSaveTelemetryDisabledBenchmark benchmarks/SaveTelemetryDisabledBenchmark.cpp)
 target_compile_features(HoroSaveTelemetryDisabledBenchmark PRIVATE cxx_std_20)
 target_link_libraries(HoroSaveTelemetryDisabledBenchmark PRIVATE HoroEngine::Runtime)
@@ -2433,6 +2421,11 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroGuiLiveReloadDispatchTests PRIVATE HoroEngine::EditorServices Catch2::Catch2WithMain)
     add_test(NAME HoroGuiLiveReloadDispatchTests COMMAND HoroGuiLiveReloadDispatchTests)
     set_tests_properties(HoroGuiLiveReloadDispatchTests PROPERTIES LABELS "unit;editor;development")
+    add_executable(HoroEditorGuiLiveReloadHostTests unit/editor/EditorGuiLiveReloadHostTests.cpp)
+    target_link_libraries(HoroEditorGuiLiveReloadHostTests PRIVATE Catch2::Catch2WithMain)
+    horo_attach_gui_live_host(HoroEditorGuiLiveReloadHostTests)
+    add_test(NAME HoroEditorGuiLiveReloadHostTests COMMAND HoroEditorGuiLiveReloadHostTests)
+    set_tests_properties(HoroEditorGuiLiveReloadHostTests PROPERTIES LABELS "unit;editor;development" TIMEOUT 120)
     if(HORO_EDITOR_LIVE_UI)
         get_target_property(HORO_RCCPP_ROOT HoroThirdPartyRccpp HORO_RCCPP_ROOT)
         set(HORO_GUI_LIVE_DIR "${PROJECT_BINARY_DIR}/gui-live")
@@ -2447,7 +2440,23 @@ if (HORO_BUILD_EDITOR_GUI)
             HORO_TEST_WELCOME_WRAPPER="${HORO_GUI_LIVE_DIR}/GuiLive_Welcome.cpp")
         horo_attach_gui_live_host(HoroEditorGuiLiveReloadTests)
         add_test(NAME HoroEditorGuiLiveReloadTests COMMAND HoroEditorGuiLiveReloadTests)
-        set_tests_properties(HoroEditorGuiLiveReloadTests PROPERTIES LABELS "unit;editor;development;ci-windows" TIMEOUT 600)
+        set_tests_properties(HoroEditorGuiLiveReloadTests PROPERTIES LABELS "unit;editor;development;ci-windows" TIMEOUT 1200)
+        if(APPLE)
+            add_executable(HoroRccppMacTransportTests unit/editor/RccppMacTransportTests.cpp)
+            target_compile_features(HoroRccppMacTransportTests PRIVATE cxx_std_20)
+            target_include_directories(HoroRccppMacTransportTests PRIVATE
+                "${HORO_RCCPP_ROOT}/RuntimeCompiler" "${HORO_RCCPP_ROOT}/RuntimeObjectSystem")
+            target_compile_definitions(HoroRccppMacTransportTests PRIVATE
+                HORO_GUI_LIVE_COMPILER="${CMAKE_CXX_COMPILER}"
+                HORO_TEST_LIVE_HEADER_DIRECTORY="${HORO_TARGET_INCLUDE_ROOT}/HoroEditorServices/public"
+                HORO_TEST_LIVE_BRIDGE_DIRECTORY="${PROJECT_SOURCE_DIR}/src/editor/development/live_reload/rccpp")
+            target_link_options(HoroRccppMacTransportTests PRIVATE "LINKER:-export_dynamic")
+            target_link_libraries(HoroRccppMacTransportTests PRIVATE
+                HoroThirdPartyRccpp HoroGuiLiveReloadInternal HoroEngine::EditorServices Catch2::Catch2WithMain)
+            add_test(NAME HoroRccppMacTransportTests COMMAND HoroRccppMacTransportTests)
+            set_tests_properties(HoroRccppMacTransportTests PROPERTIES LABELS "unit;editor;development;macos" TIMEOUT 120)
+            set_tests_properties(HoroEditorGuiLiveReloadTests PROPERTIES LABELS "unit;editor;development;macos")
+        endif()
     endif()
     add_executable(HoroAssetImportModalLifecycleTests
             unit/editor/AssetImportModalLifecycleTests.cpp
@@ -2820,6 +2829,7 @@ target_compile_features(HoroEditorSettingsStoreTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorSettingsStoreTests
         PRIVATE
         HoroEngine::EditorServices
+        nlohmann_json::nlohmann_json
 )
 add_executable(HoroWorkspaceLayoutTests
         unit/editor/WorkspaceLayoutTests.cpp
@@ -3078,6 +3088,8 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/InspectorAudioComponentTests.cpp
             unit/editor/NavigationInspectorSessionTests.cpp
             unit/editor/PhysicsInspectorSessionTests.cpp
+            unit/editor/AddComponentRegistryTests.cpp
+            unit/editor/InspectorFieldSchemaTests.cpp
             unit/editor/UiInspectorWidgetsTests.cpp
     )
 
@@ -3132,6 +3144,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroExtensionActivityViewTests
             unit/editor/ExtensionActivityViewTests.cpp
+            unit/editor/EditorCustomizationIntegrationTests.cpp
             unit/editor/ExtensionRecoveryViewTests.cpp
             unit/editor/EditorPageViewTests.cpp
             unit/editor/EditorPageFileStoreTests.cpp
@@ -4923,6 +4936,16 @@ if (MSVC AND CMAKE_C_COMPILER_ID STREQUAL "MSVC")
 endif ()
 set_target_properties(HoroEditorActivityFixture PROPERTIES C_EXTENSIONS OFF)
 target_link_libraries(HoroEditorActivityFixture PRIVATE HoroEngine::Extensions)
+add_library(HoroEditorCommandFixture MODULE fixtures/extensions/EditorActivityModule.c)
+target_compile_features(HoroEditorCommandFixture PRIVATE c_std_11)
+target_compile_definitions(HoroEditorCommandFixture PRIVATE HORO_ACTIVITY_COMMAND_FIXTURE=1)
+if (MSVC AND CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(HoroEditorCommandFixture PRIVATE /experimental:c11atomics)
+endif ()
+set_target_properties(HoroEditorCommandFixture PROPERTIES C_EXTENSIONS OFF)
+target_link_libraries(HoroEditorCommandFixture PRIVATE HoroEngine::Extensions)
+add_dependencies(HoroExtensionManagerTests HoroEditorCommandFixture)
+target_compile_definitions(HoroExtensionManagerTests PRIVATE HORO_EDITOR_COMMAND_FIXTURE="$<TARGET_FILE:HoroEditorCommandFixture>")
 add_dependencies(HoroExtensionManagerTests HoroEditorActivityFixture)
 if (TARGET HoroGuiScreenHostLifecycleTests)
     add_dependencies(HoroGuiScreenHostLifecycleTests HoroEditorActivityFixture)
@@ -4930,7 +4953,8 @@ if (TARGET HoroGuiScreenHostLifecycleTests)
 endif ()
 
 if (TARGET HoroExtensionActivityViewTests)
-    add_dependencies(HoroExtensionActivityViewTests HoroEditorActivityFixture)
+    add_dependencies(HoroExtensionActivityViewTests HoroEditorActivityFixture HoroEditorCommandFixture)
+    target_compile_definitions(HoroExtensionActivityViewTests PRIVATE HORO_EDITOR_COMMAND_FIXTURE="$<TARGET_FILE:HoroEditorCommandFixture>")
     target_compile_definitions(HoroExtensionActivityViewTests PRIVATE HORO_EDITOR_ACTIVITY_FIXTURE="$<TARGET_FILE:HoroEditorActivityFixture>")
 endif()
 
@@ -5590,7 +5614,6 @@ set(HORO_CATCH_TEST_TARGETS
         HoroStructuredLogStoreTests
         HoroObservabilityTests
         HoroHostObservabilityTests
-        HoroOpenTelemetryTests
         HoroActivityStoreTests
         HoroPrimitiveMeshTests
         HoroEditorWelcomeControllerTests

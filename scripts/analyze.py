@@ -2104,7 +2104,7 @@ def prepare(root: Path, cache: Path, files: list[Path], existing: Path | None,
         command.extend(["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug", "-DBUILD_TESTING=ON"])
         if sys.platform == "linux":
             command.extend(["-DHORO_BUILD_RENDER_VULKAN=ON", "-DHORO_ENABLE_IMGUI_UI_TESTS=ON",
-                            "-DHORO_ENABLE_OPENTELEMETRY=ON", "-DHORO_BUILD_NETWORK_GNS=ON"])
+                            "-DHORO_BUILD_NETWORK_GNS=ON"])
     configured = quality_run(command, root, timeout)
     if configured.returncode:
         raise AnalysisError("CMake configuration failed; " + configured.stderr[-2000:])

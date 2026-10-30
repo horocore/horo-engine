@@ -124,8 +124,8 @@ namespace Horo::Tests::FullEditorActions {
                 dispatch({Editor::EditorMenuAction::None, std::nullopt});
 
                 dispatch({Editor::EditorMenuAction::OpenProject, std::nullopt});
-                IM_CHECK(ui.ItemExists("//**/Unsaved Changes"));
-                ui.ItemClick("//**/Stay Here");
+                IM_CHECK(ui.ItemExists("//**/LeaveConfirmation"));
+                ui.KeyPress(ImGuiKey_Escape);
                 ui.Yield();
                 IM_CHECK(editor.ActiveRoute() == Editor::GuiRouteKind::EditorWorkspace);
             });

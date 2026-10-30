@@ -108,7 +108,7 @@ leaking into the next lease. Generated state is never committed.
 Without `--compile-commands`, the helper first checks the canonical
 `build/skeleton/compile_commands.json` for this worktree and selected sources.
 If that verified build is unavailable, it configures an external Debug/Ninja build
-with tests and the optional Vulkan, ImGui UI tests, OpenTelemetry and GNS targets
+with tests and the optional Vulkan, ImGui UI tests and GNS targets
 enabled to cover the Linux CI composition. This first configure can download
 dependencies and take materially longer than subsequent checks.
 

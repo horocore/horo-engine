@@ -1,61 +1,23 @@
 # Development-only RCC++ integration. Upstream's top-level CMake project changes
 # global output paths and adds examples, so compile only its private core here.
-if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "HORO_EDITOR_LIVE_UI currently requires native Windows x64 and MSVC")
-endif()
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message(FATAL_ERROR "HORO_EDITOR_LIVE_UI requires a Debug development build")
-endif()
-
-include(FetchContent)
-FetchContent_Declare(horo_rccpp
-    GIT_REPOSITORY https://github.com/RuntimeCompiledCPlusPlus/RuntimeCompiledCPlusPlus.git
-    GIT_TAG 005c05145d98b87d974c36fc885003ea88bf3932
-    SOURCE_SUBDIR horo_no_upstream_project
-)
-FetchContent_MakeAvailable(horo_rccpp)
-include("${CMAKE_CURRENT_LIST_DIR}/ApplyRccppDevelopmentPatch.cmake")
-file(READ "${horo_rccpp_SOURCE_DIR}/readme.md" horo_rccpp_notice)
-string(REPLACE "\r\n" "\n" horo_rccpp_notice "${horo_rccpp_notice}")
-string(SHA256 horo_rccpp_notice_digest "${horo_rccpp_notice}")
-if(NOT horo_rccpp_notice_digest STREQUAL "566018f77015429efee3e966819319373b15433fd73f017580450b6c1dc66edf")
-    message(FATAL_ERROR "Pinned RCC++ license/readme differs from the reviewed upstream notice")
-endif()
-install(FILES "${horo_rccpp_SOURCE_DIR}/readme.md"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses" RENAME RCCpp.txt)
-set(HORO_RCCPP_ROOT "${horo_rccpp_SOURCE_DIR}/Aurora")
-file(GLOB horo_rccpp_sources CONFIGURE_DEPENDS
-    "${HORO_RCCPP_ROOT}/RuntimeCompiler/*.cpp"
-    "${HORO_RCCPP_ROOT}/RuntimeCompiler/SimpleFileWatcher/*.cpp"
-    "${HORO_RCCPP_ROOT}/RuntimeObjectSystem/*.cpp"
-    "${HORO_RCCPP_ROOT}/RuntimeObjectSystem/ObjectFactorySystem/*.cpp"
-    "${HORO_RCCPP_ROOT}/RuntimeObjectSystem/SimpleSerializer/*.cpp"
-)
-list(FILTER horo_rccpp_sources EXCLUDE REGEX "(PlatformPosix|FileWatcherLinux|FileWatcherOSX)\\.cpp$")
-add_library(HoroThirdPartyRccpp STATIC ${horo_rccpp_sources})
-set_property(TARGET HoroThirdPartyRccpp PROPERTY HORO_RCCPP_ROOT "${HORO_RCCPP_ROOT}")
-target_compile_features(HoroThirdPartyRccpp PRIVATE cxx_std_20)
-target_compile_options(HoroThirdPartyRccpp PRIVATE /FC /utf-8)
-target_compile_definitions(HoroThirdPartyRccpp PRIVATE NOMINMAX)
-target_include_directories(HoroThirdPartyRccpp SYSTEM PRIVATE
-    "${HORO_RCCPP_ROOT}/RuntimeCompiler"
-    "${HORO_RCCPP_ROOT}/RuntimeObjectSystem"
-)
-target_link_libraries(HoroThirdPartyRccpp PRIVATE advapi32)
-
+include("${CMAKE_CURRENT_LIST_DIR}/HoroRccppDevelopment.cmake")
 
 # Internal built-in GUI integration. This does not grant extension packages access
 # to the GUI backend or broaden any installed target's include surface.
 set(HORO_GUI_LIVE_DIR "${PROJECT_BINARY_DIR}/gui-live")
 add_library(HoroGuiLiveReloadInternal INTERFACE)
 target_include_directories(HoroGuiLiveReloadInternal INTERFACE
-    "${PROJECT_SOURCE_DIR}/src/editor/development/live_reload")
+    "${PROJECT_SOURCE_DIR}/src/editor/development/live_reload"
+    "${PROJECT_SOURCE_DIR}/src/editor/development/live_reload/rccpp")
 target_link_libraries(HoroGui PRIVATE HoroGuiLiveReloadInternal HoroThirdPartyRccpp)
-target_link_libraries(HoroEditor PRIVATE HoroGuiLiveReloadInternal HoroThirdPartyRccpp)
-foreach(target HoroGui HoroEditor)
+target_compile_definitions(HoroEditorGuiLiveReloadHost PRIVATE HORO_EDITOR_LIVE_UI=1)
+target_link_libraries(HoroEditorGuiLiveReloadHost PRIVATE HoroGuiLiveReloadInternal HoroThirdPartyRccpp HoroEngine::Gui)
+foreach(target HoroGui HoroEditorGuiLiveReloadHost)
     target_include_directories(${target} SYSTEM PRIVATE
         "${HORO_RCCPP_ROOT}/RuntimeCompiler" "${HORO_RCCPP_ROOT}/RuntimeObjectSystem")
-    target_compile_options(${target} PRIVATE /FC /utf-8)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /FC /utf-8)
+    endif()
 endforeach()
 
 # Each record generates a stateless RCC++ adapter. GUI state and class instances
@@ -171,25 +133,3 @@ file(GENERATE OUTPUT "${HORO_GUI_LIVE_DIR}/GuiModules.cpp" CONTENT
 target_sources(HoroGui PRIVATE "${HORO_GUI_LIVE_DIR}/GuiModules.cpp")
 file(GENERATE OUTPUT "${HORO_GUI_LIVE_DIR}/includes.txt" CONTENT
     "$<JOIN:$<TARGET_PROPERTY:HoroGui,INCLUDE_DIRECTORIES>,\n>\n${HORO_RCCPP_ROOT}/RuntimeCompiler\n${HORO_RCCPP_ROOT}/RuntimeObjectSystem\n")
-
-function(horo_attach_gui_live_host target)
-    set(HORO_GUI_LIVE_DIR "${PROJECT_BINARY_DIR}/gui-live")
-    set(exports "${HORO_GUI_LIVE_DIR}/${target}.def")
-    add_custom_command(OUTPUT "${exports}" "${HORO_GUI_LIVE_DIR}/${target}.rsp"
-        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/dev.py" gui-live-bridge
-            --compile-commands "${PROJECT_BINARY_DIR}/compile_commands.json"
-            --output "${exports}" --image "$<TARGET_FILE_NAME:${target}>"
-        DEPENDS HoroGui "${PROJECT_SOURCE_DIR}/scripts/dev.py"
-            "${PROJECT_BINARY_DIR}/compile_commands.json"
-        VERBATIM)
-    target_sources(${target} PRIVATE "${exports}")
-    set_target_properties(${target} PROPERTIES ENABLE_EXPORTS ON)
-    target_compile_definitions(${target} PRIVATE
-        HORO_EDITOR_LIVE_UI=1
-        HORO_GUI_LIVE_INCLUDE_FILE="${HORO_GUI_LIVE_DIR}/includes.txt"
-        HORO_GUI_LIVE_FLAGS_FILE="${HORO_GUI_LIVE_DIR}/${target}.rsp"
-        HORO_GUI_LIVE_HOST_IMPORT="$<TARGET_LINKER_FILE:${target}>"
-        HORO_GUI_LIVE_HOST_IMAGE="$<TARGET_FILE:${target}>"
-        HORO_LIVE_UI_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}/live-ui")
-endfunction()
-horo_attach_gui_live_host(HoroEditor)

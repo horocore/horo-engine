@@ -1,3 +1,4 @@
+#include "EditorGuiLiveReloadBuildConfig.h"
 #include "GuiRuntimeBridge.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/IWorkspacePanel.h"
@@ -9,12 +10,14 @@
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cctype>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
-#include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <imgui_internal.h>
@@ -31,12 +34,24 @@ namespace {
         std::mutex mutex;
         std::vector<std::string> output;
 
+        ~CompilerLog() override {
+            if (std::uncaught_exceptions() != 0)
+                for (const auto &line : output)
+                    std::fprintf(stderr, "%s\n", line.c_str());
+        }
+
         void Capture(const char *format, va_list args) {
             std::array<char, 4096> text{};
             std::vsnprintf(text.data(), text.size(), format, args);
             std::lock_guard lock(mutex);
-            if (std::strcmp(format, "%s") == 0)
-                output.emplace_back(text.data());
+            std::istringstream lines{text.data()};
+            std::string line;
+            while (std::getline(lines, line)) {
+                if (!line.empty() && line.back() == '\r')
+                    line.pop_back();
+                if (!line.empty())
+                    output.push_back(std::move(line));
+            }
         }
 
         void LogError(const char *format, ...) override {
@@ -62,14 +77,19 @@ namespace {
     };
 
     struct TemporaryBuild {
-        std::filesystem::path path = std::filesystem::temp_directory_path() /
-                                     ("horo GUI live-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::path path =
+            std::filesystem::temp_directory_path() /
+            std::filesystem::path{"horo GUI live-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())};
 
         TemporaryBuild() {
             std::filesystem::create_directories(path);
         }
 
         ~TemporaryBuild() {
+            if (std::uncaught_exceptions() != 0) {
+                std::fprintf(stderr, "Retained failed GUI compiler artifacts: %s\n", path.string().c_str());
+                return;
+            }
             std::error_code ignored;
             std::filesystem::remove_all(path, ignored);
         }
@@ -99,7 +119,7 @@ namespace {
 
     void Compile(RuntimeObjectSystem &runtime, unsigned short project = 1) {
         runtime.CompileAllInProject(true, project);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{300};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{600};
         while (!runtime.GetIsCompiledComplete() && std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds{10});
         REQUIRE(runtime.GetIsCompiledComplete());
@@ -107,7 +127,7 @@ namespace {
 
     /** @brief Drives the real watcher without manually selecting compilation inputs. */
     void WaitForFileChangeCompilation(RuntimeObjectSystem &runtime) {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{180};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{600};
         while (!runtime.GetIsCompiledComplete() && std::chrono::steady_clock::now() < deadline) {
             if (!runtime.GetIsCompiling())
                 runtime.GetFileChangeNotifier()->Update(0.02F);
@@ -123,15 +143,44 @@ namespace {
         return text;
     }
 
+    /** @brief Reuses qualified dependency objects while keeping copied drawing owners isolated. */
+    void SeedDependencyObjects(const std::filesystem::path &baseline, const std::filesystem::path &replacement) {
+        for (std::filesystem::recursive_directory_iterator entry{baseline}, end; entry != end; ++entry) {
+            if (entry->path() == replacement) {
+                entry.disable_recursion_pending();
+                continue;
+            }
+            const auto &source = entry->path();
+            if (!entry->is_regular_file() || (source.extension() != ".o" && source.extension() != ".obj"))
+                continue;
+            std::string name = source.stem().string();
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+            if (name == "welcomeview" || name == "editoruicomponents" || name == "guilive_welcome")
+                continue;
+            const auto destination = replacement / source.lexically_relative(baseline);
+            if (std::filesystem::exists(destination))
+                continue;
+            std::filesystem::create_directories(destination.parent_path());
+            REQUIRE(std::filesystem::copy_file(source, destination));
+            std::filesystem::last_write_time(destination, std::filesystem::last_write_time(source));
+        }
+    }
+
     void Configure(RuntimeObjectSystem &runtime, const std::filesystem::path &directory, unsigned short project = 0) {
         runtime.SetIntermediateDir(directory.string().c_str(), project);
-        std::ifstream includes{HORO_GUI_LIVE_INCLUDE_FILE};
+        runtime.AddIncludeDir(std::filesystem::path{HORO_TEST_WELCOME_SOURCE}.parent_path().string().c_str(), project);
+        const auto configuration = BuildEditorGuiLiveReloadConfiguration();
+        std::ifstream includes{configuration.includeManifest};
         std::string include;
         while (std::getline(includes, include))
             if (!include.empty())
                 runtime.AddIncludeDir(include.c_str(), project);
-        runtime.SetAdditionalCompileOptions("@\"" HORO_GUI_LIVE_FLAGS_FILE "\"", project);
-        runtime.SetAdditionalLinkOptions("\"" HORO_GUI_LIVE_HOST_IMPORT "\"", project);
+        runtime.SetAdditionalCompileOptions(configuration.compileOptions.c_str(), project);
+        runtime.SetAdditionalLinkOptions(configuration.linkOptions.c_str(), project);
+        if (!configuration.compiler.empty())
+            runtime.SetCompilerLocation(configuration.compiler.string().c_str(), project);
     }
 
     struct Registry : GuiLive::IRegistry {
@@ -189,7 +238,13 @@ TEST_CASE("Registered GUI modules share one host and retain state across partial
     // RCC++ owns process-global constructor metadata. Match the editor's single-runtime lifetime.
     Configure(runtime, build.path);
     Compile(runtime, 0);
-    REQUIRE(runtime.LoadCompiledModule());
+    const bool initialLoaded = runtime.LoadCompiledModule();
+    if (!initialLoaded) {
+        std::lock_guard lock(logger.mutex);
+        for (const auto &line : logger.output)
+            UNSCOPED_INFO(line);
+    }
+    REQUIRE(initialLoaded);
     {
         std::lock_guard lock(logger.mutex);
         REQUIRE_FALSE(logger.output.empty());
@@ -244,6 +299,7 @@ REGISTERSINGLETON(HoroGuiSharedProbe, true);
     Compile(runtime);
     REQUIRE(runtime.LoadCompiledModule());
     REQUIRE(Draw(fixture, state) == 76.0F);
+    SeedDependencyObjects(build.path, build.path / "changed");
     runtime.GetFileChangeNotifier()->SetMonitoringActive(true);
     runtime.GetFileChangeNotifier()->Update(2.0F);
     Replace(drawing, "tokens.spacing.cardPadding", "(tokens.spacing.cardPadding + 12.0F)");

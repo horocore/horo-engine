@@ -1,6 +1,7 @@
 #include "EditorGuiLiveReload.h"
 
 #if defined(HORO_EDITOR_LIVE_UI)
+#include "GuiLiveBuildRevision.h"
 #include "GuiRuntimeBridge.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ICompilerLogger.h"
@@ -9,18 +10,22 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <string_view>
 #endif
 
 namespace Horo::Editor {
 #if defined(HORO_EDITOR_LIVE_UI)
     namespace {
+        /** @brief Preserves portable UTF-8 when passing native paths to RCC++ on Windows and macOS. */
+        [[nodiscard]] std::string CompilerPath(const std::filesystem::path &path) {
+            const auto text = path.u8string();
+            return {text.begin(), text.end()};
+        }
+
         /** @brief Bounds compiler diagnostics before forwarding them to the existing log authority. */
         void LogCompiler(const Log::Level level, const char *format, std::va_list arguments) {
             std::array<char, 4096> text{};
@@ -84,42 +89,66 @@ namespace Horo::Editor {
     EditorGuiLiveReload::~EditorGuiLiveReload() = default;
 
     /** @copydoc EditorGuiLiveReload::Start */
-    Result<void> EditorGuiLiveReload::Start() {
+    Result<void> EditorGuiLiveReload::Start(const EditorGuiLiveReloadConfiguration &configuration) {
 #if defined(HORO_EDITOR_LIVE_UI)
+        if (state_)
+            return Result<void>::Success();
+        if (!configuration.hostImage.is_absolute() || !configuration.intermediateRoot.is_absolute() ||
+            !configuration.includeManifest.is_absolute()) {
+            const ErrorCodeDescriptor failed{.domain = ErrorDomainId{"horo.editor.live_ui"},
+                                             .code = ErrorCode{"live_ui.configuration_invalid"},
+                                             .defaultSeverity = ErrorSeverity::Error,
+                                             .summary = "Development GUI build paths must be absolute."};
+            return Result<void>::Failure(MakeError(failed));
+        }
+        std::error_code directoryError;
+        // A different host build invalidates cached objects and their borrowed ABI.
+        const auto hostRevision = std::filesystem::last_write_time(configuration.hostImage, directoryError);
+        std::filesystem::path intermediate;
+        if (!directoryError) {
+            intermediate = configuration.intermediateRoot / Development::GuiLiveBuildRevision(hostRevision);
+            std::filesystem::create_directories(intermediate, directoryError);
+        }
+        if (directoryError) {
+            const ErrorCodeDescriptor failed{.domain = ErrorDomainId{"horo.editor.live_ui"},
+                                             .code = ErrorCode{"live_ui.build_directory_unavailable"},
+                                             .defaultSeverity = ErrorSeverity::Error,
+                                             .summary = "Unable to prepare the RCC++ development build directory."};
+            return Result<void>::Failure(MakeError(failed, directoryError.message()));
+        }
+        std::ifstream includes{configuration.includeManifest};
+        if (!includes) {
+            const ErrorCodeDescriptor failed{.domain = ErrorDomainId{"horo.editor.live_ui"},
+                                             .code = ErrorCode{"live_ui.include_manifest_unavailable"},
+                                             .defaultSeverity = ErrorSeverity::Error,
+                                             .summary = "Unable to read the development GUI include manifest."};
+            return Result<void>::Failure(MakeError(failed, CompilerPath(configuration.includeManifest)));
+        }
         Development::LinkGuiModules();
-        state_ = std::make_unique<State>();
-        state_->runtime = std::make_unique<RuntimeObjectSystem>();
-        if (!state_->runtime->Initialise(&state_->logger, &state_->system)) {
+        auto candidate = std::make_unique<State>();
+        candidate->runtime = std::make_unique<RuntimeObjectSystem>();
+        if (!candidate->runtime->Initialise(&candidate->logger, &candidate->system)) {
             const ErrorCodeDescriptor failed{.domain = ErrorDomainId{"horo.editor.live_ui"},
                                              .code = ErrorCode{"live_ui.initialization_failed"},
                                              .defaultSeverity = ErrorSeverity::Error,
                                              .summary = "RCC++ development UI initialization failed."};
             return Result<void>::Failure(MakeError(failed));
         }
-        std::error_code directoryError;
-        // RCC++ does not track every transitive header. Never reuse objects from
-        // a different host build after a signature or object-layout change.
-        const auto hostRevision = std::filesystem::last_write_time(HORO_GUI_LIVE_HOST_IMAGE, directoryError);
-        const auto intermediate = std::filesystem::path{HORO_LIVE_UI_BUILD_DIR} / std::to_string(hostRevision.time_since_epoch().count());
-        if (!directoryError)
-            std::filesystem::create_directories(intermediate, directoryError);
-        if (directoryError) {
-            const ErrorCodeDescriptor failed{.domain = ErrorDomainId{"horo.editor.live_ui"},
-                                             .code = ErrorCode{"live_ui.build_directory_unavailable"},
-                                             .defaultSeverity = ErrorSeverity::Error,
-                                             .summary = "Unable to create the RCC++ development build directory."};
-            return Result<void>::Failure(MakeError(failed));
-        }
-        state_->runtime->SetIntermediateDir(intermediate.string().c_str());
-        std::ifstream includes{HORO_GUI_LIVE_INCLUDE_FILE};
+        auto &runtime = *candidate->runtime;
+        runtime.SetIntermediateDir(CompilerPath(intermediate).c_str());
         std::string include;
         while (std::getline(includes, include)) {
             if (!include.empty())
-                state_->runtime->AddIncludeDir(include.c_str());
+                runtime.AddIncludeDir(include.c_str());
         }
-        state_->runtime->SetAdditionalCompileOptions("@\"" HORO_GUI_LIVE_FLAGS_FILE "\"");
-        state_->runtime->SetAdditionalLinkOptions("\"" HORO_GUI_LIVE_HOST_IMPORT "\"");
+        runtime.SetAdditionalCompileOptions(configuration.compileOptions.c_str());
+        runtime.SetAdditionalLinkOptions(configuration.linkOptions.c_str());
+        if (!configuration.compiler.empty())
+            runtime.SetCompilerLocation(CompilerPath(configuration.compiler).c_str());
+        state_ = std::move(candidate);
         LOG_INFO("editor.live_ui", "RCC++ GUI drawing active; edit registered GUI source files.");
+#else
+        static_cast<void>(configuration);
 #endif
         return Result<void>::Success();
     }

@@ -4,8 +4,8 @@
 
 Horo exposes one backend-neutral record and instrumentation model for engine,
 editor, game, plugin, test, and tooling code. Producers never select a sink and
-never depend on OpenTelemetry. A process composition root owns startup,
-filtering, local persistence, optional external sinks, flush, and shutdown.
+use only Horo-owned types. A process composition root owns startup,
+filtering, local persistence, flush, and shutdown.
 
 Public entry points are:
 
@@ -17,12 +17,9 @@ Public entry points are:
 - `Horo/Foundation/Telemetry/Operation.h` for meaningful operation spans and
   cross-thread context;
 - `Horo/Foundation/Diagnostics/DiagnosticBundle.h` for explicit local support
-  bundles;
-- `Horo/Foundation/Telemetry/OpenTelemetrySink.h` only for composition roots
-  built with `HORO_ENABLE_OPENTELEMETRY=ON`.
+  bundles.
 
-There is one API and one dispatcher. External backends are consumers of Horo
-records; they are not alternate instrumentation APIs.
+There is one API and one dispatcher. Local sinks consume Horo records without defining alternate instrumentation APIs.
 
 ## Host Composition
 
@@ -142,8 +139,7 @@ removed before the common record enters the asynchronous queue. Sensitive key
 fragments such as password, secret, token, credential, cookie, authorization,
 and private-key names are redacted defensively even when a producer omitted an
 explicit privacy classification. The same pre-fan-out policy applies to MDC
-context, so local JSONL, in-memory stores, and optional exporters observe one
-safe record.
+context, so local JSONL and in-memory stores observe one safe record.
 
 ## Metrics
 
@@ -188,90 +184,24 @@ static_cast<void>(import.Complete(Horo::Telemetry::SpanStatus::Succeeded));
 
 `JobSystem` captures the active operation and diagnostic context when work is
 submitted and restores it only for that job execution. Child spans therefore
-retain parent and correlation identity without OpenTelemetry context types.
+retain Horo-owned parent and correlation identity.
 Destroying an incomplete operation records cancellation. Only the first valid
 terminal transition succeeds.
 
-## Optional OpenTelemetry Export
+## Local Diagnostics
 
-For the normal local editor workflow, copy the safe example configuration once:
+Engine instrumentation, structured logs, operation histories, metrics and
+profiler captures use the host-owned local observability session. Neither host
+composes a network telemetry exporter. The developer runner starts the editor
+without checking a collector or dashboard and without reading export settings.
 
-```bash
-cp .env.example .env.local
-python3 scripts/dev.py run editor
-```
-
-`HORO_DEV_OTEL_EXPORT` is a developer-runner convenience setting, not a Horo
-runtime option. `scripts/dev.py` resolves process environment over `.env.local`
-over defaults, configures a Debug `HoroEditor` build on every invocation, and
-then maps the enabled setting to the build-time adapter option and the runtime
-export approval. When disabled, inherited OTLP approval and endpoint variables
-are removed from the editor child process.
-
-`HORO_OTEL_ENDPOINT` is an OTLP HTTP base URL; the exporter appends the signal
-paths. The runner's TCP check proves only that the configured host and port are
-reachable. An unavailable Collector produces a warning and never prevents the
-editor from continuing with local diagnostics.
-
-The equivalent manual build remains available for advanced use:
-
-Build the isolated adapter explicitly:
-
-```bash
-cmake -S . -B build/otel \
-  -DHORO_ENABLE_OPENTELEMETRY=ON \
-  -DBUILD_TESTING=ON
-```
-
-Then compose the approved sink alongside local sinks:
-
-```cpp
-Horo::Telemetry::OpenTelemetryConfiguration otlp{
-    .endpoint = "https://collector.example.com",
-    .serviceName = "my-game",
-    .exportApproved = true,
-};
-auto exporter = Horo::Telemetry::OpenTelemetrySink::Create(otlp);
-if (exporter)
-    configuration.additionalSinks.push_back(exporter);
-```
-
-External plaintext HTTP endpoints are rejected. Plaintext localhost is allowed
-for a developer Collector only when `allowInsecureLocalhost` is explicitly enabled. Header
-injection is rejected, configured sensitive attribute-key fragments are
-redacted before serialization, payload/batch/retry/time limits are bounded, and
-offline delivery remains best effort. Transport calls occur only on the common
-consumer thread.
-
-The optional HoroEditor composition remains disabled unless both the build
-option is enabled and the user sets:
-
-```bash
-HORO_OTEL_EXPORT_APPROVED=1 \
-HORO_OTEL_ENDPOINT=http://127.0.0.1:4318 \
-HoroEditor
-```
-
-Setting only the build option never enables network export. Standard builds do
-not compile or link the OTLP adapter.
-
-HoroEditor registers the following low-cardinality host metrics at startup:
-
-- `horo.editor.frame.number`
-- `horo.editor.frame.duration`
-- `horo.observability.records.dropped`
-- `horo.observability.sink.failures`
-
-The common dispatcher flushes sink-owned sparse batches once per second by
-default, so a metric does not need to fill the exporter's record batch before
-it becomes visible. OTLP thread identifiers are exported as strings because
-they are opaque platform identities rather than signed numeric measurements.
-
-Engine instrumentation and local metric/profiler histories do not require an
-external dashboard or collector. The developer runner and `.env.example` keep
-OTLP export disabled unless the developer explicitly opts in. The repository no
-longer installs, imports, or checks Grafana dashboards; this does not change the
-common record model, dispatcher, local persistence, or metric collection policy.
+Use `python3 scripts/dev.py run editor` for normal local development. Logs and
+support bundles retain the existing storage, privacy and retention contracts.
+Persistent terminal-operation history uses `operations/<host-base-name>.jsonl`
+under the configured log directory, with rolled files in that same subdirectory.
+Diagnostic bundles retain the `history/` archive layout.
+See [Local observability migration](../../guides/local-observability-migration.md)
+for the removed exporter API and build/configuration migration.
 
 ## Performance Contract And Measurement
 
@@ -312,6 +242,4 @@ ctest --test-dir build/skeleton -R \
   'HoroObservabilityTests|HoroTelemetryFastPathBenchmark' \
   --output-on-failure
 
-ctest --test-dir build/opentelemetry -R HoroOpenTelemetryTests \
-  --output-on-failure
 ```

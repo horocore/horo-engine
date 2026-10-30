@@ -128,6 +128,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshAvailableBehaviorProjection() {
+        ++m_viewModel.availableBehaviorsRevision;
         InvalidateInspectorBehaviorBindings();
         m_viewModel.availableBehaviors.clear();
         for (const Gameplay::BehaviorRegistration &registration : m_gameplayRegistry->Registry().Registrations())

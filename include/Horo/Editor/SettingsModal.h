@@ -14,6 +14,7 @@
 namespace Horo::Extensions {
     class ExtensionInventory;
     class EditorPageHost;
+    class EditorActivityHost;
     struct EditorThemeFrame;
     struct EditorSurfaceProviderIdentity;
     class ExtensionMarketplaceService;
@@ -26,6 +27,7 @@ namespace Horo::Editor {
     struct SettingsModalPagePresentation final {
         std::shared_ptr<Extensions::EditorPageHost> host;          /**< Shared page authority; empty disables extension pages. */
         std::shared_ptr<const Extensions::EditorThemeFrame> theme; /**< Owner theme capture; required when host is supplied. */
+        std::shared_ptr<Extensions::EditorActivityHost> commands;  /**< Optional live command metadata/localization authority. */
     };
 
     /** @brief Explicit project openings captured as revocable borrows during modal construction. */

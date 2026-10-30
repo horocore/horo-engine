@@ -131,24 +131,6 @@ def test_dotenv_parser_rejects_shell_syntax_and_malformed_lines(tmp_path: Path, 
         dev.parse_dotenv(env_file)
 
 
-def test_process_environment_overrides_local_configuration(tmp_path: Path) -> None:
-    env_file = write_env(
-        tmp_path / LOCAL_ENV_FILENAME,
-        "HORO_DEV_OTEL_EXPORT=OFF\nHORO_OTEL_ENDPOINT=http://127.0.0.1:4318\n",
-    )
-
-    settings = dev.load_settings(
-        env_file,
-        {
-            "HORO_DEV_OTEL_EXPORT": "ON",
-            "HORO_OTEL_ENDPOINT": "https://collector.example.com:443",
-        },
-    )
-
-    assert settings.otel_export_enabled
-    assert settings.endpoint.url == "https://collector.example.com:443"
-
-
 def test_persist_sonar_token_writes_only_configured_local_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     env_file = tmp_path / LOCAL_ENV_FILENAME
     env_file.write_text("EXISTING=value\nHORO_SONAR_TOKEN=old\n", encoding="utf-8")
@@ -159,84 +141,44 @@ def test_persist_sonar_token_writes_only_configured_local_file(monkeypatch: pyte
     assert env_file.read_text(encoding="utf-8") == "EXISTING=value\nHORO_SONAR_TOKEN=replacement\n"
 
 
-def test_disabled_export_ignores_and_later_removes_an_inherited_invalid_endpoint(tmp_path: Path) -> None:
-    settings = dev.load_settings(
-        tmp_path / "missing.env",
-        {
-            "HORO_DEV_OTEL_EXPORT": "OFF",
-            "HORO_OTEL_ENDPOINT": "not-an-endpoint",
-        },
-    )
-
-    assert not settings.otel_export_enabled
-    assert "HORO_OTEL_ENDPOINT" not in dev.child_environment(
-        settings,
-        {"HORO_OTEL_EXPORT_APPROVED": "1", "HORO_OTEL_ENDPOINT": "not-an-endpoint"},
-    )
-
-
-@pytest.mark.parametrize(
-    "endpoint",
-    [
-        "127.0.0.1:4318",
-        "ftp://127.0.0.1:4318",
-        "http://127.0.0.1",
-        "http://collector.example.com:4318",
-        "https://user:secret@collector.example.com:443",
-        "https://collector.example.com:443/custom",
-        "https://collector.example.com:443?token=value",
-    ],
-)
-def test_endpoint_validation_rejects_unsafe_or_non_base_urls(endpoint: str) -> None:
-    with pytest.raises(dev.ConfigurationError):
-        dev.validate_endpoint(endpoint)
-
-
-def test_endpoint_validation_accepts_supported_base_urls() -> None:
-    assert dev.validate_endpoint("http://127.0.0.1:4318/").url == "http://127.0.0.1:4318"
-    assert dev.validate_endpoint("http://[::1]:4318").host == "::1"
-    assert dev.validate_endpoint("https://collector.example.com:443").port == 443
-
-
-def test_telemetry_switch_controls_build_and_child_environment() -> None:
-    endpoint = dev.validate_endpoint("http://127.0.0.1:4318")
-    enabled = dev.DeveloperSettings(True, endpoint)
-    disabled = dev.DeveloperSettings(False, endpoint)
-    inherited = {
-        "KEEP": "value",
-        "HORO_DEV_OTEL_EXPORT": "OFF",
-        "HORO_OTEL_EXPORT_APPROVED": "1",
-        "HORO_OTEL_ENDPOINT": "https://unexpected.example.com:443",
-    }
-
-    assert "-DHORO_ENABLE_OPENTELEMETRY=ON" in dev.configure_command(enabled)
-    assert "-DHORO_ENABLE_OPENTELEMETRY=OFF" in dev.configure_command(disabled)
-    assert dev.child_environment(enabled, inherited) == {
-        "KEEP": "value",
-        "HORO_OTEL_EXPORT_APPROVED": "1",
-        "HORO_OTEL_ENDPOINT": "http://127.0.0.1:4318",
-    }
-    assert dev.child_environment(disabled, inherited) == {"KEEP": "value"}
-
-
 def test_editor_executable_paths_are_platform_specific(tmp_path: Path) -> None:
     assert dev.editor_executable(tmp_path, "darwin") == tmp_path / "apps/HoroEditor.app/Contents/MacOS/HoroEditor"
     assert dev.editor_executable(tmp_path, "linux") == tmp_path / "apps/HoroEditor"
     assert dev.editor_executable(tmp_path, "win32") == tmp_path / "apps/HoroEditor.exe"
 
 
+def test_editor_launch_stays_local_with_obsolete_export_settings(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HORO_DEV_OTEL_EXPORT", "ON")
+    monkeypatch.setenv("HORO_OTEL_ENDPOINT", "invalid legacy endpoint")
+    monkeypatch.setenv("HORO_OTEL_EXPORT_APPROVED", "1")
+    env_file = write_env(tmp_path / LOCAL_ENV_FILENAME, "not executable shell configuration")
+    monkeypatch.setattr(dev, "DEFAULT_ENV_FILE", env_file)
+    executable = tmp_path / "HoroEditor"
+    executable.touch()
+    monkeypatch.setattr(dev, "editor_executable", lambda *_: executable)
+    calls = []
+    monkeypatch.setattr(dev, "execute_subprocess", lambda command, **kwargs: calls.append(list(command)) or 0)
+    assert dev.main(["run", "editor"]) == 0
+    assert "-DHORO_ENABLE_TELEMETRY=ON" in calls[0]
+    assert not any("OPENTELEMETRY" in argument for argument in calls[0])
+    output = capsys.readouterr().out
+    assert "LOCAL" in output
+    assert "Collector" not in output
+    assert "OpenTelemetry" not in output
+
+
 @pytest.mark.parametrize("live_ui", [False, True])
-def test_development_theme_and_live_ui_are_explicit_launch_options(monkeypatch, tmp_path, live_ui, capsys):
+@pytest.mark.parametrize("target_platform", ["win32", "darwin"])
+def test_development_theme_and_live_ui_are_explicit_launch_options(monkeypatch, tmp_path, live_ui, target_platform, capsys):
     theme = tmp_path / "theme with spaces.json"
     theme.write_text('{"colors":{"WindowBg":"#112233"}}', encoding="utf-8")
     executable = tmp_path / "HoroEditor.exe"
     executable.touch()
     calls = []
-    monkeypatch.setattr(dev.sys, "platform", "win32")
+    monkeypatch.setattr(dev.sys, "platform", target_platform)
     monkeypatch.setattr(dev, "editor_executable", lambda *_: executable)
     monkeypatch.setattr(dev, "execute_subprocess", lambda command, **kwargs: calls.append((list(command), kwargs)) or 0)
-    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
-    assert dev.run_editor(settings, [], tmp_path, theme_file=theme, live_ui=live_ui) == 0
+    assert dev.run_editor([], tmp_path, theme_file=theme, live_ui=live_ui) == 0
     assert f"-DHORO_EDITOR_LIVE_UI={'ON' if live_ui else 'OFF'}" in calls[0][0]
     assert calls[-1][1]["env"]["HORO_THEME_OVERRIDE"] == str(theme.resolve())
     assert calls[-1][0] == [str(executable)]
@@ -247,16 +189,22 @@ def test_development_theme_and_live_ui_are_explicit_launch_options(monkeypatch, 
     assert "\033[" not in output
 
 
+def test_live_ui_rejects_unsupported_platform_before_build(monkeypatch, capsys):
+    monkeypatch.setattr(dev.sys, "platform", "linux")
+    monkeypatch.setattr(dev, "_configure_and_build", lambda *_args, **_kwargs: pytest.fail("unexpected build"))
+    assert dev.run_editor([], live_ui=True) == 2
+    assert "macOS/AppleClang" in capsys.readouterr().err
+
+
 def test_missing_development_theme_stops_before_configure(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(dev, "execute_subprocess", lambda *_args, **_kwargs: pytest.fail("unexpected build"))
-    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
-    assert dev.run_editor(settings, [], theme_file=tmp_path / "missing.json") == 2
+    assert dev.run_editor([], theme_file=tmp_path / "missing.json") == 2
     assert "theme file not found" in capsys.readouterr().err
 
 
 def test_run_parser_keeps_development_flags_out_of_editor_arguments(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(dev, "run_editor", lambda settings, arguments, **kwargs: calls.append((arguments, kwargs)) or 0)
+    monkeypatch.setattr(dev, "run_editor", lambda arguments, **kwargs: calls.append((arguments, kwargs)) or 0)
     assert dev.main(["run", "editor", "--theme-file", str(tmp_path / "theme.json"), "--live-ui", "--", "--exit-after-first-frame"]) == 0
     assert calls == [(["--exit-after-first-frame"], {"theme_file": tmp_path / "theme.json", "live_ui": True})]
 
@@ -276,10 +224,8 @@ def test_run_editor_configures_builds_and_forwards_arguments_without_a_shell(
     monkeypatch.setattr(dev, 'DEFAULT_BUILD_DIRECTORY', tmp_path)
     monkeypatch.setattr(dev, 'editor_executable', lambda *args, **kwargs: executable)
     monkeypatch.setattr(dev, 'run', fake_run)
-    monkeypatch.setattr(dev, 'collector_is_reachable', lambda endpoint: False)
-    settings = dev.DeveloperSettings(True, dev.validate_endpoint("http://127.0.0.1:4318"))
 
-    result = dev.run_editor(settings, ["--project", "path with spaces", "--verbose"])
+    result = dev.run_editor(["--project", "path with spaces", "--verbose"])
 
     assert result == 7
     assert len(calls) == 3
@@ -288,7 +234,7 @@ def test_run_editor_configures_builds_and_forwards_arguments_without_a_shell(
     assert calls[1][0][:2] == ["cmake", "--build"]
     assert calls[2][0] == [str(executable), "--project", "path with spaces", "--verbose"]
     assert all("shell" not in keyword_arguments for _, keyword_arguments in calls)
-    assert "will continue with local diagnostics only" in capsys.readouterr().err
+    assert "Collector" not in capsys.readouterr().out
 
 
 def test_configure_failure_prevents_build_and_launch(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -299,9 +245,8 @@ def test_configure_failure_prevents_build_and_launch(monkeypatch: pytest.MonkeyP
         return 9
 
     monkeypatch.setattr(dev, 'run', fake_run)
-    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
-    assert dev.run_editor(settings, []) == 9
+    assert dev.run_editor([]) == 9
     assert len(calls) == 1
     output = capsys.readouterr().out
     assert "[FAIL 9] Configure" in output
@@ -314,9 +259,8 @@ def test_missing_cmake_returns_command_not_found_exit_code(monkeypatch: pytest.M
         raise FileNotFoundError("cmake")
 
     monkeypatch.setattr(dev, 'run', missing_command)
-    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
-    assert dev.run_editor(settings, []) == 127
+    assert dev.run_editor([]) == 127
 
 
 def test_keyboard_interrupt_returns_conventional_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -334,17 +278,14 @@ def test_keyboard_interrupt_returns_conventional_exit_code(monkeypatch: pytest.M
     monkeypatch.setattr(dev, 'DEFAULT_BUILD_DIRECTORY', tmp_path)
     monkeypatch.setattr(dev, 'editor_executable', lambda *args, **kwargs: executable)
     monkeypatch.setattr(dev, 'run', fake_run)
-    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
-    assert dev.run_editor(settings, []) == 130
+    assert dev.run_editor([]) == 130
 
 
 def test_cli_run_supports_all_argument_variations(monkeypatch: pytest.MonkeyPatch) -> None:
     forwarded: list[list[str]] = []
-    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
-    monkeypatch.setattr(dev, 'load_settings', lambda: settings)
 
-    def fake_run_editor(_: object, arguments: list[str], **options: object) -> int:
+    def fake_run_editor(arguments: list[str], **options: object) -> int:
         assert options == {"theme_file": None, "live_ui": False}
         forwarded.append(arguments)
         return 0
@@ -385,8 +326,7 @@ def test_doctor_report_aggregation_and_rendering() -> None:
 
 
 def test_run_doctor_collects_valid_checks() -> None:
-    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
-    report = dev.run_doctor(settings)
+    report = dev.run_doctor()
     assert len(report.items) >= 5
     categories = {item.category for item in report.items}
     assert "Toolchain" in categories
@@ -511,7 +451,6 @@ def test_cache_prepare_compiles_isolated_main_with_matching_build_settings(
     assert dev.main(["cache", "prepare", "--offline", "--target", "HoroCore", "-j", "1"]) == 0
     assert len(calls) == 2
     assert calls[0][0][2] == str(source)
-    assert "-DHORO_ENABLE_OPENTELEMETRY=ON" in calls[0][0]
     assert calls[1][0][-2:] == ["--parallel", "1"]
     assert all(cwd == source and env is binding.env for _, cwd, env in calls)
 
@@ -779,28 +718,6 @@ def test_main_help_command_and_empty_arguments(capsys: pytest.CaptureFixture[str
     assert "unknown command 'nonexistent'" in err
 
 
-def test_default_observability_keeps_engine_local_without_external_services(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    def unexpected_network(*_args: object, **_kwargs: object) -> bool:
-        pytest.fail("Disabled export must not probe an external service")
-
-    monkeypatch.setattr(dev, 'collector_is_reachable', unexpected_network)
-    monkeypatch.setattr(dev, 'DEFAULT_ENV_FILE', tmp_path / "missing.env")
-    settings = dev.load_settings(dev.DEFAULT_ENV_FILE, {})
-    report = dev.DoctorReport()
-    dev.check_observability_and_services(report, settings)
-
-    assert not settings.otel_export_enabled
-    assert "-DHORO_ENABLE_OPENTELEMETRY=OFF" in dev.configure_command(settings)
-    assert [(item.name, item.status) for item in report.items if item.category == "Observability"] == [
-        (dev._OBSERVABILITY_OTLP_NAME, dev.CheckStatus.INFO),
-    ]
-
-
-def test_example_configuration_keeps_external_export_opt_in() -> None:
-    settings = dev.load_settings(dev.REPOSITORY_ROOT / ".env.example", {})
-    assert not settings.otel_export_enabled
-
-
 def _gui_coff(names, bigobj=False):
     header = bytearray(56 if bigobj else 20)
     records = bytearray()
@@ -856,3 +773,31 @@ def test_rejects_another_targets_compile_database(tmp_path):
     database.write_text("[]")
     with pytest.raises(ValueError, match="No HoroGui"):
         dev._generate_gui_live_bridge(database, tmp_path / "host.def", "host.exe")
+
+
+@pytest.mark.parametrize("use_arguments", [False, True])
+def test_mac_bridge_preserves_host_abi_without_reusing_object_or_pch_flags(tmp_path, use_arguments):
+    import shlex
+
+    arguments = ["/usr/bin/clang++", "-DHOST_VALUE=with spaces", "-D", 'HOST_QUOTE="quoted"',
+                 "-isysroot", "/SDK with spaces", "-arch", "arm64", "-mmacosx-version-min=14.0",
+                 "-std=c++20", "-stdlib=libc++", "-include-pch", "/host/pch", "-o", "HoroGui.dir/Gui.cpp.o",
+                 "-c", "Gui.cpp"]
+    entry = {"directory": str(tmp_path), "file": "Gui.cpp"}
+    entry["arguments" if use_arguments else "command"] = arguments if use_arguments else shlex.join(arguments)
+    database = tmp_path / "compile_commands.json"
+    database.write_text(json.dumps([entry]))
+    output = tmp_path / "host flags.rsp"
+    assert dev.main(["gui-live-bridge", "--compile-commands", str(database), "--output", str(output),
+                     "--image", "HoroEditor", "--platform", "darwin"]) == 0
+    flags = shlex.split(output.read_text())
+    assert "-DHOST_VALUE=with spaces" in flags
+    assert 'HOST_QUOTE="quoted"' in flags
+    assert flags[flags.index("-isysroot") + 1] == "/SDK with spaces"
+    assert flags[flags.index("-arch") + 1] == "arm64"
+    assert "-mmacosx-version-min=14.0" in flags
+    assert "-stdlib=libc++" in flags
+    assert "-DHORO_GUI_RUNTIME_COMPILATION=1" in flags
+    assert "-include-pch" not in flags
+    assert "-o" not in flags
+    assert not output.with_suffix(".def").exists()

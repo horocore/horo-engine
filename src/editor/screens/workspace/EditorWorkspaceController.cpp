@@ -1,5 +1,6 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Assets/AssetReimport.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
@@ -133,6 +134,9 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::InitializeProjectState(const std::filesystem::path &absoluteProjectRoot) {
         m_viewModel.projectRoot = absoluteProjectRoot.string();
+        if (const auto metadata = Application::LoadProjectMetadata(absoluteProjectRoot); metadata.HasValue())
+            m_viewModel.projectName = metadata.Value().name;
+        RefreshPhysicsProfiles();
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
         RebuildContentBrowserProjection(m_viewModel.projectRoot, {});
         if (m_durableFiles != nullptr) {
@@ -142,12 +146,7 @@ namespace Horo::Editor {
                           repaired.ErrorValue().message.c_str());
         }
         m_gameplayRegistry = ProjectGameplayRegistry::Discover(absoluteProjectRoot, m_gameplayRetirements);
-        for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->Diagnostics())
-            LOG_ERROR("editor.gameplay", "Gameplay source '%s' is invalid: %s", diagnostic.source.string().c_str(),
-                      diagnostic.error.message.c_str());
-        InvalidateInspectorBehaviorBindings();
-        for (const Gameplay::BehaviorRegistration &registration : m_gameplayRegistry->Registry().Registrations())
-            m_viewModel.availableBehaviors.push_back(registration.descriptor);
+        RefreshAvailableBehaviorProjection();
     }
 
     void EditorWorkspaceController::InitializeWorkspaceLayout() {

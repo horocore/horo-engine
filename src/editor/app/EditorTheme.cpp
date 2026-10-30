@@ -6,6 +6,7 @@
 #include <fstream>
 #include <imgui.h>
 #include <nlohmann/json.hpp>
+#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -64,6 +65,7 @@ namespace Horo::Editor::Theme {
             };
             InstallUnscaledTokens(std::move(tokens));
         }
+
         /** @brief Midnight theme design tokens — dark surface with purple accents. */
         void ApplyMidnightDesignTokens() {
             DesignTokens tokens = DefaultDesignTokens();
@@ -358,6 +360,44 @@ namespace Horo::Editor::Theme {
         return ThemeList();
     }
 
+    /** @copydoc RegisterPackageTheme */
+    bool RegisterPackageTheme(ThemeEntry theme) {
+        if (theme.id.empty() || theme.id.size() > 256 || ThemeList().size() >= 256 || theme.isBuiltIn ||
+            std::ranges::any_of(ThemeList(), [&](const auto &entry) {
+            return entry.id == theme.id;
+        }))
+            return false;
+        ThemeList().push_back(std::move(theme));
+        return true;
+    }
+
+    /** @copydoc UnregisterPackageTheme */
+    void UnregisterPackageTheme(const std::string_view id) {
+        const auto found = std::ranges::find(ThemeList(), id, &ThemeEntry::id);
+        if (id.empty() || found == ThemeList().end())
+            return;
+        const auto index = static_cast<int>(found - ThemeList().begin());
+        const auto active = GetActiveThemeIndex();
+        ThemeList().erase(found);
+        int next = active;
+        if (active == index)
+            next = 0;
+        else if (active > index)
+            next = active - 1;
+        SelectThemeByIndex(next);
+    }
+
+    /** @copydoc SelectThemeById */
+    bool SelectThemeById(const std::string_view id) {
+        if (id.empty())
+            return false;
+        const auto found = std::ranges::find(ThemeList(), id, &ThemeEntry::id);
+        if (found == ThemeList().end())
+            return false;
+        SelectThemeByIndex(static_cast<int>(found - ThemeList().begin()));
+        return true;
+    }
+
     const DesignTokens &GetActiveTokens() {
         return ActiveTokens();
     }
@@ -563,6 +603,7 @@ namespace Horo::Editor::Theme {
         const auto &current = ThemeList()[static_cast<std::size_t>(index)];
         if (current.isBuiltIn || current.sourcePath != candidate.sourcePath)
             return false;
+        candidate.id = current.id;
         ThemeList()[static_cast<std::size_t>(index)] = std::move(candidate);
         SelectThemeByIndex(index);
         return true;

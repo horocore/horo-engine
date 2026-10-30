@@ -62,6 +62,10 @@ namespace Horo::Editor {
             std::size_t historyPosition{};
             std::size_t historyBytes{};
             SourceHistoryBoundary historyBoundary{SourceHistoryBoundary::None};
+            std::uint64_t autosaveRevision{};
+            float autosaveElapsed{};
+            float autosaveRetry{};
+            bool autosaveDirty{};
             /** @brief Borrows one available replay delta without changing history. */
             [[nodiscard]] std::optional<HistoryStep> Step(bool redo) const;
         };

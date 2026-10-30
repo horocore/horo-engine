@@ -67,6 +67,17 @@ On native Windows x64 with MSVC installed:
 python .\scripts\dev.py run editor --live-ui --theme-file .\assets\themes\editor-development.json
 ```
 
+On native macOS with Xcode Command Line Tools (AppleClang), on Apple Silicon or
+Intel:
+
+```bash
+python3 scripts/dev.py run editor --live-ui --theme-file assets/themes/editor-development.json
+```
+
+Both paths require Debug. Cross-compilation is unsupported. The macOS compiler
+uses the configured host compiler, SDK, architecture, deployment target and
+compile definitions. The theme option is independent and can be omitted.
+
 The first build fetches RCC++ at pinned revision
 `005c05145d98b87d974c36fc885003ea88bf3932` under its zlib license. There is no
 paid SDK or separate demo window. Save a registered GUI `.cpp` file to compile
@@ -139,6 +150,37 @@ can own dispatch without depending on `HoroGui`. Registered drawing sources and
 generated compiler adapters remain private to `HoroGui`. The application sees
 only the narrow internal compiler bridge and the registry.
 
+### Implementation ownership
+
+This facility edits Horo Engine's built-in editor GUI during engine development.
+It does not compile game/project sources, gameplay modules or external plugins.
+
+All first-party implementation is below `src/editor/development/live_reload/`:
+
+- `EditorGuiLiveReload.h/.cpp`: the common owner-thread service for startup,
+  runtime lifetime, diagnostics, typed lookup and frame-boundary publication.
+- `GuiLiveBuildRevision.h`: host-build identity used to invalidate cached objects.
+- `rccpp/GuiRuntimeBridge.h`: private RCC++ registration and module table bridge.
+- `rccpp/platform/macos/`: native AppleClang compiler transport and kqueue watcher.
+
+Windows uses the pinned RCC++ `RuntimeCompiler/Compiler_PlatformWindows.cpp` and
+`RuntimeCompiler/SimpleFileWatcher/FileWatcherWin32.cpp`, with the reviewed
+`cmake/patches/rccpp/horo-msvc-transport.patch`. There is no second Windows-specific
+editor service. Both platforms run the same `HoroEditorGuiLiveReloadHost` service.
+
+`cmake/HoroRccppDevelopment.cmake` owns the dependency and native source selection.
+`cmake/HoroEditorLiveUi.cmake` owns built-in drawing registrations and adapters.
+`cmake/HoroEditorGuiLiveReloadHost.cmake` owns the internal service target and
+per-executable generated `EditorGuiLiveReloadBuildConfig.h`. Executable composition
+passes that typed configuration to `Start`; it does not select native compiler
+behavior in C++. Adding a platform requires a reviewed native dependency/transport
+selection and host compile/import configuration, plus native qualification; it does
+not require duplicating the service. Unqualified platforms remain rejected.
+
+The service commits its runtime only after successful startup. Missing host images
+or include manifests return typed errors, permit a corrected retry, and publish no
+partial runtime. A repeated successful `Start` keeps the current runtime intact.
+
 ### Ownership and compatibility
 
 The original host owns panel/modal instances, search buffers, selections,
@@ -150,13 +192,17 @@ fields, changing headers/signatures, adding registrations or changing build
 options requires a host rebuild and restart. Changes confined to registered
 `.cpp` bodies can reload while it runs.
 
-A development-only Windows import library routes existing Horo/ImGui function
-calls back to the running executable. Modules do not link another copy of
+A development-only Windows import library or macOS bundle loader routes existing
+Horo/ImGui function calls back to the running executable. Modules do not link another copy of
 ImGui, the theme authority or engine services. Imports are generated from the
-exact HoroGui COFF objects and its compile definitions/include paths. If a new
+exact HoroGui COFF objects on Windows; macOS exports host definitions and links
+bundles against the running host image. macOS live-UI hosts retain the complete
+GUI archive, so registered drawing dependencies are available even in a small
+qualification host that does not normally construct every panel. Both use the host compile definitions
+and include paths. If a new
 call needs a host symbol absent from that build's imports, rebuild the host;
 a failed link safely keeps the last working code. Modules use the same native
-compiler, Debug CRT and header ABI as the host. This is trusted built-in GUI
+compiler and header ABI as the host, including the Debug CRT on Windows. This is trusted built-in GUI
 code, not a plugin/extension interface; external packages retain their schema
 boundary.
 
@@ -168,11 +214,28 @@ For a function, invoke the returned reference with its normal arguments.
 Intermediate objects stay below the build directory, replacement modules use
 the OS temporary directory, and the runtime owns their lifetime until host GUI
 users have stopped. The private Windows compiler patch owns child processes
-and joins its output reader during teardown.
+and joins its output reader during teardown. The macOS adapter owns a compiler
+process group, terminates/reaps it during teardown, streams its command script through
+an owned temporary input file (avoiding macOS argument-size limits), and collects diagnostics in
+a temporary file so verbose output cannot fill a pipe and stall compilation.
+Its nonblocking kqueue watcher observes file writes and reconciles directory
+events to reattach after atomic replacement. File events compare modification time
+and size; compiler reads and access-time-only metadata changes do not trigger
+another rebuild. Compilation/link failure keeps
+the installed module; malformed candidates are never published.
+The local macOS protection patch leaves debugger-owned Mach exception ports
+unchanged; RCC++ retains its ordinary POSIX protected-call path.
 
-`--live-ui` selects `HORO_EDITOR_LIVE_UI=ON` for native Windows x64 MSVC Debug.
+`--live-ui` selects `HORO_EDITOR_LIVE_UI=ON` for native Windows x64/MSVC or
+macOS/AppleClang Debug.
 Normal `dev.py run editor` explicitly turns it off. Release builds and other
 platforms retain ordinary static GUI behavior.
+
+`HoroRccppMacTransportTests` covers native bundle imports, host address identity,
+verbose compile failure/recovery, process teardown and save/replace/delete
+watching. `HoroEditorGuiLiveReloadTests` exercises the full registered GUI with
+headless drawing, state retention and shared-control updates. A transport test
+pass alone does not qualify the full editor integration or manual UI interaction.
 
 References:
 

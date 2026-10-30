@@ -4,6 +4,20 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "leave_confirmation.title": {"text": "Unsaved Changes"},
+    "leave_confirmation.operation_title": {"text": "Operation In Progress"},
+    "leave_confirmation.dirty_document": {"text": "Save your changes before leaving?"},
+    "leave_confirmation.unsaved_draft": {"text": "Your project setup has unsaved changes. Discard them and leave?"},
+    "leave_confirmation.running_operation": {"text": "An operation is running. Cancel it before leaving?"},
+    "leave_confirmation.recovery": {"text": "Resolve the pending recovery decision before leaving."},
+    "leave_confirmation.native_dialog": {"text": "Complete the open dialog before leaving."},
+    "leave_confirmation.save": {"text": "Save & Leave"},
+    "leave_confirmation.discard": {"text": "Discard & Leave"},
+    "leave_confirmation.cancel_operation": {"text": "Cancel Operation"},
+    "leave_confirmation.keep_running": {"text": "Keep Running"},
+    "leave_confirmation.wait": {"text": "Wait"},
+    "leave_confirmation.stay": {"text": "Stay Here"},
+
     "workspace.prepare_release.identity": {"text": "Identity"},
     "workspace.prepare_release.product_name": {"text": "Product name"},
     "workspace.prepare_release.version": {"text": "Version (SemVer)"},
@@ -773,19 +787,19 @@
       "text": "PROJECT DIRECTORY"
     },
     "project_creation.identity.location": {
-      "text": "PROJECT LOCATION"
-    },
-    "project_creation.identity.location.hint": {
-      "text": "Choose an empty folder or a missing location with a writable parent."
+      "text": "PROJECT FOLDER"
     },
     "project_creation.identity.location.select": {
-      "text": "Select Project Location"
+      "text": "Select Location for New Project"
     },
     "project_creation.identity.name": {
       "text": "PROJECT NAME"
     },
+    "project_creation.identity.name.invalid_folder": {
+      "text": "Enter a valid folder name; do not use . or .. or a colon."
+    },
     "project_creation.identity.name.hint": {
-      "text": "Stored as project.json name; projectId is generated once."
+      "text": "Enter a name for your project."
     },
     "project_creation.identity.scene": {
       "text": "DEFAULT SCENE"
@@ -1002,6 +1016,19 @@
     "settings.appearance.accent_color.description": {
       "text": "Used for focus rings, active states, and primary actions."
     },
+    "settings.code_editor.font_family": {"text": "Font Family"},
+    "settings.code_editor.font_family.description": {"text": "Choose an available monospace family. Changes apply to open source tabs."},
+    "settings.code_editor.behavior": {"text": "Editing & Saving"},
+    "settings.code_editor.codeShowLineNumbers": {"text": "Line Numbers"},
+    "settings.code_editor.codeShowLineNumbers.description": {"text": "Show line numbers beside source text."},
+    "settings.code_editor.codeShowWhitespace": {"text": "Whitespace"},
+    "settings.code_editor.codeShowWhitespace.description": {"text": "Display spaces and tabs without changing the file."},
+    "settings.code_editor.codeWordWrap": {"text": "Word Wrap"},
+    "settings.code_editor.codeWordWrap.description": {"text": "Wrap long lines to the source viewport width."},
+    "settings.code_editor.codeShowScrollBar": {"text": "Scroll Bar"},
+    "settings.code_editor.codeShowScrollBar.description": {"text": "Show the source editor scroll bar."},
+    "settings.code_editor.codeAutoSaveDelaySeconds": {"text": "Auto Save Delay (seconds)"},
+    "settings.code_editor.codeAutoSaveDelaySeconds.description": {"text": "Save changed source files after this idle delay. Zero disables it. External changes are never overwritten automatically."},
     "settings.appearance.code_font_size": {
       "text": "Code Font Size"
     },
@@ -1021,10 +1048,10 @@
       "text": "Path to a JSON theme file. Leave empty to use built-in."
     },
     "settings.appearance.theme_group": {
-      "text": "THEME"
+      "text": "Theme"
     },
     "settings.appearance.typography_group": {
-      "text": "TYPOGRAPHY & SCALE"
+      "text": "Typography & Scale"
     },
     "settings.appearance.ui_scale": {
       "text": "UI Scale"
@@ -1057,7 +1084,7 @@
       "text": "Preferred playback device for editor audio."
     },
     "settings.audio.output_group": {
-      "text": "OUTPUT"
+      "text": "Output"
     },
     "settings.audio.speakers": {
       "text": "Speakers"
@@ -1090,10 +1117,10 @@
       "text": "Minimum severity shown in the editor console output."
     },
     "settings.diagnostics.logging_group": {
-      "text": "LOGGING"
+      "text": "Logging"
     },
     "settings.diagnostics.profiler_group": {
-      "text": "PROFILER"
+      "text": "Profiler"
     },
     "settings.diagnostics.stutter_threshold": {
       "text": "Stutter Threshold (ms)"
@@ -1135,7 +1162,7 @@
       "text": "Reopen tabs and panel layout from last session."
     },
     "settings.general.session_group": {
-      "text": "EDITOR SESSION"
+      "text": "Editor Session"
     },
     "settings.general.startup_behavior": {
       "text": "Startup Behavior"
@@ -1147,7 +1174,7 @@
       "text": "Project browser"
     },
     "settings.general.startup_group": {
-      "text": "STARTUP & PROJECT"
+      "text": "Startup & Project"
     },
     "settings.general.startup_last": {
       "text": "Last project"
@@ -1162,7 +1189,7 @@
       "text": "Reverse the vertical orbit direction (push up to look down)."
     },
     "settings.input.navigation_group": {
-      "text": "NAVIGATION"
+      "text": "Navigation"
     },
     "settings.input.orbit_sensitivity": {
       "text": "Orbit Sensitivity"
@@ -1177,10 +1204,79 @@
       "text": "Mouse drag multiplier for panning the viewport camera."
     },
     "settings.input.mappings_description": {
-      "text": "Open Input Mapping from the right activity bar to edit shortcuts, gamepad bindings, profiles, and player assignments."
+      "text": "Choose a command, press its shortcut, then Apply. Reset restores the default bindings."
+    },
+    "settings.keymap.editor.save": {
+      "text": "Save"
+    },
+    "settings.keymap.editor.undo": {
+      "text": "Undo"
+    },
+    "settings.keymap.editor.redo": {
+      "text": "Redo"
+    },
+    "settings.keymap.editor.source.select_all": {
+      "text": "Select all source text"
+    },
+    "settings.keymap.editor.source.copy": {
+      "text": "Copy source selection"
+    },
+    "settings.keymap.editor.source.paste": {
+      "text": "Paste into source"
+    },
+    "settings.keymap.editor.source.cut": {
+      "text": "Cut source selection"
+    },
+    "settings.keymap.editor.source.find": {
+      "text": "Find in source"
+    },
+    "settings.keymap.editor.source.go_to_line": {
+      "text": "Go to line"
+    },
+    "settings.keymap.editor.source.zoom_in": {
+      "text": "Increase code font size"
+    },
+    "settings.keymap.editor.source.zoom_out": {
+      "text": "Decrease code font size"
+    },
+    "settings.keymap.editor.source.zoom_reset": {
+      "text": "Reset code font size"
+    },
+    "settings.keymap.editor.duplicate": {
+      "text": "Duplicate selection"
+    },
+    "settings.keymap.editor.delete": {
+      "text": "Delete selection"
+    },
+    "settings.keymap.editor.tool.select": {
+      "text": "Selection tool"
+    },
+    "settings.keymap.editor.tool.move": {
+      "text": "Move tool"
+    },
+    "settings.keymap.editor.tool.rotate": {
+      "text": "Rotate tool"
+    },
+    "settings.keymap.editor.tool.scale": {
+      "text": "Scale tool"
+    },
+    "settings.keymap.editor.viewport.focus_selected": {
+      "text": "Focus selection"
+    },
+    "settings.keymap.unassigned": {
+      "text": "Not assigned"
+    },
+    "settings.keymap.recording": {
+      "text": "Press a shortcut (Escape to cancel)"
+    },
+    "settings.keymap.reset": {
+      "text": "Reset"
+    },
+    "settings.keymap.conflict": {
+      "text": "Conflicting or invalid shortcut. Choose another binding before applying."
     },
     "settings.input.mappings_group": {
-      "text": "INPUT MAPPINGS"
+      "text": "Input Mapping"
     },
     "settings.input.mappings_label": {
       "text": "Central Input Mapping"
@@ -1211,6 +1307,12 @@
     },
     "settings.nav.diagnostics": {
       "text": "Diagnostics"
+    },
+    "settings.nav.code_editor": {
+      "text": "Code Editor"
+    },
+    "settings.nav.keymaps": {
+      "text": "Keymaps"
     },
     "settings.nav.editor": {
       "text": "Editor"
@@ -1363,7 +1465,7 @@
       "text": "Maximum concurrent PIE (Play In Editor) client connections."
     },
     "settings.network.multiplayer_group": {
-      "text": "MULTIPLAYER PREVIEW"
+      "text": "Multiplayer Preview"
     },
     "settings.network.simulate_latency": {
       "text": "Simulate Latency"
@@ -1372,7 +1474,7 @@
       "text": "Artificial one-way delay injected on loopback (ms)."
     },
     "settings.packages.download_group": {
-      "text": "PACKAGE ACQUISITION"
+      "text": "Package Acquisition"
     },
     "settings.packages.download_threads": {
       "text": "Download Threads"
@@ -1489,7 +1591,7 @@
       "text": "Contributions"
     },
     "settings.extensions.details": {
-      "text": "EXTENSION DETAILS"
+      "text": "Extension Details"
     },
     "settings.extensions.empty": {
       "text": "No extension matches this filter."
@@ -1510,10 +1612,10 @@
       "text": "Installed packages"
     },
     "settings.extensions.installed_heading": {
-      "text": "INSTALLED EXTENSIONS"
+      "text": "Installed Extensions"
     },
     "settings.extensions.lifecycle": {
-      "text": "ACTIVATION LIFECYCLE"
+      "text": "Activation Lifecycle"
     },
     "settings.extensions.marketplace": {
       "text": "Marketplace"
@@ -1618,7 +1720,7 @@
       "text": "Lit"
     },
     "settings.rendering.quality_group": {
-      "text": "QUALITY"
+      "text": "Quality"
     },
     "settings.rendering.shaded": {
       "text": "Shaded"
@@ -1639,7 +1741,7 @@
       "text": "Unlit"
     },
     "settings.rendering.viewport_group": {
-      "text": "VIEWPORT"
+      "text": "Viewport"
     },
     "settings.rendering.viewport_mode": {
       "text": "Default Viewport Mode"
@@ -2986,6 +3088,17 @@
     "workspace.physics.gizmo_hint": {"text": "Collider editing · Ctrl: snap 0.1 m / 15° / 10% · Ctrl-click: toggle child · Escape: cancel"},
     "workspace.physics.gizmo_rejected": {"text": "Collider edit rejected. Use valid positive bounds and uniform sphere/capsule scale. See diagnostics."},
     "workspace.physics.gizmo_unsupported": {"text": "Cooked shape children require their owning source document; viewport editing is unavailable."},
+    "workspace.inspector.add_rendering": {"text": "Rendering"},
+    "workspace.inspector.add_audio": {"text": "Audio"},
+    "workspace.inspector.add_gameplay": {"text": "Gameplay"},
+    "workspace.inspector.add_scripts": {"text": "Scripts"},
+    "workspace.inspector.create_script": {"text": "Create Script…"},
+    "workspace.physics.details": {"text": "Details"},
+    "workspace.physics.choose_reference": {"text": "Choose…"},
+    "workspace.physics.missing_reference": {"text": "Missing reference"},
+    "workspace.physics.no_profiles": {"text": "Create a collision profile in Editor Settings > Project Collision."},
+    "workspace.physics.no_materials": {"text": "Import a Physics Material asset to select it here."},
+    "workspace.physics.add_trigger": {"text": "Trigger Collider"},
     "workspace.physics.title": {
       "text": "Physics"
     },
@@ -2999,16 +3112,16 @@
       "text": "Rigid body"
     },
     "workspace.physics.collider": {
-      "text": "Collider / sensor"
+      "text": "Collider"
     },
     "workspace.physics.constraint": {
-      "text": "Constraint"
+      "text": "Physics Joint"
     },
     "workspace.physics.enabled": {
       "text": "Enabled"
     },
     "workspace.physics.sensor": {
-      "text": "Sensor (overlap only, no response)"
+      "text": "Is Trigger"
     },
     "workspace.physics.static": {
       "text": "Static"
@@ -3065,7 +3178,7 @@
       "text": "Body slot ID"
     },
     "workspace.physics.profile": {
-      "text": "Collision profile UUID"
+      "text": "Collision Profile"
     },
     "workspace.physics.shape": {
       "text": "Shape source"
@@ -3110,13 +3223,13 @@
       "text": "Material slot ID"
     },
     "workspace.physics.material_asset": {
-      "text": "Physics material asset UUID"
+      "text": "Physics Material"
     },
     "workspace.physics.remove_material": {
-      "text": "Remove material mapping"
+      "text": "Remove Material"
     },
     "workspace.physics.add_material": {
-      "text": "Add explicit material mapping"
+      "text": "Add Material"
     },
     "workspace.physics.first_endpoint": {
       "text": "First body endpoint"
@@ -3146,28 +3259,28 @@
       "text": "Authored hinge and slider constraints are not supported by this Scene schema."
     },
     "workspace.physics.remove_body": {
-      "text": "Stage body removal"
+      "text": "Remove Body"
     },
     "workspace.physics.remove_collider": {
-      "text": "Stage collider removal"
+      "text": "Remove Collider"
     },
     "workspace.physics.remove_constraint": {
-      "text": "Stage constraint removal"
+      "text": "Remove Joint"
     },
     "workspace.physics.add_body": {
-      "text": "Stage body and box collider"
+      "text": "Rigid Body + Box Collider"
     },
     "workspace.physics.add_collider": {
-      "text": "Stage collider / sensor"
+      "text": "Box Collider"
     },
     "workspace.physics.add_constraint": {
-      "text": "Stage constraint"
+      "text": "Physics Joint"
     },
     "workspace.physics.apply": {
-      "text": "Apply Physics edit"
+      "text": "Apply"
     },
     "workspace.physics.cancel": {
-      "text": "Discard staged Physics edit"
+      "text": "Discard Changes"
     },
     "workspace.physics.invalid_identity": {
       "text": "Enter valid nonzero decimal IDs and canonical project UUIDs before applying."

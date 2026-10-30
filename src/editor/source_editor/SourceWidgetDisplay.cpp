@@ -33,9 +33,16 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc WidgetDisplay::Configure */
-    void WidgetDisplay::Configure(const SourceEditorTheme &theme, const Theme::Fonts *fonts) {
+    void WidgetDisplay::Configure(const SourceEditorTheme &theme, const Theme::Fonts *fonts, const std::string_view family) {
         ImFont *regular = fonts && fonts->monospace ? fonts->monospace : ActiveAtlasFont();
         ImFont *emphasis = fonts && fonts->monospaceEmphasis ? fonts->monospaceEmphasis : regular;
+        if (fonts)
+            for (const auto &entry : fonts->codeFamilies)
+                if (entry.name == family && entry.regular) {
+                    regular = entry.regular;
+                    emphasis = entry.emphasis ? entry.emphasis : regular;
+                    break;
+                }
         const auto pixels = static_cast<int>(std::lround(theme.fontPixels));
         if (regular_ != regular || fontPixels_ != pixels)
             SetLayoutDirty();

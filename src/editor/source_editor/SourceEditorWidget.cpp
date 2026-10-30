@@ -1,9 +1,13 @@
 #include "SourceEditorWidget.h"
 
+#include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Editor/EditorUiComponents.h"
+#include "SourceSyntax.h"
 #include "SourceSyntaxProjection.h"
 #include "SourceWidgetPlatform.h"
 #include "SourceWidgetText.h"
+#include "editor/input/EditorInputActions.h"
 
 #include <algorithm>
 #include <array>
@@ -36,13 +40,15 @@ namespace Horo::Editor {
         SourceSyntaxPresentation syntax;
         bool pending{};
         bool pointerCaptured{};
+        Zep::GlyphIterator pointerAnchor;
+        int fontZoom{};
+        int baseFontPixels{14};
         std::uint64_t restoredRevision{};
         ImGuiID inputId{};
         float scroll{};
         std::optional<float> pendingViewport;
         bool ownsInput{};
         SourceEditingView beforeView;
-        std::optional<SourceHistoryRequest> history;
         std::optional<SourceEditSubmission> planned;
         SourceEditingViewId viewIdentity{};
         std::string inputName;
@@ -76,9 +82,12 @@ namespace Horo::Editor {
             candidate->SetGlobalMode(Zep::ZepMode_Standard::StaticName());
             nextBuffer->SetSyntax({});
             auto *nextWindow = candidate->GetActiveTabWindow()->GetActiveWindow();
+            nextWindow->SetWindowFlags(nextWindow->GetWindowFlags() & ~Zep::WindowFlags::ShowWhiteSpace);
             editor = std::move(candidate);
             buffer = nextBuffer;
             window = nextWindow;
+            pointerCaptured = false;
+            pointerAnchor = window->GetBufferCursor();
             syntax.Reset();
             update = buffer->GetUpdateCount();
         }
@@ -147,24 +156,21 @@ namespace Horo::Editor {
             }
         }
 
-        /** @brief Converts host history shortcuts outward while using Zep only for clipboard/selection. */
-        void Shortcuts(const std::uint32_t modifiers) {
-            const auto &io = ImGui::GetIO();
-            if (ImGui::IsKeyPressed(ImGuiKey_Z) || ImGui::IsKeyPressed(ImGuiKey_Y)) {
-                const bool redo = io.KeyShift || ImGui::IsKeyPressed(ImGuiKey_Y);
-                history = SourceHistoryRequest{source.Identity().instance, source.Revision(),
-                                               redo ? SourceHistoryDirection::Redo : SourceHistoryDirection::Undo};
-            }
-            constexpr std::array commands{ImGuiKey_A, ImGuiKey_C, ImGuiKey_V, ImGuiKey_X};
-            for (const auto key : commands) {
-                ImGui::SetKeyOwner(key, inputId);
-                if (!ImGui::IsKeyPressed(key, ImGuiInputFlags_None, inputId))
+        /** @brief Resolves configured clipboard and selection actions through the shared registry. */
+        bool Shortcuts(const std::uint32_t modifiers, const Input::InputBindingProfile &profile) {
+            constexpr std::array commands{std::pair{kActionSourceSelectAll, ImGuiKey_A}, std::pair{kActionSourceCopy, ImGuiKey_C},
+                                          std::pair{kActionSourcePaste, ImGuiKey_V}, std::pair{kActionSourceCut, ImGuiKey_X}};
+            for (const auto &[action, key] : commands) {
+                if (!Ui::ShortcutPressed(EditorActionBindings(action, profile)))
                     continue;
                 if (key == ImGuiKey_A)
-                    buffer->GetMode()->AddKeyPress('a', modifiers);
+                    buffer->GetMode()->AddKeyPress('a', Zep::ModifierKey::Ctrl | modifiers);
                 else
                     Clipboard(key);
+                ImGui::GetIO().InputQueueCharacters.resize(0);
+                return true;
             }
+            return false;
         }
 
         /** @brief Inserts to the next four-column stop at a caret; selections and Shift-Tab use line indentation. */
@@ -194,7 +200,7 @@ namespace Horo::Editor {
                 const auto selection = CaptureSelection();
                 const SourceEditingView view{selection.anchor, selection.caret, ScrollPosition(), viewIdentity};
                 if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-                    if (auto plan = PlanSourceNewline(source, view); plan.HasValue())
+                    if (auto plan = PlanSourceLanguageNewline(source, view); plan.HasValue())
                         planned = SourceEditSubmission{source.Identity().instance, std::move(plan).Value()};
                 } else if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
                     if (auto plan = TabPlan(view, io.KeyShift); plan.HasValue())
@@ -220,18 +226,18 @@ namespace Horo::Editor {
         }
 
         /** @brief Routes only widget keys; save and other workspace shortcuts stay outside the widget. */
-        void Keyboard() {
+        void Keyboard(const Input::InputBindingProfile &profile) {
             const auto &io = ImGui::GetIO();
-            const bool command = io.ConfigMacOSXBehaviors ? io.KeySuper : io.KeyCtrl;
+            const bool command = io.KeyCtrl;
             std::uint32_t modifiers = io.KeyShift ? Zep::ModifierKey::Shift : 0;
             if (command)
                 modifiers |= Zep::ModifierKey::Ctrl;
             if (io.KeyAlt)
                 modifiers |= Zep::ModifierKey::Alt;
+            if (Shortcuts(modifiers, profile))
+                return;
             Navigation(modifiers);
-            if (command)
-                Shortcuts(modifiers);
-            else
+            if (!command)
                 CommittedText();
         }
 
@@ -246,10 +252,20 @@ namespace Horo::Editor {
             }
             if (!hovered && !pointerCaptured)
                 return;
-            editor->OnMouseMove(mouse);
-            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            const bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+            if (clicked || pointerCaptured) {
+                const auto previousSelection = CaptureSelection();
+                // Display has resolved the current pointer against the current glyph layout.
                 editor->OnMouseDown(mouse, Zep::ZepMouseButton::Left);
-                pointerCaptured = true;
+                const auto caret = window->GetBufferCursor();
+                if (clicked) {
+                    pointerAnchor = caret;
+                    if (ImGui::GetIO().KeyShift) {
+                        pointerAnchor = Zep::GlyphIterator(buffer, DisplayOffset(source, previousSelection.anchor));
+                    }
+                    pointerCaptured = true;
+                }
+                static_cast<WidgetMode *>(buffer->GetMode())->Select(*buffer, pointerAnchor, caret);
             }
             if (pointerCaptured && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 editor->OnMouseUp(mouse, Zep::ZepMouseButton::Left);
@@ -265,8 +281,29 @@ namespace Horo::Editor {
             const bool scaleChanged = display.GetPixelScale().x != frame.dpiScale || display.GetPixelScale().y != frame.dpiScale;
             if (scaleChanged)
                 display.SetPixelScale({frame.dpiScale, frame.dpiScale});
-            const auto theme = ResolveSourceEditorTheme(Theme::GetActiveTokens());
-            display.Configure(theme, fonts);
+            auto theme = ResolveSourceEditorTheme(Theme::GetActiveTokens());
+            const float base = std::clamp(frame.fontSizePx > 0 ? frame.fontSizePx : theme.fontPixels / frame.dpiScale, 14.0F, 32.0F);
+            baseFontPixels = static_cast<int>(std::lround(base));
+            fontZoom = std::clamp(fontZoom, 14 - baseFontPixels, 32 - baseFontPixels);
+            theme.fontPixels = std::clamp(base + static_cast<float>(fontZoom), 14.0F, 32.0F) * frame.dpiScale;
+            const CodeEditorSettings defaults;
+            const auto &preferences = frame.preferences ? *frame.preferences : defaults;
+            auto flags = window->GetWindowFlags();
+            const auto setFlag = [&](const auto flag, const bool enabled) {
+                if (enabled)
+                    flags |= flag;
+                else
+                    flags &= ~flag;
+            };
+            setFlag(Zep::WindowFlags::ShowWhiteSpace, preferences.showWhitespace);
+            setFlag(Zep::WindowFlags::ShowLineNumbers, preferences.showLineNumbers);
+            setFlag(Zep::WindowFlags::WrapText, preferences.wordWrap);
+            setFlag(Zep::WindowFlags::HideScrollBar, !preferences.showScrollBar);
+            if (flags != window->GetWindowFlags()) {
+                window->SetWindowFlags(flags);
+                window->DirtyLayout();
+            }
+            display.Configure(theme, fonts, frame.fontFamily);
             for (int type = 0; type < static_cast<int>(Zep::ZepTextType::Count); ++type)
                 static_cast<void>(display.GetFont(static_cast<Zep::ZepTextType>(type)));
             if (scaleChanged || generation != display.FontGeneration())
@@ -294,13 +331,13 @@ namespace Horo::Editor {
         }
 
         /** @brief Recognizes text-producing input without scanning the document on navigation/idle frames. */
-        bool HasTextInput() const {
+        bool HasTextInput(const Input::InputBindingProfile &profile) const {
             const auto &io = ImGui::GetIO();
             if (io.InputQueueCharacters.Size > 0 || ImGui::IsKeyPressed(ImGuiKey_Backspace) || ImGui::IsKeyPressed(ImGuiKey_Delete) ||
                 ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_Tab))
                 return true;
-            const bool command = io.ConfigMacOSXBehaviors ? io.KeySuper : io.KeyCtrl;
-            return command && (ImGui::IsKeyPressed(ImGuiKey_X) || ImGui::IsKeyPressed(ImGuiKey_V));
+            return Ui::ShortcutPressed(EditorActionBindings(kActionSourceCut, profile)) ||
+                   Ui::ShortcutPressed(EditorActionBindings(kActionSourcePaste, profile));
         }
 
         /** @brief Allows this surface's pointer/wheel hit test past its own active text ID, preserving other input owners. */
@@ -321,7 +358,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Captures only focused text/navigation input and claims the owning host's text-input channel. */
-        void Input(const bool focused, const bool hovered) {
+        void Input(const bool focused, const bool hovered, const Input::InputBindingProfile &profile, const bool skipKeyboard) {
             ownsInput = focused;
             if (focused) {
                 ImGui::SetActiveID(inputId, ImGui::GetCurrentWindow());
@@ -330,13 +367,19 @@ namespace Horo::Editor {
                 ImGui::GetCurrentContext()->ActiveIdAllowOverlap = !ImGui::GetIO().MouseDown[ImGuiMouseButton_Left];
                 ImGui::GetCurrentContext()->WantTextInputNextFrame = 1;
                 ImGui::SetNextFrameWantCaptureKeyboard(true);
-                if (HasTextInput()) {
+                if (HasTextInput(profile)) {
                     const auto selected = CaptureSelection();
                     beforeView = {selected.anchor, selected.caret, ScrollPosition(), viewIdentity};
                 }
-                Keyboard();
+                if (!skipKeyboard)
+                    Keyboard(profile);
             }
-            Pointer(focused, hovered);
+            if (focused && ((hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) ||
+                            (pointerCaptured && ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+                             (ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0))))
+                editor->ResetCursorTimer();
+            if (hovered || pointerCaptured)
+                editor->OnMouseMove(Zep::toNVec2f(ImGui::GetIO().MousePos));
         }
 
         /** @brief Applies this view's bounded scroll intent without transferring ownership to the document. */
@@ -459,20 +502,19 @@ namespace Horo::Editor {
             const auto extent = ImGui::GetContentRegionAvail();
             auto &display = state.PrepareDisplay(frame, origin, extent, fonts);
             state.RestoreViewport();
-            state.Input(focused, hovered);
+            const Input::InputBindingProfile defaultKeymap;
+            state.Input(focused, hovered, frame.keymap ? *frame.keymap : defaultKeymap, frame.skipKeyboard);
             state.ApplyScroll(inputEnabled && hovered, origin, extent);
             display.SetCursorColor(state.editor->GetTheme().GetColor(Zep::ThemeColor::CursorInsert));
             display.Bind(state.buffer, state.syntax.ForMirror(state.buffer->GetUpdateCount()));
             state.editor->Display();
+            state.Pointer(focused, hovered);
             display.Bind(nullptr, nullptr);
             state.Ime(display, focused, origin);
             if (auto edit = state.CaptureEdit())
                 intent = std::move(*edit);
             else if (state.planned)
                 intent = std::move(*state.planned);
-            else if (state.history)
-                intent = *state.history;
-            state.history.reset();
             state.planned.reset();
             // Native navigation/cut/paste may use transient commands. History belongs only to SourceDocumentService.
             state.buffer->GetUndoStack() = {};
@@ -544,6 +586,16 @@ namespace Horo::Editor {
         state.scroll = 0;
         state.restoredRevision = publication.snapshot.Revision();
         return true;
+    }
+
+    /** @copydoc SourceEditorWidget::SetFontZoom */
+    void SourceEditorWidget::SetFontZoom(const int steps) {
+        storage_->fontZoom = std::clamp(steps, 14 - storage_->baseFontPixels, 32 - storage_->baseFontPixels);
+    }
+
+    /** @copydoc SourceEditorWidget::FontZoom */
+    int SourceEditorWidget::FontZoom() const noexcept {
+        return storage_->fontZoom;
     }
 
     /** @copydoc SourceEditorWidget::Scroll */

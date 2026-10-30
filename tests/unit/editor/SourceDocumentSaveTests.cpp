@@ -541,3 +541,61 @@ TEST_CASE("Source undo retains the latest durable save base and dirty close canc
     CHECK_FALSE(redone.Value().snapshot.Dirty());
     CHECK(redone.Value().snapshot.BaseRevision() == saved.Value().snapshot.BaseRevision());
 }
+
+TEST_CASE("Source autosave debounces revisions and never overwrites an external change", "[editor][source][autosave]") {
+    Project project;
+    project.Put("code.cpp", "base\n");
+    SourceFileOpenService open(project.root);
+    Files files;
+    auto edited = OpenEdit(open);
+    auto &documents = open.Documents();
+    CHECK_FALSE(documents.UpdateAutosave(1, 0, files));
+    CHECK(project.Read("code.cpp") == "base\n");
+    CHECK_FALSE(documents.UpdateAutosave(1, 2, files));
+    CHECK_FALSE(documents.UpdateAutosave(1, 2, files));
+    edited = documents.Edit(edited.Identity().instance, {edited.Revision(), 0, 0, "next "}).Value();
+    CHECK_FALSE(documents.UpdateAutosave(1, 2, files));
+    CHECK_FALSE(documents.UpdateAutosave(1, 2, files));
+    CHECK(project.Read("code.cpp") == "base\n");
+    const auto saved = documents.UpdateAutosave(1, 2, files);
+    REQUIRE(saved);
+    REQUIRE(saved->HasValue());
+    CHECK_FALSE(saved->Value().snapshot.Dirty());
+    CHECK(project.Read("code.cpp") == edited.Text());
+    const auto clean = saved->Value().snapshot;
+    REQUIRE(documents.Edit(clean.Identity().instance, {clean.Revision(), 0, 0, "local "}).HasValue());
+    project.Put("code.cpp", "external\n");
+    CHECK_FALSE(documents.UpdateAutosave(1, 2, files));
+    const auto conflict = documents.UpdateAutosave(2, 2, files);
+    REQUIRE(conflict);
+    REQUIRE(conflict->HasError());
+    CHECK(project.Read("code.cpp") == "external\n");
+    CHECK(documents.Snapshot(clean.Identity().instance).Value().Dirty());
+    CHECK_FALSE(documents.UpdateAutosave(2, 2, files));
+    CHECK_FALSE(documents.UpdateAutosave(20, 2, files));
+    REQUIRE(documents.Close(clean.Identity().instance).HasValue());
+    CHECK_FALSE(documents.UpdateAutosave(60, 2, files));
+}
+
+TEST_CASE("Source autosave retains failed text and retries with bounded backoff", "[editor][source][autosave]") {
+    Project project;
+    project.Put("code.cpp", "base\n");
+    SourceFileOpenService open(project.root);
+    Files files;
+    const auto edited = OpenEdit(open);
+    auto &documents = open.Documents();
+    files.failReplace = true;
+    CHECK_FALSE(documents.UpdateAutosave(1, 1, files));
+    const auto failed = documents.UpdateAutosave(1, 1, files);
+    REQUIRE(failed);
+    REQUIRE(failed->HasError());
+    CHECK(documents.Snapshot(edited.Identity().instance).Value().Text() == edited.Text());
+    CHECK(project.Read("code.cpp") == "base\n");
+    files.failReplace = false;
+    CHECK_FALSE(documents.UpdateAutosave(29, 1, files));
+    const auto retried = documents.UpdateAutosave(1, 1, files);
+    REQUIRE(retried);
+    REQUIRE(retried->HasValue());
+    CHECK(project.Read("code.cpp") == edited.Text());
+    CHECK_FALSE(documents.UpdateAutosave(300, 1, files));
+}

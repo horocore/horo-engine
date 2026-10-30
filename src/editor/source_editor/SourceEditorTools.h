@@ -27,6 +27,11 @@ namespace Horo::Editor {
             return ownsInput_;
         }
 
+        /** @brief Reports a consumed registry shortcut so the focused text widget does not also type/navigate with it. */
+        [[nodiscard]] bool HandledShortcut() const noexcept {
+            return handledShortcut_;
+        }
+
     private:
         enum class Status {
             None,
@@ -40,6 +45,9 @@ namespace Horo::Editor {
         bool lineOpen_{};
         bool focusSource_{};
         bool ownsInput_{};
+        bool handledShortcut_{};
+        bool focusSearch_{};
+        bool focusLine_{};
         Status status_{Status::None};
         void Find(SourceEditorWidget &widget, const SourceDocumentSnapshot &source, SourceSearchDirection direction);
         [[nodiscard]] std::optional<SourceEditingCommand> Replacement(SourceEditorWidget &widget, const SourceDocumentSnapshot &source,

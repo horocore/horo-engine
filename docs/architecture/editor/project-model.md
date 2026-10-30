@@ -46,6 +46,27 @@ It covers the on-disk project structure, editor workspace persistence, project
 settings, and the data model shared by project-browser screens, the editor, CLI,
 and MCP.
 
+## Project creation destination
+
+The creation wizard exposes the final root in one editable Project Folder field.
+The folder picker selects a parent and resolves `parent / name` through
+`ProjectCreationController::SetProjectParentDirectory`. This works in either input
+order. The presentation retains that parent as a naming anchor, so renaming the
+project replaces the generated leaf without appending duplicate names. The typed
+draft, review, and creation request share the same final root shown in the field.
+
+Typing a path before naming the project establishes the parent. After naming,
+typing a complete path sets the exact destination. If its leaf matches the project
+name, automatic naming continues from its new parent; a custom leaf preserves the
+explicit destination across name edits. Clearing the field clears the anchor.
+A populated parent is allowed; occupancy and writability checks apply to the final
+root. Editing and validation do not create directories. There is no separate
+path preview or explanatory paragraph beneath the field.
+
+`SetProjectPath` remains an exact-root command for headless callers. The additive
+parent-directory command does not change existing callers or controller layout;
+the wizard adopts it explicitly.
+
 ## Project Directory
 
 A Horo project is a directory with a `.horo/` metadata folder:

@@ -10,6 +10,7 @@
 #include <string>
 
 namespace Horo::Extensions {
+    class EditorActivityHost;
     class ExtensionInventory;
     class ExtensionMarketplaceService;
 }  // namespace Horo::Extensions
@@ -33,11 +34,17 @@ namespace Horo::Editor {
         std::string customThemePath = "~/.horo/themes/my-theme.json";
         int uiScale = 100;
         std::string editorFontSize = "14";
+        std::string uiFontFamily = "Inter";
+        std::string codeFontFamily = "IBM Plex Mono";
+        CodeEditorSettings codeEditor;
         std::string accentHex = "#04A5FC";
         int pendingThemeIndex = -1;
+        std::string themeId;
     };
 
     struct SettingsInputTab {
+        EditorKeymapSettings keymap;
+        std::string recordingAction;
         int orbitSensitivity = 100;
         int panSensitivity = 100;
         bool invertOrbitY = false;
@@ -189,6 +196,7 @@ namespace Horo::Editor {
 
         std::shared_ptr<EditorPageView>
             extensionPages; /**< Transient host-rendered extension workflow; never part of EditorSettings persistence. */
+        std::shared_ptr<Extensions::EditorActivityHost> extensionCommands;
         int pluginSectionTab = 0;
         Extensions::ExtensionInventory *extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr;

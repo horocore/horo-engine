@@ -241,13 +241,19 @@ namespace Horo::Editor {
             return Result<CompatibilityResolution>::Success({std::move(compatibility), cancellationDeferred});
         }
 
+        /** @brief Records each typed cause with the operation that failed, including contributor details. */
+        void LogProjectOpenFailure(const ProjectOpenOperationId id, const Error &error) {
+            for (const Error *cause = &error; cause != nullptr; cause = cause->cause.Get())
+                LOG_ERROR("editor.project_open", "Project open failed operation=%llu code=%s: %s",
+                          static_cast<unsigned long long>(id.value), cause->code.Value().c_str(), cause->message.c_str());
+        }
+
         template <typename StateType>
         [[nodiscard]] Result<void> RunProjectOpenBackground(StateType &state, const std::shared_ptr<BackgroundCompletion> &completion,
                                                             const ProjectOpenRequest &request, const ProjectOpenOperationId id,
                                                             const CancellationToken &cancellation) {
             const auto fail = [&completion, id](Error error) {
-                LOG_ERROR("editor.project_open", "Project open failed operation=%llu code=%s.", static_cast<unsigned long long>(id.value),
-                          error.code.Value().c_str());
+                LogProjectOpenFailure(id, error);
                 std::lock_guard lock(completion->mutex);
                 completion->error = error;
                 if (ErrorChainContains(error, ProjectOpenErrors::Cancelled.domain, ProjectOpenErrors::Cancelled.code))
@@ -293,7 +299,7 @@ namespace Horo::Editor {
             for (IProjectOpenDerivedStateContributor *contributor : state.derivedContributors) {
                 auto prepared = contributor->Prepare(request.projectRoot, cancellation);
                 if (prepared.HasError())
-                    return fail(OpenError(ProjectOpenErrors::DerivedStateFailed,
+                    return fail(WrapError(ProjectOpenErrors::DerivedStateFailed, prepared.ErrorValue(),
                                           std::string(contributor->Id()) + ": " + prepared.ErrorValue().message));
                 result.derived.emplace_back(std::string(contributor->Id()), std::move(prepared).Value());
             }
@@ -547,8 +553,9 @@ namespace Horo::Editor {
                 snapshot.phase = ProjectOpenPhase::Failed;
                 snapshot.outcome = ProjectOpenOutcome::Failed;
                 snapshot.progress = 1.0F;
-                snapshot.diagnostic =
-                    OpenError(ProjectOpenErrors::DerivedStateFailed, prepared.contributorId + ": " + installed.ErrorValue().message);
+                snapshot.diagnostic = WrapError(ProjectOpenErrors::DerivedStateFailed, installed.ErrorValue(),
+                                                prepared.contributorId + ": " + installed.ErrorValue().message);
+                LogProjectOpenFailure(snapshot.operationId, *snapshot.diagnostic);
                 return;
             }
             revisions.push_back(prepared.contributorId + "@" + installed.Value());

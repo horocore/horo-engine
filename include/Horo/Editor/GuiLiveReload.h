@@ -74,11 +74,15 @@ namespace Horo::Editor::GuiLive {
 
     namespace Detail {
         template <auto *Address>
-#if defined(HORO_GUI_RUNTIME_COMPILATION)
+#if defined(HORO_GUI_RUNTIME_COMPILATION) && defined(_MSC_VER)
         __declspec(dllimport)
+#elif defined(__APPLE__)
+        __attribute__((visibility("default"), noinline))
+#if !defined(HORO_GUI_RUNTIME_COMPILATION)
+        __attribute__((used))
 #endif
-        decltype(Address)
-        HostAddress() noexcept
+#endif
+        decltype(Address) HostAddress() noexcept
 #if defined(HORO_GUI_RUNTIME_COMPILATION)
             ;
 #else

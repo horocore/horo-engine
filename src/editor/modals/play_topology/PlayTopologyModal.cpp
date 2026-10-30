@@ -71,7 +71,6 @@ namespace Horo::Editor {
         loaded_ = loaded.HasValue();
         if (loaded_) {
             projection_ = store_->Project();
-            user_ = store_->User();
             Select(projection_.profiles.empty() ? -1 : 0);
         } else
             errorKey_ = ErrorKey(loaded.ErrorValue());
@@ -103,10 +102,6 @@ namespace Horo::Editor {
         port_ = draft_.port == 0 ? 7777 : draft_.port;
         transport_ = draft_.transport.IsValid() ? std::to_string(draft_.transport.Value()) : "";
         simulation_ = draft_.simulationPreset == 0 ? "" : std::to_string(draft_.simulationPreset);
-        userPort_ = 0;
-        if (const auto portOverride = std::ranges::find(user_.overrides, draft_.id, &Application::PlayTopologyOverride::profile);
-            portOverride != user_.overrides.end())
-            userPort_ = portOverride->port;
         errorKey_.clear();
     }
 
@@ -127,23 +122,59 @@ namespace Horo::Editor {
         return Application::ValidatePlayTopology(profile).HasValue() ? std::optional{std::move(profile)} : std::nullopt;
     }
 
-    /** @brief Render stacked shared controls so localized labels and narrow surfaces never compete for row width. */
+    namespace {
+        /** @brief Uses equal field columns when both can retain readable labels; narrow forms stack in source order. */
+        template <typename Left, typename Right> void FieldPair(const char *id, Left &&left, Right &&right) {
+            if (ImGui::GetContentRegionAvail().x < 500.0F) {
+                left();
+                right();
+                return;
+            }
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2{8, 4});
+            if (ImGui::BeginTable(id, 2, ImGuiTableFlags_SizingStretchSame)) {
+                ImGui::TableNextColumn();
+                left();
+                ImGui::TableNextColumn();
+                // The previous cell's input baseline must not shift this cell's label.
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{ImGui::GetStyle().ItemSpacing.x, 0});
+                ImGui::Dummy({0, 0});
+                ImGui::PopStyleVar();
+                right();
+                ImGui::EndTable();
+            }
+            ImGui::PopStyleVar();
+        }
+    }  // namespace
+
+    /** @brief Renders bounded portable fields in responsive pairs without selecting transport implementations. */
     void PlayTopologyModal::DrawFields() {
         const auto &fonts = context_.theme.fonts;
-        Ui::FieldLabel(Text("name").c_str(), fonts);
-        (void)Ui::InputTextControl("##TopologyName", draft_.name, 97, fonts);
-        Ui::FieldLabel(Text("map").c_str(), fonts);
-        (void)Ui::InputTextControl("##TopologyMap", draft_.map, 257, fonts);
-        const std::array kinds{Text("standalone").c_str(), Text("listen").c_str(), Text("dedicated").c_str()};
-        Ui::FieldLabel(Text("kind").c_str(), fonts);
-        (void)Ui::ComboControl("##TopologyKind", &kind_, kinds.data(), static_cast<int>(kinds.size()), fonts);
+        FieldPair("##TopologyIdentity", [&] {
+            Ui::FieldLabel(Text("name").c_str(), fonts);
+            (void)Ui::InputTextControl("##TopologyName", draft_.name, 97, fonts);
+        }, [&] {
+            Ui::FieldLabel(Text("map").c_str(), fonts);
+            (void)Ui::InputTextControl("##TopologyMap", draft_.map, 257, fonts);
+        });
+        FieldPair("##TopologyModeClients", [&] {
+            const std::array kinds{Text("standalone").c_str(), Text("listen").c_str(), Text("dedicated").c_str()};
+            Ui::FieldLabel(Text("kind").c_str(), fonts);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            (void)Ui::ComboControl("##TopologyKind", &kind_, kinds.data(), static_cast<int>(kinds.size()), fonts);
+        }, [&] {
+            ImGui::BeginDisabled(kind_ == static_cast<int>(Application::PlayTopologyKind::Standalone));
+            Ui::FieldLabel(Text("clients").c_str(), fonts);
+            Ui::InputIntControl("##TopologyClients", &clients_, fonts);
+            ImGui::EndDisabled();
+        });
         ImGui::BeginDisabled(kind_ == static_cast<int>(Application::PlayTopologyKind::Standalone));
-        Ui::FieldLabel(Text("clients").c_str(), fonts);
-        Ui::InputIntControl("##TopologyClients", &clients_, fonts);
-        Ui::FieldLabel(Text("transport").c_str(), fonts);
-        (void)Ui::InputTextControl("##TopologyTransport", transport_, 21, fonts);
-        Ui::FieldLabel(Text("port").c_str(), fonts);
-        Ui::InputIntControl("##TopologyPort", &port_, fonts);
+        FieldPair("##TopologyConnection", [&] {
+            Ui::FieldLabel(Text("transport").c_str(), fonts);
+            (void)Ui::InputTextControl("##TopologyTransport", transport_, 21, fonts);
+        }, [&] {
+            Ui::FieldLabel(Text("port").c_str(), fonts);
+            Ui::InputIntControl("##TopologyPort", &port_, fonts);
+        });
         Ui::FieldLabel(Text("simulation").c_str(), fonts);
         (void)Ui::InputTextControl("##TopologySimulation", simulation_, 21, fonts);
         Ui::Hint(Text("simulation_hint").c_str(), fonts);
@@ -167,69 +198,64 @@ namespace Horo::Editor {
         Select(static_cast<int>(selected - projection_.profiles.begin()));
     }
 
-    /** @brief Commit machine-local port election independently of project defaults. */
-    void PlayTopologyModal::SaveUser() {
-        if (userPort_ < 0 || userPort_ > 65535) {
-            errorKey_ = "invalid";
-            return;
-        }
-        auto saved = store_->SaveOverride(user_.revision, {draft_.id, static_cast<std::uint16_t>(userPort_)});
-        if (saved.HasError())
-            errorKey_ = ErrorKey(saved.ErrorValue());
-        else {
-            user_ = std::move(saved).Value();
-            errorKey_.clear();
-        }
-    }
-
-    /** @brief Render portable profile selection, authoring and one validated save command. */
+    /** @brief Selects or starts a transient portable profile; the footer owns the save action. */
     void PlayTopologyModal::DrawProject() {
+        const auto &fonts = context_.theme.fonts;
+        const auto metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
+        float newWidth{};
+        {
+            Theme::ScopedTextStyle text(fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
+            newWidth = ImGui::CalcTextSize(Text("new").c_str()).x + metrics.paddingX * 2;
+        }
         if (!projection_.profiles.empty()) {
-            Ui::FieldLabel(Text("profile").c_str(), context_.theme.fonts);
+            Ui::FieldLabel(Text("profile").c_str(), fonts);
             const Ui::ComboItemSource source{.label = [this](int index) {
                 return projection_.profiles[static_cast<std::size_t>(index)].name.c_str();
             }};
-            if (Ui::ComboControl("##TopologySelect", &selected_, static_cast<int>(projection_.profiles.size()), source,
-                                 context_.theme.fonts))
+            const bool sameRow = ImGui::GetContentRegionAvail().x >= newWidth + 180;
+            ImGui::SetNextItemWidth(sameRow ? ImGui::GetContentRegionAvail().x - newWidth - ImGui::GetStyle().ItemSpacing.x
+                                            : ImGui::GetContentRegionAvail().x);
+            if (Ui::ComboControl("##TopologySelect", &selected_, static_cast<int>(projection_.profiles.size()), source, fonts))
                 Select(selected_);
+            if (sameRow)
+                ImGui::SameLine();
+        } else {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0F, ImGui::GetContentRegionAvail().x - newWidth));
         }
         if (Ui::Button({.label = Text("new").c_str(),
                         .variant = Ui::ButtonVariant::Secondary,
                         .enabled = projection_.profiles.size() < 16,
-                        .font = context_.theme.fonts.sans,
-                        .style = {.width = Ui::StyleWidth::FillAvailable}}))
+                        .font = fonts.sans}))
             Select(-1);
         DrawFields();
-        const bool valid = Draft().has_value();
-        if (!valid)
-            Ui::ErrorText(Text("invalid").c_str(), context_.theme.fonts);
-        if (Ui::Button({.label = Text("save_project").c_str(),
-                        .enabled = valid,
-                        .font = context_.theme.fonts.sans,
-                        .style = {.width = Ui::StyleWidth::FillAvailable}}))
+    }
+
+    /** @brief Keeps measured save/close actions bounded and right aligned, stacking only on narrow viewports. */
+    bool PlayTopologyModal::DrawFooter() {
+        const auto &fonts = context_.theme.fonts;
+        const auto metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
+        Theme::ScopedTextStyle text(fonts.sans, metrics.fontSize, Theme::FontPx::Sans);
+        const float closeWidth = ImGui::CalcTextSize(Text("close").c_str()).x + metrics.paddingX * 2;
+        const float saveWidth = ImGui::CalcTextSize(Text("save_project").c_str()).x + metrics.paddingX * 2;
+        const float total = closeWidth + saveWidth + ImGui::GetStyle().ItemSpacing.x;
+        const bool stacked = total > ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0F, ImGui::GetContentRegionAvail().x - (stacked ? closeWidth : total)));
+        const bool close = Ui::Button({.label = Text("close").c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans});
+        if (stacked)
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0F, ImGui::GetContentRegionAvail().x - saveWidth));
+        else
+            ImGui::SameLine();
+        if (Ui::Button({.label = Text("save_project").c_str(), .enabled = loaded_ && Draft().has_value(), .font = fonts.sans}))
             SaveProject();
+        return close;
     }
 
-    /** @brief Render an independent machine override; clearing remains possible after mode replacement. */
-    void PlayTopologyModal::DrawUser() {
-        Ui::Hint(Text("user_hint").c_str(), context_.theme.fonts);
-        Ui::FieldLabel(Text("user_port").c_str(), context_.theme.fonts);
-        Ui::InputIntControl("##TopologyUserPort", &userPort_, context_.theme.fonts);
-        if (Ui::Button({.label = Text("save_user").c_str(),
-                        .variant = Ui::ButtonVariant::Secondary,
-                        .enabled = selected_ >= 0 && (userPort_ == 0 || draft_.kind != Application::PlayTopologyKind::Standalone),
-                        .font = context_.theme.fonts.sans,
-                        .style = {.width = Ui::StyleWidth::FillAvailable}}))
-            SaveUser();
-    }
-
-    /** @brief Replace both projections only after complete successful reloading. */
+    /** @brief Replace the portable profile projection only after complete successful reloading. */
     void PlayTopologyModal::Reload() {
         const auto loaded = store_->Reload();
         if (loaded.HasValue()) {
             loaded_ = true;
             projection_ = store_->Project();
-            user_ = store_->User();
             Select(projection_.profiles.empty() ? -1 : 0);
         } else
             errorKey_ = ErrorKey(loaded.ErrorValue());
@@ -238,37 +264,35 @@ namespace Horo::Editor {
     ModalFrameResult PlayTopologyModal::Draw() {
         Ui::ScopedModalShell shell({.id = "PlayTopologyProfiles",
                                     .title = Text("title").c_str(),
-                                    .requestedSize = {640, 720},
+                                    .requestedSize = {720, 500},
                                     .viewportPadding = 32,
                                     .minimumWidth = 280,
                                     .minimumHeight = 240,
-                                    .footerHeight = Theme::Layout::FooterH,
-                                    .showClose = true,
-                                    .titleFontSize = Theme::TextPx::Title()},
+                                    .headerHeight = 38,
+                                    .headerHorizontalPadding = 13,
+                                    .footerHeight = ImGui::GetMainViewport()->WorkSize.x < 500 ? 100.0F : 60.0F,
+                                    .foregroundBorder = true,
+                                    .closeButtonVariant = Ui::CloseButtonVariant::Compact,
+                                    .titleFontSize = Theme::TextPx::Label()},
                                    context_.theme.fonts);
-        // Reserve the tall form's scrollbar from its first frame so controls never
-        // inherit the previous frame's wider content region when scrolling appears.
-        ImGui::BeginChild("##TopologyBody", {0, shell.BodyHeight()}, false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{20, 14});
+        // Reserve the scroll lane before the first layout, including narrow stacked forms.
+        ImGui::BeginChild("##TopologyBody", {0, shell.BodyHeight()}, false,
+                          ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_AlwaysVerticalScrollbar);
         ImGui::PushTextWrapPos(0);
         ImGui::BeginDisabled(!loaded_);
         DrawProject();
-        DrawUser();
         ImGui::EndDisabled();
-        if (!errorKey_.empty())
+        if (!errorKey_.empty()) {
             Ui::ErrorText(Text(errorKey_.c_str()).c_str(), context_.theme.fonts);
-        if (Ui::Button({.label = Text("reload").c_str(),
-                        .variant = Ui::ButtonVariant::Secondary,
-                        .font = context_.theme.fonts.sans,
-                        .style = {.width = Ui::StyleWidth::FillAvailable}})) {
-            Reload();
+            if (Ui::Button({.label = Text("reload").c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context_.theme.fonts.sans}))
+                Reload();
         }
         ImGui::PopTextWrapPos();
         ImGui::EndChild();
-        shell.BeginFooter({16, 12});
-        const bool close = Ui::Button({.label = Text("close").c_str(),
-                                       .variant = Ui::ButtonVariant::Secondary,
-                                       .font = context_.theme.fonts.sans,
-                                       .style = {.width = Ui::StyleWidth::FillAvailable}});
+        ImGui::PopStyleVar();
+        shell.BeginFooter({20, 12});
+        const bool close = DrawFooter();
         shell.EndFooter();
         return close || shell.CloseRequested() ? ModalFrameResult::RequestClose(ModalCloseReason::Cancelled) : ModalFrameResult::None();
     }

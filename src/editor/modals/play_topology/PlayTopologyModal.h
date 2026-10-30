@@ -1,6 +1,6 @@
 #pragma once
 /** @file PlayTopologyModal.h
- * @brief Temporary editor workflow for portable profiles and separate machine-local overrides.
+ * @brief Temporary editor workflow for portable play profiles.
  */
 #include "Horo/Application/PlayTopology.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -27,22 +27,19 @@ namespace Horo::Editor {
         void Select(int index);
         void DrawFields();
         void DrawProject();
-        void DrawUser();
+        [[nodiscard]] bool DrawFooter();
         void Reload();
         void SaveProject();
-        void SaveUser();
         [[nodiscard]] std::optional<Application::PlayTopologyProfile> Draft() const;
         [[nodiscard]] const std::string &Text(const char *suffix) const;
         const EditorGuiContext &context_;
         std::unique_ptr<Application::PlayTopologyStore> store_;
         Application::PlayTopologyCatalog projection_;
-        Application::PlayTopologyUserSettings user_;
         Application::PlayTopologyProfile draft_;
         int selected_{-1};
         int kind_{};
         int clients_{};
         int port_{7777};
-        int userPort_{};
         std::string transport_;
         std::string simulation_;
         std::string errorKey_;

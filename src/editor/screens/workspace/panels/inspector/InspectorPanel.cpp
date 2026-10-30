@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "InspectorContributionView.h"
+#include "add_component/AddComponentMenu.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanelInternal.h"
 
 #include <algorithm>
@@ -55,6 +56,7 @@ namespace Horo::Editor {
         m_prefabPresentation.reset();
         m_nameInputContext.Reset();
         m_physicsSession.Clear();
+        m_addComponents.ClearProjectBehaviors();
         m_navigationSession.Clear();
         m_inputRouter = nullptr;
         m_workspaceInputContext = nullptr;
@@ -114,6 +116,7 @@ namespace Horo::Editor {
             }
         } else {
             m_physicsSession.Clear();
+            m_addComponents.ClearProjectBehaviors();
             m_navigationSession.Clear();
             DrawEmptyState(cmd, ctx);
         }
@@ -143,6 +146,7 @@ namespace Horo::Editor {
                                            context.theme.fonts, 6.0F, 4.0F);
         } else {
             m_physicsSession.Clear();
+            m_addComponents.ClearProjectBehaviors();
             m_nameInputContext.Reset();
             DrawMultiSelectionTitle(m_editSession.Draft().selectedObjectCount, context);
         }
@@ -179,8 +183,16 @@ namespace Horo::Editor {
         }
 
         if (Ui::BeginMenuPopup("AddComponentPopup")) {
-            DrawAddComponentMenuItems(object, viewModel, command, context);
-            DrawAddPhysicsComponents(object, viewModel, context);
+            const auto synchronized = m_addComponents.SynchronizeBehaviors(viewModel.projectRoot, viewModel.availableBehaviorsRevision,
+                                                                           viewModel.availableBehaviors);
+            if (synchronized.HasError()) {
+                Ui::ErrorText(synchronized.ErrorValue().message.c_str(), context.theme.fonts);
+            } else {
+                const AddComponentContext state{object, m_physicsSession.Draft(), viewModel.physicsContext.canEdit,
+                                                !viewModel.projectRoot.empty(), command.command == EditorWorkspaceViewCommand::None};
+                if (const auto action = DrawAddComponentMenu(m_addComponents, state, context))
+                    ApplyAddComponentAction(*action, object, viewModel.projectRoot, m_physicsSession, command);
+            }
             Ui::EndMenuPopup();
         }
     }

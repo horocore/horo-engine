@@ -4,6 +4,20 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "leave_confirmation.title": {"text": "Kaydedilmemiş Değişiklikler"},
+    "leave_confirmation.operation_title": {"text": "İşlem Devam Ediyor"},
+    "leave_confirmation.dirty_document": {"text": "Ayrılmadan önce değişikliklerinizi kaydetmek ister misiniz?"},
+    "leave_confirmation.unsaved_draft": {"text": "Proje kurulumunda kaydedilmemiş değişiklikler var. Değişiklikleri silip ayrılmak ister misiniz?"},
+    "leave_confirmation.running_operation": {"text": "Bir işlem devam ediyor. Ayrılmadan önce iptal etmek ister misiniz?"},
+    "leave_confirmation.recovery": {"text": "Ayrılmadan önce bekleyen kurtarma kararını tamamlayın."},
+    "leave_confirmation.native_dialog": {"text": "Ayrılmadan önce açık iletişim kutusunu tamamlayın."},
+    "leave_confirmation.save": {"text": "Kaydet ve Ayrıl"},
+    "leave_confirmation.discard": {"text": "Kaydetmeden Ayrıl"},
+    "leave_confirmation.cancel_operation": {"text": "İşlemi İptal Et"},
+    "leave_confirmation.keep_running": {"text": "Çalışmaya Devam Et"},
+    "leave_confirmation.wait": {"text": "Bekle"},
+    "leave_confirmation.stay": {"text": "Burada Kal"},
+
     "workspace.prepare_release.identity": {"text": "Kimlik"},
     "workspace.prepare_release.product_name": {"text": "Ürün adı"},
     "workspace.prepare_release.version": {"text": "Sürüm (SemVer)"},
@@ -773,19 +787,19 @@
       "text": "PROJE DİZİNİ"
     },
     "project_creation.identity.location": {
-      "text": "PROJE KONUMU"
-    },
-    "project_creation.identity.location.hint": {
-      "text": "Boş bir klasör veya yazılabilir bir üst dizine sahip eksik bir konum seçin."
+      "text": "PROJE KLASÖRÜ"
     },
     "project_creation.identity.location.select": {
-      "text": "Proje Konumunu Seçin"
+      "text": "Yeni Proje İçin Konum Seç"
     },
     "project_creation.identity.name": {
       "text": "PROJE İSMİ"
     },
+    "project_creation.identity.name.invalid_folder": {
+      "text": "Geçerli bir klasör adı girin; . veya .. ya da iki nokta kullanmayın."
+    },
     "project_creation.identity.name.hint": {
-      "text": "project.json ismi olarak saklanır; projectId bir kez oluşturulur."
+      "text": "Projeniz için bir isim girin."
     },
     "project_creation.identity.scene": {
       "text": "VARSAYILAN SAHNE"
@@ -1002,6 +1016,19 @@
     "settings.appearance.accent_color.description": {
       "text": "Odak halkaları, aktif durumlar ve birincil eylemler için kullanılır."
     },
+    "settings.code_editor.font_family": {"text": "Yazı Tipi Ailesi"},
+    "settings.code_editor.font_family.description": {"text": "Yüklü bir eş aralıklı yazı tipi seçin. Değişiklik açık kaynak sekmelerine uygulanır."},
+    "settings.code_editor.behavior": {"text": "Düzenleme & Kaydetme"},
+    "settings.code_editor.codeShowLineNumbers": {"text": "Satır Numaraları"},
+    "settings.code_editor.codeShowLineNumbers.description": {"text": "Kaynak metnin yanında satır numaralarını gösterir."},
+    "settings.code_editor.codeShowWhitespace": {"text": "Boşluk İşaretleri"},
+    "settings.code_editor.codeShowWhitespace.description": {"text": "Dosyayı değiştirmeden boşluk ve sekme karakterlerini gösterir."},
+    "settings.code_editor.codeWordWrap": {"text": "Satır Kaydırma"},
+    "settings.code_editor.codeWordWrap.description": {"text": "Uzun satırları kaynak görünümünün genişliğine göre kaydırır."},
+    "settings.code_editor.codeShowScrollBar": {"text": "Kaydırma Çubuğu"},
+    "settings.code_editor.codeShowScrollBar.description": {"text": "Kaynak editörünün kaydırma çubuğunu gösterir."},
+    "settings.code_editor.codeAutoSaveDelaySeconds": {"text": "Otomatik Kayıt Gecikmesi (saniye)"},
+    "settings.code_editor.codeAutoSaveDelaySeconds.description": {"text": "Değişen kaynak dosyalarını bu bekleme süresinden sonra kaydeder. Sıfır kapatır. Dış değişikliklerin üzerine otomatik yazılmaz."},
     "settings.appearance.code_font_size": {
       "text": "Kod Yazı Boyutu"
     },
@@ -1021,10 +1048,10 @@
       "text": "JSON tema dosyasının yolu. Yerleşik tema için boş bırakın."
     },
     "settings.appearance.theme_group": {
-      "text": "TEMA"
+      "text": "Tema"
     },
     "settings.appearance.typography_group": {
-      "text": "TİPOGRAFİ & ÖLÇEK"
+      "text": "Tipografi & Ölçek"
     },
     "settings.appearance.ui_scale": {
       "text": "Arayüz Ölçeği"
@@ -1057,7 +1084,7 @@
       "text": "Editör sesi için tercih edilen oynatma aygıtı."
     },
     "settings.audio.output_group": {
-      "text": "ÇIKIŞ"
+      "text": "Çıkış"
     },
     "settings.audio.speakers": {
       "text": "Hoparlörler"
@@ -1090,10 +1117,10 @@
       "text": "Editör konsol çıktısında gösterilecek minimum önem seviyesi."
     },
     "settings.diagnostics.logging_group": {
-      "text": "LOGLAMA"
+      "text": "Loglama"
     },
     "settings.diagnostics.profiler_group": {
-      "text": "PROFİLEYİCİ"
+      "text": "Profilleyici"
     },
     "settings.diagnostics.stutter_threshold": {
       "text": "Takılma Eşiği (ms)"
@@ -1135,7 +1162,7 @@
       "text": "Son oturumdaki sekmeleri ve panel düzenini yeniden aç."
     },
     "settings.general.session_group": {
-      "text": "EDİTÖR OTURUMU"
+      "text": "Editör Oturumu"
     },
     "settings.general.startup_behavior": {
       "text": "Başlangıç Davranışı"
@@ -1147,7 +1174,7 @@
       "text": "Proje tarayıcı"
     },
     "settings.general.startup_group": {
-      "text": "BAŞLANGIÇ & PROJE"
+      "text": "Başlangıç & Proje"
     },
     "settings.general.startup_last": {
       "text": "Son proje"
@@ -1162,7 +1189,7 @@
       "text": "Dikey yörünge yönünü tersine çevirir."
     },
     "settings.input.navigation_group": {
-      "text": "NAVİGASYON"
+      "text": "Navigasyon"
     },
     "settings.input.orbit_sensitivity": {
       "text": "Yörünge Hassasiyeti"
@@ -1177,10 +1204,79 @@
       "text": "Viewport kamerasını kaydırmak için fare sürükleme çarpanı."
     },
     "settings.input.mappings_description": {
-      "text": "Kısayolları, gamepad bağlarını, profilleri ve oyuncu atamalarını düzenlemek için sağ etkinlik çubuğundan Giriş Eşleme panelini açın."
+      "text": "Bir komut seçin, kısayoluna basın ve Uygula’ya tıklayın. Sıfırla varsayılan tuşları geri yükler."
+    },
+    "settings.keymap.editor.save": {
+      "text": "Kaydet"
+    },
+    "settings.keymap.editor.undo": {
+      "text": "Geri al"
+    },
+    "settings.keymap.editor.redo": {
+      "text": "Yinele"
+    },
+    "settings.keymap.editor.source.select_all": {
+      "text": "Tüm kaynak metnini seç"
+    },
+    "settings.keymap.editor.source.copy": {
+      "text": "Kaynak seçimini kopyala"
+    },
+    "settings.keymap.editor.source.paste": {
+      "text": "Kaynağa yapıştır"
+    },
+    "settings.keymap.editor.source.cut": {
+      "text": "Kaynak seçimini kes"
+    },
+    "settings.keymap.editor.source.find": {
+      "text": "Kaynakta bul"
+    },
+    "settings.keymap.editor.source.go_to_line": {
+      "text": "Satıra git"
+    },
+    "settings.keymap.editor.source.zoom_in": {
+      "text": "Kod yazı boyutunu artır"
+    },
+    "settings.keymap.editor.source.zoom_out": {
+      "text": "Kod yazı boyutunu azalt"
+    },
+    "settings.keymap.editor.source.zoom_reset": {
+      "text": "Kod yazı boyutunu sıfırla"
+    },
+    "settings.keymap.editor.duplicate": {
+      "text": "Seçimi çoğalt"
+    },
+    "settings.keymap.editor.delete": {
+      "text": "Seçimi sil"
+    },
+    "settings.keymap.editor.tool.select": {
+      "text": "Seçim aracı"
+    },
+    "settings.keymap.editor.tool.move": {
+      "text": "Taşıma aracı"
+    },
+    "settings.keymap.editor.tool.rotate": {
+      "text": "Döndürme aracı"
+    },
+    "settings.keymap.editor.tool.scale": {
+      "text": "Ölçekleme aracı"
+    },
+    "settings.keymap.editor.viewport.focus_selected": {
+      "text": "Seçime odaklan"
+    },
+    "settings.keymap.unassigned": {
+      "text": "Atanmamış"
+    },
+    "settings.keymap.recording": {
+      "text": "Kısayola basın (Escape ile iptal)"
+    },
+    "settings.keymap.reset": {
+      "text": "Sıfırla"
+    },
+    "settings.keymap.conflict": {
+      "text": "Çakışan veya geçersiz kısayol. Uygulamadan önce başka bir tuş seçin."
     },
     "settings.input.mappings_group": {
-      "text": "GİRİŞ EŞLEMELERİ"
+      "text": "Giriş Eşlemeleri"
     },
     "settings.input.mappings_label": {
       "text": "Merkezi Giriş Eşleme"
@@ -1211,6 +1307,12 @@
     },
     "settings.nav.diagnostics": {
       "text": "Tanılama"
+    },
+    "settings.nav.code_editor": {
+      "text": "Kod Editörü"
+    },
+    "settings.nav.keymaps": {
+      "text": "Kısayollar"
     },
     "settings.nav.editor": {
       "text": "Editör"
@@ -1363,7 +1465,7 @@
       "text": "Maksimum eşzamanlı PIE (Editörde Oynat) istemci bağlantısı."
     },
     "settings.network.multiplayer_group": {
-      "text": "ÇOK OYUNCULU ÖNİZLEME"
+      "text": "Çok Oyunculu Önizleme"
     },
     "settings.network.simulate_latency": {
       "text": "Gecikmeyi Simüle Et"
@@ -1372,7 +1474,7 @@
       "text": "Loopback üzerine eklenen yapay tek yönlü gecikme (ms)."
     },
     "settings.packages.download_group": {
-      "text": "PAKET EDİNİMİ"
+      "text": "Paket Edinimi"
     },
     "settings.packages.download_threads": {
       "text": "İndirme İş Parçacıkları"
@@ -1489,7 +1591,7 @@
       "text": "Katkılar"
     },
     "settings.extensions.details": {
-      "text": "UZANTI DETAYLARI"
+      "text": "Uzantı Detayları"
     },
     "settings.extensions.empty": {
       "text": "Bu filtreyle eşleşen uzantı yok."
@@ -1510,10 +1612,10 @@
       "text": "Kurulu paketler"
     },
     "settings.extensions.installed_heading": {
-      "text": "KURULU UZANTILAR"
+      "text": "Kurulu Uzantılar"
     },
     "settings.extensions.lifecycle": {
-      "text": "ETKİNLEŞTİRME YAŞAM DÖNGÜSÜ"
+      "text": "Etkinleştirme Yaşam Döngüsü"
     },
     "settings.extensions.marketplace": {
       "text": "Marketplace"
@@ -1618,7 +1720,7 @@
       "text": "Aydınlatılmış"
     },
     "settings.rendering.quality_group": {
-      "text": "KALİTE"
+      "text": "Kalite"
     },
     "settings.rendering.shaded": {
       "text": "Gölgelendirilmiş"
@@ -1639,7 +1741,7 @@
       "text": "Aydınlatmasız"
     },
     "settings.rendering.viewport_group": {
-      "text": "GÖRÜNÜM ALANI"
+      "text": "Görünüm Alanı"
     },
     "settings.rendering.viewport_mode": {
       "text": "Varsayılan Viewport Modu"
@@ -2986,6 +3088,17 @@
     "workspace.physics.gizmo_hint": {"text": "Çarpıştırıcı düzenleme · Ctrl: 0,1 m / 15° / %10 yakala · Ctrl-tık: alt öğeyi seç · Escape: iptal"},
     "workspace.physics.gizmo_rejected": {"text": "Çarpıştırıcı düzenlemesi reddedildi. Pozitif sınırlar ve küre/kapsül için eş ölçek kullanın. Tanılamaya bakın."},
     "workspace.physics.gizmo_unsupported": {"text": "Pişirilmiş şeklin alt öğeleri kendi kaynak belgesini gerektirir; görünümde düzenlenemez."},
+    "workspace.inspector.add_rendering": {"text": "Görselleştirme"},
+    "workspace.inspector.add_audio": {"text": "Ses"},
+    "workspace.inspector.add_gameplay": {"text": "Oynanış"},
+    "workspace.inspector.add_scripts": {"text": "Betikler"},
+    "workspace.inspector.create_script": {"text": "Betik Oluştur…"},
+    "workspace.physics.details": {"text": "Ayrıntılar"},
+    "workspace.physics.choose_reference": {"text": "Seçin…"},
+    "workspace.physics.missing_reference": {"text": "Eksik başvuru"},
+    "workspace.physics.no_profiles": {"text": "Editor Settings > Project Collision alanında bir çarpışma profili oluşturun."},
+    "workspace.physics.no_materials": {"text": "Buradan seçmek için bir Fizik Malzemesi varlığı içe aktarın."},
+    "workspace.physics.add_trigger": {"text": "Tetikleyici Çarpıştırıcı"},
     "workspace.physics.title": {
       "text": "Fizik"
     },
@@ -2999,16 +3112,16 @@
       "text": "Katı cisim"
     },
     "workspace.physics.collider": {
-      "text": "Çarpışma şekli / algılayıcı"
+      "text": "Çarpıştırıcı"
     },
     "workspace.physics.constraint": {
-      "text": "Kısıt"
+      "text": "Fizik Bağlantısı"
     },
     "workspace.physics.enabled": {
       "text": "Etkin"
     },
     "workspace.physics.sensor": {
-      "text": "Algılayıcı (yalnızca örtüşme, fiziksel tepki yok)"
+      "text": "Tetikleyici"
     },
     "workspace.physics.static": {
       "text": "Sabit"
@@ -3065,7 +3178,7 @@
       "text": "Cisim yuvası kimliği"
     },
     "workspace.physics.profile": {
-      "text": "Çarpışma profili UUID"
+      "text": "Çarpışma Profili"
     },
     "workspace.physics.shape": {
       "text": "Şekil kaynağı"
@@ -3110,13 +3223,13 @@
       "text": "Malzeme yuvası kimliği"
     },
     "workspace.physics.material_asset": {
-      "text": "Fizik malzemesi varlığı UUID"
+      "text": "Fizik Malzemesi"
     },
     "workspace.physics.remove_material": {
-      "text": "Malzeme eşlemesini kaldır"
+      "text": "Malzemeyi Kaldır"
     },
     "workspace.physics.add_material": {
-      "text": "Açık malzeme eşlemesi ekle"
+      "text": "Malzeme Ekle"
     },
     "workspace.physics.first_endpoint": {
       "text": "İlk cisim ucu"
@@ -3146,28 +3259,28 @@
       "text": "Bu Sahne şeması menteşe ve kızak kısıtlarını desteklemez."
     },
     "workspace.physics.remove_body": {
-      "text": "Cisim kaldırmayı hazırla"
+      "text": "Gövdeyi Kaldır"
     },
     "workspace.physics.remove_collider": {
-      "text": "Çarpışma şeklini kaldırmayı hazırla"
+      "text": "Çarpıştırıcıyı Kaldır"
     },
     "workspace.physics.remove_constraint": {
-      "text": "Kısıt kaldırmayı hazırla"
+      "text": "Bağlantıyı Kaldır"
     },
     "workspace.physics.add_body": {
-      "text": "Cisim ve kutu çarpışma şekli hazırla"
+      "text": "Fizik Gövdesi + Kutu Çarpıştırıcı"
     },
     "workspace.physics.add_collider": {
-      "text": "Çarpışma şekli / algılayıcı hazırla"
+      "text": "Kutu Çarpıştırıcı"
     },
     "workspace.physics.add_constraint": {
-      "text": "Kısıt hazırla"
+      "text": "Fizik Bağlantısı"
     },
     "workspace.physics.apply": {
-      "text": "Fizik düzenlemesini uygula"
+      "text": "Uygula"
     },
     "workspace.physics.cancel": {
-      "text": "Hazırlanan fizik düzenlemesini at"
+      "text": "Değişiklikleri İptal Et"
     },
     "workspace.physics.invalid_identity": {
       "text": "Uygulamadan önce geçerli sıfır olmayan ondalık kimlikler ve kanonik proje UUID değerleri girin."

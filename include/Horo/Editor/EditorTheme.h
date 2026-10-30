@@ -12,6 +12,7 @@
 namespace Horo {
     class JobSystem;
 }
+
 namespace Horo::Editor {
     class EditorDataBus;
 }
@@ -251,13 +252,21 @@ namespace Horo::Editor::Theme {
     // ─────────────────────────────────────────────────────────────────────────
     // Fonts — the three font atlas entries loaded by the application
     // ─────────────────────────────────────────────────────────────────────────
+    /** @brief Host-loaded font family; atlas owns both faces for the GUI session. */
+    struct CodeFontFamily final {
+        std::string name;
+        ImFont *regular{};
+        ImFont *emphasis{};
+    };
+
     struct Fonts {
         ImFont *sans = nullptr;
         ImFont *sansCompact = nullptr;
         ImFont *sansEmphasis = nullptr;
-        ImFont *icon = nullptr;              /**< Material Symbols Outlined for editor UI icons. */
-        ImFont *monospace = nullptr;         /**< Source text at the semantic body size. */
-        ImFont *monospaceEmphasis = nullptr; /**< Emphasized source roles with identical cell metrics. */
+        ImFont *icon = nullptr;                   /**< Material Symbols Outlined for editor UI icons. */
+        ImFont *monospace = nullptr;              /**< Source text at the semantic body size. */
+        std::vector<CodeFontFamily> codeFamilies; /**< Explicit host registry of available atlas families. */
+        ImFont *monospaceEmphasis = nullptr;      /**< Emphasized source roles with identical cell metrics. */
     };
 
     namespace FontPx {
@@ -415,7 +424,8 @@ namespace Horo::Editor::Theme {
         std::string sourcePath; /**< Empty for built-ins; source JSON path for custom themes. */
         std::unordered_map<std::string, ImVec4, ThemeStringHash, std::equal_to<>> colors; /**< ImGui color name to RGBA. */
         DesignSystem::DesignTokens designTokens = DesignSystem::DefaultDesignTokens();    /**< Unscaled theme token baseline. */
-        bool isBuiltIn = true;                                                            /**< Whether the entry ships with Horo. */
+        std::string id;        /**< Stable package contribution identity; empty for legacy file themes and builtins. */
+        bool isBuiltIn = true; /**< Whether the entry ships with Horo. */
     };
 
     /** @brief Returns the list of all discovered themes (built-in + custom). */
@@ -423,6 +433,15 @@ namespace Horo::Editor::Theme {
 
     /** @brief Scans `~/.horo/themes/` for JSON theme files. Call once at startup. */
     void RefreshThemeList(const char *additionalPath = nullptr);
+
+    /** @brief Publishes a package theme during owner startup; rejects missing/duplicate identities.
+     * @param theme Owned parsed theme. @return Whether publication succeeded.
+     */
+    [[nodiscard]] bool RegisterPackageTheme(ThemeEntry theme);
+    /** @brief Withdraws a package theme on the owner lane; active removal selects the builtin Horo theme. */
+    void UnregisterPackageTheme(std::string_view id);
+    /** @brief Selects a published stable package theme identity. @return False without changing appearance when absent. */
+    [[nodiscard]] bool SelectThemeById(std::string_view id);
 
     /** @brief Loads a single theme JSON from the given path. Returns true on success. */
     [[nodiscard]] bool LoadThemeFromJson(const char *path, ThemeEntry &outEntry);

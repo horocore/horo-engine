@@ -99,7 +99,7 @@ namespace Horo::Editor {
                 if (leaveResolved_) {
                     return LeaveDecision{.disposition = Allow, .requirement = std::nullopt};
                 }
-                if (const bool hasDraftChanges = !state_.projectName.empty() || !state_.projectPath.empty() || state_.step > 1;
+                if (const bool hasDraftChanges = !state_.projectName.empty() || !state_.projectParentDirectory.empty() || state_.step > 1;
                     hasDraftChanges &&
                     (std::holds_alternative<ApplicationCloseTarget>(target.value) ||
                      (std::holds_alternative<GuiRoute>(target.value) && std::get<GuiRoute>(target.value).kind == GuiRouteKind::Welcome))) {

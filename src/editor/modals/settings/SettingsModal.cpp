@@ -43,7 +43,7 @@ namespace Horo::Editor {
                     .size = {0.0F, modal.BodyHeight()},
                     .leadingWidth = SettingsModalInternal::Layout::NavW,
                     .leadingPadding = {8.0F, 10.0F},
-                    .contentPadding = {26.0F, 22.0F},
+                    .contentPadding = {20.0F, 14.0F},
                     .leadingBackground = Bg0(),
                     .contentBackground = Bg1(),
                     .drawDivider = true,

@@ -118,7 +118,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             }
             controller_->UpdateNavigationSettingsProjection();
             controller_->UpdateUiCanvasResources();
-            controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
+            const auto preferences = settings_.Snapshot();
+            controller_->UpdateAutosave(dt, preferences.settings.autoSaveIntervalMinutes);
+            controller_->UpdateSourceAutosave(dt, preferences.settings.codeEditor.autoSaveDelaySeconds);
             controller_->UpdateExternalSceneWatch(dt);
             controller_->UpdateGameplaySources(dt);
             if (projectServices_.assetRegistry != nullptr) {

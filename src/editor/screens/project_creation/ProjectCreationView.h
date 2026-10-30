@@ -22,7 +22,8 @@ namespace Horo::Editor {
         int highestUnlockedStep = 1;
         int lastRenderedStep = 0;
         std::string projectName;
-        std::string projectPath;
+        std::string
+            projectParentDirectory; /**< Naming anchor for picker-derived destinations; the controller owns the editable final root. */
         std::string projectVersion;
         std::string defaultScene;
         std::string targetFps;

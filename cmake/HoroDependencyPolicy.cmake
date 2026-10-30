@@ -38,7 +38,6 @@ if (BUILD_TESTING)
 endif ()
 horo_allow_target_dependencies(TARGET HoroModelProvider)
 horo_allow_target_dependencies(TARGET HoroModelProviderAdapters DEPENDENCIES HoroModelProvider)
-horo_allow_target_dependencies(TARGET HoroOpenTelemetry DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroPlatform DEPENDENCIES HoroFoundation HoroSecurity HoroRootedStorageNativeInternal HoroRootedProjectOwnersInternal)
 horo_allow_target_dependencies(TARGET HoroPlatformServices DEPENDENCIES HoroFoundation HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroPlatformServicesExtension DEPENDENCIES HoroPlatformServices HoroExtensions)
@@ -328,10 +327,12 @@ horo_allow_target_dependencies(TARGET horo-package DEPENDENCIES HoroPackageSecur
 horo_allow_target_dependencies(TARGET HoroExtensionSdkPackageStage DEPENDENCIES horo-package)
 horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
+horo_allow_target_dependencies(TARGET HoroEditorGuiLiveReloadHost
+    DEPENDENCIES HoroEditorServices HoroGuiLiveReloadInternal HoroThirdPartyRccpp HoroGui)
 horo_allow_target_dependencies(TARGET HoroGuiLiveReloadInternal)
 horo_allow_target_dependencies(TARGET HoroThirdPartyRccpp)
 horo_allow_target_dependencies(TARGET HoroEditor
-    DEPENDENCIES HoroGuiLiveReloadInternal HoroThirdPartyRccpp HoroEditorUiStyleHostInternal HoroRuntimeUiPaintHost
+    DEPENDENCIES HoroEditorGuiLiveReloadHost HoroEditorUiStyleHostInternal HoroRuntimeUiPaintHost
         HoroPlatformProjectReadFiles
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo
@@ -357,7 +358,6 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroInputSdl
         HoroUpdateDiscovery
         HoroUpdateDownload
-        HoroOpenTelemetry
         HoroEditorViewportOpenGL
         HoroEditorViewportMetal
         HoroEditorVulkanGuiInternal

@@ -39,6 +39,7 @@ namespace Horo::Editor {
         ProjectPathInaccessible,
         ProjectParentNotWritable,
         RendererBackendUnavailable,
+        ProjectNameInvalidFolderName,
     };
 
     /** @brief Validation diagnostic presented by the project-creation screen. */
@@ -61,7 +62,7 @@ namespace Horo::Editor {
     struct ProjectCreationDraft {
         std::string templateId = "3d-starter";
         std::string projectName;
-        std::string projectPath;
+        std::string projectPath; /**< Final project root, including the project folder name. */
         std::string projectVersion = "0.1.0";
         std::string defaultScene = "Assets/Scenes/main.horo";
         std::string renderBackend = "opengl";
@@ -133,6 +134,15 @@ namespace Horo::Editor {
 
         /** @brief Updates the project root draft value. */
         void SetProjectPath(std::string projectPath);
+
+        /**
+         * @brief Resolves the final root beneath the chosen parent using the current project name.
+         *
+         * Invalid or incomplete folder names clear the final root. Call again after name edits.
+         * This performs no filesystem writes; SetProjectPath remains an exact-root command.
+         * @param parentDirectory Parent folder selected or typed in the creation wizard.
+         */
+        void SetProjectParentDirectory(const std::filesystem::path &parentDirectory);
 
         /** @brief Updates the selected template identifier. */
         void SetTemplateId(std::string templateId);
