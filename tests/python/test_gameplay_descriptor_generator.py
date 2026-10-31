@@ -33,6 +33,36 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def test_generated_decision_nodes_share_bundle_and_stable_numeric_order(tmp_path: Path) -> None:
+    source = tmp_path / "Nodes.cpp"
+    source.write_text('HORO_AI_NODE(Later, "99")\nHORO_AI_NODE(First, "2")\n', encoding="utf-8")
+    output = tmp_path / "bundle.cpp"
+    generate(output, tmp_path / "bundle.revision", [source])
+    text = output.read_text(encoding="utf-8")
+    assert ".decisionNodeCount = 2" in text
+    assert text.index("HoroGeneratedDecisionNode_First()") < text.index("HoroGeneratedDecisionNode_Later()")
+    assert ".decisionNodes = DecisionNodes().data()" in text
+
+
+@pytest.mark.parametrize("identity", ["0", "01", "-1", "18446744073709551616", "game.node"])
+def test_generated_decision_nodes_reject_invalid_identity_without_output(tmp_path: Path, identity: str) -> None:
+    source = tmp_path / "Node.cpp"
+    source.write_text(f'HORO_AI_NODE(Node, "{identity}")\n', encoding="utf-8")
+    output = tmp_path / "bundle.cpp"
+    with pytest.raises(ValueError, match="decision node identity"):
+        generate(output, tmp_path / "bundle.revision", [source])
+    assert not output.exists()
+
+
+def test_generated_decision_nodes_reject_duplicates_without_output(tmp_path: Path) -> None:
+    source = tmp_path / "Nodes.cpp"
+    source.write_text('HORO_AI_NODE(First, "2")\nHORO_AI_NODE(Other, "2")\n', encoding="utf-8")
+    output = tmp_path / "bundle.cpp"
+    with pytest.raises(ValueError, match="duplicate decision node"):
+        generate(output, tmp_path / "bundle.revision", [source])
+    assert not output.exists()
+
+
 def test_generation_is_deterministic_across_source_order(tmp_path: Path) -> None:
     first = tmp_path / "First.cpp"
     second = tmp_path / "Second.cpp"

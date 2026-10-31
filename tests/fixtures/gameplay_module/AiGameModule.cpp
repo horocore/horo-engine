@@ -1,6 +1,8 @@
 #include "Horo/Gameplay/GameplayAiContext.h"
+#include "Horo/Gameplay/NativeDecisionNode.h"
 
 #include <memory>
+#include <stdexcept>
 
 namespace {
     using namespace Horo;
@@ -39,6 +41,48 @@ namespace {
         std::shared_ptr<const GameplayAiContext> retained_;
     };
 }  // namespace
+
+namespace {
+    /** @brief Real generated decision-node callbacks live in the unloadable fixture image. */
+    class FixtureDecisionNode final : public Horo::AI::IBehaviorTreeExecutor {
+    public:
+        static Horo::AI::DecisionNodeContract DescribeDecisionNode() {
+            using namespace Horo::AI;
+            DecisionNodeContract contract;
+            contract.descriptor.origin = {DecisionDescriptorSourceKind::Native, DecisionProviderId::Create(501).Value(), 1};
+            contract.properties = {{BehaviorTreePropertyId::Create(9).Value(), "throw", BehaviorTreePropertyKind::Boolean, false}};
+            return contract;
+        }
+
+        explicit FixtureDecisionNode(std::span<const Horo::AI::BehaviorTreeProperty> properties) {
+            if (std::get<bool>(properties.front().value))
+                throw std::runtime_error("fixture factory rejection");
+        }
+
+        Horo::Result<Horo::AI::AiTaskState> Start(const Horo::AI::BehaviorTreeEvaluationContext &,
+                                                  const Horo::AI::AiTaskOperationContext &) noexcept override {
+            return Horo::Result<Horo::AI::AiTaskState>::Success(Horo::AI::AiTaskState::Running);
+        }
+
+        Horo::Result<Horo::AI::AiTaskState> Resume(const Horo::AI::BehaviorTreeEvaluationContext &,
+                                                   const Horo::AI::AiTaskOperationContext &) noexcept override {
+            return Horo::Result<Horo::AI::AiTaskState>::Success(Horo::AI::AiTaskState::Succeeded);
+        }
+
+        void Abort(const Horo::AI::AiTaskOperationContext &, Horo::AI::AiTaskCancellationReason) noexcept override {}
+
+        void Cleanup(const Horo::AI::AiTaskOperationContext &, const Horo::AI::AiTaskTerminalResult &) noexcept override {}
+
+        Horo::Result<bool> Check(const Horo::AI::BehaviorTreeEvaluationContext &) noexcept override {
+            return Horo::Result<bool>::Success(true);
+        }
+
+        Horo::Result<void> Service(const Horo::AI::BehaviorTreeEvaluationContext &) noexcept override {
+            return Horo::Result<void>::Success();
+        }
+    };
+}  // namespace
+HORO_AI_NODE(FixtureDecisionNode, "101")
 
 extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noexcept {
     return std::make_unique<AiModule>().release();

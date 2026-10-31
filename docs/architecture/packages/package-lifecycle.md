@@ -156,6 +156,22 @@ SDK safe-reload rule. Other required-role failures preserve the previous graph.
 The host's borrowed SDK view pins the complete verified install and native owner.
 Failed Register/Start attempts retain the actual native owner through rollback.
 
+The same dedicated `HoroPackageGameplayHost` adapter also composes the existing
+`GameplayLua` runtime for decision-node contributions. This direct dependency
+belongs to the concrete host; `PackageLifecycle`, package manifests and the
+generic script invocation host remain VM independent. `AcquireDecisionNodes`
+returns the actual generated native contribution with its locked package
+version, artifact digest and activation generation. `CompileDecisionNode` reads
+only a declared, bounded `.horo_script` from that exact verified module inventory
+and delegates metadata generation and callback execution to `LuaDecisionNodeProgram`.
+It retains the actual native activation's node-generation lease as the Lua
+provider parent. Revocation closes new Lua callbacks, and package retirement
+cannot unload the native image or remove its verified staged resources until
+the Lua programs, executors and cleanup have released those leases. A manifest
+role or generic `ScriptInvocationProvider` never certifies a node factory.
+Node descriptor versions are separate from package versions; the existing
+locked resolver selects package versions before these APIs can acquire them.
+
 The narrow non-installed `HoroPackageContentStagingInternal` target owns verified
 private-root materialization shared by the native-extension and gameplay adapters.
 It publishes only its dedicated internal header directory and never a repository

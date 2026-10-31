@@ -37,15 +37,15 @@ namespace Horo::Gameplay {
                 return Result<ValidatedModuleExports>::Failure(
                     MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Gameplay module is missing required descriptor exports."));
             const GameModuleDescriptor *descriptor = getDescriptor();
-            const GeneratedGameplayDescriptorBundle *bundle = getBundle();
             if (descriptor == nullptr)
                 return Result<ValidatedModuleExports>::Failure(
                     MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Gameplay module descriptor export returned null."));
+            if (const Result<void> valid = ValidateGameModuleDescriptor(*descriptor, expectation); valid.HasError())
+                return Result<ValidatedModuleExports>::Failure(valid.ErrorValue());
+            const GeneratedGameplayDescriptorBundle *bundle = getBundle();
             if (bundle == nullptr)
                 return Result<ValidatedModuleExports>::Failure(
                     MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle, "Generated gameplay descriptor export returned null."));
-            if (const Result<void> valid = ValidateGameModuleDescriptor(*descriptor, expectation); valid.HasError())
-                return Result<ValidatedModuleExports>::Failure(valid.ErrorValue());
             if (const Result<void> valid = ValidateGeneratedGameplayDescriptorBundle(*bundle, expectation); valid.HasError())
                 return Result<ValidatedModuleExports>::Failure(valid.ErrorValue());
             return Result<ValidatedModuleExports>::Success({descriptor, bundle});
@@ -109,6 +109,17 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
+    /** @brief Owns validated generated contributions before any module factory or lifecycle callback can run. */
+    Result<void> LoadedGameModule::Impl::CaptureGeneratedContributions(const GeneratedGameplayDescriptorBundle &bundle) {
+        auto registry = BuildRegistry(bundle);
+        if (registry.HasError())
+            return Result<void>::Failure(registry.ErrorValue());
+        registries.registry = std::move(registry).Value();
+        if (bundle.decisionNodeCount != 0)
+            decisionNodes.assign(bundle.decisionNodes, bundle.decisionNodes + bundle.decisionNodeCount);
+        return Result<void>::Success();
+    }
+
     /** @copydoc GameModuleHost::ValidateArtifact */
     Result<void> GameModuleHost::ValidateArtifact(const std::filesystem::path &libraryPath,
                                                   const GameModuleLoadExpectation &expectation) const {
@@ -154,10 +165,8 @@ namespace Horo::Gameplay {
         if (const auto bound = BindRuntimeServices(*impl); bound.HasError())
             return Result<GameModuleLoadCandidate>::Failure(bound.ErrorValue());
 
-        auto registry = BuildRegistry(*validated.bundle);
-        if (registry.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(registry.ErrorValue());
-        impl->registries.registry = std::move(registry).Value();
+        if (auto captured = impl->CaptureGeneratedContributions(*validated.bundle); captured.HasError())
+            return Result<GameModuleLoadCandidate>::Failure(captured.ErrorValue());
 
         // Allocate the exported RAII wrapper before any module factory can publish work.
         auto owner = std::make_unique<LoadedGameModule>(LoadedGameModule::ConstructionKey{}, impl);

@@ -5,6 +5,7 @@
  * @brief Exact-SDK-generation native project gameplay module boundary.
  */
 
+#include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/Gameplay/Behavior.h"
 #include "Horo/Gameplay/GameAsset.h"
 #include "Horo/Gameplay/GameplayRegistration.h"
@@ -42,7 +43,7 @@ namespace Horo::Gameplay {
     class GameplayAiContext;
     class GameplayCharacterContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 22;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 23;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -170,6 +171,8 @@ namespace Horo::Gameplay {
         const GeneratedDescriptorDiagnostic *diagnostics{};
         std::size_t diagnosticCount{};
         GameModuleLifecycleCallbacks lifecycle;
+        const AI::DecisionNodeRegistration *decisionNodes{};
+        std::size_t decisionNodeCount{};
     };
 
     using GetGameplayDescriptorBundleFunction = const GeneratedGameplayDescriptorBundle *(*)() noexcept;

@@ -72,6 +72,11 @@ namespace Horo::Gameplay {
         [[nodiscard]] const std::string &BuildFingerprint() const noexcept;
         /** @brief Returns the complete generated descriptor revision loaded from the module. */
         [[nodiscard]] std::uint64_t DescriptorRevision() const noexcept;
+        /** @brief Acquires generated nodes with exact native-generation callback/code-image admission.
+         * @return Owned immutable metadata and revocable factories, or typed retired/off-owner failure.
+         * Leases block native reload/finalization until all executor cleanup and factory destruction complete.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionNodes() const;
         /** @brief Returns the artifact path actually loaded by the platform library loader. */
         [[nodiscard]] const std::filesystem::path &LoadedArtifactPath() const noexcept;
         /** @brief Returns the frozen descriptor registry while the module is loaded. */

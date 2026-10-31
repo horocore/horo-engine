@@ -1474,19 +1474,19 @@ def significant_tokens(text: str) -> list[tuple[str, str]]:
     return [(match.lastgroup or "other", match.group()) for match in TOKEN.finditer(text) if match.lastgroup not in ignored]
 
 
-def annotations_in(text: str, source: pathlib.Path) -> list[tuple[str, str]]:
+def annotations_in(text: str, source: pathlib.Path, marker: str = "HORO_BEHAVIOR") -> list[tuple[str, str]]:
     tokens = significant_tokens(text)
     annotations: list[tuple[str, str]] = []
     expected = ("identifier", "punctuation", "identifier", "punctuation", "string", "punctuation")
     for index, token in enumerate(tokens):
-        if token != ("identifier", "HORO_BEHAVIOR"):
+        if token != ("identifier", marker):
             continue
         candidate = tokens[index : index + len(expected)]
         if len(candidate) != len(expected) or tuple(kind for kind, _ in candidate) != expected:
-            raise ValueError(f"malformed HORO_BEHAVIOR annotation in {source}")
+            raise ValueError(f"malformed {marker} annotation in {source}")
         _, opening, symbol, comma, encoded_type_id, closing = candidate
         if opening[1] != "(" or comma[1] != "," or closing[1] != ")":
-            raise ValueError(f"malformed HORO_BEHAVIOR annotation in {source}")
+            raise ValueError(f"malformed {marker} annotation in {source}")
         type_id = json.loads(encoded_type_id[1])
         annotations.append((symbol[1], type_id))
     return annotations
@@ -1590,9 +1590,10 @@ const auto &Factories() {{
 '''
 
 
-def generated_exports(module_id: str, fingerprint: str, revision: int, count: int) -> str:
+def generated_exports(module_id: str, fingerprint: str, revision: int, count: int, node_count: int = 0) -> str:
     behavior_pointer = "Descriptors().data()" if count else "nullptr"
     factory_pointer = "Factories().data()" if count else "nullptr"
+    node_pointer = "DecisionNodes().data()" if node_count else "nullptr"
     return f'''
 
 extern "C" HORO_GAME_EXPORT const Horo::Gameplay::GameModuleDescriptor *GetGameModuleDescriptor() noexcept {{
@@ -1621,6 +1622,8 @@ extern "C" HORO_GAME_EXPORT const Horo::Gameplay::GeneratedGameplayDescriptorBun
         .diagnostics = nullptr,
         .diagnosticCount = 0,
         .lifecycle = {{.create = &CreateGameModule, .destroy = &DestroyGameModule}},
+        .decisionNodes = {node_pointer},
+        .decisionNodeCount = {node_count},
     }};
     return &bundle;
 }}
@@ -1632,8 +1635,47 @@ def generated_source(
     fingerprint: str,
     revision: int,
     annotations: list[tuple[str, str, pathlib.Path]],
+    nodes: list[tuple[str, str, pathlib.Path]] | None = None,
 ) -> str:
-    return generated_storage(annotations) + generated_exports(module_id, fingerprint, revision, len(annotations))
+    nodes = nodes or []
+    return (generated_storage(annotations) + generated_node_storage(nodes)
+            + generated_exports(module_id, fingerprint, revision, len(annotations), len(nodes)))
+
+
+def generated_node_storage(nodes: list[tuple[str, str, pathlib.Path]]) -> str:
+    declarations = "\n".join(
+        f"Horo::AI::DecisionNodeRegistration HoroGeneratedDecisionNode_{symbol}();"
+        for symbol, _, _ in nodes
+    )
+    records = ",\n        ".join(f"HoroGeneratedDecisionNode_{symbol}()" for symbol, _, _ in nodes)
+    return f'''
+{declarations}
+namespace {{
+const auto &DecisionNodes() {{
+    static const std::array<Horo::AI::DecisionNodeRegistration, {len(nodes)}> nodes{{{{
+        {records}
+    }}}};
+    return nodes;
+}}
+}}
+'''
+
+
+def decision_node_annotations(sources: list[tuple[pathlib.Path, str, str]]) -> list[tuple[str, str, pathlib.Path]]:
+    nodes = [(symbol, identity, source) for source, text, _ in sources
+             for symbol, identity in annotations_in(text, source, "HORO_AI_NODE")]
+    if len(nodes) > 128:
+        raise ValueError("decision node annotation count exceeds the supported limit")
+    seen_ids: set[int] = set()
+    seen_symbols: set[str] = set()
+    for symbol, identity, source in nodes:
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", identity) or int(identity) > 2**64 - 1:
+            raise ValueError(f"invalid decision node identity in {source}")
+        if int(identity) in seen_ids or symbol in seen_symbols:
+            raise ValueError(f"duplicate decision node annotation in {source}")
+        seen_ids.add(int(identity))
+        seen_symbols.add(symbol)
+    return sorted(nodes, key=lambda node: (int(node[1]), node[0]))
 
 
 def validate_identity(module_id: str, fingerprint: str) -> None:
@@ -1667,8 +1709,9 @@ def generate_bundle(
     ]
     annotations.sort(key=lambda annotation: (annotation[1], annotation[0]))
     validate_annotations(annotations)
+    nodes = decision_node_annotations(sources)
     revision = descriptor_revision(module_id, annotations, [record[2] for record in sources])
-    write_atomic(generated_output, generated_source(module_id, fingerprint, revision, annotations))
+    write_atomic(generated_output, generated_source(module_id, fingerprint, revision, annotations, nodes))
     write_atomic(generated_revision, f"{revision}\n")
 
 

@@ -1708,6 +1708,19 @@ target_compile_features(HoroTerrainAuthoringTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainAuthoringTests PRIVATE HoroEngine::TerrainAuthoring)
 horo_register_catch_test(HoroTerrainAuthoringTests LABELS "unit;editor;terrain;headless;lifecycle")
 
+add_executable(HoroLuaDecisionNodeTests unit/runtime/ai/DecisionNodeLuaTests.cpp)
+target_compile_features(HoroLuaDecisionNodeTests PRIVATE cxx_std_20)
+target_include_directories(HoroLuaDecisionNodeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroLuaDecisionNodeTests PRIVATE HoroEngine::GameplayLua HoroEngine::AI)
+horo_register_catch_test(HoroLuaDecisionNodeTests LABELS "unit;ai;headless")
+
+add_executable(HoroDecisionNodeRegistrationTests unit/runtime/ai/DecisionNodeRegistrationTests.cpp
+        unit/runtime/ai/DecisionNodeNativeHostTests.cpp)
+target_compile_features(HoroDecisionNodeRegistrationTests PRIVATE cxx_std_20)
+target_include_directories(HoroDecisionNodeRegistrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroDecisionNodeRegistrationTests PRIVATE HoroEngine::AI HoroEngine::GameplayApi HoroEngine::GameplayModuleHost)
+horo_register_catch_test(HoroDecisionNodeRegistrationTests LABELS "unit;ai;headless")
+
 add_executable(HoroTerrainSculptProducerTests unit/editor/TerrainSculptProducerTests.cpp
         ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainSculptProducer.cpp
         ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainViewportPicking.cpp)
@@ -2162,6 +2175,10 @@ horo_add_gameplay_module(HoroTestAiGameModule
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/AiGameModule.cpp)
 target_link_libraries(HoroTestAiGameModule PRIVATE HoroEngine::GameplayAiIntegration)
 get_property(HORO_TEST_AI_MODULE_REVISION_FILE TARGET HoroTestAiGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+add_dependencies(HoroDecisionNodeRegistrationTests HoroTestAiGameModule)
+target_compile_definitions(HoroDecisionNodeRegistrationTests PRIVATE
+    HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
+    HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
 add_executable(HoroGameplayAiTests
     support/AllocationProbe.cpp
     unit/gameplay/GameplayAiCapabilityTests.cpp

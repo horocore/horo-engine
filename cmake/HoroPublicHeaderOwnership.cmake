@@ -489,6 +489,7 @@ horo_configure_target_header_boundary(HoroNetworkTransportNull PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
+    Horo/Gameplay/NativeDecisionNode.h
     Horo/Gameplay/GameEventRegistry.h
     Horo/Gameplay/Behavior.h
     Horo/Gameplay/PersistenceSource.h
@@ -552,6 +553,7 @@ horo_configure_target_header_boundary(HoroShaderBuild PUBLIC_HEADERS
     Horo/Application/ShaderBuildService.h
 )
 horo_configure_target_header_boundary(HoroGameplayLua PUBLIC_HEADERS
+    Horo/Gameplay/LuaDecisionNode.h
     Horo/Gameplay/LuaBehavior.h
 )
 
@@ -725,6 +727,7 @@ horo_configure_target_header_boundary(HoroCharacterInput PUBLIC_HEADERS
     Horo/CharacterInput/DesiredMotionAdapter.h
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
+    Horo/AI/DecisionNodeRegistration.h
     Horo/AI/AICapabilityDescriptors.h
     Horo/AI/AICanonicalState.h
     Horo/AI/AIErrors.h

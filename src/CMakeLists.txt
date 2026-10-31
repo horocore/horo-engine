@@ -964,6 +964,7 @@ target_link_libraries(HoroUiTemplateHost PUBLIC HoroEngine::UiTemplateInstances 
         HoroEngine::Assets HoroEngine::PackageSecurity HoroEngine::ProjectMutationGuard)
 
 add_library(HoroGameplayApi STATIC
+        gameplay/api/NativeDecisionNode.cpp
         gameplay/api/PersistenceRegistration.cpp
         gameplay/api/GameEventRegistry.cpp
         gameplay/api/BehaviorTypes.cpp
@@ -1000,7 +1001,7 @@ add_library(HoroGameplayApi STATIC
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)
 target_compile_features(HoroGameplayApi PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayApi PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayApi PUBLIC HoroEngine::Foundation HoroEngine::NetworkApi HoroEngine::SaveApi)
+target_link_libraries(HoroGameplayApi PUBLIC HoroEngine::Foundation HoroEngine::NetworkApi HoroEngine::SaveApi HoroEngine::AI)
 target_compile_definitions(HoroGameplayApi PRIVATE
         HORO_GAMEPLAY_SDK_FINGERPRINT="${HORO_GAMEPLAY_SDK_FINGERPRINT}"
 )
@@ -1142,6 +1143,7 @@ target_include_directories(HoroGameplayModuleHost PUBLIC ${PROJECT_SOURCE_DIR}/i
 target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 
 add_library(HoroGameplayLua STATIC
+    gameplay/lua/LuaDecisionNode.cpp
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaBehaviorSandbox.cpp
         gameplay/lua/LuaBehaviorSandbox.h
@@ -1642,6 +1644,8 @@ target_compile_features(HoroCharacterInput PUBLIC cxx_std_20)
 target_link_libraries(HoroCharacterInput PUBLIC HoroEngine::Input HoroEngine::Physics)
 
 add_library(HoroAI STATIC
+        runtime/ai/api/DecisionNodeRegistration.cpp
+        runtime/ai/api/DecisionNodeExecutor.cpp
         runtime/ai/api/AICapabilityDescriptors.cpp
         runtime/ai/api/AICanonicalErrors.cpp
         runtime/ai/api/AICanonicalState.cpp
@@ -3960,7 +3964,7 @@ target_link_libraries(HoroPackageLifecycle PRIVATE HoroPackageContentStagingInte
 add_library(HoroPackageGameplayHost STATIC packages/gameplay/GameplayPackageModuleHost.cpp)
 add_library(HoroEngine::PackageGameplayHost ALIAS HoroPackageGameplayHost)
 target_compile_features(HoroPackageGameplayHost PUBLIC cxx_std_20)
-target_link_libraries(HoroPackageGameplayHost PUBLIC HoroEngine::PackageLifecycle HoroEngine::GameplayModuleHost
+target_link_libraries(HoroPackageGameplayHost PUBLIC HoroEngine::PackageLifecycle HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
     PRIVATE HoroPackageContentStagingInternal)
 
 

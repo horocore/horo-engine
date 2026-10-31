@@ -205,7 +205,7 @@ horo_allow_target_dependencies(TARGET HoroInput DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroAndroidInputIntegration DEPENDENCIES HoroInput)
 horo_allow_target_dependencies(TARGET HoroInputSdl DEPENDENCIES HoroInput)
 
-horo_allow_target_dependencies(TARGET HoroGameplayApi DEPENDENCIES HoroFoundation HoroNetworkApi HoroSaveApi)
+horo_allow_target_dependencies(TARGET HoroGameplayApi DEPENDENCIES HoroFoundation HoroNetworkApi HoroSaveApi HoroAI)
 horo_allow_target_dependencies(TARGET HoroRuntimeScene
     DEPENDENCIES HoroFoundation HoroRuntime HoroAssets HoroGameplayApi HoroNavigationApi HoroPhysicsModel HoroSceneModel HoroRuntimeUi HoroAI HoroAudioApi HoroVfxApi)
 horo_allow_target_dependencies(TARGET HoroGameplayNavigationIntegration DEPENDENCIES HoroNavigationRuntime)
@@ -296,7 +296,7 @@ horo_allow_target_dependencies(TARGET HoroGui
 horo_allow_target_dependencies(TARGET HoroPackageContentStagingInternal
     DEPENDENCIES HoroPackageSecurity)
 horo_allow_target_dependencies(TARGET HoroPackageGameplayHost
-    DEPENDENCIES HoroPackageLifecycle HoroGameplayModuleHost HoroPackageContentStagingInternal)
+    DEPENDENCIES HoroPackageLifecycle HoroGameplayModuleHost HoroGameplayLua HoroPackageContentStagingInternal)
 horo_allow_target_dependencies(TARGET HoroPackageLifecycle
     DEPENDENCIES HoroFoundation HoroPackageSecurity HoroExtensions HoroAssets HoroPackageContentStagingInternal)
 horo_allow_target_dependencies(TARGET HoroExtensions

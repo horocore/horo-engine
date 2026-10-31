@@ -9,6 +9,13 @@
 #include <utility>
 
 namespace Horo::Gameplay {
+    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> LoadedGameModule::AcquireDecisionNodes() const {
+        if (std::this_thread::get_id() != impl_->ownerThread || !impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
+            return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};
+        return AI::DecisionNodeGeneration::Capture(impl_->decisionNodes, std::move(admission));
+    }
+
     LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     LoadedGameModule::~LoadedGameModule() {

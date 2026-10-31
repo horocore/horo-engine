@@ -77,6 +77,7 @@ namespace Horo::Gameplay {
         ~Impl();
 
         /** @brief Freezes contributed metadata and binds exact-generation leases before any runtime activation. */
+        [[nodiscard]] Result<void> CaptureGeneratedContributions(const GeneratedGameplayDescriptorBundle &bundle);
         [[nodiscard]] Result<void> FreezeRegistries(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities,
                                                     const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission);
@@ -102,6 +103,7 @@ namespace Horo::Gameplay {
         std::string moduleId;
         std::string buildFingerprint;
         std::uint64_t descriptorRevision{};
+        std::vector<AI::DecisionNodeRegistration> decisionNodes;
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};
         std::thread::id ownerThread{std::this_thread::get_id()};
