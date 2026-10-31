@@ -16,7 +16,9 @@ namespace Horo::Editor {
             if (entries.empty())
                 continue;
             const auto &label = context.localization.Get("editor", category.labelKey);
-            if (!Ui::BeginContextSubmenu(label.c_str(), context.theme.fonts))
+            std::string categoryLabel = label + "###";
+            categoryLabel.append(category.labelKey);
+            if (!Ui::BeginContextSubmenu(categoryLabel.c_str(), context.theme.fonts))
                 continue;
             bool drawn = false;
             for (const auto &entry : entries) {

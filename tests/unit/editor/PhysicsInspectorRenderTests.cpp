@@ -225,7 +225,8 @@ TEST_CASE("Add Component exposes script creation through its Scripts category", 
         ImGui::Begin("ComponentMenuTest");
         ImGui::OpenPopup("components");
         if (Ui::BeginMenuPopup("components")) {
-            const std::string category = localization.Get("editor", "workspace.inspector.add_scripts");
+            const std::string category =
+                localization.Get("editor", "workspace.inspector.add_scripts") + "###workspace.inspector.add_scripts";
             ImGui::OpenPopup(("##submenu_popup_" + category).c_str());
             if (index == 2) {
                 auto &gui = *ImGui::GetCurrentContext();

@@ -420,6 +420,9 @@ TEST_CASE("Workspace transport buttons dispatch only canonical lifecycle actions
     using namespace Horo;
     using namespace Horo::Editor;
     Horo::Editor::Tests::EditorGuiContextFixture fixture;
+    REQUIRE(fixture.localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor/en-US.json"));
+    REQUIRE(fixture.localization.Prepare(LocaleTag{"en-US"}));
+    REQUIRE(fixture.localization.ActivatePrepared());
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     WorkspacePanelRegistry panels;
     auto input = fixture.input.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
