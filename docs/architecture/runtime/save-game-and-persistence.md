@@ -239,8 +239,47 @@ name a path, namespace, storage provider or native handle. Native C++ participan
 planned scripting adapters map to the same inert descriptor, bounded capture sink,
 staged restore and path-free request semantics rather than parallel persistence models.
 
-The complete application service shape below remains schematic; it is not an
-installed `RuntimeSaveService` header:
+The complete slot-aware application service shape below remains schematic; it is not an
+installed `RuntimeSaveService` header. The implemented foundation orchestrator is
+`RuntimeSaveSession` (`HoroEngine::Runtime`); it composes the existing registry,
+capture barrier, safe-point coordinator, operation lifecycle, JobSystem and staged
+restore transaction without selecting archive/storage policy:
+
+- The host supplies a pinned real registry snapshot, exact runtime/Scene/registry
+  generation and its actual mutation/epoch capture barrier. Every required domain
+  and capture owner must already be registered; the session never synthesizes
+  readiness or content-install/world proof. Host generation replacement retires
+  this session and explicitly composes its successor.
+- Save admission retains one bounded operation. At the host's exclusive
+  `CommitDeferredLifecycleChanges`, the existing barrier captures immutable
+  participant data. An operation-owned writer prepares detached data on the
+  explicitly selected JobSystem CPU/I/O lane. Only the existing atomic operation
+  commit gate admits its transactional publication. A preparation failure is
+  `NotCommitted`; a publication failure is conservatively `Unknown`.
+- Load input is staged by an owned worker adapter. Receipt decoding, validation,
+  instantiation, application, reference fixup and aggregate activation use the
+  existing deterministic `StagedRestoreTransaction` at the owner safe point.
+  An inactive candidate never replaces live state on preparation failure.
+- Submission, pumping, retirement and acknowledgement belong to the owner thread;
+  returned request polling, completion observation and cancellation are thread-safe.
+  One terminal record remains until explicit acknowledgement after worker settlement.
+  Retirement is nonblocking; detached closures own their inputs and registry/module
+  leases, never a session pointer. Hosts retain external owners until `IsSettled`.
+  Destroy the session on its construction thread. Writer/source/staged-receipt leases
+  may outlive it; their last-reference destruction must be safe on worker or owner
+  threads and cannot assume owner-thread runtime retirement. The same owner mutation
+  fence covers admission, capture/restore pumping, retirement and acknowledgement,
+  including host clock and completion callbacks; nested transitions fail explicitly.
+
+This additive public API is owned only by HoroRuntime and has standalone staged
+header consumer and real registered-participant integration coverage. Existing
+primitive consumers migrate by replacing their hand-written capture/worker/restore
+wiring; they retain their real barrier and storage/restore adapters. The lower
+level contracts remain canonical. Editor SceneDocument persistence is not a save
+participant and acquires no dependency on the session. This integration does not
+install PIE controls or a packaged slot policy.
+
+The planned complete slot-aware application surface is:
 
 ```cpp
 struct ProductStorageId { Uuid value; };

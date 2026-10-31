@@ -4034,6 +4034,13 @@ add_executable(HoroRuntimeSaveParticipantRegistryTests
 target_compile_features(HoroRuntimeSaveParticipantRegistryTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveParticipantRegistryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSaveParticipantRegistryTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveSessionPublicConsumer support/RuntimeSaveSessionPublicConsumer.cpp)
+target_compile_features(HoroRuntimeSaveSessionPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveSessionPublicConsumer PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveSessionTests unit/runtime/save/RuntimeSaveSessionTests.cpp)
+target_compile_features(HoroRuntimeSaveSessionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveSessionTests PRIVATE HoroEngine::Runtime)
+horo_register_catch_test(HoroRuntimeSaveSessionTests LABELS "unit;runtime;save")
 add_executable(HoroRuntimeSaveCaptureSnapshotTests
         support/AllocationProbe.cpp
         unit/runtime/save/SaveCaptureSnapshotTests.cpp

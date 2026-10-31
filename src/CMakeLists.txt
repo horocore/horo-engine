@@ -565,6 +565,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveNamespace.cpp
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
+        runtime/save/RuntimeSaveSession.cpp
         runtime/save/SaveRestoreTransaction.cpp
         runtime/save/SaveGameplayCheckpoint.cpp
         runtime/save/SaveRestoreTransactionReferences.cpp
