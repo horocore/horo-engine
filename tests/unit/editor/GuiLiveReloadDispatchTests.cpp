@@ -90,6 +90,8 @@ namespace {
     };
 
     struct Modal : EditorModal {
+        Modal() : EditorModal("test.GuiLiveReloadModal") {}
+
         bool fail{};
         int calls{};
 
