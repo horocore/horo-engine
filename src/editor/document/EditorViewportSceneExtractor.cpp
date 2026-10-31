@@ -286,7 +286,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ResolveSceneObjectWorldTransforms */
-    Result<SceneObjectWorldTransforms> ResolveSceneObjectWorldTransforms(const Runtime::RuntimeSceneView scene,
+    Result<SceneObjectWorldTransforms> ResolveSceneObjectWorldTransforms(const Runtime::RuntimeSceneView &scene,
                                                                          const SceneObjectId object) {
         const std::optional<Runtime::EntityRef> entity = scene.Find(Runtime::SceneObjectId{object.value});
         if (!entity)
@@ -401,7 +401,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ApplyEditorViewportTransformPreview */
-    Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView scene,
+    Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView &scene,
                                                      const std::span<const SceneObjectTransformPreview> previews,
                                                      EditorViewportSceneSnapshot &snapshot) {
         if (snapshot.runtimeSceneId != scene.RuntimeId() || snapshot.instances.size() != snapshot.instanceObjects.size()) {
@@ -418,7 +418,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ApplyEditorViewportLightPreview */
-    Result<void> ApplyEditorViewportLightPreview(const Runtime::RuntimeSceneView scene, const SceneObjectLightPreview *preview,
+    Result<void> ApplyEditorViewportLightPreview(const Runtime::RuntimeSceneView &scene, const SceneObjectLightPreview *preview,
                                                  EditorViewportSceneSnapshot &snapshot) {
         if (snapshot.runtimeSceneId != scene.RuntimeId() || snapshot.lights.size() != snapshot.lightObjects.size()) {
             return Result<void>::Failure(ExtractionError(ViewportSceneErrors::InstanceIdentityMismatch,

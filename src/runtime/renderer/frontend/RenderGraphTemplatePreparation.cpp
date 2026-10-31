@@ -53,6 +53,7 @@ namespace Horo::Render::Detail {
     /** @copydoc PreparedRenderGraphTemplate::ValidateOptionalReads */
     Result<void> PreparedRenderGraphTemplate::ValidateOptionalReads(const RenderGraph &graph,
                                                                     std::span<const RenderGraphOptionalRead> reads) {
+        using enum RenderGraphUsageKind;
         if (reads.empty())
             return Result<void>::Success();
         if (graph.Passes().size() != 1 || graph.Passes().front().kind != RenderPassKind::Graphics ||
@@ -61,8 +62,7 @@ namespace Horo::Render::Detail {
         std::array<std::uint8_t, RenderGraphLimits::HardMaxResources> selected{};
         for (const auto &read : reads) {
             if (read.resource.owner != graph.Owner() || read.resource.value == 0 || read.resource.value > graph.Resources().size() ||
-                (read.role != RenderGraphUsageKind::VertexBuffer && read.role != RenderGraphUsageKind::IndexBuffer &&
-                 read.role != RenderGraphUsageKind::UniformBuffer))
+                (read.role != VertexBuffer && read.role != IndexBuffer && read.role != UniformBuffer))
                 return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
             const auto index = read.resource.value - 1;
             if (const auto &resource = graph.Resources()[index]; selected[index] || resource.kind != RenderGraphResourceKind::Buffer ||

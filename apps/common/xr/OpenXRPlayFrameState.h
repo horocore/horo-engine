@@ -207,7 +207,7 @@ namespace Horo::Application::Internal {
         }
 
         Result<XrSpace> Borrow(const XR::XRCoordinateSpace &space) const override {
-            return host.composition_.session.BorrowWorldSpace(space);
+            return host.composition_.session.BorrowPresentationReference(space);
         }
 
         /** @brief Retires only the exact candidate's frame/image/queue children through the same host.
@@ -215,6 +215,8 @@ namespace Horo::Application::Internal {
          * @return False while actual debt remains, original failure, or complete resource retirement.
          */
         [[nodiscard]] static Result<bool> RetireResources(OpenXRPlayHost &host, const XR::XRSessionId &candidate);
+        /** @brief Retires graphics after native stopping or the exact captured Lost state permits recovery. */
+        [[nodiscard]] static Result<bool> RetireGraphics(OpenXRPlayHost &host, bool lost);
         /** @brief Polls the same submitted queue debt and releases exact eye views during explicit Lost recovery.
          * @return Original poll/view-release error, retaining every unreleased view for retry. No completion is manufactured.
          */

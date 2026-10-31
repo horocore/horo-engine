@@ -1563,6 +1563,7 @@ if(HORO_BUILD_XR_OPENXR)
         unit/runtime/xr/OpenXRInstalledHostCatalogTests.cpp)
     target_link_libraries(HoroOpenXRProductHostTests PRIVATE HoroOpenXRProductHost HoroHostSignatureDocuments
         nlohmann_json::nlohmann_json MbedTLS::mbedcrypto)
+    target_include_directories(HoroOpenXRProductHostTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     if(TARGET HoroEditorOpenXRBootstrap)
         target_sources(HoroOpenXRProductHostTests PRIVATE unit/runtime/xr/EditorOpenXRBootstrapTests.cpp)
         target_link_libraries(HoroOpenXRProductHostTests PRIVATE HoroEditorOpenXRBootstrap)
@@ -1880,7 +1881,10 @@ target_include_directories(HoroCharacterSceneProductTests PRIVATE
 target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroNetworkProductHost HoroEngine::PhysicsTriggerVolumeHost HoroEngine::Platform
         nlohmann_json::nlohmann_json miniz)
 add_dependencies(HoroCharacterSceneProductTests horo-engine)
-horo_register_catch_test(HoroCharacterSceneProductTests LABELS "integration;character;scene;editor;headless;product")
+# The generated canonical case runs source/cooked CLI children for both scene sizes.
+# Four bounded 90-second children plus fixture setup must fit within the CTest budget.
+horo_register_catch_test(HoroCharacterSceneProductTests LABELS "integration;character;scene;editor;headless;product"
+        PROPERTIES TIMEOUT 420)
 
 add_executable(HoroProjectPhysicsCaptureBoundaryConsumer support/ProjectPhysicsCapturePublicHeaderConsumer.cpp)
 target_compile_features(HoroProjectPhysicsCaptureBoundaryConsumer PRIVATE cxx_std_20)
@@ -3748,6 +3752,7 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderSubmissionAllocatorTests.cpp
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
+        unit/runtime/renderer/RenderMultiviewContentsTests.cpp
         unit/runtime/renderer/RenderFrontendLifecycleTests.cpp
             unit/runtime/renderer/RenderFrontendGuiCompositionTests.cpp
         unit/runtime/renderer/RenderFrontendPresentationTests.cpp
@@ -3778,6 +3783,7 @@ target_include_directories(HoroRenderFrontendTests PRIVATE
 )
 target_link_libraries(HoroRenderFrontendTests
         PRIVATE
+        HoroRenderGraphContentsInternal
         HoroEngine::TerrainRenderIntegration
         HoroRenderGraphTemplateInterface
         HoroRenderExternalImagesInterface

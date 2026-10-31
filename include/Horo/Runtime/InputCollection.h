@@ -60,7 +60,7 @@ namespace Horo::Input {
         /** @brief Atomically stages one source's values. @param source Exact current registration.
          * @param values Unique registration-local indices and normalized payloads.
          * @return Typed stale, invalid, capacity or owner-thread error without partial admission. */
-        [[nodiscard]] Result<void> Append(const InputActionSourceToken &source, std::span<const CollectedActionValue> values);
+        [[nodiscard]] Result<void> Append(const InputActionSourceToken &source, std::span<const CollectedActionValue> values) const;
         /** @brief Publishes the raw snapshot and all staged values once through the existing router ledger.
          * @return Success or typed stale/owner-thread failure. Missing sources commit neutral state.
          * @pre The raw snapshot supplied to Begin remains alive through this frame's routing, as for BeginFrame. */

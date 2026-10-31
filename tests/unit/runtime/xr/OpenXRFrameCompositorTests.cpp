@@ -296,8 +296,20 @@ namespace Horo::Tests::OpenXR {
                 const auto waited = f.compositor.Wait();
                 REQUIRE(waited.HasValue());
                 f.script.beginResult = XR_ERROR_RUNTIME_FAILURE;
-                REQUIRE_FALSE(f.compositor.Begin(waited.Value().frame).HasValue());
-                REQUIRE_FALSE(f.compositor.Wait().HasValue());
+                const auto failed = f.compositor.Begin(waited.Value().frame);
+                REQUIRE(failed.HasError());
+                REQUIRE(f.compositor.RetainedFault());
+                CHECK(f.compositor.RetainedFault()->message == failed.ErrorValue().message);
+                const auto repeated = f.compositor.Wait();
+                REQUIRE(repeated.HasError());
+                CHECK(repeated.ErrorValue().code.Value() == XRErrors::OperationUnavailable.code.Value());
+                REQUIRE(repeated.ErrorValue().cause.Get());
+                CHECK(repeated.ErrorValue().cause.Get()->message == failed.ErrorValue().message);
+                const auto repeatedBegin = f.compositor.Begin(waited.Value().frame);
+                REQUIRE(repeatedBegin.HasError());
+                CHECK(repeatedBegin.ErrorValue().code.Value() == XRErrors::OperationUnavailable.code.Value());
+                REQUIRE(repeatedBegin.ErrorValue().cause.Get());
+                CHECK(repeatedBegin.ErrorValue().cause.Get()->message == failed.ErrorValue().message);
                 CHECK(f.frames.Snapshot().phase == XRFramePhase::Waited);
                 f.Recover();
             }
@@ -305,8 +317,15 @@ namespace Horo::Tests::OpenXR {
                 const auto frame = f.Begin();
                 REQUIRE(f.frames.Abort(frame) == XRFrameStatus::Ok);
                 f.script.endResult = XR_ERROR_RUNTIME_FAILURE;
-                REQUIRE_FALSE(f.compositor.EndEmpty(frame).HasValue());
-                REQUIRE_FALSE(f.compositor.EndEmpty(frame).HasValue());
+                const auto failed = f.compositor.EndEmpty(frame);
+                REQUIRE(failed.HasError());
+                REQUIRE(f.compositor.RetainedFault());
+                CHECK(f.compositor.RetainedFault()->message == failed.ErrorValue().message);
+                const auto repeated = f.compositor.EndEmpty(frame);
+                REQUIRE(repeated.HasError());
+                CHECK(repeated.ErrorValue().code.Value() == XRErrors::OperationUnavailable.code.Value());
+                REQUIRE(repeated.ErrorValue().cause.Get());
+                CHECK(repeated.ErrorValue().cause.Get()->message == failed.ErrorValue().message);
                 CHECK(f.script.ends == 1);
                 f.Recover();
             }

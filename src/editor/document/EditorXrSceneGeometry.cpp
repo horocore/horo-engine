@@ -113,7 +113,8 @@ namespace Horo::Editor {
         }
     };
 
-    PreparedEditorXrGeometry::PreparedEditorXrGeometry(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    PreparedEditorXrGeometry::PreparedEditorXrGeometry(const ConstructionKey &, std::unique_ptr<Impl> impl) noexcept
+        : impl_(std::move(impl)) {}
 
     PreparedEditorXrGeometry::~PreparedEditorXrGeometry() = default;
 
@@ -204,7 +205,7 @@ namespace Horo::Editor {
             return Output::Failure(hierarchy.ErrorValue());
         if (auto mapped = impl->MapInstances(candidate); mapped.HasError())
             return Output::Failure(mapped.ErrorValue());
-        auto prepared = std::unique_ptr<PreparedEditorXrGeometry>(new PreparedEditorXrGeometry(std::move(impl)));
+        auto prepared = std::make_unique<PreparedEditorXrGeometry>(PreparedEditorXrGeometry::ConstructionKey{}, std::move(impl));
         if (const auto valid = prepared->Update(candidate); valid.HasError())
             return Output::Failure(valid.ErrorValue());
         return Output::Success(std::move(prepared));

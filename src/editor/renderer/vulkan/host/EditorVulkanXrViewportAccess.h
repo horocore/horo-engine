@@ -57,7 +57,7 @@ namespace Horo::Editor {
         [[nodiscard]] static EditorViewportTextureView Mirror(const EditorViewportRendererVulkan &viewport, std::uint64_t frame,
                                                               Render::RenderTextureViewHandle expected) noexcept;
         /** @brief Revokes only the borrowed mirror receipt on exact Scene loss/retirement; native queue debt stays owned. */
-        static void RevokeMirror(EditorViewportRendererVulkan &viewport) noexcept;
+        static void RevokeMirror(const EditorViewportRendererVulkan &viewport) noexcept;
         /** @brief Releases cold XR graph backing only after the App proved every acquisition/scene/GUI reference retired.
          * @param viewport SAME selected owner. @pre Exact native image retirement is already complete; owner lane.
          */

@@ -38,7 +38,7 @@ namespace Horo::Render::Detail {
             throw std::bad_alloc{};
         }
 
-        void Deallocate(std::byte *address) noexcept {
+        void Deallocate(const std::byte *address) noexcept {
             // Destruction follows the same render-owner completion poll lane as native retirement.
             if (std::this_thread::get_id() != owner_)
                 std::terminate();
@@ -72,11 +72,11 @@ namespace Horo::Render::Detail {
         [[nodiscard]] T *allocate(const std::size_t count) {
             if (!pool || count > VulkanExternalAllocationPool::CellBytes / sizeof(T))
                 throw std::bad_alloc{};
-            return reinterpret_cast<T *>(pool->Allocate(count * sizeof(T), alignof(T)));
+            return static_cast<T *>(static_cast<void *>(pool->Allocate(count * sizeof(T), alignof(T))));
         }
 
         void deallocate(T *address, std::size_t) const noexcept {
-            pool->Deallocate(reinterpret_cast<std::byte *>(address));
+            pool->Deallocate(static_cast<const std::byte *>(static_cast<const void *>(address)));
         }
 
         template <typename U> bool operator==(const VulkanExternalAllocator<U> &other) const noexcept {

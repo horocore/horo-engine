@@ -37,15 +37,15 @@ namespace Horo::Editor {
         std::array<std::byte, MaximumUniformBytes> storage{};
         const auto bytes = std::span{storage}.first(shader_.uniformBytes);
         for (const auto parameter : {1U, 2U, 3U}) {
-            const auto written =
-                WriteParameter(bytes, {parameter},
-                               parameter == 1 ? std::span<const float>{mvp.values} : std::span<const float>{identity.values});
+            const auto written = ProgramResources::WriteParameter(shader_.layout, bytes, {parameter},
+                                                                  parameter == 1 ? std::span<const float>{mvp.values}
+                                                                                 : std::span<const float>{identity.values});
             if (written.HasError())
                 return written;
         }
-        if (const auto written = WriteParameter(bytes, {4}, mode); written.HasError())
+        if (const auto written = ProgramResources::WriteParameter(shader_.layout, bytes, {4}, mode); written.HasError())
             return written;
-        if (const auto written = WriteParameter(bytes, {10}, palette); written.HasError())
+        if (const auto written = ProgramResources::WriteParameter(shader_.layout, bytes, {10}, palette); written.HasError())
             return written;
         return bridge_.Port()->WriteFrameBuffer(frame, slot.uniforms.instance, bytes);
     }

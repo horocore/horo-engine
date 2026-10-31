@@ -2,6 +2,10 @@
 #include "support/OpenXRInstalledProductTestFixture.h"
 
 #include <catch2/generators/catch_generators.hpp>
+#include <type_traits>
+
+static_assert(!std::is_default_constructible_v<Horo::Editor::EditorOpenXRBootstrap::ConstructionKey>);
+static_assert(!std::is_aggregate_v<Horo::Editor::EditorOpenXRBootstrap::ConstructionKey>);
 
 namespace Horo::Editor::Tests {
     namespace {

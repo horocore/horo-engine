@@ -46,9 +46,8 @@ namespace Horo::Editor {
         return HoroDark;
     }
 
-    /** @copydoc CreateEditorConfigurationService */
-    ConfigurationService CreateEditorConfigurationService(const EditorSettings &settings, EngineDataBus *events,
-                                                          ConfigurationSchema schema) {
+    /** @copydoc CreateEditorConfigurationSchema */
+    ConfigurationSchema CreateEditorConfigurationSchema(const EditorSettings &settings, ConfigurationSchema schema) {
         const ModuleConfigurationContribution contribution = MakeEditorSettingsContribution(settings);
         for (const SettingDescriptor &descriptor : contribution.settings) {
             if (schema.FindDescriptor(descriptor.key) == nullptr)
@@ -60,7 +59,13 @@ namespace Horo::Editor {
         if (sealed.HasError()) {
             std::terminate();
         }
-        return ConfigurationService{std::move(schema), events};
+        return schema;
+    }
+
+    /** @copydoc CreateEditorConfigurationService */
+    ConfigurationService CreateEditorConfigurationService(const EditorSettings &settings, EngineDataBus *events,
+                                                          ConfigurationSchema schema) {
+        return ConfigurationService{CreateEditorConfigurationSchema(settings, std::move(schema)), events};
     }
 
     /** @copydoc MakeEditorSettingsContribution */

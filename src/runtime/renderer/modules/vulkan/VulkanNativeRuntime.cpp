@@ -165,6 +165,7 @@ namespace Horo::Render {
             Result<void> CreateInstance(const VulkanInstanceRequest &request) override {
                 if (instance_ != VK_NULL_HANDLE)
                     return Result<void>::Failure(MakeError(VulkanBackendErrors::AlreadyInitialized));
+                // Native/host callbacks can mutate the caller's request; publication retains this admitted value.
                 const auto admitted = request;
                 if (!enabledGraphics_.host)
                     return Result<void>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
@@ -277,6 +278,7 @@ namespace Horo::Render {
             Result<void> CreateDevice(const VulkanDeviceRequest &request) override {
                 if (device_ != VK_NULL_HANDLE)
                     return Result<void>::Failure(MakeError(VulkanBackendErrors::AlreadyInitialized));
+                // Keep owned extension/queue storage stable across host validation and native creation callbacks.
                 const auto admitted = request;
                 const auto selected = std::ranges::find(nativeAdapters_, admitted.adapter, &NativeAdapter::id);
                 if (selected == nativeAdapters_.end()) {
@@ -920,13 +922,12 @@ namespace Horo::Render {
 
     namespace Detail {
         /** @copydoc QueryMultiviewDepthLimits */
-        Result<VulkanMultiviewDepthLimits> QueryMultiviewDepthLimits(const VkPhysicalDevice device,
-                                                                     const PFN_vkGetPhysicalDeviceImageFormatProperties query,
+        Result<VulkanMultiviewDepthLimits> QueryMultiviewDepthLimits(const VkPhysicalDevice device, const VulkanDepthFormatQuery &query,
                                                                      const std::uint32_t implementedViews,
                                                                      const VkPhysicalDeviceLimits &limits) {
             if (implementedViews == 0)
                 return Result<VulkanMultiviewDepthLimits>::Success({});
-            if (query == nullptr)
+            if (!query)
                 return Result<VulkanMultiviewDepthLimits>::Failure(MissingEntryPoint("vkGetPhysicalDeviceImageFormatProperties"));
             VkImageFormatProperties format{};
             const auto result = query(device, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,

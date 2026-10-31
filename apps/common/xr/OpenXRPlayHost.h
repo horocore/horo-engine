@@ -57,6 +57,15 @@ namespace Horo::Application::Internal {
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
                                  private XR::IXRBindingNeutralizer {
     public:
+        /** @brief Factory-only authority for adopting an already prepared native session. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class OpenXRPlayHost;
+        };
+
+        /** @brief Adopts the existing composition after its native preparation succeeded. */
+        OpenXRPlayHost(const ConstructionKey &key, OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation);
+
         /** @brief Composes actual existing native and scheduler parents without publishing Ready.
          * @param composition Exact selected application owners; all borrowed parents outlive the host.
          * @return Concrete host or preserved native/declaration/currentness failure; no fallback renderer is selected.
@@ -67,6 +76,8 @@ namespace Horo::Application::Internal {
          * @return True only after actual frame/image/GUI/native retirement; false/error retains every parent for retry.
          * @pre Owner lane outside callbacks. No normal-frame wait or guessed completion; explicit App teardown
          * retains this owner and the selected device/loader until success. Repeated calls preserve original debt.
+         * A retained terminal compositor Begin/End fault revokes the SAME session to Lost before bounded cleanup;
+         * closing still rejects new work. Only actual native destruction permits the quiescent frame reset.
          */
         [[nodiscard]] Result<bool> Close();
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
@@ -133,12 +144,11 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override;
 
     private:
-        OpenXRPlayHost(OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation);
         [[nodiscard]] Result<void> Prepare(XR::XRSessionPreparation stage, const XR::XRSessionId &candidate,
                                            const XR::XRFeaturePlan &plan) override;
         void Release(XR::XRSessionPreparation stage, const XR::XRSessionId &session) noexcept override;
         void Neutralize(const XR::XRSessionId &session, std::uint64_t revision) noexcept override;
-        [[nodiscard]] Result<void> AppendInput(const Runtime::FrameContext &context, Input::InputCollectionFrame &frame);
+        [[nodiscard]] Result<void> AppendInput(const Runtime::FrameContext &context, const Input::InputCollectionFrame &frame);
         [[nodiscard]] Result<void> Lane() const;
         struct FrameState;
         [[nodiscard]] Result<void> ProgressTail();

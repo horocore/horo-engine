@@ -411,10 +411,9 @@ namespace Horo::Render {
         if (ValidateRenderTextureDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::InvalidTextureDescriptor));
         const auto &capabilities = backend_->Capabilities();
-        const auto &support = capabilities.support;
-        if (!support.IsValid() || !capabilities.supportsTextureResources ||
-            !support.features.Supports(RenderCapability::ViewIndexedShaders) || viewCount > support.limits.maxMultiviewViews ||
-            !support.Supports(descriptor))
+        if (const auto &support = capabilities.support; !support.IsValid() || !capabilities.supportsTextureResources ||
+                                                        !support.features.Supports(RenderCapability::ViewIndexedShaders) ||
+                                                        viewCount > support.limits.maxMultiviewViews || !support.Supports(descriptor))
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
         if (!resourceUploadQueue_->CanEnqueue(0))
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::ResourceUploadCapacityExceeded));

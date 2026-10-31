@@ -367,6 +367,12 @@ namespace Horo::Application::Internal {
             if (host.events_->Running())
                 return Output::Success(false);
         }
+        return RetireGraphics(host, lost);
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::RetireGraphics */
+    Result<bool> OpenXRPlayHost::FrameState::RetireGraphics(OpenXRPlayHost &host, const bool lost) {
+        using Output = Result<bool>;
         if (host.render_) {
             if (auto closed = host.render_->compositor.BeginShutdown(); closed.HasError())
                 return Output::Failure(closed.ErrorValue());

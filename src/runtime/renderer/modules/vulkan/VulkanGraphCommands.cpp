@@ -1,15 +1,38 @@
+#include "RenderMultiviewAttachmentContents.h"
 #include "VulkanGraphRuntimeInternal.h"
 
 #include <algorithm>
 #include <type_traits>
 
 namespace Horo::Render::Detail {
+    namespace {
+        /** @brief Updates only admitted multiview attachment contents in the existing transactional scratch journal. */
+        void PrepareMultiviewContents(const RenderGraphMultiview &workload, const std::span<const VulkanGraphResource> bindings,
+                                      const std::span<VulkanGraphResourceState> states) {
+            using enum MultiviewAttachmentAspect;
+            // PreparePass already admitted the exact native targets. Keep this evidence in the same scratch
+            // journal as ordinary attachments: neither recording nor an aborted/failed submission publishes it.
+            for (const auto &target : workload.targets) {
+                for (const auto aspect : {Color, Depth}) {
+                    const auto resource = aspect == Color ? target.color : target.depth;
+                    if (!resource.IsValid())
+                        continue;
+                    const auto index = resource.value - 1;
+                    states[index].contentsDefined = MultiviewAttachmentContentsDefined(states[index].contentsDefined, workload, resource,
+                                                                                       bindings[index].textureDescriptor, aspect);
+                }
+            }
+        }
+    }  // namespace
+
 #include "VulkanGraphDepthAttachment.inl"
 
     /** @brief Validates native descriptor roles and contents before recording; unsupported adjacent capabilities remain explicit. */
     Result<void> VulkanGraphRuntime::Impl::ValidateWorkload(const RenderGraphWorkload &workload, const RenderQueueId queue) {
-        if (std::holds_alternative<RenderGraphMultiview>(workload))
-            return Result<void>::Success();  // Complete native scene admission is performed with the full request in PreparePass.
+        if (const auto *multiviewWork = std::get_if<RenderGraphMultiview>(&workload)) {
+            PrepareMultiviewContents(*multiviewWork, bindings, states);
+            return Result<void>::Success();
+        }
         if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
             return ValidateDepthAttachment(*depth, queue);
         if (std::holds_alternative<std::monostate>(workload))
@@ -68,23 +91,25 @@ namespace Horo::Render::Detail {
         }
     }
 
-    /** @copydoc VulkanGraphRuntime::Impl::EncodeCopy */
-    void VulkanGraphRuntime::Impl::EncodeCopy(const VkCommandBuffer command, const RenderGraphBufferCopy &operation) const noexcept {
+    /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeCopy */
+    void VulkanGraphRuntime::Impl::Dispatch::EncodeCopy(const VkCommandBuffer command, const RenderGraphBufferCopy &operation,
+                                                        const std::span<const VulkanGraphResource> resident) const noexcept {
         const VkBufferCopy2 region{.sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
                                    .srcOffset = operation.sourceOffset,
                                    .dstOffset = operation.destinationOffset,
                                    .size = operation.byteCount};
         const VkCopyBufferInfo2 commandInfo{.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
-                                            .srcBuffer = bindings[operation.source.value - 1].buffer,
-                                            .dstBuffer = bindings[operation.destination.value - 1].buffer,
+                                            .srcBuffer = resident[operation.source.value - 1].buffer,
+                                            .dstBuffer = resident[operation.destination.value - 1].buffer,
                                             .regionCount = 1,
                                             .pRegions = &region};
-        native.copy(command, &commandInfo);
+        copy(command, &commandInfo);
     }
 
-    /** @copydoc VulkanGraphRuntime::Impl::EncodeColor */
-    void VulkanGraphRuntime::Impl::EncodeColor(const VkCommandBuffer command, const RenderGraphColorAttachment &operation) const noexcept {
-        const auto &binding = bindings[operation.texture.value - 1];
+    /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeColor */
+    void VulkanGraphRuntime::Impl::Dispatch::EncodeColor(const VkCommandBuffer command, const RenderGraphColorAttachment &operation,
+                                                         const std::span<const VulkanGraphResource> resident) const noexcept {
+        const auto &binding = resident[operation.texture.value - 1];
         const auto &clear = operation.operations.clearColor;
         const VkRenderingAttachmentInfo attachment{.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                                                    .imageView = binding.colorView,
@@ -101,8 +126,8 @@ namespace Horo::Render::Detail {
                                         .layerCount = binding.textureDescriptor.layerCount,
                                         .colorAttachmentCount = 1,
                                         .pColorAttachments = &attachment};
-        native.beginRendering(command, &rendering);
-        native.endRendering(command);
+        beginRendering(command, &rendering);
+        endRendering(command);
     }
 
     /** @brief Encodes only a workload already proven against exact resident descriptors. */
@@ -111,11 +136,11 @@ namespace Horo::Render::Detail {
             if constexpr (std::is_same_v<Operation, RenderGraphMultiview>) {
                 multiview.Encode(command);
             } else if constexpr (std::is_same_v<Operation, RenderGraphDepthAttachment>) {
-                EncodeDepthAttachment(command, operation);
+                native.EncodeDepthAttachment(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphBufferCopy>) {
-                EncodeCopy(command, operation);
+                native.EncodeCopy(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphColorAttachment>) {
-                EncodeColor(command, operation);
+                native.EncodeColor(command, operation, bindings);
             } else if constexpr (!std::is_same_v<Operation, std::monostate>) {
                 HORO_INVARIANT_MSG(false, "Unsupported native workload passed validation.");
             }

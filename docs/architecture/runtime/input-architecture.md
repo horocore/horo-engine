@@ -725,6 +725,17 @@ need no migration. The explicit XR application caller uses Begin/Append/Commit b
 normal input consumers. Raw snapshot lifetime is unchanged. All public consumers rebuild
 because InputRouter's private implementation and the additive header ownership changed.
 
+`InputCollectionFrame::Append` is const-qualified on the transaction handle: it stages
+values on the same weakly retained owner without changing the handle's owner or serial.
+It still requires the creating thread and an open cutoff, and cannot append after
+Commit/Cancel. Existing calls require no source migration; consumers must rebuild for
+the changed member-function signature, and explicitly typed member pointers must use
+the const-qualified signature. `XRInputProjection::Append` and the non-installed
+application sampling adapters accept the same handle by const reference; the host
+retains the mutable handle for Commit/Cancel. Explicitly typed projection member
+pointers must also adopt that const-reference parameter. Const does not grant
+concurrent collection access.
+
 
 ### Reserved Source Admission Before Dependent Readiness
 

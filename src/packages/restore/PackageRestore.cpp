@@ -296,9 +296,10 @@ namespace Horo::Packages {
                 auto cached = context.cache.Load(package.artifactDigest);
                 if (cached.HasError())
                     return Outcome::Failure(PackageCause(PackageRestoreErrors::CacheFailure, package, cached.ErrorValue()));
-                if (!cached.Value())
+                auto cachedArchive = std::move(cached).Value();
+                if (!cachedArchive)
                     return Outcome::Success(std::nullopt);
-                auto archive = std::move(*cached.Value());
+                auto archive = std::move(*cachedArchive);
                 if (!EvidenceMatches(package, archive))
                     return Outcome::Failure(PackageMessage(PackageRestoreErrors::ArtifactEvidenceMismatch, package));
                 return Outcome::Success(RestoredArtifact{std::move(archive), true, std::nullopt});
@@ -306,9 +307,10 @@ namespace Horo::Packages {
             auto cached = context.cache.LoadWithPublisherEvidence(package.artifactDigest);
             if (cached.HasError())
                 return Outcome::Failure(PackageCause(PackageRestoreErrors::CacheFailure, package, cached.ErrorValue()));
-            if (!cached.Value())
+            auto cachedArtifact = std::move(cached).Value();
+            if (!cachedArtifact)
                 return Outcome::Success(std::nullopt);
-            auto value = std::move(*cached.Value());
+            auto value = std::move(*cachedArtifact);
             if (!EvidenceMatches(package, value.archive))
                 return Outcome::Failure(PackageMessage(PackageRestoreErrors::ArtifactEvidenceMismatch, package));
             if (request.requirePublisherVerification && !value.signature)
@@ -344,8 +346,8 @@ namespace Horo::Packages {
                 return Result<RestoredArtifact>::Failure(MakeError(PackageRestoreErrors::Cancelled));
             const bool signedPublisher = publisher.Value() && publisher.Value()->outcome == PackagePublisherVerificationOutcome::Accepted &&
                                          artifact.signature.has_value();
-            auto published = signedPublisher ? context.cache.Publish(archive, *artifact.signature) : context.cache.Publish(archive);
-            if (published.HasError())
+            if (auto published = signedPublisher ? context.cache.Publish(archive, *artifact.signature) : context.cache.Publish(archive);
+                published.HasError())
                 return Result<RestoredArtifact>::Failure(PackageCause(PackageRestoreErrors::CacheFailure, package, published.ErrorValue()));
             return Result<RestoredArtifact>::Success({std::move(archive), false, std::move(publisher).Value()});
         }

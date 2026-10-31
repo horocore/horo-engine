@@ -118,3 +118,41 @@ the ON configure may remain; their presence is not native activation.
 The qualification presets disable unrelated concrete rendering, Physics,
 Navigation and networking backends. These fake-dispatch lifecycle tests never
 claim headset, compositor or physical graphics-device qualification.
+
+## Private responsibility and borrowing migration
+
+The action owner still performs every control-lane, current-session, sampling,
+attachment and shutdown admission. Its existing embedded `Tracking` value owns
+all native tracking children and generation storage. Tracking operations borrow
+a read-only `TrackingContext` for the duration of the already admitted outer
+operation; the context is never stored and cannot create, close or revoke a
+session. Pure dispatch resolution and profile decoding stay with the existing
+dispatch table. Native callback reentry remains fenced by the outer owner.
+
+`OpenXRApplicationSession::PrepareInput` now borrows its tracking request by
+`const&`, then captures the same owning value before any loader callback. This
+preserves the caller-mutation boundary while making the synchronous API borrow
+explicit. Scene-extractor preview/world-transform queries also borrow their
+`RuntimeSceneView` only for the call; they retain neither the wrapper nor its
+spans. The private prepared-graph `Bind` contract takes a const frontend because
+it queries residency while mutating only its own prepared graph state. Existing
+callers pass the same objects; no compatibility adapter or public native handle
+is introduced.
+
+Viewport program construction and reflected packing are stateless private
+operations with explicit frontend, program, slot and bridge inputs. The viewport
+remains the sole owner of shader/material/slot storage and its retirement order.
+The Vulkan graph dispatch emits already admitted native work; validation,
+scratch contents, retention, submission and rollback remain on the graph owner.
+
+The verified loader lease uses one inert lifetime aggregate and an aliasing
+`shared_ptr<const DynamicLibrary>`. It does not implement another symbol lookup
+interface: the alias points at the already verified native implementation. The
+native library unloads before the aggregate releases the retained installation
+and verification files, including exceptional unwinding.
+
+Private package-staging cleanup emits an emergency diagnostic if the existing
+filesystem callback fails or throws. Cleanup cannot replace the original
+publication error or expose the private orphan as an active cache entry. The
+canonical digest lock continues to span archive, detached evidence and the
+final owning result.

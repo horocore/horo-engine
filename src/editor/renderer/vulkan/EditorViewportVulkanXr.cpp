@@ -49,7 +49,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::RevokeMirror */
-    void EditorVulkanXrViewportAccess::RevokeMirror(EditorViewportRendererVulkan &viewport) noexcept {
+    void EditorVulkanXrViewportAccess::RevokeMirror(const EditorViewportRendererVulkan &viewport) noexcept {
         viewport.RevokeXrMirror();
     }
 
@@ -242,7 +242,7 @@ namespace Horo::Editor {
 
         /** @brief Binds exact selected read IDs through the canonical retired-instance gate and immutable superset. */
         Result<const CompiledRenderGraphExecution *> BindReads(
-            RenderFrontend &frontend, RenderTextureHandle colorTexture, const MultiviewSceneSnapshot &snapshot,
+            const RenderFrontend &frontend, RenderTextureHandle colorTexture, const MultiviewSceneSnapshot &snapshot,
             const std::array<const Geometry *, RenderMaterialPass::MaximumDraws> &meshes) {
             constexpr std::size_t maximumReads = RenderMaterialPass::MaximumDraws * 3;
             std::array<Detail::RenderGraphOptionalRead, maximumReads> selectedReads{};
@@ -416,7 +416,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::RevokeXrMirror */
-    void EditorViewportRendererVulkan::RevokeXrMirror() noexcept {
+    void EditorViewportRendererVulkan::RevokeXrMirror() const noexcept {
         if (owner_ == std::this_thread::get_id() && xrGraph_)
             xrGraph_->mirror.Revoke();
     }
@@ -507,7 +507,7 @@ namespace Horo::Editor {
     void EditorViewportRendererVulkan::ReleaseXrGraph() noexcept {
         if (!xrGraph_)
             return;
-        for (auto view : xrGraph_->depthViews)
+        for (const auto &view : xrGraph_->depthViews)
             if (view.handle.IsValid())
                 static_cast<void>(frontend_.ReleaseTextureView(view.handle));
         if (xrGraph_->depthTexture.handle.IsValid())

@@ -76,7 +76,7 @@ namespace Horo::XR {
     Result<void> XRInputProjection::Append(const XRTrackingSnapshot &snapshot, const XRSessionId &activeSession,
                                            const XRTrackingSnapshotRevision expectedSnapshotRevision,
                                            const XRWorldOriginRevision activeOriginRevision, const std::uint64_t currentBindingRevision,
-                                           Input::InputCollectionFrame &frame) const {
+                                           const Input::InputCollectionFrame &frame) const {
         if (auto valid = ValidateXRTrackingSnapshot(snapshot, activeSession, expectedSnapshotRevision, activeOriginRevision);
             valid.HasError())
             return valid;

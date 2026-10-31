@@ -203,13 +203,40 @@ The physical Mac executes that full selection after the producer succeeds. Linux
 and Windows remain a two-entry native matrix; the hardware consumer depends only
 on its macOS producer. This adds one job per run, without per-test fanout.
 
-Select the physical consumer with the repository variable
-`HORO_MACOS_METAL_RUNNER`; an unset value retains `macos-latest`, whose device
-support must still be qualified. Use a unique label for a native ARM64 Mac
-meeting the renderer's device-family baseline, with an interactive user session
-for presentation. A device-query probe alone does not qualify the engine tests.
-Only pushes, manual dispatches and same-repository PRs may select the physical
-runner. Fork PRs stay hosted.
+Normal pull-request and push jobs use `macos-latest`, so an unavailable custom
+runner cannot leave ordinary CI queued indefinitely. A manual dispatch can opt
+in with `use_macos_metal_runner` to the repository runner selected by the
+`HORO_MACOS_METAL_RUNNER` repository variable. An unset label uses the hosted
+runner. Set a unique custom label only after verifying a native
+Mac against the rendering architecture's device-family baseline and providing
+an interactive user session for presentation tests. Install Xcode's optional
+Metal Toolchain once during host provisioning with
+`xcodebuild -downloadComponent MetalToolchain`. Verify execution with
+`xcrun --sdk macosx metal --version`; `xcrun --find metal` can find a stub even
+when the component is missing. CI checks execution before restoring caches or
+building Debug, so an incomplete Xcode installation fails immediately. A successful device query
+alone does not qualify the engine's GPU tests. On ephemeral GitHub-hosted Macs,
+CI installs a missing Metal Toolchain with the same Xcode command, within a
+ten-minute step budget, and verifies compiler execution again. Provisioned
+custom hosts must already have the component; CI does not modify their Xcode
+installation. The existing device query and GPU-test selection remain separate
+from compiler readiness.
+
+Only explicitly opted-in manual dispatches select the physical runner. Pushes
+and all pull requests retain the hosted label. Installing a runner therefore
+authorizes repository branch code on that host; do not assign this label to a
+general-purpose or differently qualified runner. Workflow routing alone is not
+a host access boundary: provision a host-owned
+`ACTIONS_RUNNER_HOOK_JOB_STARTED` script outside the runner application and
+checkout; install a reviewed copy of
+`.github/scripts/macos_runner_admission.sh` there. Before any job steps, it must
+reject missing/malformed payloads, other repositories, unexpected events and
+pull requests whose head repository differs. Do not approve a fork workflow that
+attempts to change this policy. The job also rejects a non-macOS host before
+configuration. Existing CPU, Metal, audio, network and XR qualification stays
+in the same platform job with the existing matrix width. One runner accepts one
+job at a time; superseded runs retain workflow cancellation. Additional PRs
+queue rather than multiplying local build workers.
 
 Routing is not a host access boundary. Install a reviewed copy of
 `.github/scripts/macos_runner_admission.sh` outside the runner application and

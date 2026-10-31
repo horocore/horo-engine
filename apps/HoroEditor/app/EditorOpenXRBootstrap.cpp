@@ -36,8 +36,7 @@ namespace Horo::Editor {
                 return Result<void>::Failure(entry.ErrorValue());
             if (!entry.Value() || entry.Value()->kind != FileEntryKind::Directory)
                 return Result<void>::Failure(BootstrapError("XR cache storage must be an existing directory, never a file or redirect."));
-            std::error_code error;
-            if (std::filesystem::canonical(path, error) != path || error)
+            if (std::error_code error; std::filesystem::canonical(path, error) != path || error)
                 return Result<void>::Failure(BootstrapError("XR cache storage must retain its exact canonical host-owned location."));
             return Result<void>::Success();
         }
@@ -291,7 +290,7 @@ namespace Horo::Editor {
             }, &jobs});
             auto &configuration = services->configuration.invocation;
             const auto put = [&](const char *key, SettingValue value) {
-                configuration.try_emplace(SettingKey{key}, ConfigurationInputValue{std::move(value), std::nullopt});
+                configuration.try_emplace(SettingKey{key}, std::move(value), std::nullopt);
             };
             put("xr.enabled", true);
             put("xr.schema_version", XR::XRProjectSettingsSchemaVersion);
@@ -349,11 +348,11 @@ namespace Horo::Editor {
         auto impl = std::make_unique<Impl>(std::move(publishers).Value(), std::move(catalog).Value(), now.Value(), rootExpiry.Value());
         if (auto initialized = impl->Initialize(projectRoot, cacheRoot, trackingRoot); initialized.HasError())
             return Outcome::Failure(initialized.ErrorValue());
-        return Outcome::Success(std::unique_ptr<EditorOpenXRBootstrap>{new EditorOpenXRBootstrap{std::move(impl)}});
+        return Outcome::Success(std::make_unique<EditorOpenXRBootstrap>(ConstructionKey{}, std::move(impl)));
     }
 
     /** @copydoc EditorOpenXRBootstrap::EditorOpenXRBootstrap */
-    EditorOpenXRBootstrap::EditorOpenXRBootstrap(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    EditorOpenXRBootstrap::EditorOpenXRBootstrap(const ConstructionKey &, std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     /** @copydoc EditorOpenXRBootstrap::~EditorOpenXRBootstrap */
     EditorOpenXRBootstrap::~EditorOpenXRBootstrap() = default;

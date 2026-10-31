@@ -160,6 +160,8 @@ namespace Horo::Application::Internal {
 #if defined(_WIN32)
         if (!QueryPerformanceCounter(&counter))
 #else
+        // xrConvertTimespecTimeToTimeKHR requires the CLOCK_MONOTONIC epoch.
+        // std::chrono::steady_clock does not promise that native epoch across platforms.
         if (clock_gettime(CLOCK_MONOTONIC, &counter) != 0)
 #endif
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));

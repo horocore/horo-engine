@@ -1,5 +1,6 @@
 #include "Horo/Packages/PackageCache.h"
 
+#include "Horo/Foundation/Logging/Logger.h"
 #include "PackageCachePublisherEnvelope.h"
 
 #include <algorithm>
@@ -83,9 +84,14 @@ namespace Horo::Packages {
             ~CacheStage() {
                 if (created_) {
                     try {
-                        static_cast<void>(files_.RemoveDurable(path_));  // Unlink only; never chmod an unowned/hard-linked path.
+                        // Unlink only; never chmod an unowned/hard-linked path.
+                        if (files_.RemoveDurable(path_).HasError())
+                            Log::Logger::WriteEmergency("packages.cache", Log::Level::Warn,
+                                                        "Private cache staging cleanup failed; the active cache is unchanged.");
                     } catch (...) {
-                        // Preserve the original failure; a private orphan never enters the active cache namespace.
+                        // Destruction must preserve the original publication failure across foreign filesystem callbacks.
+                        Log::Logger::WriteEmergency("packages.cache", Log::Level::Warn,
+                                                    "Private cache staging cleanup threw; the active cache is unchanged.");
                     }
                 }
             }
@@ -182,8 +188,7 @@ namespace Horo::Packages {
 
         /** @brief Rejects redirected cache ancestors and hostile final entries before evidence I/O. */
         [[nodiscard]] Result<void> AdmitEnvelopePath(const std::filesystem::path &root, const std::filesystem::path &path) {
-            std::error_code rootError;
-            if (std::filesystem::weakly_canonical(root, rootError) != root || rootError)
+            if (std::error_code rootError; std::filesystem::weakly_canonical(root, rootError) != root || rootError)
                 return Result<void>::Failure(MakeError(IoFailure, "Package publisher evidence requires its exact host-owned cache root."));
             auto current = root;
             for (const auto &part : path.lexically_relative(root)) {
@@ -203,8 +208,8 @@ namespace Horo::Packages {
         [[nodiscard]] Result<void> RemoveEnvelope(DurableFileSystem &files, const std::filesystem::path &root, const Sha256Digest &digest) {
             const auto path = EnvelopePath(root, digest);
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (error == std::errc::no_such_file_or_directory || status.type() == std::filesystem::file_type::not_found)
+            if (const auto status = std::filesystem::symlink_status(path, error);
+                error == std::errc::no_such_file_or_directory || status.type() == std::filesystem::file_type::not_found)
                 return Result<void>::Success();  // Legacy archive-only cleanup keeps its existing behavior.
             if (error)
                 return Result<void>::Failure(MakeError(IoFailure));
@@ -421,47 +426,51 @@ namespace Horo::Packages {
         auto encoded = CacheDetail::EncodePublisherEnvelope(signature, archive.Digest());
         if (encoded.HasError())
             return Result<PackageCacheEntry>::Failure(encoded.ErrorValue());
-        auto lock = Acquire(files_, root_, archive.Digest());  // NOSONAR
-        if (lock.HasError())
+        if (auto lock = Acquire(files_, root_, archive.Digest()); lock.HasError()) {
             return Result<PackageCacheEntry>::Failure(lock.ErrorValue());
-        if (auto admitted = AdmitEnvelopePath(root_, EnvelopePath(root_, archive.Digest())); admitted.HasError())
-            return Result<PackageCacheEntry>::Failure(admitted.ErrorValue());
-        auto published = PublishLocked(archive);
-        if (published.HasError())
+        } else {
+            // The if-init lease spans this complete archive/evidence publication transaction.
+            if (auto admitted = AdmitEnvelopePath(root_, EnvelopePath(root_, archive.Digest())); admitted.HasError())
+                return Result<PackageCacheEntry>::Failure(admitted.ErrorValue());
+            auto published = PublishLocked(archive);
+            if (published.HasError())
+                return published;
+            if (auto evidence = PublishEnvelope(files_, root_, archive.Digest(), encoded.Value()); evidence.HasError())
+                return Result<PackageCacheEntry>::Failure(evidence.ErrorValue());
             return published;
-        if (auto evidence = PublishEnvelope(files_, root_, archive.Digest(), encoded.Value()); evidence.HasError())
-            return Result<PackageCacheEntry>::Failure(evidence.ErrorValue());
-        return published;
+        }
     }
 
     /** @copydoc PackageCacheStore::LoadWithPublisherEvidence */
     Result<std::optional<PackageCachedArtifact>> PackageCacheStore::LoadWithPublisherEvidence(const Sha256Digest &digest) {
         using Outcome = Result<std::optional<PackageCachedArtifact>>;
-        auto lock = Acquire(files_, root_, digest);  // NOSONAR
-        if (lock.HasError())
+        if (auto lock = Acquire(files_, root_, digest); lock.HasError()) {
             return Outcome::Failure(lock.ErrorValue());
-        if (auto admitted = AdmitEnvelopePath(root_, EnvelopePath(root_, digest)); admitted.HasError())
-            return Outcome::Failure(admitted.ErrorValue());
-        auto loaded = LoadLocked(digest);
-        if (loaded.HasError())
-            return Outcome::Failure(loaded.ErrorValue());
-        if (!loaded.Value())
-            return Outcome::Success(std::nullopt);
-        PackageCachedArtifact artifact{std::move(*loaded.Value()), std::nullopt};
-        const auto path = EnvelopePath(root_, digest);
-        if (auto admitted = AdmitEnvelopePath(root_, path); admitted.HasError())
-            return Outcome::Failure(admitted.ErrorValue());
-        std::error_code error;
-        if (!std::filesystem::exists(path, error))
-            return error ? Outcome::Failure(MakeError(IoFailure)) : Outcome::Success(std::move(artifact));
-        auto bytes = ReadBounded(path, CacheDetail::MaximumPublisherEnvelopeBytes);
-        if (bytes.HasError())
-            return Outcome::Failure(bytes.ErrorValue());
-        auto decoded = CacheDetail::DecodePublisherEnvelope(bytes.Value(), digest);
-        if (decoded.HasError())
-            return Outcome::Failure(WrapError(Corrupt, decoded.ErrorValue()));
-        artifact.signature = std::move(decoded).Value();
-        return Outcome::Success(std::move(artifact));
+        } else {
+            // The exact digest lease protects both bytes and detached evidence through the final owning result.
+            if (auto admitted = AdmitEnvelopePath(root_, EnvelopePath(root_, digest)); admitted.HasError())
+                return Outcome::Failure(admitted.ErrorValue());
+            auto loaded = LoadLocked(digest);
+            if (loaded.HasError())
+                return Outcome::Failure(loaded.ErrorValue());
+            auto archive = std::move(loaded).Value();
+            if (!archive)
+                return Outcome::Success(std::nullopt);
+            PackageCachedArtifact artifact{std::move(*archive), std::nullopt};
+            const auto path = EnvelopePath(root_, digest);
+            if (auto admitted = AdmitEnvelopePath(root_, path); admitted.HasError())
+                return Outcome::Failure(admitted.ErrorValue());
+            if (std::error_code error; !std::filesystem::exists(path, error))
+                return error ? Outcome::Failure(MakeError(IoFailure)) : Outcome::Success(std::move(artifact));
+            auto bytes = ReadBounded(path, CacheDetail::MaximumPublisherEnvelopeBytes);
+            if (bytes.HasError())
+                return Outcome::Failure(bytes.ErrorValue());
+            auto decoded = CacheDetail::DecodePublisherEnvelope(bytes.Value(), digest);
+            if (decoded.HasError())
+                return Outcome::Failure(WrapError(Corrupt, decoded.ErrorValue()));
+            artifact.signature = std::move(decoded).Value();
+            return Outcome::Success(std::move(artifact));
+        }
     }
 
     /** @copydoc PackageCacheStore::Quarantine */

@@ -44,11 +44,11 @@ namespace Horo::Editor {
         if (attached.HasError())
             return attached;
         childAttached_ = true;
-        if (const auto pipeline = CreatePipeline(); pipeline.HasError()) {
+        if (const auto pipeline = ProgramResources::CreatePipeline(frontend_, shader_, device_.frames); pipeline.HasError()) {
             Shutdown();
             return pipeline;
         }
-        if (const auto slots = CreateDrawSlots(); slots.HasError()) {
+        if (const auto slots = ProgramResources::CreateDrawSlots(frontend_, shader_, slots_, device_.frames); slots.HasError()) {
             Shutdown();
             return slots;
         }

@@ -24,7 +24,9 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::PrepareInput */
     Result<void> OpenXRApplicationSession::PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
                                                         const OpenXRApplicationBindings &bindings,
-                                                        const NativeTrackingSpaceRequest tracking) {
+                                                        const NativeTrackingSpaceRequest &tracking) {
+        // Retain the caller's original tracking plan before admission and loader callbacks can reenter foreign code.
+        const NativeTrackingSpaceRequest admittedTracking = tracking;
         if (auto current = Current(); current.HasError())
             return current;
         if (input_.native || input_.projection || input_.bindings)
@@ -35,8 +37,8 @@ namespace Horo::Application::Internal {
         if (discovery.HasError())
             return Result<void>::Failure(discovery.ErrorValue());
         input_.native = std::make_unique<OpenXRActionBindings>(*native_);
-        auto plan =
-            bindings.Prepare(*input_.native, {*preflight_, selection_.attempt}, {discovery.Value().getProc}, router.Actions(), tracking);
+        auto plan = bindings.Prepare(*input_.native, {*preflight_, selection_.attempt}, {discovery.Value().getProc}, router.Actions(),
+                                     admittedTracking);
         if (plan.HasError())
             return Result<void>::Failure(plan.ErrorValue());
         const auto profiles = input_.native->PreparedProfiles({*preflight_, selection_.attempt});
@@ -81,7 +83,7 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::AppendInput(const XRSessionLifecycle &sessions, const XRActionBindingCoordinator &coordinator,
                                                        RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                        const Runtime::FrameContext &context, const XRWorldOriginRevision origin,
-                                                       Input::InputCollectionFrame &frame) {
+                                                       const Input::InputCollectionFrame &frame) {
         // Revoke the prior sample BEFORE any foreign call: failure cannot revive an earlier opportunity.
         publication.Revoke();
         if (auto current = Current(); current.HasError())
@@ -130,7 +132,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::AppendPreparedInput */
     Result<void> OpenXRApplicationSession::AppendPreparedInput(const PreparedInputSample &sample,
                                                                XR::RuntimeInternal::XRTrackingPublication &publication,
-                                                               Input::InputCollectionFrame &frame) {
+                                                               const Input::InputCollectionFrame &frame) {
         const auto &[poses, actions, state, time, origin, bindingRevision] = sample;
         std::array<RuntimeInternal::TrackingPoseEvidence, 5> normalized{};
         std::size_t poseCount = 0;
@@ -183,6 +185,15 @@ namespace Horo::Application::Internal {
         if (!input_.native)
             return Result<XrSpace>::Failure(MakeError(XRErrors::OperationUnavailable));
         return input_.native->BorrowWorldSpace(space);
+    }
+
+    /** @copydoc OpenXRApplicationSession::BorrowPresentationReference */
+    Result<XrSpace> OpenXRApplicationSession::BorrowPresentationReference(const XRCoordinateSpace &space) const {
+        if (auto current = Current(); current.HasError())
+            return Result<XrSpace>::Failure(current.ErrorValue());
+        if (!input_.native)
+            return Result<XrSpace>::Failure(MakeError(XRErrors::OperationUnavailable));
+        return input_.native->BorrowPresentationReference(space);
     }
 
     /** @copydoc OpenXRApplicationSession::LocatePresentation */

@@ -1,13 +1,14 @@
 #include "OpenXRPlayHost.h"
 
 #include "Horo/Foundation/Assertions.h"
+#include "OpenXRPlayFrameState.h"
 
 namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
 
     /** @copydoc OpenXRPlayHost::OpenXRPlayHost */
-    OpenXRPlayHost::OpenXRPlayHost(OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation)
+    OpenXRPlayHost::OpenXRPlayHost(const ConstructionKey &, OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation)
         : composition_{composition.session,
                        composition.viewport,
                        composition.frontend,
@@ -29,7 +30,7 @@ namespace Horo::Application::Internal {
         const auto facts = composition.session.BorrowPreparation();
         if (facts.HasError())
             return Result<std::unique_ptr<OpenXRPlayHost>>::Failure(facts.ErrorValue());
-        std::unique_ptr<OpenXRPlayHost> host{new OpenXRPlayHost(std::move(composition), facts.Value())};
+        auto host = std::make_unique<OpenXRPlayHost>(ConstructionKey{}, std::move(composition), facts.Value());
         if (auto clock = host->clock_.PrepareScheduler(host->composition_.dispatch, host->composition_.fixedStep); clock.HasError())
             return Result<std::unique_ptr<OpenXRPlayHost>>::Failure(clock.ErrorValue());
         return Result<std::unique_ptr<OpenXRPlayHost>>::Success(std::move(host));
@@ -45,6 +46,10 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_ || busy_)
             return Result<bool>::Failure(MakeError(XRErrors::OperationIncompatible));
         closing_ = true;
+        // A failed native Begin/End cannot be retried as a successful zero-layer frame. The same host
+        // revokes admission and retains all image/queue prefixes until its existing Lost cleanup proves quiescence.
+        if (render_ && render_->compositor.RetainedFault())
+            RevokeEventAdmission();
         if (scene_)
             scene_->Retire(*this);
         RevokeInput();
@@ -195,7 +200,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRPlayHost::AppendInput */
-    Result<void> OpenXRPlayHost::AppendInput(const Runtime::FrameContext &context, Input::InputCollectionFrame &frame) {
+    Result<void> OpenXRPlayHost::AppendInput(const Runtime::FrameContext &context, const Input::InputCollectionFrame &frame) {
         if (!input_.coordinator)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         return composition_.session.AppendInput(sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame);
