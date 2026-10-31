@@ -1100,6 +1100,7 @@ horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
 Horo/Prefab/PrefabAssetDependencyClosure.h
 Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDiagnostics.h
+    Horo/Prefab/PrefabDebugSnapshot.h
     Horo/Prefab/PrefabDocument.h
     Horo/Prefab/PrefabExpansionCache.h
     Horo/Prefab/PrefabSceneIdentityRemap.h

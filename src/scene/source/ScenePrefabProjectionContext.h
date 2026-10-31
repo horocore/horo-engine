@@ -11,9 +11,16 @@ namespace Horo::SceneSource::Detail {
                                     projection.authored.sourcePrefab.Asset().ToString(), error.message);
     }
 
+    /** @brief Operation-local aggregate inspection admission; independent of canonical expansion success. */
+    struct ScenePrefabDebugCaptureBudget final {
+        std::size_t remainingEntries{Prefab::PrefabDebugCaptureLimits::MaximumEntries};
+        std::size_t remainingSnapshots{64};
+    };
+
     /** @brief Apply instance values only after source-cache resolution; retain unresolved authoring evidence. */
     void ApplyInstanceValues(ScenePrefabInstanceProjection &entry, const Prefab::PrefabValueSchemaSnapshot *schemas,
-                             const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation = {});
+                             const Prefab::PrefabLimitProfile &limits, ScenePrefabDebugCaptureBudget &debugBudget,
+                             const CancellationToken &cancellation = {});
     /** @brief Reject source-only/modified candidate substitution and stale schema metadata at runtime publication. */
     [[nodiscard]] Result<void> ValidateInstanceValues(const ScenePrefabInstanceProjection &entry,
                                                       const Prefab::PrefabValueSchemaSnapshot *schemas,

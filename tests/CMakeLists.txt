@@ -1880,6 +1880,7 @@ add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversion
         unit/scene/ScenePrefabExpansionTests.cpp unit/scene/ScenePrefabExpansionOwnerTests.cpp
         unit/scene/ScenePrefabCanonicalWireTests.cpp unit/scene/ScenePrefabValueOverrideTests.cpp support/AllocationProbe.cpp)
 target_sources(HoroSceneRuntimeConversionTests PRIVATE unit/scene/ScenePrefabExpansionQualificationTests.cpp
+        unit/scene/ScenePrefabDebugSnapshotTests.cpp
         unit/scene/PrefabBuiltinProjectionTests.cpp)
 target_include_directories(HoroSceneRuntimeConversionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_compile_features(HoroSceneRuntimeConversionTests PRIVATE cxx_std_20)
@@ -1976,6 +1977,7 @@ add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabComponentSchemaTests.cpp
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDiagnosticsTests.cpp
+        unit/runtime/prefab/PrefabDebugSnapshotTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabDocumentSerializationTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp

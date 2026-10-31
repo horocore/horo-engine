@@ -917,6 +917,63 @@ enum class PrefabError : std::uint32_t {
 
 ---
 
+## Bounded dependency and expansion inspection (HORO-1078 / PFB-008.3)
+
+`HoroPrefabAuthoring` exclusively owns the additive `PrefabDebugSnapshot.h`
+contract. `CapturePrefabDebugSnapshot` consumes an already immutable canonical
+candidate plus optional detached override/provenance results. It performs no
+owner query, lock, source I/O, provider callback, expansion, value encoding or
+runtime/backend discovery. Hosts schedule explicit capture outside authoring and
+simulation hot loops; normal Scene preparation captures at its existing fresh,
+cached and worker conversion boundaries, never during draw or simulation update.
+
+Each publication owns only stable AssetIds, revision evidence, scoped member and
+property identities, semantic graph edges, component counts, override target/kind/
+state and value origin. No document, candidate payload, component bytes, values,
+names, source path, runtime handle or executable provider is retained. The class
+exposes const spans and value getters and survives retirement of every input.
+Existing typed `PrefabDiagnostics`, Observability, Build Output and source
+navigation remain the failure/reporting authorities; this API adds inspection
+data and no parallel logger, diagnostic identity or navigation authority.
+
+The explicit capture ceiling is 4096 rows, with 64 rows by default. Canonical
+nodes, edges, objects, override sections (value active/conflict/orphan, then
+component active/conflict/orphan) and provenance retain deterministic prefixes.
+Every section reports exact available/retained/omitted counts; a zero-row request
+retains totals only. Arbitrary value/payload bytes and omitted records are never
+traversed. Constructor-bounded type strings and fixed-size nested paths bound
+row size; retained paths are additionally checked against captured policy.
+Exact retained provenance targets must match a canonical source object. At most
+256 object addresses are checked per retained provenance row. This projection
+does not revalidate omitted caller-provided override content.
+
+All three Scene preparation paths share one operation-local admission budget of
+4096 retained rows and 64 capture attempts across all placements, independently
+of the number of authored placements. Exhaustion sets `debugCaptureOmitted` on
+later placements without allocating a snapshot. Rows include at most 512 bytes
+of value storage plus bounded identity text (asserted by consumer regressions),
+so retained row storage is at most 2 MiB, excluding allocator overhead; snapshot
+headers are independently bounded to 64. Existing per-placement projection
+metadata still scales with the authored placement count. Capture cancellation
+and errors are retained separately in `debugCaptureFailure` and cannot replace
+canonical expansion success, conflict/orphan errors or publication fences.
+
+Budget inspection distinguishes configured ceilings from measured facts. The
+snapshot reports the exact supplied project profile for source, graph,
+expansion, override, cook and runtime limits, canonical parser byte/depth hard
+ceilings and the derived expansion-work ceiling. Observations are exact graph,
+expanded-object, override and provenance cardinalities and retained per-object
+component counts. Parser consumed bytes/depth, consumed expansion work, cooked
+bytes and runtime usage are not measured by these inputs and are not fabricated.
+This delivery introduces no parser/cook/runtime instrumentation hook.
+
+Migration: existing canonical conversion calls remain source-compatible. Scene
+projections append optional immutable inspection evidence, a distinct capture
+failure and explicit omission flag. Inspection consumers can retain/copy just
+the debug snapshot and release the larger Scene/source projection; publication
+continues to validate original source/schema evidence. Existing errors use the
+canonical diagnostic codes and existing Build Output/source-navigation adapters.
+
 ## Related Documents
 
 - [ADR-017: Prefab Role, Ownership and Capability-Tier Decision](../../adr/017-prefab-role-ownership-and-capability-tiers.md)

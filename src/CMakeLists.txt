@@ -2452,6 +2452,7 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabExpansionCache.cpp
         runtime/prefab/PrefabDiagnostics.cpp
+        runtime/prefab/PrefabDebugSnapshot.cpp
         runtime/prefab/PrefabDocumentBehaviorComposition.cpp
         runtime/prefab/PrefabDocumentCanonical.cpp
         runtime/prefab/PrefabDocument.cpp

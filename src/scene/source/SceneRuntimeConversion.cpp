@@ -360,6 +360,7 @@ namespace Horo::SceneSource {
                                                              const Prefab::PrefabLimitProfile &limits,
                                                              const Prefab::PrefabValueSchemaSnapshot *schemas) {
         ScenePrefabProjection projection;
+        Detail::ScenePrefabDebugCaptureBudget debugBudget;
         projection.instances.reserve(document.prefabInstances.size());
         for (const ScenePrefabInstance &instance : document.prefabInstances) {
             ScenePrefabInstanceProjection entry{.authored = instance};
@@ -369,7 +370,7 @@ namespace Horo::SceneSource {
                 entry.failure = std::move(error);
             } else
                 entry.expanded = std::move(candidate).Value();
-            Detail::ApplyInstanceValues(entry, schemas, limits);
+            Detail::ApplyInstanceValues(entry, schemas, limits, debugBudget);
             projection.instances.push_back(std::move(entry));
         }
         return Result<ScenePrefabProjection>::Success(std::move(projection));

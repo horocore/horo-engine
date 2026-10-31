@@ -3,6 +3,7 @@
 /** @file SceneRuntimeConversion.h
  * @brief Headless immutable authored-scene and prefab projection into runtime-owned definitions.
  */
+#include "Horo/Prefab/PrefabDebugSnapshot.h"
 #include "Horo/Prefab/PrefabExpansionCache.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Prefab/PrefabValueOverrides.h"
@@ -30,6 +31,9 @@ namespace Horo::SceneSource {
         std::vector<Prefab::PrefabValueProvenance> valueProvenance;  /**< Owned source/default/instance inspection. */
         Sha256Digest schemaRevision;                                 /**< Exact copied schema context used for value resolution. */
         bool stale{false}; /**< Retained expansion requires explicit re-resolution before publication. */
+        std::optional<Prefab::PrefabDebugSnapshot> debugSnapshot; /**< Bounded detached inspection captured during preparation. */
+        std::optional<Error> debugCaptureFailure; /**< Inspection failure never changes canonical expansion/publication success. */
+        bool debugCaptureOmitted{false};          /**< Shared scene inspection row budget exhausted before this placement. */
 
         /** @brief Reports whether the retained candidate matches its inspected publication. @return True for a complete current candidate.
          */
