@@ -30,13 +30,21 @@ namespace Horo::Tests {
         /** @brief Advances and draws one complete editor frame. */
         void DrawFrame(ImGuiTestContext *context);
 
-        /** @brief Advances exactly the requested number of editor fixed ticks. */
-        void AdvanceFixedTicks(std::size_t count);
+        /** @brief Queues at most 64 exact fixed ticks for the next GUI-owner frame.
+         * @param count Nonzero bounded tick count; no earlier request may remain pending.
+         * @return Expected completed tick count after the caller yields to DrawFrame.
+         * @throws std::invalid_argument When the request is empty, oversized or overlaps pending work.
+         * @details Test Engine coroutines run on a different thread. Only DrawFrame may invoke Scene/input owners.
+         */
+        [[nodiscard]] std::uint64_t AdvanceFixedTicks(std::size_t count);
+
+        /** @brief Observes completed owner-thread ticks after a Test Engine yield. @return Exact completed tick count. */
+        [[nodiscard]] std::uint64_t CompletedFixedTicks() const noexcept;
 
         /** @brief Returns the first rendered object's world position when one is published. */
         [[nodiscard]] std::optional<Math::Vec3> FirstViewportObjectPosition() const noexcept;
 
-        /** @brief Returns the first active authoring-runtime entity position. */
+        /** @brief Returns the detached first authoring position captured by the last GUI-owner frame. */
         [[nodiscard]] std::optional<Math::Vec3> FirstAuthoringObjectPosition() const noexcept;
 
         /** @brief Returns the document revision currently published to the viewport handoff. */

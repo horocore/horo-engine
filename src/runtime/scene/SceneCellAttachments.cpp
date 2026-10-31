@@ -169,7 +169,7 @@ namespace Horo::Runtime {
                 }
             }
 
-            Result<void> Prepare(const RuntimeSceneDefinition &definition, const RuntimeSceneView scene) {
+            Result<void> Prepare(const RuntimeSceneDefinition &definition, const RuntimeSceneView &scene) {
                 candidates_.reserve(state_->manifest.References().size());
                 status_.reserve(state_->manifest.References().size());
                 for (const auto &reference : state_->manifest.References()) {
@@ -259,7 +259,7 @@ namespace Horo::Runtime {
 
     /** @copydoc SceneCellAttachmentParticipant::Prepare */
     Result<std::unique_ptr<SceneActivationCandidate>> SceneCellAttachmentParticipant::Prepare(const RuntimeSceneDefinition &definition,
-                                                                                              const RuntimeSceneView scene) {
+                                                                                              const RuntimeSceneView &scene) {
         if (state_->closed)
             return Result<std::unique_ptr<SceneActivationCandidate>>::Failure(MakeError(W::CellAttachmentErrors::Closed));
         if (definition.Id() != state_->context.scene || definition.Revision() != state_->context.sceneRevision)

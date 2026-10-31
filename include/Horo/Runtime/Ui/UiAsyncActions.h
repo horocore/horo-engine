@@ -33,6 +33,7 @@ namespace Horo::Runtime::Ui {
         UiActionPayload payload;
         std::shared_ptr<const Error> error; /**< Original bounded typed failure, including causes. */
         UiActionCancellationReason cancellation{UiActionCancellationReason::Count};
+        UiRouteInstanceId route; /**< Exact route incarnation; invalid for a canvas-owned operation. */
 
         /** @brief Reports whether this projection blocks duplicate activation. @return True only while pending. */
         [[nodiscard]] bool Busy() const noexcept {
@@ -49,6 +50,7 @@ namespace Horo::Runtime::Ui {
         UiActionSource source;
         UiActionRequestId request;
         UiActionOperationId operation;
+        UiRouteInstanceId route; /**< Original route ownership fence, preserved through interaction-only publications. */
         [[nodiscard]] bool operator==(const UiAsyncActionKey &) const noexcept = default;
     };
 
@@ -134,8 +136,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiAsyncActionProducer> Start(const UiActionRequest &request);
         /** @brief Copies exact operation state. @param operation Identity to query. @return Projection or stale failure. */
         [[nodiscard]] Result<UiAsyncActionSnapshot> Snapshot(const UiAsyncActionKey &operation) const;
-        /** @brief Projects the latest action for an exact control source. @param source Current source. @return Optional projection or
-         * stale-source failure. */
+        /** @brief Projects the latest semantic-control action for the current exact admission source. @param source Current source. @return
+         * Optional projection or stale-source failure. */
         [[nodiscard]] Result<std::optional<UiAsyncActionSnapshot>> Project(const UiActionSource &source) const;
         /** @brief Cancels a pending operation once; terminal results remain unchanged. @param operation Exact identity. @param reason
          * Closed cancellation reason. @return Success or typed invalid/stale failure. */
@@ -143,6 +145,11 @@ namespace Horo::Runtime::Ui {
         /** @brief Releases terminal retention; outstanding leases still pin the slot. @param operation Exact identity. @return Success or
          * typed busy/stale failure. */
         [[nodiscard]] Result<void> Release(const UiAsyncActionKey &operation);
+        /** @brief Collects released terminal errors only after producers, observers and copied error projections drain.
+         * @return Number of reclaimed records; zero outside the owner thread.
+         * @pre Explicit load-time/application quiescence; may release final immutable error ownership.
+         */
+        [[nodiscard]] std::size_t CollectReleased() noexcept;
         /** @brief Idempotently closes admission and cancels every pending operation. @param reason First lifecycle cancellation reason
          * wins. */
         void Retire(UiActionCancellationReason reason) noexcept;
@@ -150,12 +157,25 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         friend class UiActionRouter;
+        friend class UiControlStateMachine;
+        /** @brief Validates the still-active exact admission and immutable route/semantic audience of a cutoff copy.
+         * @details Mutable progress/terminal/latest-record changes are deliberately observed on the next frame.
+         */
+        [[nodiscard]] bool CanPublishObservation(const UiActionSource &source, const UiAsyncActionSnapshot *observation) const noexcept;
+        /** @brief Binds a fresh store to the real activated route before it can issue any operation. */
+        [[nodiscard]] Result<void> BindRouteIncarnation(UiRouteInstanceId route);
+        /** @brief Checks copied error projections before retiring an owner storage pool at quiescence. */
+        [[nodiscard]] bool HasErrorObservers() const noexcept;
+        /** @brief Advances only the current interaction admission; issued operation keys and records remain immutable.
+         * @pre Router proved identical instance/canvas/document/revision/tree and a monotonic interaction publication.
+         */
+        void AdvanceInteractionSource(const UiActionOwnerContext &owner) noexcept;
+        /** @brief Transfers the existing preallocated store at a validated no-fail router publication boundary. */
+        void SwapOperationStorage(UiAsyncActionStore &other) noexcept;
         /** @brief Checks all requests, completion/cancellation pins and error storage drained before a source generation is reused. */
         [[nodiscard]] bool CanPrepareReplacementSource() const noexcept;
         /** @brief Reinitializes only an inactive, fully drained preallocated source; caller has checked admission. */
         void PrepareReplacementSource(const UiActionOwnerContext &owner, std::uint64_t previousRequest) noexcept;
-        /** @brief Releases drained terminal error pins at explicit application quiescence. @return Number of released records. */
-        [[nodiscard]] std::size_t DrainReplacementSource() noexcept;
         explicit UiAsyncActionStore(std::unique_ptr<Storage> storage) noexcept;
         /** @brief Borrows mutable owner state. @return Null after move; unavailable on const stores. */
         [[nodiscard]] Storage *StateStorage() noexcept;

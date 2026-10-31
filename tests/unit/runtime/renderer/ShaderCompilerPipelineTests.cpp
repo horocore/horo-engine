@@ -1,9 +1,12 @@
+#include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipeline.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/ShaderManifestErrors.h"
+#include "ShaderCompilerPipelineTestFixture.h"
 #include "support/TypedIdentityTestSupport.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <span>
@@ -14,115 +17,7 @@ namespace {
     using namespace Horo;
     using namespace Horo::Render;
     using Tests::RequireError;
-
-    [[nodiscard]] Sha256Digest Digest(const std::uint8_t marker) {
-        Sha256Digest result;
-        result.bytes.front() = marker;
-        return result;
-    }
-
-    [[nodiscard]] ShaderTargetRequirement Requirement(const ShaderTargetBackend backend, const ShaderPayloadFormat format) {
-        return {.backend = backend,
-                .payloadFormat = format,
-                .descriptorVersion = 1,
-                .interfaceSchemaVersion = 1,
-                .maximumBindings = 16,
-                .maximumInlineConstantBytes = 128};
-    }
-
-    [[nodiscard]] ShaderCompilerToolIdentity Tool(const ShaderCompilerTool tool, const std::uint8_t marker) {
-        return {tool, "test-1.0+locked", Digest(marker)};
-    }
-
-    [[nodiscard]] ShaderCompilerDependency Dependency(std::string logicalPath, std::vector<std::uint8_t> content) {
-        const Sha256Digest digest = ComputeSha256(std::as_bytes(std::span{content}));
-        return {std::move(logicalPath), digest, std::move(content)};
-    }
-
-    [[nodiscard]] ShaderCompilerTargetDescriptor Target(const ShaderTargetBackend backend, const ShaderPayloadFormat format) {
-        ShaderCompilerTargetDescriptor target;
-        target.requirement = Requirement(backend, format);
-        switch (backend) {
-            case ShaderTargetBackend::Null:
-                target.platformTriple = "headless-null";
-                break;
-            case ShaderTargetBackend::OpenGL:
-                target.platformTriple = "desktop-opengl";
-                target.intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16;
-                target.tools = {Tool(ShaderCompilerTool::Dxc, 1), Tool(ShaderCompilerTool::SpirvTools, 2),
-                                Tool(ShaderCompilerTool::SpirvCross, 3)};
-                break;
-            case ShaderTargetBackend::Vulkan:
-                target.platformTriple = "desktop-vulkan";
-                target.intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16;
-                target.tools = {Tool(ShaderCompilerTool::Dxc, 1), Tool(ShaderCompilerTool::SpirvTools, 2)};
-                break;
-            case ShaderTargetBackend::Metal:
-                target.platformTriple = "macos14-arm64-metal";
-                target.intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16;
-                target.tools = {Tool(ShaderCompilerTool::Dxc, 1), Tool(ShaderCompilerTool::SpirvTools, 2),
-                                Tool(ShaderCompilerTool::SpirvCross, 3), Tool(ShaderCompilerTool::AppleMetal, 4)};
-                break;
-            case ShaderTargetBackend::D3D12:
-                target.platformTriple = "windows-x64-d3d12";
-                target.tools = {Tool(ShaderCompilerTool::Dxc, 1), Tool(ShaderCompilerTool::DxilValidator, 5)};
-                break;
-        }
-        return target;
-    }
-
-    [[nodiscard]] ShaderCompilationRequest ValidRequest() {
-        ShaderCompilationRequest request;
-        request.manifest = {.schemaVersion = 1,
-                            .sourceIdentity = "shaders.standard.surface",
-                            .sourceRevision = 17,
-                            .entryPoints = {{ShaderStage::Vertex, "VertexMain"}, {ShaderStage::Fragment, "FragmentMain"}},
-                            .bindings = {{ShaderBindingId{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1,
-                                          ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment}},
-                            .parameters = {{ShaderParameterId{1}, ShaderBindingId{1}, ShaderValueType::Float32, 1, 4, 1}},
-                            .inlineConstants = {},
-                            .specializationInputs = {},
-                            .targets = {Requirement(ShaderTargetBackend::Null, ShaderPayloadFormat::ValidationFixture),
-                                        Requirement(ShaderTargetBackend::OpenGL, ShaderPayloadFormat::Glsl410),
-                                        Requirement(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16),
-                                        Requirement(ShaderTargetBackend::Metal, ShaderPayloadFormat::MetalLibrary24),
-                                        Requirement(ShaderTargetBackend::D3D12, ShaderPayloadFormat::Dxil60)}};
-        request.source = {1, 2, 3, 4, 5};
-        request.dependencies = {Dependency("shaders/common.hlsli", {20}), Dependency("shaders/lighting.hlsli", {21})};
-        request.defines = {{"ALPHA_MASK", "0"}, {"NORMAL_MAP", "1"}};
-        request.targets = {Target(ShaderTargetBackend::Null, ShaderPayloadFormat::ValidationFixture),
-                           Target(ShaderTargetBackend::OpenGL, ShaderPayloadFormat::Glsl410),
-                           Target(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16),
-                           Target(ShaderTargetBackend::Metal, ShaderPayloadFormat::MetalLibrary24),
-                           Target(ShaderTargetBackend::D3D12, ShaderPayloadFormat::Dxil60)};
-        return request;
-    }
-
-    class RecordingAdapter final : public IShaderCompilerAdapter {
-    public:
-        [[nodiscard]] Result<ShaderCompilerAdapterOutput> Compile(const ShaderCompilerInvocation &invocation,
-                                                                  const CancellationToken &) const override {
-            keys.push_back(invocation.artifactKey);
-            backends.push_back(invocation.target.requirement.backend);
-            ShaderCompilerAdapterOutput output;
-            output.backend = invocation.target.requirement.backend;
-            output.payloadFormat = invocation.target.requirement.payloadFormat;
-            output.payload = {static_cast<std::uint8_t>(output.backend), 0x7fU};
-            if (invocation.target.emitDebugInformation)
-                output.debugPayload = {0xddU};
-            output.diagnostics = {{ShaderCompilerDiagnosticCategory::Toolchain,
-                                   ShaderCompilerDiagnosticSeverity::Information,
-                                   {},
-                                   0,
-                                   0,
-                                   "compiled by locked test toolchain",
-                                   false}};
-            return Result<ShaderCompilerAdapterOutput>::Success(std::move(output));
-        }
-
-        mutable std::vector<Sha256Digest> keys;
-        mutable std::vector<ShaderTargetBackend> backends;
-    };
+    using namespace Horo::Render::ShaderCompilerPipelineTests;
 
     class CountingDiagnosticSink final : public IShaderCompilerDiagnosticSink {
     public:
@@ -434,4 +329,76 @@ TEST_CASE("Legacy compiler diagnostics are forwarded once and host sink failure 
     sink.reject = true;
     RequireError(CompileShaderTargets(request, adapter, {}, {}, &sink), ShaderManifestErrors::InvalidManifest);
     CHECK(sink.count == 1);
+}
+
+TEST_CASE("Compiler result retains exactly the requested immutable same-cook reflection", "[runtime][renderer][shader-compiler]") {
+    auto request = ValidRequest();
+    request.targets = {request.targets[2]};
+    request.manifest.targets = {request.manifest.targets[2]};
+    request.reflection = ShaderCompilerReflectionRequest{Tool(ShaderCompilerTool::SpirvCross, 3), {{{1}, "Parameters", {{{1}, "Tint"}}}}};
+    ReflectedAdapter adapter;
+    const auto result = CompileShaderTargets(request, adapter, {});
+    REQUIRE(result.HasValue());
+    REQUIRE(result.Value().artifacts.size() == 1);
+    const auto copy = result.Value();
+    const auto &artifact = copy.artifacts.front();
+    REQUIRE(artifact.reflection != nullptr);
+    CHECK(artifact.reflection == result.Value().artifacts.front().reflection);
+    CHECK(artifact.reflection->compiledArtifactKey == artifact.artifactKey);
+    CHECK(artifact.reflection->payloadDigest == ComputeSha256(std::as_bytes(std::span{artifact.payload})));
+    auto renamed = request;
+    renamed.reflection->names.front().parameters.front().name = "OtherTint";
+    const auto changed = CompileShaderTargets(renamed, adapter, {});
+    REQUIRE(changed.HasValue());
+    CHECK(changed.Value().artifacts.front().artifactKey != artifact.artifactKey);
+}
+
+TEST_CASE("Compiler result rejects missing foreign or stale reflected records", "[runtime][renderer][shader-compiler]") {
+    auto request = ValidRequest();
+    request.targets = {request.targets[2]};
+    request.manifest.targets = {request.manifest.targets[2]};
+    request.reflection = ShaderCompilerReflectionRequest{Tool(ShaderCompilerTool::SpirvCross, 3), {{{1}, "Parameters", {{{1}, "Tint"}}}}};
+    ReflectedAdapter adapter;
+    SECTION("Missing") {
+        adapter.mutation = ReflectedAdapter::Mutation::Missing;
+    }
+    SECTION("Key") {
+        adapter.mutation = ReflectedAdapter::Mutation::Key;
+    }
+    SECTION("Payload") {
+        adapter.mutation = ReflectedAdapter::Mutation::Payload;
+    }
+    SECTION("Tool") {
+        adapter.mutation = ReflectedAdapter::Mutation::Tool;
+    }
+    SECTION("Interface") {
+        adapter.mutation = ReflectedAdapter::Mutation::Interface;
+    }
+    SECTION("Valid alternate mapping with stale cooked identity") {
+        adapter.mutation = ReflectedAdapter::Mutation::Mapping;
+    }
+    CHECK(CompileShaderTargets(request, adapter, {}).HasError());
+}
+
+TEST_CASE("Compiler bounds and validates logical reflection requests before invoking tools", "[runtime][renderer][shader-compiler]") {
+    auto request = ValidRequest();
+    request.reflection = ShaderCompilerReflectionRequest{Tool(ShaderCompilerTool::SpirvCross, 3), {{{1}, "Parameters", {{{1}, "Tint"}}}}};
+    SECTION("Duplicate binding") {
+        request.reflection->names.push_back(request.reflection->names.front());
+    }
+    SECTION("Duplicate parameter") {
+        request.reflection->names.front().parameters.push_back({{1}, "Other"});
+    }
+    SECTION("Foreign logical member") {
+        request.reflection->names.front().parameters.front().id = {2};
+    }
+    SECTION("Oversized authored name") {
+        request.reflection->names.front().name.resize(513, 'x');
+    }
+    SECTION("Wrong tool role") {
+        request.reflection->tool.tool = ShaderCompilerTool::Dxc;
+    }
+    RecordingAdapter adapter;
+    CHECK(CompileShaderTargets(request, adapter, {}).HasError());
+    CHECK(adapter.keys.empty());
 }

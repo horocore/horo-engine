@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
+#include "MaterialBindingTestFixture.h"
+#include "support/AllocationProbe.h"
 #include "support/TypedIdentityTestSupport.h"
 
 #include <algorithm>
@@ -12,7 +14,7 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
-    constexpr RenderResourceOwnerId Owner{17};
+    using namespace Horo::Tests::MaterialBindingFixture;
 
     struct Backend final : IMaterialBindingBackend {
         struct Lease final : IResidentMaterialBinding {
@@ -45,25 +47,12 @@ namespace {
         }
     };
 
-    [[nodiscard]] MaterialBindingDescriptor Descriptor() {
-        MaterialBindingLayout layout;
-        layout.backend = ShaderTargetBackend::Metal;
-        layout.resources = {
-            {{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment, true}};
-        layout.targetBindings = {{{1}, 0, 0, 2, "", {}, true}};
-        layout.parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 3, 1, 0, 0, 0, true, true}};
-        return {{4}, 1, {Owner, 2, 3}, std::move(layout), {{{1}, 0, MaterialParameterBinding{std::vector<std::byte>(12)}}}, true, {}};
-    }
-
     [[nodiscard]] std::unique_ptr<MaterialBindingTable> Table(Backend &backend, const MaterialBindingLimits &limits = {}) {
         auto table = MaterialBindingTable::Create(Owner, backend, limits);
         REQUIRE(table.HasValue());
         return std::move(table).Value();
     }
 
-    template <typename T> void ErrorIs(const Result<T> &result, const ErrorCodeDescriptor &code) {
-        Tests::RequireActionableError(result, code);
-    }
 }  // namespace
 
 TEST_CASE("Generic material layouts preserve exact final target packing", "[renderer][material]") {

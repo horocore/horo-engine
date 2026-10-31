@@ -314,14 +314,7 @@ namespace Horo::Runtime::Ui {
         auto projected = actions.Project({base.owner, base.element});
         if (projected.HasError())
             return Result<void>::Failure(projected.ErrorValue());
-        const bool busy = projected.Value() && projected.Value()->Busy();
-        if (busy)
-            storage_->ClearTransient(false);
-        storage_->asyncAction = std::move(projected).Value();
-        const auto effective = storage_->configuredAvailability == UiControlAvailability::Enabled && busy
-                                   ? UiControlAvailability::Busy
-                                   : storage_->configuredAvailability;
-        storage_->SetAvailabilityProjection(effective);
+        storage_->ProjectAsync(std::move(projected).Value());
         return Result<void>::Success();
     }
 

@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/RuntimeUiService.h"
 #include "UiAnimationAdmission.h"
 #include "UiAnimationOwnerInternal.h"
 
@@ -11,11 +12,8 @@ namespace Horo::Runtime::Ui {
                                                       UiAnimationCanvasDefinition definition, const UiAnimationLimits limits) {
         if (!AnimationInternal::ValidLimits(limits))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
-        const auto canvases = initial.Canvases();
-        const auto canvas = std::ranges::find(canvases, definition.canvas, &UiReloadCanvas::id);
-        if (canvas == canvases.end() || !canvas->tree.WasIssuedBy(allocator))
+        if (const auto *canvas = initial.Canvas(definition.canvas); !canvas || !canvas->tree.WasIssuedBy(allocator))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationTargetStale));
-        // Source + six clocks + finite timeline slots share the actual tree issuer, and this complete range is burned on failure.
         auto reserved =
             allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + limits.timelines + MaximumUiAnimationAttachments);
         if (reserved.HasError())
@@ -23,9 +21,59 @@ namespace Horo::Runtime::Ui {
         auto publisher = UiHotReload::Create(std::move(initial));
         if (publisher.HasError())
             return Result<UiAnimationOwner>::Failure(publisher.ErrorValue());
+        return CreateFromPublisher(Detail::UiAnimationPublisher{std::move(publisher).Value()}, allocator, std::move(registry),
+                                   std::move(styles), std::move(definition), limits,
+                                   std::optional<UiElementSlotRange>{std::move(reserved).Value()});
+    }
+
+    /** @copydoc UiAnimationOwner::Create(const RuntimeUiService &, RuntimeUiInstanceId, UiElementSlotAllocator &,
+     * RuntimeStyleRegistry, UiStyleResolver, UiAnimationCanvasDefinition, UiAnimationLimits) */
+    Result<UiAnimationOwner> UiAnimationOwner::Create(const RuntimeUiService &service, const RuntimeUiInstanceId instance,
+                                                      UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
+                                                      UiStyleResolver styles, UiAnimationCanvasDefinition definition,
+                                                      const UiAnimationLimits limits) {
+        auto publisher = Detail::UiAnimationPublisher::Attach(service.state_, instance, definition.canvas);
+        if (publisher.HasError())
+            return Result<UiAnimationOwner>::Failure(publisher.ErrorValue());
+        return CreateFromPublisher(std::move(publisher).Value(), allocator, std::move(registry), std::move(styles), std::move(definition),
+                                   limits);
+    }
+
+    /** @copydoc RuntimeUiService::PrepareAnimation */
+    Result<UiAnimationOwner> RuntimeUiService::PrepareAnimation(const UiSceneReconciliation::Prepared &prepared,
+                                                                const RuntimeUiInstanceId instance, UiElementSlotAllocator &allocator,
+                                                                RuntimeStyleRegistry registry, UiStyleResolver styles,
+                                                                UiAnimationCanvasDefinition definition,
+                                                                const UiAnimationLimits limits) const {
+        auto publisher = Detail::UiAnimationPublisher::AttachPrepared(state_, prepared, instance, definition.canvas);
+        if (publisher.HasError())
+            return Result<UiAnimationOwner>::Failure(publisher.ErrorValue());
+        return UiAnimationOwner::CreateFromPublisher(std::move(publisher).Value(), allocator, std::move(registry), std::move(styles),
+                                                     std::move(definition), limits);
+    }
+
+    /** @copydoc UiAnimationOwner::CreateFromPublisher */
+    Result<UiAnimationOwner> UiAnimationOwner::CreateFromPublisher(Detail::UiAnimationPublisher publisher,
+                                                                   UiElementSlotAllocator &allocator, RuntimeStyleRegistry registry,
+                                                                   UiStyleResolver styles, UiAnimationCanvasDefinition definition,
+                                                                   const UiAnimationLimits limits,
+                                                                   std::optional<UiElementSlotRange> range) {
+        if (!AnimationInternal::ValidLimits(limits))
+            return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
+        auto *generation = publisher.Current();
+        const auto *canvas = generation ? generation->Canvas(definition.canvas) : nullptr;
+        if (!canvas || !canvas->tree.WasIssuedBy(allocator))
+            return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationTargetStale));
+        if (!range) {
+            auto reserved =
+                allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + limits.timelines + MaximumUiAnimationAttachments);
+            if (reserved.HasError())
+                return Result<UiAnimationOwner>::Failure(reserved.ErrorValue());
+            range.emplace(std::move(reserved).Value());
+        }
         try {
-            auto storage = std::make_shared<Storage>(std::move(publisher).Value(), std::move(registry), std::move(styles),
-                                                     std::move(definition), limits, std::move(reserved).Value(), canvas->controls.size());
+            auto storage = std::make_shared<Storage>(std::move(publisher), std::move(registry), std::move(styles), std::move(definition),
+                                                     limits, std::move(*range), canvas->controls.size());
             if (const auto bound = InitializeBindings(*storage, *storage->publisher.Current()); bound.HasError())
                 return Result<UiAnimationOwner>::Failure(bound.ErrorValue());
             return Result<UiAnimationOwner>::Success(UiAnimationOwner{std::move(storage)});
@@ -104,7 +152,7 @@ namespace Horo::Runtime::Ui {
             storage.work.layoutDescriptors[index] = {target.Value(), element.layout, element.intrinsic};
         }
         for (const auto &binding : storage.definition.layoutBindings)
-            storage.work.layoutBindings.emplace_back(tree.Find(binding.target).Value(), binding.property, binding.field);
+            storage.work.layoutBindings.emplace_back(tree.Find(binding.target).Value(), binding.property, binding.field, binding.values);
         const UiStyleSourceRevisions sources{tree.SourceDocumentRevision(),     tree.Revision(),
                                              storage.registry.Generation(),     storage.definition.content,
                                              storage.definition.resolvedPolicy, canvas->layoutEngine->PublishedInteraction()};

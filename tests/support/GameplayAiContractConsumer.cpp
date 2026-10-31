@@ -3,7 +3,7 @@
 
 #include <type_traits>
 
-static_assert(Horo::Gameplay::GameplaySdkBoundaryVersion == 21);
+static_assert(Horo::Gameplay::GameplaySdkBoundaryVersion == 22);
 static_assert(
     std::is_same_v<decltype(Horo::Gameplay::GameRuntimeContext::runtimeUi), std::shared_ptr<const Horo::Runtime::Ui::RuntimeUiClient>>);
 static_assert(std::is_same_v<decltype(Horo::Gameplay::GameRuntimeContext::ai), std::shared_ptr<const Horo::Gameplay::GameplayAiContext>>);

@@ -139,3 +139,45 @@ TEST_CASE("Vulkan multiview rejects late invalid views materials work bounds and
     CHECK(fixture.commandState.state.accepted.empty());
     fixture.graph.AbortFrame({1});
 }
+
+TEST_CASE("Vulkan multiview publishes whole contents only for complete successfully submitted writes",
+          "[vulkan][multiview][contents][rollback]") {
+    NativeGraphFixture fixture;
+    MultiviewPacket packet(fixture, false);
+    bool partial = false;
+    bool abort = false;
+    bool failSubmit = false;
+    SECTION("complete write") {}
+    SECTION("partial rectangle stays undefined") {
+        partial = true;
+        packet.targets.back().rectangle.width = 4;
+    }
+    SECTION("aborted complete write stays undefined") {
+        abort = true;
+    }
+    SECTION("failed complete submit stays undefined") {
+        failSubmit = true;
+    }
+    RenderGraphLeaseTransfer transfer;
+    auto request = packet.Request(fixture, transfer);
+    std::array<Detail::VulkanGraphResource, 4> captured{};
+    Detail::VulkanCommandRetention observation;
+    observation.resources.reserve(4);
+    REQUIRE(fixture.resources.CaptureGraphResources(request, captured, observation).HasValue());
+    const auto *state = captured.front().state;
+    REQUIRE(state);
+    REQUIRE_FALSE(state->contentsDefined);
+    REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+    REQUIRE(fixture.graph.ExecuteGraph(request).HasValue());
+    CHECK_FALSE(state->contentsDefined);  // Recording alone never publishes planned attachment contents.
+    if (abort) {
+        fixture.graph.AbortFrame({1});
+    } else {
+        if (failSubmit)
+            fixture.commandState.state.submitResult = VK_ERROR_OUT_OF_HOST_MEMORY;
+        const auto submitted = fixture.graph.SubmitFrame({1});
+        CHECK(submitted.HasValue() == !failSubmit);
+    }
+    CHECK(state->contentsDefined == (!partial && !abort && !failSubmit));
+    CHECK(fixture.commandState.state.waitCalls == 0);
+}

@@ -8,14 +8,10 @@
 #include "OpenXRSwapchain.h"
 
 #include <array>
+#include <optional>
 #include <thread>
 
 namespace Horo::XR::OpenXRInternal {
-    /** @brief Borrowed official loader dispatch; its session/loader owner must outlive the bound compositor. */
-    struct NativeCompositorDispatch final {
-        PFN_xrGetInstanceProcAddr getProc{}; /**< Official ABI resolver; null is rejected before binding any state. */
-    };
-
     /** @brief Host-owned exact reference-space borrow; native lifetime remains with the selected space owner. */
     class IOpenXRCompositionSpace {
     public:
@@ -94,7 +90,7 @@ namespace Horo::XR::OpenXRInternal {
          * @param dispatch Official loader dispatch retained by session. @param pacing Finite supported queue policy.
          * @param colorSpace Explicit runtime compositor primaries, requiring XR_FB_color_space for non-default.
          * @return Success or typed unsupported/invalid/native failure without publishing a partial adapter. */
-        [[nodiscard]] Result<void> Bind(NativeCompositorDispatch dispatch, const NativeFramePacingPolicy &pacing,
+        [[nodiscard]] Result<void> Bind(NativeOpenXRDispatch dispatch, const NativeFramePacingPolicy &pacing,
                                         NativeCompositorColorSpace colorSpace = NativeCompositorColorSpace::RuntimeDefault);
         /** @brief Reserves before native wait and preserves every successful native wait obligation.
          * @return Frame status plus exact debt identity, or native wait failure after cancelling only its reservation. */
@@ -117,6 +113,11 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Ends runtime-disabled or explicitly aborted work with no layers after all image releases.
          * @param frame Exact begun frame. @return Native end result; failure retains debt for quiescent recovery. */
         [[nodiscard]] Result<void> EndEmpty(const XRFrameId &frame);
+        /** @brief Observes the original terminal native frame fault without native work or admission changes.
+         * @return Borrowed fault on the creating lane, otherwise null. The observation expires at quiescent reset.
+         * @pre Serialized host control; the caller retains this compositor through the synchronous observation.
+         */
+        [[nodiscard]] const Error *RetainedFault() const noexcept;
         /** @brief Closes new waits while retaining native frame and image release obligations.
          * @return Success or a typed wrong-thread failure without mutation. */
         [[nodiscard]] Result<void> BeginShutdown();
@@ -164,6 +165,6 @@ namespace Horo::XR::OpenXRInternal {
         PFN_xrEndFrame end_{};
         bool begun_{};
         bool closing_{};
-        bool faulted_{};
+        std::optional<Error> fault_;
     };
 }  // namespace Horo::XR::OpenXRInternal

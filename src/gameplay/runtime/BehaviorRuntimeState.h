@@ -398,7 +398,7 @@ namespace Horo::Gameplay {
             }
 
             [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
-                const Runtime::RuntimeSceneView active, const std::span<const Runtime::RuntimeEntityView> created,
+                const Runtime::RuntimeSceneView &active, const std::span<const Runtime::RuntimeEntityView> created,
                 const std::span<const Runtime::EntityRef> destroyed) override {
                 if (owner.shutdown || owner.shutdownRequested || owner.structuralPending || !active.IsCurrent() ||
                     active.RuntimeId() != owner.sceneIdentity || active.RuntimeId() != owner.SceneView().RuntimeId())

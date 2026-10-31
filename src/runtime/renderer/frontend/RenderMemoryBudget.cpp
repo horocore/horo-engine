@@ -34,16 +34,22 @@ namespace Horo::Render {
             return ReserveNewBlock(pool, scope, attempt, plan);
         }
 
-        [[nodiscard]] Result<void> Cancel(const RenderMemoryReservationId reservation) {
-            auto found = FindReservation(reservation);
+        [[nodiscard]] bool TryCancelReservation(const RenderMemoryReservationId reservation) noexcept {
+            const auto found = FindReservation(reservation);
             if (!found.has_value())
-                return Failure<void>(RenderMemoryBudgetErrors::InvalidReservation,
-                                     "Reservation is malformed, foreign, stale, or already consumed.");
+                return false;
             const Block &block = blocks_[found->block];
             regions_[found->region] = {};
             --reservationCount_;
             if (!block.committed && !HasRegions(block.id))
                 RemoveBlock(found->block);
+            return true;
+        }
+
+        [[nodiscard]] Result<void> Cancel(const RenderMemoryReservationId reservation) {
+            if (!TryCancelReservation(reservation))
+                return Failure<void>(RenderMemoryBudgetErrors::InvalidReservation,
+                                     "Reservation is malformed, foreign, stale, or already consumed.");
             return Result<void>::Success();
         }
 
@@ -504,6 +510,11 @@ namespace Horo::Render {
     Result<RenderMemoryReservationId> RenderMemoryBudget::Reserve(const RenderMemoryScopeId scope, const ResourceOperationId attempt,
                                                                   const RenderMemoryCostPlan &plan) {
         return implementation_->Reserve(scope, attempt, plan);
+    }
+
+    /** @copydoc RenderMemoryBudget::TryCancelReservation */
+    bool RenderMemoryBudget::TryCancelReservation(const RenderMemoryReservationId reservation) noexcept {
+        return implementation_->TryCancelReservation(reservation);
     }
 
     /** @copydoc RenderMemoryBudget::Cancel */

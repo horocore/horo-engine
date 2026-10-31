@@ -685,3 +685,83 @@ Required tests cover:
 - [Configuration System](../foundation/configuration-system.md)
 - [Platform Abstraction](../foundation/platform-abstraction.md)
 - [XR Architecture](./vr-ar-architecture.md)
+
+### Bounded External-Source Collection Migration
+
+`HoroInput` owns `InputCollection.h`. The application borrows a port from its existing
+`InputRouter` and exact live context. Optional player filtering derives from an existing
+canonical connected-device assignment; a producer cannot choose or change a player.
+Registration validates existing action ID, value shape and context, without creating
+an action or bypassing the resolved XR binding policy. Input has no XR dependency.
+
+The port's weak lifecycle anchor protects retirement; no token dereferences a retired
+router. The router is nonmovable. Owner-thread checks precede router access. The shared
+anchor's reference-count operations protect only lifetime, not mutable routing state;
+there is no new mutex, ambient registry or cross-thread mutation. Wrong-thread token
+destruction leaves bounded ownership reserved until explicit owner retirement, rather
+than mutating the router. Normal success paths use fixed arrays (four sources and 256
+registered action slots total) and allocate no frame storage.
+
+One explicit collection transaction stages normalized scalar candidates, then commits
+through the existing raw-snapshot publication and consumption ledger. Atomic rejection,
+cancellation, late callbacks and stale map/assignment/source/frame tokens cannot publish
+partial values. Cancellation withholds routing until the next actual commit. A revoked
+registration remains reserved until a real neutral commit; its release evidence remains
+readable during that frame. Replacement cannot become eligible before this boundary.
+Map/profile replacement invalidates registrations and requires the same neutral commit.
+
+Missing XR contributions are zero for that source only. Values aggregate with existing
+physical bindings in deterministic registration-slot order, using the existing clamp
+and context/focus/consumption policy. As with multiple existing physical bindings,
+down/pressed/released aggregate independently: a semantic release does not erase a held
+keyboard value or suppress a physical press, and a held provider does not erase another
+provider's release. Producers supply no pressed/released flags: Input derives and consumes their edges once per committed
+frame. Native sampling and presentation-late poses cannot mutate a committed cutoff.
+
+Legacy `BeginFrame(raw)` keeps its signature and directly commits the empty-source path;
+it does not discard a fallible transaction result. With no registrations this path has
+no capacity, source-validation or admission failure. Existing InputService/platform callers
+need no migration. The explicit XR application caller uses Begin/Append/Commit before
+normal input consumers. Raw snapshot lifetime is unchanged. All public consumers rebuild
+because InputRouter's private implementation and the additive header ownership changed.
+
+`InputCollectionFrame::Append` is const-qualified on the transaction handle: it stages
+values on the same weakly retained owner without changing the handle's owner or serial.
+It still requires the creating thread and an open cutoff, and cannot append after
+Commit/Cancel. Existing calls require no source migration; consumers must rebuild for
+the changed member-function signature, and explicitly typed member pointers must use
+the const-qualified signature. `XRInputProjection::Append` and the non-installed
+application sampling adapters accept the same handle by const reference; the host
+retains the mutable handle for Commit/Cancel. Explicitly typed projection member
+pointers must also adopt that const-reference parameter. Const does not grant
+concurrent collection access.
+
+
+### Reserved Source Admission Before Dependent Readiness
+
+`InputActionSourceToken::Validate` is an additive read-only admission query required by
+host-composed XR preparation. Native preparation can span a context, profile, assignment
+or router retirement boundary before the canonical XR lifecycle issues its candidate.
+The same reserved source must therefore be revalidated before publishing Ready, rather
+than discovering a revoked source on its first Append. The query delegates to the SAME
+existing weak-owner/thread/source/configuration/context/assignment validator; it creates
+no second registration, snapshot, consumption ledger or callbacks. Success does not
+allocate or mutate collection state. Existing callers need no migration. The actual
+new consumer is `XRInputProjection::Bind`, with staged public-header consumer and
+retired-router/map/move/off-thread/allocation regression coverage.
+
+`XRInputProjection::Prepare(port, plan)` reserves one Input source and copies only role/type
+metadata, without issuing a Horo session or predicting a binding revision. After the
+canonical lifecycle issues its candidate, `Bind(candidate, coordinator.Revision())` seals
+that SAME reserved token to the actual canonical binding publication and revalidates the
+source before activation. The former `Prepare(port, plan, revision)` and `Bind(candidate)`
+signatures are deliberately migrated: the application cannot know the coordinator's
+revision before it has the issued candidate. The actual callers are the application XR
+owner and focused XRInputProjection tests; Create's existing signature is unchanged and
+continues to perform the same two stages atomically. All affected XRApi/public consumers
+must rebuild. Zero revisions, duplicate/foreign rebinds, or a retired registration fail
+without changing the admitted session/revision. Existing Create delegates atomically and preserves its
+invalid-input diagnostic and cleanup policy. A failed/stale Bind cannot append data or
+revive an old generation. Reset and failed/destructed preparation still require Input's
+real neutral commit before replacement; the host does not manufacture a commit or
+consume another source's keyboard/gamepad transitions.

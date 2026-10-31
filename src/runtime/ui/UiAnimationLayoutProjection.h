@@ -12,6 +12,7 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         UiElementHandle element;
         UiStylePropertyId property;
         UiAnimationLayoutField field;
+        UiAnimationLayoutValuePolicy values{UiAnimationLayoutValuePolicy::AllComputedValues};
     };
 
     /** @brief Projects immutable computed values into caller-preallocated inactive layout descriptors; no publication occurs. */

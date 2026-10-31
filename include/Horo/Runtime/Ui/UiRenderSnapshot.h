@@ -19,6 +19,7 @@
 #include <variant>
 
 namespace Horo::Runtime::Ui {
+    class UiAnimationFrameLease;
     /** @brief Sentinel for an absent optional table reference. */
     inline constexpr std::uint32_t NoUiRenderIndex = std::numeric_limits<std::uint32_t>::max();
     inline constexpr std::uint32_t MaximumUiRenderCommands = 16'384;
@@ -26,6 +27,9 @@ namespace Horo::Runtime::Ui {
     inline constexpr std::uint32_t MaximumUiRenderGlyphs = 65'536;
     inline constexpr std::uint32_t MaximumUiRenderClips = 4'096;
     inline constexpr std::uint32_t MaximumUiRenderMasks = 1'024;
+    inline constexpr std::uint32_t MaximumUiRenderMaskDepth = 32;
+    inline constexpr std::uint32_t MaximumUiRenderOpacityGroups = 256;
+    inline constexpr std::uint32_t MaximumUiRenderOpacityGroupDepth = 16;
     inline constexpr std::uint32_t MaximumUiRenderTransforms = 4'096;
     inline constexpr std::uint32_t MaximumUiRenderResources = 4'096;
     inline constexpr std::uint32_t MaximumUiRenderSnapshotsInFlight = 64;
@@ -92,11 +96,35 @@ namespace Horo::Runtime::Ui {
         std::uint32_t parent{NoUiRenderIndex}; /**< Earlier parent clip or sentinel. */
     };
 
-    /** @brief Logical mask projection backed by one typed mask resource. */
+    /** @brief Closed canonical mask shapes; native realization never changes the shape. */
+    enum class UiMaskShape : std::uint8_t {
+        AlphaTexture,
+        Rectangle,
+        RoundedRectangle
+    };
+
+    /** @brief Logical mask projection intersected with every earlier ancestor. */
     struct UiMask final {
-        UiLogicalRect rect;        /**< Logical mask bounds. */
-        std::uint32_t resource{};  /**< Mask resource table index. */
-        std::uint32_t transform{}; /**< Transform table index. */
+        UiLogicalRect rect;                           /**< Logical mask bounds. */
+        std::uint32_t resource{};                     /**< Mask resource table index. */
+        std::uint32_t transform{};                    /**< Transform table index. */
+        UiMaskShape shape{UiMaskShape::AlphaTexture}; /**< Existing resource-backed masks remain the default. */
+        std::uint32_t parent{NoUiRenderIndex};        /**< Earlier mask intersected before this shape. */
+        std::array<std::int32_t, 4>
+            cornerRadii{}; /**< Clockwise top-left radii in 1/64 DIP; adjacent sums fit each edge, zero for other shapes. */
+    };
+
+    /** @brief Isolated contiguous paint interval composited once with its own opacity. */
+    struct UiOpacityGroup final {
+        UiElementHandle element;               /**< Exact retained owner of this isolation boundary. */
+        UiLogicalRect rect;                    /**< Logical isolation bounds; rendering outside is clipped. */
+        std::uint32_t firstCommand{};          /**< First included command in canonical paint order. */
+        std::uint32_t commandCount{};          /**< Nonempty bounded interval. */
+        std::uint32_t parent{NoUiRenderIndex}; /**< Earlier enclosing group or sentinel. */
+        float opacity{1.0F};                   /**< Applied once to the completed isolated surface, never to each leaf. */
+        std::uint32_t transform{};             /**< Transform table index for the isolation bounds. */
+        std::uint32_t clip{NoUiRenderIndex};   /**< Optional clip applied to the final composite. */
+        std::uint32_t mask{NoUiRenderIndex};   /**< Optional mask applied to the final composite. */
     };
 
     /** @brief Resolved solid paint payload. */
@@ -142,13 +170,14 @@ namespace Horo::Runtime::Ui {
 
     /** @brief One ordered logical draw emitted for an exact retained element. */
     struct UiDrawCommand final {
-        UiElementHandle element;             /**< Exact resident source element. */
-        UiLogicalRect rect;                  /**< Resolved logical paint bounds. */
-        std::uint32_t transform{};           /**< Required transform table index. */
-        std::uint32_t clip{NoUiRenderIndex}; /**< Optional clip table index. */
-        std::uint32_t mask{NoUiRenderIndex}; /**< Optional mask table index. */
-        float opacity{1.0F};                 /**< Resolved opacity in [0, 1]. */
-        UiDrawPayload payload;               /**< Closed resolved paint payload. */
+        UiElementHandle element;              /**< Exact resident source element. */
+        UiLogicalRect rect;                   /**< Resolved logical paint bounds. */
+        std::uint32_t transform{};            /**< Required transform table index. */
+        std::uint32_t clip{NoUiRenderIndex};  /**< Optional clip table index. */
+        std::uint32_t mask{NoUiRenderIndex};  /**< Optional mask table index. */
+        float opacity{1.0F};                  /**< Resolved opacity in [0, 1]. */
+        UiDrawPayload payload;                /**< Closed resolved paint payload. */
+        std::uint32_t group{NoUiRenderIndex}; /**< Deepest enclosing isolated group or sentinel. */
     };
 
     /** @brief Caller-selected capacities qualified by repository hard ceilings. */
@@ -160,6 +189,7 @@ namespace Horo::Runtime::Ui {
         std::uint32_t masks{};      /**< Logical mask ceiling. */
         std::uint32_t transforms{}; /**< Logical transform ceiling; must be positive. */
         std::uint32_t resources{};  /**< Stable resource reference ceiling. */
+        std::uint32_t groups{};     /**< Isolated opacity group ceiling; zero preserves ungrouped callers. */
         /** @brief Validates every declared ceiling. @return Whether all bounds are supported. */
         [[nodiscard]] bool IsValid() const noexcept;
     };
@@ -186,6 +216,7 @@ namespace Horo::Runtime::Ui {
         std::span<const UiMask> masks;                        /**< Logical mask table. */
         std::span<const UiLogicalTransform> transforms;       /**< Logical transform table. */
         std::span<const UiRenderResourceReference> resources; /**< Stable resource reference table. */
+        std::span<const UiOpacityGroup> groups;               /**< Parent-first nested paint intervals. */
     };
 
     /** @brief Load-time bounds and exact view identity for one allocation-free extraction store. */
@@ -229,6 +260,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiRenderSnapshotDescriptor &Descriptor() const noexcept;
         /** @brief Reports whether this object still owns a live immutable snapshot lease. @return True for a live snapshot. */
         [[nodiscard]] bool IsValid() const noexcept;
+        /** @brief Observes immutable load-time purpose; prototypes cannot become uploadable geometry or presentation evidence.
+         * @return True only for an exact ExtractPrototype issuance, including its retained copies.
+         */
+        [[nodiscard]] bool IsPreparationOnly() const noexcept;
         /** @brief Returns stable paint-order commands. @return Borrowed span owned by this snapshot. */
         [[nodiscard]] std::span<const UiDrawCommand> Commands() const noexcept;
         /** @brief Returns positioned text runs. @return Borrowed span owned by this snapshot. */
@@ -239,6 +274,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiClip> Clips() const noexcept;
         /** @brief Returns logical mask projections. @return Borrowed span owned by this snapshot. */
         [[nodiscard]] std::span<const UiMask> Masks() const noexcept;
+        /** @brief Returns isolated paint groups. @return Borrowed span owned by this snapshot. */
+        [[nodiscard]] std::span<const UiOpacityGroup> Groups() const noexcept;
         /** @brief Returns logical transforms. @return Borrowed span owned by this snapshot. */
         [[nodiscard]] std::span<const UiLogicalTransform> Transforms() const noexcept;
         /** @brief Returns stable Horo resource references. @return Borrowed span owned by this snapshot. */
@@ -289,6 +326,26 @@ namespace Horo::Runtime::Ui {
          */
         [[nodiscard]] Result<UiRenderSnapshot> Extract(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
                                                        const UiRenderProjection &projection);
+        /**
+         * @brief Extracts a real animation publication and retains its exact canonical generation through every snapshot reader.
+         * @param tree Exact tree retained by frame; numerically equal independent trees are rejected.
+         * @param descriptor Exact source and interaction revisions matching frame.
+         * @param projection Complete ordered projection copied into preallocated storage.
+         * @param frame Committed VariableUpdate publication; load-time baselines are rejected.
+         * @return Snapshot or typed lineage, lifecycle, validation or capacity failure.
+         * @details Geometry and queued native readers transitively retain this frame. The last reader releases its pin even
+         *          while extractor and geometry pools remain alive. Admission is owner-thread serialized; successful extraction does not
+         * allocate.
+         */
+        [[nodiscard]] Result<UiRenderSnapshot> Extract(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
+                                                       const UiRenderProjection &projection, const UiAnimationFrameLease &frame);
+        /** @brief Copies a fully validated potential-role projection for load-time native program preparation only.
+         * @param tree Exact private canonical source. @param descriptor Complete identity and bounded table policy.
+         * @param projection Actual baseline presentation. @return Immutable prototype or the same typed extraction failure.
+         * @details Geometry upload and normal render submission reject this issuance; Extract remains the real-frame route.
+         */
+        [[nodiscard]] Result<UiRenderSnapshot> ExtractPrototype(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
+                                                                const UiRenderProjection &projection);
         /** @brief Idempotently stops new extraction without invalidating live snapshot leases. */
         void Close() noexcept;
         /** @brief Reports whether no snapshot slot is currently leased. @return True after every snapshot copy retires. */

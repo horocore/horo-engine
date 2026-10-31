@@ -10,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace {
     using namespace Horo;
@@ -31,6 +32,9 @@ namespace {
         std::string_view missing;
         std::uint32_t specialization{};
         std::size_t uniformRange{16};
+        std::vector<std::size_t> admittedUniformRanges;
+        std::vector<std::uint32_t> admittedAttributeCounts;
+        std::uint32_t specializationCount{1};
         bool depthTestEnabled{}, depthWriteEnabled{};
         VkCompareOp depthCompare{};
     };
@@ -87,12 +91,20 @@ namespace {
         CHECK(info->renderPass == VK_NULL_HANDLE);
         REQUIRE(info->pNext != nullptr);
         CHECK(info->stageCount == 2);
-        CHECK(info->pVertexInputState->vertexAttributeDescriptionCount == 3);
+        const auto attributes = info->pVertexInputState->vertexAttributeDescriptionCount;
+        if (driver->admittedAttributeCounts.empty())
+            CHECK(attributes == 3);
+        else
+            CHECK(std::ranges::find(driver->admittedAttributeCounts, attributes) != driver->admittedAttributeCounts.end());
         const auto *spec = info->pStages[1].pSpecializationInfo;
-        REQUIRE(spec != nullptr);
-        REQUIRE(spec->mapEntryCount == 1);
-        CHECK(spec->pMapEntries[0].constantID == 7);
-        driver->specialization = *static_cast<const std::uint32_t *>(spec->pData);
+        if (driver->specializationCount == 0) {
+            CHECK((spec == nullptr || spec->mapEntryCount == 0));
+        } else {
+            REQUIRE(spec != nullptr);
+            REQUIRE(spec->mapEntryCount == driver->specializationCount);
+            CHECK(spec->pMapEntries[0].constantID == 7);
+            driver->specialization = *static_cast<const std::uint32_t *>(spec->pData);
+        }
         driver->depthTestEnabled = info->pDepthStencilState->depthTestEnable;
         driver->depthWriteEnabled = info->pDepthStencilState->depthWriteEnable;
         driver->depthCompare = info->pDepthStencilState->depthCompareOp;
@@ -135,7 +147,11 @@ namespace {
         for (std::uint32_t index = 0; index < count; ++index) {
             if (writes[index].descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
                 REQUIRE(writes[index].pBufferInfo != nullptr);
-                CHECK(writes[index].pBufferInfo->range == driver->uniformRange);
+                const auto range = writes[index].pBufferInfo->range;
+                if (driver->admittedUniformRanges.empty())
+                    CHECK(range == driver->uniformRange);
+                else
+                    CHECK(std::ranges::find(driver->admittedUniformRanges, range) != driver->admittedUniformRanges.end());
             } else {
                 REQUIRE(writes[index].pImageInfo != nullptr);
                 if (writes[index].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)

@@ -11,12 +11,17 @@ public:
         return graphics_.RequiredExtension();
     }
 
+    Horo::Result<void> ValidatePreparation() const override {
+        return graphics_.ValidatePreparation();
+    }
+
     Horo::Result<void> Validate(const Horo::XR::XRSessionId &candidate) const override {
         request_.texture.format = RenderTextureFormat::R8Unorm;
         return graphics_.Validate(candidate);
     }
 
-    Horo::Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system, PFN_xrGetInstanceProcAddr dispatch) override {
+    Horo::Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system,
+                                                    NativeXR::NativeOpenXRDispatch dispatch) override {
         return graphics_.Prepare(instance, system, dispatch);
     }
 
@@ -36,7 +41,11 @@ TEST_CASE("OpenXR Vulkan format selection rejects format revoked during graphics
     NativeXR::NativeSwapchainRequest request{.target = {session.identity, {1, 1}},
                                              .texture = {.extent = {640, 480}, .usage = RenderTextureUsage::RenderAttachment}};
     ReentrantFormatGraphics graphics{session.graphics, request};
-    NativeXR::OpenXRVulkanSwapchainImages images{*frontend, graphics, session.graphics.binding, {1}};
+    NativeXR::OpenXRVulkanSwapchainImages images{*frontend,
+                                                 graphics,
+                                                 session.graphics.binding,
+                                                 {1},
+                                                 {&FakeCreateImageView, &FakeDestroyImageView}};
     NativeXR::OpenXRSwapchain swapchain{session.owner, images};
     REQUIRE(images.Bind(swapchain).HasValue());
     const std::array<std::int64_t, 1> offered{VK_FORMAT_R8G8B8A8_UNORM};
@@ -60,7 +69,11 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
                 .HasValue());
     REQUIRE(registry.Seal().HasValue());
     auto frontend = SubmissionTest::Take(RenderFrontend::Create(registry, RenderBackendId{"xr-bridge-test"}, {}));
-    NativeXR::OpenXRVulkanSwapchainImages images{*frontend, session.graphics, session.graphics.binding, {1}};
+    NativeXR::OpenXRVulkanSwapchainImages images{*frontend,
+                                                 session.graphics,
+                                                 session.graphics.binding,
+                                                 {1},
+                                                 {&FakeCreateImageView, &FakeDestroyImageView}};
     NativeXR::OpenXRSwapchain swapchain{session.owner, images};
     REQUIRE(images.Bind(swapchain).HasValue());
 
@@ -241,4 +254,50 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
     REQUIRE(released.Value());
     CHECK(xr.releases == 2);
     REQUIRE(swapchain.Close().Value());
+}
+
+TEST_CASE("OpenXR complete-view depth uses canonical ready layered Vulkan storage and exact per-eye views",
+          "[unit][xr][vulkan][multiview][integration]") {
+    NativeGraphFixture native{true};
+    native.resourceState.state.sizedAllocations = true;
+    auto frontend = XRBridgeFixture::CreateFrontend(native);
+    const auto unsupported = Detail::RenderFrontendResourceAccess::CreateMultiviewDepth(*frontend, {11, 1}, {8, 8}, 3);
+    REQUIRE(unsupported.HasError());
+    CHECK(native.resourceState.state.createImageCount == 0);
+    const auto depth = Detail::RenderFrontendResourceAccess::CreateMultiviewDepth(*frontend, {11, 1}, {8, 8}, 2);
+    REQUIRE(depth.HasValue());
+    REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    REQUIRE(frontend->ResourceOperationResult(depth.Value().operation).HasValue());
+    CHECK(frontend->ResourceState(depth.Value().handle).Value() == RenderResourceState::Ready);
+    std::array<RenderTextureViewHandle, 2> views{};
+    VkImage image{VK_NULL_HANDLE};
+    for (std::uint32_t layer = 0; layer < views.size(); ++layer) {
+        const auto view = frontend->CreateTextureView({.texture = depth.Value().handle,
+                                                       .format = RenderTextureFormat::Depth32Float,
+                                                       .aspect = RenderTextureAspect::Depth,
+                                                       .baseLayer = layer});
+        REQUIRE(view.HasValue());
+        views[layer] = view.Value().handle;
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        const auto instance = Detail::RenderFrontendResourceAccess::BackendInstance(*frontend, views[layer]);
+        REQUIRE(instance.HasValue());
+        const auto actual = native.resources.MaterialCapture().ResolveDrawView(instance.Value());
+        REQUIRE(actual.HasValue());
+        CHECK(actual.Value().descriptor.baseLayer == layer);
+        CHECK(actual.Value().descriptor.layerCount == 1);
+        CHECK(actual.Value().descriptor.aspect == RenderTextureAspect::Depth);
+        if (layer == 0)
+            image = actual.Value().image;
+        CHECK(actual.Value().image == image);
+    }
+    CHECK(views[0] != views[1]);
+    for (const auto view : views)
+        REQUIRE(frontend->ReleaseTextureView(view).HasValue());
+    REQUIRE(frontend->ReleaseTexture(depth.Value().handle).HasValue());
+    CHECK(frontend->ResourceState(depth.Value().handle).HasError());
+    CHECK(frontend->MemorySnapshot().reservationCount == 0);
+    CHECK(frontend->MemorySnapshot().allocationCount == 0);
+    REQUIRE(frontend->BeginShutdown().HasValue());
+    REQUIRE(frontend->PollDrain().Value() == RenderBackendDrainProgress::Drained);
+    CHECK(native.commandState.state.waitCalls == 0);
 }

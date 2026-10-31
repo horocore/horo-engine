@@ -28,6 +28,10 @@ static_assert(std::is_same_v<decltype(std::declval<const PhysicsWorld &>().Prepa
                                  std::declval<std::span<const PhysicsSceneBodyDescriptor>>())),
                              Horo::Result<std::unique_ptr<PhysicsSceneBodyPreparation>>>);
 
+using PlayWorldCommitSignature = Horo::Result<void> (Horo::Physics::PhysicsPlayWorldSession::*)(Horo::Runtime::RuntimePhase,
+                                                                                                const Horo::Runtime::RuntimeSceneView &);
+static_assert(std::is_same_v<decltype(&Horo::Physics::PhysicsPlayWorldSession::Commit), PlayWorldCommitSignature>);
+
 int main() {
     return 0;
 }

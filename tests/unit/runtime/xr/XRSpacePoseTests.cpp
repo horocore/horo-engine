@@ -93,6 +93,46 @@ namespace Horo::XR {
         REQUIRE(accepted.Value().Purpose() == XRPosePurpose::PresentationPrediction);
     }
 
+    TEST_CASE("XR simulation epoch is valid without manufacturing runtime or prediction evidence", "[unit][xr][space-pose]") {
+        static_assert(sizeof(XRSimulationTime) == sizeof(std::int64_t));
+        static_assert(sizeof(XRRuntimeTime) == sizeof(std::int64_t));
+        REQUIRE_FALSE(XRSimulationTime{}.IsValid());
+        REQUIRE(XRSimulationTime{}.Nanoseconds() == -1);
+        REQUIRE(XRSimulationTime::Create(XRSimulationTime{}.Nanoseconds()).HasError());
+        REQUIRE(XRSimulationTime::Create(-1).HasError());
+        REQUIRE(XRSimulationTime::Create(std::numeric_limits<std::int64_t>::min()).HasError());
+        REQUIRE(XRRuntimeTime::Create(0).HasError());
+        REQUIRE(XRRenderPredictionTime::Create(0).HasError());
+        REQUIRE_FALSE(XRRuntimeTime{}.IsValid());
+        REQUIRE_FALSE(XRRenderPredictionTime{}.IsValid());
+
+        const auto epoch = XRSimulationTime::Create(0);
+        REQUIRE(epoch.HasValue());
+        REQUIRE(epoch.Value().IsValid());
+        REQUIRE(epoch.Value().Nanoseconds() == 0);
+        REQUIRE(XRSimulationTime::Create(epoch.Value().Nanoseconds()).Value().IsValid());
+        REQUIRE(epoch.Value() != XRSimulationTime{});
+        const auto maximum = XRSimulationTime::Create(std::numeric_limits<std::int64_t>::max());
+        REQUIRE(maximum.HasValue());
+        REQUIRE(maximum.Value().Nanoseconds() == std::numeric_limits<std::int64_t>::max());
+
+        auto descriptor = Descriptor();
+        descriptor.time.simulation = epoch.Value();
+        const auto origin = MakeGeneration<XRWorldOriginRevision>(9);
+        auto first = XRPoseSample::Create(descriptor, Session(), origin);
+        REQUIRE(first.HasValue());
+        REQUIRE(first.Value().Time().simulation->IsValid());
+        REQUIRE(first.Value().Time().simulation->Nanoseconds() == 0);
+        // Pausing keeps the same canonical elapsed time; native sample evidence remains independent.
+        descriptor.time.runtimeSample = MakeGeneration<XRRuntimeTime>(101);
+        auto paused = XRPoseSample::Create(descriptor, Session(), origin);
+        REQUIRE(paused.HasValue());
+        REQUIRE(paused.Value().Time().simulation == first.Value().Time().simulation);
+        REQUIRE(paused.Value().Time().runtimeSample != first.Value().Time().runtimeSample);
+        descriptor.time.simulation = XRSimulationTime{};
+        RequireFailure(XRPoseSample::Create(descriptor, Session(), origin), XRErrors::TimeDomainIncompatible);
+    }
+
     TEST_CASE("XR pose components reject nonfinite fabricated and contradictory validity", "[unit][xr][space-pose]") {
         const auto session = Session();
         const auto origin = MakeGeneration<XRWorldOriginRevision>(9);
@@ -154,6 +194,29 @@ namespace Horo::XR {
         auto invalidSpace = Descriptor(session);
         invalidSpace.source.kind = XRSpaceKind::Count;
         RequireFailure(XRPoseSample::Create(invalidSpace, session, origin), XRErrors::OperationInvalid);
+    }
+
+    TEST_CASE("XR action spaces preserve independent pose validity and exact session origin fences", "[unit][xr][space-pose]") {
+        static_assert(static_cast<unsigned>(XRSpaceKind::View) == 0);
+        static_assert(static_cast<unsigned>(XRSpaceKind::Local) == 1);
+        static_assert(static_cast<unsigned>(XRSpaceKind::Stage) == 2);
+        static_assert(static_cast<unsigned>(XRSpaceKind::World) == 3);
+        static_assert(static_cast<unsigned>(XRSpaceKind::Action) == 4);
+        const auto session = Session();
+        const auto origin = MakeGeneration<XRWorldOriginRevision>(9);
+        auto descriptor = Descriptor(session);
+        descriptor.source.kind = XRSpaceKind::Action;
+        descriptor.components.positionMeters = {};
+        descriptor.components.linearVelocityMetersPerSecond = {};
+        descriptor.components.loss = XRTrackingLossState::PositionLost;
+        const auto sample = XRPoseSample::Create(descriptor, session, origin);
+        REQUIRE(sample.HasValue());
+        CHECK(sample.Value().Source().kind == XRSpaceKind::Action);
+        CHECK_FALSE(sample.Value().Components().positionMeters.value.has_value());
+        CHECK(sample.Value().Components().orientation.value.has_value());
+        RequireFailure(XRPoseSample::Create(descriptor, Session(6), origin), XRErrors::IdentityStale);
+        RequireFailure(XRPoseSample::Create(descriptor, session, MakeGeneration<XRWorldOriginRevision>(10)), XRErrors::OriginRevisionStale);
+        RequireFailure(XRPoseSample::Create(descriptor, {}, origin), XRErrors::IdentityInvalid);
     }
 
     TEST_CASE("XR coordinate transforms compose deterministically without changing time authority", "[unit][xr][space-pose]") {

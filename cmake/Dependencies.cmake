@@ -290,22 +290,8 @@ FetchContent_MakeAvailable(utf8proc)
 # Runtime UI shaping uses HarfBuzz as a private, backend-neutral shaping strategy.
 # Keep the dependency self-contained and deterministic: platform shapers, font
 # discovery, and HarfBuzz types never cross the Horo public header boundary.
-set(HORO_HARFBUZZ_REVISION "7497c4147469fd4102a7229222586ad5c743c5a1")
-set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
-set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
-set(HB_HAVE_CAIRO OFF CACHE BOOL "" FORCE)
-set(HB_HAVE_FREETYPE OFF CACHE BOOL "" FORCE)
-set(HB_HAVE_GRAPHITE2 OFF CACHE BOOL "" FORCE)
-set(HB_HAVE_GLIB OFF CACHE BOOL "" FORCE)
-set(HB_HAVE_ICU OFF CACHE BOOL "" FORCE)
-set(HB_HAVE_CORETEXT OFF CACHE BOOL "" FORCE)
-set(HB_HAVE_GOBJECT OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    harfbuzz
-    URL https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/${HORO_HARFBUZZ_REVISION}
-    URL_HASH SHA256=6af13e0f154d52a60328a278de00cab26277a616958173a129d91d8f2e8e0284
-)
-FetchContent_MakeAvailable(harfbuzz)
+include(HoroHarfBuzzDependency)
+horo_add_harfbuzz_dependency()
 
 include(HoroUnicodeDependency)
 horo_add_unicode_dependency()
@@ -416,9 +402,10 @@ if(HORO_BUILD_RENDER_OPENGL)
     )
 endif()
 
-if(HORO_BUILD_RENDER_VULKAN)
-    # Vulkan headers are a pinned private build dependency. Runtime loading stays
-    # behind the host-owned loader lease and never requires an installed SDK.
+if(HORO_BUILD_RENDER_VULKAN OR (BUILD_TESTING AND HORO_BUILD_XR_OPENXR))
+    # Canonical OpenXR test dispatch also needs the official Vulkan extension
+    # declarations when its renderer is disabled. This SDK-only dependency does
+    # not enable renderer targets or runtime loading outside the host loader lease.
     set(HORO_VULKAN_HEADERS_REVISION "29f979ee5aa58b7b005f805ea8df7a855c39ff37")
     set(VULKAN_HEADERS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(

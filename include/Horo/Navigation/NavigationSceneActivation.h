@@ -26,7 +26,7 @@ namespace Horo::Navigation {
 
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */
         [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                                                         Runtime::RuntimeSceneView scene) override;
+                                                                                         const Runtime::RuntimeSceneView &scene) override;
 
     private:
         NavigationAgentRegistry *registry_{};

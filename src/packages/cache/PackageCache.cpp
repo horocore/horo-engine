@@ -1,5 +1,8 @@
 #include "Horo/Packages/PackageCache.h"
 
+#include "Horo/Foundation/Logging/Logger.h"
+#include "PackageCachePublisherEnvelope.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -68,6 +71,57 @@ namespace Horo::Packages {
             return WrapError(IoFailure, cause, "Package cache failed to " + std::string{operation} + '.');
         }
 
+        /** @brief Owns only an exclusively-created private cache staging entry; existing paths are never touched. */
+        class CacheStage final {
+            DurableFileSystem &files_;
+            std::filesystem::path path_;
+            bool created_{};
+
+        public:
+            CacheStage(DurableFileSystem &authority, const std::filesystem::path &root, const std::string_view identity)
+                : files_(authority), path_(root / "staging" / std::format("{}.{}.tmp", identity, NextQuarantineSequence())) {}
+
+            ~CacheStage() {
+                if (created_) {
+                    try {
+                        // Unlink only; never chmod an unowned/hard-linked path.
+                        if (files_.RemoveDurable(path_).HasError())
+                            Log::Logger::WriteEmergency("packages.cache", Log::Level::Warn,
+                                                        "Private cache staging cleanup failed; the active cache is unchanged.");
+                    } catch (...) {
+                        // Destruction must preserve the original publication failure across foreign filesystem callbacks.
+                        Log::Logger::WriteEmergency("packages.cache", Log::Level::Warn,
+                                                    "Private cache staging cleanup threw; the active cache is unchanged.");
+                    }
+                }
+            }
+
+            CacheStage(const CacheStage &) = delete;
+            CacheStage &operator=(const CacheStage &) = delete;
+            CacheStage(CacheStage &&) = delete;
+            CacheStage &operator=(CacheStage &&) = delete;
+
+            /** @brief Transfers the exclusively-created entry to the existing quarantine transaction, ending local cleanup ownership. */
+            [[nodiscard]] std::filesystem::path ReleasePath() noexcept {
+                created_ = false;
+                return std::move(path_);
+            }
+
+            Result<void> Write(const std::span<const std::byte> bytes) {
+                if (auto parent = files_.CreateDirectoryPath(path_.parent_path(), DirectoryCreationMode::Parents); parent.HasError())
+                    return Result<void>::Failure(parent.ErrorValue());
+                return files_.WritePrivateDurable(path_, bytes, created_,
+                                                  std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+            }
+
+            Result<void> Publish(const std::filesystem::path &destination) {
+                auto published = files_.AtomicReplace(path_, destination);
+                if (published.HasValue())
+                    created_ = false;
+                return published;
+            }
+        };
+
         [[nodiscard]] Result<ExclusiveFileLock> Acquire(DurableFileSystem &files, const std::filesystem::path &root,
                                                         const Sha256Digest &digest) {
             auto lock = files.TryAcquireExclusive(LockPath(root, digest), "horo-package-cache");
@@ -125,9 +179,62 @@ namespace Horo::Packages {
         }
 
         void BestEffortRemove(DurableFileSystem &files, const std::filesystem::path &path) {
-            std::error_code ignored;
-            std::filesystem::permissions(path, std::filesystem::perms::owner_write, std::filesystem::perm_options::add, ignored);
-            static_cast<void>(files.RemoveDurable(path));
+            static_cast<void>(files.RemoveDurable(path));  // Remove only the owned entry; never mutate linked-file permissions.
+        }
+
+        [[nodiscard]] std::filesystem::path EnvelopePath(const std::filesystem::path &root, const Sha256Digest &digest) {
+            return ArchivePath(root, digest).parent_path() / "publisher-envelope.bin";
+        }
+
+        /** @brief Rejects redirected cache ancestors and hostile final entries before evidence I/O. */
+        [[nodiscard]] Result<void> AdmitEnvelopePath(const std::filesystem::path &root, const std::filesystem::path &path) {
+            if (std::error_code rootError; std::filesystem::weakly_canonical(root, rootError) != root || rootError)
+                return Result<void>::Failure(MakeError(IoFailure, "Package publisher evidence requires its exact host-owned cache root."));
+            auto current = root;
+            for (const auto &part : path.lexically_relative(root)) {
+                current /= part;
+                std::error_code error;
+                const auto status = std::filesystem::symlink_status(current, error);
+                if (error == std::errc::no_such_file_or_directory || status.type() == std::filesystem::file_type::not_found)
+                    return Result<void>::Success();
+                if (error || std::filesystem::is_symlink(status) ||
+                    (current == path ? !std::filesystem::is_regular_file(status) : !std::filesystem::is_directory(status)))
+                    return Result<void>::Failure(
+                        MakeError(IoFailure, "Package publisher evidence rejected a redirected or non-regular location."));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> RemoveEnvelope(DurableFileSystem &files, const std::filesystem::path &root, const Sha256Digest &digest) {
+            const auto path = EnvelopePath(root, digest);
+            std::error_code error;
+            if (const auto status = std::filesystem::symlink_status(path, error);
+                error == std::errc::no_such_file_or_directory || status.type() == std::filesystem::file_type::not_found)
+                return Result<void>::Success();  // Legacy archive-only cleanup keeps its existing behavior.
+            if (error)
+                return Result<void>::Failure(MakeError(IoFailure));
+            if (auto admitted = AdmitEnvelopePath(root, path); admitted.HasError())
+                return admitted;
+            return files.RemoveDurable(path);  // Private evidence stays owner-writable; cleanup never chmods linked victims.
+        }
+
+        /** @brief Publishes inert detached bytes while the caller retains the archive's existing digest lock. */
+        [[nodiscard]] Result<void> PublishEnvelope(DurableFileSystem &files, const std::filesystem::path &root, const Sha256Digest &digest,
+                                                   const std::span<const std::byte> bytes) {
+            const auto destination = EnvelopePath(root, digest);
+            CacheStage staging{files, root, DigestHex(digest) + ".publisher"};
+            if (auto admitted = AdmitEnvelopePath(root, destination); admitted.HasError())
+                return admitted;
+            if (auto write = staging.Write(bytes); write.HasError())
+                return Result<void>::Failure(StorageError(write.ErrorValue(), "stage publisher evidence"));
+            if (auto publish = staging.Publish(destination); publish.HasError())
+                return Result<void>::Failure(StorageError(publish.ErrorValue(), "publish publisher evidence"));
+            auto stored = ReadBounded(destination, CacheDetail::MaximumPublisherEnvelopeBytes);
+            if (stored.HasError())
+                return Result<void>::Failure(stored.ErrorValue());
+            if (!std::ranges::equal(stored.Value(), bytes))
+                return Result<void>::Failure(MakeError(Corrupt, "Published publisher evidence differs from the staged bytes."));
+            return Result<void>::Success();
         }
 
         [[nodiscard]] std::string QuarantineJson(const PackageQuarantineRecord &record) {
@@ -161,14 +268,12 @@ namespace Horo::Packages {
         [[nodiscard]] Result<void> PublishQuarantineDiagnostic(DurableFileSystem &files, const std::filesystem::path &root,
                                                                const std::filesystem::path &diagnostic,
                                                                const PackageQuarantineRecord &record) {
-            const std::filesystem::path staging = root / "staging" / (record.quarantineId + ".diagnostic.tmp");
+            CacheStage staging{files, root, record.quarantineId + ".diagnostic"};
             const std::string json = QuarantineJson(record);
-            if (auto write = files.WriteDurable(staging, std::as_bytes(std::span{json})); write.HasError())
+            if (auto write = staging.Write(std::as_bytes(std::span{json})); write.HasError())
                 return Result<void>::Failure(StorageError(write.ErrorValue(), "write quarantine diagnostics"));
-            if (auto publish = files.AtomicReplace(staging, diagnostic); publish.HasError()) {
-                BestEffortRemove(files, staging);
+            if (auto publish = staging.Publish(diagnostic); publish.HasError())
                 return Result<void>::Failure(StorageError(publish.ErrorValue(), "publish quarantine diagnostics"));
-            }
             return Result<void>::Success();
         }
 
@@ -179,14 +284,10 @@ namespace Horo::Packages {
                                                                               const std::optional<std::filesystem::path> &existingPath) {
             if (existingPath.has_value())
                 return Result<std::filesystem::path>::Success(*existingPath);
-            const std::filesystem::path staging = root / "staging" / (std::string{quarantineId} + ".artifact.tmp");
-            if (auto write = files.WriteDurable(staging, bytes); write.HasError())
+            CacheStage staging{files, root, std::string{quarantineId} + ".artifact"};
+            if (auto write = staging.Write(bytes); write.HasError())
                 return Result<std::filesystem::path>::Failure(StorageError(write.ErrorValue(), "write quarantined bytes"));
-            if (auto permissions = MakeReadOnly(staging); permissions.HasError()) {
-                BestEffortRemove(files, staging);
-                return Result<std::filesystem::path>::Failure(permissions.ErrorValue());
-            }
-            return Result<std::filesystem::path>::Success(staging);
+            return Result<std::filesystem::path>::Success(staging.ReleasePath());
         }
 
         [[nodiscard]] Result<PackageQuarantineRecord> QuarantineLocked(
@@ -219,6 +320,13 @@ namespace Horo::Packages {
                 BestEffortRemove(files, diagnostic);
                 return Result<PackageQuarantineRecord>::Failure(StorageError(publish.ErrorValue(), "isolate quarantined bytes"));
             }
+            if (!existingPath.has_value())
+                if (auto permissions = MakeReadOnly(destination / "artifact.horopkg"); permissions.HasError())
+                    return Result<PackageQuarantineRecord>::Failure(permissions.ErrorValue());
+            // Moving an untrusted existing entry must not chmod another name of a hard-linked victim.
+            if (existingPath.has_value())
+                if (auto removed = RemoveEnvelope(files, root, identity); removed.HasError())
+                    return Result<PackageQuarantineRecord>::Failure(removed.ErrorValue());
             return Result<PackageQuarantineRecord>::Success(std::move(record));
         }
     }  // namespace
@@ -237,15 +345,19 @@ namespace Horo::Packages {
                                          const PackageValidationLimits &limits) noexcept
         : files_(files), root_(std::move(root)), limits_(limits) {}
 
-    /** @copydoc PackageCacheStore::Publish */
+    /** @copydoc PackageCacheStore::Publish(const ValidatedPackageArchive&) */
     Result<PackageCacheEntry> PackageCacheStore::Publish(const ValidatedPackageArchive &archive) {
+        auto lock = Acquire(files_, root_, archive.Digest());  // NOSONAR
+        if (lock.HasError())
+            return Result<PackageCacheEntry>::Failure(lock.ErrorValue());
+        return PublishLocked(archive);
+    }
+
+    /** @copydoc PackageCacheStore::PublishLocked */
+    Result<PackageCacheEntry> PackageCacheStore::PublishLocked(const ValidatedPackageArchive &archive) {
         const Sha256Digest digest = archive.Digest();
         if (auto compatible = VerifyExpected(archive.Bytes(), digest, limits_); compatible.HasError())
             return Result<PackageCacheEntry>::Failure(compatible.ErrorValue());
-        // The lock must span the complete publication transaction.
-        auto lock = Acquire(files_, root_, digest);  // NOSONAR
-        if (lock.HasError())
-            return Result<PackageCacheEntry>::Failure(lock.ErrorValue());
         const std::filesystem::path destination = ArchivePath(root_, digest);
         if (std::error_code existsError; std::filesystem::exists(destination, existsError)) {
             auto bytes = ReadBounded(destination, limits_.archiveBytes);
@@ -261,17 +373,13 @@ namespace Horo::Packages {
             return Result<PackageCacheEntry>::Failure(MakeError(IoFailure, "Package cache destination could not be inspected."));
         }
 
-        const std::filesystem::path staging = root_ / "staging" / (DigestHex(digest) + ".publish.tmp");
-        if (auto write = files_.WriteDurable(staging, archive.Bytes()); write.HasError())
+        CacheStage staging{files_, root_, DigestHex(digest) + ".archive"};
+        if (auto write = staging.Write(archive.Bytes()); write.HasError())
             return Result<PackageCacheEntry>::Failure(StorageError(write.ErrorValue(), "write a staged archive"));
-        if (auto permissions = MakeReadOnly(staging); permissions.HasError()) {
-            BestEffortRemove(files_, staging);
-            return Result<PackageCacheEntry>::Failure(permissions.ErrorValue());
-        }
-        if (auto publish = files_.AtomicReplace(staging, destination); publish.HasError()) {
-            BestEffortRemove(files_, staging);
+        if (auto publish = staging.Publish(destination); publish.HasError())
             return Result<PackageCacheEntry>::Failure(StorageError(publish.ErrorValue(), "publish an archive atomically"));
-        }
+        if (auto permissions = MakeReadOnly(destination); permissions.HasError())
+            return Result<PackageCacheEntry>::Failure(permissions.ErrorValue());
         auto publishedBytes = ReadBounded(destination, limits_.archiveBytes);
         if (publishedBytes.HasError())
             return Result<PackageCacheEntry>::Failure(publishedBytes.ErrorValue());
@@ -290,6 +398,11 @@ namespace Horo::Packages {
         auto lock = Acquire(files_, root_, digest);  // NOSONAR
         if (lock.HasError())
             return Result<std::optional<ValidatedPackageArchive>>::Failure(lock.ErrorValue());
+        return LoadLocked(digest);
+    }
+
+    /** @copydoc PackageCacheStore::LoadLocked */
+    Result<std::optional<ValidatedPackageArchive>> PackageCacheStore::LoadLocked(const Sha256Digest &digest) {
         const std::filesystem::path path = ArchivePath(root_, digest);
         if (std::error_code existsError; !std::filesystem::exists(path, existsError)) {
             if (existsError)
@@ -305,6 +418,59 @@ namespace Horo::Packages {
         auto quarantined = QuarantineLocked(files_, root_, bytes.Value(), PackageQuarantineReason::CorruptCacheEntry, digest, path);
         return Result<std::optional<ValidatedPackageArchive>>::Failure(quarantined.HasError() ? WrapError(Corrupt, quarantined.ErrorValue())
                                                                                               : MakeError(Corrupt));
+    }
+
+    /** @copydoc PackageCacheStore::Publish(const ValidatedPackageArchive&, const Security::DetachedSignatureEnvelope&) */
+    Result<PackageCacheEntry> PackageCacheStore::Publish(const ValidatedPackageArchive &archive,
+                                                         const Security::DetachedSignatureEnvelope &signature) {
+        auto encoded = CacheDetail::EncodePublisherEnvelope(signature, archive.Digest());
+        if (encoded.HasError())
+            return Result<PackageCacheEntry>::Failure(encoded.ErrorValue());
+        if (auto lock = Acquire(files_, root_, archive.Digest()); lock.HasError()) {
+            return Result<PackageCacheEntry>::Failure(lock.ErrorValue());
+        } else {
+            // The if-init lease spans this complete archive/evidence publication transaction.
+            if (auto admitted = AdmitEnvelopePath(root_, EnvelopePath(root_, archive.Digest())); admitted.HasError())
+                return Result<PackageCacheEntry>::Failure(admitted.ErrorValue());
+            auto published = PublishLocked(archive);
+            if (published.HasError())
+                return published;
+            if (auto evidence = PublishEnvelope(files_, root_, archive.Digest(), encoded.Value()); evidence.HasError())
+                return Result<PackageCacheEntry>::Failure(evidence.ErrorValue());
+            return published;
+        }
+    }
+
+    /** @copydoc PackageCacheStore::LoadWithPublisherEvidence */
+    Result<std::optional<PackageCachedArtifact>> PackageCacheStore::LoadWithPublisherEvidence(const Sha256Digest &digest) {
+        using Outcome = Result<std::optional<PackageCachedArtifact>>;
+        if (auto lock = Acquire(files_, root_, digest); lock.HasError()) {
+            return Outcome::Failure(lock.ErrorValue());
+        } else {
+            // The exact digest lease protects both bytes and detached evidence through the final owning result.
+            if (auto admitted = AdmitEnvelopePath(root_, EnvelopePath(root_, digest)); admitted.HasError())
+                return Outcome::Failure(admitted.ErrorValue());
+            auto loaded = LoadLocked(digest);
+            if (loaded.HasError())
+                return Outcome::Failure(loaded.ErrorValue());
+            auto archive = std::move(loaded).Value();
+            if (!archive)
+                return Outcome::Success(std::nullopt);
+            PackageCachedArtifact artifact{std::move(*archive), std::nullopt};
+            const auto path = EnvelopePath(root_, digest);
+            if (auto admitted = AdmitEnvelopePath(root_, path); admitted.HasError())
+                return Outcome::Failure(admitted.ErrorValue());
+            if (std::error_code error; !std::filesystem::exists(path, error))
+                return error ? Outcome::Failure(MakeError(IoFailure)) : Outcome::Success(std::move(artifact));
+            auto bytes = ReadBounded(path, CacheDetail::MaximumPublisherEnvelopeBytes);
+            if (bytes.HasError())
+                return Outcome::Failure(bytes.ErrorValue());
+            auto decoded = CacheDetail::DecodePublisherEnvelope(bytes.Value(), digest);
+            if (decoded.HasError())
+                return Outcome::Failure(WrapError(Corrupt, decoded.ErrorValue()));
+            artifact.signature = std::move(decoded).Value();
+            return Outcome::Success(std::move(artifact));
+        }
     }
 
     /** @copydoc PackageCacheStore::Quarantine */
@@ -329,6 +495,8 @@ namespace Horo::Packages {
         auto lock = Acquire(files_, root_, digest);  // NOSONAR
         if (lock.HasError())
             return Result<bool>::Failure(lock.ErrorValue());
+        if (auto removed = RemoveEnvelope(files_, root_, digest); removed.HasError())
+            return Result<bool>::Failure(removed.ErrorValue());
         const std::filesystem::path path = ArchivePath(root_, digest);
         std::error_code statusError;
         const auto status = std::filesystem::symlink_status(path, statusError);

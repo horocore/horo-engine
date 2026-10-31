@@ -1,5 +1,6 @@
 #include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "AllocationProbe.h"
+#include "Horo/Runtime/Render/RenderShaderResourceErrors.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLMaterialFixture.h"
 #include "OpenGLRenderBackendErrors.h"
@@ -10,6 +11,7 @@
 #include "TypedIdentityTestSupport.h"
 
 #include <optional>
+#include <thread>
 
 namespace Horo::Render::OpenGLResourceTests {
     /** @brief Borrows the existing deterministic resource dispatch; never creates a real context. */
@@ -424,6 +426,52 @@ namespace Horo::Render::OpenGLMaterialTests {
         const auto programs = native.nextProgram;
         CHECK(frontend->CreateGraphicsPipeline(invalid).HasError());
         CHECK(native.nextProgram == programs);
+    }
+
+    TEST_CASE("Internal material storage query delegates exact native layout and preserves admission errors",
+              "[renderer][opengl][material][frontend]") {
+        OpenGLResourceTests::ResourcePresentationPort port;
+        auto frontend = Create(port);
+        const auto pipeline = PreparePipeline(*frontend);
+        MaterialBindingDescriptor descriptor{.pipeline = pipeline.pipeline, .layout = pipeline.layout};
+        const auto query = [&] {
+            return Detail::RenderFrontendResourceAccess::MaterialParameterBufferBytes(*frontend, descriptor, {1});
+        };
+        const auto size = query();
+        REQUIRE(size.HasValue());
+        REQUIRE(size.Value() == 16);
+        SECTION("stale frontend generation") {
+            ++descriptor.pipeline.generation;
+            CHECK(query().HasError());
+        }
+        SECTION("incompatible native layout") {
+            descriptor.layout.shaderInterface = {};
+            CHECK(query().HasError());
+        }
+        SECTION("wrong preparation thread") {
+            std::optional<Result<std::size_t>> result;
+            std::thread worker{[&] {
+                result.emplace(query());
+            }};
+            worker.join();
+            REQUIRE(result.has_value());
+            Horo::Tests::RequireError(*result, RenderShaderResourceErrors::WrongThread);
+        }
+        SECTION("active frame") {
+            auto frame = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 32}});
+            REQUIRE(frame.HasValue());
+            Horo::Tests::RequireError(query(), FrontendErrors::ResourceChangeDuringFrame);
+        }
+        SECTION("closing frontend") {
+            REQUIRE(frontend->BeginShutdown().HasValue());
+            Horo::Tests::RequireError(query(), FrontendErrors::Closing);
+        }
+        SECTION("retired native pipeline") {
+            const auto instance = Detail::RenderFrontendResourceAccess::BackendInstance(*frontend, pipeline.pipeline);
+            REQUIRE(instance.HasValue());
+            borrowedBackend->DestroyGraphicsPipeline(instance.Value());
+            CHECK(query().HasError());
+        }
     }
 
     TEST_CASE("OpenGL material consumption rejects missing native instances before encoding", "[renderer][opengl][material]") {

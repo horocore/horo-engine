@@ -60,7 +60,7 @@ namespace {
         }
 
         Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &,
-                                                                           Runtime::RuntimeSceneView) override {
+                                                                           const Runtime::RuntimeSceneView &) override {
             REQUIRE(trace_.owned == 2);
             ++trace_.immutable;
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(std::make_unique<PreparedCandidate>());

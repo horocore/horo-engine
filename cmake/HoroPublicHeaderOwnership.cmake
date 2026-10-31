@@ -71,6 +71,10 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Math/WorldCoordinate64.h
 )
 
+horo_configure_target_header_boundary(HoroSecurityEnvelope PUBLIC_HEADERS
+    Horo/Security/ArtifactSignatureEnvelope.h
+)
+
 horo_configure_target_header_boundary(HoroSecurity PUBLIC_HEADERS
     Horo/Security/AgentPolicy.h
     Horo/Security/ArtifactSignature.h
@@ -247,6 +251,7 @@ horo_configure_target_header_boundary(HoroReleaseService PUBLIC_HEADERS
     Horo/Release/ReleaseService.h
     Horo/Release/ReleaseRunHistory.h
 )
+# PackageCache carries neutral detached envelopes through its explicit SecurityEnvelope dependency; publisher authority stays separate.
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageDependencyResolver.h
     Horo/Packages/PackageLockfile.h
@@ -651,6 +656,7 @@ horo_configure_target_header_boundary(HoroAndroidInputIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
+    Horo/Runtime/InputCollection.h
 )
 horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
     Horo/Physics/CharacterPolicies.h
@@ -960,6 +966,7 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroXRInputBindings PUBLIC_HEADERS
     Horo/XR/XRActionBindings.h
+    Horo/XR/XRInputProjection.h
 )
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
@@ -1157,6 +1164,9 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/RenderSurfaceLifecycleErrors.h
     Horo/Runtime/Render/RenderGraph.h
     Horo/Runtime/Render/RenderGraphWorkload.h
+    Horo/Runtime/Render/UiPaintWorkload.h
+    Horo/Runtime/Render/UiPaintKernel.h
+    Horo/Runtime/Render/UiPaintFrameUpload.h
     Horo/Runtime/Render/RenderGraphExecution.h
     Horo/Runtime/Render/RenderGraphInspection.h
     Horo/Runtime/Render/RenderGraphInspectionErrors.h
@@ -1199,6 +1209,8 @@ horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/LightFrameBufferPool.h
+    Horo/Runtime/Render/UiPaintFrameBufferPool.h
+    Horo/Runtime/Render/UiPaintProgram.h
     Horo/Runtime/Render/RenderFrontend.h
     Horo/Runtime/Render/RenderGraphTransientResources.h
     Horo/Runtime/Render/RenderMemoryBudget.h

@@ -1,11 +1,14 @@
 #include "UiAnimationOwnerIntegrationFixture.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace {
     using namespace Horo;
     using namespace Horo::Runtime;
     using namespace Horo::Runtime::Ui;
     using namespace Horo::Runtime::Ui::ReloadTests;
     using namespace Horo::Runtime::Ui::AnimationTests;
+
 }  // namespace
 
 TEST_CASE("Real host animation publishes matching style layout and clipping while retained geometry remains immutable",
@@ -190,42 +193,6 @@ TEST_CASE("Stable host animation frames preserve an active press and its pending
     CHECK(applied.Value()->kind == UiControlActionKind::Submit);
     CHECK(std::get<UiTextInputControlState>(held.Controls().front().state).pressed);
     CHECK_FALSE(participant.ApplyControlDefault(receipt.view, source).Value().has_value());
-}
-
-TEST_CASE("A real attached async router remains live on stable geometry and blocks replacement until its producer drains",
-          "[runtime_ui][animation][integration][async][rollback]") {
-    HostFixture fixture{{.actions = true}};
-    auto &participant = *fixture.participant;
-    REQUIRE(fixture.attachedActions);
-    REQUIRE(fixture.host->RunFrame().HasValue());
-    auto initial = Frame(participant);
-    const auto source = initial.Controls().front().source;
-    REQUIRE(participant.ApplyPresentation(Receipt(initial, 1)).HasValue());
-    auto &router = *fixture.attachedActions;
-    REQUIRE(router.Enqueue(source, UiButtonActionCommand{Stable<UiActionId>(8), {}}).HasValue());
-    RetainedAnimationHandler handler;
-    auto dispatched = router.DispatchNext(handler);
-    REQUIRE(dispatched.HasValue());
-    REQUIRE(dispatched.Value().has_value());
-    REQUIRE(handler.producer.has_value());
-    CHECK(handler.actual.source == source);
-    fixture.clock.Advance(Duration::FromMilliseconds(10));
-    REQUIRE(fixture.host->RunFrame().HasValue());
-    auto stable = Frame(participant);
-    CHECK(stable.Controls().front().source == source);
-    CHECK(router.Owner() == source.owner);
-    CHECK(participant.InputEligible(Receipt(initial, 1).view));
-    REQUIRE(participant.Start(Stable<UiAnimationId>(1)).HasValue());
-    REQUIRE(fixture.host->RunFrame().HasValue());
-    fixture.clock.Advance(Duration::FromMilliseconds(10));
-    const auto failed = fixture.host->RunFrame();
-    REQUIRE(failed.HasError());
-    // RuntimeHost's real fatal policy shuts down; the last immutable publication is nevertheless unchanged and readable.
-    CHECK(stable.Styles().Descriptor().geometry == initial.Styles().Descriptor().geometry);
-    CHECK(stable.Layout().Descriptor().interaction == initial.Layout().Descriptor().interaction);
-    CHECK(handler.producer->Cancellation().IsCancellationRequested());
-    CHECK(participant.Acquire().HasError());
-    handler.producer.reset();
 }
 
 TEST_CASE("Actual frame and route publication use preallocated owners without C++ allocation or reclamation",

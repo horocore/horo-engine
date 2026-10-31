@@ -100,7 +100,7 @@ namespace Horo::Runtime {
                                            std::vector<SceneCellAttachmentBytes> artifacts);
         /** @copydoc SceneActivationParticipant::Prepare */
         [[nodiscard]] Result<std::unique_ptr<SceneActivationCandidate>> Prepare(const RuntimeSceneDefinition &definition,
-                                                                                RuntimeSceneView scene) override;
+                                                                                const RuntimeSceneView &scene) override;
         /** @brief Closes admission and pending publication for cancellation; prepared/native candidates retain their cleanup ownership. */
         void RequestCancellation() const noexcept;
         /** @brief Permanently closes admission and pending publication; idempotent, with no wait or fabricated retirement. */

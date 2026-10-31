@@ -1,3 +1,4 @@
+#include "EditorPlayXrHost.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -170,8 +171,12 @@ namespace Horo::Editor {
         }
 
         m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
-        const Result<void> started = m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(),
-                                                         m_gameplayRegistry->Components(), m_playSceneFactory, m_triggerBinding);
+        LoadDocumentAssetMeshes();  // Cold SAME cache preparation before the XR Scene participant captures exact leases.
+        const Result<void> started =
+            m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), m_gameplayRegistry->Components(), m_playSceneFactory,
+                                m_triggerBinding,
+                                m_selectedXrPlayHost ? EditorPlayViewSource::SelectedXr : EditorPlayViewSource::AuthoredCamera,
+                                m_selectedXrPlayHost);
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())
@@ -272,6 +277,13 @@ namespace Horo::Editor {
         const auto playScene = m_playSession.SceneView();
         if (!playScene)
             return;
+        if (m_selectedXrPlayHost) {
+            if (const auto updated = m_selectedXrPlayHost->UpdateScene(*playScene); updated.HasError()) {
+                LOG_ERROR("editor.xr", "XR Scene presentation revoked: %s", updated.ErrorValue().message.c_str());
+                StopPlaySession();
+            }
+            return;  // SAME acquired-eye mirror; no independent camera or outgoing Scene borrow escapes.
+        }
         const Runtime::RuntimeSceneView runtimeView = *playScene;
         const EditorViewportCamera camera = ResolvePlayViewportCamera(runtimeView);
         LoadDocumentAssetMeshes();

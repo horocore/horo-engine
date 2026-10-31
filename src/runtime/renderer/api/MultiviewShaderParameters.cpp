@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/MultiviewShaderParameters.h"
 
+#include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
 
 #include <algorithm>
@@ -50,20 +51,19 @@ namespace Horo::Render {
     }
 
     /** @copydoc PackMultiviewShaderParameters */
-    Result<MaterialParameterBinding> PackMultiviewShaderParameters(const MaterialBindingLayout &layout,
-                                                                   const std::span<const MultiviewSceneView> views,
-                                                                   const Math::Mat4 &localToWorld,
-                                                                   const std::span<const std::uint32_t> layers) {
+    Result<std::size_t> PackMultiviewShaderParameters(const MaterialBindingLayout &layout, const std::span<const MultiviewSceneView> views,
+                                                      const Math::Mat4 &localToWorld, const std::span<const std::uint32_t> layers,
+                                                      const std::span<std::byte> destination) {
         if (const auto bytes = MultiviewShaderParameterBytes(layout, views.size()); bytes.HasError())
-            return Result<MaterialParameterBinding>::Failure(bytes.ErrorValue());
+            return Result<std::size_t>::Failure(bytes.ErrorValue());
         if (layers.size() != views.size() || !Math::IsFinite(localToWorld))
-            return Result<MaterialParameterBinding>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
+            return Result<std::size_t>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
         std::array<float, MultiviewExtractionLimits::HardMaximumViews * 16> matrices{};
         std::array<float, 16> model{};
         std::array<std::uint32_t, MultiviewExtractionLimits::HardMaximumViews> routing{};
         for (std::size_t index = 0; index < views.size(); ++index) {
             if (views[index].index != index || !Math::IsFinite(views[index].worldToClip))
-                return Result<MaterialParameterBinding>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
+                return Result<std::size_t>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
             MatrixValues(views[index].worldToClip, std::span<float, 16>{matrices.data() + index * 16, 16});
             routing[index] = layers[index];
         }
@@ -77,6 +77,25 @@ namespace Horo::Render {
                                 MaterialParameterValue{MultiviewShaderParameterIds::LocalToWorld, std::span<const float>{model}},
                                 MaterialParameterValue{MultiviewShaderParameterIds::ViewLayers,
                                                        std::span<const std::uint32_t>{routing}.first(layerField->arrayCount)}};
-        return PackMaterialParameterBinding(layout, MultiviewShaderParameterIds::Buffer, values);
+        return PackMaterialParameterBinding(layout, MultiviewShaderParameterIds::Buffer, values, destination);
+    }
+
+    /** @copydoc PackMultiviewShaderParameters */
+    Result<MaterialParameterBinding> PackMultiviewShaderParameters(const MaterialBindingLayout &layout,
+                                                                   const std::span<const MultiviewSceneView> views,
+                                                                   const Math::Mat4 &localToWorld,
+                                                                   const std::span<const std::uint32_t> layers) {
+        const auto size = MultiviewShaderParameterBytes(layout, views.size());
+        if (size.HasError())
+            return Result<MaterialParameterBinding>::Failure(size.ErrorValue());
+        try {
+            MaterialParameterBinding result{std::vector<std::byte>(size.Value())};
+            if (const auto written = PackMultiviewShaderParameters(layout, views, localToWorld, layers, std::span{result.bytes});
+                written.HasError())
+                return Result<MaterialParameterBinding>::Failure(written.ErrorValue());
+            return Result<MaterialParameterBinding>::Success(std::move(result));
+        } catch (const std::bad_alloc &) {
+            return Result<MaterialParameterBinding>::Failure(MakeError(MaterialBindingErrors::AllocationFailed));
+        }
     }
 }  // namespace Horo::Render

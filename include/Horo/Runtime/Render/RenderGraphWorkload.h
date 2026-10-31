@@ -6,6 +6,7 @@
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/MultiviewGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
+#include "Horo/Runtime/Render/UiPaintWorkload.h"
 #include "Horo/Runtime/Render/VfxGraphWorkload.h"
 
 #include <cstdint>
@@ -49,8 +50,9 @@ namespace Horo::Render {
     };
 
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
-    using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy,
-                                             RenderGraphLightCulling, RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview>;
+    using RenderGraphWorkload =
+        std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
+                     RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {
@@ -115,6 +117,12 @@ namespace Horo::Render {
         static constexpr std::size_t MaximumQueues = 8;
     };
 
+    /** @brief Explicit frame stage; only the named UI composition admits a second, paint-only graph. */
+    enum class RenderGraphExecutionRole : std::uint8_t {
+        Scene,
+        UiComposition
+    };
+
     /**
      * @brief Synchronously borrowed compiled graph execution request for an active frame.
      *
@@ -138,6 +146,7 @@ namespace Horo::Render {
         std::span<const RenderGraphMeshInstance> meshes;
         /**< Exact frontend-resolved mesh instances used by typed multiview geometry; never native API handles. */
         std::span<const RenderGraphTextureViewInstance> views;
+        RenderGraphExecutionRole role{RenderGraphExecutionRole::Scene};
     };
 
     /**

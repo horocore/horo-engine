@@ -6,6 +6,7 @@
 #include <bit>
 #include <exception>
 #include <format>
+#include <limits>
 #include <string>
 
 namespace Horo::XR::OpenXRInternal {
@@ -222,6 +223,8 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::CheckCurrent */
     Result<void> OpenXRNativeSession::CheckCurrent(const NativeSessionRequest &request) const {
+        if (controlThread_ != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "XR native owner requires its control thread"));
         if (!request.candidate.IsValid() || request.preflight.RuntimeGeneration() != request.candidate.system.runtime)
             return Result<void>::Failure(MakeError(XRErrors::IdentityInvalid));
         auto admitted = ValidateXRLoaderPreflight(request.preflight, request.activeAttempt, request.preflight.Backend(),
@@ -258,10 +261,11 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRNativeSession::DiscoverAndNegotiate */
-    Result<void> OpenXRNativeSession::DiscoverAndNegotiate(const NativeSessionRequest &request) {
+    Result<void> OpenXRNativeSession::DiscoverAndNegotiate(const NativeDiscoveryRequest &request) {
         if (request.extensions.size() >= MaximumEnabledExtensions || request.layers.size() > MaximumNativeLayers)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (!request.layers.empty() && (!request.developmentLayersApproved || request.productMode != XRPreflightProductMode::Development))
+        if (!request.layers.empty() &&
+            (!request.developmentLayersApproved || request.selection.productMode != XRPreflightProductMode::Development))
             return Result<void>::Failure(MakeError(XRErrors::RuntimeOverrideRejected));
         const auto layers = DiscoverLayers(request.layers);
         return layers.HasError() ? layers : NegotiateExtensions(request.extensions);
@@ -365,13 +369,11 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRNativeSession::CreateInstance */
-    Result<void> OpenXRNativeSession::CreateInstance(const NativeSessionRequest &request) {
-        if (const auto current = CheckCurrent(request); current.HasError())
-            return current;
+    Result<void> OpenXRNativeSession::CreateInstance(const NativeDiscoveryRequest &request) {
         XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
         CopyNativeLiteral(info.applicationInfo.applicationName, "Horo Engine");
         CopyNativeLiteral(info.applicationInfo.engineName, "Horo Engine");
-        const auto version = request.preflight.LoaderApiVersion();
+        const auto version = request.requestedApi;
         if (version.major != 1 || version.minor > XR_VERSION_MINOR(XR_CURRENT_API_VERSION))
             return Result<void>::Failure(
                 MakeError(XRErrors::LoaderIncompatible, "Preflight API exceeds the privately compiled SDK contract"));
@@ -415,17 +417,19 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRNativeSession::CreateSession */
-    Result<void> OpenXRNativeSession::CreateSession(const NativeSessionRequest &request) {
-        auto current = CheckCurrent(request);
+    Result<void> OpenXRNativeSession::CreateSession(const NativeSessionPreparation &request) {
+        auto current = CheckPreparation(request);
         if (current.HasError())
             return current;
-        auto binding = graphics_->Prepare(instance_, system_, dispatch_.getProc);
+        if (nativeSessionIncarnation_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Native session creation receipt exhausted"));
+        auto binding = graphics_->Prepare(instance_, system_, {dispatch_.getProc});
         if (binding.HasError())
             return Result<void>::Failure(binding.ErrorValue());
         graphicsPrepared_ = true;
         if (!binding.Value() || binding.Value()->next || !MatchesGraphicsBinding(names_.extensions[0], binding.Value()->type))
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Graphics binding must be one explicit native structure"));
-        current = CheckCurrent(request);
+        current = CheckPreparation(request);
         if (current.HasError())
             return current;
         const XrSessionCreateInfo info{XR_TYPE_SESSION_CREATE_INFO, binding.Value(), 0, system_};
@@ -434,6 +438,8 @@ namespace Horo::XR::OpenXRInternal {
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeError("xrCreateSession", result));
         session_ = candidate;
+        if (session_ != XR_NULL_HANDLE)
+            ++nativeSessionIncarnation_;
         return session_ != XR_NULL_HANDLE
                    ? Result<void>::Success()
                    : Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "xrCreateSession returned an empty success"));
@@ -447,7 +453,9 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::Create */
     Result<void> OpenXRNativeSession::Create(const NativeSessionRequest &request) {
-        if (instance_ != XR_NULL_HANDLE || session_ != XR_NULL_HANDLE || owner_.IsValid())
+        if (controlThread_ != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "XR native owner requires its control thread"));
+        if (discovery_ || instance_ != XR_NULL_HANDLE || session_ != XR_NULL_HANDLE || owner_.IsValid())
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationUnavailable, "Owner must retire before reuse; replacement uses a separate owner"));
         if (const auto current = CheckCurrent(request); current.HasError())
@@ -473,58 +481,40 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::PrepareTransaction */
     Result<void> OpenXRNativeSession::PrepareTransaction(const NativeSessionRequest &request) {
-        auto prepared = ResolveGlobal();
+        const auto api = request.preflight.LoaderApiVersion();
+        const NativeDiscoveryRequest discovery{.selection = {.contractVersion = request.preflight.ContractVersion(),
+                                                             .attempt = request.activeAttempt,
+                                                             .backend = request.preflight.Backend(),
+                                                             .installRecord = request.preflight.InstallRecord(),
+                                                             .productProfile = request.preflight.ProductProfile(),
+                                                             .loaderSource = request.preflight.LoaderSource(),
+                                                             .productMode = request.productMode,
+                                                             .runtimeSelection = request.preflight.RuntimeSelection(),
+                                                             .admittedLoaderVersions = {api, api},
+                                                             .developerOverrideApproved =
+                                                                 request.preflight.RuntimeSelection() ==
+                                                                 XRRuntimeSelectionPolicy::ApprovedDeveloperOverride},
+                                               .requestedApi = api,
+                                               .extensions = request.extensions,
+                                               .layers = request.layers,
+                                               .developmentLayersApproved = request.developmentLayersApproved};
+        auto prepared = PrepareDiscovery(discovery);
         if (prepared.HasValue())
-            prepared = DiscoverAndNegotiate(request);
-        if (prepared.HasValue())
-            prepared = CreateInstance(request);
-        if (prepared.HasValue())
-            prepared = ResolveInstance();
-        if (prepared.HasValue())
-            prepared = CheckCurrent(request);
-        if (prepared.HasValue())
-            prepared = SelectSystem();
-        if (prepared.HasValue())
-            prepared = CreateSession(request);
-        if (prepared.HasValue())
-            prepared = CheckCurrent(request);
-        if (prepared.HasError())
-            return Fail(prepared.ErrorValue());
-        owner_ = request.candidate;
-        retainedPreflight_ = request.preflight;
-        retainedPlan_ = request.plan;
-        preparing_ = {};
-        return Result<void>::Success();
+            prepared = PrepareSession({request.preflight, request.activeAttempt});
+        return prepared.HasError() ? FinishCreate(std::move(prepared)) : FinishCreate(Activate(request));
     }
 
-    /** @copydoc OpenXRNativeSession::Close */
-    Result<void> OpenXRNativeSession::Close() {
-        owner_ = {};
-        preparing_ = {};
-        retainedPreflight_.reset();
-        retainedPlan_.reset();
-        if (session_ != XR_NULL_HANDLE) {
-            if (!dispatch_.destroySession)
-                return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Native session has no retirement dispatch"));
-            const auto result = dispatch_.destroySession(session_);
-            if (XR_FAILED(result))
-                return Result<void>::Failure(NativeError("xrDestroySession", result));
-            session_ = XR_NULL_HANDLE;
-        }
-        if (graphicsPrepared_) {
-            graphics_->Release();
-            graphicsPrepared_ = false;
-        }
-        if (instance_ != XR_NULL_HANDLE) {
-            if (!dispatch_.destroyInstance)
-                return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible, "Native instance has no retirement dispatch"));
-            const auto result = dispatch_.destroyInstance(instance_);
-            if (XR_FAILED(result))
-                return Result<void>::Failure(NativeError("xrDestroyInstance", result));
-            instance_ = XR_NULL_HANDLE;
-        }
-        system_ = XR_NULL_SYSTEM_ID;
-        return Result<void>::Success();
+    /** @copydoc OpenXRNativeSession::FinishCreate */
+    Result<void> OpenXRNativeSession::FinishCreate(Result<void> outcome) {
+        if (outcome.HasError() && discovery_ && discovery_->phase != DiscoveryPhase::Retiring)
+            return Fail(std::move(outcome).ErrorValue());
+        // A retiring owner retains failed-destroy debt. Only a later explicit Close may retry native destruction.
+        return outcome;
+    }
+
+    /** @copydoc OpenXRNativeSession::NativeFailure */
+    Error OpenXRNativeSession::NativeFailure(const char *operation, const XrResult result) {
+        return NativeError(operation, result);
     }
 
     /** @copydoc OpenXRNativeSession::Validate */
@@ -557,6 +547,7 @@ namespace Horo::XR::OpenXRInternal {
         const auto current = Validate(session);
         return current.HasError()
                    ? Result<NativeSessionBorrow>::Failure(current.ErrorValue())
-                   : Result<NativeSessionBorrow>::Success({instance_, system_, session_, retainedPlan_->Limits().maximumActions});
+                   : Result<NativeSessionBorrow>::Success({instance_, system_, session_, retainedPlan_->Limits().maximumActions,
+                                                           retainedPlan_->Limits().maximumSpaces, nativeSessionIncarnation_});
     }
 }  // namespace Horo::XR::OpenXRInternal

@@ -32,7 +32,7 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] bool IsEligible(const VulkanAdapterCandidate &candidate, const bool requirePresentation) {
-            return candidate.standardApiVariant && !candidate.portabilitySubset && candidate.driverAllowed &&
+            return candidate.standardApiVariant && !candidate.portabilitySubset && candidate.driverAllowed && candidate.hostAllowed &&
                    VulkanSupportsVersion(candidate.apiVersion) && candidate.requiredFeatures.AreAvailable() &&
                    HasGraphicsQueue(candidate) &&
                    (!requirePresentation ||
@@ -55,6 +55,8 @@ namespace Horo::Render::Detail {
             if (!candidate.driverAllowed) {
                 return VulkanBackendErrors::DriverUnsupported;
             }
+            if (!candidate.hostAllowed)
+                return VulkanBackendErrors::AdapterRequirementsUnsupported;
             if (!HasGraphicsQueue(candidate)) {
                 return VulkanBackendErrors::GraphicsQueueUnavailable;
             }

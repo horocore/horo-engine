@@ -3,8 +3,9 @@
 /** @file VulkanGraphRuntime.h
  * @brief Device-private translation of canonical graph submissions and resource states.
  */
-#include "VulkanEditorGraphicsBridge.h"
 #include "VulkanResourceRuntime.h"
+
+#include <VulkanEditorGraphicsBridge.h>
 
 namespace Horo::Render::Detail {
     /** @brief Acquired WSI output, borrowed until this same frame submits or aborts. */
@@ -14,6 +15,7 @@ namespace Horo::Render::Detail {
         VkSemaphore renderFinished{};
         FramebufferExtent extent;
         ClearColor clearColor;
+        bool legacyUnmanagedOutput{false}; /**< Actual admitted primary-output policy, never inferred from a native format alone. */
     };
 
     /** @brief Borrowed selected-device configuration consumed synchronously during graph initialization. */

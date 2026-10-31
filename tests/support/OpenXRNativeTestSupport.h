@@ -30,17 +30,27 @@ namespace Horo::Tests::OpenXR {
         std::string_view instanceDispatchAbsent;
         std::vector<std::string_view> calls;
         bool depthExtension{};
+        bool legacyVulkan{};   /**< Selects the existing Vulkan-enable1 application bridge in real-loader fixtures. */
+        bool clockExtension{}; /**< Optional official native clock extension for same-production-clock tests. */
         std::uint32_t extensionCount{1};
         bool malformedExtension{};
         bool advertiseLayer{};
         bool enabledLayer{};
         bool failRetirement{};
+        bool failInstanceRetirement{};
         bool stale{};
         bool staleAfterSession{};
         bool throwAfterInstance{};
         bool throwUnknownAfterInstance{};
         std::uint32_t liveInstances{};
         std::uint32_t liveSessions{};
+        XrSession lastSession{}; /**< Observes the actual script-created native handle; never issues a Horo identity. */
+
+        struct RetirementProbe final {
+            OpenXRNativeSession *owner{};
+            bool rejectedSession{};
+            bool rejectedFull{};
+        } retirement;
 
         Script() {
             REQUIRE(active == nullptr);
@@ -73,10 +83,19 @@ namespace Horo::Tests::OpenXR {
                 for (std::uint32_t index = 0; index < *count; ++index) {
                     if (layer)
                         CopyNativeLiteral(properties[index].extensionName, "XR_TEST_layer_extension");
+                    else if (active->legacyVulkan)
+                        CopyNativeLiteral(properties[index].extensionName, "XR_KHR_vulkan_enable");
                     else
                         CopyNativeLiteral(properties[index].extensionName, "XR_KHR_vulkan_enable2");
                     if (!layer && active->depthExtension && index == 1)
                         CopyNativeLiteral(properties[index].extensionName, "XR_KHR_composition_layer_depth");
+                    if (!layer && active->clockExtension && index == (active->depthExtension ? 2U : 1U)) {
+#if defined(_WIN32)
+                        CopyNativeLiteral(properties[index].extensionName, "XR_KHR_win32_convert_performance_counter_time");
+#else
+                        CopyNativeLiteral(properties[index].extensionName, "XR_KHR_convert_timespec_time");
+#endif
+                    }
                     properties[index].extensionVersion = 1;
                     if (active->malformedExtension)
                         properties[index].type = XR_TYPE_UNKNOWN;
@@ -96,6 +115,8 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL DestroyInstance(XrInstance) {
             const auto result = Record("destroy-instance");
+            if (active->failInstanceRetirement)
+                return XR_ERROR_RUNTIME_FAILURE;
             if (XR_SUCCEEDED(result))
                 --active->liveInstances;
             return result;
@@ -112,6 +133,7 @@ namespace Horo::Tests::OpenXR {
             const auto result = Record("session");
             if (XR_SUCCEEDED(result)) {
                 *session = NativeHandle<XrSession>(++active->liveSessions);
+                active->lastSession = *session;
                 if (active->staleAfterSession)
                     active->stale = true;
             }
@@ -119,6 +141,10 @@ namespace Horo::Tests::OpenXR {
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL DestroySession(XrSession) {
+            if (active->retirement.owner) {
+                active->retirement.rejectedSession = active->retirement.owner->RetireSession().HasError();
+                active->retirement.rejectedFull = active->retirement.owner->Close().HasError();
+            }
             const auto result = Record("destroy-session");
             if (active->failRetirement)
                 return XR_ERROR_RUNTIME_FAILURE;
@@ -183,11 +209,15 @@ namespace Horo::Tests::OpenXR {
             return "XR_KHR_vulkan_enable2";
         }
 
+        Result<void> ValidatePreparation() const override {
+            return Script::active->stale ? Result<void>::Failure(MakeError(XRErrors::CapabilityStale)) : Result<void>::Success();
+        }
+
         Result<void> Validate(const XRSessionId &) const override {
             return Script::active->stale ? Result<void>::Failure(MakeError(XRErrors::CapabilityStale)) : Result<void>::Success();
         }
 
-        Result<const XrBaseInStructure *> Prepare(XrInstance, XrSystemId, PFN_xrGetInstanceProcAddr) override {
+        Result<const XrBaseInStructure *> Prepare(XrInstance, XrSystemId, NativeOpenXRDispatch) override {
             if (Script::active->throwAfterInstance)
                 throw std::runtime_error("injected private graphics failure");
             if (Script::active->throwUnknownAfterInstance)
@@ -204,6 +234,14 @@ namespace Horo::Tests::OpenXR {
 
     class Fence final : public IOpenXRCompositionFence {
     public:
+        Result<void> ValidatePreparation(const XRLoaderPreflightSnapshot &preflight,
+                                         const XRLoaderPreflightAttempt attempt) const override {
+            if (Script::active->stale)
+                return Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
+            return ValidateXRLoaderPreflight(preflight, attempt, preflight.Backend(), preflight.InstallRecord(),
+                                             preflight.ProductProfile());
+        }
+
         Result<void> Validate(const XRSessionId &, const XRLoaderPreflightSnapshot &, const XRFeaturePlan &) const override {
             return Script::active->stale ? Result<void>::Failure(MakeError(XRErrors::CapabilityStale)) : Result<void>::Success();
         }

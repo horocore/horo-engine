@@ -47,6 +47,40 @@ This contract does not own OpenXR handles, sample native runtime state, interpol
 poses, or select a prediction policy. Those responsibilities remain with the XR
 backend and host composition boundaries.
 
+## Fixed-simulation epoch migration
+
+`XRSimulationTime::Create(0)` now represents the real fixed-simulation epoch,
+including the first Input cutoff before any fixed update and repeated paused
+cutoffs. Runtime and render-prediction timestamps still require positive native
+evidence. Do not add one nanosecond, cast a Foundation clock epoch, or advance a
+separate XR tick counter to manufacture simulation evidence.
+
+The host derives elapsed simulation time from the same immutable scheduler fixed
+step and its validated committed tick. Multiplication must reject overflow before
+construction. Pause and time scaling govern admission of fixed steps, not the
+fixed-step quantum; catch-up drops and failed steps do not increment committed
+ticks. The host obtains native sample time independently through the enabled
+conversion extension on the retained native instance. Presentation prediction
+never replaces simulation Input evidence.
+
+The timestamp remains one `int64_t`; only the simulation default's private invalid
+sentinel changes from zero to negative one. Default construction is still invalid.
+`Nanoseconds()` returns the exact representation, including simulation-invalid
+negative one. A default-invalid numeric round trip therefore stays rejected; a
+valid-zero round trip stays valid. Runtime/prediction invalid getters remain zero.
+Consumers should still use `IsValid()` for domain-neutral admission.
+Rebuild public-header consumers. No repository codec serializes this private
+representation, and no caller should serialize object bytes; an external codec
+must preserve explicit validity rather than treating a zero integer as invalid.
+The repository-wide caller audit found numeric native reads in the OpenXR pose
+sampler and frame compositor only; both use the unchanged runtime/prediction
+domains. Existing positive simulation callers need no source migration.
+
+`XRSpacePoseTests` adds zero-epoch publication, unchanged positive native-domain
+requirements, default-invalid/negative rejection, paused repeated-time evidence
+and the maximum representable simulation timestamp. Scheduler multiplication and
+native conversion require their owning App integration tests separately.
+
 ## Validation Record
 
 `HoroXRApiTests` covers valid publication, time-domain separation, tracking loss,

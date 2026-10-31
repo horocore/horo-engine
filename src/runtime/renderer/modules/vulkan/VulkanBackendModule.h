@@ -7,6 +7,7 @@
 
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
+#include "VulkanHostGraphicsRequirements.h"
 
 #include <cstdint>
 #include <memory>
@@ -37,6 +38,15 @@ namespace Horo::Render {
         [[nodiscard]] virtual PFN_vkGetInstanceProcAddr GetInstanceProcAddr() noexcept = 0;
         /** @brief Returns the exact platform-selected WSI instance extensions. */
         [[nodiscard]] virtual Result<std::vector<std::string>> RequiredPresentationExtensions() = 0;
+        /** @brief Returns exact immutable preflight graphics requirements before native instance/device creation.
+         * @return Explicit non-XR empty requirements by default; selected XR ports preserve actual preflight failures.
+         */
+        [[nodiscard]] virtual Result<VulkanHostGraphicsRequirements> RequiredGraphicsRequirements();
+        /** @brief Admits one same-instance physical device against the selected host's runtime requirement.
+         * @param instance Existing backend-owned instance. @param physical Candidate from that instance.
+         * @return True for an exact eligible device, false for another candidate, or original runtime query failure.
+         */
+        [[nodiscard]] virtual Result<bool> AcceptPhysicalDevice(VkInstance instance, VkPhysicalDevice physical);
         /** @brief Creates a surface for exactly the supplied backend-owned instance.
          * @param instance Initialized instance enabling this port's required WSI extensions.
          * @return Native surface, or typed unsupported/native failure. The runtime owns the returned lease.
@@ -51,15 +61,6 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<bool> IsDriverAllowed(const VkPhysicalDeviceProperties &properties) = 0;
         /** @brief Releases the loader after all descendant Vulkan objects are destroyed. */
         virtual void ReleaseLoader() noexcept = 0;
-    };
-
-    /** @brief Vulkan API version reported independently by the loader and an adapter. */
-    struct VulkanApiVersion {
-        std::uint32_t major{0};
-        std::uint32_t minor{0};
-        std::uint32_t patch{0};
-
-        [[nodiscard]] constexpr auto operator<=>(const VulkanApiVersion &) const noexcept = default;
     };
 
     /** @brief Required Vulkan 1.3 feature bits queried before logical-device creation. */
@@ -96,6 +97,7 @@ namespace Horo::Render {
         bool standardApiVariant{true};
         bool portabilitySubset{false};
         bool driverAllowed{true};
+        bool hostAllowed{true};           /**< Actual selected runtime's physical-device admission, independent of driver qualification. */
         bool vertexLayerRouting{false};   /**< Queried optional shaderOutputLayer feature; never part of baseline admission. */
         bool swapchainMaintenance{false}; /**< Actual optional feature; required only for interactive present-resource retirement. */
     };
@@ -155,6 +157,8 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<VulkanLoaderCapabilities> QueryLoaderCapabilities() = 0;
         /** @brief Returns platform-selected WSI instance extensions, empty for headless use. */
         [[nodiscard]] virtual Result<std::vector<std::string>> RequiredPresentationExtensions() = 0;
+        /** @brief Returns the exact retained immutable requirements; explicit host errors remain fallible. */
+        [[nodiscard]] virtual Result<VulkanHostGraphicsRequirements> RequiredGraphicsRequirements();
         /** @brief Creates the instance and its instance-owned dispatch table. */
         [[nodiscard]] virtual Result<void> CreateInstance(const VulkanInstanceRequest &request) = 0;
         /** @brief Enumerates at most maxAdapters physical-device records. */

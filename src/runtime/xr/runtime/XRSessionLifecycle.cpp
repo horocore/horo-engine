@@ -41,6 +41,8 @@ namespace Horo::XR {
 
         [[nodiscard]] bool IsLegalEvent(const XRSessionState current, const XRSessionEvent event) noexcept {
             switch (event) {
+                case XRSessionEvent::Ready:
+                    return current == XRSessionState::Inactive || current == XRSessionState::Ready;
                 case XRSessionEvent::Started:
                     return current == XRSessionState::Ready || current == XRSessionState::Running;
                 case XRSessionEvent::BecameVisible:
@@ -58,13 +60,15 @@ namespace Horo::XR {
                     return current == XRSessionState::Stopping || current == XRSessionState::Inactive;
                 case XRSessionEvent::SessionLost:
                 case XRSessionEvent::InstanceLost:
-                    return current != XRSessionState::Inactive && current != XRSessionState::Destroyed;
+                    return current != XRSessionState::Destroyed;
             }
             return false;
         }
 
         [[nodiscard]] XRSessionState StateForEvent(const XRSessionEvent event) noexcept {
             switch (event) {
+                case XRSessionEvent::Ready:
+                    return XRSessionState::Ready;
                 case XRSessionEvent::Started:
                 case XRSessionEvent::VisibilityLost:
                     return XRSessionState::Running;
@@ -139,18 +143,25 @@ namespace Horo::XR {
 
     /** @copydoc XRSessionLifecycle::ApplyEvent */
     Result<void> XRSessionLifecycle::ApplyEvent(const XRSessionId &source, const XRSessionEvent event) {
-        if (!source.IsValid() || event > XRSessionEvent::InstanceLost)
+        if (!source.IsValid() || event > XRSessionEvent::Ready)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (source != ownedSession_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const XRSessionState next = StateForEvent(event);
         if (!IsLegalEvent(snapshot_.state, event))
             return Result<void>::Failure(MakeError(XRSessionErrors::TransitionInvalid));
+        if (event == XRSessionEvent::Ready) {
+            if (!acceptedPlan_ || acceptedPlan_->System() != ownedSession_.system)
+                return Result<void>::Failure(MakeError(XRSessionErrors::TransitionInvalid));
+            snapshot_.session = ownedSession_;
+            snapshot_.capabilityRevision = acceptedPlan_->Revision();
+        }
         PublishState(next);
         if (next == XRSessionState::Inactive || next == XRSessionState::Lost) {
             snapshot_.session = {};
             snapshot_.capabilityRevision = {};
-            acceptedPlan_.reset();
+            if (next == XRSessionState::Lost)
+                acceptedPlan_.reset();
         }
         return Result<void>::Success();
     }
@@ -173,7 +184,7 @@ namespace Horo::XR {
 
     /** @copydoc XRSessionLifecycle::AcceptedPlan */
     std::optional<XRFeaturePlan> XRSessionLifecycle::AcceptedPlan() const noexcept {
-        return acceptedPlan_;
+        return snapshot_.session.IsValid() ? acceptedPlan_ : std::nullopt;
     }
 
     void XRSessionLifecycle::Retire(const XRSessionId &session) noexcept {

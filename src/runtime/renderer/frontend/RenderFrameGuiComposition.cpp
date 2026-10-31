@@ -108,7 +108,7 @@ namespace Horo::Render {
             return owner;
         if (!executed_)
             return Result<void>::Failure(MakeError(FrontendErrors::FrameNotExecuted));
-        if (guiComposed_)
+        if (guiComposed_ || uiComposing_)
             return Result<void>::Failure(MakeError(FrontendErrors::GuiAlreadyComposed));
         if (cancellation.IsCancellationRequested()) {
             Abort();

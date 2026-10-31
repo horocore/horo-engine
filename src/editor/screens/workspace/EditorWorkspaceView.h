@@ -4,6 +4,7 @@
 #include "ExtensionRecoveryView.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "UiCanvasDocumentView.h"
 #include "WorkspaceSplitterInteraction.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/source_editor/SourceEditorSession.h"
@@ -18,7 +19,6 @@
 
 namespace Horo::Editor {
     struct GuiContentRegion;
-    class UiCanvasInspectorPanel;
 
     class EditorWorkspaceView final : public Input::IInputCaptureOwner {
     public:
@@ -89,7 +89,7 @@ namespace Horo::Editor {
         ExtensionActivityView m_extensions;
         ExtensionRecoveryView m_extensionRecovery;
         const EditorGuiContext &m_context;
-        mutable std::unique_ptr<UiCanvasInspectorPanel> m_uiCanvasInspector;
+        UiCanvasDocumentView m_uiCanvasView;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;
         Input::InputRouter &m_inputRouter;
@@ -125,8 +125,6 @@ namespace Horo::Editor {
         /** @brief Draws the host's ordered instance tabs using shared controls and typed lifecycle commands. */
         void DrawWorkspaceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Presents the active immutable source; text editing belongs to the source widget adapter. */
-        /** @brief Draws cached retained hierarchy and descriptor palette, emitting typed owner commands. */
-        bool DrawUiCanvasDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         bool DrawSourceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Composes one view's tools and concrete widget without taking document mutation ownership. */
         void DrawSourceEditor(DocumentInstanceId instance, const SourceDocumentSnapshot &source, const SourceHistoryState &history,

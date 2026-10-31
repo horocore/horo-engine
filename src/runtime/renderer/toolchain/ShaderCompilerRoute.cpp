@@ -336,6 +336,31 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 return Result<void>::Success();
             }
 
+            /** @brief Captures actual locked Cross reflection and MSL from the same stage translation before native compilation. */
+            [[nodiscard]] Result<void> CaptureMetalReflection(const ShaderEntryPoint &entry, const std::string &stem,
+                                                              const std::filesystem::path &spirvPath,
+                                                              const std::filesystem::path &nativePath) {
+                if (!invocation_.reflection)
+                    return Result<void>::Success();
+                const auto *cross = Lookup(ShaderCompilerTool::SpirvCross);
+                if (const auto valid = ValidateUiPaintMetalReflection(*invocation_.reflection, cross); valid.HasError())
+                    return valid;
+                const auto reflectionPath = scratch_ / (stem + ".reflection.json");
+                if (auto reflected = Run(*cross, {spirvPath.string(), "--reflect", "--output", reflectionPath.string()},
+                                         ShaderCompilerPhase::Translation, entry);
+                    reflected.HasError())
+                    return reflected;
+                auto json = ReadBoundedFile(reflectionPath, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                auto msl = ReadBoundedFile(nativePath, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (json.HasError())
+                    return Result<void>::Failure(json.ErrorValue());
+                if (msl.HasError())
+                    return Result<void>::Failure(msl.ErrorValue());
+                reflectionStages_.push_back({entry.stage, entry.name, {json.Value().begin(), json.Value().end()}});
+                translations_.emplace_back(msl.Value().begin(), msl.Value().end());
+                return Result<void>::Success();
+            }
+
             [[nodiscard]] Result<void> CompileMetalRoute(const ShaderEntryPoint &entry, const std::string &stem,
                                                          const std::filesystem::path &spirvPath) {
                 const ShaderCompilerToolInstallation *metal = Lookup(ShaderCompilerTool::AppleMetal);
@@ -348,6 +373,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                   ShaderCompilerPipelineErrors::ToolOutputInvalid);
                     native.HasError())
                     return Result<void>::Failure(std::move(native).ErrorValue());
+                if (auto reflected = CaptureMetalReflection(entry, stem, spirvPath, nativePath); reflected.HasError())
+                    return reflected;
                 const std::filesystem::path airPath = scratch_ / (stem + ".air");
                 if (auto compiled = Run(*metal,
                                         {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0", "-c",
@@ -454,9 +481,26 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                         return Result<ShaderCompilerAdapterOutput>::Failure(std::move(packagedDebug).ErrorValue());
                     debugPayload = std::move(packagedDebug).Value();
                 }
-                return Result<ShaderCompilerAdapterOutput>::Success(
-                    {invocation_.target.requirement.backend, invocation_.target.requirement.payloadFormat, std::move(payload).Value(),
-                     std::move(debugPayload), std::move(diagnostics_)});
+                ShaderCompilerAdapterOutput output{invocation_.target.requirement.backend, invocation_.target.requirement.payloadFormat,
+                                                   std::move(payload).Value(), std::move(debugPayload), std::move(diagnostics_)};
+                if (invocation_.reflection && output.backend == ShaderTargetBackend::Metal) {
+                    auto reflected = NormalizeUiPaintMetalReflection(invocation_.manifest, invocation_.target.requirement,
+                                                                     reflectionStages_, translations_);
+                    if (reflected.HasError())
+                        return Result<ShaderCompilerAdapterOutput>::Failure(reflected.ErrorValue());
+                    CompiledShaderArtifact compiled{output.backend,
+                                                    output.payloadFormat,
+                                                    invocation_.artifactKey,
+                                                    std::move(output.payload),
+                                                    {},
+                                                    {}};
+                    auto cooked = CookReflectedShaderArtifact(compiled, invocation_.reflection->tool, std::move(reflected).Value());
+                    output.payload = std::move(compiled.payload);
+                    if (cooked.HasError())
+                        return Result<ShaderCompilerAdapterOutput>::Failure(cooked.ErrorValue());
+                    output.reflection = std::make_shared<const ReflectedShaderArtifact>(std::move(cooked).Value());
+                }
+                return Result<ShaderCompilerAdapterOutput>::Success(std::move(output));
             }
 
             const ShaderCompilerToolchainConfiguration &configuration_;
@@ -468,6 +512,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             std::vector<ToolArtifactRecord> payloadStages_;
             std::vector<ToolArtifactRecord> debugStages_;
             std::vector<ShaderCompilerDiagnostic> diagnostics_;
+            std::vector<SpirvReflectionStage> reflectionStages_;
+            std::vector<std::string> translations_;
             ShaderCompilerDiagnosticContext diagnosticContext_;
             bool outputTruncated_{};
             std::optional<Error> diagnosticFailure_;

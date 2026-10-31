@@ -500,7 +500,9 @@ and cannot reinterpret string maps or make parsing mutate ambient package state.
 Arrows point from the dependent target to the target that defines the contract:
 
 ```text
-security ----------------------------------------------> foundation
+security-envelope (data only) --------------------------> foundation
+security ----------------------------------------------> security-envelope + foundation
+packages (archive/cache data) --------------------------> security-envelope + foundation
 
 platform -----------------------------------------------> security + foundation
 
@@ -538,8 +540,11 @@ apps ---------------------------------------------------> runtime + adapters + p
 Required rules:
 
 - Foundation does not depend on platform, scene, terrain, renderer, editor, MCP, or UI.
-- Security contracts remain backend-neutral and depend only on Foundation;
-  operating-system entropy and durable credential adapters remain in Platform.
+- SecurityEnvelope owns only detached signature data and depends only on Foundation.
+  Packages may consume that data target for untrusted persisted evidence; it must
+  not depend on the full Security verifier/provider target, PackageSecurity or apps.
+  Security services consume SecurityEnvelope and Foundation; cryptographic providers
+  remain private, and operating-system entropy and durable credential adapters remain in Platform.
 - NetworkRuntime may publicly consume Security's backend-neutral SecureBytes and
   SecureRandomSource contracts for bounded proof ownership and host-injected
   entropy. Platform retains concrete entropy/provider composition; this edge

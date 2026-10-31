@@ -431,7 +431,7 @@ namespace Horo::Runtime::Ui {
                                                                                   std::optional<UiRouteInstanceId> instance) noexcept;
         /** @brief Load-time reservation for each actual route-owned action source. @return Reservation or failure. */
         [[nodiscard]] Result<void> ReserveActionInteractionReplacements() const;
-        /** @brief Prepares new action source generations only after queues, pending operations and retained producers drain. */
+        /** @brief Prepares interaction-only action sources after queues drain; route-owned operation identity remains stable. */
         [[nodiscard]] Result<void> PrepareActionInteractionReplacements(const UiActionOwnerContext &owner) const;
         /** @brief Revalidates actual route-owned replacement sources before no-fail aggregate publication. */
         [[nodiscard]] Result<void> CanPublishActionInteractionReplacements(const UiActionOwnerContext &owner) const;

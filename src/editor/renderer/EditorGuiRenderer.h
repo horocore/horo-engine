@@ -42,7 +42,11 @@ namespace Horo::Editor {
         /** @brief Initializes Dear ImGui platform and renderer bridges. */
         [[nodiscard]] virtual Result<void> Initialize() = 0;
 
-        /** @brief Prepares renderer and SDL platform state for one active backend frame. */
+        /** @brief Prepares GUI CPU/device state before ImGui::NewFrame, without requiring an active native frame.
+         * @details The selected owner restores its native context before lazy device/font work. Actual pass/encoder binding
+         * happens only in RenderDrawData after canonical native admission; no frame or presentation receipt is created here.
+         * @return Success or the original owner/context/device preparation error.
+         */
         [[nodiscard]] virtual Result<void> BeginFrame() = 0;
 
         /** @brief Encodes current Dear ImGui draw data into the active backend frame. */

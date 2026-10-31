@@ -17,15 +17,18 @@ def test_instance_commands_never_reach_the_device_resolver():
     loader = source.split("PFN_vkVoidFunction EditorGuiRendererVulkan::Load(", 1)[1].split(
         "/** @copydoc EditorGuiRendererVulkan::Initialize */", 1
     )[0]
-    instance_branch = loader.split("device.deviceResolver(device.device, name)", 1)[0]
-    classifier = source.split("bool IsInstanceCommand(", 1)[1].split("/** @brief Load-time", 1)[0]
+    assert 'return Detail::ResolveVulkanGuiFunction(device, name);' in loader
+    classifier = (ROOT / "src/editor/renderer/vulkan/EditorVulkanGuiFunctionLoader.h").read_text()
+    instance_branch, device_branch = classifier.split("return device.deviceResolver(device.device, name);", 1)
     for command in INSTANCE_COMMANDS:
-        assert f'"{command}"' in classifier, command
-    assert "if (IsInstanceCommand(name))" in instance_branch
+        assert f'"{command}"' in instance_branch, command
+    assert "std::ranges::find(instanceCommands, std::string_view{name})" in instance_branch
     assert re.search(r"return device\.instanceResolver\(device\.instance, name\);", instance_branch)
+    # Missing device commands never fall back to a query from a different dispatch domain.
+    assert "instanceResolver" not in device_branch
     assert 'name = "vkCmdBeginRendering"' in loader
     assert 'name = "vkCmdEndRendering"' in loader
     for hook in ("DenySubmit", "DenyQueueIdle", "DenyDeviceIdle"):
         assert f"(&{hook})" in loader
-    assert "return native;" in loader
-    assert loader.rstrip().endswith("return device.instanceResolver(device.instance, name);\n    }")
+    assert "deviceResolver" not in loader
+    assert "instanceResolver" not in loader

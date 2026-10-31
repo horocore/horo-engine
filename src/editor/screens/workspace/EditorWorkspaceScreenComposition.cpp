@@ -196,8 +196,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                            .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
                                                       .stageFactory = BindPrefabStageFactory(projectRoot)},
-                                           .pcg = std::move(catalog),
-                                           .pcgPreviewInputs = std::move(previewInputs)};
+                                           .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)}};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

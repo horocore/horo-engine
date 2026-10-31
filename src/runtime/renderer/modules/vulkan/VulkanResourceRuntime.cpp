@@ -1,6 +1,7 @@
 #include "VulkanResourceRuntime.h"
 
 #include "Horo/Runtime/Render/RenderCapabilities.h"
+#include "VulkanExternalRegistrationStorage.h"
 #include "VulkanRenderBackendErrors.h"
 #include "VulkanResourceConversions.h"
 
@@ -32,6 +33,22 @@ namespace Horo::Render::Detail {
                     .size = descriptor.byteSize,
                     .usage = VulkanResourceConversion::BufferUsage(descriptor.usage),
                     .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+        }
+
+        /** @brief Selects only an already prepared exact attachment or bounded layer; never creates a borrowed view. */
+        [[nodiscard]] VkImageView PreparedExternalView(const RenderTextureViewDescriptor &descriptor,
+                                                       const RenderTextureDescriptor &texture,
+                                                       const VulkanExternalNativeViews &prepared) noexcept {
+            using enum RenderTextureViewDimension;
+            if (const bool full = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.baseLayer == 0 &&
+                                  descriptor.layerCount == texture.layerCount &&
+                                  descriptor.dimension == (texture.layerCount == 1 ? TwoD : TwoDArray);
+                full)
+                return prepared.attachment;
+            const bool layer = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.layerCount == 1 &&
+                               descriptor.baseLayer < prepared.layerCount && descriptor.baseLayer < prepared.layers.size() &&
+                               descriptor.dimension == TwoD;
+            return layer ? prepared.layers[descriptor.baseLayer] : VK_NULL_HANDLE;
         }
 
     }  // namespace
@@ -76,11 +93,12 @@ namespace Horo::Render::Detail {
             VulkanGraphResourceState graphState;
             VkImageView colorView{VK_NULL_HANDLE};
             PFN_vkDestroyImageView destroyView{};
+            bool borrowedView{};
 
             ~Texture() {
                 if (externalSource != nullptr)
                     externalSource->RecordNativeRetirement(graphState.logical, graphState.hasNativeState);
-                if (colorView != VK_NULL_HANDLE)
+                if (colorView != VK_NULL_HANDLE && !borrowedView)
                     destroyView(this->device, colorView, nullptr);
             }
         };
@@ -93,10 +111,11 @@ namespace Horo::Render::Detail {
             View &operator=(const View &) = delete;
 
             ~View() {
-                if (handle != VK_NULL_HANDLE)
+                if (handle != VK_NULL_HANDLE && !borrowed)
                     destroy(device, handle, nullptr);
             }
 
+            bool borrowed{};
             VkDevice device{VK_NULL_HANDLE};
             VkImageView handle{VK_NULL_HANDLE};
             PFN_vkDestroyImageView destroy{nullptr};
@@ -146,6 +165,15 @@ namespace Horo::Render::Detail {
         Registry<View> views;
         Registry<Mesh> meshes;
         Registry<Target> targets;
+
+        struct ExternalStorage {
+            std::shared_ptr<VulkanExternalAllocationPool> pool;
+            VulkanExternalRegistryNodes<Texture> textures;
+            VulkanExternalRegistryNodes<View> views;
+        };
+
+        ExternalStorage external;
+
         std::uint64_t maximumIdentity{0};
         std::uint64_t nextIdentity{1};
 
@@ -196,6 +224,25 @@ namespace Horo::Render::Detail {
                 return Result<std::uint64_t>::Failure(
                     ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Vulkan resource registry allocation failed."));
             }
+            return Result<std::uint64_t>::Success(*identity);
+        }
+
+        template <typename Resource> [[nodiscard]] std::shared_ptr<Resource> AllocateExternal() noexcept {
+            try {
+                return std::allocate_shared<Resource>(VulkanExternalAllocator<Resource>{external.pool});
+            } catch (const std::bad_alloc &) {
+                return nullptr;
+            }
+        }
+
+        template <typename Resource>
+        [[nodiscard]] Result<std::uint64_t> RegisterExternal(Registry<Resource> &entries, VulkanExternalRegistryNodes<Resource> &nodes,
+                                                             std::shared_ptr<Resource> resource) {
+            const auto identity = IssueIdentity();
+            if (!identity || !nodes.Insert(entries, *identity, std::move(resource)))
+                return Result<std::uint64_t>::Failure(
+                    ResourceError(VulkanBackendErrors::ResourceCreationFailed,
+                                  "Prepared external registry capacity is exhausted; no frame allocation fallback is permitted."));
             return Result<std::uint64_t>::Success(*identity);
         }
 
@@ -284,12 +331,19 @@ namespace Horo::Render::Detail {
         }
 
         void RemoveViewsReferencing(const Texture *texture) {
-            std::erase_if(views, [this, texture](const auto &entry) {
-                if (entry.second->texture.get() != texture)
-                    return false;
-                RemoveTargetsReferencing(entry.second.get());
-                return true;
-            });
+            for (auto iterator = views.begin(); iterator != views.end();) {
+                if (iterator->second->texture.get() != texture) {
+                    ++iterator;
+                    continue;
+                }
+                RemoveTargetsReferencing(iterator->second.get());
+                const auto identity = iterator->first;
+                ++iterator;
+                if (texture->externalSource != nullptr)
+                    external.views.Erase(views, identity);
+                else
+                    views.erase(identity);
+            }
         }
 
         [[nodiscard]] static bool ViewDescriptorMatches(const RenderTextureDescriptor &texture,
@@ -339,6 +393,15 @@ namespace Horo::Render::Detail {
             impl_->device = VK_NULL_HANDLE;
             impl_->memoryProperties = {};
             return Result<void>::Failure(ResourceError(VulkanBackendErrors::EntryPointMissing, "Vulkan resource dispatch is incomplete."));
+        }
+        try {
+            impl_->external.pool = std::make_shared<VulkanExternalAllocationPool>();
+            impl_->external.textures.Prepare(impl_->textures);
+            impl_->external.views.Prepare(impl_->views);
+        } catch (const std::bad_alloc &) {
+            impl_->device = VK_NULL_HANDLE;
+            return Result<void>::Failure(
+                ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Cold external image registration storage preparation failed."));
         }
         return Result<void>::Success();
     }
@@ -555,7 +618,7 @@ namespace Horo::Render::Detail {
                                          .format = VulkanResourceConversion::TextureFormat(descriptor.format),
                                          .subresourceRange = {VulkanResourceConversion::Aspect(descriptor.aspect), descriptor.baseMip,
                                                               descriptor.mipCount, descriptor.baseLayer, descriptor.layerCount}};
-        auto view = Impl::Allocate<Impl::View>();
+        auto view = texture->externalSource != nullptr ? impl_->AllocateExternal<Impl::View>() : Impl::Allocate<Impl::View>();
         if (view == nullptr)
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Texture view identity allocation failed."));
@@ -565,12 +628,21 @@ namespace Horo::Render::Detail {
         view->texture = impl_->textures.at(textureIdentity);
         view->aspect = descriptor.aspect;
         view->descriptor = descriptor;
-        if (impl_->dispatch.createImageView(impl_->device, &info, nullptr, &view->handle) != VK_SUCCESS) {
+        if (const auto prepared =
+                texture->externalSource != nullptr ? texture->externalSource->PreparedNativeViews() : VulkanExternalNativeViews{};
+            prepared.attachment != VK_NULL_HANDLE) {
+            view->handle = PreparedExternalView(descriptor, texture->descriptor, prepared);
+            if (view->handle == VK_NULL_HANDLE)
+                return Result<std::uint64_t>::Failure(
+                    ResourceError(VulkanBackendErrors::ResourceUnsupported, "External view was not prepared before acquisition."));
+            view->borrowed = true;
+        } else if (impl_->dispatch.createImageView(impl_->device, &info, nullptr, &view->handle) != VK_SUCCESS) {
             view->handle = VK_NULL_HANDLE;
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Texture view creation failed."));
         }
-        return impl_->Register(impl_->views, std::move(view));
+        return texture->externalSource != nullptr ? impl_->RegisterExternal(impl_->views, impl_->external.views, std::move(view))
+                                                  : impl_->Register(impl_->views, std::move(view));
     }
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateRenderTarget(const RenderTargetDescriptor &descriptor,
@@ -609,13 +681,21 @@ namespace Horo::Render::Detail {
     void VulkanResourceRuntime::DestroyTexture(const std::uint64_t id) noexcept {
         if (const Impl::Texture *texture = Impl::Find(impl_->textures, id); texture != nullptr)
             impl_->RemoveViewsReferencing(texture);
-        impl_->textures.erase(id);
+        const auto *texture = Impl::Find(impl_->textures, id);
+        if (texture != nullptr && texture->externalSource != nullptr)
+            impl_->external.textures.Erase(impl_->textures, id);
+        else
+            impl_->textures.erase(id);
     }
 
     void VulkanResourceRuntime::DestroyTextureView(const std::uint64_t id) noexcept {
         if (const Impl::View *view = Impl::Find(impl_->views, id); view != nullptr)
             impl_->RemoveTargetsReferencing(view);
-        impl_->views.erase(id);
+        const auto *view = Impl::Find(impl_->views, id);
+        if (view != nullptr && view->texture->externalSource != nullptr)
+            impl_->external.views.Erase(impl_->views, id);
+        else
+            impl_->views.erase(id);
     }
 
     void VulkanResourceRuntime::DestroyRenderTarget(const std::uint64_t id) noexcept {

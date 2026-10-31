@@ -10,6 +10,11 @@
 #include <utility>
 
 namespace Horo::Editor {
+    /** @copydoc EditorViewportResources::PrepareMeshes */
+    Result<void> EditorViewportResources::PrepareMeshes(std::span<const EditorViewportMeshResourceView> resources) {
+        return SynchronizeMeshes(resources);
+    }
+
     namespace {
         [[nodiscard]] Error MakeViewportError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
@@ -30,6 +35,20 @@ namespace Horo::Editor {
                     return Result<bool>::Failure(completion.ErrorValue());
             }
             return Result<bool>::Failure(state.ErrorValue());
+        }
+
+        /** @brief Preserves a failed cold operation instead of interpreting a non-ready state as pending. */
+        template <typename Handle>
+        [[nodiscard]] Result<bool> ColdResourceReady(const Render::RenderFrontend &frontend, const Handle handle,
+                                                     const Render::ResourceOperationId operation) {
+            const auto ready = ResourceReady(frontend, handle, operation);
+            if (ready.HasError() || ready.Value() || !handle.IsValid() || !operation.IsValid())
+                return ready;
+            if (const auto completed = frontend.ResourceOperationResult(operation);
+                completed.HasError() &&
+                completed.ErrorValue().code.Value() != Render::FrontendErrors::ResourceOperationPending.code.Value())
+                return Result<bool>::Failure(completed.ErrorValue());
+            return ready;
         }
 
         template <typename Handle, typename Create>
@@ -72,6 +91,87 @@ namespace Horo::Editor {
     EditorViewportResources::EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig &config) noexcept
         : frontend_(&frontend), config_(config) {}
 
+    /** @copydoc EditorViewportResources::PrepareMeshesCold */
+    Result<void> EditorViewportResources::PrepareMeshesCold(const std::span<const EditorViewportMeshResourceView> resources) {
+        const auto queued = frontend_->UploadSnapshot().pendingRequests;
+        constexpr std::size_t RequestsPerMesh = 3;  // Two buffers, then their dependent mesh.
+        if (resources.size() > ((std::numeric_limits<std::size_t>::max)() - queued) / RequestsPerMesh)
+            return Result<void>::Failure(MakeError(Render::FrontendErrors::ResourceUploadCapacityExceeded));
+        const auto maximumDrains = queued + resources.size() * RequestsPerMesh;
+        auto remaining = maximumDrains;
+        bool progressing = true;
+        while (remaining > 0 && progressing) {
+            --remaining;
+            const auto ready = AdvanceColdMeshes(resources);
+            if (ready.HasError())
+                return Result<void>::Failure(ready.ErrorValue());
+            if (ready.Value())
+                return Result<void>::Success();
+            const auto before = frontend_->UploadSnapshot().pendingRequests;
+            if (before == 0) {
+                progressing = false;
+            } else {
+                const auto processed = frontend_->ProcessResourceRequests();
+                if (processed.HasError())
+                    return Result<void>::Failure(processed.ErrorValue());
+                progressing = processed.Value() != 0 || frontend_->UploadSnapshot().pendingRequests < before;
+            }
+        }
+        const auto ready = AdvanceColdMeshes(resources);
+        if (ready.HasError())
+            return Result<void>::Failure(ready.ErrorValue());
+        return ready.Value() ? Result<void>::Success() : Result<void>::Failure(MakeError(Render::FrontendErrors::ResourceOperationPending));
+    }
+
+    /** @copydoc EditorViewportResources::AdvanceColdMeshes */
+    Result<bool> EditorViewportResources::AdvanceColdMeshes(const std::span<const EditorViewportMeshResourceView> resources) {
+        // Observe stored failures before incremental advancement can replace their identity with a pending observation.
+        if (const auto observed = ColdMeshesReady(resources); observed.HasError())
+            return observed;
+        if (auto prepared = SynchronizeMeshes(resources); prepared.HasError())
+            return Result<bool>::Failure(prepared.ErrorValue());
+        return ColdMeshesReady(resources);
+    }
+
+    /** @copydoc EditorViewportResources::ColdMeshesReady */
+    Result<bool> EditorViewportResources::ColdMeshesReady(const std::span<const EditorViewportMeshResourceView> resources) const {
+        bool ready = true;
+        for (const auto &source : resources) {
+            const auto active = meshes_.find(source.handle.id.value);
+            if (active == meshes_.end()) {
+                ready = false;
+                continue;
+            }
+            const ResidentMesh *resident = &active->second;
+            const bool exact = resident->sourceGeneration == source.handle.generation;
+            if (!exact) {
+                const auto pending = pendingMeshes_.find(source.handle.id.value);
+                if (pending == pendingMeshes_.end()) {
+                    ready = false;
+                    continue;
+                }
+                resident = &pending->second;
+            }
+            const auto vertices = ColdResourceReady(*frontend_, resident->vertexBuffer, resident->vertexOperation);
+            if (vertices.HasError())
+                return vertices;
+            const auto indices = ColdResourceReady(*frontend_, resident->indexBuffer, resident->indexOperation);
+            if (indices.HasError())
+                return indices;
+            const auto mesh = ColdResourceReady(*frontend_, resident->mesh, resident->meshOperation);
+            if (mesh.HasError())
+                return mesh;
+            if (!exact || !vertices.Value() || !indices.Value() || !mesh.Value()) {
+                ready = false;
+                continue;
+            }
+            if (resident->descriptor.vertexBuffer != resident->vertexBuffer || resident->descriptor.indexBuffer != resident->indexBuffer ||
+                resident->descriptor.vertexCount != source.vertices.size() || resident->descriptor.indexCount != source.indices.size())
+                return Result<bool>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
+        }
+        return Result<bool>::Success(ready);
+    }
+
     Result<std::optional<Render::RenderTargetHandle>> EditorViewportResources::Prepare(const Render::RenderSceneView &scene,
                                                                                        const EditorViewportExtent requestedExtent) {
         if (const Result<void> meshes = SynchronizeMeshes(scene.meshResources); meshes.HasError())
@@ -106,7 +206,7 @@ namespace Horo::Editor {
 
     std::optional<EditorViewportResources::MeshBinding> EditorViewportResources::FindMesh(const std::uint64_t sourceId) const noexcept {
         if (const auto mesh = meshes_.find(sourceId); mesh != meshes_.end())
-            return MeshBinding{mesh->second.mesh, mesh->second.indexCount};
+            return MeshBinding{mesh->second.mesh, mesh->second.indexCount, mesh->second.descriptor};
         return std::nullopt;
     }
 
@@ -199,18 +299,20 @@ namespace Horo::Editor {
         if (indexReady.HasError())
             return Result<bool>::Failure(indexReady.ErrorValue());
         if (!resident.mesh.IsValid() && vertexReady.Value() && indexReady.Value()) {
-            auto mesh = frontend_->CreateMesh({.vertexBuffer = resident.vertexBuffer,
-                                               .indexBuffer = resident.indexBuffer,
-                                               .vertexStride = sizeof(Render::MeshVertex),
-                                               .vertexCount = static_cast<std::uint32_t>(resource.vertices.size()),
-                                               .indexFormat = Render::RenderIndexFormat::UInt32,
-                                               .indexCount = resident.indexCount,
-                                               .topology = Render::RenderPrimitiveTopology::Triangles,
-                                               .localBounds = resource.localBounds});
+            const Render::RenderMeshDescriptor descriptor{.vertexBuffer = resident.vertexBuffer,
+                                                          .indexBuffer = resident.indexBuffer,
+                                                          .vertexStride = sizeof(Render::MeshVertex),
+                                                          .vertexCount = static_cast<std::uint32_t>(resource.vertices.size()),
+                                                          .indexFormat = Render::RenderIndexFormat::UInt32,
+                                                          .indexCount = resident.indexCount,
+                                                          .topology = Render::RenderPrimitiveTopology::Triangles,
+                                                          .localBounds = resource.localBounds};
+            auto mesh = frontend_->CreateMesh(descriptor);
             if (mesh.HasError())
                 return Result<bool>::Failure(mesh.ErrorValue());
             resident.mesh = mesh.Value().handle;
             resident.meshOperation = mesh.Value().operation;
+            resident.descriptor = descriptor;
         }
         return ResourceReady(*frontend_, resident.mesh, resident.meshOperation);
     }

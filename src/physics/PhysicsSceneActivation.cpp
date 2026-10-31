@@ -211,7 +211,7 @@ namespace Horo::Physics::Detail {
     namespace {
         /** @brief Prepares the paired native and character worlds under one captured generation. */
         Result<StagedPhysicsScene> PrepareWorldResources(PhysicsRuntime &runtime, const PhysicsSceneActivationSettings &settings,
-                                                         const Runtime::RuntimeSceneView scene,
+                                                         const Runtime::RuntimeSceneView &scene,
                                                          const PhysicsSceneActivationEvidence evidence, const PhysicsWorldId identity,
                                                          const PhysicsScenePlan &plan) {
             auto physics = runtime.PrepareWorld(settings.physics, settings.simulation);
@@ -227,7 +227,7 @@ namespace Horo::Physics::Detail {
 
         /** @brief Captures exact authored-to-runtime bindings while both worlds remain detached. */
         Result<std::shared_ptr<PhysicsStructuralState>> PrepareStructuralState(StagedPhysicsScene &resources,
-                                                                               const Runtime::RuntimeSceneView scene,
+                                                                               const Runtime::RuntimeSceneView &scene,
                                                                                const PhysicsSceneActivationAuthority &authority,
                                                                                const PhysicsSceneActivationEvidence evidence,
                                                                                const PhysicsWorldSimulationBinding &simulation) {
@@ -309,8 +309,8 @@ namespace Horo::Physics {
 
     namespace {
         /** @brief Checks portable migration constraints against installed project semantics and real pinned asset bytes. */
-        Result<void> ValidateTriggerVolumeEvidence(const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene,
-                                                   const PhysicsSceneActivationSettings &settings) {
+        Result<void> ValidateTriggerVolumeEvidence(const Runtime::RuntimeSceneDefinition &definition,
+                                                   const Runtime::RuntimeSceneView &scene, const PhysicsSceneActivationSettings &settings) {
             for (const auto &evidence : definition.TriggerVolumeEvidence()) {
                 const auto &binding = evidence.binding;
                 const auto material = scene.FindAsset(binding.material.id);
@@ -326,7 +326,7 @@ namespace Horo::Physics {
 
         /** @brief Validates capabilities and complete durable project bindings before issuing native world identity. */
         Result<Detail::PhysicsScenePlan> BuildAdmittedPlan(const PhysicsRuntime &runtime, const Runtime::RuntimeSceneDefinition &definition,
-                                                           const Runtime::RuntimeSceneView scene,
+                                                           const Runtime::RuntimeSceneView &scene,
                                                            const PhysicsSceneActivationSettings &settings) {
             if (const Result<void> capabilities = Detail::RequirePhysicsSceneCapabilities(runtime, definition); capabilities.HasError())
                 return Result<Detail::PhysicsScenePlan>::Failure(capabilities.ErrorValue());
@@ -345,7 +345,7 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PhysicsSceneActivationParticipant::Prepare(
-        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
+        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
         if (const std::array valid{runtime_->State() == PhysicsRuntimeState::Ready, scene.IsCurrent(), scene.RuntimeId().IsValid()};
             !std::ranges::all_of(valid, std::identity{}))
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::WorldInvalid));

@@ -140,3 +140,35 @@ TEST_CASE("Metal capability snapshots reject incomplete native facts", "[runtime
     facts.adapter.availability = RenderAdapterAvailability::Unavailable;
     CheckError(AdmitMetalDevice(facts, {}), MetalBackendErrors::AdapterUnavailable);
 }
+
+TEST_CASE("Metal UI paint profile requires exact independent offscreen stencil upload and frame support",
+          "[runtime][renderer][metal][capabilities][ui_paint]") {
+    auto facts = SupportedFacts();
+    auto baseline = AdmitMetalDevice(facts, {});
+    REQUIRE(baseline.HasValue());
+    CHECK_FALSE(SupportsMetalUiPaint(baseline.Value()));
+    facts.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Rgba16Float)] =
+        RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
+    facts.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32FloatStencil8)] = RenderTextureUsage::RenderAttachment;
+    facts.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Rgba8Unorm)] =
+        RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopyDestination;
+    auto admitted = AdmitMetalDevice(facts, {});
+    REQUIRE(admitted.HasValue());
+    REQUIRE(SupportsMetalUiPaint(admitted.Value()));
+    auto missing = admitted.Value();
+    missing.implemented.support.limits.maxFramesInFlight = 0;
+    CHECK_FALSE(SupportsMetalUiPaint(missing));
+    missing = admitted.Value();
+    missing.implemented.support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Rgba16Float)] = RenderTextureUsage::Sampled;
+    CHECK_FALSE(SupportsMetalUiPaint(missing));
+    missing = admitted.Value();
+    missing.implemented.support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32FloatStencil8)] =
+        RenderTextureUsage::None;
+    CHECK_FALSE(SupportsMetalUiPaint(missing));
+    missing = admitted.Value();
+    missing.implemented.support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Rgba8Unorm)] = RenderTextureUsage::Sampled;
+    CHECK_FALSE(SupportsMetalUiPaint(missing));
+    missing = admitted.Value();
+    missing.implemented.support.formats.sampleCountMask = std::uint64_t{1} << 4;
+    CHECK_FALSE(SupportsMetalUiPaint(missing));
+}

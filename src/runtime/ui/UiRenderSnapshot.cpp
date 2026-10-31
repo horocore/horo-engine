@@ -1,6 +1,8 @@
 #include "Horo/Runtime/Ui/UiRenderSnapshot.h"
 
+#include "Horo/Runtime/Ui/UiAnimationOwner.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiRenderPaintValidation.h"
 
 #include <algorithm>
 #include <array>
@@ -59,7 +61,8 @@ namespace Horo::Runtime::Ui {
 
         bool ValidPaintLimits(const UiRenderSnapshotLimits &limits) noexcept {
             return limits.commands <= MaximumUiRenderCommands && limits.textRuns <= MaximumUiRenderTextRuns &&
-                   limits.glyphs <= MaximumUiRenderGlyphs && limits.resources <= MaximumUiRenderResources;
+                   limits.glyphs <= MaximumUiRenderGlyphs && limits.resources <= MaximumUiRenderResources &&
+                   limits.groups <= MaximumUiRenderOpacityGroups;
         }
 
         bool ValidProjectionLimits(const UiRenderSnapshotLimits &limits) noexcept {
@@ -79,10 +82,10 @@ namespace Horo::Runtime::Ui {
         }
 
         bool FitsWithin(const UiRenderSnapshotLimits &requested, const UiRenderSnapshotLimits &reserved) noexcept {
-            const std::array requestedCounts{requested.commands, requested.textRuns,   requested.glyphs,   requested.clips,
-                                             requested.masks,    requested.transforms, requested.resources};
-            const std::array reservedCounts{reserved.commands, reserved.textRuns,   reserved.glyphs,   reserved.clips,
-                                            reserved.masks,    reserved.transforms, reserved.resources};
+            const std::array requestedCounts{requested.commands, requested.textRuns,   requested.glyphs,    requested.clips,
+                                             requested.masks,    requested.transforms, requested.resources, requested.groups};
+            const std::array reservedCounts{reserved.commands, reserved.textRuns,   reserved.glyphs,    reserved.clips,
+                                            reserved.masks,    reserved.transforms, reserved.resources, reserved.groups};
             for (std::size_t index = 0; index < requestedCounts.size(); ++index)
                 if (requestedCounts[index] > reservedCounts[index])
                     return false;
@@ -102,13 +105,13 @@ namespace Horo::Runtime::Ui {
         }
 
         Result<void> ValidateCounts(const UiRenderSnapshotLimits &limits, const UiRenderProjection &projection) {
-            const std::array counts{projection.commands.size(), projection.textRuns.size(), projection.glyphs.size(),
-                                    projection.clips.size(),    projection.masks.size(),    projection.transforms.size(),
-                                    projection.resources.size()};
-            const std::array capacities{static_cast<std::size_t>(limits.commands), static_cast<std::size_t>(limits.textRuns),
-                                        static_cast<std::size_t>(limits.glyphs),   static_cast<std::size_t>(limits.clips),
-                                        static_cast<std::size_t>(limits.masks),    static_cast<std::size_t>(limits.transforms),
-                                        static_cast<std::size_t>(limits.resources)};
+            const std::array counts{projection.commands.size(),  projection.textRuns.size(), projection.glyphs.size(),
+                                    projection.clips.size(),     projection.masks.size(),    projection.transforms.size(),
+                                    projection.resources.size(), projection.groups.size()};
+            const std::array capacities{static_cast<std::size_t>(limits.commands),  static_cast<std::size_t>(limits.textRuns),
+                                        static_cast<std::size_t>(limits.glyphs),    static_cast<std::size_t>(limits.clips),
+                                        static_cast<std::size_t>(limits.masks),     static_cast<std::size_t>(limits.transforms),
+                                        static_cast<std::size_t>(limits.resources), static_cast<std::size_t>(limits.groups)};
             return std::ranges::equal(counts, capacities, std::less_equal{}) ? Result<void>::Success()
                                                                              : Failure(UiErrors::CapacityExceeded);
         }
@@ -141,17 +144,6 @@ namespace Horo::Runtime::Ui {
             for (std::uint32_t index = 0; index < clips.size(); ++index) {
                 if (!clips[index].rect.extent.IsValid() || (clips[index].parent != NoUiRenderIndex && clips[index].parent >= index))
                     return Failure(UiErrors::RenderSnapshotInvalid);
-            }
-            return Result<void>::Success();
-        }
-
-        Result<void> ValidateMasks(const std::span<const UiMask> masks, const std::span<const UiLogicalTransform> transforms,
-                                   const std::span<const UiRenderResourceReference> resources) {
-            for (const auto &mask : masks) {
-                if (!mask.rect.extent.IsValid() || !PresentIndex(mask.transform, transforms.size()))
-                    return Failure(UiErrors::RenderSnapshotInvalid);
-                if (!PresentIndex(mask.resource, resources.size()) || resources[mask.resource].role != UiRenderResourceRole::Mask)
-                    return Failure(UiErrors::RenderResourceReferenceInvalid);
             }
             return Result<void>::Success();
         }
@@ -224,8 +216,8 @@ namespace Horo::Runtime::Ui {
         Result<void> ValidateProjectionTopology(const UiElementTree &tree, const UiRenderProjection &projection) {
             if (const auto clips = ValidateClips(projection.clips); clips.HasError())
                 return clips;
-            if (const auto masks = ValidateMasks(projection.masks, projection.transforms, projection.resources); masks.HasError())
-                return masks;
+            if (const auto paint = PaintInternal::ValidateEffects(tree, projection); paint.HasError())
+                return paint;
             return ValidateCommands(tree, projection.commands, projection.textRuns, projection.clips, projection.masks,
                                     projection.transforms, projection.resources);
         }
@@ -276,11 +268,14 @@ namespace Horo::Runtime::Ui {
 
         mutable std::atomic<std::uint64_t> leases{};
         UiRenderSnapshotDescriptor descriptor;
+        bool preparationOnly{};
+        mutable UiAnimationFrameLease sourceFrame;
         std::vector<UiDrawCommand> commands;
         std::vector<UiTextRun> textRuns;
         std::vector<UiPositionedGlyph> glyphs;
         std::vector<UiClip> clips;
         std::vector<UiMask> masks;
+        std::vector<UiOpacityGroup> groups;
         std::vector<UiLogicalTransform> transforms;
         std::vector<UiRenderResourceReference> resources;
 
@@ -290,6 +285,7 @@ namespace Horo::Runtime::Ui {
             glyphs.reserve(limits.glyphs);
             clips.reserve(limits.clips);
             masks.reserve(limits.masks);
+            groups.reserve(limits.groups);
             transforms.reserve(limits.transforms);
             resources.reserve(limits.resources);
         }
@@ -302,6 +298,7 @@ namespace Horo::Runtime::Ui {
             CopyInto(glyphs, projection.glyphs);
             CopyInto(clips, projection.clips);
             CopyInto(masks, projection.masks);
+            CopyInto(groups, projection.groups);
             CopyInto(transforms, projection.transforms);
             CopyInto(resources, projection.resources);
         }
@@ -396,7 +393,7 @@ namespace Horo::Runtime::Ui {
         if (!storage_)
             return;
         auto current = storage_->leases.load();
-        while (current != std::numeric_limits<std::uint64_t>::max()) {
+        while (current > 0 && current < std::numeric_limits<std::uint64_t>::max() - 1) {
             if (storage_->leases.compare_exchange_weak(current, current + 1))
                 return;
         }
@@ -407,7 +404,20 @@ namespace Horo::Runtime::Ui {
     void UiRenderSnapshot::Release() noexcept {
         if (!storage_)
             return;
-        storage_->leases.fetch_sub(1);
+        auto current = storage_->leases.load(std::memory_order_seq_cst);
+        bool released = false;
+        while (!released) {
+            if (current == 1) {
+                // Reserve the slot until its final source pin is gone; publishing zero first permits concurrent reuse.
+                if (!storage_->leases.compare_exchange_weak(current, std::numeric_limits<std::uint64_t>::max(), std::memory_order_seq_cst))
+                    continue;
+                storage_->sourceFrame = {};
+                storage_->leases.store(0, std::memory_order_seq_cst);
+                released = true;
+            } else {
+                released = storage_->leases.compare_exchange_weak(current, current - 1, std::memory_order_seq_cst);
+            }
+        }
         storage_.reset();
     }
 
@@ -419,6 +429,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderSnapshot::IsValid */
     bool UiRenderSnapshot::IsValid() const noexcept {
         return static_cast<bool>(storage_);
+    }
+
+    /** @copydoc UiRenderSnapshot::IsPreparationOnly */
+    bool UiRenderSnapshot::IsPreparationOnly() const noexcept {
+        return storage_ && storage_->preparationOnly;
     }
 
     /** @copydoc UiRenderSnapshot::Commands */
@@ -444,6 +459,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderSnapshot::Masks */
     std::span<const UiMask> UiRenderSnapshot::Masks() const noexcept {
         return storage_->masks;
+    }
+
+    /** @copydoc UiRenderSnapshot::Groups */
+    std::span<const UiOpacityGroup> UiRenderSnapshot::Groups() const noexcept {
+        return storage_->groups;
     }
 
     /** @copydoc UiRenderSnapshot::Transforms */
@@ -496,12 +516,48 @@ namespace Horo::Runtime::Ui {
         UiRenderSnapshot::Storage::PublishLease publishLease{*slot};
         try {
             slot->Publish(descriptor, projection);
+            slot->preparationOnly = false;
         } catch (const std::bad_alloc &) {
             return Failure<UiRenderSnapshot>(UiErrors::CapacityExceeded);
         }
         publishLease.Commit();
         storage_->lastRevision = descriptor.snapshotRevision;
         return Result<UiRenderSnapshot>::Success(UiRenderSnapshot{std::move(slot)});
+    }
+
+    /** @copydoc UiRenderExtractor::Extract */
+    Result<UiRenderSnapshot> UiRenderExtractor::Extract(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
+                                                        const UiRenderProjection &projection, const UiAnimationFrameLease &frame) {
+        if (!frame.MatchesSourceTree(tree))
+            return Failure<UiRenderSnapshot>(UiErrors::HandleOwnerMismatch);
+        if (const auto &layout = frame.Layout().Descriptor();
+            frame.Clocks().updateSequence == 0 || layout.instance != descriptor.instance || layout.canvas != descriptor.canvas ||
+            layout.document != descriptor.document || layout.sources.document != descriptor.documentRevision ||
+            layout.sources.tree != descriptor.treeRevision || layout.interaction != descriptor.interactionRevision)
+            return Failure<UiRenderSnapshot>(UiErrors::RevisionStale);
+        auto extracted = Extract(tree, descriptor, projection);
+        if (extracted.HasValue()) {
+            // The only issued snapshot has not escaped. Installing this noexcept pin cannot introduce a partial publication.
+            const auto slot = std::ranges::find_if(storage_->slots, [&](const auto &entry) {
+                return entry.get() == extracted.Value().storage_.get();
+            });
+            (*slot)->sourceFrame = frame;
+        }
+        return extracted;
+    }
+
+    /** @copydoc UiRenderExtractor::ExtractPrototype */
+    Result<UiRenderSnapshot> UiRenderExtractor::ExtractPrototype(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
+                                                                 const UiRenderProjection &projection) {
+        auto extracted = Extract(tree, descriptor, projection);
+        if (extracted.HasValue()) {
+            // Extract still owns the only issued lease; mark its slot before it can escape to any consumer.
+            const auto slot = std::ranges::find_if(storage_->slots, [&](const auto &entry) {
+                return entry.get() == extracted.Value().storage_.get();
+            });
+            (*slot)->preparationOnly = true;
+        }
+        return extracted;
     }
 
     /** @copydoc UiRenderExtractor::Close */

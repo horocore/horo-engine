@@ -1,5 +1,4 @@
 #pragma once
-
 #include "EditorWorkspaceHostServices.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/WorldBakeApplication.h"
@@ -25,6 +24,7 @@
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
+#include "editor/renderer/xr/EditorXrSceneGeometry.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/PCGPreviewWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
@@ -51,6 +51,7 @@ namespace Horo::Platform {
 }
 
 namespace Horo::Editor {
+    class IEditorPlayXrHost;
     class ILocalizationService;
     struct EditorViewportPickResult;
     /** @brief Host presentation adapter for one already-validated source-open result. */
@@ -85,6 +86,13 @@ namespace Horo::Editor {
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
     };
 
+    /** @brief Explicit procedural source catalog, optional migrator and detached preview inputs. */
+    struct EditorWorkspaceProceduralServices {
+        const PCG::IPCGGraphSourceMigrator *migrator{};
+        PCGEditorCatalog catalog{.document = {.revision = 1}};
+        std::optional<PCGPreviewInputs> previewInputs;
+    };
+
     /**
      * @brief Optional host-composed services; value groups preserve borrowed/shared lifetimes and defaults.
      * @details Private caller migration: asset registry/source/importer inputs belong to assets; canonical
@@ -106,17 +114,26 @@ namespace Horo::Editor {
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
-        const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Host-owned compatible schema converter. */
-        Extensions::EditorInspectorHost *inspectorHost{};  /**< Borrowed host, outliving this workspace. */
-        IAudioComponentPreview *audioPreview{};            /**< Explicit output capability; absent means unavailable. */
-        EditorWorkspacePrefabServices prefab;              /**< Explicit authoring composition; never discovered by panels. */
-        PCGEditorCatalog pcg{.document = {.revision = 1}}; /**< Source support, executable schemas and creation recipes. */
-        std::optional<PCGPreviewInputs> pcgPreviewInputs;  /**< Detached provider; absent rejects preview. */
+        Extensions::EditorInspectorHost *inspectorHost{}; /**< Borrowed host, outliving this workspace. */
+        IAudioComponentPreview *audioPreview{};           /**< Explicit output capability; absent means unavailable. */
+        EditorWorkspacePrefabServices prefab;             /**< Explicit authoring composition; never discovered by panels. */
+        EditorWorkspaceProceduralServices procedural;
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Immutable project capture; omitted in Null. */
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
     public:
+        /** @brief Supplies the SAME workspace caches/document through a weak owner-lane fence. */
+        [[nodiscard]] EditorXrSceneSourcePort XrSceneSource() const noexcept {
+            return m_xrSceneSource.Port();
+        }
+
+        /** @brief Selects the actual application XR host; null preserves authored-camera desktop Play. */
+        void SelectXrPlayHost(IEditorPlayXrHost *host) noexcept {
+            m_selectedXrPlayHost = host;
+            m_viewModel.playViewSource = host ? EditorPlayViewSource::SelectedXr : EditorPlayViewSource::AuthoredCamera;
+        }
+
         EditorWorkspaceController(const std::filesystem::path &projectRoot, Runtime::RuntimeSceneService &runtimeScene,
                                   const Assets::AssetRegistrySnapshot &assetRegistry = {},
                                   const EditorWorkspaceDependencies &dependencies = {});
@@ -561,6 +578,8 @@ namespace Horo::Editor {
         EditorViewportModel m_viewport{m_dataBus};
         Runtime::PrimitiveMeshCache m_primitiveMeshCache;
         EditorAssetMeshCache m_assetMeshCache;
+        EditorXrSceneSourceOwner m_xrSceneSource{m_document, m_primitiveMeshCache, m_assetMeshCache};
+        IEditorPlayXrHost *m_selectedXrPlayHost{};
         EditorViewportSceneSnapshot m_viewportScene;
 
         struct CameraPreviewState final {
@@ -761,6 +780,10 @@ namespace Horo::Editor {
         void RefreshUiCanvasProjection();
         /** @brief Routes revision-fenced hierarchy and persistence operations to the canonical canvas owner. */
         bool ProcessUiCanvasCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Dispatch a validated canvas intent to its canonical owner or session preview capability. */
+        [[nodiscard]] Result<void> ExecuteUiCanvasCommand(UiCanvasDocument &owner, UiCanvasWorkspaceDocument &projection,
+                                                          const EditorWorkspaceViewCommandData &command,
+                                                          const UiInspectorResourceSnapshot &resources);
         /** @brief Saves one canvas through the shared project mutation boundary and returns its typed outcome. */
         [[nodiscard]] Result<void> SaveUiCanvasSource(UiCanvasDocument &owner) const;
         /** @brief Joins explicit canvas close admission with workspace routing and presents dirty-state errors. */

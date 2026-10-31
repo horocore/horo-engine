@@ -23,6 +23,7 @@ runs:
   using: composite
   steps:
     - name: Flush and report compiler cache
+      if: inputs.compiler-ready == 'true' || inputs.dependency-ready != 'true'
       shell: bash
       env:
         RUNNER_PLATFORM: ${{ runner.os }}

@@ -36,3 +36,8 @@ static_assert(std::is_same_v<decltype(std::declval<const Horo::Runtime::Installe
                                  std::declval<std::shared_ptr<const Horo::Assets::AssetArchiveProvider>>(),
                                  std::declval<std::vector<Horo::Runtime::GameplayPersistenceInstallation>>())),
                              Horo::Result<void>>);
+
+// Scene borrows remain cheap to copy and query; cold owner construction may allocate lifetime evidence.
+static_assert(std::is_nothrow_copy_constructible_v<Horo::Runtime::RuntimeSceneView>);
+static_assert(noexcept(std::declval<const Horo::Runtime::RuntimeScene &>().View()));
+static_assert(noexcept(std::declval<const Horo::Runtime::RuntimeSceneView &>().IsCurrent()));

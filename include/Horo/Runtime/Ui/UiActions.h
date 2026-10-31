@@ -452,9 +452,12 @@ namespace Horo::Runtime::Ui {
         struct Storage;
         friend class UiAnimationOwner;
         friend class UiScreenStack;
+        /** @brief Binds a fresh actual router to its sole exact route incarnation before transfer. */
+        [[nodiscard]] Result<void> BindRouteIncarnation(UiRouteInstanceId route);
         /** @brief Reserves a bounded distinct inactive router source at load time. @return Reservation or typed failure. */
         [[nodiscard]] Result<void> ReserveInteractionReplacement();
-        /** @brief Prepares a genuinely new source owner only after every old request and producer pin has drained. @return Admission. */
+        /** @brief Prepares an interaction-only owner after queued input drains, preserving the semantic operation store. @return Admission.
+         */
         [[nodiscard]] Result<void> PrepareInteractionReplacement(const UiActionOwnerContext &owner);
         /** @brief Rechecks exact active source, sequence high-water and inactive prepared identity. @return Admission. */
         [[nodiscard]] Result<void> CanPublishInteractionReplacement(const UiActionOwnerContext &owner) const;
@@ -462,6 +465,8 @@ namespace Horo::Runtime::Ui {
         void PublishInteractionReplacement() noexcept;
         /** @brief Releases preparation admission without changing the active router. */
         void AbandonInteractionReplacement() noexcept;
+        /** @brief Reports whether retired route storage can be destroyed without orphaning copied error projections. */
+        [[nodiscard]] bool CanCollectRetired() const noexcept;
         /** @brief Releases drained terminal error pins at explicit load-time quiescence. @return Reclaimed count. */
         [[nodiscard]] std::size_t DrainInteractionReplacement() const noexcept;
         explicit UiActionRouter(std::shared_ptr<Storage> storage) noexcept;

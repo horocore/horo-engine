@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import ast
 import operator
+import os
 from pathlib import Path
 import re
+import shutil
+import textwrap
 
 import pytest
 
@@ -20,8 +23,8 @@ def job(workflow: str, name: str) -> str:
     return match[1]
 
 
-def condition(block: str, context: dict[str, str]) -> bool:
-    """Interpret only the equality/boolean subset used by these token guards."""
+def condition(block: str, context: dict[str, str], *, cancelled: bool = False) -> bool:
+    """Interpret the token guards with an explicit, non-executing cancellation status."""
     match = re.search(r"^    if: \$\{\{ (.*?) \}\}$", block, re.MULTILINE)
     assert match is not None
     expression = match[1]
@@ -29,35 +32,40 @@ def condition(block: str, context: dict[str, str]) -> bool:
         expression = expression.replace(name, repr(value))
     expression = expression.replace("&&", " and ").replace("||", " or ")
     expression = re.sub(r"!(?!=)", "not ", expression).strip()
-    return bool(boolean_value(ast.parse(expression, mode="eval").body))
+    return bool(boolean_value(ast.parse(expression, mode="eval").body, cancelled=cancelled))
 
 
-def boolean_value(node: ast.AST) -> str | bool:
-    """Reject calls and unsupported syntax instead of evaluating workflow code."""
+def boolean_value(node: ast.AST, *, cancelled: bool | None = None) -> str | bool:
+    """Model only the closed zero-argument status call; never execute workflow code."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "cancelled" and not node.args and not node.keywords
+            and cancelled is not None):
+        return cancelled
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.BoolOp):
-        return logical_value(node)
+        return logical_value(node, cancelled=cancelled)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return not boolean_value(node.operand)
+        return not boolean_value(node.operand, cancelled=cancelled)
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
-        return comparison_value(node)
+        return comparison_value(node, cancelled=cancelled)
     raise ValueError("Unexpected token-guard expression")
 
 
-def logical_value(node: ast.BoolOp) -> str | bool:
+def logical_value(node: ast.BoolOp, *, cancelled: bool | None = None) -> str | bool:
     """Preserve operand values for Actions' conditional group-key selection."""
-    values = [boolean_value(value) for value in node.values]
+    values = [boolean_value(value, cancelled=cancelled) for value in node.values]
     short_circuit = isinstance(node.op, ast.Or)
     return next((value for value in values if bool(value) == short_circuit), values[-1])
 
 
-def comparison_value(node: ast.Compare) -> bool:
+def comparison_value(node: ast.Compare, *, cancelled: bool | None = None) -> bool:
     """Restrict comparisons to the two string equality operators used by Actions."""
     operation = {ast.Eq: operator.eq, ast.NotEq: operator.ne}.get(type(node.ops[0]))
     if operation is None:
         raise ValueError("Unexpected token-guard comparison")
-    return operation(boolean_value(node.left), boolean_value(node.comparators[0]))
+    return operation(boolean_value(node.left, cancelled=cancelled),
+                     boolean_value(node.comparators[0], cancelled=cancelled))
 
 
 def concurrency_key(block: str, context: dict[str, str]) -> str:
@@ -111,13 +119,21 @@ def test_main_native_writers_serialize_by_platform_without_global_head_of_line_w
     source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     block = job(source, "test-main")
     keys = set()
-    for platform in ("Linux / GCC", "macOS / Clang", "Windows / MSVC"):
+    for platform in ("Linux / GCC", "Windows / MSVC"):
         context = ci_context("refs/heads/main", "101", platform)
         key = concurrency_key(block, context)
         context["github.run_id"] = "102"
         assert concurrency_key(block, context) == key
         keys.add(key)
+    macos = job(source, "macos-build-main")
+    context = ci_context("refs/heads/main", "101", "macOS / Clang")
+    macos_key = concurrency_key(macos, context)
+    context["github.run_id"] = "102"
+    assert concurrency_key(macos, context) == macos_key
+    keys.add(macos_key)
     assert len(keys) == 3
+    assert "      cancel-in-progress: false\n" in macos
+    assert "    concurrency:" not in job(source, "macos-build")
     assert "      cancel-in-progress: false\n" in block
     assert "    concurrency:" not in job(source, "test")
     shader = job(source, "shaders")
@@ -127,6 +143,7 @@ def test_main_native_writers_serialize_by_platform_without_global_head_of_line_w
 
 @pytest.mark.parametrize("workflow,readonly,writer", [
     ("ci", "test", "test-main"), ("sonar", "sonar", "sonar-main"),
+    ("ci", "macos-build", "macos-build-main"),
     ("ci", "shaders", "shaders-main"),
 ])
 @pytest.mark.parametrize("repository", ["horocore/horo-engine", "fork/horo-engine"])
@@ -139,10 +156,34 @@ def test_only_canonical_main_selects_the_write_job(
     context = {"github.repository": repository, "github.ref": ref,
                "github.event_name": event,
                "github.event.pull_request.head.repo.full_name": repository}
+    context["needs.tooling.result"] = "success"
     expected = (repository == "horocore/horo-engine" and ref == "refs/heads/main"
                 and event in {"push", "workflow_dispatch"})
     assert condition(job(source, writer), context) is expected
     assert condition(job(source, readonly), context) is not expected
+
+
+@pytest.mark.parametrize("writer", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("tooling", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize("native_job", ["test", "macos-build"])
+def test_native_status_guards_require_uncancelled_successful_tooling(
+    writer: bool, cancelled: bool, tooling: str, native_job: str,
+) -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    context = {"github.repository": "horocore/horo-engine",
+               "github.ref": "refs/heads/main" if writer else "refs/heads/topic",
+               "github.event_name": "push", "needs.tooling.result": tooling}
+    permitted = not cancelled and tooling == "success"
+    assert condition(job(source, native_job + "-main"), context, cancelled=cancelled) is (writer and permitted)
+    assert condition(job(source, native_job), context, cancelled=cancelled) is (not writer and permitted)
+
+
+@pytest.mark.parametrize("expression", ["unknown()", "cancelled(True)", "cancelled(flag=True)", "obj.cancelled()"])
+def test_status_model_rejects_arbitrary_or_parameterized_calls(expression: str) -> None:
+    parsed = ast.parse(expression, mode="eval").body
+    with pytest.raises(ValueError, match="Unexpected token-guard expression"):
+        boolean_value(parsed, cancelled=False)
 
 
 def test_foreign_fork_sonar_policy_is_preserved() -> None:
@@ -177,7 +218,11 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
         assert f"    {field}: *{match[1]}\n" in main
     if readonly == "test":
         assert "max-parallel: 2" in reader
-        assert reader.count("          - name:") == 3
+        assert reader.count("          - name:") == 2
+        matrix = reader.split("    strategy:", 1)[1].split("    steps:", 1)[0]
+        assert "- name: Linux / GCC" in matrix
+        assert "- name: Windows / MSVC" in matrix
+        assert "- name: macOS / Clang" not in matrix
     if readonly == "shaders":
         assert "max-parallel: 1" in reader
         assert reader.count("          - os:") == 2
@@ -192,6 +237,64 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
 
 def step(source: str, name: str) -> str:
     return source.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("cache", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize("debug", ["success", "failure", "cancelled", "skipped"])
+def test_auxiliary_restore_survives_debug_failure_without_relaxing_primary_publication(
+    cancelled: bool, cache: str, debug: str,
+) -> None:
+    source = job((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"), "test")
+    context = {"steps.cache.outcome": cache, "steps.debug_build.outcome": debug,
+               "github.repository": "horocore/horo-engine", "github.ref": "refs/heads/main"}
+    restore = "\n".join(line[4:] for line in step(source, "Restore auxiliary compiler variants").splitlines())
+    assert condition(restore, context, cancelled=cancelled) is (not cancelled and cache == "success")
+    publication = "\n".join(line[4:] for line in step(source, "Publish main Debug compiler checkpoint").splitlines())
+    assert condition(publication, context, cancelled=cancelled) is (not cancelled and debug == "success")
+
+
+@pytest.mark.parametrize("compiler,dependency,flush", [
+    ("false", "true", False), ("false", "false", True),
+    ("true", "true", True), ("true", "false", True),
+])
+def test_dependency_only_checkpoint_avoids_flush_without_hiding_compiler_failures(
+    tmp_path: Path, pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch,
+    compiler: str, dependency: str, flush: bool,
+) -> None:
+    action = (ROOT / ".github/actions/save-native-cache/action.yml").read_text(encoding="utf-8")
+    block = action.split("    - name: Flush and report compiler cache\n", 1)[1].split("\n    - name:", 1)[0]
+    guard = re.search(r"^      if: (.*)$", block, re.MULTILINE)
+    assert guard is not None
+    selected = condition("    if: ${{ " + guard[1] + " }}",
+                         {"inputs.compiler-ready": compiler, "inputs.dependency-ready": dependency})
+    assert selected is flush
+    host_bash = shutil.which("bash")
+    assert host_bash is not None
+    bash = Path(host_bash).resolve(strict=True)
+    assert bash.is_absolute()
+    assert bash.is_file()
+    assert os.access(bash, os.X_OK)
+    executable = tmp_path / "sccache"
+    calls = tmp_path / "calls"
+    executable.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$CACHE_CALLS"\n'
+                          'if [ "$1" = --stop-server ]; then exit 2; fi\n', encoding="utf-8")
+    executable.chmod(0o700)
+    if selected:
+        script = textwrap.dedent(block.split("      run: |\n", 1)[1])
+        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+        monkeypatch.setenv("RUNNER_PLATFORM", "Windows")
+        monkeypatch.setenv("CACHE_CALLS", str(calls))
+        # The fixed fake cache command spawns no children; pytester bounds and reaps the Bash process.
+        completed = pytester.run(str(bash), "-e", "-o", "pipefail", "-c", script, timeout=5)
+        assert completed.ret == 2
+        assert calls.read_text(encoding="utf-8").splitlines() == ["--show-stats", "--stop-server"]
+    else:
+        assert not calls.exists()
+    workflow = job((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"), "test")
+    assert "compiler-ready: 'false'" in step(workflow, "Checkpoint complete dependency sources")
+    assert "if: github.ref == 'refs/heads/main' && inputs.dependency-hit != 'true' && inputs.dependency-ready == 'true'" in action
+    assert "if: github.ref == 'refs/heads/main' && inputs.compiler-ready == 'true'" in action
 
 
 def test_compiled_native_stores_publish_before_the_next_phase_without_actions_copies() -> None:
@@ -263,3 +366,53 @@ def test_registry_storage_skips_actions_while_focused_profiles_keep_the_default(
         settings = block.split("\n      - name:", 1)[0]
         if "profile: native-tests-v1" in settings:
             assert "compiler-storage: registry" in settings
+
+
+def test_macos_publishers_retain_complete_native_pipeline_and_bundle_outputs() -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    reader, main = job(source, "macos-build"), job(source, "macos-build-main")
+    assert "    name: Build · ${{ matrix.name }}\n" in reader
+    assert "    name: Build · ${{ matrix.name }} (main)\n" in main
+    for field, anchor in (("steps", "native_steps"), ("env", "native_environment"), ("defaults", "native_defaults")):
+        assert f"    {field}: *{anchor}\n" in reader
+        assert f"    {field}: *{anchor}\n" in main
+        assert f"    {field}: &{anchor}\n" in source
+    for field in ("strategy", "outputs"):
+        match = re.search(rf"^    {field}: &(\w+)", reader, re.MULTILINE)
+        assert match is not None
+        assert f"    {field}: *{match[1]}\n" in main
+    assert "packages: read" in reader
+    assert "packages: write" not in reader
+    assert "packages: write" in main
+    assert reader.count("          - name:") == 1
+    assert "- name: macOS / Clang" in reader
+    assert "max-parallel: 1" in reader
+    assert "runs-on: macos-latest" in reader
+    for output in ("artifact-id", "artifact-digest", "payload-digest", "producer-attempt"):
+        assert f"      {output}:" in reader
+
+
+@pytest.mark.parametrize("event,head_repo,reader_result,main_result,label,expected", [
+    ("workflow_dispatch", "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
+    ("push", "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
+    ("pull_request", "fork/horo-engine", "success", "skipped", "horo-macos-metal", "macos-latest"),
+    ("pull_request", "horocore/horo-engine", "success", "skipped", "horo-macos-metal", "horo-macos-metal"),
+    ("push", "horocore/horo-engine", "skipped", "success", "horo-macos-metal", "horo-macos-metal"),
+    ("workflow_dispatch", "horocore/horo-engine", "failure", "skipped", "horo-macos-metal", "ubuntu-slim"),
+    ("workflow_dispatch", "horocore/horo-engine", "success", "skipped", "", "macos-latest"),
+    ("pull_request", "fork/horo-engine", "failure", "skipped", "horo-macos-metal", "ubuntu-slim"),
+])
+def test_actual_metal_runner_expression_preserves_admission(
+    event: str, head_repo: str, reader_result: str, main_result: str, label: str, expected: str,
+) -> None:
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    hardware = job(source, "macos-metal")
+    routing = re.search(r"^    runs-on: (.+)$", hardware, re.MULTILINE)
+    assert routing is not None
+    context = {"github.event_name": event,
+               "github.event.pull_request.head.repo.full_name": head_repo,
+               "github.repository": "horocore/horo-engine", "vars.HORO_MACOS_METAL_RUNNER": label,
+               "needs.macos-build.result": reader_result, "needs.macos-build-main.result": main_result,
+               "true": True}
+    # Reuse the existing restricted Actions interpreter on the actual field value.
+    assert concurrency_key("    group: " + routing[1], context) == expected

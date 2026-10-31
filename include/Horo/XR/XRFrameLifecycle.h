@@ -236,6 +236,7 @@ namespace Horo::XR {
         void Shutdown() noexcept;
 
     private:
+        friend class RuntimeInternal::XRSessionHostControl;
         /** @brief Find an acquired image in fixed storage or return MaximumImages as the missing sentinel. */
         [[nodiscard]] std::uint32_t FindImage(const XRSwapchainImageId &image) const noexcept;
         /** @brief Clear the current logical transaction without issuing native cleanup. */

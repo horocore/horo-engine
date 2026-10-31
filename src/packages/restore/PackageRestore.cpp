@@ -172,7 +172,7 @@ namespace Horo::Packages {
                                          package.version.ToString()));
         }
 
-        [[nodiscard]] Result<void> Isolate(PackageCacheStore &cache, const std::vector<std::byte> &bytes,
+        [[nodiscard]] Result<void> Isolate(PackageCacheStore &cache, const std::span<const std::byte> bytes,
                                            const PackageQuarantineReason reason, const LockedPackage &package) {
             if (auto result = cache.Quarantine(bytes, reason, package.artifactDigest); result.HasError())
                 return Result<void>::Failure(result.ErrorValue());
@@ -186,33 +186,11 @@ namespace Horo::Packages {
         };
 
         [[nodiscard]] Error QuarantineOrOriginal(const ErrorCodeDescriptor &primary, const LockedPackage &package, PackageCacheStore &cache,
-                                                 const std::vector<std::byte> &bytes, const PackageQuarantineReason reason,
+                                                 const std::span<const std::byte> bytes, const PackageQuarantineReason reason,
                                                  Error original) {
             if (auto isolated = Isolate(cache, bytes, reason, package); isolated.HasError())
                 return QuarantineCause(primary, package, std::move(original), std::move(isolated).ErrorValue());
             return original;
-        }
-
-        [[nodiscard]] Result<std::optional<RestoredArtifact>> LoadCachedArtifact(const LockedPackage &package,
-                                                                                 const PackageRestoreRequest &request,
-                                                                                 PackageCacheStore &cache) {
-            // The cache stores archive bytes, not detached publisher evidence; a release must fetch that evidence again.
-            if (request.requirePublisherVerification)
-                return Result<std::optional<RestoredArtifact>>::Success(std::nullopt);
-            auto cached = cache.Load(package.artifactDigest);
-            if (cached.HasError())
-                return Result<std::optional<RestoredArtifact>>::Failure(
-                    PackageCause(PackageRestoreErrors::CacheFailure, package, cached.ErrorValue()));
-            auto cachedArchive = std::move(cached).Value();
-            if (!cachedArchive.has_value())
-                return Result<std::optional<RestoredArtifact>>::Success(std::nullopt);
-
-            auto archive = std::move(*cachedArchive);
-            if (!EvidenceMatches(package, archive))
-                return Result<std::optional<RestoredArtifact>>::Failure(
-                    PackageMessage(PackageRestoreErrors::ArtifactEvidenceMismatch, package));
-            return Result<std::optional<RestoredArtifact>>::Success(
-                std::optional<RestoredArtifact>{RestoredArtifact{std::move(archive), true, std::nullopt}});
         }
 
         [[nodiscard]] Result<PackageRestoreArtifact> FetchArtifact(const LockedPackage &package, const PackageRestoreRequest &request,
@@ -271,11 +249,10 @@ namespace Horo::Packages {
             return Result<ValidatedPackageArchive>::Success(std::move(archive));
         }
 
-        [[nodiscard]] Result<std::optional<PackagePublisherVerificationDecision>> VerifyPublisher(const LockedPackage &package,
-                                                                                                  const PackageRestoreRequest &request,
-                                                                                                  const RestoreContext &context,
-                                                                                                  PackageRestoreArtifact &artifact,
-                                                                                                  const CancellationToken &cancellation) {
+        [[nodiscard]] Result<std::optional<PackagePublisherVerificationDecision>> VerifyPublisher(
+            const LockedPackage &package, const PackageRestoreRequest &request, const RestoreContext &context,
+            const std::span<const std::byte> bytes, const std::optional<Security::DetachedSignatureEnvelope> &signature,
+            const CancellationToken &cancellation) {
             if (context.publisherVerification == nullptr) {
                 if (request.requirePublisherVerification)
                     return Result<std::optional<PackagePublisherVerificationDecision>>::Failure(
@@ -284,8 +261,8 @@ namespace Horo::Packages {
             }
 
             PackagePublisherVerificationRequest verificationRequest{.package = package.package,
-                                                                    .artifact = artifact.bytes,
-                                                                    .signature = std::move(artifact.signature),
+                                                                    .artifact = {bytes.begin(), bytes.end()},
+                                                                    .signature = signature,
                                                                     .expectedPublisher = std::nullopt,
                                                                     .nowUnixMilliseconds = request.nowUnixMilliseconds,
                                                                     .cancellation = cancellation};
@@ -295,7 +272,7 @@ namespace Horo::Packages {
                     return Result<std::optional<PackagePublisherVerificationDecision>>::Failure(MakeError(PackageRestoreErrors::Cancelled));
                 auto failure = PackageCause(PackageRestoreErrors::PublisherRejected, package, decision.ErrorValue());
                 return Result<std::optional<PackagePublisherVerificationDecision>>::Failure(
-                    QuarantineOrOriginal(PackageRestoreErrors::PublisherRejected, package, context.cache, artifact.bytes,
+                    QuarantineOrOriginal(PackageRestoreErrors::PublisherRejected, package, context.cache, bytes,
                                          PackageQuarantineReason::VerificationFailure, std::move(failure)));
             }
             if (const auto &publisher = decision.Value().decision;
@@ -305,13 +282,50 @@ namespace Horo::Packages {
 
             auto failure = PackageMessage(PackageRestoreErrors::PublisherRejected, package);
             return Result<std::optional<PackagePublisherVerificationDecision>>::Failure(
-                QuarantineOrOriginal(PackageRestoreErrors::PublisherRejected, package, context.cache, artifact.bytes,
+                QuarantineOrOriginal(PackageRestoreErrors::PublisherRejected, package, context.cache, bytes,
                                      PackageQuarantineReason::VerificationFailure, std::move(failure)));
+        }
+
+        /** @brief Revalidates cache bytes and current publisher policy; persisted envelopes are never decisions. */
+        [[nodiscard]] Result<std::optional<RestoredArtifact>> LoadCachedArtifact(const LockedPackage &package,
+                                                                                 const PackageRestoreRequest &request,
+                                                                                 const RestoreContext &context,
+                                                                                 const CancellationToken &cancellation) {
+            using Outcome = Result<std::optional<RestoredArtifact>>;
+            if (!context.publisherVerification && !request.requirePublisherVerification) {
+                auto cached = context.cache.Load(package.artifactDigest);
+                if (cached.HasError())
+                    return Outcome::Failure(PackageCause(PackageRestoreErrors::CacheFailure, package, cached.ErrorValue()));
+                auto cachedArchive = std::move(cached).Value();
+                if (!cachedArchive)
+                    return Outcome::Success(std::nullopt);
+                auto archive = std::move(*cachedArchive);
+                if (!EvidenceMatches(package, archive))
+                    return Outcome::Failure(PackageMessage(PackageRestoreErrors::ArtifactEvidenceMismatch, package));
+                return Outcome::Success(RestoredArtifact{std::move(archive), true, std::nullopt});
+            }
+            auto cached = context.cache.LoadWithPublisherEvidence(package.artifactDigest);
+            if (cached.HasError())
+                return Outcome::Failure(PackageCause(PackageRestoreErrors::CacheFailure, package, cached.ErrorValue()));
+            auto cachedArtifact = std::move(cached).Value();
+            if (!cachedArtifact)
+                return Outcome::Success(std::nullopt);
+            auto value = std::move(*cachedArtifact);
+            if (!EvidenceMatches(package, value.archive))
+                return Outcome::Failure(PackageMessage(PackageRestoreErrors::ArtifactEvidenceMismatch, package));
+            if (request.requirePublisherVerification && !value.signature)
+                return Outcome::Success(std::nullopt);  // Legacy entries must refetch evidence online; offline remains fail-closed.
+            auto publisher = VerifyPublisher(package, request, context, value.archive.Bytes(), value.signature, cancellation);
+            if (publisher.HasError())
+                return Outcome::Failure(publisher.ErrorValue());
+            if (cancellation.IsCancellationRequested())
+                return Outcome::Failure(MakeError(PackageRestoreErrors::Cancelled));
+            return Outcome::Success(RestoredArtifact{std::move(value.archive), true, std::move(publisher).Value()});
         }
 
         [[nodiscard]] Result<RestoredArtifact> RestoreArtifact(const LockedPackage &package, const PackageRestoreRequest &request,
                                                                const RestoreContext &context, const CancellationToken &cancellation) {
-            auto cached = LoadCachedArtifact(package, request, context.cache);
+            auto cached = LoadCachedArtifact(package, request, context, cancellation);
             if (cached.HasError())
                 return Result<RestoredArtifact>::Failure(std::move(cached).ErrorValue());
             if (auto cachedArtifact = std::move(cached).Value(); cachedArtifact.has_value())
@@ -325,12 +339,15 @@ namespace Horo::Packages {
             if (verified.HasError())
                 return Result<RestoredArtifact>::Failure(std::move(verified).ErrorValue());
             auto archive = std::move(verified).Value();
-            auto publisher = VerifyPublisher(package, request, context, artifact, cancellation);
+            auto publisher = VerifyPublisher(package, request, context, artifact.bytes, artifact.signature, cancellation);
             if (publisher.HasError())
                 return Result<RestoredArtifact>::Failure(std::move(publisher).ErrorValue());
             if (cancellation.IsCancellationRequested())
                 return Result<RestoredArtifact>::Failure(MakeError(PackageRestoreErrors::Cancelled));
-            if (auto published = context.cache.Publish(archive); published.HasError())
+            const bool signedPublisher = publisher.Value() && publisher.Value()->outcome == PackagePublisherVerificationOutcome::Accepted &&
+                                         artifact.signature.has_value();
+            if (auto published = signedPublisher ? context.cache.Publish(archive, *artifact.signature) : context.cache.Publish(archive);
+                published.HasError())
                 return Result<RestoredArtifact>::Failure(PackageCause(PackageRestoreErrors::CacheFailure, package, published.ErrorValue()));
             return Result<RestoredArtifact>::Success({std::move(archive), false, std::move(publisher).Value()});
         }

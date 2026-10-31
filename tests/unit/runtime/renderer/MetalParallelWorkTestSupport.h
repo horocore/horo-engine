@@ -14,6 +14,8 @@ namespace Horo::Render::MetalBackendTests {
     /** @brief Observable test-native encoder and completion controls, never borrowed from a caller by jobs. */
     struct ParallelObservation final {
         std::atomic<bool> releaseFirst{false};
+        std::atomic<bool> deferFirstCancellation{
+            false}; /**< Test-only native operation gate; owner toggles before cancellation, worker observes atomically. */
         std::array<std::atomic<bool>, 2> entered{};
         std::array<std::atomic<bool>, 2> finished{};
         std::array<std::thread::id, 2> workerThreads{};
@@ -91,7 +93,7 @@ namespace Horo::Render::MetalBackendTests {
         /** @brief Keeps the deterministic first-worker gate independently cancellable, including terminal acknowledgement. */
         bool AwaitRecordingAdmission(const std::size_t index, const CancellationToken &cancellation) const {
             while (index == 0 && !observation_->releaseFirst.load()) {
-                if (closed_.load() || cancellation.IsCancellationRequested())
+                if ((closed_.load() || cancellation.IsCancellationRequested()) && !observation_->deferFirstCancellation.load())
                     return false;
                 std::this_thread::yield();
             }

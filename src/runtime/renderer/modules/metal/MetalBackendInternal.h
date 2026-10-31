@@ -26,6 +26,16 @@ namespace Horo::Render::Detail {
             return Result<std::shared_ptr<IResidentLightCullingKernel>>::Failure(MakeError(LightCullingErrors::Unsupported));
         }
 
+        /** @brief Injected runtimes explicitly decline native cooked UI pipelines unless implemented. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &) {
+            return Result<std::shared_ptr<IResidentUiPaintKernel>>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        /** @brief Default injected runtimes decline reusable native UI updates. */
+        [[nodiscard]] virtual Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &) {
+            return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
         [[nodiscard]] virtual Result<MetalDeviceCapabilities> Initialize(const MetalPresentationDescriptor &descriptor,
                                                                          const MetalDeviceAdmissionRequest &request) = 0;
 

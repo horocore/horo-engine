@@ -12,6 +12,34 @@ namespace Horo::Runtime::Ui {
         }
     }  // namespace
 
+    /** @copydoc UiAnimationOwner::ControlActionOwner */
+    UiActionRouter *UiAnimationOwner::ControlActionOwner(Storage &storage, const UiElementHandle element) {
+        auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
+        if (canvas->routes) {
+            const auto routes = canvas->routes->Routes();
+            for (auto route = routes.rbegin(); route != routes.rend(); ++route) {
+                const auto binding = std::ranges::find(storage.definition.routes, route->metadata.id, &UiAnimationRouteBinding::route);
+                if (binding != storage.definition.routes.end() && WithinRouteRoot(canvas->tree, element, binding->root))
+                    return canvas->routes->Actions(route->id);
+            }
+        }
+        return canvas->actions ? &*canvas->actions : nullptr;
+    }
+
+    /** @copydoc UiAnimationOwner::PrepareControlProjections */
+    Result<void> UiAnimationOwner::PrepareControlProjections(Storage &storage) {
+        auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
+        for (auto &element : canvas->controls) {
+            auto *router = ControlActionOwner(storage, element.control.Element());
+            storage.candidate.controls.push_back(&element.control);
+            if (auto prepared =
+                    element.control.PrepareInteractionReplacement(element.control.Owner(), router ? router->AsyncActions() : nullptr);
+                prepared.HasError())
+                return prepared;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiAnimationOwner::PrepareControlSources */
     Result<void> UiAnimationOwner::PrepareControlSources(Storage &storage) {
         auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
@@ -19,10 +47,12 @@ namespace Horo::Runtime::Ui {
         auto &frame = *storage.frames[storage.candidate.frameSlot];
         frame.controls.clear();
         for (auto &element : canvas->controls) {
-            if (auto prepared = element.control.PrepareInteractionReplacement(owner); prepared.HasError())
+            if (auto prepared = element.control.RebasePreparedInteraction(owner); prepared.HasError())
                 return prepared;
-            storage.candidate.controls.push_back(&element.control);
-            frame.controls.push_back({element.id, {owner, element.control.Element()}, element.control.PreparedInteractionState()});
+            frame.controls.push_back({element.id,
+                                      {owner, element.control.Element()},
+                                      element.control.PreparedInteractionState(),
+                                      element.control.PreparedAsyncAction()});
         }
         if (canvas->actions) {
             if (auto prepared = canvas->actions->PrepareInteractionReplacement(owner); prepared.HasError())

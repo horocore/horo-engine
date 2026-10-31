@@ -16,9 +16,19 @@
 
 namespace Horo::Render {
     namespace {
+        /** @brief Resolves optional prepared transients without changing ownership or frame execution state. */
+        Result<Detail::RenderGraphTransientResourceSet *> ResolveOptionalTransient(const Detail::RenderGraphTransientResourcePool &pool,
+                                                                                   RenderGraphTransientResourcesHandle handle,
+                                                                                   const CompiledRenderGraphExecution &graph) {
+            return handle.IsValid() ? pool.Resolve(handle, graph) : Result<Detail::RenderGraphTransientResourceSet *>::Success(nullptr);
+        }
+
         /** @brief Rejects unavailable encoders before resources or native work are acquired. */
         Result<void> ValidateGraphWorkloadSupport(const IRenderBackend &backend, const std::span<const RenderGraphPassWorkload> workloads,
-                                                  const bool explicitSubmissions) {
+                                                  const bool explicitSubmissions, RenderGraphExecutionRole role,
+                                                  const UiRenderSubmission *ui) {
+            if (role == RenderGraphExecutionRole::UiComposition && ui == nullptr)
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
             if (explicitSubmissions && !backend.Capabilities().supportsExplicitGraphSubmissions)
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
                                                        "The selected backend does not implement explicit graph submissions."));
@@ -65,7 +75,16 @@ namespace Horo::Render {
                                                         const std::span<const RenderGraphQueueSubmission> submissions) {
         if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
             return admitted;
-        if (auto supported = ValidateGraphWorkloadSupport(*backend_, workloads, !submissions.empty()); supported.HasError()) {
+        return EncodeAdmittedGraph(graph, workloads, ui, transientResources, submissions, RenderGraphExecutionRole::Scene);
+    }
+
+    /** @copydoc RenderFrameScope::EncodeAdmittedGraph */
+    Result<void> RenderFrameScope::EncodeAdmittedGraph(const CompiledRenderGraphExecution &graph,
+                                                       const std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
+                                                       const RenderGraphTransientResourcesHandle transientResources,
+                                                       const std::span<const RenderGraphQueueSubmission> submissions,
+                                                       const RenderGraphExecutionRole role) {
+        if (auto supported = ValidateGraphWorkloadSupport(*backend_, workloads, !submissions.empty(), role, ui); supported.HasError()) {
             Abort();
             return supported;
         }
@@ -75,15 +94,12 @@ namespace Horo::Render {
                 Abort();
                 return imported;
             }
-            Detail::RenderGraphTransientResourceSet *transient = nullptr;
-            if (transientResources.IsValid()) {
-                const auto found = owner_->graphTransientResources_->Resolve(transientResources, graph);
-                if (found.HasError()) {
-                    Abort();
-                    return Result<void>::Failure(found.ErrorValue());
-                }
-                transient = found.Value();
+            const auto selectedTransient = ResolveOptionalTransient(*owner_->graphTransientResources_, transientResources, graph);
+            if (selectedTransient.HasError()) {
+                Abort();
+                return Result<void>::Failure(selectedTransient.ErrorValue());
             }
+            auto *transient = selectedTransient.Value();
             const auto resolved = Detail::ResolveFrameGraphResources(graph, *owner_->resourceRegistry_, transient);
             if (resolved.HasError()) {
                 Abort();
@@ -94,14 +110,17 @@ namespace Horo::Render {
                 Abort();
                 return Result<void>::Failure(multiview.ErrorValue());
             }
-            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads);
+            const auto leased =
+                role == RenderGraphExecutionRole::UiComposition
+                    ? owner_->graphResourceLeases_->AcquireUi(graph.Resources(), *ui, transient, completionLease_, workloads)
+                    : owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads, graph.templateBinding_);
             if (leased.HasError()) {
                 Abort();
                 return Result<void>::Failure(leased.ErrorValue());
             }
             return ExecuteLeasedGraph({frame_, graph, workloads, resolved.Value().View(), leased.Value(), transient != nullptr, nullptr,
                                        submissions, std::span{multiview.Value().meshes}.first(multiview.Value().meshCount),
-                                       std::span{multiview.Value().views}.first(multiview.Value().viewCount)},
+                                       std::span{multiview.Value().views}.first(multiview.Value().viewCount), role},
                                       submissionHistory);
         } catch (...) {  // NOSONAR(cpp:S2738) Frame ownership must recover across an arbitrary backend exception.
             Abort();
@@ -137,6 +156,8 @@ namespace Horo::Render {
     Result<void> RenderFrameScope::ExecuteLeasedGraph(RenderGraphExecutionRequest request,
                                                       const Detail::RenderSubmissionAllocator &submissionHistory) {
         RenderGraphLeaseTransfer transfer;
+        if (request.lease == completionLease_ && completionLease_ != nullptr)
+            transfer.authority = RenderGraphLeaseAuthority::BackendCompletion;
         const auto releaseLease = [&transfer](IRenderGraphResourceLease *lease) {
             if (transfer.authority == RenderGraphLeaseAuthority::Frontend)
                 lease->Release();

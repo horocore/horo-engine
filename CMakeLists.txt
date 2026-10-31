@@ -23,7 +23,7 @@ if(NOT HORO_GIT_REVISION_RESULT EQUAL 0 OR HORO_SOURCE_REVISION STREQUAL "")
 endif()
 
 set(HORO_GAMEPLAY_SDK_FINGERPRINT
-    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk21-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
+    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk22-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
 set(HORO_EXTENSION_SDK_VERSION "${HORO_ENGINE_VERSION}")
 set(HORO_EXTENSION_ABI_MAJOR_VERSION 1)
@@ -110,10 +110,11 @@ set(HORO_GAMEPLAY_SDK_PACKAGE_DIR "${CMAKE_BINARY_DIR}/sdk/gameplay" CACHE INTER
     "Build-tree CMake package used by project gameplay modules")
 file(MAKE_DIRECTORY "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}")
 set_target_properties(HoroFoundation PROPERTIES EXPORT_NAME Foundation POSITION_INDEPENDENT_CODE ON)
+set_target_properties(HoroSecurityEnvelope PROPERTIES EXPORT_NAME SecurityEnvelope)
 set_target_properties(HoroNetworkApi PROPERTIES EXPORT_NAME NetworkApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroSaveApi PROPERTIES EXPORT_NAME SaveApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroGameplayApi PROPERTIES EXPORT_NAME GameplayApi POSITION_INDEPENDENT_CODE ON)
-export(TARGETS HoroFoundation HoroNetworkApi HoroSaveApi HoroGameplayApi
+export(TARGETS HoroFoundation HoroSecurityEnvelope HoroNetworkApi HoroSaveApi HoroGameplayApi
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayTargets.cmake")
 # Physics is an explicit SDK component. The minimal gameplay export remains solver-free;

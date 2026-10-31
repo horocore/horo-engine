@@ -1,5 +1,9 @@
+#include "EditorPlayXrHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Runtime/Scene/PrimitiveMesh.h"
+#include "editor/document/EditorAssetMeshCache.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
+#include "editor/renderer/xr/EditorXrSceneGeometry.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
@@ -106,6 +110,97 @@ namespace {
                  {Editor::SceneObjectId{2}, std::nullopt, "Actor", {}, std::nullopt, std::move(actor)}}};
     }
 
+    /** @brief Real CPU Scene participant over canonical document/cache capture; never claims native XR qualification. */
+    class CpuSelectedXrHost final : public Editor::IEditorPlayXrHost {
+    public:
+        explicit CpuSelectedXrHost(Editor::EditorXrSceneSourcePort source) : source_(std::move(source)) {}
+
+        bool failPreparation{};
+        bool published{};
+        Runtime::SceneRuntimeId current;
+        std::size_t retired{};
+
+        Result<void> AttachInput(const Input::InputActionCollection &, const Editor::EditorXrSceneSourcePort &) override {
+            return Result<void>::Failure(MakeError(Gameplay::GameplayErrors::GameplayPlayBlocked));
+        }
+
+        Result<void> SetPlayState(Editor::EditorPlayState) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> DetachInput() override {
+            return Result<void>::Success();
+        }
+
+        void RevokeInput() noexcept override {
+            published = false;
+        }
+
+        Result<void> UpdateScene(const Runtime::RuntimeSceneView &) override {
+            return Result<void>::Success();
+        }
+
+        class Candidate final : public Runtime::SceneActivationCandidate {
+        public:
+            Candidate(CpuSelectedXrHost &host, Runtime::SceneRuntimeId scene, std::unique_ptr<Editor::PreparedEditorXrGeometry> geometry)
+                : host_(host), scene_(scene), geometry_(std::move(geometry)) {}
+
+            Result<void> ValidatePublication() const override {
+                return geometry_->ValidateSource();
+            }
+
+            void Publish() noexcept override {
+                host_.current = scene_;
+                host_.published = true;
+            }
+
+            void Shutdown() noexcept override {
+                if (closed_)
+                    return;
+                closed_ = true;
+                geometry_->Revoke();
+                if (host_.current == scene_)
+                    host_.published = false;
+                ++host_.retired;
+            }
+
+        private:
+            CpuSelectedXrHost &host_;
+            Runtime::SceneRuntimeId scene_;
+            std::unique_ptr<Editor::PreparedEditorXrGeometry> geometry_;
+            bool closed_{};
+        };
+
+        class Participant final : public Runtime::SceneActivationParticipant {
+        public:
+            explicit Participant(CpuSelectedXrHost &host) : host_(host) {}
+
+            Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
+                                                                               const Runtime::RuntimeSceneView &scene) override {
+                // Preserve the original value snapshot before the source provider can reenter its caller.
+                const Runtime::RuntimeSceneView candidate = scene;
+                if (host_.failPreparation)
+                    return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
+                        MakeError(Gameplay::GameplayErrors::GameplayPlayBlocked));
+                auto geometry = host_.source_.Capture(definition.Revision(), candidate);
+                if (geometry.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(geometry.ErrorValue());
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(
+                    std::make_unique<Candidate>(host_, candidate.RuntimeId(), std::move(geometry).Value()));
+            }
+
+        private:
+            CpuSelectedXrHost &host_;
+        };
+
+        std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override {
+            return std::make_unique<Participant>(*this);
+        }
+
+    private:
+        Editor::EditorXrSceneSourcePort source_;
+    };
+
     struct PlayOwnerObservations final {
         std::vector<Runtime::SceneRuntimeId> admitted;
         std::size_t ticks{};
@@ -116,8 +211,16 @@ namespace {
     /** @brief Exercises the injected owner protocol using an actual assetless Scene service; no native backend claim. */
     class ObservedPlaySceneHost final : public Editor::EditorPlaySceneHost {
     public:
-        ObservedPlaySceneHost(Runtime::SceneRuntimeId identity, std::shared_ptr<PlayOwnerObservations> observations)
-            : observations_(std::move(observations)), scenes_(identity) {}
+        ObservedPlaySceneHost(Runtime::SceneRuntimeId identity, std::shared_ptr<PlayOwnerObservations> observations,
+                              Editor::IEditorPlayXrHost *xr = nullptr)
+            : observations_(std::move(observations)), scenes_(identity), xr_(xr) {
+            if (xr_)
+                REQUIRE(scenes_.AddActivationParticipant(xr_->MakeSceneParticipant()).HasValue());
+        }
+
+        const Editor::IEditorPlayXrHost *SelectedXrHost() const noexcept override {
+            return xr_;
+        }
 
         Runtime::RuntimeSceneService &Scenes() noexcept override {
             return scenes_;
@@ -138,6 +241,7 @@ namespace {
         }
 
     private:
+        Editor::IEditorPlayXrHost *xr_{};
         std::shared_ptr<PlayOwnerObservations> observations_;
         Runtime::RuntimeSceneService scenes_;
         bool closed_{};
@@ -152,7 +256,71 @@ namespace {
                 std::make_unique<ObservedPlaySceneHost>(identity, observations));
         };
     }
+
+    /** @brief Owns the complete selected-Play source/factory lifetime through each independent admission/Stop scenario. */
+    struct SelectedXrPlayFixture {
+        Editor::SceneDocument document;
+        Editor::EditorHistory history;
+        Editor::SceneDocumentCommandExecutor commands{document, history};
+        Runtime::PrimitiveMeshCache primitives;
+        Editor::EditorAssetMeshCache assets;
+        Editor::EditorXrSceneSourceOwner source{document, primitives, assets};
+        CpuSelectedXrHost xr{source.Port()}, foreign{source.Port()};
+        Gameplay::BehaviorRegistry registry;
+        std::shared_ptr<PlayOwnerObservations> observations{std::make_shared<PlayOwnerObservations>()};
+        Editor::EditorPlaySceneFactory factory;
+        Editor::EditorPlaySessionController play;  // Dies before every authority captured by the factory.
+
+        SelectedXrPlayFixture() {
+            REQUIRE(commands.Execute(Editor::CreateSceneObjectCommand{.name = "Box", .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}})
+                        .HasValue());
+            REQUIRE(registry.Freeze().HasValue());
+            factory = [this](Runtime::SceneRuntimeId identity, const Runtime::RuntimeSceneDefinition &) {
+                return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Success(
+                    std::make_unique<ObservedPlaySceneHost>(identity, observations, &xr));
+            };
+        }
+    };
 }  // namespace
+
+TEST_CASE_METHOD(SelectedXrPlayFixture,
+                 "selected XR camera-free Play requires the exact real Scene participant and preserves repeat Play ownership") {
+    using namespace Editor;
+    SECTION("ordinary desktop still requires its authored camera") {
+        REQUIRE(play.Start(document.Snapshot(), registry, factory).HasError());
+        CHECK_FALSE(xr.published);
+    }
+    SECTION("selected enum without actual host cannot bypass admission") {
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::SelectedXr).HasError());
+        CHECK_FALSE(xr.published);
+    }
+    SECTION("wrong actual factory host rejects before publication") {
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::SelectedXr, &foreign).HasError());
+        CHECK_FALSE(xr.published);
+    }
+    SECTION("actual participant failure remains a Play failure") {
+        xr.failPreparation = true;
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::SelectedXr, &xr).HasError());
+        CHECK_FALSE(xr.published);
+        CHECK_FALSE(play.SceneView());
+    }
+    SECTION("same source can prepare a new higher Scene occurrence after Stop") {
+        REQUIRE(document.State().value != document.Revision().value);
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::SelectedXr, &xr).HasValue());
+        REQUIRE(xr.published);
+        const auto first = play.SceneView()->RuntimeId();
+        REQUIRE(xr.current == first);
+        play.Stop();
+        REQUIRE_FALSE(xr.published);
+        REQUIRE(xr.retired == 1);
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::SelectedXr, &xr).HasValue());
+        REQUIRE(xr.published);
+        REQUIRE(play.SceneView()->RuntimeId() != first);
+        REQUIRE(xr.current == play.SceneView()->RuntimeId());
+        play.Stop();
+        REQUIRE(xr.retired == 2);
+    }
+}
 
 TEST_CASE("play session pause step stop keeps authoring snapshot isolated") {
     Gameplay::BehaviorRegistry registry = Registry();

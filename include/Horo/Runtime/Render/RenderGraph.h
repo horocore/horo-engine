@@ -19,6 +19,10 @@
 #include <vector>
 
 namespace Horo::Render {
+    namespace Detail {
+        class PreparedRenderGraphTemplate;
+    }
+
     /** @brief Process-local owner identity assigned to one render-graph builder. */
     struct RenderGraphOwnerId {
         std::uint64_t value{0};
@@ -454,6 +458,7 @@ namespace Horo::Render {
 
     private:
         friend class RenderFrontend;
+        friend class Detail::PreparedRenderGraphTemplate;
         RenderGraphBuilder(RenderGraphOwnerId owner, const RenderGraphLimits &limits) noexcept;
 
         [[nodiscard]] Result<void> Reserve();

@@ -1,30 +1,9 @@
+#include "SceneDocumentHierarchyFixture.h"
 #include "SceneDocumentTestSupport.h"
+#include "editor/renderer/xr/EditorXrTrackingRoot.h"
 
 namespace {
     using namespace Horo::Editor::SceneDocumentTestSupport;
-
-    struct HierarchySceneObjects {
-        Horo::Editor::SceneObjectId parent;
-        Horo::Editor::SceneObjectId child;
-    };
-
-    [[nodiscard]] HierarchySceneObjects MakeHierarchyScene(Horo::Editor::SceneDocument &document) {
-        Horo::Editor::EditorHistory history;
-        Horo::Editor::SceneDocumentCommandExecutor commands{document, history};
-        const auto parent = commands.Execute(Horo::Editor::CreateSceneObjectCommand{
-            .name = "Parent",
-            .localTransform = Horo::Math::Transform{.translation = {2.0F, 0.0F, 0.0F}},
-        });
-        REQUIRE((parent.HasValue()));
-        const auto child = commands.Execute(Horo::Editor::CreateSceneObjectCommand{
-            .name = "Box",
-            .parent = parent.Value().object,
-            .localTransform = Horo::Math::Transform{.translation = {0.0F, 3.0F, 0.0F}},
-            .primitiveMesh = Horo::Runtime::PrimitiveMeshDescriptor{},
-        });
-        REQUIRE((child.HasValue()));
-        return {parent.Value().object, child.Value().object};
-    }
 
     struct LightSceneObjects {
         Horo::Editor::SceneObjectId parent;
@@ -86,6 +65,37 @@ namespace {
         const Math::Vec3 resolvedParentOrigin = Math::TransformPoint(resolved.Value().parentToWorld, {});
         REQUIRE((NearlyEqual(resolvedOrigin.x, 2.0F) && NearlyEqual(resolvedOrigin.y, 3.0F)));
         REQUIRE((NearlyEqual(resolvedParentOrigin.x, 2.0F) && NearlyEqual(resolvedParentOrigin.y, 0.0F)));
+    }
+
+    TEST_CASE("XR tracking root resolves exact authored rigid hierarchy and rejects missing or scaled placement", "[unit][editor][xr]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        auto scene = MakeRuntimeScene(document);
+        const auto root = ResolveXrTrackingRoot(scene->View(), Runtime::SceneObjectId{objects.light.value});
+        REQUIRE(root.HasValue());
+        CHECK(NearlyEqual(root.Value().translation.x, 2.0F));
+        CHECK(NearlyEqual(root.Value().translation.y, 3.0F));
+        const auto direction = root.Value().rotation.Rotate({0.0F, 0.0F, -1.0F});
+        CHECK(NearlyEqual(direction.x, -1.0F));
+        CHECK(NearlyEqual(direction.z, 0.0F));
+        CHECK(ResolveXrTrackingRoot(scene->View(), Runtime::SceneObjectId{}).HasError());
+        CHECK(ResolveXrTrackingRoot(scene->View(), Runtime::SceneObjectId{999999}).HasError());
+        const auto stale = scene->View();
+        scene.reset();
+        CHECK(ResolveXrTrackingRoot(stale, Runtime::SceneObjectId{objects.light.value}).HasError());
+
+        EditorHistory history;
+        SceneDocument scaledDocument;
+        SceneDocumentCommandExecutor commands{scaledDocument, history};
+        for (const auto scale : {Math::Vec3{1.0F, 2.0F, 1.0F}, Math::Vec3{-1.0F, 1.0F, 1.0F}}) {
+            const auto created = commands.Execute(
+                CreateSceneObjectCommand{.name = "Invalid tracking root", .localTransform = Math::Transform{.scale = scale}});
+            REQUIRE(created.HasValue());
+            auto scaled = MakeRuntimeScene(scaledDocument);
+            CHECK(ResolveXrTrackingRoot(scaled->View(), Runtime::SceneObjectId{created.Value().object.value}).HasError());
+        }
     }
 
     TEST_CASE("Extraction Applies Hierarchy Transform Previews", "[unit][editor]") {
