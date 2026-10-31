@@ -851,6 +851,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterSlopeTests.cpp
         unit/runtime/physics/CharacterAirborneTests.cpp
         unit/runtime/physics/CharacterMovementQualificationTests.cpp
+        unit/runtime/physics/CharacterReferenceSceneCorpusTests.cpp
         unit/runtime/physics/CharacterGeometryRobustnessTests.cpp
         unit/runtime/physics/CharacterStepTests.cpp
         unit/runtime/physics/CharacterShapeChangeTests.cpp
@@ -917,6 +918,8 @@ target_link_libraries(HoroPhysicsTests PRIVATE HoroCharacterScenePlacementIntern
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 add_test(NAME HoroCharacterPropertyFuzzTests COMMAND HoroPhysicsTests "[character-property]")
 set_tests_properties(HoroCharacterPropertyFuzzTests PROPERTIES LABELS "unit;physics;character;property;fuzz;headless" TIMEOUT 90 RUN_SERIAL TRUE)
+add_test(NAME HoroCharacterReferenceSceneCorpusTests COMMAND HoroPhysicsTests "[character-reference]")
+set_tests_properties(HoroCharacterReferenceSceneCorpusTests PROPERTIES LABELS "unit;physics;character;reference;headless" TIMEOUT 90 RUN_SERIAL TRUE)
 
 add_executable(HoroPrefabPhysicsGroupTests unit/runtime/physics/PrefabPhysicsGroupTests.cpp)
 target_compile_features(HoroPrefabPhysicsGroupTests PRIVATE cxx_std_20)
