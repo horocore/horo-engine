@@ -108,3 +108,16 @@ TEST_CASE("Settings destinations with equal translated labels retain distinct wi
         frame();
     }
 }
+
+TEST_CASE("Code preferences share typed descriptors with modal drafts", "[editor][settings][code]") {
+    using namespace Horo::Editor;
+    auto settings = DefaultEditorSettings();
+    settings.codeFontFamily = "Menlo";
+    settings.uiFontFamily = "Custom UI";
+    for (const auto &entry : CodeEditorBooleanSettings())
+        settings.codeEditor.*entry.member = !(settings.codeEditor.*entry.member);
+    settings.codeEditor.autoSaveDelaySeconds = 3;
+    SettingsState draft;
+    ApplySettingsToDraft(draft, settings);
+    CHECK(CollectDraftSettings(draft) == settings);
+}

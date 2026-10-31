@@ -1,13 +1,11 @@
+#include "EditorInputActions.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
-#include "Horo/Editor/SettingsModal.h"
-#include "Horo/Editor/SettingsModalDraft.h"
 #include "Horo/Foundation/DataBus.h"
-#include "editor/input/EditorInputActions.h"
 #include "support/OwnedTestDirectory.h"
 
 #include <algorithm>
@@ -558,7 +556,7 @@ TEST_CASE("Settings section headings retain localized title casing", "[editor][s
     }
 }
 
-TEST_CASE("Code preferences share typed descriptors across persistence and modal drafts", "[editor][settings][code]") {
+TEST_CASE("Code preferences share typed descriptors across persistence and validation", "[editor][settings][code]") {
     using namespace Horo::Editor;
     KeymapHome home;
     EditorSettingsDocument document;
@@ -572,9 +570,6 @@ TEST_CASE("Code preferences share typed descriptors across persistence and modal
     const auto loaded = LoadEditorSettingsDocument();
     REQUIRE_FALSE(loaded.parseError);
     CHECK(loaded.settings == document.settings);
-    SettingsState draft;
-    ApplySettingsToDraft(draft, loaded.settings);
-    CHECK(CollectDraftSettings(draft) == loaded.settings);
     auto invalid = loaded.settings;
     invalid.codeEditor.autoSaveDelaySeconds = 999;
     REQUIRE_FALSE(ValidateEditorSettings(invalid));

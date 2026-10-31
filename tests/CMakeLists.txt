@@ -2826,6 +2826,11 @@ add_executable(HoroEditorSettingsStoreTests
 )
 
 target_compile_features(HoroEditorSettingsStoreTests PRIVATE cxx_std_20)
+# White-box keymap tests access only the owning input implementation directory.
+target_include_directories(HoroEditorSettingsStoreTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/editor/input
+        ${PROJECT_SOURCE_DIR}/tests
+)
 target_link_libraries(HoroEditorSettingsStoreTests
         PRIVATE
         HoroEngine::EditorServices
