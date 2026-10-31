@@ -39,6 +39,15 @@ namespace Horo::Editor {
          * @pre Lifecycle preparation only, before graph topology admission; normal frames never synchronize meshes.
          */
         [[nodiscard]] Result<void> PrepareMeshes(std::span<const EditorViewportMeshResourceView> resources);
+        /** @brief Admits exact ready mesh generations for a cold graph without creating a desktop target.
+         * @param resources Immutable mesh projection retained throughout this owner-lane call.
+         * @return Success only for ready mesh/buffer generations and descriptors; original failure or typed pending otherwise.
+         * @pre Lifecycle preparation outside a frame. Existing queued requests and three requests per incoming mesh
+         * bound CPU upload drains; no GPU completion wait or unbounded readiness polling occurs.
+         * @post Pending resources remain owned for retry; failed partial resources remain owned until Shutdown.
+         * Incremental Prepare is unchanged.
+         */
+        [[nodiscard]] Result<void> PrepareMeshesCold(std::span<const EditorViewportMeshResourceView> resources);
         void Shutdown() noexcept;
 
         [[nodiscard]] std::optional<MeshBinding> FindMesh(std::uint64_t sourceId) const noexcept;
@@ -82,6 +91,10 @@ namespace Horo::Editor {
         };
 
         [[nodiscard]] Result<void> SynchronizeMeshes(std::span<const EditorViewportMeshResourceView> resources);
+        /** @brief Advances the existing resident stages and observes exact cold-generation readiness. */
+        [[nodiscard]] Result<bool> AdvanceColdMeshes(std::span<const EditorViewportMeshResourceView> resources);
+        /** @brief Checks actual requested mesh/buffer operations without accepting an older ready replacement. */
+        [[nodiscard]] Result<bool> ColdMeshesReady(std::span<const EditorViewportMeshResourceView> resources) const;
         [[nodiscard]] Result<bool> SynchronizeMesh(const EditorViewportMeshResourceView &resource);
         [[nodiscard]] Result<bool> AdvanceResidentMesh(const EditorViewportMeshResourceView &resource, ResidentMesh &resident);
         [[nodiscard]] Result<void> CreateResidentMeshBuffers(const EditorViewportMeshResourceView &resource, ResidentMesh &resident);

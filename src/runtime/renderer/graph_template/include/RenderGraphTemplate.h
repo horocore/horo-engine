@@ -94,7 +94,7 @@ namespace Horo::Render {
              * Canonical lease acquisition consumes a successful binding once.
              * @pre No active frame: imports and binding precede the one RenderFrameScope. No borrowed plan survives rebind.
              */
-            [[nodiscard]] Result<const CompiledRenderGraphExecution *> Bind(RenderFrontend &frontend, std::size_t instance,
+            [[nodiscard]] Result<const CompiledRenderGraphExecution *> Bind(const RenderFrontend &frontend, std::size_t instance,
                                                                             std::span<const RenderGraphExternalTextureBinding> bindings);
             /** @brief Binds an exact bounded subset of the cold optional-read declarations without compiling a new graph.
              * @param frontend SAME registry/device owner. @param instance Retired unqueued canonical instance.
@@ -105,7 +105,7 @@ namespace Horo::Render {
              * No hot allocation/compilation; queued storage cannot mutate. The workload semantic validator still requires
              * exact selected uses. A stale unselected resource rejects and requires lifecycle rebuilding, never bypass.
              */
-            [[nodiscard]] Result<const CompiledRenderGraphExecution *> Bind(RenderFrontend &frontend, std::size_t instance,
+            [[nodiscard]] Result<const CompiledRenderGraphExecution *> Bind(const RenderFrontend &frontend, std::size_t instance,
                                                                             std::span<const RenderGraphExternalTextureBinding> bindings,
                                                                             std::span<const RenderGraphOptionalRead> reads);
 
@@ -116,7 +116,7 @@ namespace Horo::Render {
             [[nodiscard]] static Result<void> ValidateOptionalReads(const RenderGraph &graph,
                                                                     std::span<const RenderGraphOptionalRead> reads);
             [[nodiscard]] Result<void> SelectReads(CompiledRenderGraphExecution &execution, std::span<const RenderGraphOptionalRead> reads);
-            [[nodiscard]] Result<void> ValidateResidentSuperset(RenderFrontend &frontend,
+            [[nodiscard]] Result<void> ValidateResidentSuperset(const RenderFrontend &frontend,
                                                                 const CompiledRenderGraphExecution &execution) const;
             [[nodiscard]] static Result<void> ValidateSlots(const RenderGraph &graph,
                                                             std::span<const RenderGraphExternalTextureSlot> slots);
@@ -131,7 +131,9 @@ namespace Horo::Render {
                 std::vector<int> roles;  // Resource-indexed closed role; -1 means mandatory/non-optional.
                 std::vector<std::uint8_t> selected;
                 std::vector<std::uint8_t> externalSlots;
-            } reads_;
+            };
+
+            ReadStorage reads_;
 
             bool binding_{}; /**< Owner-lane foreign-source reentry fence, not cross-thread synchronization. */
         };

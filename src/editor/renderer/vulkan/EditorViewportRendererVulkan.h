@@ -75,7 +75,7 @@ namespace Horo::Editor {
         /** @brief Revokes the synchronous acquired-eye borrow without releasing native resources or selection intent.
          * @pre Render-owner lane; actual image/scene/GUI retirement remains with the canonical lease owner.
          */
-        void RevokeXrMirror() noexcept;
+        void RevokeXrMirror() const noexcept;
         /** @brief Polls the actual canonical graphics queue without waiting or declaring image/GUI completion.
          * @return Original observation error or successful zero-time queue poll. Image release still requires
          * the external acquisition owner's actual scene AND GUI retirement/final-state evidence.
@@ -141,26 +141,47 @@ namespace Horo::Editor {
             Render::RenderPipelineHandle pipeline, overlayPipeline;
             Render::MaterialBindingLayout layout;
             std::unique_ptr<Render::MaterialBindingTable> materials;
-            std::size_t uniformBytes{};
+            std::size_t parameterBytes{}; /**< Exact logical packing extent, excluding native block tail padding. */
+            std::size_t uniformBytes{};   /**< Selected backend's allocation, binding and full-upload extent. */
         };
 
-        [[nodiscard]] Result<void> CreatePipeline();
-        /** @brief Admits the reflected uniform layout and creates its one binding table. */
-        [[nodiscard]] Result<Render::RenderPipelineHandle> CreatePipelineState(const Render::RenderGraphicsPipelineState &state);
-        /** @brief Realizes a validated program through the same selected-device pipeline/cache owner. */
-        [[nodiscard]] Result<Render::RenderPipelineHandle> CreatePipelineState(ShaderResources &program,
-                                                                               const Render::ShaderManifest &manifest,
-                                                                               const Render::RenderGraphicsPipelineState &state);
-        /** @brief Allocates both native shader stages once during cold program admission. */
-        [[nodiscard]] Result<void> CreateProgramStages(ShaderResources &program);
-        [[nodiscard]] Result<void> CreateMaterialLayout(const Render::NormalizedShaderReflection &reflection);
-        [[nodiscard]] Result<void> CreateDrawSlots();
-        [[nodiscard]] Result<void> CreateUniformSlot(DrawSlot &draw, std::uint64_t material, Render::RenderPipelineHandle pipeline);
-        /** @brief Allocates one bounded cold uniform/material generation for the exact program's reflected ABI. */
-        [[nodiscard]] Result<void> CreateUniformSlot(ShaderResources &program, DrawSlot &draw, std::uint64_t material,
-                                                     Render::RenderPipelineHandle pipeline);
-        /** @brief Validates one ABI and prepares its sole material-table owner before interactive use. */
-        [[nodiscard]] Result<void> CreateMaterialLayout(ShaderResources &program, const Render::NormalizedShaderReflection &reflection);
+        /** @brief Stateless cold program construction and reflected packing; all owned storage stays in this viewport. */
+        struct ProgramResources final {
+            /** @brief Admits the desktop program and its overlay against one frontend and frame capacity. */
+            [[nodiscard]] static Result<void> CreatePipeline(Render::RenderFrontend &frontend, ShaderResources &program,
+                                                             std::uint32_t frames);
+            /** @brief Creates native shader stages into the same retained program, preserving partial prefixes. */
+            [[nodiscard]] static Result<void> CreateProgramStages(Render::RenderFrontend &frontend, ShaderResources &program);
+            /** @brief Creates a pipeline using exact selected-device and cooked-program identity. */
+            [[nodiscard]] static Result<Render::RenderPipelineHandle> CreatePipelineState(Render::RenderFrontend &frontend,
+                                                                                          const ShaderResources &program,
+                                                                                          const Render::ShaderManifest &manifest,
+                                                                                          const Render::RenderGraphicsPipelineState &state);
+            /** @brief Admits logical and native uniform extents and owns one bounded material table. */
+            [[nodiscard]] static Result<void> CreateMaterialLayout(Render::RenderFrontend &frontend, ShaderResources &program,
+                                                                   const Render::NormalizedShaderReflection &reflection,
+                                                                   std::uint32_t frames);
+            /** @brief Creates the bounded desktop draw slots without replacing their owner. */
+            [[nodiscard]] static Result<void> CreateDrawSlots(Render::RenderFrontend &frontend, const ShaderResources &program,
+                                                              std::span<FrameSlot> slots, std::uint32_t frames);
+            /** @brief Creates one exact program buffer and material generation during cold admission. */
+            [[nodiscard]] static Result<void> CreateUniformSlot(Render::RenderFrontend &frontend, const ShaderResources &program,
+                                                                DrawSlot &draw, std::uint64_t material,
+                                                                Render::RenderPipelineHandle pipeline);
+            /** @brief Packs one finite reflected parameter into caller-owned bounded storage. */
+            [[nodiscard]] static Result<void> WriteParameter(const Render::MaterialBindingLayout &layout, std::span<std::byte> bytes,
+                                                             Render::ShaderParameterId parameter, std::span<const float> values);
+            /** @brief Packs the admitted canonical light arrays into the same reflected layout. */
+            [[nodiscard]] static Result<void> WriteLighting(const Render::MaterialBindingLayout &layout, std::span<std::byte> bytes,
+                                                            const Render::RenderSceneView &scene);
+            /** @brief Writes the current draw through the existing bridge using the program ABI and viewport extent. */
+            [[nodiscard]] static Result<void> WriteDraw(const Render::Detail::VulkanEditorGraphicsBridge &bridge,
+                                                        const ShaderResources &program, EditorViewportExtent extent,
+                                                        Render::FrameToken frame, const DrawSlot &slot,
+                                                        const Render::RenderStaticMeshInstance &instance,
+                                                        const Render::RenderSceneView &scene);
+        };
+
         [[nodiscard]] Result<void> CreateOverlaySlots();
         [[nodiscard]] Result<void> CreateOverlayMesh(OverlaySlot &slot);
         void ReleaseOverlaySlots() noexcept;
@@ -173,12 +194,6 @@ namespace Horo::Editor {
         /** @brief Submits the cached empty-scene clear through the exact current frontend frame. */
         [[nodiscard]] Result<void> ExecuteEmptyViewport(Render::RenderFrameScope &frame, Render::ClearColor clearColor);
         [[nodiscard]] Result<void> ExecuteViewport(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass);
-        [[nodiscard]] Result<void> WriteDraw(Render::FrameToken frame, const DrawSlot &slot,
-                                             const Render::RenderStaticMeshInstance &instance, const Render::RenderSceneView &scene);
-        /** @brief Packs the bounded canonical light set using the admitted reflected array layout. */
-        [[nodiscard]] Result<void> WriteLighting(std::span<std::byte> bytes, const Render::RenderSceneView &scene) const;
-        [[nodiscard]] Result<void> WriteParameter(std::span<std::byte> bytes, Render::ShaderParameterId parameter,
-                                                  std::span<const float> values) const;
         const std::thread::id owner_{std::this_thread::get_id()};
         Render::RenderFrontend &frontend_;
         Render::Detail::VulkanEditorGraphicsBridge &bridge_;

@@ -1,3 +1,4 @@
+#include "RenderFrontendResourceAccess.h"
 #include "RenderFrontendTestSupport.h"
 
 namespace {
@@ -285,3 +286,154 @@ namespace Horo::Tests::RenderFrontendTesting {
         CHECK(frontend->UploadSnapshot().pendingRequests == 0);
     }
 }  // namespace Horo::Tests::RenderFrontendTesting
+
+namespace {
+    using DepthAccess = Horo::Render::Detail::RenderFrontendResourceAccess;
+
+    TEST_CASE("Multiview depth admission rejects absent support and malformed bounds before reservation",
+              "[unit][renderer][resource][multiview]") {
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        const auto unsupported = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2);
+        REQUIRE(unsupported.HasError());
+        CHECK(unsupported.ErrorValue().code.Value() == "render.frontend.resource.unsupported");
+        CHECK(DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 0).HasError());
+        CHECK(DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {0, 2}, 2).HasError());
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CHECK(lifecycleState.createTextureCount == 0);
+    }
+
+    TEST_CASE("Multiview depth retains ordinary texture admission and exact view generations", "[unit][renderer][resource][multiview]") {
+        lifecycleState = {};
+        lifecycleState.completeMultiviewViews = 2;  // CPU admission/ownership proof only; no native rendering claim.
+        auto frontend = CreateTrackingFrontend();
+        const RenderTextureDescriptor ordinary{.extent = {2, 2},
+                                               .format = RenderTextureFormat::Depth32Float,
+                                               .layerCount = 2,
+                                               .usage = RenderTextureUsage::RenderAttachment};
+        REQUIRE(frontend->CreateTexture(ordinary).HasError());
+        REQUIRE(DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 3).HasError());
+        REQUIRE(DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {129, 2}, 2).HasError());
+        const auto created = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2);
+        REQUIRE(created.HasValue());
+        CHECK(frontend->ResourceState(created.Value().handle).Value() == RenderResourceState::Pending);
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend->ResourceOperationResult(created.Value().operation).HasValue());
+        REQUIRE(lifecycleState.lastTextureDescriptor.has_value());
+        const auto &actual = *lifecycleState.lastTextureDescriptor;
+        CHECK(actual.extent == ordinary.extent);
+        CHECK(actual.format == ordinary.format);
+        CHECK(actual.layerCount == 2);
+        CHECK(actual.usage == RenderTextureUsage::RenderAttachment);
+        CHECK(actual.dimension == RenderTextureDimension::TwoD);
+        CHECK(actual.mipCount == 1);
+        CHECK(actual.sampleCount == 1);
+        CHECK(actual.depth == 1);
+        CHECK(lifecycleState.lastTextureInitialData.empty());
+        const auto view = frontend->CreateTextureView({.texture = created.Value().handle,
+                                                       .format = RenderTextureFormat::Depth32Float,
+                                                       .aspect = RenderTextureAspect::Depth,
+                                                       .baseLayer = 1});
+        REQUIRE(view.HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend->ResourceOperationResult(view.Value().operation).HasValue());
+        REQUIRE(frontend->ReleaseTextureView(view.Value().handle).HasValue());
+        REQUIRE(frontend->ReleaseTexture(created.Value().handle).HasValue());
+        REQUIRE(frontend->ResourceState(created.Value().handle).HasError());
+        const auto replacement = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2);
+        REQUIRE(replacement.HasValue());
+        CHECK(replacement.Value().handle != created.Value().handle);
+        REQUIRE(frontend->ReleaseTexture(replacement.Value().handle).HasValue());
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+    }
+
+    TEST_CASE("Multiview depth budget denial and pending cancellation preserve canonical accounting",
+              "[unit][renderer][resource][multiview]") {
+        lifecycleState = {};
+        lifecycleState.completeMultiviewViews = 2;
+        RenderFrontendMemoryConfig memory;
+        memory.budget = {.hardCapBytes = 8,
+                         .defaultBlockBytes = 8,
+                         .maximumBlockBytes = 8,
+                         .maximumAlignment = 8,
+                         .maximumPools = 2,
+                         .maximumBlocks = 2,
+                         .maximumReservations = 2,
+                         .maximumAllocations = 2};
+        auto frontend = CreateTrackingFrontend(memory);
+        const auto denied = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2);
+        REQUIRE(denied.HasError());
+        CHECK(denied.ErrorValue().code.Value() == RenderMemoryBudgetErrors::BudgetExceeded.code.Value());
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+        CHECK(lifecycleState.createTextureCount == 0);
+        const auto pending = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {1, 1}, 2);
+        REQUIRE(pending.HasValue());
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 8);
+        REQUIRE(frontend->ReleaseTexture(pending.Value().handle).HasValue());
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CHECK(frontend->UploadSnapshot().cancelledRequestCount == 1);
+        CHECK(lifecycleState.createTextureCount == 0);
+    }
+
+    TEST_CASE("Multiview depth propagates failed realization and releases its exact memory claim",
+              "[unit][renderer][resource][multiview]") {
+        lifecycleState = {};
+        lifecycleState.completeMultiviewViews = 2;
+        auto frontend = CreateTrackingFrontend();
+        const auto created = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2);
+        REQUIRE(created.HasValue());
+        const auto failure = MakeError(RenderMemoryBudgetErrors::BudgetExceeded, "Injected depth realization failure.");
+        lifecycleState.textureCreationFailure = failure;
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        const auto realized = frontend->ResourceOperationResult(created.Value().operation);
+        REQUIRE(realized.HasError());
+        CHECK(realized.ErrorValue().code.Value() == failure.code.Value());
+        CHECK(realized.ErrorValue().message == failure.message);
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+        CHECK(frontend->MemorySnapshot().allocationCount == 0);
+        CHECK(frontend->ReleaseTexture(created.Value().handle).HasError());
+        auto unknown = created.Value();
+        unknown.operation = {};
+        CHECK(DepthAccess::RetireCreation(*frontend, unknown).HasError());
+        REQUIRE(DepthAccess::RetireCreation(*frontend, created.Value()).HasValue());
+        lifecycleState.textureCreationFailure.reset();
+        const auto retry = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2);
+        REQUIRE(retry.HasValue());
+        CHECK(retry.Value().handle != created.Value().handle);
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(DepthAccess::RetireCreation(*frontend, retry.Value()).HasValue());
+        CHECK(DepthAccess::RetireCreation(*frontend, retry.Value()).HasError());
+        REQUIRE(frontend->BeginShutdown().HasValue());
+        REQUIRE(frontend->PollDrain().HasValue());
+    }
+
+    TEST_CASE("Multiview depth rejects frame-hot and closing mutations before native work", "[unit][renderer][resource][multiview]") {
+        lifecycleState = {};
+        lifecycleState.completeMultiviewViews = 2;
+        auto frontend = CreateTrackingFrontend();
+        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {2, 2}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        const auto active = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2);
+        REQUIRE(active.HasError());
+        CHECK(active.ErrorValue().code.Value() == "render.frontend.resource.change_during_frame");
+        frame.Cancel();
+        std::optional<Error> foreignError;
+        std::thread foreign([&] {
+            const auto result = DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2);
+            if (result.HasError())
+                foreignError = result.ErrorValue();
+        });
+        foreign.join();
+        REQUIRE(foreignError.has_value());
+        CHECK(foreignError->code.Value() == "render.frontend.wrong_thread");
+        REQUIRE(frontend->BeginShutdown().HasValue());
+        REQUIRE(DepthAccess::CreateMultiviewDepth(*frontend, {11, 1}, {2, 2}, 2).HasError());
+        CHECK(lifecycleState.createTextureCount == 0);
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+    }
+}  // namespace

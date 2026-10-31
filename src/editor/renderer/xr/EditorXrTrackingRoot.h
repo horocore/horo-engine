@@ -13,5 +13,5 @@ namespace Horo::Editor {
      * projective transforms are rejected, with a 1e-5 floating-point orthonormality tolerance. The retained value
      * maps native base coordinates to World; OpenXR reference-space creation consumes its inverse.
      */
-    [[nodiscard]] Result<Math::Transform> ResolveXrTrackingRoot(Runtime::RuntimeSceneView scene, Runtime::SceneObjectId object);
+    [[nodiscard]] Result<Math::Transform> ResolveXrTrackingRoot(const Runtime::RuntimeSceneView &scene, Runtime::SceneObjectId object);
 }  // namespace Horo::Editor

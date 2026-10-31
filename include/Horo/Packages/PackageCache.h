@@ -7,6 +7,7 @@
 
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Packages/PackageArchive.h"
+#include "Horo/Security/ArtifactSignatureEnvelope.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -28,6 +29,12 @@ namespace Horo::Packages {
         Sha256Digest digest;
         std::uint64_t byteSize{};
         bool alreadyPresent{}; /**< True when an independently reverified entry already existed. */
+    };
+
+    /** @brief Owned archive and untrusted detached envelope; callers must verify current publisher policy. */
+    struct PackageCachedArtifact {
+        ValidatedPackageArchive archive;                              /**< Independently revalidated owning content snapshot. */
+        std::optional<Security::DetachedSignatureEnvelope> signature; /**< Untrusted stored evidence, absent for legacy entries. */
     };
 
     /** @brief Safe persisted evidence describing bytes moved outside the active cache namespace. */
@@ -69,6 +76,23 @@ namespace Horo::Packages {
          */
         [[nodiscard]] Result<PackageCacheEntry> Publish(const ValidatedPackageArchive &archive);
 
+        /** @brief Publishes archive bytes and bounded detached evidence under the same digest lock.
+         * @param archive Complete verified archive snapshot. @param signature Exact detached evidence already accepted by the caller's
+         * verifier.
+         * @return Published entry or typed failure; absent/failed evidence never grants publisher authority.
+         * @details Cache publication stores no trust decision. Readers must reverify under their current roots and time.
+         * An interrupted evidence write leaves at most an unsigned archive; strict offline readers reject it.
+         */
+        [[nodiscard]] Result<PackageCacheEntry> Publish(const ValidatedPackageArchive &archive,
+                                                        const Security::DetachedSignatureEnvelope &signature);
+
+        /** @brief Loads independently verified archive bytes and bounded, untrusted publisher evidence together.
+         * @param digest Exact immutable archive identity.
+         * @return Empty for an archive miss, owned bytes with optional legacy-missing evidence, or typed corruption/I/O failure.
+         * @details Neither a stored envelope nor a cache hit is a verification decision. Current policy must verify every signed use.
+         */
+        [[nodiscard]] Result<std::optional<PackageCachedArtifact>> LoadWithPublisherEvidence(const Sha256Digest &digest);
+
         /**
          * @brief Loads and independently reverifies one content-addressed archive.
          * @param digest Requested immutable artifact identity.
@@ -97,6 +121,11 @@ namespace Horo::Packages {
     private:
         /** @brief Constructs a store only after root and resource-policy validation. */
         PackageCacheStore(DurableFileSystem &files, std::filesystem::path root, const PackageValidationLimits &limits) noexcept;
+
+        /** @brief Publishes only while the public entry point retains the digest lock. */
+        [[nodiscard]] Result<PackageCacheEntry> PublishLocked(const ValidatedPackageArchive &archive);
+        /** @brief Revalidates and quarantines only while the caller retains the digest lock. */
+        [[nodiscard]] Result<std::optional<ValidatedPackageArchive>> LoadLocked(const Sha256Digest &digest);
 
         DurableFileSystem &files_;
         std::filesystem::path root_;

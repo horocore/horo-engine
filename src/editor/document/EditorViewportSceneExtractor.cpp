@@ -14,7 +14,7 @@ namespace Horo::Editor {
             return MakeError(descriptor, std::move(message));
         }
 
-        [[nodiscard]] Result<Math::Mat4> ResolveWorld(const Runtime::RuntimeSceneView scene, const Runtime::EntityRef entity,
+        [[nodiscard]] Result<Math::Mat4> ResolveWorld(const Runtime::RuntimeSceneView &scene, const Runtime::EntityRef entity,
                                                       const std::span<const SceneObjectTransformPreview> previews,
                                                       const std::size_t remainingDepth) {
             if (remainingDepth == 0)
@@ -78,7 +78,7 @@ namespace Horo::Editor {
             return Result<Render::RenderLight>::Success(light);
         }
 
-        [[nodiscard]] Result<void> ExtractEntityLight(const Runtime::RuntimeSceneView scene, const Runtime::RuntimeEntityView &entity,
+        [[nodiscard]] Result<void> ExtractEntityLight(const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeEntityView &entity,
                                                       EditorViewportSceneSnapshot &extracted) {
             if (!entity.components->light.has_value() || extracted.lights.size() >= Render::MaximumForwardLights)
                 return Result<void>::Success();
@@ -97,7 +97,7 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ExtractPrimitiveMeshInstance(const Runtime::RuntimeSceneView scene,
+        [[nodiscard]] Result<void> ExtractPrimitiveMeshInstance(const Runtime::RuntimeSceneView &scene,
                                                                 const Runtime::RuntimeEntityView &entity,
                                                                 const std::optional<ResolvedSceneObjectEditorState> &editorState,
                                                                 Runtime::PrimitiveMeshCache &meshCache,
@@ -137,7 +137,21 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ExtractDocumentAssetMeshes(const Runtime::RuntimeSceneView scene, const SceneDocumentSnapshot &document,
+        /** @brief Retains one deduplicated imported resource in the same extraction snapshot before using its borrowed view. */
+        Result<void> RetainImportedMesh(const EditorAssetMeshCache &assets, const Assets::AssetId &asset, const EditorAssetMeshView &mesh,
+                                        EditorViewportSceneSnapshot &extracted) {
+            if (std::ranges::find(extracted.meshResources, mesh.handle, &EditorViewportMeshResourceView::handle) !=
+                extracted.meshResources.end())
+                return Result<void>::Success();
+            auto lease = assets.Acquire(asset);
+            if (lease.HasError())
+                return Result<void>::Failure(lease.ErrorValue());
+            extracted.importedMeshLeases.push_back(std::move(lease).Value());
+            extracted.meshResources.emplace_back(mesh.handle, mesh.mesh->vertices, mesh.mesh->indices, mesh.mesh->localBounds);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ExtractDocumentAssetMeshes(const Runtime::RuntimeSceneView &scene, const SceneDocumentSnapshot &document,
                                                               const EditorAssetMeshCache &assetMeshes, const bool respectEditorVisibility,
                                                               EditorViewportSceneSnapshot &extracted,
                                                               const EditorGeometryExtractionPolicy policy) {
@@ -163,15 +177,8 @@ namespace Horo::Editor {
                     return Result<void>::Failure(
                         ExtractionError(ViewportSceneErrors::ObjectNotFound, "Imported mesh scene object does not exist."));
                 }
-                if (std::ranges::find(extracted.meshResources, assetMesh->handle, &EditorViewportMeshResourceView::handle) ==
-                    extracted.meshResources.end()) {
-                    auto lease = assetMeshes.Acquire(*object.meshAsset);
-                    if (lease.HasError())
-                        return Result<void>::Failure(lease.ErrorValue());
-                    extracted.importedMeshLeases.push_back(std::move(lease).Value());
-                    extracted.meshResources.emplace_back(assetMesh->handle, assetMesh->mesh->vertices, assetMesh->mesh->indices,
-                                                         assetMesh->mesh->localBounds);
-                }
+                if (auto retained = RetainImportedMesh(assetMeshes, *object.meshAsset, *assetMesh, extracted); retained.HasError())
+                    return retained;
                 const Result<Math::Mat4> world = ResolveWorld(scene, *entity, {}, scene.SlotCount() + 1);
                 if (world.HasError())
                     return Result<void>::Failure(world.ErrorValue());
@@ -186,7 +193,7 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateTransformPreviews(const Runtime::RuntimeSceneView scene,
+        [[nodiscard]] Result<void> ValidateTransformPreviews(const Runtime::RuntimeSceneView &scene,
                                                              const std::span<const SceneObjectTransformPreview> previews) {
             for (std::size_t index = 0; index < previews.size(); ++index) {
                 if (!scene.Find(Runtime::SceneObjectId{previews[index].object.value})) {
@@ -202,7 +209,7 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ApplyPreviewToInstances(const Runtime::RuntimeSceneView scene,
+        [[nodiscard]] Result<void> ApplyPreviewToInstances(const Runtime::RuntimeSceneView &scene,
                                                            const std::span<const SceneObjectTransformPreview> previews,
                                                            EditorViewportSceneSnapshot &snapshot) {
             for (std::size_t index = 0; index < snapshot.instanceObjects.size(); ++index) {
@@ -222,7 +229,7 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ApplyPreviewToLights(const Runtime::RuntimeSceneView scene,
+        [[nodiscard]] Result<void> ApplyPreviewToLights(const Runtime::RuntimeSceneView &scene,
                                                         const std::span<const SceneObjectTransformPreview> previews,
                                                         EditorViewportSceneSnapshot &snapshot) {
             if (snapshot.lights.size() != snapshot.lightObjects.size()) {
@@ -279,7 +286,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ResolveSceneObjectWorldTransforms */
-    Result<SceneObjectWorldTransforms> ResolveSceneObjectWorldTransforms(const Runtime::RuntimeSceneView scene,
+    Result<SceneObjectWorldTransforms> ResolveSceneObjectWorldTransforms(const Runtime::RuntimeSceneView &scene,
                                                                          const SceneObjectId object) {
         const std::optional<Runtime::EntityRef> entity = scene.Find(Runtime::SceneObjectId{object.value});
         if (!entity)
@@ -301,7 +308,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ResolveXrTrackingRoot */
-    Result<Math::Transform> ResolveXrTrackingRoot(const Runtime::RuntimeSceneView scene, const Runtime::SceneObjectId object) {
+    Result<Math::Transform> ResolveXrTrackingRoot(const Runtime::RuntimeSceneView &scene, const Runtime::SceneObjectId object) {
         if (!scene.IsCurrent() || !object.IsValid())
             return Result<Math::Transform>::Failure(
                 ExtractionError(ViewportSceneErrors::InvalidResult, "XR tracking root requires its exact live Scene and authored object."));
@@ -312,8 +319,8 @@ namespace Horo::Editor {
         constexpr float tolerance = 0.00001F;
         const Math::Vec3 x{matrix.At(0, 0), matrix.At(1, 0), matrix.At(2, 0)};
         const Math::Vec3 y{matrix.At(0, 1), matrix.At(1, 1), matrix.At(2, 1)};
-        const Math::Vec3 z{matrix.At(0, 2), matrix.At(1, 2), matrix.At(2, 2)};
-        if (!Math::IsFinite(matrix) || std::abs(Math::Dot(x, x) - 1.0F) > tolerance || std::abs(Math::Dot(y, y) - 1.0F) > tolerance ||
+        if (const Math::Vec3 z{matrix.At(0, 2), matrix.At(1, 2), matrix.At(2, 2)};
+            !Math::IsFinite(matrix) || std::abs(Math::Dot(x, x) - 1.0F) > tolerance || std::abs(Math::Dot(y, y) - 1.0F) > tolerance ||
             std::abs(Math::Dot(z, z) - 1.0F) > tolerance || std::abs(Math::Dot(x, y)) > tolerance ||
             std::abs(Math::Dot(x, z)) > tolerance || std::abs(Math::Dot(y, z)) > tolerance ||
             std::abs(Math::Dot(Math::Cross(x, y), z) - 1.0F) > tolerance || std::abs(matrix.At(3, 0)) > tolerance ||
@@ -331,7 +338,7 @@ namespace Horo::Editor {
 
     /** @copydoc ExtractEditorViewportGeometry */
     Result<EditorViewportSceneSnapshot> ExtractEditorViewportGeometry(
-        const Runtime::RuntimeSceneView scene, const DocumentRevision documentRevision, Runtime::PrimitiveMeshCache &meshCache,
+        const Runtime::RuntimeSceneView &scene, const DocumentRevision documentRevision, Runtime::PrimitiveMeshCache &meshCache,
         const SceneDocumentSnapshot *document, const EditorAssetMeshCache *assetMeshes, const bool respectEditorVisibility,
         const EditorGeometryExtractionPolicy policy) {
         if (!scene.RuntimeId().IsValid())
@@ -376,7 +383,7 @@ namespace Horo::Editor {
 
     /** @copydoc ExtractEditorViewportScene */
     Result<EditorViewportSceneSnapshot> ExtractEditorViewportScene(
-        const Runtime::RuntimeSceneView scene, const DocumentRevision documentRevision, const EditorViewportCamera &camera,
+        const Runtime::RuntimeSceneView &scene, const DocumentRevision documentRevision, const EditorViewportCamera &camera,
         Runtime::PrimitiveMeshCache &meshCache, const SceneDocumentSnapshot *document, const EditorAssetMeshCache *assetMeshes,
         const bool respectEditorVisibility) {
         if (!camera.IsValid())
@@ -394,7 +401,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ApplyEditorViewportTransformPreview */
-    Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView scene,
+    Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView &scene,
                                                      const std::span<const SceneObjectTransformPreview> previews,
                                                      EditorViewportSceneSnapshot &snapshot) {
         if (snapshot.runtimeSceneId != scene.RuntimeId() || snapshot.instances.size() != snapshot.instanceObjects.size()) {
@@ -411,7 +418,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ApplyEditorViewportLightPreview */
-    Result<void> ApplyEditorViewportLightPreview(const Runtime::RuntimeSceneView scene, const SceneObjectLightPreview *preview,
+    Result<void> ApplyEditorViewportLightPreview(const Runtime::RuntimeSceneView &scene, const SceneObjectLightPreview *preview,
                                                  EditorViewportSceneSnapshot &snapshot) {
         if (snapshot.runtimeSceneId != scene.RuntimeId() || snapshot.lights.size() != snapshot.lightObjects.size()) {
             return Result<void>::Failure(ExtractionError(ViewportSceneErrors::InstanceIdentityMismatch,

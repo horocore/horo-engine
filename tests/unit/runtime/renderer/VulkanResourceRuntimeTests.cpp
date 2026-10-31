@@ -1,4 +1,5 @@
 #include "VulkanResourceTestSupport.h"
+#include "runtime/renderer/modules/vulkan/VulkanMultiviewDepthSupport.h"
 #include "runtime/renderer/modules/vulkan/VulkanResourceConversions.h"
 
 namespace {
@@ -317,5 +318,152 @@ namespace {
         CHECK(runtime.WriteHostFrameBuffer(buffer.Value(), std::span{bytes}.first(63)).HasError());
         runtime.DestroyBuffer(buffer.Value());
         CHECK(runtime.WriteHostFrameBuffer(buffer.Value(), bytes).HasError());
+    }
+}  // namespace
+
+namespace {
+    struct DepthFormatQuery {
+        inline static DepthFormatQuery *active{};
+        VkImageFormatProperties properties{.maxExtent = {2048, 1024, 1},
+                                           .maxMipLevels = 1,
+                                           .maxArrayLayers = 8,
+                                           .sampleCounts = VK_SAMPLE_COUNT_1_BIT,
+                                           .maxResourceSize = 1024 * 1024};
+        VkResult result{VK_SUCCESS};
+        unsigned calls{};
+
+        DepthFormatQuery() {
+            active = this;
+        }
+
+        ~DepthFormatQuery() {
+            active = nullptr;
+        }
+
+        DepthFormatQuery(const DepthFormatQuery &) = delete;
+        DepthFormatQuery &operator=(const DepthFormatQuery &) = delete;
+
+        static VKAPI_ATTR VkResult VKAPI_CALL Query(VkPhysicalDevice device, VkFormat format, VkImageType type, VkImageTiling tiling,
+                                                    VkImageUsageFlags usage, VkImageCreateFlags flags, VkImageFormatProperties *out) {
+            REQUIRE(active != nullptr);
+            ++active->calls;
+            CHECK(device == NativeHandle<VkPhysicalDevice>(3));
+            CHECK(format == VK_FORMAT_D32_SFLOAT);
+            CHECK(type == VK_IMAGE_TYPE_2D);
+            CHECK(tiling == VK_IMAGE_TILING_OPTIMAL);
+            CHECK(usage == VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+            CHECK(flags == 0);
+            *out = active->properties;
+            return active->result;
+        }
+    };
+
+    TEST_CASE("Vulkan complete views intersect exact queried depth array and extent support", "[unit][vulkan][multiview][capability]") {
+        DepthFormatQuery query;
+        VkPhysicalDeviceLimits limits{};
+        limits.maxImageDimension2D = 4096;
+        limits.maxFramebufferLayers = 6;
+        limits.maxImageArrayLayers = 4;
+        const auto admitted = Detail::QueryMultiviewDepthLimits(NativeHandle<VkPhysicalDevice>(3), &DepthFormatQuery::Query, 32, limits);
+        REQUIRE(admitted.HasValue());
+        CHECK(admitted.Value().maximumViews == 4);
+        CHECK(admitted.Value().maximumExtent2D == 1024);
+        CHECK(query.calls == 1);
+        query.properties.maxArrayLayers = 2;
+        const auto reduced = Detail::QueryMultiviewDepthLimits(NativeHandle<VkPhysicalDevice>(3), &DepthFormatQuery::Query, 32, limits);
+        REQUIRE(reduced.HasValue());
+        CHECK(reduced.Value().maximumViews == 2);
+    }
+
+    TEST_CASE("Vulkan complete depth support stays unavailable for unsupported exact image tuples",
+              "[unit][vulkan][multiview][capability]") {
+        DepthFormatQuery query;
+        VkPhysicalDeviceLimits limits{};
+        limits.maxImageDimension2D = 4096;
+        limits.maxFramebufferLayers = 32;
+        limits.maxImageArrayLayers = 32;
+        SECTION("native tuple unsupported") {
+            query.result = VK_ERROR_FORMAT_NOT_SUPPORTED;
+        }
+        SECTION("single sampling unavailable") {
+            query.properties.sampleCounts = VK_SAMPLE_COUNT_2_BIT;
+        }
+        SECTION("no array storage") {
+            query.properties.maxArrayLayers = 0;
+        }
+        SECTION("no mip storage") {
+            query.properties.maxMipLevels = 0;
+        }
+        SECTION("no extent") {
+            query.properties.maxExtent.width = 0;
+        }
+        const auto admitted = Detail::QueryMultiviewDepthLimits(NativeHandle<VkPhysicalDevice>(3), &DepthFormatQuery::Query, 32, limits);
+        REQUIRE(admitted.HasValue());
+        CHECK(admitted.Value().maximumViews == 0);
+        CHECK(admitted.Value().maximumExtent2D == 0);
+    }
+
+    TEST_CASE("Vulkan complete depth queries preserve missing dispatch and native failures", "[unit][vulkan][multiview][capability]") {
+        DepthFormatQuery query;
+        const auto missing = Detail::QueryMultiviewDepthLimits(NativeHandle<VkPhysicalDevice>(3), nullptr, 2, {});
+        REQUIRE(missing.HasError());
+        CHECK(missing.ErrorValue().code.Value() == "render.vulkan.entry_point_missing");
+        CHECK(query.calls == 0);
+        query.result = VK_ERROR_OUT_OF_HOST_MEMORY;
+        const auto failed = Detail::QueryMultiviewDepthLimits(NativeHandle<VkPhysicalDevice>(3), &DepthFormatQuery::Query, 2, {});
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().code.Value() == "render.vulkan.native_call_failed");
+        CHECK(failed.ErrorValue().message.find("VkResult -1") != std::string::npos);
+        CHECK(query.calls == 1);
+    }
+}  // namespace
+
+namespace {
+    TEST_CASE("Vulkan sized image fixture preserves canonical payload and strict fixed-requirement failures",
+              "[unit][vulkan][resource][memory]") {
+        NativeResourceScope native;
+        Detail::VulkanResourceRuntime runtime;
+        InitializeNativeResourceRuntime(runtime);
+        const RenderTextureDescriptor descriptor{.extent = {8, 8},
+                                                 .format = RenderTextureFormat::Depth32Float,
+                                                 .layerCount = 2,
+                                                 .usage = RenderTextureUsage::RenderAttachment};
+        bool admitted = false;
+        SECTION("fixed undersized requirements remain rejected") {}
+        SECTION("captured array payload with queried alignment") {
+            native.state.sizedAllocations = true;
+            native.state.imageRequirements.alignment = 256;
+            admitted = true;
+        }
+        SECTION("zero type bits remain rejected") {
+            native.state.sizedAllocations = true;
+            native.state.imageRequirements.memoryTypeBits = 0;
+        }
+        SECTION("zero alignment remains rejected") {
+            native.state.sizedAllocations = true;
+            native.state.imageRequirements.alignment = 0;
+        }
+        const auto cost = runtime.QueryTextureMemoryCost(descriptor);
+        REQUIRE(cost.HasValue() == admitted);
+        if (!admitted) {
+            CHECK(native.state.imageRequirements.size == 256);
+            return;
+        }
+        CHECK(cost.Value().payloadBytes == 512);
+        CHECK(cost.Value().requiredBytes == 512);
+        CHECK(cost.Value().alignment == 256);
+        const auto texture = runtime.CreateTexture(descriptor, {}, TestSupport::PlacementFor(cost.Value(), 1));
+        REQUIRE(texture.HasValue());
+        runtime.DestroyTexture(texture.Value());
+        CHECK(native.state.imageSizes.empty());
+        CHECK(native.state.allocateCount == native.state.freeCount);
+        VkImageCreateInfo overflowing{.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                                      .imageType = VK_IMAGE_TYPE_2D,
+                                      .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                                      .extent = {UINT32_MAX, UINT32_MAX, 1},
+                                      .mipLevels = 1,
+                                      .arrayLayers = UINT32_MAX,
+                                      .samples = VK_SAMPLE_COUNT_1_BIT};
+        CHECK_FALSE(CapturedImageBytes(overflowing).has_value());
     }
 }  // namespace

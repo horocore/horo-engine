@@ -51,6 +51,17 @@ if(HORO_BUILD_XR_OPENXR)
 endif()
 
 if(HORO_BUILD_XR_OPENXR)
+    # OS/native-time conversion depends on the selected XR owner and scheduler, not a renderer backend.
+    # The application and its lifecycle tests link the same implementation; no copied test TU is compiled.
+    set(HORO_OPENXR_CLOCK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/openxr_clock_headers")
+    file(MAKE_DIRECTORY "${HORO_OPENXR_CLOCK_HEADERS}")
+    configure_file(common/xr/OpenXRInputClock.h "${HORO_OPENXR_CLOCK_HEADERS}/OpenXRInputClock.h" COPYONLY)
+    add_library(HoroOpenXRApplicationClock STATIC common/xr/OpenXRInputClock.cpp)
+    target_compile_features(HoroOpenXRApplicationClock PUBLIC cxx_std_20)
+    target_include_directories(HoroOpenXRApplicationClock PUBLIC "${HORO_OPENXR_CLOCK_HEADERS}")
+    target_link_libraries(HoroOpenXRApplicationClock PUBLIC HoroXROpenXRHostInterface HoroEngine::Runtime
+        PRIVATE HoroEngine::XROpenXR)
+
     # Application action composition is independently testable without selecting a concrete renderer.
     set(HORO_OPENXR_BINDING_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/openxr_binding_headers")
     file(MAKE_DIRECTORY "${HORO_OPENXR_BINDING_HEADERS}")
@@ -66,18 +77,18 @@ endif()
 if(HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroEditorVulkanXrHostInterface)
     set(HORO_OPENXR_APPLICATION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/openxr_application_headers")
     file(MAKE_DIRECTORY "${HORO_OPENXR_APPLICATION_HEADERS}")
+    # Ownership migration: an older in-place build must not shadow the clock target's staged header.
+    file(REMOVE "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRInputClock.h")
     configure_file(common/xr/OpenXRApplicationSession.h
         "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRApplicationSession.h" COPYONLY)
-    configure_file(common/xr/OpenXRInputClock.h
-        "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRInputClock.h" COPYONLY)
     configure_file(common/xr/OpenXRPlayHost.h "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRPlayHost.h" COPYONLY)
     add_library(HoroOpenXRApplicationHost STATIC common/xr/OpenXRApplicationSession.cpp
-        common/xr/OpenXRApplicationInput.cpp common/xr/OpenXRApplicationProjection.cpp common/xr/OpenXRInputClock.cpp
+        common/xr/OpenXRApplicationInput.cpp common/xr/OpenXRApplicationProjection.cpp
         common/xr/OpenXRPlayHost.cpp common/xr/OpenXRPlayFrames.cpp common/xr/OpenXRPlayScene.cpp)
     target_compile_features(HoroOpenXRApplicationHost PUBLIC cxx_std_20)
     target_include_directories(HoroOpenXRApplicationHost PUBLIC "${HORO_OPENXR_APPLICATION_HEADERS}")
     target_link_libraries(HoroOpenXRApplicationHost
-        PUBLIC HoroEditorPlayXrHostInterface HoroEditorXrSceneInternal HoroXRRuntimeHostInterface HoroEngine::RuntimeScene HoroOpenXRProductHost HoroOpenXRApplicationBindings HoroXROpenXRHostInterface HoroXROpenXRVulkanHostInterface HoroRenderVulkanHostInterface HoroEngine::XRRuntime HoroEngine::Runtime
+        PUBLIC HoroOpenXRApplicationClock HoroEditorPlayXrHostInterface HoroEditorXrSceneInternal HoroXRRuntimeHostInterface HoroEngine::RuntimeScene HoroOpenXRProductHost HoroOpenXRApplicationBindings HoroXROpenXRHostInterface HoroXROpenXRVulkanHostInterface HoroRenderVulkanHostInterface HoroEngine::XRRuntime HoroEngine::Runtime
         PRIVATE HoroEngine::XROpenXR HoroXROpenXRVulkan HoroEngine::RenderFrontend HoroEditorVulkanXrHostInterface)
 endif()
 

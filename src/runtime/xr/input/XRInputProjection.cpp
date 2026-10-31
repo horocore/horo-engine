@@ -8,15 +8,17 @@
 namespace Horo::XR {
     namespace {
         [[nodiscard]] XRTrackedActionKind ActionKind(const Input::ActionValueType type) noexcept {
+            using enum Horo::XR::XRTrackedActionKind;
             switch (type) {
-                case Input::ActionValueType::Digital:
-                    return XRTrackedActionKind::Boolean;
-                case Input::ActionValueType::Axis1D:
-                    return XRTrackedActionKind::Scalar;
-                case Input::ActionValueType::Axis2D:
-                    return XRTrackedActionKind::Vector2;
+                using enum Horo::Input::ActionValueType;
+                case Digital:
+                    return Boolean;
+                case Axis1D:
+                    return Scalar;
+                case Axis2D:
+                    return Vector2;
             }
-            return XRTrackedActionKind::Count;
+            return Count;
         }
     }  // namespace
 
@@ -74,7 +76,7 @@ namespace Horo::XR {
     Result<void> XRInputProjection::Append(const XRTrackingSnapshot &snapshot, const XRSessionId &activeSession,
                                            const XRTrackingSnapshotRevision expectedSnapshotRevision,
                                            const XRWorldOriginRevision activeOriginRevision, const std::uint64_t currentBindingRevision,
-                                           Input::InputCollectionFrame &frame) const {
+                                           const Input::InputCollectionFrame &frame) const {
         if (auto valid = ValidateXRTrackingSnapshot(snapshot, activeSession, expectedSnapshotRevision, activeOriginRevision);
             valid.HasError())
             return valid;
@@ -87,8 +89,8 @@ namespace Horo::XR {
             if (sample.bindingIndex >= count_ || selected.test(sample.bindingIndex))
                 return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
             const auto device = std::ranges::find(snapshot.Devices(), sample.device, &XRTrackedDeviceRecord::id);
-            const auto &binding = bindings_[sample.bindingIndex];
-            if (device == snapshot.Devices().end() || binding.role != device->role || binding.kind != sample.kind)
+            if (const auto &binding = bindings_[sample.bindingIndex];
+                device == snapshot.Devices().end() || binding.role != device->role || binding.kind != sample.kind)
                 return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
             selected.set(sample.bindingIndex);
             values[count++] = {static_cast<std::uint16_t>(sample.bindingIndex), sample.x, sample.y, sample.active};

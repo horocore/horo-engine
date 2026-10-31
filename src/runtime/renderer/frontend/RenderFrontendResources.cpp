@@ -393,6 +393,37 @@ namespace Horo::Render {
         const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner) {
         if (const auto valid = AdmitUiPaintTextureRequest(descriptor, initialData); valid.HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(valid.ErrorValue());
+        return QueueOwnedTexture(scope, descriptor, initialData, owner);
+    }
+
+    /** @copydoc RenderFrontend::CreateMultiviewDepthTexture */
+    Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::CreateMultiviewDepthTexture(const RenderMemoryScopeId scope,
+                                                                                              const FramebufferExtent extent,
+                                                                                              const std::uint32_t viewCount) {
+        if (const auto owner = RequireOpenOwner(); owner.HasError())
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(owner.ErrorValue());
+        if (activeFrameScope_ != nullptr)
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
+        const RenderTextureDescriptor descriptor{.extent = extent,
+                                                 .format = RenderTextureFormat::Depth32Float,
+                                                 .layerCount = viewCount,
+                                                 .usage = RenderTextureUsage::RenderAttachment};
+        if (ValidateRenderTextureDescriptor(descriptor).HasError())
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::InvalidTextureDescriptor));
+        const auto &capabilities = backend_->Capabilities();
+        if (const auto &support = capabilities.support; !support.IsValid() || !capabilities.supportsTextureResources ||
+                                                        !support.features.Supports(RenderCapability::ViewIndexedShaders) ||
+                                                        viewCount > support.limits.maxMultiviewViews || !support.Supports(descriptor))
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
+        if (!resourceUploadQueue_->CanEnqueue(0))
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::ResourceUploadCapacityExceeded));
+        return QueueOwnedTexture(scope, descriptor, {}, {});
+    }
+
+    /** @copydoc RenderFrontend::QueueOwnedTexture */
+    Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::QueueOwnedTexture(
+        const RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
+        const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner) {
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Texture, [this, &descriptor] {
             return backend_->QueryTextureMemoryCost(descriptor);

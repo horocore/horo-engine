@@ -27,7 +27,7 @@ namespace Horo::Render::Detail {
         static constexpr std::size_t Capacity = 128;
         static constexpr std::size_t CellBytes = 1024;
 
-        [[nodiscard]] void *Allocate(const std::size_t bytes, const std::size_t alignment) {
+        [[nodiscard]] std::byte *Allocate(const std::size_t bytes, const std::size_t alignment) {
             if (std::this_thread::get_id() != owner_ || bytes > CellBytes || alignment > alignof(std::max_align_t))
                 throw std::bad_alloc{};
             for (auto &cell : cells_)
@@ -38,7 +38,7 @@ namespace Horo::Render::Detail {
             throw std::bad_alloc{};
         }
 
-        void Deallocate(void *address) noexcept {
+        void Deallocate(const std::byte *address) noexcept {
             // Destruction follows the same render-owner completion poll lane as native retirement.
             if (std::this_thread::get_id() != owner_)
                 std::terminate();
@@ -67,16 +67,16 @@ namespace Horo::Render::Detail {
 
         explicit VulkanExternalAllocator(std::shared_ptr<VulkanExternalAllocationPool> owner) noexcept : pool(std::move(owner)) {}
 
-        template <typename U> VulkanExternalAllocator(const VulkanExternalAllocator<U> &other) noexcept : pool(other.pool) {}
+        template <typename U> explicit VulkanExternalAllocator(const VulkanExternalAllocator<U> &other) noexcept : pool(other.pool) {}
 
         [[nodiscard]] T *allocate(const std::size_t count) {
             if (!pool || count > VulkanExternalAllocationPool::CellBytes / sizeof(T))
                 throw std::bad_alloc{};
-            return static_cast<T *>(pool->Allocate(count * sizeof(T), alignof(T)));
+            return static_cast<T *>(static_cast<void *>(pool->Allocate(count * sizeof(T), alignof(T))));
         }
 
-        void deallocate(T *address, std::size_t) noexcept {
-            pool->Deallocate(address);
+        void deallocate(T *address, std::size_t) const noexcept {
+            pool->Deallocate(static_cast<const std::byte *>(static_cast<const void *>(address)));
         }
 
         template <typename U> bool operator==(const VulkanExternalAllocator<U> &other) const noexcept {
@@ -110,8 +110,7 @@ namespace Horo::Render::Detail {
                 if (!node.empty()) {
                     node.key() = identity;
                     node.mapped() = std::move(resource);
-                    const auto inserted = registry.insert(std::move(node));
-                    if (!inserted.inserted)
+                    if (const auto inserted = registry.insert(std::move(node)); !inserted.inserted)
                         std::terminate();  // Fresh backend identities cannot collide.
                     return true;
                 }

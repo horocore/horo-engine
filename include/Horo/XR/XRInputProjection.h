@@ -55,7 +55,7 @@ namespace Horo::XR {
          * The host still commits an empty contribution on loss/failure so physical input survives. */
         [[nodiscard]] Result<void> Append(const XRTrackingSnapshot &snapshot, const XRSessionId &activeSession,
                                           XRTrackingSnapshotRevision expectedSnapshotRevision, XRWorldOriginRevision activeOriginRevision,
-                                          std::uint64_t currentBindingRevision, Input::InputCollectionFrame &frame) const;
+                                          std::uint64_t currentBindingRevision, const Input::InputCollectionFrame &frame) const;
         /** @brief Revokes the exact registration. @return Input's typed owner-thread/retirement outcome. */
         [[nodiscard]] Result<void> Reset();
 

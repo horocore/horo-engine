@@ -6,6 +6,9 @@
 namespace Horo::Application::Internal {
     /** @brief One rollback-safe private artifact owner; library wrappers retain it until native unload completes. */
     struct OpenXRLoaderLease::Files final {
+        Files(const Files &) = delete;
+        Files &operator=(const Files &) = delete;
+
         VerifiedOpenXRComponent component;
         VerifiedOpenXRDeployment deployment;
         std::filesystem::path root;
@@ -24,22 +27,11 @@ namespace Horo::Application::Internal {
         }
     };
 
-    /** @brief The existing native-session library lease itself keeps exact files/provenance alive. */
-    class OpenXRLoaderLease::RetainedLibrary final : public Platform::DynamicLibrary {
-    public:
-        RetainedLibrary(std::shared_ptr<const Files> files, std::unique_ptr<Platform::DynamicLibrary> native)
-            : files_(std::move(files)), native_(std::move(native)) {}
-
-        ~RetainedLibrary() override = default;
-
-        [[nodiscard]] void *GetSymbol(const std::string_view name) const noexcept override {
-            return native_->GetSymbol(name);
-        }
-
-    private:
-        // Reverse member destruction closes the native library BEFORE retiring its exact files and verification owners.
-        std::shared_ptr<const Files> files_;
-        std::unique_ptr<Platform::DynamicLibrary> native_;
+    /** @brief Retains already verified native storage; aliasing borrows share its exact control block. */
+    struct OpenXRLoaderLease::RetainedLibrary final {
+        // Reverse destruction unloads the native implementation BEFORE retiring its exact files/provenance.
+        std::shared_ptr<const Files> files;
+        std::unique_ptr<Platform::DynamicLibrary> native;
     };
 
     namespace {
@@ -86,8 +78,8 @@ namespace Horo::Application::Internal {
         auto evidence = gate->Verify(artifact);
         if (evidence.HasError())
             return Outcome::Failure(evidence.ErrorValue());
-        const auto &publisher = files->component.Install()->Graph()->packages[files->component.PackageIndex()].publisher;
-        if (!publisher || !publisher->publisher || evidence.Value().PublisherId() != publisher->publisher->Value() ||
+        if (const auto &publisher = files->component.Install()->Graph()->packages[files->component.PackageIndex()].publisher;
+            !publisher || !publisher->publisher || evidence.Value().PublisherId() != publisher->publisher->Value() ||
             evidence.Value().KeyId() != publisher->keyId || evidence.Value().ArtifactDigest() != files->component.Manifest().loader.digest)
             return Outcome::Failure(MakeError(XR::XRErrors::RuntimeRejected));
         files->nativeEvidence.emplace(std::move(evidence).Value());
@@ -100,12 +92,14 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XR::XRErrors::LoaderIncompatible));
         if (cancellation.IsCancellationRequested())
             return Outcome::Failure(MakeError(XR::XRErrors::LoaderPreflightCancelled));
-        std::shared_ptr<const Platform::DynamicLibrary> library = std::make_shared<RetainedLibrary>(files, std::move(native).Value());
-        return Outcome::Success(std::shared_ptr<const OpenXRLoaderLease>{new OpenXRLoaderLease{std::move(files), std::move(library)}});
+        const auto retained = std::make_shared<RetainedLibrary>(files, std::move(native).Value());
+        std::shared_ptr<const Platform::DynamicLibrary> library{retained, retained->native.get()};
+        return Outcome::Success(std::make_shared<OpenXRLoaderLease>(ConstructionKey{}, std::move(files), std::move(library)));
     }
 
     /** @copydoc OpenXRLoaderLease::OpenXRLoaderLease */
-    OpenXRLoaderLease::OpenXRLoaderLease(std::shared_ptr<const Files> files, std::shared_ptr<const Platform::DynamicLibrary> library)
+    OpenXRLoaderLease::OpenXRLoaderLease(const ConstructionKey &, std::shared_ptr<const Files> files,
+                                         std::shared_ptr<const Platform::DynamicLibrary> library)
         : files_(std::move(files)), library_(std::move(library)) {}
 
     /** @copydoc OpenXRLoaderLease::Library */

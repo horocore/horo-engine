@@ -75,6 +75,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         int destroyRenderTargetCount{0};
         std::vector<std::byte> lastBufferInitialData;
         std::vector<std::byte> lastTextureInitialData;
+        std::optional<RenderTextureDescriptor> lastTextureDescriptor;
         bool drainPending{false};
         bool supportsSubmissionObservation{false};
         int submissionObservations{0};
@@ -97,7 +98,9 @@ namespace Horo::Tests::RenderFrontendTesting {
         bool supportsBufferResources{true};
         bool supportsMeshResources{true};
         bool supportsTextureResources{true};
+        std::uint32_t completeMultiviewViews{0}; /**< CPU-only admission contract; never native rendering evidence. */
         std::optional<Error> textureMemoryCostFailure;
+        std::optional<Error> textureCreationFailure;
         bool supportsRenderTargetResources{true};
         int guiAdmissions{};
         bool failGuiAdmission{};

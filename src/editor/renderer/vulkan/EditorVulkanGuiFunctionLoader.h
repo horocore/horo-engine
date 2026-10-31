@@ -16,11 +16,11 @@ namespace Horo::Editor::Detail {
      */
     [[nodiscard]] inline PFN_vkVoidFunction ResolveVulkanGuiFunction(const Render::Detail::VulkanEditorDevice &device, const char *name) {
         // These are the instance-dispatched commands in the pinned ImGui Vulkan function map.
-        constexpr std::array<std::string_view, 5> instanceCommands{"vkDestroySurfaceKHR", "vkGetPhysicalDeviceMemoryProperties",
-                                                                   "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
-                                                                   "vkGetPhysicalDeviceSurfaceFormatsKHR",
-                                                                   "vkGetPhysicalDeviceSurfacePresentModesKHR"};
-        if (std::ranges::find(instanceCommands, std::string_view{name}) != instanceCommands.end())
+        if (constexpr std::array<std::string_view, 5> instanceCommands{"vkDestroySurfaceKHR", "vkGetPhysicalDeviceMemoryProperties",
+                                                                       "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+                                                                       "vkGetPhysicalDeviceSurfaceFormatsKHR",
+                                                                       "vkGetPhysicalDeviceSurfacePresentModesKHR"};
+            std::ranges::find(instanceCommands, std::string_view{name}) != instanceCommands.end())
             return device.instanceResolver(device.instance, name);
         return device.deviceResolver(device.device, name);
     }

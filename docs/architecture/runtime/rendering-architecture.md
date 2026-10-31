@@ -2141,6 +2141,18 @@ This adds private friend access and a shared storage receipt to `CompiledRenderG
 
 Successful binding is intended to perform no owner-thread C++ allocations; regression instrumentation measures only that stated scope. This does not establish allocation behavior of native import, view creation, shader/material preparation, graph encoding or complete XR frames. Native import allocation backing must be prepared separately and must never fall back to heap allocation on an admitted interactive path.
 
+The viewport's logical parameter extent and native uniform storage extent are distinct.
+Cold preparation queries the selected backend through the existing noninstalled
+`HoroRenderFrontendResourceAccessInternal` adapter, preserving the render-owner,
+closing, active-frame and exact pipeline-generation checks. The Vulkan viewport
+allocates and binds that returned storage extent, while packing still checks the
+canonical logical extent. Full native uploads include a zeroed tail: the current
+32-view matrix/object/layer block packs 2612 logical bytes into 2624 native bytes.
+This migrates only the private viewport and internal adapter; installed headers,
+logical packing, backend sizing and material admission remain authoritative and
+unchanged. Portable OpenGL query/error regressions and Linux XR lifecycle uploads
+cover the adapter and its actual padded-buffer consumer respectively.
+
 ### Private XR native image registration backing
 
 The selected Vulkan resource owner cold-prepares fixed shared-control-block cells and

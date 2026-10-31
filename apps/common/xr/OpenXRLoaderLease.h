@@ -13,9 +13,18 @@ namespace Horo::Application::Internal {
      */
     class OpenXRLoaderLease final {
         struct Files;
-        class RetainedLibrary;
+        struct RetainedLibrary;
 
     public:
+        /** @brief Factory-only authority for publishing an already verified loader lease. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class OpenXRLoaderLease;
+        };
+
+        /** @brief Adopts staged files and their already opened library; no native loading occurs here. */
+        OpenXRLoaderLease(const ConstructionKey &key, std::shared_ptr<const Files> files,
+                          std::shared_ptr<const Platform::DynamicLibrary> library);
         /** @brief Stages and opens exactly one already admitted first-party component, without runtime discovery.
          * @param component Sealed immutable install/manifest and full identity.
          * @param deployment Signed installer-qualified dependency-minimized deployment bound to that identity.
@@ -36,8 +45,6 @@ namespace Horo::Application::Internal {
         [[nodiscard]] const VerifiedOpenXRComponent &Component() const noexcept;
 
     private:
-        /** @brief Publishes only completely staged, signed and opened ownership. */
-        OpenXRLoaderLease(std::shared_ptr<const Files> files, std::shared_ptr<const Platform::DynamicLibrary> library);
         std::shared_ptr<const Files> files_;
         std::shared_ptr<const Platform::DynamicLibrary> library_;
     };

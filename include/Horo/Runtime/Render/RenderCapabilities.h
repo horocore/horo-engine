@@ -133,7 +133,8 @@ namespace Horo::Render {
         std::uint32_t maxColorAttachments{0};   /**< Maximum simultaneous color attachments. */
         std::uint32_t maxVertexAttributes{0};   /**< Maximum vertex attributes per vertex layout. */
         std::uint32_t maxFramesInFlight{0};     /**< Maximum bounded frames retained by the backend. */
-        std::uint32_t maxMultiviewViews{0};     /**< Zero means unsupported; finite complete-view admission otherwise. */
+        std::uint32_t maxMultiviewViews{
+            0}; /**< Complete-view bound, including owned Depth32Float attachment layers; zero is unsupported. */
 
         /**
          * @brief Reports whether the limits are bounded and structurally valid.

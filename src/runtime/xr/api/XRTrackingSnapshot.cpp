@@ -161,13 +161,12 @@ namespace Horo::XR {
             if ((descriptor.limits.maximumActions == 0) != (descriptor.bindingRevision == 0))
                 return Reject<void>(XRErrors::TrackingSnapshotInvalid);
             for (std::size_t index = 0; index < descriptor.actions.size(); ++index) {
+                using enum Horo::XR::XRTrackedActionKind;
                 const auto &action = descriptor.actions[index];
                 const auto *device = FindDevice(descriptor.devices, action.device);
-                if (!device || action.kind >= XRTrackedActionKind::Count ||
-                    action.bindingIndex >= XRTrackingSnapshotHardLimits::MaximumActions || !std::isfinite(action.x) ||
-                    !std::isfinite(action.y) || std::abs(action.x) > 1.0F || std::abs(action.y) > 1.0F ||
-                    (action.kind != XRTrackedActionKind::Vector2 && action.y != 0.0F) ||
-                    (action.kind == XRTrackedActionKind::Boolean && action.x != 0.0F && action.x != 1.0F) ||
+                if (!device || action.kind >= Count || action.bindingIndex >= XRTrackingSnapshotHardLimits::MaximumActions ||
+                    !std::isfinite(action.x) || !std::isfinite(action.y) || std::abs(action.x) > 1.0F || std::abs(action.y) > 1.0F ||
+                    (action.kind != Vector2 && action.y != 0.0F) || (action.kind == Boolean && action.x != 0.0F && action.x != 1.0F) ||
                     (!action.active && (action.x != 0.0F || action.y != 0.0F)))
                     return Reject<void>(XRErrors::TrackingSnapshotInvalid);
                 if (action.active && (descriptor.focus != XRTrackingFocusState::Focused ||

@@ -17,8 +17,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<void>::Failure(port.ErrorValue());
         // Set the cleanup obligation before calling a host which may throw after partial preparation.
         xr_.attached = true;
-        const auto attached = xr_.host->AttachInput(port.Value(), controller_->XrSceneSource());
-        if (attached.HasError()) {
+        if (const auto attached = xr_.host->AttachInput(port.Value(), controller_->XrSceneSource()); attached.HasError()) {
             xr_.host->RevokeInput();
             xr_.attached = false;
             return attached;
@@ -35,8 +34,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const auto state = controller_->ViewModel().playState;
         if (xr_.observed == state)
             return;
-        const auto observed = xr_.host->SetPlayState(state);
-        if (observed.HasError()) {
+        if (const auto observed = xr_.host->SetPlayState(state); observed.HasError()) {
             // The host closes its own producer first; this forwards the failure to the existing Play owner.
             LOG_ERROR("editor.xr", "XR Play admission failed: %s", observed.ErrorValue().message.c_str());
             controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::StopPlay});

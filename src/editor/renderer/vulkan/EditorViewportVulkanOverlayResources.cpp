@@ -11,8 +11,9 @@ namespace Horo::Editor {
             auto &slot = slots_[index].overlay;
             if (const auto mesh = CreateOverlayMesh(slot); mesh.HasError())
                 return mesh;
-            if (const auto uniform =
-                    CreateUniformSlot(slot.uniforms, (index + 1) * (Render::RenderMaterialPass::MaximumDraws + 1), shader_.overlayPipeline);
+            if (const auto uniform = ProgramResources::CreateUniformSlot(frontend_, shader_, slot.uniforms,
+                                                                         (index + 1) * (Render::RenderMaterialPass::MaximumDraws + 1),
+                                                                         shader_.overlayPipeline);
                 uniform.HasError())
                 return uniform;
         }

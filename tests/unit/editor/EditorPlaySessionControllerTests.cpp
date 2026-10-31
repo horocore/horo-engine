@@ -136,7 +136,7 @@ namespace {
             published = false;
         }
 
-        Result<void> UpdateScene(Runtime::RuntimeSceneView) override {
+        Result<void> UpdateScene(const Runtime::RuntimeSceneView &) override {
             return Result<void>::Success();
         }
 
@@ -176,15 +176,17 @@ namespace {
             explicit Participant(CpuSelectedXrHost &host) : host_(host) {}
 
             Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
-                                                                               Runtime::RuntimeSceneView scene) override {
+                                                                               const Runtime::RuntimeSceneView &scene) override {
+                // Preserve the original value snapshot before the source provider can reenter its caller.
+                const Runtime::RuntimeSceneView candidate = scene;
                 if (host_.failPreparation)
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
                         MakeError(Gameplay::GameplayErrors::GameplayPlayBlocked));
-                auto geometry = host_.source_.Capture(definition.Revision(), scene);
+                auto geometry = host_.source_.Capture(definition.Revision(), candidate);
                 if (geometry.HasError())
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(geometry.ErrorValue());
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(
-                    std::make_unique<Candidate>(host_, scene.RuntimeId(), std::move(geometry).Value()));
+                    std::make_unique<Candidate>(host_, candidate.RuntimeId(), std::move(geometry).Value()));
             }
 
         private:

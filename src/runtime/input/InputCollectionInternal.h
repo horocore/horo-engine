@@ -43,7 +43,7 @@ namespace Horo::Input {
             bool consumed{};
         };
 
-        explicit InputCollectionLifetime(InputRouter &owner) : router(&owner), thread(std::this_thread::get_id()) {}
+        explicit InputCollectionLifetime(InputRouter &owner) : router(&owner) {}
 
         [[nodiscard]] Result<InputRouter *> Borrow() const;
         [[nodiscard]] Result<void> ValidateSource(std::size_t slot, std::uint64_t generation) const;
@@ -60,7 +60,7 @@ namespace Horo::Input {
         void CommitValues(bool focused) noexcept;
         void Accumulate(std::size_t action, std::optional<PlayerId> player, ActionValue &value) noexcept;
         InputRouter *router;
-        const std::thread::id thread;
+        const std::thread::id thread{std::this_thread::get_id()};
         std::array<Source, MaximumCollectedInputSources> sources{};
         std::array<Entry, MaximumCollectedInputActions> entries{};
         std::uint64_t nextGeneration{1};

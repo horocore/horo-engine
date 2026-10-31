@@ -11,7 +11,17 @@ namespace Horo::Editor {
      * Destruction is cold teardown: it cancels/joins its own package jobs while all borrowed authorities remain alive.
      */
     class EditorOpenXRBootstrap final {
+        struct Impl;
+
     public:
+        /** @brief Factory-only authority for adopting completed signed startup state. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class EditorOpenXRBootstrap;
+        };
+
+        /** @brief Adopts validated retained startup services without discovering or loading native code. */
+        EditorOpenXRBootstrap(const ConstructionKey &key, std::unique_ptr<Impl> impl) noexcept;
         /** @brief Parses only explicit host arguments and prepares one real verified offline package installation.
          * @param arguments Actual process arguments, including executable name.
          * @param projectRoot Explicit selected absolute project; package metadata is read only by the canonical host.
@@ -19,6 +29,8 @@ namespace Horo::Editor {
          * @return No host for ordinary desktop, a complete retained host, or the original trust/install/admission failure.
          * @details All three --xr-host-roots, --xr-host-catalog and --xr-host-catalog-signature paths are required together.
          * Roots are an independent explicit operator/installer approval, never inferred from the signed catalog/project.
+         * After trust admission, startup prepares only the existing canonical cache's native and xr-native children;
+         * files and redirects are rejected before the unchanged package lifecycle and native extraction gates.
          * The startup-only wait for existing package jobs is bounded to ten seconds; no native library is opened here.
          * @throws std::bad_alloc Cold startup allocation failure, after RAII cancels/joins any admitted package work.
          */
@@ -33,8 +45,6 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorOpenXRHostServices &Services() const noexcept;
 
     private:
-        struct Impl;
-        explicit EditorOpenXRBootstrap(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;
     };
 }  // namespace Horo::Editor

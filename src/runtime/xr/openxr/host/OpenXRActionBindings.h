@@ -244,6 +244,12 @@ namespace Horo::XR::OpenXRInternal {
          * @return Synchronous native borrow or typed stale failure; no borrow survives owner retirement/reentry.
          */
         [[nodiscard]] Result<XrSpace> BorrowWorldSpace(const XRCoordinateSpace &space) const;
+        /** @brief Borrows the exact native base used by the current presentation view query.
+         * @param space Complete reference identity returned by LocatePresentation, never an eye or World identity.
+         * @return Synchronous native base borrow or original lane/currentness/stale failure.
+         * @pre No sampling operation is active; the borrow ends before another owner operation or retirement.
+         */
+        [[nodiscard]] Result<XrSpace> BorrowPresentationReference(const XRCoordinateSpace &space) const;
         /** @brief Quiescent idempotent reverse-order retirement; failed destruction retains exact handles for retry.
          * @return Success or native retirement failure. No further sync/profile query is admitted after Close begins.
          */
@@ -255,7 +261,7 @@ namespace Horo::XR::OpenXRInternal {
          * No eye identity is exposed until a successful LocatePresentation, and none grants native XrSpace borrowing.
          * No frame/capability or tracking validity is published.
          */
-        [[nodiscard]] Result<void> PreparePresentation(PFN_xrGetInstanceProcAddr getProc);
+        [[nodiscard]] Result<void> PreparePresentation(NativeOpenXRDispatch dispatch);
         /** @brief Locates actual primary-stereo views at the runtime's exact predicted display time.
          * @param session Same issued active owner. @param time Actual OS-converted sample plus native frame prediction, no simulation time.
          * @param expectedViews Complete primary view count observed by the same native system census.
@@ -272,7 +278,7 @@ namespace Horo::XR::OpenXRInternal {
             const bool previous;
 
             explicit Operation(bool &state) noexcept : busy(state), previous(state) {
-                busy = true;
+                state = true;
             }
 
             ~Operation() {
@@ -282,6 +288,8 @@ namespace Horo::XR::OpenXRInternal {
             Operation(const Operation &) = delete;
             Operation &operator=(const Operation &) = delete;
         };
+
+        struct Profile;
 
         struct Dispatch final {
             PFN_xrStringToPath stringToPath{};
@@ -302,6 +310,14 @@ namespace Horo::XR::OpenXRInternal {
             PFN_xrDestroySpace destroySpace{};
             PFN_xrLocateSpace locate{};
             PFN_xrLocateViews locateViews{};
+
+            [[nodiscard]] Result<void> Resolve(const NativeActionBindingRequest &request, XrInstance instance);
+            /** @brief Resolves optional complete tracking dispatch before acquiring any tracking child. */
+            [[nodiscard]] Result<void> ResolveTracking(const NativeActionBindingRequest &request, XrInstance instance);
+            /** @brief Queries actual registered profiles with a retained native owner; callers fence before and after foreign calls. */
+            [[nodiscard]] Result<std::array<XRActiveInteractionProfile, 2>> ReadProfiles(XrSession session,
+                                                                                         const std::array<XrPath, 2> &hands,
+                                                                                         std::span<const Profile> catalog) const;
         };
 
         struct Set final {
@@ -356,6 +372,43 @@ namespace Horo::XR::OpenXRInternal {
             XRCoordinateSpace identity;
         };
 
+        /** @brief Read-only native context borrowed only for one outer-owner operation; never retained by Tracking. */
+        class TrackingContext final {
+            friend class OpenXRActionBindings;
+
+            explicit TrackingContext(const OpenXRActionBindings &owner) noexcept : owner_(owner) {}
+
+            const OpenXRActionBindings &owner_;
+
+        public:
+            TrackingContext(const TrackingContext &) = delete;
+            TrackingContext &operator=(const TrackingContext &) = delete;
+
+            [[nodiscard]] const Dispatch &DispatchTable() const noexcept {
+                return owner_.dispatch_;
+            }
+
+            [[nodiscard]] const NativeSessionBorrow &Native() const noexcept {
+                return owner_.native_;
+            }
+
+            [[nodiscard]] const std::array<XrPath, 2> &Hands() const noexcept {
+                return owner_.hands_;
+            }
+
+            [[nodiscard]] std::span<const Set> Sets() const noexcept {
+                return owner_.sets_;
+            }
+
+            [[nodiscard]] const XRSessionId &Session() const noexcept {
+                return owner_.owner_;
+            }
+
+            [[nodiscard]] bool Preparing() const noexcept {
+                return owner_.preparation_.has_value();
+            }
+        };
+
         struct Tracking final {
             std::vector<PoseAction> actions;
             std::optional<NativeTrackingSpaceRequest> request;
@@ -369,49 +422,51 @@ namespace Horo::XR::OpenXRInternal {
             std::uint32_t nextSpaceSlot{}; /**< SAME bound per-session semantic space allocator, after native child slots. */
             std::uint32_t generation{};    /**< Non-wrapping space incarnation; retained across Close. */
             mutable std::uint64_t sampledSequence{};
+
+            /** @brief Validates exact registered grip/aim paths before creating native children. */
+            [[nodiscard]] Result<void> ValidatePosePaths(const NativeActionBindingRequest &bindingRequest,
+                                                         std::uint32_t maximumActions) const;
+            /** @brief Creates tracking actions before the sole immutable action-set attachment. */
+            [[nodiscard]] Result<void> CreatePoseActions(const TrackingContext &context, std::span<const NativePoseActionPath> paths);
+            /** @brief Appends registered pose paths to one profile's existing suggestion transaction. */
+            [[nodiscard]] Result<std::uint32_t> SuggestPoses(const TrackingContext &context, const Profile &profile,
+                                                             std::span<const NativePoseActionPath> paths,
+                                                             std::span<XrActionSuggestedBinding> output) const;
+            /** @brief Creates native reference/action spaces without publishing Horo IDs. */
+            [[nodiscard]] Result<void> PrepareSpaces(const TrackingContext &context);
+            /** @brief Creates the calibrated World child, retaining any native prefix on failure. */
+            [[nodiscard]] Result<void> PrepareWorldSpace(const TrackingContext &context);
+            /** @brief Issues generation-safe space identities only for already created children and issued session. */
+            [[nodiscard]] Result<void> BindSpaces(const XRSessionId &session);
+            /** @brief Retires spaces before the borrowed pose actions; failed destruction preserves exact handles. */
+            [[nodiscard]] Result<void> CloseSpaces(const TrackingContext &context);
+            /** @brief Destroys pose actions after all their spaces; preserves failed native handles. */
+            [[nodiscard]] Result<void> ClosePoseActions(const TrackingContext &context);
+            /** @brief Validates and normalizes one official locate result without inventing unavailable components. */
+            [[nodiscard]] Result<XRPoseDescriptor> Locate(const TrackingContext &context, XrSpace source, const XRCoordinateSpace &identity,
+                                                          const XRTimeEvidence &time) const;
+            /** @brief Queries one action's activity then locates independently valid components, or publishes exact loss. */
+            [[nodiscard]] Result<NativePoseObservation> LocateAction(const TrackingContext &context, const PoseAction &action,
+                                                                     const XRTimeEvidence &time) const;
+            /** @brief Appends actual head evidence to the same fixed packet under the existing sampling operation.
+             * @param time Validated simulation cutoff. @param samples Candidate packet, never a committed snapshot.
+             * @return Original native/pose failure without issuing device or session identity.
+             */
+            [[nodiscard]] Result<void> AppendHeadObservation(const TrackingContext &context, const XRTimeEvidence &time,
+                                                             NativePoseObservations &samples) const;
+            /** @brief Locates and validates the current native base-to-World presentation transform.
+             * @param time Exact validated presentation prediction. @return Actual independent-validity pose or native failure.
+             * @pre Called within the existing sampling operation between canonical currentness fences.
+             */
+            [[nodiscard]] Result<XRPoseDescriptor> PresentationReference(const TrackingContext &context, const XRTimeEvidence &time) const;
         };
 
-        /** @brief Queries actual registered profiles with a retained native owner; callers fence before and after foreign calls. */
-        [[nodiscard]] Result<std::array<XRActiveInteractionProfile, 2>> ReadProfiles(XrSession session) const;
-        [[nodiscard]] Result<void> Resolve(const NativeActionBindingRequest &request, XrInstance instance);
-        /** @brief Resolves optional complete tracking dispatch before acquiring any tracking child. */
-        [[nodiscard]] Result<void> ResolveTracking(const NativeActionBindingRequest &request, XrInstance instance);
         /** @brief Runs one guarded preparation/rollback transaction for either private or legacy admission. */
         [[nodiscard]] Result<void> PrepareTransaction(const NativeActionBindingRequest &request, std::uint32_t maximumActions);
         /** @brief Revalidates the retained preparation or active owner after foreign callbacks. */
         [[nodiscard]] Result<void> ValidateOwner() const;
         /** @brief Rejects foreign control lanes before reading or mutating retained native ownership. */
         [[nodiscard]] Result<void> ControlLane() const;
-        /** @brief Validates exact registered grip/aim paths before creating native children. */
-        [[nodiscard]] Result<void> ValidatePosePaths(const NativeActionBindingRequest &request, std::uint32_t maximumActions) const;
-        /** @brief Creates tracking actions before the sole immutable action-set attachment. */
-        [[nodiscard]] Result<void> CreatePoseActions(std::span<const NativePoseActionPath> paths);
-        /** @brief Appends registered pose paths to one profile's existing suggestion transaction. */
-        [[nodiscard]] Result<std::uint32_t> SuggestPoses(const Profile &profile, std::span<const NativePoseActionPath> paths,
-                                                         std::span<XrActionSuggestedBinding> output) const;
-        /** @brief Creates native reference/action spaces without publishing Horo IDs. */
-        [[nodiscard]] Result<void> PrepareSpaces();
-        /** @brief Issues generation-safe space identities only for already created children and issued session. */
-        [[nodiscard]] Result<void> BindSpaces(const XRSessionId &session);
-        /** @brief Retires spaces before the borrowed pose actions; failed destruction preserves exact handles. */
-        [[nodiscard]] Result<void> CloseSpaces();
-        /** @brief Destroys pose actions after all their spaces; preserves failed native handles. */
-        [[nodiscard]] Result<void> ClosePoseActions();
-        /** @brief Validates and normalizes one official locate result without inventing unavailable components. */
-        [[nodiscard]] Result<XRPoseDescriptor> Locate(XrSpace source, const XRCoordinateSpace &identity, const XRTimeEvidence &time) const;
-        /** @brief Queries one action's activity then locates independently valid components, or publishes exact loss. */
-        [[nodiscard]] Result<NativePoseObservation> LocateAction(const PoseAction &action, const XRTimeEvidence &time) const;
-        /** @brief Appends actual head evidence to the same fixed packet under the existing sampling operation.
-         * @param time Validated simulation cutoff. @param samples Candidate packet, never a committed snapshot.
-         * @return Original native/pose failure without issuing device or session identity.
-         */
-        [[nodiscard]] Result<void> AppendHeadObservation(const XRTimeEvidence &time, NativePoseObservations &samples) const;
-
-        /** @brief Locates and validates the current native base-to-World presentation transform.
-         * @param time Exact validated presentation prediction. @return Actual independent-validity pose or native failure.
-         * @pre Called within the existing sampling operation between canonical currentness fences.
-         */
-        [[nodiscard]] Result<XRPoseDescriptor> PresentationReference(const XRTimeEvidence &time) const;
 
         /** @brief One native sampling implementation; an explicit existing-device selection preserves legacy query filtering.
          * @param session Exact current native owner. @param time Current simulation-cutoff evidence.
@@ -421,12 +476,21 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<NativePoseObservations> CollectPoseObservations(
             const XRSessionId &session, const XRTimeEvidence &time, XRWorldOriginRevision origin,
             std::optional<std::span<const XRTrackedDeviceRecord>> devices) const;
-        [[nodiscard]] Result<void> Prepare(const XRActionBindingSchema &schema, std::span<const XRProfileControl> catalog,
-                                           std::span<const XRActionBindingOverride> overrides,
-                                           std::span<const NativeInteractionProfilePath> profiles,
-                                           std::span<const NativeActionControlPath> controls, const NativeActionLabels &labels,
-                                           std::uint32_t maximumActions, std::span<const NativePoseActionPath> poses);
+        /** @brief Captures the existing request's borrowed catalogs before native creation and attachment. */
+        [[nodiscard]] Result<void> Prepare(const NativeActionBindingRequest &request, std::uint32_t maximumActions);
+        /** @brief Attaches the validated native sets once, then prepares spaces under the same retained rollback owner.
+         * @return Original native attachment, space preparation or owner-currentness failure.
+         */
+        [[nodiscard]] Result<void> AttachPreparedSets();
         [[nodiscard]] Result<void> CreateActions(const XRActionBindingSchema &schema, const NativeActionLabels &labels);
+        /** @brief Resolves this profile's admitted action paths into the caller's bounded suggestion storage.
+         * @param profile Exact prepared profile. @param bindings Canonical resolved bindings in deterministic order.
+         * @param controls Validated native control catalog. @param suggestions Cold storage bounded by the admitted schema.
+         * @return Written count or original native path failure; no suggestion is submitted here.
+         */
+        [[nodiscard]] Result<std::uint32_t> SuggestControls(const Profile &profile, std::span<const XRResolvedActionBinding> bindings,
+                                                            std::span<const NativeActionControlPath> controls,
+                                                            std::span<XrActionSuggestedBinding> suggestions);
         [[nodiscard]] Result<void> Suggest(const XRActionBindingSchema &schema, std::span<const XRProfileControl> catalog,
                                            std::span<const XRActionBindingOverride> overrides,
                                            std::span<const NativeInteractionProfilePath> profiles,

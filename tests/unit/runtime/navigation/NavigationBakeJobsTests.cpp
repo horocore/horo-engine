@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <semaphore>
 #include <thread>
 
 namespace Horo::Navigation {
@@ -123,12 +124,12 @@ namespace Horo::Navigation {
 
     TEST_CASE("Navigation bake cancellation terminalizes once after accepted children drain") {
         OperationStore operations(4, 4);
+        std::counting_semaphore<2> tileEntered{0};
         JobSystem jobs({.workerCount = 4, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
-        std::atomic<bool> tileEntered{};
 
         auto descriptor = CompleteDescriptor();
         descriptor.work[1].execute = [&tileEntered](const CancellationToken &cancellation) {
-            tileEntered.store(true);
+            tileEntered.release();
             while (!cancellation.IsCancellationRequested())
                 std::this_thread::yield();
             return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
@@ -136,9 +137,11 @@ namespace Horo::Navigation {
         descriptor.work[2].execute = descriptor.work[1].execute;
 
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&tileEntered] {
-            return tileEntered.load();
-        });
+        // Both accepted callbacks must own their typed cancellation result before cancellation can win in the queue.
+        const bool bothEntered = tileEntered.try_acquire_for(2s) && tileEntered.try_acquire_for(2s);
+        if (!bothEntered)
+            static_cast<void>(handle.RequestCancellation());
+        REQUIRE(bothEntered);
         REQUIRE(handle.RequestCancellation());
         REQUIRE(handle.RequestCancellation());
         RequireTerminal(handle);

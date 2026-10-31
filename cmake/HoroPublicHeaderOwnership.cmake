@@ -71,6 +71,10 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Math/WorldCoordinate64.h
 )
 
+horo_configure_target_header_boundary(HoroSecurityEnvelope PUBLIC_HEADERS
+    Horo/Security/ArtifactSignatureEnvelope.h
+)
+
 horo_configure_target_header_boundary(HoroSecurity PUBLIC_HEADERS
     Horo/Security/AgentPolicy.h
     Horo/Security/ArtifactSignature.h
@@ -247,6 +251,7 @@ horo_configure_target_header_boundary(HoroReleaseService PUBLIC_HEADERS
     Horo/Release/ReleaseService.h
     Horo/Release/ReleaseRunHistory.h
 )
+# PackageCache carries neutral detached envelopes through its explicit SecurityEnvelope dependency; publisher authority stays separate.
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageDependencyResolver.h
     Horo/Packages/PackageLockfile.h

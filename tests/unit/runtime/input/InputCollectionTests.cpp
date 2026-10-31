@@ -68,6 +68,33 @@ namespace Horo::Input {
         CHECK(moved.Validate().HasError());
     }
 
+    TEST_CASE("Input collection rejects expired scoped contexts and accepts retained context owners", "[unit][input][collection]") {
+        Fixture fixture;
+        const std::array actions{fixture.action};
+        SECTION("expired local owner") {
+            InputActionCollection expired;
+            InputActionSourceToken source;
+            {
+                auto local = fixture.router.PushContext(fixture.action.context, InputContextKind::Gameplay);
+                auto borrowed = fixture.router.ActionCollection(local);
+                REQUIRE(borrowed.HasValue());
+                expired = borrowed.Value();
+                auto registered = expired.RegisterSource(actions);
+                REQUIRE(registered.HasValue());
+                source = std::move(registered).Value();
+                REQUIRE(source.Validate().HasValue());
+            }
+            CHECK(source.Validate().HasError());
+            CHECK(expired.RegisterSource(actions).HasError());
+        }
+        SECTION("retained fixture owner") {
+            auto retained = fixture.Port();
+            auto source = retained.RegisterSource(actions);
+            REQUIRE(source.HasValue());
+            REQUIRE(source.Value().Validate().HasValue());
+        }
+    }
+
     TEST_CASE("Input source validation rejects expired router without dereferencing retired storage", "[unit][input][collection]") {
         InputActionSourceToken retained;
         {
@@ -83,14 +110,15 @@ namespace Horo::Input {
         auto port = fixture.Port();
         auto source = fixture.Source(port);
         auto frame = fixture.Frame(port, 1);
-        REQUIRE(frame.Append(source, pressed).HasValue());
+        const auto &producerFrame = frame;
+        REQUIRE(producerFrame.Append(source, pressed).HasValue());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
         REQUIRE(frame.Commit().HasValue());
         auto first = fixture.router.ReadAction(fixture.context, fixture.action.id);
         CHECK(first.down);
         CHECK(first.pressed);
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
-        CHECK(frame.Append(source, pressed).HasError());
+        CHECK(producerFrame.Append(source, pressed).HasError());
         CHECK(frame.Commit().HasError());
         auto missing = fixture.Frame(port, 2);
         REQUIRE(missing.Commit().HasValue());
@@ -307,9 +335,10 @@ namespace Horo::Input {
         fixture.collector.BeginFrame(1);
         const auto device = fixture.collector.ConnectGamepad("host-assigned");
         fixture.router.BeginFrame(fixture.collector.Commit());
-        CHECK(fixture.router.ActionCollection(fixture.context, device).HasError());
+        const InputRouter &query = fixture.router;
+        CHECK(query.ActionCollection(fixture.context, device).HasError());
         REQUIRE(fixture.router.AssignGamepad(2, device));
-        auto borrowed = fixture.router.ActionCollection(fixture.context, device);
+        auto borrowed = query.ActionCollection(fixture.context, device);
         REQUIRE(borrowed.HasValue());
         auto port = std::move(borrowed).Value();
         auto source = fixture.Source(port);

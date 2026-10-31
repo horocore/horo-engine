@@ -174,6 +174,56 @@ vendored content or an approved local/air-gapped mirror. It does not trust
 arbitrary directories, relax hash/signature checks or choose a different package
 version. Missing required bytes return `OfflineArtifactUnavailable`.
 
+### Persisted Detached Publisher Evidence
+
+`PackageCacheStore` owns archive bytes and optional untrusted detached publisher
+envelopes under the same content-addressed digest lock. A stored envelope never
+persists an accepted trust decision. Signed restores independently revalidate the
+archive/file/manifest evidence and invoke `PackagePublisherVerificationService`
+with the current host policy and wall clock on every cache hit. Revocation,
+expiry, key rotation, cancellation, and signature rejection remain authoritative.
+
+The existing archive-only `Publish` and `Load` contracts remain available. The
+signed `Publish` overload and `LoadWithPublisherEvidence` return the existing
+backend-neutral `Security::DetachedSignatureEnvelope`. Only `SignatureAlgorithm`
+and that unchanged data struct move into `ArtifactSignatureEnvelope.h`, owned by
+the real Foundation-only `HoroSecurityEnvelope` interface target. `ArtifactSignature.h`
+includes the new header, preserving namespaces, fields and ABI for existing callers.
+`HoroPackages` consumes only this data target; it cannot consume full Security,
+PackageSecurity, apps or crypto providers. Verification remains in the existing
+`HoroPackageSecurity`/`HoroSecurity` owners. Public header ownership, permanent
+dependency policy and the target inventory enforce this split. The build-tree
+SDK additively exports `HoroEngine::SecurityEnvelope`; existing verifier consumers
+keep using `HoroEngine::Security`. No provider enters the minimal SDK closure.
+
+The cache-private binary envelope uses fixed magic/version and algorithm tags,
+bounded length-prefixed identities, the exact archive digest, and signature
+bytes. Unknown versions/algorithms, invalid lengths, non-printable identities,
+truncation, trailing bytes, and a different digest fail before evidence is
+returned. Reads and publication reject links and non-regular evidence entries.
+All cache staging uses exclusive `WritePrivateDurable` creation with a fresh
+created receipt and unique owned path; preexisting regular files, hard links and
+redirects are never truncated or cleaned up. Hosts and test filesystem adapters
+must implement that capability; there is no unsafe `WriteDurable` fallback.
+Archive bytes become read-only after atomic publication. Envelope files retain
+private owner read/write mode so replacing/removing untrusted metadata never
+requires changing an existing linked file's permissions.
+Archive publication precedes durable, atomic envelope replacement under the same
+lock. Failed or interrupted evidence publication cannot publish a restored or
+installed graph; it leaves at most an archive without evidence. Existing owned
+snapshots remain valid. Cleanup and archive quarantine retire associated evidence.
+
+Migration is additive: legacy unsigned restore without any verifier uses the
+ordinary archive-only cache path even if an optional sidecar is malformed.
+When a verifier is configured, its current unsigned policy also applies to cache
+hits with no envelope; strict signed requests still refetch missing evidence
+online rather than treating absence as approval. Legacy entries
+without a detached envelope cannot satisfy strict signed offline restore; online
+restore must fetch and verify fresh publisher evidence. Existing bootstrap callers
+keep the same offline mode and mandatory verification policy. They gain no trusted
+boolean, alternate source, or installed-record bypass. Public consumers must
+compile the new typed cache methods through the owning staged header boundary.
+
 ## Development Overrides
 
 Portable dependencies belong in `.horo/packages.json`. Local development
