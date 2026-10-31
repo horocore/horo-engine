@@ -9,6 +9,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/OperationStore.h"
+#include "OwnedTestDirectory.h"
 #include "WorldCompositionSourceTestSupport.h"
 #include "editor/input/EditorScrollSmoother.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
@@ -796,4 +797,37 @@ TEST_CASE("World Composition renders empty populated filtered error and narrow l
     }
     tab.OnDetach();
     ImGui::DestroyContext();
+}
+
+TEST_CASE("Content browser publishes real asset and native roots and hides source leases", "[editor][content-browser][source]") {
+    using namespace Horo::Editor;
+    Horo::Tests::OwnedTestDirectory owned{"content roots"};
+    const auto project = owned.Path() / "My Game ö";
+    const auto assets = project / "Assets";
+    const auto scripts = assets / "Scripts";
+    const auto source = project / "source";
+    std::filesystem::create_directories(scripts);
+    std::ofstream(scripts / "Run.horo_script") << "return {}";
+    std::ofstream(scripts / "Run.horo_script.meta") << "{}";
+    std::ofstream(scripts / "Run.horo_script.horo-source.lock");
+    const auto initial = BuildContentBrowserDirectory(project, {}, {});
+    REQUIRE(initial.roots.size() == 1);
+    CHECK(initial.roots.front().kind == ContentBrowserRootKind::Assets);
+    REQUIRE(initial.entries.size() == 1);
+    CHECK(initial.entries.front().containedItemCount == 1);
+    std::filesystem::create_directories(source / "gameplay");
+    std::ofstream(source / "gameplay/Slide.cpp") << "void slide() {}";
+    std::ofstream(source / "gameplay/Slide.cpp.horo-source.lock");
+    const auto native = BuildContentBrowserDirectory(project, source / "gameplay", {});
+    REQUIRE(native.roots.size() == 2);
+    CHECK(native.roots.back().kind == ContentBrowserRootKind::NativeSources);
+    CHECK(native.rootKind == ContentBrowserRootKind::NativeSources);
+    CHECK(native.absoluteRootPath == std::filesystem::weakly_canonical(source).string());
+    REQUIRE(native.entries.size() == 1);
+    CHECK(native.entries.front().displayName == "Slide.cpp");
+    CHECK_FALSE(native.entries.front().registered);
+    CHECK(native.entries.front().assetId.empty());
+    CHECK_FALSE(IsProjectContentBrowserDirectoryTargetAllowed(project, owned.Path()));
+    CHECK(std::filesystem::exists(scripts / "Run.horo_script.horo-source.lock"));
+    CHECK(std::filesystem::exists(source / "gameplay/Slide.cpp.horo-source.lock"));
 }

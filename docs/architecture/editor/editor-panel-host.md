@@ -578,6 +578,16 @@ sections:
   - Opens files through: typed editor/application commands
   - Subscribes to: `ProjectOpenedEvent`
 
+The embedded content browser exposes the existing `Assets` and `source` roots
+as **Assets** and **Sources**. The controller's directory projection publishes
+only existing roots that satisfy project containment and symlink policy. Root
+selection and breadcrumbs use the same canonical navigation/history commands;
+paint code does not enumerate the filesystem. Native files retain their actual
+extensions and open through the source document service. They do not acquire
+asset identities, sidecars or import authority merely by appearing in this view.
+Source-write lease files (`*.horo-source.lock`) stay on disk but are omitted from
+cards and visible-child counts.
+
 ## Embedded Source Editor
 
 The editor workspace includes source-editing surfaces for project scripts,
@@ -651,6 +661,11 @@ Required source editor constraints:
 - large files use bounded memory and may open in read-only or external-editor
   mode until a streaming editor contract exists;
 - editor shortcuts participate in the workspace shortcut conflict policy.
+
+A source surface releases its active text-input ID on a primary press outside
+the surface before later-drawn dock controls process that press. An in-progress
+selection drag retains pointer ownership until release. Keyboard capture must
+not make another panel require a second click.
 
 ### Source syntax and theme projection
 

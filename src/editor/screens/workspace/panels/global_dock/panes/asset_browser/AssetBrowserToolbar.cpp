@@ -108,7 +108,8 @@ namespace Horo::Editor {
 
         [[nodiscard]] float DrawBreadcrumb(const ImVec2 position, const ContentBrowserDirectory &directory,
                                            EditorWorkspaceViewCommandData &command, ImFont *font, const float maximumWidth) {
-            if (directory.breadcrumbs.empty() || maximumWidth <= 0.0F)
+            const std::size_t first = directory.roots.empty() ? 0 : 1;
+            if (directory.breadcrumbs.size() <= first || maximumWidth <= 0.0F)
                 return 0.0F;
 
             const float scale = Scale();
@@ -118,7 +119,7 @@ namespace Horo::Editor {
             const float minimumWidth = 70.0F * scale;
             float x = position.x;
             const float right = position.x + maximumWidth;
-            for (std::size_t index = 0; index < directory.breadcrumbs.size(); ++index) {
+            for (std::size_t index = first; index < directory.breadcrumbs.size(); ++index) {
                 const ContentBrowserBreadcrumb &segment = directory.breadcrumbs[index];
                 const float labelWidth = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, segment.label.c_str()).x;
                 if (x + labelWidth > right)
@@ -250,6 +251,40 @@ namespace Horo::Editor {
             return clicked;
         }
 
+        /** @brief Chooses only roots captured by the controller's validated directory projection. */
+        [[nodiscard]] float DrawRootSelector(const ImVec2 position, const ContentBrowserDirectory &directory,
+                                             EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
+                                             const ToolbarLayout &layout) {
+            if (directory.roots.empty())
+                return 0;
+            int selected = 0;
+            float textWidth = 0;
+            const auto &metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
+            for (std::size_t index = 0; index < directory.roots.size(); ++index) {
+                const auto &root = directory.roots[index];
+                const auto &label = AssetBrowserPane::kTextScope.Text(context.localization, AssetBrowserPane::RootLabelKey(root.kind));
+                textWidth =
+                    std::max(textWidth,
+                             ResolveFont(context.theme.fonts.sansCompact)->CalcTextSizeA(metrics.fontSize, FLT_MAX, 0, label.c_str()).x);
+                if (root.absolutePath == directory.absoluteRootPath)
+                    selected = static_cast<int>(index);
+            }
+            const float width = textWidth + metrics.paddingX * 2 + layout.control * 0.5F;
+            const Ui::ComboItemSource items{.label = [&](const int index) {
+                return AssetBrowserPane::kTextScope
+                    .Text(context.localization, AssetBrowserPane::RootLabelKey(directory.roots[static_cast<std::size_t>(index)].kind))
+                    .c_str();
+            }};
+            ImGui::SetCursorScreenPos(position);
+            ImGui::SetNextItemWidth(width);
+            if (Ui::ComboControl("ContentBrowserRoot", &selected, static_cast<int>(directory.roots.size()), items, context.theme.fonts,
+                                 {.height = AssetBrowserLayout::ToolbarControlHeight,
+                                  .componentSize = Ui::ComponentSize::Medium,
+                                  .surface = Ui::ComboControlSurface::BottomDockToolbar}))
+                command = AssetBrowserInteractionSession::Navigate(directory.roots[static_cast<std::size_t>(selected)].absolutePath);
+            return width + layout.gap;
+        }
+
         [[nodiscard]] float DrawNavigation(const ImVec2 position, const EditorWorkspaceViewModel &viewModel,
                                            EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
                                            const ToolbarLayout &layout) {
@@ -268,6 +303,8 @@ namespace Horo::Editor {
             button("ContentBrowserUp", Ui::UiIcon::ArrowUpward,
                    viewModel.contentBrowser.absoluteCurrentPath != viewModel.contentBrowser.absoluteRootPath, "navigation.up",
                    EditorWorkspaceViewCommand::NavigateContentBrowserUp);
+            if (!layout.compact)
+                x += DrawRootSelector({x, position.y}, viewModel.contentBrowser, command, context, layout);
             if (layout.narrow)
                 return x;
             ImGui::GetWindowDrawList()->AddLine({x, position.y + 5.0F * layout.scale}, {x, position.y + 25.0F * layout.scale},

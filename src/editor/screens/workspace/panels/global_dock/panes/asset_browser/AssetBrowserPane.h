@@ -19,6 +19,11 @@ namespace Horo::Editor {
         /** @brief Creates a pane with its required localization scope. */
         AssetBrowserPane() : LocalizedGui(kTextScope) {}
 
+        /** @brief Resolves root presentation without deriving filesystem capabilities from a display label. */
+        [[nodiscard]] static constexpr const char *RootLabelKey(const ContentBrowserRootKind kind) noexcept {
+            return kind == ContentBrowserRootKind::Assets ? "location.assets" : "location.native_sources";
+        }
+
         /** @brief Binds renderer services required by generated previews. */
         void Attach(IEditorGuiRenderer *guiRenderer) noexcept;
 

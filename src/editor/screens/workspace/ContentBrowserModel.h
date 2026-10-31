@@ -95,14 +95,28 @@ namespace Horo::Editor {
         }
     };
 
-    /** @brief Complete immutable presentation snapshot for one absolute asset directory. */
+    /** @brief Project-owned content roots; native code retains its source/build ownership. */
+    enum class ContentBrowserRootKind : std::uint8_t {
+        Assets,
+        NativeSources,
+    };
+
+    /** @brief Existing, validated root offered by the project directory projection. */
+    struct ContentBrowserRoot {
+        ContentBrowserRootKind kind{ContentBrowserRootKind::Assets};
+        std::string absolutePath;
+    };
+
+    /** @brief Complete immutable presentation snapshot for one project content directory. */
     struct ContentBrowserDirectory {
-        std::string absoluteRootPath;    /**< Canonical absolute project asset root. */
+        std::string absoluteRootPath;    /**< Canonical absolute root of the selected content location. */
         std::string absoluteCurrentPath; /**< Canonical absolute directory currently being displayed. */
         std::vector<ContentBrowserBreadcrumb> breadcrumbs;
         std::vector<ContentBrowserEntry> entries; /**< Direct directories first, then visible asset files. */
         bool readable{false};                     /**< False when the asset root or requested directory could not be enumerated. */
         ContentBrowserLoadState loadState{ContentBrowserLoadState::Ready};
+        ContentBrowserRootKind rootKind{ContentBrowserRootKind::Assets};
+        std::vector<ContentBrowserRoot> roots; /**< Existing permitted roots; discovered at directory refresh, never in draw code. */
     };
 
     /** @brief Non-owning presentation query applied to one immutable directory snapshot. */

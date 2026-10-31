@@ -77,7 +77,7 @@ namespace Horo::Editor {
 
         [[nodiscard]] bool IsHiddenSidecar(const std::filesystem::path &path) {
             const std::string extension = LowercaseExtension(path);
-            if (extension == ".meta")
+            if (extension == ".meta" || path.filename().string().ends_with(".horo-source.lock"))
                 return true;
             if (extension != ".horo")
                 return false;
@@ -357,7 +357,13 @@ namespace Horo::Editor {
             .absoluteCurrentPath = currentDirectory.string(),
             .breadcrumbs = BuildBreadcrumbs(assetRoot, currentDirectory),
             .loadState = ContentBrowserLoadState::Loading,
+            .rootKind = browsingSource ? ContentBrowserRootKind::NativeSources : ContentBrowserRootKind::Assets,
         };
+        const auto projectAssets = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
+        if (IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, projectAssets))
+            directory.roots.push_back({ContentBrowserRootKind::Assets, projectAssets.string()});
+        if (IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, sourceRoot))
+            directory.roots.push_back({ContentBrowserRootKind::NativeSources, sourceRoot.string()});
         if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory)) {
             directory.loadState = ContentBrowserLoadState::Error;
             return directory;
@@ -398,7 +404,10 @@ namespace Horo::Editor {
                     continue;
                 }
 
-                directory.entries.push_back(CreateAssetFileEntry(diskEntry, absoluteEntry, projectRoot, registeredAssets, importerCatalog));
+                auto entry = CreateAssetFileEntry(diskEntry, absoluteEntry, projectRoot, registeredAssets, importerCatalog);
+                if (browsingSource)
+                    entry.displayName = absoluteEntry.filename().string();
+                directory.entries.push_back(std::move(entry));
             }
             iterator.increment(error);
         }

@@ -350,6 +350,11 @@ namespace Horo::Editor {
         bool AcquireFocus(const bool enabled, const bool request, const bool hovered) {
             auto *guiWindow = ImGui::GetCurrentWindow();
             inputId = guiWindow->GetID("text-input");
+            if (!hovered && !pointerCaptured && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                if (ImGui::GetActiveID() == inputId)
+                    ImGui::ClearActiveID();
+                return false;
+            }
             if (enabled && (request || (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)))) {
                 ImGui::FocusWindow(guiWindow);
                 ImGui::SetActiveID(inputId, guiWindow);

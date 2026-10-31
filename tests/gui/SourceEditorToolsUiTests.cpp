@@ -7,9 +7,12 @@
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "OwnedTestDirectory.h"
+#include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "editor/source_editor/SourceEditorTools.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <imgui_internal.h>
 #include <imgui_test_engine/imgui_te_context.h>
@@ -145,4 +148,90 @@ TEST_CASE("Visible source tools edit search history and navigate through the can
     CHECK(fixture.outcome->HasValue());
     CHECK(fixture.submitted == 4);
     CHECK(fixture.source.Text() == "beta A\r\n  line\r\n");
+}
+
+TEST_CASE("Focused source editing hands primary clicks to global dock tabs", "[ui][imgui][editor][source][focus]") {
+    SourceToolsUi fixture;
+    Horo::Editor::GlobalDockPanel dock;
+    Horo::Editor::EditorWorkspaceViewModel model;
+    const auto result = fixture.harness.Run("horo_source", "dock_pointer_handoff", [&](ImGuiTestContext *) {
+        fixture.Frame();
+        ImGui::SetNextWindowPos({0, 625});
+        ImGui::SetNextWindowSize({1100, 160});
+        ImGui::Begin("SourceDockHandoff", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+        Horo::Editor::EditorWorkspaceViewCommandData command;
+        dock.DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), model, command, fixture.context);
+        ImGui::End();
+    }, [&](ImGuiTestContext *ui) {
+        ui->Yield(3);
+        ui->MouseMoveToPos({120, 300});
+        ui->MouseClick();
+        ui->Yield(2);
+        IM_CHECK(fixture.widget.OwnsInput());
+        ui->ItemClick("//SourceDockHandoff/Console");
+        ui->Yield(2);
+        IM_CHECK(dock.ActiveTab() == Horo::Editor::GlobalDockTab::Console);
+        IM_CHECK(!fixture.widget.OwnsInput());
+        ui->ItemClick("//SourceDockHandoff/Assets");
+        ui->Yield(2);
+        IM_CHECK(dock.ActiveTab() == Horo::Editor::GlobalDockTab::Assets);
+    });
+    INFO(result.testEngineLog);
+    REQUIRE(result.Succeeded());
+}
+
+TEST_CASE("Project browser reaches native gameplay files through the Sources root", "[ui][imgui][editor][source][browser]") {
+    SourceToolsUi fixture;
+    const auto locale = GENERATE("en-US", "tr-TR");
+    REQUIRE(fixture.localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                                 (std::string{locale} + ".json")));
+    REQUIRE(fixture.localization.Prepare(Horo::Editor::LocaleTag{locale}));
+    REQUIRE(fixture.localization.ActivatePrepared());
+    const auto assets = fixture.directory.Path() / "Assets/Scripts";
+    const auto gameplay = fixture.directory.Path() / "source/gameplay";
+    std::filesystem::create_directories(assets);
+    std::filesystem::create_directories(gameplay);
+    std::ofstream(gameplay / "GameModule.cpp") << "// module";
+    std::ofstream(gameplay / "Slide.cpp") << "void slide() {}\n";
+    std::ofstream(gameplay / "Slide.cpp.horo-source.lock");
+    const float browserWidth = GENERATE(1100.0F, 420.0F);
+    Horo::Editor::EditorWorkspaceViewModel model;
+    model.projectRoot = fixture.directory.Path().string();
+    model.contentBrowser = Horo::Editor::BuildContentBrowserDirectory(fixture.directory.Path(), {}, {});
+    Horo::Editor::GlobalDockPanel dock;
+    const auto result = fixture.harness.Run("horo_source", "native_source_browser", [&](ImGuiTestContext *) {
+        fixture.Frame();
+        ImGui::SetNextWindowPos({0, 625});
+        ImGui::SetNextWindowSize({browserWidth, 160});
+        ImGui::Begin("NativeSourceBrowser", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+        Horo::Editor::EditorWorkspaceViewCommandData command;
+        dock.DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), model, command, fixture.context);
+        ImGui::End();
+        if (command.command == Horo::Editor::EditorWorkspaceViewCommand::NavigateContentBrowser && command.stringPayload)
+            model.contentBrowser = Horo::Editor::BuildContentBrowserDirectory(fixture.directory.Path(), *command.stringPayload, {});
+        if (command.sourceOpenRequest) {
+            const auto opened = fixture.documents.Open(*command.sourceOpenRequest);
+            REQUIRE(opened.HasValue());
+            REQUIRE(opened.Value().sourceSnapshot);
+            fixture.source = *opened.Value().sourceSnapshot;
+        }
+    }, [&](ImGuiTestContext *ui) {
+        ui->Yield(3);
+        if (browserWidth >= 640) {
+            ui->ItemClick("//**/ContentBrowserRoot/Combo###ContentBrowserRoot");
+            ui->ItemClick("//**/###combo_option_1");
+        } else {
+            ui->ItemClick("//**/$$1/##location");
+        }
+        ui->Yield(2);
+        IM_CHECK(model.contentBrowser.rootKind == Horo::Editor::ContentBrowserRootKind::NativeSources);
+        ui->ItemDoubleClick("//**/##AssetCard");
+        ui->Yield(2);
+        IM_CHECK(model.contentBrowser.entries.size() == 2);
+        ui->ItemDoubleClick("//**/$$1/##AssetCard");
+        ui->Yield(2);
+        IM_CHECK(fixture.source.Text() == "void slide() {}\n");
+    });
+    INFO(result.testEngineLog);
+    REQUIRE(result.Succeeded());
 }
