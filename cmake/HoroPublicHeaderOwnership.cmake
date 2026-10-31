@@ -751,6 +751,9 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSight.h
 )
+horo_configure_target_header_boundary(HoroAnimationEditorModel PUBLIC_HEADERS
+    Horo/Editor/AnimationPreviewSession.h
+)
 horo_configure_target_header_boundary(HoroAnimationGraphSourceCodec PUBLIC_HEADERS
     Horo/Animation/AnimationGraphSource.h
 )
@@ -1270,6 +1273,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/AudioEditorDocument.h
     Horo/Editor/AudioComponentPreview.h
     Horo/Editor/MixerAssetDocument.h
+    Horo/Editor/AnimationGraphDocument.h
     Horo/Editor/CinematicPropertyBindings.h
     Horo/Editor/ActivityBarLayout.h
     Horo/Editor/EditorConfiguration.h

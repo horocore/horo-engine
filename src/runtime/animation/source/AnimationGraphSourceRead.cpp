@@ -111,9 +111,9 @@ namespace Horo::Animation {
                 Keys(entry, {"id", "sourceKind", "reference", "loopPeriod"});
                 GraphState state;
                 state.id = Id<GraphStateId>(entry["id"]);
-                if (entry["sourceKind"] == "clip")
+                if (entry["sourceKind"].is_string() && entry["sourceKind"].get_ref<const std::string &>() == "clip")
                     state.source = AssetIdentity<AnimationClipId>(entry["reference"]);
-                else if (entry["sourceKind"] == "definition")
+                else if (entry["sourceKind"].is_string() && entry["sourceKind"].get_ref<const std::string &>() == "definition")
                     state.source = Id<GraphDefinitionId>(entry["reference"]);
                 else
                     Reject(AnimationErrors::GraphTypeMismatch);
@@ -363,7 +363,7 @@ namespace Horo::Animation {
             if (const auto expected = SourceContract(schema);
                 !AdmittedSchema(schema, migration) || !ContractMatches(envelope["contractVersion"], expected))
                 Reject(AnimationErrors::GraphVersionUnsupported);
-            if (envelope["assetType"] != "core.animation.graph")
+            if (!envelope["assetType"].is_string() || envelope["assetType"].get_ref<const std::string &>() != "core.animation.graph")
                 Reject(AnimationErrors::GraphTypeMismatch);
             return schema;
         }
@@ -381,11 +381,34 @@ namespace Horo::Animation {
                 if (!actual.emplace(dependency["assetType"].get<std::string>(), Asset(dependency["assetId"])).second)
                     Reject(AnimationErrors::GraphBindingMismatch);
             }
-            for (const auto &dependency : Dependencies(data))
-                expected.emplace(dependency["assetType"].get<std::string>(), Asset(dependency["assetId"]));
+            DependencyProjection projection;
+            for (const auto &definition : data.definitions)
+                for (const auto &node : definition.nodes)
+                    std::visit(projection, node.payload);
+            for (const auto clip : projection.clips)
+                expected.emplace("core.animation.clip", clip.Asset());
+            expected.emplace("core.animation.skeleton", data.skeleton.Asset());
             if (actual != expected)
                 Reject(AnimationErrors::GraphBindingMismatch);
         }
+
+        /** @brief Releases admitted-depth JSON trees without allocating inside basic_json's noexcept destructor. */
+        struct SourceTreeGuard final {
+            Json &root;
+
+            /** @brief Empties children before their containers are destroyed; admitted nesting is at most the codec hard ceiling. */
+            static void Clear(Json &value) noexcept {
+                if (value.is_structured()) {
+                    for (auto &child : value)
+                        Clear(child);
+                    value.clear();
+                }
+            }
+
+            ~SourceTreeGuard() {
+                Clear(root);
+            }
+        };
 
         /** @brief Parses with hard byte/depth/value/string ceilings and duplicate-key rejection. */
         Json Parse(std::string_view source, const AnimationGraphCompileContext &context, const AnimationGraphSourceLimits &limits) {
@@ -428,7 +451,8 @@ namespace Horo::Animation {
                 Reject(AnimationErrors::GraphMalformed);
             if (migration > AnimationGraphSourceMigration::MigrateSupported)
                 Reject(AnimationErrors::GraphVersionUnsupported);
-            const auto envelope = Parse(source, context, limits);
+            auto envelope = Parse(source, context, limits);
+            const SourceTreeGuard cleanup{envelope};
             AnimationGraphData data;
             data.schemaVersion = Version(envelope, migration);
             data.contractVersion = SourceContract(data.schemaVersion);

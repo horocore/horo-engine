@@ -6,7 +6,9 @@
 #include <set>
 
 namespace Horo::Animation::GraphSourceDetail {
-    using Json = nlohmann::ordered_json;
+    // Parsing needs stable object nodes: ordered_map relocates populated JSON values while growing,
+    // and their noexcept destruction may allocate. Canonical field order belongs to SourceWriter.
+    using Json = nlohmann::json;
 
     /** @brief Typed private parser rejection; candidate content never enters diagnostics. */
     struct Rejection final {
@@ -71,19 +73,6 @@ namespace Horo::Animation::GraphSourceDetail {
         }
     };
 
-    /** @brief Produces the exact canonical typed dependency projection used by the host sink. */
-    inline Json Dependencies(const AnimationGraphData &data) {
-        DependencyProjection projection;
-        for (const auto &definition : data.definitions)
-            for (const auto &node : definition.nodes)
-                std::visit(projection, node.payload);
-        Json values = Json::array();
-        for (const auto clip : projection.clips)
-            values.push_back(Json{{"assetType", "core.animation.clip"}, {"assetId", clip.Asset().ToString()}});
-        values.push_back(Json{{"assetType", "core.animation.skeleton"}, {"assetId", data.skeleton.Asset().ToString()}});
-        return values;
-    }
-
     /** @brief Source schemas retain one exact semantic contract through explicit migration. */
     inline AnimationGraphContractVersion SourceContract(const std::uint32_t schema) noexcept {
         if (schema <= 2)
@@ -102,26 +91,4 @@ namespace Horo::Animation::GraphSourceDetail {
                 Reject(AnimationErrors::GraphMalformed);
     }
 
-    /** @brief Applies symmetric JSON token/nesting policy to the detached serialization tree. */
-    inline void CheckJsonBudget(const Json &value, const AnimationGraphCompileContext &context, const AnimationGraphSourceLimits &limits,
-                                std::size_t depth, std::size_t &values) {
-        CheckAdmission(context);
-        if (depth > limits.depth)
-            Reject(AnimationErrors::GraphLimitExceeded);
-        const auto events = value.is_structured() ? 2U : 1U;
-        if (values > limits.jsonValues || events > limits.jsonValues - values)
-            Reject(AnimationErrors::GraphLimitExceeded);
-        values += events;
-        if (value.is_object()) {
-            for (auto field = value.begin(); field != value.end(); ++field) {
-                if (depth + 1 > limits.depth || values >= limits.jsonValues)
-                    Reject(AnimationErrors::GraphLimitExceeded);
-                ++values;
-                CheckJsonBudget(field.value(), context, limits, depth + 1, values);
-            }
-        } else if (value.is_array()) {
-            for (const auto &item : value)
-                CheckJsonBudget(item, context, limits, depth + 1, values);
-        }
-    }
 }  // namespace Horo::Animation::GraphSourceDetail

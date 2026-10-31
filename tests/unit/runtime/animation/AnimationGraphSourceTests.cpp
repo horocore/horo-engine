@@ -9,6 +9,26 @@ using namespace Horo::Animation;
 using namespace Horo::Animation::Test;
 using namespace Horo::Animation::Test::Graph;
 
+TEST_CASE("Graph canonical source preserves the existing byte format", "[animation][graph][codec]") {
+    auto data = Simple();
+    data.parameters.push_back({Id<GraphParameterId>(1), "weight", GraphValueType::Float, 0.5F});
+    // Captured from the prior canonical writer before its allocation-safety correction.
+    constexpr std::string_view expected =
+        R"gold({"schemaVersion":4,"assetType":"core.animation.graph","contractVersion":{"major":1,"minor":2,"patch":0},")gold"
+        R"gold(dependencies":[{"assetType":"core.animation.clip","assetId":"00000000-0000-0000-0000-000000000003"},{"ass)gold"
+        R"gold(etType":"core.animation.skeleton","assetId":"00000000-0000-0000-0000-000000000002"}],"payload":{"skeleton)gold"
+        R"gold(":"00000000-0000-0000-0000-000000000002","entry":1,"parameters":[{"id":1,"name":"weight","type":"float",")gold"
+        R"gold(default":0.5}],"definitions":[{"id":1,"inputs":[],"nodes":[{"id":2,"kind":"output","reference":null,"pins)gold"
+        R"gold(":[{"id":1,"role":"value","type":"pose","output":false,"interface":null}],"settings":{}},{"id":4,"kind":")gold"
+        R"gold(clip","reference":"00000000-0000-0000-0000-000000000003","pins":[{"id":1,"role":"result","type":"pose","o)gold"
+        R"gold(utput":true,"interface":null}],"settings":{"referencePose":null}}],"connections":[{"source":{"node":4,"pi)gold"
+        R"gold(n":1},"destination":{"node":2,"pin":1},"type":"pose"}]}]}})gold"
+        "\n";
+    const auto encoded = SerializeAnimationGraphSource(data);
+    REQUIRE(encoded.HasValue());
+    CHECK(encoded.Value() == expected);
+}
+
 TEST_CASE("Graph source round trips all scalar defaults and canonical identities", "[animation][graph][codec]") {
     auto data = Blended();
     data.entry = Id<GraphDefinitionId>(std::numeric_limits<std::uint64_t>::max());
@@ -197,6 +217,35 @@ TEST_CASE("Graph source parser and encoder enforce exact byte count depth token 
     REQUIRE(write.HasError());
     CHECK(read.ErrorValue().code.Value() == AnimationErrors::GraphLimitExceeded.code.Value());
     CHECK(write.ErrorValue().code.Value() == AnimationErrors::GraphLimitExceeded.code.Value());
+}
+
+TEST_CASE("Graph text writer preserves exact parser token and depth boundaries", "[animation][graph][codec]") {
+    const auto data = Blended();
+    const auto encoded = SerializeAnimationGraphSource(data);
+    REQUIRE(encoded.HasValue());
+    std::size_t tokens{};
+    std::size_t maximumDepth{};
+    const auto inspected = nlohmann::json::parse(encoded.Value(), [&](const int depth, const auto, const auto &) {
+        ++tokens;
+        maximumDepth = std::max(maximumDepth, static_cast<std::size_t>(depth));
+        return true;
+    });
+    REQUIRE(inspected.is_object());
+    AnimationGraphSourceLimits limits{.bytes = encoded.Value().size(), .jsonValues = tokens, .depth = maximumDepth};
+    const auto exact = SerializeAnimationGraphSource(data, {}, limits);
+    REQUIRE(exact.HasValue());
+    CHECK(exact.Value() == encoded.Value());
+    CHECK(DeserializeAnimationGraphSource(encoded.Value(), data.id, {}, limits).HasValue());
+    SECTION("one fewer parser event") {
+        --limits.jsonValues;
+    }
+    SECTION("one fewer nesting level") {
+        --limits.depth;
+    }
+    const auto rejected = SerializeAnimationGraphSource(data, {}, limits);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == AnimationErrors::GraphLimitExceeded.code.Value());
+    CHECK(DeserializeAnimationGraphSource(encoded.Value(), data.id, {}, limits).HasError());
 }
 
 TEST_CASE("Graph source version migration is explicit canonical and transactional", "[animation][graph][codec]") {

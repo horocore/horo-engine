@@ -1008,6 +1008,22 @@ target_include_directories(HoroAISightTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 target_compile_definitions(HoroAISightTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
 horo_register_catch_test(HoroAISightTests LABELS "unit;ai;sight;headless")
 
+add_executable(HoroAnimationPreviewTests
+    support/AllocationProbe.cpp
+    unit/editor/AnimationPreviewSessionTests.cpp)
+target_compile_features(HoroAnimationPreviewTests PRIVATE cxx_std_20)
+target_include_directories(HoroAnimationPreviewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroAnimationPreviewTests PRIVATE HoroEngine::AnimationEditorModel)
+horo_register_catch_test(HoroAnimationPreviewTests LABELS "unit;animation;editor;headless")
+
+add_executable(HoroAnimationDocumentTests
+    support/AllocationProbe.cpp
+    unit/editor/AnimationGraphDocumentTests.cpp)
+target_compile_features(HoroAnimationDocumentTests PRIVATE cxx_std_20)
+target_include_directories(HoroAnimationDocumentTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroAnimationDocumentTests PRIVATE HoroEngine::EditorServices)
+horo_register_catch_test(HoroAnimationDocumentTests LABELS "unit;animation;editor;headless")
+
 add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationStateMachineTests.cpp
         unit/runtime/animation/AnimationStateGraphInstanceTests.cpp

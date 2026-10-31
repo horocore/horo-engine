@@ -1723,6 +1723,11 @@ add_library(HoroEngine::AnimationApi ALIAS HoroAnimationApi)
 target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
+add_library(HoroAnimationEditorModel STATIC editor/animation/AnimationPreviewSession.cpp)
+add_library(HoroEngine::AnimationEditorModel ALIAS HoroAnimationEditorModel)
+target_compile_features(HoroAnimationEditorModel PUBLIC cxx_std_20)
+target_link_libraries(HoroAnimationEditorModel PUBLIC HoroEngine::AnimationApi)
+
 add_library(HoroAnimationStateMachineInternal INTERFACE)
 target_include_directories(HoroAnimationStateMachineInternal INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/animation/state_machine)
@@ -3304,6 +3309,8 @@ add_library(HoroEditorServices STATIC
         editor/audio/AudioEditorDocument.cpp
         editor/audio/AudioComponentPreview.cpp
         editor/audio/MixerAssetDocument.cpp
+        editor/animation/AnimationGraphDocument.cpp
+        editor/animation/AnimationGraphDocumentBounds.cpp
         editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
         editor/EditorServiceErrors.cpp
@@ -3373,6 +3380,7 @@ target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEn
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices
