@@ -118,8 +118,10 @@ horo_configure_target_header_boundary(HoroMcpController PUBLIC_HEADERS
     Horo/Mcp/McpController.h
 )
 
-horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
-    Horo/Foundation/Telemetry/OpenTelemetrySink.h)
+
+horo_configure_target_header_boundary(HoroPlatformDesktop PUBLIC_HEADERS
+    Horo/Platform/FileManager.h
+)
 
 horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
     Horo/Platform/NativePublicationFileSystem.h
@@ -190,6 +192,9 @@ horo_configure_target_header_boundary(HoroProjectSettings PUBLIC_HEADERS
     Horo/Application/NavigationProjectSettings.h
     Horo/Application/NavigationProjectSettingsStore.h
     Horo/Application/ProjectNetworkSettings.h
+)
+horo_configure_target_header_boundary(HoroPrefabProjectSettings PUBLIC_HEADERS
+    Horo/Application/PrefabProjectSettings.h
 )
 horo_configure_target_header_boundary(HoroReleaseGitHub PUBLIC_HEADERS
     Horo/Release/GitHubReleasePublication.h
@@ -332,6 +337,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveProjectPolicy.h
     Horo/Runtime/Save/SaveSafePointCoordinator.h
     Horo/Runtime/Save/SaveCaptureBarrier.h
+    Horo/Runtime/Save/RuntimeSaveSession.h
     Horo/Runtime/Save/SaveAutosaveScheduler.h
     Horo/Runtime/Save/SaveEventTriggers.h
     Horo/Runtime/Save/SaveTestCompositions.h
@@ -406,6 +412,7 @@ horo_configure_target_header_boundary(HoroUiTemplateInstances PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDocumentOwner.h
 )
 
+horo_configure_target_header_boundary(HoroProjectAssetImportApplication PUBLIC_HEADERS Horo/Application/ProjectAssetImportCommitter.h)
 horo_configure_target_header_boundary(HoroProjectMutationGuard PUBLIC_HEADERS
     Horo/Editor/ProjectMutation.h
 )
@@ -1076,9 +1083,11 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
+    Horo/Prefab/PrefabMetrics.h
     Horo/Prefab/CookedPrefab.h
     Horo/Prefab/PrefabErrors.h
     Horo/Prefab/PrefabIdentity.h
+    Horo/Prefab/PrefabCompositionOrigin.h
     Horo/Prefab/PrefabLimits.h
 )
 
@@ -1095,9 +1104,11 @@ horo_configure_target_header_boundary(HoroPrefabOverrideModel PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
     Horo/Prefab/PrefabValueOverrides.h
+    Horo/Prefab/PrefabValueSnapshot.h
 Horo/Prefab/PrefabAssetDependencyClosure.h
 Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDiagnostics.h
+    Horo/Prefab/PrefabDebugSnapshot.h
     Horo/Prefab/PrefabDocument.h
     Horo/Prefab/PrefabExpansionCache.h
     Horo/Prefab/PrefabSceneIdentityRemap.h
@@ -1273,6 +1284,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/NativeAssetRegistrySource.h
     Horo/Editor/CollisionProjectSettingsSession.h
     Horo/Editor/NavigationProjectSettingsSession.h
+    Horo/Editor/PrefabProjectSettingsSession.h
     Horo/Editor/AudioEditorDocument.h
     Horo/Editor/AudioComponentPreview.h
     Horo/Editor/MixerAssetDocument.h
@@ -1283,6 +1295,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/EditorEngineEventBridge.h
     Horo/Editor/EditorMenuModel.h
     Horo/Editor/EditorModalHost.h
+    Horo/Editor/GuiLiveReload.h
     Horo/Editor/EditorServiceRegistry.h
     Horo/Editor/EditorSurfaceIdentity.h
     Horo/Editor/EditorSettingsEvents.h
@@ -1296,6 +1309,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/Localization/ILocalizationService.h
     Horo/Editor/Localization/LocalizationService.h
     Horo/Editor/Localization/LocalizationTypes.h
+    Horo/Editor/Localization/LocalizedGui.h
     Horo/Editor/NotificationService.h
     Horo/Editor/ProjectCreationController.h
     Horo/Editor/ProjectCreationService.h

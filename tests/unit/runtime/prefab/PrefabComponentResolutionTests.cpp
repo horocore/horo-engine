@@ -1,3 +1,4 @@
+#include "Horo/Prefab/PrefabValueSnapshot.h"
 #include "PrefabValueOverrideTestSupport.h"
 
 namespace Horo::Prefab {
@@ -25,6 +26,48 @@ namespace Horo::Prefab {
 
         PrefabComponentOverrideTarget Target(const std::uint64_t id = 1) {
             return {Object(), Type(), PrefabComponentInstanceId::Create(id).Value()};
+        }
+
+        TEST_CASE("Immutable prefab diffs retain supported component effects conflicts and orphans without phantom effective properties",
+                  "[prefab][value-snapshot][topology]") {
+            const auto values = Schemas();
+            const auto topology = TopologySchema();
+            auto properties = std::vector<PrefabValuePropertySchema>{values.Properties().begin(), values.Properties().end()};
+            properties[0].required = true;
+            auto createdSchema = PrefabValueSchemaSnapshot::Create(std::move(properties), Limits(),
+                                                                   {topology.Components().begin(), topology.Components().end()});
+            REQUIRE(createdSchema.HasValue());
+            const auto schema = std::move(createdSchema).Value();
+            const auto source = Source();
+            const auto removed = PreparePrefabComponentEdit(source, {}, PrefabRemoveComponentEdit{Target()}, &schema, Limits()).Value();
+            const auto snapshot = PrefabValueSnapshot::Prepare(source, removed.rebased, &schema, Limits()).Value().snapshot;
+            REQUIRE(snapshot->Components().size() == 1);
+            CHECK(std::holds_alternative<PrefabComponentOverrideRecord>(snapshot->Components()[0]));
+            CHECK(snapshot->Values().back().disposition == PrefabValueDisposition::RemovedByInstance);
+            CHECK(snapshot->Values().back().origin == PrefabValueOrigin::Instance);
+            const auto removedAssignment =
+                PreparePrefabValueEdit(source, removed.rebased, {PrefabValueEditKind::Assign, Property(), 7.0}, &schema, Limits());
+            REQUIRE(removedAssignment.HasError());
+            CHECK(removedAssignment.ErrorValue().code.Value() == PrefabErrors::OverrideOrphan.code.Value());
+            const auto assignment =
+                PreparePrefabValueEdit(source, {}, {PrefabValueEditKind::Assign, Property(), 7.0}, &schema, Limits()).Value();
+            auto conflicting = removed.rebased;
+            conflicting.records = assignment.rebased.records;
+            CHECK(ResolvePrefabValueOverrides(source, conflicting, &schema, Limits()).HasError());
+            const auto replaced =
+                PreparePrefabComponentEdit(source, {}, PrefabReplaceComponentEdit{Target(), Added()}, &schema, Limits()).Value();
+            const auto replacement = PrefabValueSnapshot::Prepare(source, replaced.rebased, &schema, Limits()).Value();
+            CHECK(replacement.snapshot->Components().size() == 2);
+            REQUIRE(replacement.resolution.effective);
+            CHECK(replacement.resolution.effective->Objects()[0].object.components == std::vector{Added()});
+            const auto conflict =
+                PrefabValueSnapshot::Prepare(Source("{\"speed\":4.0}", 2), removed.rebased, &schema, Limits()).Value().snapshot;
+            REQUIRE(conflict->Components().size() == 1);
+            CHECK(std::holds_alternative<PrefabComponentOverrideConflict>(conflict->Components()[0]));
+            CHECK(conflict->Values().back().disposition == PrefabValueDisposition::Present);
+            const auto orphan = PrefabValueSnapshot::Prepare(source, removed.rebased, nullptr, Limits()).Value().snapshot;
+            REQUIRE(orphan->Components().size() == 1);
+            CHECK(std::holds_alternative<PrefabComponentOverrideOrphan>(orphan->Components()[0]));
         }
 
         TEST_CASE("Atomic component replacement removes before adding at singleton capacity", "[unit][prefab][override][topology]") {

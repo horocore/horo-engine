@@ -590,6 +590,12 @@ namespace Horo::Telemetry {
         return Globals().enabled.load();
     }
 
+    /** @copydoc Runtime::Generation */
+    std::uint32_t Runtime::Generation() noexcept {
+        const auto state = Globals().LoadState();
+        return state ? state->Generation() : 0;
+    }
+
     /** @copydoc Runtime::IsEventEnabled */
     bool Runtime::IsEventEnabled(const std::string_view subsystem, const Log::Level severity) noexcept {
 #if !HORO_ENABLE_TELEMETRY
@@ -610,27 +616,44 @@ namespace Horo::Telemetry {
         return state == nullptr || state->Flush(timeout);
     }
 
+    namespace {
+        /** @brief Shares filtering, redaction and bounded ingestion over one captured runtime state. */
+        bool EmitRecordToRuntime(Record record, std::optional<std::uint32_t> expectedGeneration) noexcept {
+            if (!Runtime::IsEnabled())
+                return false;
+            const auto state = Globals().LoadState();
+            if (state == nullptr) {
+                Health().shutdownDrops.fetch_add(1);
+                Health().droppedRecords.fetch_add(1);
+                return false;
+            }
+            if (expectedGeneration && (*expectedGeneration == 0 || state->Generation() != *expectedGeneration)) {
+                Health().staleHandleDrops.fetch_add(1);
+                Health().droppedRecords.fetch_add(1);
+                return false;
+            }
+            if (!state->Allows(record)) {
+                Health().filteredRecords.fetch_add(1);
+                return false;
+            }
+            try {
+                RedactRecord(record);
+                return state->TryPush(std::move(record));
+            } catch (const std::bad_alloc &) {
+                Health().droppedRecords.fetch_add(1);
+                return false;
+            }
+        }
+    }  // namespace
+
     /** @copydoc Runtime::EmitRecord */
     bool Runtime::EmitRecord(Record record) noexcept {
-        if (!IsEnabled())
-            return false;
-        const auto state = Globals().LoadState();
-        if (state == nullptr) {
-            Health().shutdownDrops.fetch_add(1);
-            Health().droppedRecords.fetch_add(1);
-            return false;
-        }
-        if (!state->Allows(record)) {
-            Health().filteredRecords.fetch_add(1);
-            return false;
-        }
-        try {
-            RedactRecord(record);
-            return state->TryPush(std::move(record));
-        } catch (const std::bad_alloc &) {
-            Health().droppedRecords.fetch_add(1);
-            return false;
-        }
+        return EmitRecordToRuntime(std::move(record), std::nullopt);
+    }
+
+    /** @copydoc Runtime::EmitRecord */
+    bool Runtime::EmitRecord(Record record, const std::uint32_t expectedGeneration) noexcept {
+        return EmitRecordToRuntime(std::move(record), expectedGeneration);
     }
 
     /** @copydoc Runtime::RegisterCounter */

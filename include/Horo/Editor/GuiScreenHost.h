@@ -275,6 +275,8 @@ namespace Horo::Editor {
         JobSystem m_importJobs{JobSystemConfig{.workerCount = 1}};
         std::unique_ptr<Assets::AssetImporterCatalog> importerCatalogCandidate_;
         std::shared_ptr<Extensions::EditorActivityHost> editorActivityHost_;
+        std::uint64_t extensionCommandRevision_{};
+        std::vector<std::string> extensionThemeIds_;
         std::unique_ptr<EditorPageFileStore> extensionPageStore_;
         std::unique_ptr<EditorPageThemeCapture> extensionPageTheme_;
         std::shared_ptr<Extensions::EditorPageHost> editorPageHost_;
@@ -292,6 +294,7 @@ namespace Horo::Editor {
         std::optional<ProjectCreationOperationId> activeCreationId_;
         std::optional<EditorRendererRestartRequest> rendererRestartRequest_;
         std::filesystem::path currentProjectRoot_;
+        std::optional<std::uint64_t> nativeBuildSession_;
         bool closeRequested_{false};
         bool gameplayClosePending_{};
         bool navigationBusy_{false};
@@ -302,6 +305,7 @@ namespace Horo::Editor {
         std::optional<LeaveRequirement> pendingRequirement_;
         std::optional<LeaveTarget> pendingTarget_;
         std::size_t resolutionAttemptCount_{0};
+        float buildStatusElapsed_{}; /**< Host-owned polling remains active after the build modal closes. */
     };
 
 }  // namespace Horo::Editor

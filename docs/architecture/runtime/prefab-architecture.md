@@ -917,6 +917,141 @@ enum class PrefabError : std::uint32_t {
 
 ---
 
+## Project policy authoring (HORO-1087 / PFB-006.12)
+
+The application-owned `HoroPrefabProjectSettings` bridge projects the canonical
+Foundation configuration document `.horo/prefab.json` into an immutable
+`PrefabLimitProfile`. Its single typed field registry covers all nineteen
+existing lowerable project-policy members. Engine parser byte/depth safety and
+object-name bytes remain fixed; derived expansion work is read-only and always
+comes from `PrefabLimitProfile::Create`. Unknown keys, unsupported envelopes,
+noninteger values, nonpositive/over-ceiling fields and value/set byte conflicts
+reject admission. A missing module document uses declared defaults, preserving
+existing projects without a migration write or another source-precedence engine.
+
+`PrefabProjectSettingsSession` is the project-owned editing/document authority.
+Settings modal drafts hold weak, exact-opening borrows and presentation text;
+typed commands edit/reset/discard/save/reload against the immutable viewed draft
+revision. Invalid numeric text remains a field finding, never a coerced value.
+Both field-level and summary diagnostics are localized in English and Turkish.
+Save uses the shared project mutation lease and exact Assets source identity,
+native file lock and atomic publication protocol. Failure preserves accepted
+policy and draft; post-rename durability uncertainty advances source identity
+but keeps the document dirty. Dirty reload is rejected until explicit discard.
+Modal cancellation discards transient policy edits. Project leave Save/Discard/
+Stay includes settings state and fences delayed decisions to its draft revision.
+
+Accepted publication is captured at new authoring/conversion operations. The
+workspace invalidates source hierarchy/drop/thumbnail evidence at its owner
+boundary, rebuilds source inspection with the accepted profile, and revalidates
+open prefab documents without changing their authored bytes, saved/history
+identities or active stages. An existing document that exceeds a lowered policy
+remains inspectable and dirty, while subsequent edits/saves fail under the new
+profile until explicit repair or policy adjustment. `PrefabDocument::ValidateLimits`
+reuses canonical validation over borrowed immutable bytes, avoiding a payload copy
+before a smaller policy can reject admission. Its additive public contract is
+covered by the existing owning Prefab Authoring consumer target. Running operations and live
+Scene/stage runtimes keep their captured policy; the Settings modal never
+patches native runtime objects or queues an implicit runtime replacement.
+
+Prefab Cook Host captures the same persisted project configuration under its
+project lease. Existing explicit per-operation limits may lower that policy but
+cannot raise it. The host key includes every effective field and the resolved
+persisted configuration; final publication additionally fences the exact module
+document bytes, including absence. Changed limits require canonical revalidation
+and prevent stale cache reuse. Failure retains the previous complete cooked
+generation. Runtime spawn consumes the profile explicitly supplied by its host;
+this workflow does not rewrite an already running runtime's captured limits.
+
+New Editor project Scene hosts capture accepted policy during composition only
+when the host explicitly grants Prefab services, before native admission. The
+project CLI resource capture passes the same typed policy through
+`HeadlessSceneActivationInput`; this CLI path already requires an authoring
+project root, including its cooked Scene selector. Generic headless/world
+services consume only that typed input and never read `.horo` or discover a
+backend. Packaged composition supplies its admitted policy explicitly; the
+declared engine-default field preserves existing source callers, while invalid
+explicit policies fail before backend construction rather than falling back.
+
+`PrefabTemplateProvider::LimitProfile` exposes only its immutable captured
+profile. Spawn service construction copies the runtime depth and instance
+binding ceilings once; request admission checks them before allocating queued
+work. Prepared-group submission also checks the captured lineage ceiling.
+This corrects previously ineffective project fields and the old hardcoded depth
+of sixteen: the canonical engine maximum is eight, with the target included,
+and projects may lower it. Instance binding admission similarly honors the
+configured ceiling instead of an unconditional sixty-four. Existing hosts keep
+their captured values after project-file changes; newly composed hosts capture
+the successor. Rebuild host and statically linked Prefab frontends together
+because the private shared spawn-state layout changed; the public provider
+getter is additive and the provider's public object layout is unchanged.
+
+Migration is additive: existing projects without `.horo/prefab.json` retain the
+same nineteen defaults. Headless settings/cook consumers link
+`HoroEngine::PrefabProjectSettings`; generic `HoroEngine::Application` and
+`HoroEngine::ProjectSettings` do not acquire Prefab dependencies. UI consumers
+use the project session rather than persisting editor preferences or querying
+files during draw. Explicit pure create-from-selection/thumbnail helpers retain
+their default-profile compatibility overload for callers without project
+context; real project composition passes an accepted profile.
+
+## Bounded dependency and expansion inspection (HORO-1078 / PFB-008.3)
+
+`HoroPrefabAuthoring` exclusively owns the additive `PrefabDebugSnapshot.h`
+contract. `CapturePrefabDebugSnapshot` consumes an already immutable canonical
+candidate plus optional detached override/provenance results. It performs no
+owner query, lock, source I/O, provider callback, expansion, value encoding or
+runtime/backend discovery. Hosts schedule explicit capture outside authoring and
+simulation hot loops; normal Scene preparation captures at its existing fresh,
+cached and worker conversion boundaries, never during draw or simulation update.
+
+Each publication owns only stable AssetIds, revision evidence, scoped member and
+property identities, semantic graph edges, component counts, override target/kind/
+state and value origin. No document, candidate payload, component bytes, values,
+names, source path, runtime handle or executable provider is retained. The class
+exposes const spans and value getters and survives retirement of every input.
+Existing typed `PrefabDiagnostics`, Observability, Build Output and source
+navigation remain the failure/reporting authorities; this API adds inspection
+data and no parallel logger, diagnostic identity or navigation authority.
+
+The explicit capture ceiling is 4096 rows, with 64 rows by default. Canonical
+nodes, edges, objects, override sections (value active/conflict/orphan, then
+component active/conflict/orphan) and provenance retain deterministic prefixes.
+Every section reports exact available/retained/omitted counts; a zero-row request
+retains totals only. Arbitrary value/payload bytes and omitted records are never
+traversed. Constructor-bounded type strings and fixed-size nested paths bound
+row size; retained paths are additionally checked against captured policy.
+Exact retained provenance targets must match a canonical source object. At most
+256 object addresses are checked per retained provenance row. This projection
+does not revalidate omitted caller-provided override content.
+
+All three Scene preparation paths share one operation-local admission budget of
+4096 retained rows and 64 capture attempts across all placements, independently
+of the number of authored placements. Exhaustion sets `debugCaptureOmitted` on
+later placements without allocating a snapshot. Rows include at most 512 bytes
+of value storage plus bounded identity text (asserted by consumer regressions),
+so retained row storage is at most 2 MiB, excluding allocator overhead; snapshot
+headers are independently bounded to 64. Existing per-placement projection
+metadata still scales with the authored placement count. Capture cancellation
+and errors are retained separately in `debugCaptureFailure` and cannot replace
+canonical expansion success, conflict/orphan errors or publication fences.
+
+Budget inspection distinguishes configured ceilings from measured facts. The
+snapshot reports the exact supplied project profile for source, graph,
+expansion, override, cook and runtime limits, canonical parser byte/depth hard
+ceilings and the derived expansion-work ceiling. Observations are exact graph,
+expanded-object, override and provenance cardinalities and retained per-object
+component counts. Parser consumed bytes/depth, consumed expansion work, cooked
+bytes and runtime usage are not measured by these inputs and are not fabricated.
+This delivery introduces no parser/cook/runtime instrumentation hook.
+
+Migration: existing canonical conversion calls remain source-compatible. Scene
+projections append optional immutable inspection evidence, a distinct capture
+failure and explicit omission flag. Inspection consumers can retain/copy just
+the debug snapshot and release the larger Scene/source projection; publication
+continues to validate original source/schema evidence. Existing errors use the
+canonical diagnostic codes and existing Build Output/source-navigation adapters.
+
 ## Related Documents
 
 - [ADR-017: Prefab Role, Ownership and Capability-Tier Decision](../../adr/017-prefab-role-ownership-and-capability-tiers.md)
@@ -1105,3 +1240,93 @@ Source conversion resolves locals through the canonical occurrence identity map
 before Scene definition admission. Cooked hosts retain local endpoints only until
 exact source-provenance resolution produces typed group body fixups; Runtime Scene
 resolves those fixups against candidate entities before Physics binding.
+
+## Bounded pipeline observations (HORO-1077 / PFB-008.2)
+
+Application composition registers Prefab metric handles once after process Telemetry
+startup. Numeric prebound handles are copied explicitly through source capture,
+immutable resolver/candidate evidence, cache requests, cook requests and runtime
+providers. They own no host/service pointer and are excluded from canonical bytes,
+source revisions, cook settings and cache-key equality. Legacy callers default to
+observation off; source-compatible API additions carry the explicit configuration.
+
+Eight closed phases and four terminal outcomes produce at most 32 operation series.
+Separate fixed count/byte, duration and cache vocabularies prevent identities, paths,
+component types, display names or arbitrary errors from becoming metric dimensions.
+Graph node/edge and bounded item sizes come from actual model outputs. External
+cache hits/misses exclude internal store deduplication; eviction/rejection report
+actual bounded storage behavior. Each canonical measured boundary is an attempt,
+so a cook may include separately measured graph, resolve, expansion and template
+work. Observations are never used to decide an engine result or publication.
+
+Disabled/stale operation construction performs no clock, string, span or MDC work.
+Process policy controls Core counters and Detailed durations/logical span events.
+Spans retain only canonical numeric operation lineage and use the existing Telemetry
+SpanRecord envelope with empty context/fields. Runtime spawn prepares its span at
+admission and completes once from actual Scene receipt/failure/cancellation/shutdown;
+normal empty Advance polls add no instrumentation work. Generation-scoped ingestion
+uses one captured canonical Telemetry state, preventing retired operations from
+publishing into a restarted runtime. Allocation, filtering, queue loss and retired
+handles suppress observations while preserving authoritative behavior.
+
+These are logical operation events, not proof of an implemented CPU/GPU profiler
+capture backend. See [Prefab metrics](../../guides/prefab-metrics.md) for ownership,
+series bounds, integration and focused validation.
+
+### Dependency-local incremental cook identity
+
+`PrefabSceneCookHost` retains the whole immutable source/sidecar capture and project,
+package, policy and provider publication fences through generation publication.
+Cache reuse is a separate decision: each scene or explicit runtime template commits
+its own canonical source closure, including nested placements, variant parents,
+declared resource dependencies and only the component/behavior descriptors it uses.
+The scene definition revision derives from that same local closure. Source paths,
+registry publication counters and unrelated selected template roots do not alter
+semantic keys. Target, format, selected producer/tool settings and project-wide
+compatibility/package/policy settings remain inputs.
+
+Resource strategies must explicitly declare their complete source dependencies
+through `ICookerStrategy::InputDependencies` before the host schedules output. An
+empty vector means a source-only producer; an absent declaration is unsupported
+for dependency-local cooking. The bounded iterative traversal rejects missing
+sources, cycles, unsupported scene conversion contexts and exhausted work before
+output. Strategies must not read undisclosed paths or mutable registries. Output
+dependencies are checked against the admitted closure. Built-in mesh, material,
+audio and collision producers are source-only; UI style uses its admitted document
+references. Native collision importers already forbid opening paths.
+
+Generic Assets cooks retain their complete captured-input identity unless a domain
+producer supplies an `AssetCookKeyProjection` tied to the exact immutable capture.
+The projection canonicalizes actual source/sidecar pairs; the domain producer owns
+closure completeness. Dependent template keys include only verified candidate
+resource envelopes belonging to that template's closure. Publication still uses the
+existing joined staging and atomic selector authority: cancellation, stale capture,
+corrupt cache, failed reload or failed selector publication retains the prior valid
+generation. This does not extend the authored nested/variant forms beyond the
+currently admitted source contracts or claim completion of their separate tickets.
+
+### Immutable value inspection and preview currentness (HORO-1035)
+
+`PrefabValueSnapshot` is a bounded read-only projection of the existing canonical
+value/component resolution, not another mutation authority. It owns typed values,
+defaults, actual composition lineage and preserved conflict/orphan/component intent.
+Canonical variant and nested application entry points capture outer-to-inner origin
+steps; source identities and presentation labels never infer a value's origin.
+Scene-instance application retains that lineage and marks removed component values
+as source-only evidence. Unregistered properties remain explicit opaque evidence.
+
+Snapshot source/schema/delta proofs include actual canonical source commitments.
+An absent delta is distinct from an empty authored envelope. Entry/byte ceilings
+retain deterministic prefixes with truthful total coverage, including zero-budget
+captures. Scene inspection shares a separate 4096-row/4-MiB budget and never changes
+otherwise-valid source-only expansion when optional inspection is unavailable.
+Existing authored override failures and publication fences remain authoritative.
+
+Preview provider revision capture runs on the existing worker before cache lookup,
+and the same proof is used for generation and revalidation before cached/fresh image
+delivery. Required unavailable revisions are typed failures. Prefab proof commits
+source closure, schema, delta and owner publication; callbacks read only owned
+immutable captures. The owner retains final generation/schema invalidation before
+display and cancels/requeues stale work, including ready cards. This does not claim
+an atomic filesystem/display snapshot. See [value snapshot contracts and API
+migration](../../guides/prefab-value-snapshots.md).

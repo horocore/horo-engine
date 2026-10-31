@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -22,7 +23,7 @@ namespace Horo::Editor::SettingsModalInternal {
     using namespace Ui;
     using Theme::ScopedTextStyle;
 
-    void DrawFooterStatus(const SettingsState &st, const EditorGuiContext &ctx, const float footerPaddingX) {
+    void DrawFooterStatus(const SettingsState &st, const EditorGuiContext &ctx, const float footerPaddingX, const float actionsStartX) {
         ImGui::SetCursorPos({footerPaddingX, (ImGui::GetWindowHeight() - ImGui::GetTextLineHeight()) * 0.5F});
         if (st.dirty) {
             ScopedTextStyle badge(ctx.theme.fonts.sansCompact, TextPx::Caption(), FontPx::SansCompact);
@@ -39,30 +40,48 @@ namespace Horo::Editor::SettingsModalInternal {
         else if (st.statusIsError)
             textColor = Err();
         ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-        const auto navigationHint = ctx.localization.Get("editor", "settings.navigation.save_policy_first");
+        const auto navigationHint = SettingsModal::kTextScope.Text(ctx.localization, "navigation.save_policy_first");
         const char *message =
             st.navigationProjectDraftDirty ? navigationHint.c_str() : "Apply writes user preferences to ~/.horo/editor_settings.json";
         if (hasFeedback)
             message = st.modalFeedback.c_str();
         else if (!st.statusMessage.empty())
             message = st.statusMessage.c_str();
+        const auto prefab = st.prefab.owner.lock();
+        const auto &prefabHint = SettingsModal::kTextScope.Text(ctx.localization, "prefab.save_first");
+        if (prefab && prefab->IsDirty())
+            message = prefabHint.c_str();
+        const auto origin = ImGui::GetWindowPos();
+        ImGui::PushClipRect(origin, {origin.x + actionsStartX - 12.0F, origin.y + ImGui::GetWindowHeight()}, true);
         ImGui::TextUnformatted(message);
+        ImGui::PopClipRect();
         ImGui::PopStyleColor();
     }
 
     [[nodiscard]] bool DrawFooterActions(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx,
-                                         const float centeredActionY) {
+                                         const float centeredActionY, float &actionsStartX) {
+        const auto prefab = st.prefab.owner.lock();
         constexpr float actionH = 32.0F;
-        constexpr float restoreW = 124.0F;
-        constexpr float cancelW = 78.0F;
-        constexpr float applyW = 70.0F;
+        const auto restoreDefaults = SettingsModal::kTextScope.Text(ctx.localization, "restore_defaults");
+        const auto cancelLabel = SettingsModal::kTextScope.Text(ctx.localization, "cancel") + "###settings_cancel";
+        const auto applyLabel = SettingsModal::kTextScope.Text(ctx.localization, "apply") + "###settings_apply";
+        const auto &tokens = GetActiveTokens();
+        const float scale = tokens.sizes.uiScale;
+        const auto metrics = DesignSystem::MetricsFor(tokens, ComponentSize::Small);
+        ScopedTextStyle text(ctx.theme.fonts.sansCompact, metrics.fontSize, FontPx::SansCompact);
+        const auto width = [&](const char *label, const float minimum) {
+            return std::max(minimum, (ImGui::CalcTextSize(label, nullptr, true).x + metrics.paddingX * 2.0F) / scale);
+        };
+        const float restoreW = width(restoreDefaults.c_str(), 124.0F);
+        const float cancelW = width(cancelLabel.c_str(), 78.0F);
+        const float applyW = width(applyLabel.c_str(), 70.0F);
         constexpr float gap = 8.0F;
         constexpr float footerPaddingX = 22.0F;
-        const float actionsW = restoreW + cancelW + applyW + gap * 2.0F;
-        ImGui::SetCursorPos({ImGui::GetWindowWidth() - footerPaddingX - actionsW, centeredActionY});
+        const float actionsW = (restoreW + cancelW + applyW) * scale + gap * 2.0F;
+        actionsStartX = ImGui::GetWindowWidth() - footerPaddingX - actionsW;
+        ImGui::SetCursorPos({actionsStartX, centeredActionY});
         bool requestClose = false;
-        if (const std::string restoreDefaults = ctx.localization.Get("editor", "settings.restore_defaults");
-            Button({.label = restoreDefaults.c_str(),
+        if (Button({.label = restoreDefaults.c_str(),
                     .size = {restoreW, actionH},
                     .variant = ButtonVariant::Secondary,
                     .font = ctx.theme.fonts.sansCompact,
@@ -74,8 +93,7 @@ namespace Horo::Editor::SettingsModalInternal {
             st.statusIsError = false;
         }
         ImGui::SameLine(0.0F, gap);
-        if (const std::string cancelLabel = ctx.localization.Get("editor", "settings.cancel") + "###settings_cancel";
-            Button({.label = cancelLabel.c_str(),
+        if (Button({.label = cancelLabel.c_str(),
                     .size = {cancelW, actionH},
                     .variant = ButtonVariant::Secondary,
                     .font = ctx.theme.fonts.sansCompact,
@@ -85,10 +103,10 @@ namespace Horo::Editor::SettingsModalInternal {
             requestClose = true;
         }
         ImGui::SameLine(0.0F, gap);
-        if (const std::string applyLabel = ctx.localization.Get("editor", "settings.apply") + "###settings_apply";
-            Button({.label = applyLabel.c_str(),
+        if (Button({.label = applyLabel.c_str(),
                     .size = {applyW, actionH},
                     .variant = ButtonVariant::Primary,
+                    .enabled = !prefab || !prefab->IsDirty(),
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {
@@ -100,9 +118,11 @@ namespace Horo::Editor::SettingsModalInternal {
     [[nodiscard]] bool DrawFooterContent(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx) {
         constexpr float actionH = 32.0F;
         constexpr float footerPaddingX = 22.0F;
-        const float centeredActionY = (ImGui::GetWindowHeight() - actionH) * 0.5F;
-        DrawFooterStatus(st, ctx, footerPaddingX);
-        return DrawFooterActions(st, settings, ctx, centeredActionY);
+        const float centeredActionY = (ImGui::GetWindowHeight() - actionH * GetActiveTokens().sizes.uiScale) * 0.5F;
+        float actionsStartX{};
+        const bool requestClose = DrawFooterActions(st, settings, ctx, centeredActionY, actionsStartX);
+        DrawFooterStatus(st, ctx, footerPaddingX, actionsStartX);
+        return requestClose;
     }
 
 }  // namespace Horo::Editor::SettingsModalInternal

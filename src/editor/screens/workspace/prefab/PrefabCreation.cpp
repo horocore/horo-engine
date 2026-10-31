@@ -353,7 +353,8 @@ namespace Horo::Editor {
                                                                 const Assets::AssetId asset, const Application::HoroVersion &version,
                                                                 const Assets::AssetRegistrySnapshot &registry,
                                                                 const Gameplay::BehaviorRegistry *behaviors,
-                                                                std::vector<PrefabCreationBoundary> &boundaries) {
+                                                                std::vector<PrefabCreationBoundary> &boundaries,
+                                                                const Prefab::PrefabLimitProfile *projectLimits) {
         using Return = Result<Prefab::PrefabDocument>;
         boundaries.clear();
         auto selected = Subtree(snapshot, root);
@@ -367,7 +368,7 @@ namespace Horo::Editor {
         AuditSelectedBehaviors(selected.Value(), behaviors, boundaries);
         if (!boundaries.empty())
             return Return::Failure(Unsupported());
-        auto limits = Prefab::PrefabLimitProfile::Create({});
+        auto limits = projectLimits ? Result<Prefab::PrefabLimitProfile>::Success(*projectLimits) : Prefab::PrefabLimitProfile::Create({});
         if (limits.HasError())
             return Return::Failure(limits.ErrorValue());
         Prefab::PrefabDocumentData data{.projectVersion = version, .assetId = asset};

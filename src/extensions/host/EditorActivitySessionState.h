@@ -20,6 +20,8 @@ namespace Horo::Extensions {
         JobSystem &jobs;
         const ExtensionAdmissionPolicy policy;
         EditorSurfaceRegistry registry;
+        EditorCommandRegistry commands;
+        std::vector<EditorActivityCommandProjection> preparedCommands;
         std::vector<std::weak_ptr<EditorActivitySession>> sessions;
         std::vector<EditorActivityProjection> prepared;
         std::uint64_t nextGeneration{1};
@@ -48,6 +50,15 @@ namespace Horo::Extensions {
         };
 
         std::vector<Message> messages;
+
+        struct Command {
+            EditorCommandDescriptor descriptor;
+            std::string node;
+            std::string action;
+            std::optional<EditorCommandRegistration> registration;
+        };
+
+        std::vector<Command> commands;
         EditorUiForm form;
         EditorActivityPresentation presentation;
         std::shared_ptr<const EditorSvgIcon> icon;
@@ -96,6 +107,8 @@ namespace Horo::Extensions {
                 activityRegistration->Reset();
             if (drawerRegistration)
                 drawerRegistration->Reset();
+            for (auto &command : commands)
+                command.registration.reset();
             contexts.BeginShutdown();
         }
 
@@ -148,6 +161,23 @@ namespace Horo::Extensions {
             if (auto published = activeHost->Registry().PublishActivity(activity.surface.provider, activity.surface.id, presentation);
                 published.HasError())
                 return published;
+            for (auto &command : commands) {
+                EditorSurfaceContextDescriptor descriptor{.surface = {.id = command.descriptor.id.value,
+                                                                      .kind = EditorSurfaceKind::ToolbarAction,
+                                                                      .labelLocalizationKey = command.descriptor.labelLocalizationKey,
+                                                                      .placement = {EditorSurfacePlacementKind::Toolbar, "main", 0},
+                                                                      .requiredCapabilities = drawer.surface.requiredCapabilities,
+                                                                      .provider = drawer.surface.provider},
+                                                          .commands = {{command.descriptor.id.value}},
+                                                          .localization = {{command.descriptor.labelLocalizationKey}}};
+                auto attached = contexts.Attach(std::move(descriptor), admission->ActivationLease(), grants);
+                if (attached.HasError())
+                    return Result<void>::Failure(attached.ErrorValue());
+                auto registered = activeHost->state_->commands.Register(std::move(attached).Value(), command.descriptor);
+                if (registered.HasError())
+                    return Result<void>::Failure(registered.ErrorValue());
+                command.registration.emplace(std::move(registered).Value());
+            }
             committed = true;
             return Result<void>::Success();
         }

@@ -82,10 +82,51 @@ namespace Horo::Editor {
         return namespaceId + ':' + localKey;
     }
 
+    /** @copydoc MessageKeyHash::operator()(const MessageKey &) */
     std::size_t MessageKeyHash::operator()(const MessageKey &key) const noexcept {
-        const auto namespaceHash = std::hash<std::string>{}(key.namespaceId);
-        const auto localKeyHash = std::hash<std::string>{}(key.localKey);
-        return namespaceHash ^ (localKeyHash + static_cast<std::size_t>(0x9e3779b9) + (namespaceHash << 6U) + (namespaceHash >> 2U));
+        return (*this)(MessageKeyView{key.namespaceId, {}, key.localKey});
+    }
+
+    /** @copydoc MessageKeyHash::operator()(MessageKeyView) */
+    std::size_t MessageKeyHash::operator()(const MessageKeyView key) const noexcept {
+        std::size_t hash = 2166136261U;
+        const auto append = [&hash](const std::string_view part) {
+            for (const unsigned char value : part)
+                hash = (hash ^ value) * 16777619U;
+        };
+        append(key.namespaceId);
+        append(":");
+        append(key.scope);
+        if (!key.scope.empty())
+            append(".");
+        append(key.key);
+        return hash;
+    }
+
+    /** @copydoc MessageKeyEqual::operator()(const MessageKey &, const MessageKey &) */
+    bool MessageKeyEqual::operator()(const MessageKey &left, const MessageKey &right) const noexcept {
+        return left == right;
+    }
+
+    /** @copydoc MessageKeyEqual::operator()(const MessageKey &, MessageKeyView) */
+    bool MessageKeyEqual::operator()(const MessageKey &left, const MessageKeyView right) const noexcept {
+        if (left.namespaceId != right.namespaceId)
+            return false;
+        std::string_view local = left.localKey;
+        if (!right.scope.empty()) {
+            if (!local.starts_with(right.scope))
+                return false;
+            local.remove_prefix(right.scope.size());
+            if (local.empty() || local.front() != '.')
+                return false;
+            local.remove_prefix(1);
+        }
+        return local == right.key;
+    }
+
+    /** @copydoc MessageKeyEqual::operator()(MessageKeyView, const MessageKey &) */
+    bool MessageKeyEqual::operator()(const MessageKeyView left, const MessageKey &right) const noexcept {
+        return (*this)(right, left);
     }
 
     LocalizationService::LocalizationService(LocaleTag sourceFallback) : m_sourceFallback(std::move(sourceFallback)) {
@@ -164,14 +205,27 @@ namespace Horo::Editor {
         return LocalizationSnapshot{m_active, nullptr, m_revision};
     }
 
+    /** @copydoc LocalizationService::Get */
     const std::string &LocalizationService::Get(std::string_view namespaceId, std::string_view localKey) const {
+        return GetScoped(namespaceId, {}, localKey);
+    }
+
+    /** @copydoc LocalizationService::GetScoped */
+    const std::string &LocalizationService::GetScoped(const std::string_view namespaceId, const std::string_view scope,
+                                                      const std::string_view localKey) const {
         if (m_active) {
-            const MessageKey key{std::string(namespaceId), std::string(localKey)};
+            const MessageKeyView key{namespaceId, scope, localKey};
             if (const auto it = m_active->messages.find(key); it != m_active->messages.end())
                 return it->second;
         }
 
-        std::string missingText = "[missing:" + std::string(namespaceId) + ":" + std::string(localKey) + "]";
+        std::string missingText = "[missing:" + std::string(namespaceId) + ":";
+        if (!scope.empty()) {
+            missingText += scope;
+            missingText += '.';
+        }
+        missingText += localKey;
+        missingText += ']';
         const auto [insertedIt, inserted] = m_missingCache.insert(std::move(missingText));
         return *insertedIt;
     }

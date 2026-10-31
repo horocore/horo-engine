@@ -4,6 +4,241 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab.diff.component_added": {"text": "Component added by instance"},
+    "workspace.prefab.diff.component_removed": {"text": "Component removed by instance"},
+    "workspace.prefab.diff.origin.source": {"text": "Source value"},
+    "workspace.prefab.diff.origin.variant": {"text": "Variant inheritance"},
+    "workspace.prefab.diff.origin.nested": {"text": "Nested prefab"},
+    "workspace.prefab.diff.origin.instance": {"text": "Scene instance override"},
+    "workspace.prefab.diff.source_value": {"text": "Source"},
+    "workspace.prefab.diff.effective_value": {"text": "Effective value / intent"},
+    "workspace.prefab.diff.schema_default": {"text": "Schema default (inspection only)"},
+    "workspace.prefab.diff.conflict": {"text": "Conflicting intent retained"},
+    "workspace.prefab.diff.orphan": {"text": "Orphaned intent retained"},
+    "workspace.prefab.diff.unavailable": {"text": "Typed properties unavailable; opaque source retained"},
+    "workspace.prefab.diff.omitted": {"text": "Additional values omitted by inspection budget"},
+    "terrain.import.width": {"text": "Height samples along X"},
+    "terrain.import.height": {"text": "Height samples along Z"},
+    "terrain.import.width_help": {"text": "Exact RAW-F32 columns; at least two. Width × height is limited to 1,048,576 samples."},
+    "terrain.import.height_help": {"text": "Exact RAW-F32 rows. The file must contain one finite little-endian float32 meter elevation per sample."},
+    "terrain.import.spacing_x": {"text": "X spacing (meters)"},
+    "terrain.import.spacing_z": {"text": "Z spacing (meters)"},
+    "terrain.import.spacing_help": {"text": "Positive sample spacing. Sculpting edits the height-only canonical asset; no weight or hole channels are inferred."},
+    "terrain.import.origin_x": {"text": "Source origin X (meters)"},
+    "terrain.import.origin_z": {"text": "Source origin Z (meters)"},
+    "terrain.import.origin_help": {"text": "Preserved dataset coordinates. The isolated source viewport is anchored at this first sample."},
+    "terrain.import.crs": {"text": "Projected CRS (optional)"},
+    "terrain.import.crs_help": {"text": "Leave empty for local meters; otherwise use EPSG followed by a colon and digits. Geographic degrees require upstream conversion."},
+    "terrain.tools.title": {"text": "Terrain sculpt tools"},
+    "terrain.tools.raise": {"text": "Raise"},
+    "terrain.tools.lower": {"text": "Lower"},
+    "terrain.tools.smooth": {"text": "Smooth"},
+    "terrain.tools.flatten": {"text": "Flatten"},
+    "terrain.tools.noise": {"text": "Noise"},
+    "terrain.tools.operation": {"text": "Operation"},
+    "terrain.tools.radius": {"text": "Radius (meters)"},
+    "terrain.tools.amount": {"text": "Elevation per stamp (meters)"},
+    "terrain.tools.blend": {"text": "Smooth / flatten blend (0–1)"},
+    "terrain.tools.flatten_help": {"text": "Flatten samples its target elevation when the stroke begins. Noise retains an explicit deterministic seed for each stroke."},
+    "terrain.tools.undo": {"text": "Undo terrain stroke"},
+    "terrain.tools.redo": {"text": "Redo terrain stroke"},
+    "terrain.tools.save": {"text": "Save terrain source"},
+    "terrain.tools.close": {"text": "Close terrain document"},
+    "terrain.tools.discard": {"text": "Discard changes and close"},
+    "terrain.tools.instructions": {"text": "Drag on the actual terrain surface. Release commits one patch transaction. Escape, focus loss or view changes cancel the uncommitted stroke. A stroke allows 64 stamps and 16,384 affected samples."},
+    "terrain.tools.unavailable": {"text": "Terrain authoring is unavailable for this asset or editor composition."},
+    "terrain.tools.failed": {"text": "The terrain operation could not complete. Source and undo history are preserved when admission or application fails. See the Console for the original diagnostic."},
+    "terrain.tools.conflict": {"text": "The terrain source or importer settings changed on disk. Save is blocked. Keep this document, or explicitly discard and reopen it."},
+    "terrain.tools.dirty_close": {"text": "This terrain document has unsaved changes. Save it, discard changes and close, or keep editing."},
+
+    "leave_confirmation.title": {"text": "Unsaved Changes"},
+    "leave_confirmation.operation_title": {"text": "Operation In Progress"},
+    "leave_confirmation.dirty_document": {"text": "Save your changes before leaving?"},
+    "leave_confirmation.unsaved_draft": {"text": "Your project setup has unsaved changes. Discard them and leave?"},
+    "leave_confirmation.running_operation": {"text": "An operation is running. Cancel it before leaving?"},
+    "leave_confirmation.recovery": {"text": "Resolve the pending recovery decision before leaving."},
+    "leave_confirmation.native_dialog": {"text": "Complete the open dialog before leaving."},
+    "leave_confirmation.save": {"text": "Save & Leave"},
+    "leave_confirmation.discard": {"text": "Discard & Leave"},
+    "leave_confirmation.cancel_operation": {"text": "Cancel Operation"},
+    "leave_confirmation.keep_running": {"text": "Keep Running"},
+    "leave_confirmation.wait": {"text": "Wait"},
+    "leave_confirmation.stay": {"text": "Stay Here"},
+
+    "workspace.prepare_release.identity": {"text": "Identity"},
+    "workspace.prepare_release.product_name": {"text": "Product name"},
+    "workspace.prepare_release.version": {"text": "Version (SemVer)"},
+    "workspace.prepare_release.source": {"text": "Source revision or tag"},
+    "workspace.prepare_release.notes": {"text": "Release notes (project-relative)"},
+    "workspace.prepare_release.target_content": {"text": "Target and content"},
+    "workspace.prepare_release.product_profile": {"text": "Product release profile"},
+    "workspace.prepare_release.package_format": {"text": "Package format"},
+    "workspace.prepare_release.portable": {"text": "Portable archive"},
+    "workspace.prepare_release.installer": {"text": "Platform installer"},
+    "workspace.prepare_release.store_package": {"text": "Store package"},
+    "workspace.prepare_release.content": {"text": "Content selection"},
+    "workspace.prepare_release.base_content": {"text": "Base game and required chunks"},
+    "workspace.prepare_release.quality_gates": {"text": "Quality gates"},
+    "workspace.prepare_release.test_profile": {"text": "Project test profile"},
+    "workspace.prepare_release.smoke": {"text": "Release smoke only"},
+    "workspace.prepare_release.fast_smoke": {"text": "Fast + release smoke"},
+    "workspace.prepare_release.full_smoke": {"text": "Full project tests + release smoke"},
+    "workspace.prepare_release.smoke_required": {"text": "Packaged-player smoke and final verification are always required."},
+    "workspace.prepare_release.gates_notice": {"text": "Version/tag/notes, frozen package lock, licenses, compatibility, signatures, checksums, and packaged-player startup must be checked before the candidate becomes eligible to publish."},
+    "workspace.prepare_release.security_output": {"text": "Security and output"},
+    "workspace.prepare_release.signing_reference": {"text": "Signing profile reference"},
+    "workspace.prepare_release.protection": {"text": "Archive protection profile"},
+    "workspace.prepare_release.output_root": {"text": "Output root"},
+    "workspace.prepare_release.local_only": {"text": "This action prepares a local candidate only. Publishing requires opening Publish Candidate separately."},
+    "workspace.prepare_release.review_heading": {"text": "Review release request"},
+    "workspace.prepare_release.review_hint": {"text": "Confirm the source, target, and gates before preparing a local candidate."},
+    "workspace.prepare_release.release_identity": {"text": "Release identity"},
+    "workspace.prepare_release.target_package": {"text": "Target and package"},
+    "workspace.prepare_release.verification_security": {"text": "Verification and security"},
+    "workspace.prepare_release.local_output": {"text": "Local output"},
+    "workspace.prepare_release.candidate_path": {"text": "Local candidate path"},
+    "workspace.prepare_release.path_pending": {"text": "Enter a version and output root to preview the candidate path."},
+    "workspace.prepare_release.path_unavailable": {"text": "Not exposed by the connected release service."},
+    "workspace.prepare_release.review_notice": {"text": "The candidate must pass all required checks. Preparing it requires a host-validated execution plan; request preflight is not connected in this host yet."},
+    "workspace.prepare_release.review_request": {"text": "Review request"},
+    "workspace.prepare_release.prepare_local": {"text": "Prepare local candidate"},
+    "workspace.prepare_release.final_verified": {"text": "Local candidate passed final verification."},
+    "workspace.build.title": {"text": "Build"},
+    "workspace.build.profile": {"text": "Build profile"},
+    "workspace.build.host_profile": {"text": "Current host configuration"},
+    "workspace.build.manage_profiles": {"text": "Manage profiles"},
+    "workspace.build.profiles_unavailable": {"text": "Saved build profiles are not connected in this host."},
+    "workspace.build.product": {"text": "Product"},
+    "workspace.build.dedicated_server": {"text": "Game Dedicated Server"},
+    "workspace.build.engine_cli": {"text": "Engine CLI"},
+    "workspace.build.sdk": {"text": "SDK"},
+    "workspace.build.workflow": {"text": "Workflow"},
+    "workspace.build.playable": {"text": "Playable Build"},
+    "workspace.build.compile_only": {"text": "Compile Only"},
+    "workspace.build.qa_package": {"text": "Package for QA"},
+    "workspace.build.content": {"text": "Content"},
+    "workspace.build.all_content": {"text": "All game content"},
+    "workspace.build.selected_content": {"text": "Selected scenes and dependencies"},
+    "workspace.build.test_after": {"text": "Test after build"},
+    "workspace.build.run_after": {"text": "Run after build"},
+    "workspace.build.advanced": {"text": "Advanced build options"},
+    "workspace.build.native_scope": {"text": "This host supports Compile Only for Game Runtime gameplay modules on this machine. Playable packaging, content cooking, tests and launching are not connected."},
+    "workspace.build.new_job": {"text": "New build"},
+    "workspace.build.background": {"text": "Keep running in background"},
+    "workspace.build_release.stage_validate": {"text": "01 Validate"},
+    "workspace.build_release.stage_configure": {"text": "02 Configure"},
+    "workspace.build_release.stage_build": {"text": "03 Build"},
+    "workspace.build_release.stage_cook": {"text": "04 Cook"},
+    "workspace.build_release.stage_package": {"text": "05 Package"},
+    "workspace.build_release.stage_preverify": {"text": "06 Pre-Verify"},
+    "workspace.build_release.stage_sign": {"text": "07 Sign"},
+    "workspace.build_release.stage_finalize": {"text": "08 Finalize"},
+    "workspace.build_release.stage_verify": {"text": "09 Final Verify"},
+    "workspace.build_release.stage_publish": {"text": "10 Publish"},
+    "workspace.build_release.product_profile": {"text": "Product Profile"},
+    "workspace.build_release.game_runtime": {"text": "Game Runtime"},
+    "workspace.build_release.dedicated_server": {"text": "Dedicated Server"},
+    "workspace.build_release.engine_editor": {"text": "Engine Editor"},
+    "workspace.build_release.diagnostics": {"text": "Diagnostics"},
+    "workspace.build_release.target": {"text": "Target"},
+    "workspace.build_release.platform": {"text": "Platform"},
+    "workspace.build_release.windows": {"text": "Windows"},
+    "workspace.build_release.macos": {"text": "macOS"},
+    "workspace.build_release.linux": {"text": "Linux"},
+    "workspace.build_release.architecture": {"text": "Architecture"},
+    "workspace.build_release.x64": {"text": "x86 64"},
+    "workspace.build_release.arm64": {"text": "ARM64"},
+    "workspace.build_release.shipping": {"text": "Shipping"},
+    "workspace.build_release.development": {"text": "Development"},
+    "workspace.build_release.test_config": {"text": "Test"},
+    "workspace.build_release.security": {"text": "Security"},
+    "workspace.build_release.signing_profile": {"text": "Signing Profile"},
+    "workspace.build_release.none": {"text": "None"},
+    "workspace.build_release.configured_identity": {"text": "Configured identity reference"},
+    "workspace.build_release.archive_protection": {"text": "Archive Protection"},
+    "workspace.build_release.project_policy": {"text": "Project policy"},
+    "workspace.build_release.credential_hint": {"text": "Signing identities are references. Credentials are never stored in this form."},
+    "workspace.build_release.release_name": {"text": "Release Name"},
+    "workspace.build_release.version_string": {"text": "Version String"},
+    "workspace.build_release.semver_hint": {"text": "Use a semantic version: major.minor.patch, with optional prerelease and build metadata."},
+    "workspace.build_release.notes_path": {"text": "Release Notes Path"},
+    "workspace.build_release.minimum_engine": {"text": "Minimum Engine Version"},
+    "workspace.build_release.compatibility_hint": {"text": "Project compatibility and version authority must be verified by release preflight before execution."},
+    "workspace.build_release.include_symbols": {"text": "Include source-level debug symbols in a separate archive"},
+    "workspace.build_release.crash_reporter": {"text": "Generate crash reporter integration files"},
+    "workspace.build_release.allow_downgrades": {"text": "Allow downgrades from newer builds"},
+    "workspace.build_release.toolchain": {"text": "Toolchain"},
+    "workspace.build_release.host_toolchain": {"text": "Host-configured toolchain"},
+    "workspace.build_release.parallel_jobs": {"text": "Parallel Jobs"},
+    "workspace.build_release.jobs_invalid": {"text": "Parallel jobs must be between 1 and 256."},
+    "workspace.build_release.defines": {"text": "Preprocessor Defines"},
+    "workspace.build_release.pre_build": {"text": "Pre-Build Script"},
+    "workspace.build_release.post_build": {"text": "Post-Build Script"},
+    "workspace.build_release.lto": {"text": "Enable link-time optimization (LTO)"},
+    "workspace.build_release.strip_editor": {"text": "Strip editor-only metadata"},
+    "workspace.build_release.unit_test_runner": {"text": "Build unit-test runner"},
+    "workspace.build_release.scripts_hint": {"text": "These are draft preferences. Opening or editing this form never executes a script."},
+    "workspace.build_release.inclusion_mode": {"text": "Package Inclusion Mode"},
+    "workspace.build_release.all_referenced": {"text": "All referenced"},
+    "workspace.build_release.explicit_list": {"text": "Explicit list"},
+    "workspace.build_release.core_only": {"text": "Core only"},
+    "workspace.build_release.packages_unavailable": {"text": "No release package inventory is connected. Package names, versions and inclusion status are unavailable."},
+    "workspace.build_release.fail_unresolved": {"text": "Fail on unresolved package dependency"},
+    "workspace.build_release.distribution_targets": {"text": "Distribution Targets"},
+    "workspace.build_release.destinations_unavailable": {"text": "Publication destinations must come from the configured release provider. None is connected in this host."},
+    "workspace.build_release.channel": {"text": "Channel"},
+    "workspace.build_release.stable": {"text": "Stable"},
+    "workspace.build_release.beta": {"text": "Beta"},
+    "workspace.build_release.alpha": {"text": "Alpha"},
+    "workspace.build_release.visibility": {"text": "Visibility"},
+    "workspace.build_release.public": {"text": "Public"},
+    "workspace.build_release.private": {"text": "Private"},
+    "workspace.build_release.cdn_endpoint": {"text": "CDN Endpoint"},
+    "workspace.build_release.delta_patch": {"text": "Generate a delta patch from the previous release"},
+    "workspace.build_release.output_path": {"text": "Output Path Template"},
+    "workspace.build_release.source_revision": {"text": "Source Revision / Branch"},
+    "workspace.build_release.symbol_store": {"text": "Symbol Store Path"},
+    "workspace.build_release.manifest_output": {"text": "Manifest Output"},
+    "workspace.build_release.compress_archive": {"text": "Compress the final archive"},
+    "workspace.build_release.output_hint": {"text": "Paths are draft values. No files are created or overwritten while editing."},
+    "workspace.build_release.native_build": {"text": "Native gameplay build tools"},
+    "workspace.build_release.title": {"text": "Build & Release"},
+    "workspace.build_release.draft_badge": {"text": "DRAFT"},
+    "workspace.build_release.draft_hint": {"text": "Release execution is not connected in this host. Form values remain a transient draft; preparation and publication are unavailable."},
+    "workspace.build_release.tab_configuration": {"text": "Configuration"},
+    "workspace.build_release.tab_build": {"text": "Build Options"},
+    "workspace.build_release.tab_packages": {"text": "Packages"},
+    "workspace.build_release.tab_distribution": {"text": "Distribution"},
+    "workspace.build_release.tab_output": {"text": "Output"},
+    "workspace.build_release.tab_logs": {"text": "Logs"},
+    "workspace.build_release.prepare": {"text": "Prepare Release"},
+    "workspace.build_release.build_title": {"text": "Build Job"},
+    "workspace.build_release.release_title": {"text": "Prepare Release"},
+    "workspace.build_release.build_hint": {"text": "Build the project’s native gameplay module using the editor’s configured toolchain. This does not package a player."},
+    "workspace.build_release.project": {"text": "Project"},
+    "workspace.build_release.configuration": {"text": "Configuration"},
+    "workspace.build_release.no_project": {"text": "Open a project to start a build."},
+    "workspace.build_release.build_unavailable": {"text": "The native build service or gameplay SDK is unavailable."},
+    "workspace.build_release.release_hint": {"text": "Release jobs are owned by the shared release service. Opening this window never starts a release or publishes a candidate."},
+    "workspace.build_release.release_unavailable": {"text": "Release preparation is not connected in this editor host yet. No candidate can be built or published from this window."},
+    "workspace.build_release.no_jobs": {"text": "No active or recent release jobs."},
+    "workspace.build_release.status": {"text": "Status"},
+    "workspace.build_release.start": {"text": "Build native gameplay"},
+    "workspace.build_release.cancel": {"text": "Cancel job"},
+    "workspace.build_release.close": {"text": "Close"},
+    "workspace.build_release.background": {"text": "Closing this window keeps running jobs in the background."},
+    "workspace.build_release.queued": {"text": "Queued"},
+    "workspace.build_release.locking": {"text": "Acquiring build lock"},
+    "workspace.build_release.waiting": {"text": "Waiting for another build"},
+    "workspace.build_release.configuring": {"text": "Configuring"},
+    "workspace.build_release.building": {"text": "Building"},
+    "workspace.build_release.validating": {"text": "Validating"},
+    "workspace.build_release.succeeded": {"text": "Succeeded"},
+    "workspace.build_release.failed": {"text": "Failed"},
+    "workspace.build_release.cancelled": {"text": "Cancelled"},
+    "workspace.build_release.timed_out": {"text": "Timed out"},
+    "workspace.build_release.running": {"text": "Running"},
+    "workspace.build_release.cancelling": {"text": "Cancellation requested"},
     "workspace.prefab_document.source_controls": { "text": "Prefab source controls are in the document. Return to the Scene viewport to edit the Scene." },
     "workspace.prefab_document.undo": { "text": "Undo source edit" },
     "workspace.prefab_document.redo": { "text": "Redo source edit" },
@@ -499,11 +734,50 @@
     "workspace.play_topology.storage": {
       "text": "Profiles could not be read or saved. Check project storage access."
     },
+    "workspace.global_dock.network.field.records": {"text": "Records"},
+    "workspace.global_dock.network.field.dropped": {"text": "Dropped"},
+    "workspace.global_dock.network.field.evicted": {"text": "Evicted"},
+    "workspace.global_dock.network.empty.filter": {"text": "No matching records"},
+    "workspace.global_dock.network.status.live": {"text": "Live"},
+    "workspace.global_dock.network.status.paused": {"text": "Paused"},
+    "workspace.global_dock.network.status.stale": {"text": "Stale"},
+    "workspace.global_dock.network.status.disabled": {"text": "Disabled"},
+    "workspace.global_dock.network.status.detached": {"text": "Offline"},
+    "workspace.global_dock.network.column.record": {"text": "#"},
+    "workspace.global_dock.network.column.event": {"text": "Event"},
+    "workspace.global_dock.network.column.connection": {"text": "Connection"},
+    "workspace.global_dock.network.column.summary": {"text": "Summary"},
+    "workspace.global_dock.network.details.title": {"text": "Record Details"},
+    "workspace.global_dock.network.details.close": {"text": "Close"},
+    "workspace.global_dock.network.empty.title": {"text": "No network activity"},
+    "workspace.global_dock.network.empty.live": {"text": "Waiting for runtime network records."},
+    "workspace.global_dock.network.empty.offline": {"text": "Start a network-enabled runtime to inspect its activity."},
+    "workspace.global_dock.network.field.bytes": {"text": "Bytes"},
+    "workspace.global_dock.network.field.session": {"text": "Peer session generation"},
+    "workspace.global_dock.network.field.admitted": {"text": "Gameplay admitted"},
+    "workspace.global_dock.network.field.registered": {"text": "Registered"},
+    "workspace.global_dock.network.field.retired": {"text": "Retired"},
+    "workspace.global_dock.network.field.considered": {"text": "Considered"},
+    "workspace.global_dock.network.field.published": {"text": "Published"},
+    "workspace.global_dock.network.field.failed": {"text": "Failed"},
+    "workspace.global_dock.network.field.deferred": {"text": "Deferred"},
+    "workspace.global_dock.network.field.accepted": {"text": "Accepted"},
+    "workspace.global_dock.network.field.succeeded": {"text": "Succeeded"},
+    "workspace.global_dock.network.field.cancelled": {"text": "Cancelled"},
+    "workspace.global_dock.network.field.local_tick": {"text": "Local tick"},
+    "workspace.global_dock.network.field.server_tick": {"text": "Server tick"},
+    "workspace.global_dock.network.field.sample_age": {"text": "Sample age (ticks)"},
+    "workspace.global_dock.network.field.mapping": {"text": "Tick mapping"},
+    "workspace.global_dock.network.field.relevant": {"text": "Relevant"},
+    "workspace.global_dock.network.field.sequence": {"text": "Sequence"},
+    "workspace.global_dock.network.field.amount": {"text": "Amount"},
+    "workspace.global_dock.network.value.yes": {"text": "Yes"},
+    "workspace.global_dock.network.value.no": {"text": "No"},
     "workspace.global_dock.network.event.admitted": {
       "text": "Gameplay session admitted"
     },
     "workspace.global_dock.network.replication": {
-      "text": "176 objects replicating · RPC queue: 0"
+      "text": "Replication"
     },
     "workspace.global_dock.network.rpc": {
       "text": "RPC"
@@ -599,19 +873,19 @@
       "text": "PROJECT DIRECTORY"
     },
     "project_creation.identity.location": {
-      "text": "PROJECT LOCATION"
-    },
-    "project_creation.identity.location.hint": {
-      "text": "Choose an empty folder or a missing location with a writable parent."
+      "text": "PROJECT FOLDER"
     },
     "project_creation.identity.location.select": {
-      "text": "Select Project Location"
+      "text": "Select Location for New Project"
     },
     "project_creation.identity.name": {
       "text": "PROJECT NAME"
     },
+    "project_creation.identity.name.invalid_folder": {
+      "text": "Enter a valid folder name; do not use . or .. or a colon."
+    },
     "project_creation.identity.name.hint": {
-      "text": "Stored as project.json name; projectId is generated once."
+      "text": "Enter a name for your project."
     },
     "project_creation.identity.scene": {
       "text": "DEFAULT SCENE"
@@ -789,13 +1063,20 @@
     "workspace.scene_compare.field.components": { "text": "Components" },
     "workspace.scene_compare.empty": { "text": "No semantic object differences remain. The file may only differ in formatting." },
     "workspace.gameplay_behavior.create.title": { "text": "Create Gameplay Behavior" },
-    "workspace.gameplay_behavior.create.type": { "text": "TYPE" },
+    "workspace.gameplay_behavior.create.type": { "text": "Scripting Language" },
     "workspace.gameplay_behavior.create.lua": { "text": "Lua" },
     "workspace.gameplay_behavior.create.native": { "text": "Native C++" },
-    "workspace.gameplay_behavior.create.destination": { "text": "DESTINATION" },
-    "workspace.gameplay_behavior.create.filename": { "text": "FILENAME" },
+    "workspace.gameplay_behavior.create.destination": { "text": "Destination" },
+    "workspace.gameplay_behavior.create.filename": { "text": "Behavior Name" },
     "workspace.gameplay_behavior.create.invalid_filename": { "text": "Enter a valid filename without an extension or path separators." },
-    "workspace.gameplay_behavior.create.confirm": { "text": "Create" },
+    "workspace.gameplay_behavior.create.available": { "text": "Valid name and available" },
+    "workspace.gameplay_behavior.create.name_exists": { "text": "A behavior with this name already exists here." },
+    "workspace.gameplay_behavior.create.invalid_destination": { "text": "Choose a folder inside Assets/Scripts." },
+    "workspace.gameplay_behavior.create.browse": { "text": "Browse..." },
+    "workspace.gameplay_behavior.create.browse_title": { "text": "Choose behavior destination" },
+    "workspace.gameplay_behavior.create.template": { "text": "Starting Template" },
+    "workspace.gameplay_behavior.create.basic_template": { "text": "Basic Behavior" },
+    "workspace.gameplay_behavior.create.confirm": { "text": "Create Behavior" },
     "workspace.gameplay_behavior.create.cancel": { "text": "Cancel" },
     "project_loading.status.cancelling": {
       "text": "Cancelling..."
@@ -821,6 +1102,19 @@
     "settings.appearance.accent_color.description": {
       "text": "Used for focus rings, active states, and primary actions."
     },
+    "settings.code_editor.font_family": {"text": "Font Family"},
+    "settings.code_editor.font_family.description": {"text": "Choose an available monospace family. Changes apply to open source tabs."},
+    "settings.code_editor.behavior": {"text": "Editing & Saving"},
+    "settings.code_editor.codeShowLineNumbers": {"text": "Line Numbers"},
+    "settings.code_editor.codeShowLineNumbers.description": {"text": "Show line numbers beside source text."},
+    "settings.code_editor.codeShowWhitespace": {"text": "Whitespace"},
+    "settings.code_editor.codeShowWhitespace.description": {"text": "Display spaces and tabs without changing the file."},
+    "settings.code_editor.codeWordWrap": {"text": "Word Wrap"},
+    "settings.code_editor.codeWordWrap.description": {"text": "Wrap long lines to the source viewport width."},
+    "settings.code_editor.codeShowScrollBar": {"text": "Scroll Bar"},
+    "settings.code_editor.codeShowScrollBar.description": {"text": "Show the source editor scroll bar."},
+    "settings.code_editor.codeAutoSaveDelaySeconds": {"text": "Auto Save Delay (seconds)"},
+    "settings.code_editor.codeAutoSaveDelaySeconds.description": {"text": "Save changed source files after this idle delay. Zero disables it. External changes are never overwritten automatically."},
     "settings.appearance.code_font_size": {
       "text": "Code Font Size"
     },
@@ -840,10 +1134,10 @@
       "text": "Path to a JSON theme file. Leave empty to use built-in."
     },
     "settings.appearance.theme_group": {
-      "text": "THEME"
+      "text": "Theme"
     },
     "settings.appearance.typography_group": {
-      "text": "TYPOGRAPHY & SCALE"
+      "text": "Typography & Scale"
     },
     "settings.appearance.ui_scale": {
       "text": "UI Scale"
@@ -876,7 +1170,7 @@
       "text": "Preferred playback device for editor audio."
     },
     "settings.audio.output_group": {
-      "text": "OUTPUT"
+      "text": "Output"
     },
     "settings.audio.speakers": {
       "text": "Speakers"
@@ -909,10 +1203,10 @@
       "text": "Minimum severity shown in the editor console output."
     },
     "settings.diagnostics.logging_group": {
-      "text": "LOGGING"
+      "text": "Logging"
     },
     "settings.diagnostics.profiler_group": {
-      "text": "PROFILER"
+      "text": "Profiler"
     },
     "settings.diagnostics.stutter_threshold": {
       "text": "Stutter Threshold (ms)"
@@ -954,7 +1248,7 @@
       "text": "Reopen tabs and panel layout from last session."
     },
     "settings.general.session_group": {
-      "text": "EDITOR SESSION"
+      "text": "Editor Session"
     },
     "settings.general.startup_behavior": {
       "text": "Startup Behavior"
@@ -966,7 +1260,7 @@
       "text": "Project browser"
     },
     "settings.general.startup_group": {
-      "text": "STARTUP & PROJECT"
+      "text": "Startup & Project"
     },
     "settings.general.startup_last": {
       "text": "Last project"
@@ -981,7 +1275,7 @@
       "text": "Reverse the vertical orbit direction (push up to look down)."
     },
     "settings.input.navigation_group": {
-      "text": "NAVIGATION"
+      "text": "Navigation"
     },
     "settings.input.orbit_sensitivity": {
       "text": "Orbit Sensitivity"
@@ -996,10 +1290,79 @@
       "text": "Mouse drag multiplier for panning the viewport camera."
     },
     "settings.input.mappings_description": {
-      "text": "Open Input Mapping from the right activity bar to edit shortcuts, gamepad bindings, profiles, and player assignments."
+      "text": "Choose a command, press its shortcut, then Apply. Reset restores the default bindings."
+    },
+    "settings.keymap.editor.save": {
+      "text": "Save"
+    },
+    "settings.keymap.editor.undo": {
+      "text": "Undo"
+    },
+    "settings.keymap.editor.redo": {
+      "text": "Redo"
+    },
+    "settings.keymap.editor.source.select_all": {
+      "text": "Select all source text"
+    },
+    "settings.keymap.editor.source.copy": {
+      "text": "Copy source selection"
+    },
+    "settings.keymap.editor.source.paste": {
+      "text": "Paste into source"
+    },
+    "settings.keymap.editor.source.cut": {
+      "text": "Cut source selection"
+    },
+    "settings.keymap.editor.source.find": {
+      "text": "Find in source"
+    },
+    "settings.keymap.editor.source.go_to_line": {
+      "text": "Go to line"
+    },
+    "settings.keymap.editor.source.zoom_in": {
+      "text": "Increase code font size"
+    },
+    "settings.keymap.editor.source.zoom_out": {
+      "text": "Decrease code font size"
+    },
+    "settings.keymap.editor.source.zoom_reset": {
+      "text": "Reset code font size"
+    },
+    "settings.keymap.editor.duplicate": {
+      "text": "Duplicate selection"
+    },
+    "settings.keymap.editor.delete": {
+      "text": "Delete selection"
+    },
+    "settings.keymap.editor.tool.select": {
+      "text": "Selection tool"
+    },
+    "settings.keymap.editor.tool.move": {
+      "text": "Move tool"
+    },
+    "settings.keymap.editor.tool.rotate": {
+      "text": "Rotate tool"
+    },
+    "settings.keymap.editor.tool.scale": {
+      "text": "Scale tool"
+    },
+    "settings.keymap.editor.viewport.focus_selected": {
+      "text": "Focus selection"
+    },
+    "settings.keymap.unassigned": {
+      "text": "Not assigned"
+    },
+    "settings.keymap.recording": {
+      "text": "Press a shortcut (Escape to cancel)"
+    },
+    "settings.keymap.reset": {
+      "text": "Reset"
+    },
+    "settings.keymap.conflict": {
+      "text": "Conflicting or invalid shortcut. Choose another binding before applying."
     },
     "settings.input.mappings_group": {
-      "text": "INPUT MAPPINGS"
+      "text": "Input Mapping"
     },
     "settings.input.mappings_label": {
       "text": "Central Input Mapping"
@@ -1030,6 +1393,12 @@
     },
     "settings.nav.diagnostics": {
       "text": "Diagnostics"
+    },
+    "settings.nav.code_editor": {
+      "text": "Code Editor"
+    },
+    "settings.nav.keymaps": {
+      "text": "Keymaps"
     },
     "settings.nav.editor": {
       "text": "Editor"
@@ -1182,7 +1551,7 @@
       "text": "Maximum concurrent PIE (Play In Editor) client connections."
     },
     "settings.network.multiplayer_group": {
-      "text": "MULTIPLAYER PREVIEW"
+      "text": "Multiplayer Preview"
     },
     "settings.network.simulate_latency": {
       "text": "Simulate Latency"
@@ -1191,7 +1560,7 @@
       "text": "Artificial one-way delay injected on loopback (ms)."
     },
     "settings.packages.download_group": {
-      "text": "PACKAGE ACQUISITION"
+      "text": "Package Acquisition"
     },
     "settings.packages.download_threads": {
       "text": "Download Threads"
@@ -1308,7 +1677,7 @@
       "text": "Contributions"
     },
     "settings.extensions.details": {
-      "text": "EXTENSION DETAILS"
+      "text": "Extension Details"
     },
     "settings.extensions.empty": {
       "text": "No extension matches this filter."
@@ -1329,10 +1698,10 @@
       "text": "Installed packages"
     },
     "settings.extensions.installed_heading": {
-      "text": "INSTALLED EXTENSIONS"
+      "text": "Installed Extensions"
     },
     "settings.extensions.lifecycle": {
-      "text": "ACTIVATION LIFECYCLE"
+      "text": "Activation Lifecycle"
     },
     "settings.extensions.marketplace": {
       "text": "Marketplace"
@@ -1437,7 +1806,7 @@
       "text": "Lit"
     },
     "settings.rendering.quality_group": {
-      "text": "QUALITY"
+      "text": "Quality"
     },
     "settings.rendering.shaded": {
       "text": "Shaded"
@@ -1458,7 +1827,7 @@
       "text": "Unlit"
     },
     "settings.rendering.viewport_group": {
-      "text": "VIEWPORT"
+      "text": "Viewport"
     },
     "settings.rendering.viewport_mode": {
       "text": "Default Viewport Mode"
@@ -2313,12 +2682,12 @@
     "workspace.global_dock.audio.master": {"text": "−3.2 dB · Voices: 12 / 64"},
     "workspace.global_dock.audio.busses": {"text": "Master, Music, SFX, Ambient, Voice"},
     "workspace.global_dock.audio.device": {"text": "Stereo 48 kHz · Latency: 10.7 ms"},
-    "workspace.global_dock.network.search": {"text": "Search connections and messages..."},
+    "workspace.global_dock.network.search": {"text": "Filter network records..."},
     "workspace.global_dock.network.session.current": {"text": "Current session"},
     "workspace.global_dock.network.session.all": {"text": "All sessions"},
     "workspace.global_dock.network.connections": {"text": "Connections"},
     "workspace.global_dock.network.queues": {"text": "Queues"},
-    "workspace.global_dock.network.trace": {"text": "Trace"},
+    "workspace.global_dock.network.trace": {"text": "All activity"},
     "workspace.global_dock.network.pause_capture": {"text": "Pause capture"},
     "workspace.global_dock.network.resume_capture": {"text": "Resume capture"},
     "workspace.global_dock.network.clear": {"text": "Clear"},
@@ -2363,6 +2732,9 @@
     "workspace.content_browser.view.list": {"text": "List view"},
     "workspace.content_browser.location.favorites": {"text": "Favorites"},
     "workspace.content_browser.location.recent": {"text": "Recent"},
+    "workspace.content_browser.location.assets": {"text": "Assets"},
+    "workspace.content_browser.location.native_sources": {"text": "Sources"},
+    "workspace.content_browser.asset.native_source": {"text": "Source file"},
     "workspace.content_browser.location.sources": {"text": "Sources"},
     "workspace.content_browser.location.packages": {"text": "Packages"},
     "workspace.content_browser.location.dependencies": {"text": "Dependencies"},
@@ -2439,7 +2811,7 @@
     "workspace.content_browser.operation.reimport_unavailable": {"text": "This asset does not record a reimport source."},
     "workspace.content_browser.operation.reimport_importer_missing": {"text": "The importer module recorded by this asset is not available."},
     "workspace.content_browser.operation.reimport_failed": {"text": "The asset could not be reimported; the previous payload was preserved."},
-    "workspace.content_browser.operation.reveal_unavailable": {"text": "File Manager integration is unavailable on this platform."},
+    "workspace.content_browser.operation.reveal_unavailable": {"text": "Could not open File Manager. Check desktop availability and file permissions."},
     "workspace.content_browser.scenes": {"text": "scenes"},
     "workspace.content_browser.models": {"text": "models"},
     "workspace.content_browser.textures": {"text": "textures"},
@@ -2805,6 +3177,17 @@
     "workspace.physics.gizmo_hint": {"text": "Collider editing · Ctrl: snap 0.1 m / 15° / 10% · Ctrl-click: toggle child · Escape: cancel"},
     "workspace.physics.gizmo_rejected": {"text": "Collider edit rejected. Use valid positive bounds and uniform sphere/capsule scale. See diagnostics."},
     "workspace.physics.gizmo_unsupported": {"text": "Cooked shape children require their owning source document; viewport editing is unavailable."},
+    "workspace.inspector.add_rendering": {"text": "Rendering"},
+    "workspace.inspector.add_audio": {"text": "Audio"},
+    "workspace.inspector.add_gameplay": {"text": "Gameplay"},
+    "workspace.inspector.add_scripts": {"text": "Scripts"},
+    "workspace.inspector.create_script": {"text": "Create Script…"},
+    "workspace.physics.details": {"text": "Details"},
+    "workspace.physics.choose_reference": {"text": "Choose…"},
+    "workspace.physics.missing_reference": {"text": "Missing reference"},
+    "workspace.physics.no_profiles": {"text": "Create a collision profile in Editor Settings > Project Collision."},
+    "workspace.physics.no_materials": {"text": "Import a Physics Material asset to select it here."},
+    "workspace.physics.add_trigger": {"text": "Trigger Collider"},
     "workspace.physics.title": {
       "text": "Physics"
     },
@@ -2818,16 +3201,16 @@
       "text": "Rigid body"
     },
     "workspace.physics.collider": {
-      "text": "Collider / sensor"
+      "text": "Collider"
     },
     "workspace.physics.constraint": {
-      "text": "Constraint"
+      "text": "Physics Joint"
     },
     "workspace.physics.enabled": {
       "text": "Enabled"
     },
     "workspace.physics.sensor": {
-      "text": "Sensor (overlap only, no response)"
+      "text": "Is Trigger"
     },
     "workspace.physics.static": {
       "text": "Static"
@@ -2884,7 +3267,7 @@
       "text": "Body slot ID"
     },
     "workspace.physics.profile": {
-      "text": "Collision profile UUID"
+      "text": "Collision Profile"
     },
     "workspace.physics.shape": {
       "text": "Shape source"
@@ -2929,13 +3312,13 @@
       "text": "Material slot ID"
     },
     "workspace.physics.material_asset": {
-      "text": "Physics material asset UUID"
+      "text": "Physics Material"
     },
     "workspace.physics.remove_material": {
-      "text": "Remove material mapping"
+      "text": "Remove Material"
     },
     "workspace.physics.add_material": {
-      "text": "Add explicit material mapping"
+      "text": "Add Material"
     },
     "workspace.physics.first_endpoint": {
       "text": "First body endpoint"
@@ -2965,28 +3348,28 @@
       "text": "Authored hinge and slider constraints are not supported by this Scene schema."
     },
     "workspace.physics.remove_body": {
-      "text": "Stage body removal"
+      "text": "Remove Body"
     },
     "workspace.physics.remove_collider": {
-      "text": "Stage collider removal"
+      "text": "Remove Collider"
     },
     "workspace.physics.remove_constraint": {
-      "text": "Stage constraint removal"
+      "text": "Remove Joint"
     },
     "workspace.physics.add_body": {
-      "text": "Stage body and box collider"
+      "text": "Rigid Body + Box Collider"
     },
     "workspace.physics.add_collider": {
-      "text": "Stage collider / sensor"
+      "text": "Box Collider"
     },
     "workspace.physics.add_constraint": {
-      "text": "Stage constraint"
+      "text": "Physics Joint"
     },
     "workspace.physics.apply": {
-      "text": "Apply Physics edit"
+      "text": "Apply"
     },
     "workspace.physics.cancel": {
-      "text": "Discard staged Physics edit"
+      "text": "Discard Changes"
     },
     "workspace.physics.invalid_identity": {
       "text": "Enter valid nonzero decimal IDs and canonical project UUIDs before applying."
@@ -3913,6 +4296,48 @@
     },
     "workspace.ui_inspector.preparing_theme": {
       "text": "Preparing style assets…"
-    }
+    },
+    "settings.prefab.title": {"text": "Prefab Limits"},
+    "settings.prefab.description": {"text": "Project policy for new authoring, expansion and cook operations. Running operations and live scenes retain their captured policy. Save project policy separately from user preferences."},
+    "settings.prefab.ceiling": {"text": "Engine safety ceiling: {}"},
+    "settings.prefab.derived_work": {"text": "Derived expansion work"},
+    "settings.prefab.derived_help": {"text": "Read-only work ceiling calculated from the complete validated policy."},
+    "settings.prefab.hard_safety": {"text": "Parser safety is fixed by the engine: {} encoded source bytes and {} JSON levels. Object-name bytes are also fixed."},
+    "settings.prefab.invalid": {"text": "Unavailable until all fields are valid"},
+    "settings.prefab.unavailable": {"text": "Open a project with an available, valid prefab settings document to edit its policy."},
+    "settings.prefab.reset": {"text": "Reset to engine defaults"},
+    "settings.prefab.discard": {"text": "Discard policy edits"},
+    "settings.prefab.reload": {"text": "Reload project policy"},
+    "settings.prefab.save": {"text": "Save project policy"},
+    "settings.prefab.saved": {"text": "Project policy updated. New operations capture the accepted policy."},
+    "settings.prefab.error.command": {"text": "The project policy could not be changed. Reload after resolving a concurrent edit, unavailable project or write failure."},
+    "settings.prefab.error.number": {"text": "Enter a whole number without extra characters."},
+    "settings.prefab.error.range": {"text": "Use a positive whole number within the engine safety ceiling."},
+    "settings.prefab.error.value_set": {"text": "The per-value override byte limit cannot exceed the aggregate override byte limit."},
+    "settings.prefab.error.summary": {"text": "Project policy is invalid. Correct the marked fields before saving or starting a new operation."},
+    "settings.prefab.error.durability": {"text": "The file was replaced, but durability is unconfirmed. Policy remains dirty until a successful save."},
+    "settings.prefab.fields.hierarchy_depth": {"text": "Source hierarchy depth"},
+    "settings.prefab.fields.object_count": {"text": "Expanded object count"},
+    "settings.prefab.fields.source_payload_bytes": {"text": "Source payload bytes"},
+    "settings.prefab.fields.expanded_payload_bytes": {"text": "Expanded payload bytes"},
+    "settings.prefab.fields.cooked_payload_bytes": {"text": "Cooked payload bytes"},
+    "settings.prefab.fields.components_per_object": {"text": "Components per object"},
+    "settings.prefab.fields.referenced_assets": {"text": "Referenced assets"},
+    "settings.prefab.fields.direct_nested_placements": {"text": "Direct nested placements"},
+    "settings.prefab.fields.variant_depth": {"text": "Variant inheritance depth"},
+    "settings.prefab.fields.nested_depth": {"text": "Nested prefab depth"},
+    "settings.prefab.fields.override_records": {"text": "Override records"},
+    "settings.prefab.fields.unresolved_records": {"text": "Conflict and orphan records"},
+    "settings.prefab.fields.property_path_segments": {"text": "Property path segments"},
+    "settings.prefab.fields.override_value_bytes": {"text": "Override value bytes"},
+    "settings.prefab.fields.override_set_bytes": {"text": "Aggregate override bytes"},
+    "settings.prefab.fields.binding_slots": {"text": "Binding slots"},
+    "settings.prefab.fields.binding_uses": {"text": "Binding uses"},
+    "settings.prefab.fields.instance_bindings": {"text": "Instance bindings"},
+    "settings.prefab.fields.runtime_spawn_depth": {"text": "Runtime spawn lineage depth"},
+    "settings.prefab.draft_updated": {"text": "Policy draft updated. Save to use it for new operations."},
+    "settings.prefab.reloaded": {"text": "Project policy reloaded."},
+    "settings.prefab.discarded": {"text": "Unsaved policy edits discarded."},
+    "settings.prefab.save_first": {"text": "Save or discard the project prefab policy before applying user preferences."}
   }
 }

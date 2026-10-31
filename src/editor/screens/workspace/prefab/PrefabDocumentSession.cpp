@@ -10,6 +10,17 @@
 #include <new>
 
 namespace Horo::Editor {
+    /** @copydoc PrefabDocumentSession::UpdateLimitProfile */
+    Result<void> PrefabDocumentSession::UpdateLimitProfile(const Prefab::PrefabLimitProfile &limits) {
+        if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
+            return admitted;
+        limits_ = limits;
+        const auto checked = source_->ValidateLimits(limits_);
+        if (checked.HasError())
+            return Result<void>::Failure(checked.ErrorValue());
+        return Result<void>::Success();
+    }
+
     namespace {
         /** @brief Hashes the sole canonical source encoding; no preview values enter dirty identity. */
         Result<Sha256Digest> Digest(const Prefab::PrefabDocument &source) {

@@ -40,21 +40,17 @@ nonzero.
 
 ## Local editor runner
 
-Copy `.env.example` to `.env.local`, adjust the local OpenTelemetry endpoint if
-needed, then use the narrow developer runner:
+Run the editor with local diagnostics:
 
 ```bash
 python3 scripts/dev.py run editor
 python3 scripts/dev.py run editor -- --project /path/to/project
 ```
 
-Engine logs, metrics and profiler data are available locally without an external
-service. External OTLP export is disabled by default, including in `.env.example`.
-
-`HORO_DEV_OTEL_EXPORT=ON` explicitly enables the optional OpenTelemetry adapter.
-The runner then checks the configured collector and passes export approval to
-the editor. It does not install or start a collector. Dashboard import and
-Grafana service checks have been removed; old Grafana environment keys are ignored.
+Engine logs, metrics and profiler data use local storage. The runner does not
+configure external telemetry exporters or probe collectors/dashboard services.
+`.env.local` remains available for optional developer tools such as Sonar token
+resolution; launching the editor does not require it.
 
 ## Local quality preflight
 

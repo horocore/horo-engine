@@ -29,13 +29,13 @@ namespace Horo::Editor {
             using enum SceneObjectComparisonKind;
             switch (kind) {
                 case AddedOnDisk:
-                    return context.localization.Get("editor", "workspace.scene_compare.added");
+                    return SceneConflictCompareModal::kTextScope.Text(context.localization, "added");
                 case RemovedFromDisk:
-                    return context.localization.Get("editor", "workspace.scene_compare.removed");
+                    return SceneConflictCompareModal::kTextScope.Text(context.localization, "removed");
                 case Modified:
-                    return context.localization.Get("editor", "workspace.scene_compare.modified");
+                    return SceneConflictCompareModal::kTextScope.Text(context.localization, "modified");
             }
-            return context.localization.Get("editor", "workspace.scene_compare.modified");
+            return SceneConflictCompareModal::kTextScope.Text(context.localization, "modified");
         }
 
         [[nodiscard]] std::string DifferenceLabel(const SceneObjectComparison &object, const EditorGuiContext &context) {
@@ -46,15 +46,15 @@ namespace Horo::Editor {
                 label += field;
             };
             if (object.fields.name)
-                append(context.localization.Get("editor", "workspace.scene_compare.field.name"));
+                append(SceneConflictCompareModal::kTextScope.Text(context.localization, "field.name"));
             if (object.fields.parent)
-                append(context.localization.Get("editor", "workspace.scene_compare.field.parent"));
+                append(SceneConflictCompareModal::kTextScope.Text(context.localization, "field.parent"));
             if (object.fields.transform)
-                append(context.localization.Get("editor", "workspace.scene_compare.field.transform"));
+                append(SceneConflictCompareModal::kTextScope.Text(context.localization, "field.transform"));
             if (object.fields.primitive || object.fields.asset)
-                append(context.localization.Get("editor", "workspace.scene_compare.field.primitive"));
+                append(SceneConflictCompareModal::kTextScope.Text(context.localization, "field.primitive"));
             if (object.fields.components)
-                append(context.localization.Get("editor", "workspace.scene_compare.field.components"));
+                append(SceneConflictCompareModal::kTextScope.Text(context.localization, "field.components"));
             return label;
         }
 
@@ -111,7 +111,7 @@ namespace Horo::Editor {
                     ImGui::PopStyleColor();
                 }
                 ImGui::PushStyleColor(ImGuiCol_Text, Theme::Dim());
-                ImGui::Text("%s %llu", context.localization.Get("editor", "workspace.scene_compare.field.id").c_str(),
+                ImGui::Text("%s %llu", SceneConflictCompareModal::kTextScope.Text(context.localization, "field.id").c_str(),
                             static_cast<unsigned long long>(object.id.value));
                 if (!differences.empty())
                     ImGui::TextWrapped("%s", differences.c_str());
@@ -131,8 +131,8 @@ namespace Horo::Editor {
     /** @copydoc SceneConflictCompareModal::SceneConflictCompareModal */
     SceneConflictCompareModal::SceneConflictCompareModal(const EditorGuiContext &context, JobSystem &jobs,
                                                          SceneDocumentComparisonRequest request)
-        : context_(context), jobs_(jobs), request_(std::move(request)), absoluteScenePath_(request_.absoluteScenePath.string()),
-          completion_(std::make_shared<Completion>()) {}
+        : EditorModal(kTextScope), context_(context), jobs_(jobs), request_(std::move(request)),
+          absoluteScenePath_(request_.absoluteScenePath.string()), completion_(std::make_shared<Completion>()) {}
 
     /** @copydoc SceneConflictCompareModal::~SceneConflictCompareModal */
     SceneConflictCompareModal::~SceneConflictCompareModal() {
@@ -211,7 +211,7 @@ namespace Horo::Editor {
 
     /** @copydoc SceneConflictCompareModal::Draw */
     ModalFrameResult SceneConflictCompareModal::Draw() {
-        const std::string &title = context_.localization.Get("editor", "workspace.scene_compare.title");
+        const std::string &title = SceneConflictCompareModal::kTextScope.Text(context_.localization, "title");
         Ui::ScopedModalShell modal(
             {
                 .id = "SceneConflictCompare",
@@ -230,7 +230,7 @@ namespace Horo::Editor {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::Bg1());
         ImGui::BeginChild("##SceneCompareBody", {0.0F, modal.BodyHeight()}, false, ImGuiWindowFlags_AlwaysUseWindowPadding);
 
-        const std::string &description = context_.localization.Get("editor", "workspace.scene_compare.description");
+        const std::string &description = SceneConflictCompareModal::kTextScope.Text(context_.localization, "description");
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::Muted());
         ImGui::TextWrapped("%s", description.c_str());
         ImGui::PopStyleColor();
@@ -240,7 +240,7 @@ namespace Horo::Editor {
         ImGui::Dummy({0.0F, 8.0F});
 
         if (error_.has_value()) {
-            const std::string &failed = context_.localization.Get("editor", "workspace.scene_compare.failed");
+            const std::string &failed = SceneConflictCompareModal::kTextScope.Text(context_.localization, "failed");
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::Err());
             ImGui::TextWrapped("%s", failed.c_str());
             ImGui::PopStyleColor();
@@ -249,18 +249,20 @@ namespace Horo::Editor {
             ImGui::PopStyleColor();
         } else if (!comparison_.has_value()) {
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::Muted());
-            ImGui::TextUnformatted(context_.localization.Get("editor", "workspace.scene_compare.loading").c_str());
+            ImGui::TextUnformatted(SceneConflictCompareModal::kTextScope.Text(context_.localization, "loading").c_str());
             ImGui::PopStyleColor();
         } else {
             const SceneDocumentComparison &comparison = *comparison_;
-            DrawSummaryBadge(comparison.addedOnDisk, context_.localization.Get("editor", "workspace.scene_compare.summary.added").c_str(),
+            DrawSummaryBadge(comparison.addedOnDisk,
+                             SceneConflictCompareModal::kTextScope.Text(context_.localization, "summary.added").c_str(),
                              Ui::BadgeTone::Success, context_.theme.fonts);
             ImGui::SameLine(0.0F, 8.0F);
             DrawSummaryBadge(comparison.removedFromDisk,
-                             context_.localization.Get("editor", "workspace.scene_compare.summary.removed").c_str(), Ui::BadgeTone::Error,
-                             context_.theme.fonts);
+                             SceneConflictCompareModal::kTextScope.Text(context_.localization, "summary.removed").c_str(),
+                             Ui::BadgeTone::Error, context_.theme.fonts);
             ImGui::SameLine(0.0F, 8.0F);
-            DrawSummaryBadge(comparison.modified, context_.localization.Get("editor", "workspace.scene_compare.summary.modified").c_str(),
+            DrawSummaryBadge(comparison.modified,
+                             SceneConflictCompareModal::kTextScope.Text(context_.localization, "summary.modified").c_str(),
                              Ui::BadgeTone::Warning, context_.theme.fonts);
             ImGui::Dummy({0.0F, 10.0F});
             ImGui::Separator();
@@ -268,7 +270,7 @@ namespace Horo::Editor {
 
             if (!comparison.HasDifferences()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, Theme::Muted());
-                ImGui::TextWrapped("%s", context_.localization.Get("editor", "workspace.scene_compare.empty").c_str());
+                ImGui::TextWrapped("%s", SceneConflictCompareModal::kTextScope.Text(context_.localization, "empty").c_str());
                 ImGui::PopStyleColor();
             } else {
                 for (const SceneObjectComparison &object : comparison.objects) {

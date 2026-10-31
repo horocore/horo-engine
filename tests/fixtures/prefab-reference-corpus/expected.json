@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "projectVersion": "0.2.0",
+  "instance": 41,
+  "target": "linux-x64",
+  "cases": [
+    {
+      "file": "single.prefab",
+      "asset": "00000000-0000-0000-0000-000000000001",
+      "sourceHash": "sha256:4d2430f05b0ab2e3c255c89f2da8162ff8ef54d62c8b88fe8c35fcad74e57d02",
+      "objects": [
+        {
+          "localId": 0,
+          "parent": -1,
+          "x": 0,
+          "scope": [],
+          "source": "00000000-0000-0000-0000-000000000001"
+        }
+      ],
+      "cookedHash": "sha256:8555f02d38f42a19f16d37eb944c483bbe3098488b0ce66aac5a168f10afedfe"
+    },
+    {
+      "file": "multi.prefab",
+      "asset": "00000000-0000-0000-0000-000000000002",
+      "sourceHash": "sha256:9e12ed49c7dd0240244eb64d5e98ac468458c2661beb5fb7e3c9b44eac202dee",
+      "objects": [
+        {
+          "localId": 0,
+          "parent": -1,
+          "x": 0,
+          "scope": [],
+          "source": "00000000-0000-0000-0000-000000000002"
+        },
+        {
+          "localId": 17,
+          "parent": 0,
+          "x": 2,
+          "scope": [],
+          "source": "00000000-0000-0000-0000-000000000002"
+        }
+      ],
+      "cookedHash": "sha256:042ae1d6dd697496992a4f653a489bcf9c44899f71bab87b4f3ce161516008a7"
+    },
+    {
+      "file": "resource.prefab",
+      "asset": "00000000-0000-0000-0000-000000000003",
+      "sourceHash": "sha256:6797384bc300afe6584c77a6d5ce2dfbaac39d1946c83d2b2b730ef67118b5a8",
+      "objects": [
+        {
+          "localId": 0,
+          "parent": -1,
+          "x": 0,
+          "scope": [],
+          "source": "00000000-0000-0000-0000-000000000003"
+        }
+      ],
+      "cookedHash": "sha256:6a41672ba227c2c8a8742a6e9e6b923366eb355140a0b1c1c6da09e3f83facff"
+    },
+    {
+      "file": "nested.prefab",
+      "asset": "00000000-0000-0000-0000-000000000004",
+      "sourceHash": "sha256:feb52acc45e5a961c381d9671b30ff54d3333e22b5ac51e2a59592aaf161f6e3",
+      "objects": [
+        {
+          "localId": 0,
+          "parent": -1,
+          "x": 0,
+          "scope": [],
+          "source": "00000000-0000-0000-0000-000000000004"
+        },
+        {
+          "localId": 0,
+          "parent": 0,
+          "x": 3,
+          "scope": [
+            7
+          ],
+          "source": "00000000-0000-0000-0000-000000000002"
+        },
+        {
+          "localId": 17,
+          "parent": 1,
+          "x": 2,
+          "scope": [
+            7
+          ],
+          "source": "00000000-0000-0000-0000-000000000002"
+        }
+      ],
+      "cookedHash": "sha256:d50e99ed63cd754c74427ca8cf649d3707a51a94c479ca37d9e39a976bee1d10"
+    },
+    {
+      "file": "variant.prefab",
+      "asset": "00000000-0000-0000-0000-000000000005",
+      "sourceHash": "sha256:127539c3474a95b98bc211e8f0c27958a10406f76a0b1c5bb5567bf2fdef9784",
+      "objects": [
+        {
+          "localId": 0,
+          "parent": -1,
+          "x": 0,
+          "scope": [],
+          "source": "00000000-0000-0000-0000-000000000002"
+        },
+        {
+          "localId": 17,
+          "parent": 0,
+          "x": 2,
+          "scope": [],
+          "source": "00000000-0000-0000-0000-000000000002"
+        }
+      ],
+      "cookedHash": "sha256:f76e99c348f847986308178b74a2d4db7077d1ec7d3cb20d8cafc059d8d9c557"
+    }
+  ],
+  "failures": [
+    {
+      "file": "malformed.prefab",
+      "stage": "parse",
+      "code": "prefab.document.invalid"
+    },
+    {
+      "file": "missing.prefab",
+      "stage": "graph",
+      "code": "prefab.dependency.unavailable"
+    },
+    {
+      "file": "stale.prefab",
+      "stage": "graph",
+      "code": "prefab.dependency.revision_mismatch"
+    }
+  ]
+}

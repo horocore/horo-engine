@@ -9,7 +9,7 @@ namespace Horo::Prefab {
     public:
         static EffectivePrefabCandidate Publish(const EffectivePrefabCandidate &source, std::vector<ResolvedPrefabObject> objects,
                                                 const Sha256Digest &digest) {
-            return EffectivePrefabCandidate{source.RootAsset(), source.Revision(), std::move(objects), digest};
+            return EffectivePrefabCandidate{source.RootAsset(), source.Revision(), std::move(objects), digest, source.Metrics()};
         }
     };
 
@@ -140,13 +140,25 @@ namespace Horo::Prefab {
                                                                       const PrefabValueSchemaSnapshot *schemas,
                                                                       const PrefabLimitProfile &limits,
                                                                       const CancellationToken &cancellation) {
-        try {
-            return Resolve(source, set, schemas, limits, cancellation);
-        } catch (const std::bad_alloc &) {
-            return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
-        } catch (const ValueDetail::Json::exception &) {
-            return ValueDetail::Invalid<PrefabValueOverrideResolution>("Component schema/value encoding is invalid.");
+        PrefabMetricOperation observation{source.Metrics(), PrefabMetricPhase::Rebase};
+        auto result = [&]() -> Result<PrefabValueOverrideResolution> {
+            try {
+                return Resolve(source, set, schemas, limits, cancellation);
+            } catch (const std::bad_alloc &) {
+                return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+            } catch (const ValueDetail::Json::exception &) {
+                return ValueDetail::Invalid<PrefabValueOverrideResolution>("Component schema/value encoding is invalid.");
+            }
+        }();
+        if (result.HasError())
+            observation.Fail(result.ErrorValue());
+        else {
+            observation.Observe(PrefabMetricItem::Overrides, set.records.size() + set.conflicts.size() + set.orphans.size() +
+                                                                 set.componentRecords.size() + set.componentConflicts.size() +
+                                                                 set.componentOrphans.size());
+            observation.Complete();
         }
+        return result;
     }
 
     /** @copydoc PreparePrefabValueEdit */
@@ -154,44 +166,58 @@ namespace Horo::Prefab {
                                                                  const std::optional<PrefabValueOverrideSet> &current,
                                                                  const PrefabValueEdit &edit, const PrefabValueSchemaSnapshot *schemas,
                                                                  const PrefabLimitProfile &limits, const CancellationToken &cancellation) {
-        try {
-            const PrefabValueOverrideSet empty{source.RootAsset(),
-                                               source.Revision().rootSource,
-                                               schemas ? schemas->Revision() : Sha256Digest{},
-                                               {},
-                                               {},
-                                               {}};
-            const auto *input = &empty;
-            if (current.has_value())
-                input = &current.value();
-            auto inspected = Resolve(source, *input, schemas, limits, cancellation);
-            if (inspected.HasError() || edit.kind == PrefabValueEditKind::Rebase)
-                return inspected;
-            if (edit.kind != PrefabValueEditKind::Assign && edit.kind != PrefabValueEditKind::Revert)
-                return ValueDetail::Invalid<PrefabValueOverrideResolution>();
-            auto state = std::move(inspected).Value();
-            auto next = std::move(state.rebased);
-            RemoveTarget(next, edit.target);
-            if (edit.kind == PrefabValueEditKind::Assign) {
-                const auto binding = std::ranges::find(state.provenance, edit.target, &PrefabValueProvenance::target);
-                if (binding == state.provenance.end())
-                    return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::OverrideOrphan));
-                const auto *property = std::get_if<PrefabPropertyAddress>(&edit.target);
-                const auto *schema = property && schemas ? schemas->Find(*property) : nullptr;
-                if (property && !schema)
-                    return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::OverrideOrphan));
-                if (auto valid = ValueDetail::ValidateValue(edit.value, schema); valid.HasError())
-                    return Result<PrefabValueOverrideResolution>::Failure(valid.ErrorValue());
-                if (std::holds_alternative<PrefabObjectAddress>(edit.target) != std::holds_alternative<Math::Transform>(edit.value))
+        PrefabMetricOperation observation{source.Metrics(), PrefabMetricPhase::Rebase};
+        auto result = [&]() -> Result<PrefabValueOverrideResolution> {
+            try {
+                const PrefabValueOverrideSet empty{source.RootAsset(),
+                                                   source.Revision().rootSource,
+                                                   schemas ? schemas->Revision() : Sha256Digest{},
+                                                   {},
+                                                   {},
+                                                   {}};
+                const auto *input = &empty;
+                if (current.has_value())
+                    input = &current.value();
+                auto inspected = Resolve(source, *input, schemas, limits, cancellation);
+                if (inspected.HasError() || edit.kind == PrefabValueEditKind::Rebase)
+                    return inspected;
+                if (edit.kind != PrefabValueEditKind::Assign && edit.kind != PrefabValueEditKind::Revert)
                     return ValueDetail::Invalid<PrefabValueOverrideResolution>();
-                next.records.emplace_back(edit.target, schema ? schema->componentSchemaVersion : 0,
-                                          ValueDetail::ValueDigest(binding->sourceValue), edit.value);
+                auto state = std::move(inspected).Value();
+                auto next = std::move(state.rebased);
+                RemoveTarget(next, edit.target);
+                if (edit.kind == PrefabValueEditKind::Assign) {
+                    const auto binding = std::ranges::find_if(state.provenance, [&](const auto &value) {
+                        return value.disposition == PrefabValueDisposition::Present && value.target == edit.target;
+                    });
+                    if (binding == state.provenance.end())
+                        return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::OverrideOrphan));
+                    const auto *property = std::get_if<PrefabPropertyAddress>(&edit.target);
+                    const auto *schema = property && schemas ? schemas->Find(*property) : nullptr;
+                    if (property && !schema)
+                        return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::OverrideOrphan));
+                    if (auto valid = ValueDetail::ValidateValue(edit.value, schema); valid.HasError())
+                        return Result<PrefabValueOverrideResolution>::Failure(valid.ErrorValue());
+                    if (std::holds_alternative<PrefabObjectAddress>(edit.target) != std::holds_alternative<Math::Transform>(edit.value))
+                        return ValueDetail::Invalid<PrefabValueOverrideResolution>();
+                    next.records.emplace_back(edit.target, schema ? schema->componentSchemaVersion : 0,
+                                              ValueDetail::ValueDigest(binding->sourceValue), edit.value);
+                }
+                return Resolve(source, next, schemas, limits, cancellation);
+            } catch (const std::bad_alloc &) {
+                return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+            } catch (const ValueDetail::Json::exception &) {
+                return ValueDetail::Invalid<PrefabValueOverrideResolution>();
             }
-            return Resolve(source, next, schemas, limits, cancellation);
-        } catch (const std::bad_alloc &) {
-            return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
-        } catch (const ValueDetail::Json::exception &) {
-            return ValueDetail::Invalid<PrefabValueOverrideResolution>();
+        }();
+        if (result.HasError())
+            observation.Fail(result.ErrorValue());
+        else {
+            observation.Observe(PrefabMetricItem::Overrides, result.Value().rebased.records.size() +
+                                                                 result.Value().rebased.conflicts.size() +
+                                                                 result.Value().rebased.orphans.size());
+            observation.Complete();
         }
+        return result;
     }
 }  // namespace Horo::Prefab

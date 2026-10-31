@@ -3,6 +3,7 @@
 
 import json
 import io
+import os
 from contextlib import redirect_stderr
 import sys
 import tarfile
@@ -125,6 +126,19 @@ class ReleaseNotesTests(unittest.TestCase):
             self.assertEqual((root / "generated" / "ReleaseNotesSnapshot.json").read_bytes(),
                              snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor")))
             self.assertTrue((root / "generated" / "GeneratedBuildInfo.h").is_file())
+            outputs = [root / "generated" / name for name in ("ReleaseNotesSnapshot.json", "GeneratedBuildInfo.h")]
+            for output in outputs:
+                os.utime(output, ns=(1_600_000_000_000_000_000, 1_600_000_000_000_000_000))
+            timestamps = [output.stat().st_mtime_ns for output in outputs]
+            with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root):
+                self.assertEqual(parse_main(), 0)
+            self.assertEqual([output.stat().st_mtime_ns for output in outputs], timestamps)
+            source.write_text(SOURCE.replace("Reviewed feature.", "Updated reviewed feature."), encoding="utf-8")
+            with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root):
+                self.assertEqual(parse_main(), 0)
+            for output, timestamp in zip(outputs, timestamps):
+                self.assertNotEqual(output.stat().st_mtime_ns, timestamp)
+                self.assertIn("Updated reviewed feature.", output.read_text(encoding="utf-8"))
             outside = root / "outside"
             outside.mkdir()
             (root / "generated" / "ReleaseNotesSnapshot.json").unlink()

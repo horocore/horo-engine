@@ -23,6 +23,8 @@
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Navigation/NavigationSettingsErrors.h"
 #include "SecurityTestSupport.h"
+#include "editor/modals/build_release/BuildModal.h"
+#include "editor/modals/build_release/BuildReleaseModal.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/update/UpdateExperienceSession.h"
 
@@ -57,7 +59,7 @@ namespace {
 
     class RecordingScreen final : public GuiScreen {
     public:
-        explicit RecordingScreen(ScreenStats &stats) : stats_(stats) {}
+        explicit RecordingScreen(ScreenStats &stats) : GuiScreen("test.RecordingScreen"), stats_(stats) {}
 
         RecordingScreen(const RecordingScreen &) = delete;
         RecordingScreen &operator=(const RecordingScreen &) = delete;
@@ -445,6 +447,10 @@ namespace {
                                                          .screenRegistry = std::move(screens),
                                                          .workspacePanelRegistry = std::move(panels)}};
         REQUIRE((host.StatusItems().Find("horo.status.backend") != nullptr));
+        const auto *backgroundBuild = host.StatusItems().Find("horo.status.build");
+        REQUIRE(backgroundBuild != nullptr);
+        CHECK_FALSE(backgroundBuild->content.available);
+        CHECK(backgroundBuild->descriptor.actionId == "horo.build.show");
         REQUIRE((host.StatusItems().Find("horo.status.cpu") == nullptr));
         CheckApplicationServiceBorrows(host, jobs, input, modals, settings);
         REQUIRE((stats.enters == 0));
@@ -480,3 +486,49 @@ namespace {
     }
 
 }  // namespace
+
+TEST_CASE("Application Build menu dispatch opens the matching modal and respects the modal gate", "[editor][gui][build_release]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    EngineDataBus engineEvents;
+    EditorDataBus editorEvents;
+    Input::InputRouter input;
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+    ProjectCreationService creation{jobs, engineEvents};
+    LocalizationService localization{LocaleTag{"en-US"}};
+    ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
+    EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
+    EditorModalHost modals{editorEvents, input};
+    const Theme::Fonts fonts{};
+    ThemeContext theme{fonts};
+    EditorSettingsSnapshot snapshot = settings.Snapshot();
+    EditorGuiContext gui{engineEvents, editorEvents, localization, theme, snapshot};
+    RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
+                                           "opengl"};
+    GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
+                                                     .settingsService = settings,
+                                                     .localization = localization,
+                                                     .engineEvents = engineEvents,
+                                                     .creationService = creation,
+                                                     .jobs = jobs,
+                                                     .inputRouter = input,
+                                                     .rendererAvailability = renderers,
+                                                     .extensionInspectorPolicy = Extensions::Tests::InspectorSupport::Policy()}};
+    for (const auto action : {EditorMenuAction::OpenBuild, EditorMenuAction::OpenRelease}) {
+        host.DispatchMenuInvocation({action});
+        REQUIRE(modals.HasOpenModal());
+        auto *modal = modals.TopModal();
+        REQUIRE(modal != nullptr);
+        if (action == EditorMenuAction::OpenBuild)
+            CHECK(dynamic_cast<BuildModal *>(modal) != nullptr);
+        else
+            CHECK(dynamic_cast<BuildReleaseModal *>(modal) != nullptr);
+        host.DispatchMenuInvocation({EditorMenuAction::OpenBuild});
+        CHECK(modals.TopModal() == modal);
+        REQUIRE(modals.RequestClose(modal->Id(), ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0);
+        CHECK_FALSE(modals.HasOpenModal());
+    }
+    host.Shutdown();
+    jobs.Shutdown(ShutdownPolicy::Cancel);
+}

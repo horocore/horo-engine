@@ -1,3 +1,4 @@
+#include "EditorFrameAdmission.h"
 #include "EditorPresentationSurface.h"
 #include "Horo/Runtime/Render/RenderPresentationOutput.h"
 #include "Horo/Runtime/Render/RenderSurfaceLifecycleErrors.h"
@@ -6,6 +7,20 @@
 #include <thread>
 
 namespace Horo::Editor {
+    TEST_CASE("Editor defers only occupied renderer frame capacity", "[editor][surface]") {
+        const Error openGl{.code = ErrorCode{"render.opengl.frame_backpressure"}, .domain = ErrorDomainId{"horo.render.opengl"}};
+        const Error metal{.code = ErrorCode{"render.metal.submission_busy"}, .domain = ErrorDomainId{"horo.render.metal"}};
+        const Error synchronization{.code = ErrorCode{"render.opengl.synchronization_failed"},
+                                    .domain = ErrorDomainId{"horo.render.opengl"}};
+        const Error foreign{.code = ErrorCode{"render.opengl.frame_backpressure"}, .domain = ErrorDomainId{"horo.render.other"}};
+
+        CHECK(IsDeferredFrameAdmission(openGl));
+        CHECK(IsDeferredFrameAdmission(metal));
+        CHECK_FALSE(IsDeferredFrameAdmission(WithCause(synchronization, openGl)));
+        CHECK_FALSE(IsDeferredFrameAdmission(synchronization));
+        CHECK_FALSE(IsDeferredFrameAdmission(foreign));
+    }
+
     namespace {
         constexpr Render::ResolvedPresentMode Mode{Render::PresentMode::Fifo, Render::PresentMode::Fifo,
                                                    Render::PresentModeResolution::Exact, 0};

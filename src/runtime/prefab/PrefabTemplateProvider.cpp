@@ -173,8 +173,19 @@ namespace Horo::Prefab {
     /** @copydoc PrefabTemplateProvider::PrefabTemplateProvider */
     PrefabTemplateProvider::PrefabTemplateProvider(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads,
                                                    Runtime::RuntimeSceneService &scenes, PrefabLimitProfile profile,
-                                                   PrefabTemplateProviderLimits limits)
-        : state_(std::make_unique<Detail::PrefabTemplateProviderState>(registry, loads, scenes, std::move(profile), limits)) {}
+                                                   PrefabTemplateProviderLimits limits, PrefabMetricHandles metrics)
+        : state_(std::make_unique<Detail::PrefabTemplateProviderState>(registry, loads, scenes, std::move(profile), limits,
+                                                                       std::move(metrics))) {}
+
+    /** @copydoc PrefabTemplateProvider::LimitProfile */
+    const PrefabLimitProfile &PrefabTemplateProvider::LimitProfile() const noexcept {
+        return state_->profile;
+    }
+
+    /** @copydoc PrefabTemplateProvider::Metrics */
+    const PrefabMetricHandles &PrefabTemplateProvider::Metrics() const noexcept {
+        return state_->metrics;
+    }
 
     /** @copydoc PrefabTemplateProvider::~PrefabTemplateProvider */
     PrefabTemplateProvider::~PrefabTemplateProvider() {
@@ -273,6 +284,8 @@ namespace Horo::Prefab {
             return Result<Tokens>::Failure(admission.ErrorValue());
         if (cancellation.IsCancellationRequested() || options.scopeCancellation.IsCancellationRequested())
             return Result<Tokens>::Failure(MakeError(PrefabErrors::Cancelled));
+        if (options.spawnLineage.size() > state_->profile.Policy().maximumRuntimeSpawnDepth)
+            return Result<Tokens>::Failure(MakeError(PrefabErrors::SpawnDepthExceeded));
         const auto &entities = lease.Template()->Data().entities;
         if (options.rootPlacement && options.rootPlacement->TryToMatrix().HasError())
             return Result<Tokens>::Failure(MakeError(PrefabErrors::InvalidPlacement));

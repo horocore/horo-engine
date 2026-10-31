@@ -1,3 +1,4 @@
+#include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -5,6 +6,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -328,4 +330,63 @@ TEST_CASE("Project open validates the default scene before workspace preparation
 
     service.Shutdown();
     jobs.Shutdown(ShutdownPolicy::Drain);
+}
+
+TEST_CASE("Project open retains the missing collision cause from derived preparation and installation",
+          "[unit][editor][project-open-error]") {
+    const bool failDuringInstall = GENERATE(false, true);
+    TempProject project;
+    const auto missing = LoadProjectCollisionSettings(project.root, "test-project");
+    REQUIRE(missing.HasError());
+    const Error original = missing.ErrorValue();
+
+    struct FailedPrepared final : IPreparedProjectOpenDerivedState {
+        explicit FailedPrepared(Error error) : error{std::move(error)} {}
+
+        Result<std::string> Install() override {
+            return Result<std::string>::Failure(error);
+        }
+
+        Error error;
+    };
+
+    struct FailedContributor final : IProjectOpenDerivedStateContributor {
+        FailedContributor(Error error, bool install) : error{std::move(error)}, install{install} {}
+
+        std::string_view Id() const noexcept override {
+            return "test.collision";
+        }
+
+        Result<std::unique_ptr<IPreparedProjectOpenDerivedState>> Prepare(const std::filesystem::path &,
+                                                                          const CancellationToken &) override {
+            if (!install)
+                return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(error);
+            return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Success(std::make_unique<FailedPrepared>(error));
+        }
+
+        Error error;
+        bool install;
+    } contributor{original, failDuringInstall};
+
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8}};
+    ProjectMutationCoordinator mutations{files};
+    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectOpenPreflightService preflight{transactions};
+    RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
+    std::array<IProjectOpenDerivedStateContributor *, 1> contributors{&contributor};
+    ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers, contributors};
+    const auto started = service.Start({.projectRoot = project.root, .expectedProjectName = "Open Test", .engineBuildIdentity = "test"});
+    REQUIRE(started.HasValue());
+    const auto snapshot = PumpToTerminal(service, started.Value().Id());
+    REQUIRE(snapshot.outcome == ProjectOpenOutcome::Failed);
+    REQUIRE(snapshot.diagnostic.has_value());
+    CHECK(snapshot.diagnostic->code.Value() == "project.open.derived_state_failed");
+    CHECK(snapshot.diagnostic->message.find("test.collision") != std::string::npos);
+    REQUIRE(snapshot.diagnostic->cause.Get() != nullptr);
+    CHECK(snapshot.diagnostic->cause.Get()->message == original.message);
+    CHECK(ErrorChainContains(*snapshot.diagnostic, original.domain, original.code));
+    CHECK_FALSE(std::filesystem::exists(project.root / ".horo/collision.json"));
+    CHECK_FALSE(snapshot.readySession.has_value());
 }

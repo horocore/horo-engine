@@ -3,6 +3,8 @@
  */
 #pragma once
 
+#include "Horo/Editor/SourceEditingCommands.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -75,4 +77,9 @@ namespace Horo::Editor {
      * @note Call on document publication changes, never for unchanged text during drawing. No I/O, jobs, or document mutations occur.
      */
     [[nodiscard]] SourceSyntax TokenizeSource(SourceLanguage language, std::string_view text, SourceSyntaxLimits limits = {});
+    /** @brief Plans a newline using the admitted lexical family, retaining canonical byte/history ownership.
+     * @param source Authoritative snapshot. @param view Exact current selection.
+     * @return Canonical edit plan; unknown or malformed languages retain ordinary indentation.
+     */
+    [[nodiscard]] Result<SourceEditingPlan> PlanSourceLanguageNewline(const SourceDocumentSnapshot &source, const SourceEditingView &view);
 }  // namespace Horo::Editor

@@ -75,3 +75,24 @@ namespace {
         backend.StopTextInput(nullptr);
     }
 }  // namespace
+
+TEST_CASE("SDL punctuation keys retain their physical identity for configurable zoom chords", "[unit][runtime][input][sdl][keymap]") {
+    using namespace Horo::Input;
+    SdlInputBackend backend;
+    backend.BindWindow(7);
+    backend.BeginFrame(1);
+    SDL_Event event{};
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.key.windowID = 7;
+    event.key.scancode = SDL_SCANCODE_EQUALS;
+    event.key.down = true;
+    event.key.mod = SDL_KMOD_GUI;
+    backend.ProcessEvent(event);
+    const auto &plus = backend.Commit();
+    REQUIRE(plus.State(Key::Equal).pressed);
+    REQUIRE(plus.modifiers.command);
+    backend.BeginFrame(2);
+    event.key.scancode = SDL_SCANCODE_MINUS;
+    backend.ProcessEvent(event);
+    REQUIRE(backend.Commit().State(Key::Minus).pressed);
+}

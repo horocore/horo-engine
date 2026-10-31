@@ -1158,8 +1158,7 @@ Networking integrates with Horo's diagnostic and metric infrastructure:
 
 - **Counters**: `net.bytes_sent`, `net.bytes_received`, `net.packets_lost`, `net.packets_dropped`.
 - **Gauges**: `net.active_connections`, `net.inbound_queue_depth`, `net.outbound_queue_depth`, `net.rtt_ms`.
-- `net.rtt_ms` uses the appended `MetricUnit::Milliseconds` descriptor, exported as
-  OTLP unit `ms`. Existing metric-unit numeric identities are unchanged; hosts
+- `net.rtt_ms` uses the appended `MetricUnit::Milliseconds` descriptor for local records. Existing metric-unit numeric identities are unchanged; hosts
   using typed descriptors need no migration.
 - **Tracing**: Transport connection events and session handshakes log to the `LogCategory::Network` category. Payloads are scrubbed of sensitive data by default.
 
@@ -1263,7 +1262,13 @@ simulation ticks.
 The editor Net pane receives those capabilities through `PanelContext`; it owns
 only search/view state and copied evidence. Controls use shared dock primitives;
 long text wraps at the semantic body size and the toolbar scrolls horizontally at
-narrow widths. Standalone editor Play publishes the actual cloned Scene as disabled
+narrow widths. A padded toolbar is followed by a separate filter row, a bounded
+record table, and selected-record details. Details move below the table in narrow
+panes. Selection copies one typed record with its exact source/revision and is
+revoked on source replacement, category change, detach or an accepted clear
+request. A record is an owner observation or aggregate report, not necessarily a
+wire packet; the pane does not invent packet timestamps, durations or payloads.
+Drop/eviction counters remain visible. Standalone editor Play publishes the actual cloned Scene as disabled
 and revokes publication on stop, failure and reload. Real transport events,
 committed mapping/capture reports, admitted RPC terminal totals and tick alignment
 are optional explicit producers. Missing interest/rollback producers remain
@@ -1376,7 +1381,6 @@ The modal/store run on the editor owner thread. The host retains its durable
 filesystem and shared GUI context until modal shutdown; the modal owns the store
 and draft and copies committed projections. Cancellation discards only the draft.
 Existing single-session Play behavior remains its own lifecycle authority.
-
 
 ### Admission provider containment and synchronous event observation
 

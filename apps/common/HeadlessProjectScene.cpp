@@ -1,5 +1,6 @@
 #include "HeadlessProjectScene.h"
 
+#include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -119,6 +120,10 @@ namespace Horo::Application::Internal {
         auto metadata = LoadProjectMetadata(launch.projectRoot);
         if (metadata.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(metadata.ErrorValue());
+        const auto prefabSettings = LoadPrefabProjectSettings(launch.projectRoot);
+        if (prefabSettings.HasError())
+            return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(prefabSettings.ErrorValue());
+        resources->prefabPolicy = prefabSettings.Value().settings->Limits().Policy();
         if (const auto assets = CaptureProductAssets(launch, *resources); assets.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(assets.ErrorValue());
         auto definition = launch.scene.starts_with("source:") ? ReadProductSceneSource(launch, *resources, metadata.Value())

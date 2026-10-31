@@ -14,6 +14,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Prefab/PrefabLimits.h"
+#include "Horo/Prefab/PrefabMetrics.h"
 #include "Horo/Prefab/PrefabSourceRevision.h"
 
 #include <cstddef>
@@ -78,7 +79,12 @@ namespace Horo::Prefab {
         std::size_t maximumJsonDepth{PrefabHardLimits::SourceJsonDepth};       /**< Maximum nested JSON container depth. */
         std::optional<Application::HoroVersion> expectedProjectVersion;        /**< Optional exact unified project version to require. */
 
-        [[nodiscard]] bool operator==(const PrefabSourceParseLimits &) const noexcept = default;
+        const PrefabMetricHandles *metrics{}; /**< Explicit host observer borrowed only during synchronous parsing; never serialized. */
+
+        [[nodiscard]] bool operator==(const PrefabSourceParseLimits &other) const noexcept {
+            return maximumSourceBytes == other.maximumSourceBytes && maximumJsonDepth == other.maximumJsonDepth &&
+                   expectedProjectVersion == other.expectedProjectVersion;
+        }
     };
 
     /** @brief Compatibility of preserved project-owned data with the currently available provider snapshot. */
@@ -138,6 +144,12 @@ namespace Horo::Prefab {
          * @return Immutable document or a stable prefab/gameplay/application validation error.
          */
         [[nodiscard]] static Result<PrefabDocument> Create(PrefabDocumentData candidate, const PrefabLimitProfile &limits);
+        /** @brief Revalidate this immutable source against an accepted next-operation policy without copying its payload.
+         * @param limits Complete validated project profile.
+         * @return Canonical source/hierarchy/composition/budget validation outcome; this document remains unchanged.
+         * @throws std::bad_alloc If bounded validation scratch storage cannot be allocated.
+         * @details Cold authoring/save boundary only. Metadata scratch storage is bounded by the admitted profile. */
+        [[nodiscard]] Result<void> ValidateLimits(const PrefabLimitProfile &limits) const;
 
         /**
          * @brief Parses, validates and transactionally publishes one complete canonical source candidate.

@@ -14,6 +14,7 @@
 namespace Horo::Extensions {
     class ExtensionInventory;
     class EditorPageHost;
+    class EditorActivityHost;
     struct EditorThemeFrame;
     struct EditorSurfaceProviderIdentity;
     class ExtensionMarketplaceService;
@@ -26,6 +27,7 @@ namespace Horo::Editor {
     struct SettingsModalPagePresentation final {
         std::shared_ptr<Extensions::EditorPageHost> host;          /**< Shared page authority; empty disables extension pages. */
         std::shared_ptr<const Extensions::EditorThemeFrame> theme; /**< Owner theme capture; required when host is supplied. */
+        std::shared_ptr<Extensions::EditorActivityHost> commands;  /**< Optional live command metadata/localization authority. */
     };
 
     /** @brief Explicit project openings captured as revocable borrows during modal construction. */
@@ -33,11 +35,15 @@ namespace Horo::Editor {
         const NavigationProjectSettingsSession *navigation{};     /**< Borrowed only until its revocable opening is captured. */
         std::weak_ptr<CollisionProjectSettingsSession> collision; /**< Never extends the project or Scene owner lifetime. */
         std::optional<Error> collisionError;                      /**< Preserves the original typed opening failure for presentation. */
+        std::weak_ptr<PrefabProjectSettingsSession> prefab;       /**< Exact project opening, revoked by owner shutdown. */
     };
 
     /** @brief Host-owned editor settings workflow and its transient settings draft. */
     class SettingsModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"settings"};
+
         static constexpr std::uint64_t kModalId = 0x53455454494E4753ULL;
 
         /**

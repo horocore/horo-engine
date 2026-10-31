@@ -25,12 +25,9 @@ namespace Horo::Editor {
         constexpr std::array GpuSamples{0.35F, 0.42F, 0.64F, 0.45F, 0.74F, 0.54F, 0.63F, 0.42F, 0.67F, 0.58F};
         constexpr std::array MemorySamples{0.21F, 0.23F, 0.28F, 0.32F, 0.37F, 0.45F, 0.49F, 0.53F, 0.57F};
         constexpr std::array Rows{
-            PerformanceRow{"workspace.global_dock.performance.subsystem.renderer", "8.2 ms", "15.8 ms",
-                           "workspace.global_dock.performance.notes.renderer"},
-            PerformanceRow{"workspace.global_dock.performance.subsystem.physics", "0.72 ms", "1.14 ms",
-                           "workspace.global_dock.performance.notes.physics"},
-            PerformanceRow{"workspace.global_dock.performance.subsystem.audio", "0.18 ms", "0.31 ms",
-                           "workspace.global_dock.performance.notes.audio"},
+            PerformanceRow{"subsystem.renderer", "8.2 ms", "15.8 ms", "notes.renderer"},
+            PerformanceRow{"subsystem.physics", "0.72 ms", "1.14 ms", "notes.physics"},
+            PerformanceRow{"subsystem.audio", "0.18 ms", "0.31 ms", "notes.audio"},
         };
 
         void DrawMetricGridSurface(const ImVec2 origin, const float width, const float height, const float scale) {
@@ -66,17 +63,17 @@ namespace Horo::Editor {
         const GlobalDockPaneRegions regions =
             ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockPerformancePane::kTextScope.Text(context.localization, key);
         };
 
         DrawGlobalDockToolbarSurface(regions.toolbarOrigin, regions.toolbarWidth, metrics.toolbarHeight);
         const float controlY = regions.toolbarOrigin.y + (metrics.toolbarHeight - metrics.controlHeight) * 0.5F;
         const GlobalDockToolbarChipProps live{.id = "PerformanceLive",
-                                              .label = localized("workspace.global_dock.performance.live"),
+                                              .label = localized("live"),
                                               .tone = GlobalDockTone::Positive,
                                               .active = m_live};
         const GlobalDockToolbarChipProps capture{.id = "PerformanceCapture",
-                                                 .label = localized("workspace.global_dock.performance.capture"),
+                                                 .label = localized("capture"),
                                                  .tone = GlobalDockTone::Accent,
                                                  .active = true,
                                                  .icon = Ui::UiIcon::Record};
@@ -88,7 +85,7 @@ namespace Horo::Editor {
         const float searchWidth = std::max(180.0F * scale, regions.toolbarWidth - metrics.toolbarPaddingX * 2.0F - fixedWidth);
         float x = regions.toolbarOrigin.x + metrics.toolbarPaddingX;
 
-        const std::string &searchHint = localized("workspace.global_dock.performance.search");
+        const std::string &searchHint = localized("search");
         x = DrawGlobalDockSearchControl({x, controlY}, searchWidth, "##PerformanceSearch", m_search, searchHint, fonts);
 
         DrawToolbarSelectors(x, controlY, context);
@@ -101,11 +98,11 @@ namespace Horo::Editor {
     }
 
     void GlobalDockPerformancePane::DrawToolbarSelectors(float &x, const float y, const EditorGuiContext &context) {
-        const std::array<std::string, 3> windowLabels{context.localization.Get("editor",
-                                                                               "workspace.global_dock.performance.window.ten_seconds"),
-                                                      context.localization.Get("editor", "workspace.global_dock.performance.window.minute"),
-                                                      context.localization.Get("editor",
-                                                                               "workspace.global_dock.performance.window.five_minutes")};
+        const std::array<std::string, 3> windowLabels{GlobalDockPerformancePane::kTextScope.Text(context.localization,
+                                                                                                 "window.ten_seconds"),
+                                                      GlobalDockPerformancePane::kTextScope.Text(context.localization, "window.minute"),
+                                                      GlobalDockPerformancePane::kTextScope.Text(context.localization,
+                                                                                                 "window.five_minutes")};
         const std::array<const char *, 3> windowItems{windowLabels[0].c_str(), windowLabels[1].c_str(), windowLabels[2].c_str()};
         const float windowWidth = 148.0F * Theme::GetActiveTokens().sizes.uiScale;
         ImGui::SetCursorScreenPos({x, y});
@@ -116,11 +113,13 @@ namespace Horo::Editor {
                                             .componentSize = Ui::ComponentSize::Small,
                                             .surface = Ui::ComboControlSurface::BottomDockToolbar}));
         x += windowWidth + ResolveGlobalDockPaneMetrics().toolbarGap;
-        const std::array<std::string, 4>
-            subsystemLabels{context.localization.Get("editor", "workspace.global_dock.performance.subsystem.all"),
-                            context.localization.Get("editor", "workspace.global_dock.performance.subsystem.renderer"),
-                            context.localization.Get("editor", "workspace.global_dock.performance.subsystem.physics"),
-                            context.localization.Get("editor", "workspace.global_dock.performance.subsystem.audio")};
+        const std::array<std::string, 4> subsystemLabels{GlobalDockPerformancePane::kTextScope.Text(context.localization, "subsystem.all"),
+                                                         GlobalDockPerformancePane::kTextScope.Text(context.localization,
+                                                                                                    "subsystem.renderer"),
+                                                         GlobalDockPerformancePane::kTextScope.Text(context.localization,
+                                                                                                    "subsystem.physics"),
+                                                         GlobalDockPerformancePane::kTextScope.Text(context.localization,
+                                                                                                    "subsystem.audio")};
         const std::array<const char *, 4> subsystemItems{subsystemLabels[0].c_str(), subsystemLabels[1].c_str(), subsystemLabels[2].c_str(),
                                                          subsystemLabels[3].c_str()};
         const float subsystemWidth = 142.0F * Theme::GetActiveTokens().sizes.uiScale;
@@ -139,7 +138,7 @@ namespace Horo::Editor {
         const Theme::Fonts &fonts = context.theme.fonts;
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockPerformancePane::kTextScope.Text(context.localization, key);
         };
 
         const bool narrow = contentWidth < 900.0F * scale;
@@ -153,24 +152,21 @@ namespace Horo::Editor {
                                                              static_cast<float>(columns));
         DrawMetricGridSurface(contentOrigin, contentWidth, gridHeight, scale);
         const std::array<GlobalDockMetricCardProps, 4> cards{
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.performance.metric.frame_time"),
+            GlobalDockMetricCardProps{.label = localized("metric.frame_time"),
                                       .value = "16.7 ms",
-                                      .note = localized("workspace.global_dock.performance.metric.frame_budget"),
+                                      .note = localized("metric.frame_budget"),
                                       .noteTone = GlobalDockTone::Warning,
                                       .samples = FrameSamples,
                                       .budget = 0.52F},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.performance.metric.cpu"),
+            GlobalDockMetricCardProps{.label = localized("metric.cpu"),
                                       .value = "4.1 ms",
                                       .valueTone = GlobalDockTone::Positive,
                                       .samples = CpuSamples},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.performance.metric.gpu"),
+            GlobalDockMetricCardProps{.label = localized("metric.gpu"),
                                       .value = "15.8 ms",
                                       .valueTone = GlobalDockTone::Warning,
                                       .samples = GpuSamples},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.performance.metric.memory"),
-                                      .value = "628 MB",
-                                      .note = "+8.4",
-                                      .samples = MemorySamples},
+            GlobalDockMetricCardProps{.label = localized("metric.memory"), .value = "628 MB", .note = "+8.4", .samples = MemorySamples},
         };
         for (std::size_t index = 0; index < cards.size(); ++index) {
             const int column = static_cast<int>(index) % columns;
@@ -188,7 +184,7 @@ namespace Horo::Editor {
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockPerformancePane::kTextScope.Text(context.localization, key);
         };
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         const ImVec2 headerMin = origin;
@@ -202,10 +198,10 @@ namespace Horo::Editor {
             drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {textX, headerY}, Theme::U32(Theme::Muted()),
                               localized(key).c_str());
         };
-        headerText(layout.subsystem, "workspace.global_dock.performance.column.subsystem");
-        headerText(layout.p50, "workspace.global_dock.performance.column.p50");
-        headerText(layout.p95, "workspace.global_dock.performance.column.p95");
-        headerText(layout.notes, "workspace.global_dock.performance.column.notes");
+        headerText(layout.subsystem, "column.subsystem");
+        headerText(layout.p50, "column.p50");
+        headerText(layout.p95, "column.p95");
+        headerText(layout.notes, "column.notes");
 
         const ImVec2 rowsOrigin{headerMin.x, headerMin.y + metrics.tableHeaderHeight};
         const float rowsHeight = std::max(1.0F, height - metrics.tableHeaderHeight);
@@ -236,14 +232,14 @@ namespace Horo::Editor {
         const float bottom = origin.y + metrics.tableRowHeight;
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.subsystem, textY},
                                   {layout.p50 - metrics.columnGap, bottom}, Theme::Text(),
-                                  context.localization.Get("editor", row.subsystemKey));
+                                  GlobalDockPerformancePane::kTextScope.Text(context.localization, row.subsystemKey));
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.p50, textY},
                                   {layout.p95 - metrics.columnGap, bottom}, Theme::Text(), row.p50);
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.p95, textY},
                                   {layout.notes - metrics.columnGap, bottom}, Theme::Text(), row.p95);
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.notes, textY},
                                   {origin.x + width - metrics.contentPadding, bottom}, Theme::Text(),
-                                  context.localization.Get("editor", row.notesKey));
+                                  GlobalDockPerformancePane::kTextScope.Text(context.localization, row.notesKey));
         ImGui::PopID();
     }
 

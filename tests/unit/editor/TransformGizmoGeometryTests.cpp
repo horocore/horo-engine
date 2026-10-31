@@ -4,6 +4,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <imgui_internal.h>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -66,8 +67,7 @@ namespace {
     }
 
     [[nodiscard]] std::pair<float, ImVec2> MeasureBlueTransformGizmoScaleHandle(ImDrawList &drawList, const EditorViewportCamera &camera,
-                                                                                const Math::Mat4 &worldTransform,
-                                                                                const ImU32 blueScaleColor) {
+                                                                                const Math::Mat4 &worldTransform) {
         const TransformGizmoGeometryRequest request{
             .camera = camera,
             .worldTransform = worldTransform,
@@ -85,7 +85,8 @@ namespace {
         float extent = 0.0F;
         for (int vertexIndex = firstVertex; vertexIndex < drawList.VtxBuffer.Size; ++vertexIndex) {
             const ImDrawVert &vertex = drawList.VtxBuffer[vertexIndex];
-            if (vertex.col == blueScaleColor)
+            const auto color = ImGui::ColorConvertU32ToFloat4(vertex.col);
+            if (color.w > 0 && color.z > color.x * 1.5F && color.z > color.y * 1.3F)
                 extent = std::max(extent, std::hypot(vertex.pos.x - geometry.Value().center->x, vertex.pos.y - geometry.Value().center->y));
         }
         return std::pair{extent, geometry.Value().screenDirections[2]};
@@ -340,53 +341,123 @@ TEST_CASE("Transform gizmo scale handles remain stable under camera changes", "[
     }
 }
 
-TEST_CASE("Scale handle faces stay square to their projected axes", "[unit][editor][viewport][gizmo]") {
+TEST_CASE("Scale handles project cube corners from one 3D frame and share their picking geometry", "[unit][editor][viewport][gizmo]") {
     ImGuiGizmoGeometryTestContext context;
-    context.camera.position = {4.0F, 3.0F, 5.0F};
-    TransformGizmoGeometryRequest request = context.request;
-    request.tool = EditorTransformTool::Scale;
-    request.hovered = false;
-
-    ImDrawList &drawList = context.DrawList();
-    const int firstVertex = drawList.VtxBuffer.Size;
-    const Result<TransformGizmoFrameGeometry> geometry = DrawTransformGizmoGeometry(drawList, request);
-    REQUIRE(geometry.HasValue());
-    REQUIRE(geometry.Value().center.has_value());
-
-    const Result<Math::Vec3> viewDirection = Math::TryNormalize(context.camera.target - context.camera.position);
-    REQUIRE(viewDirection.HasValue());
-    const ImU32 redFace = ImGui::GetColorU32(ImVec4{0.93F, 0.29F, 0.26F, 1.0F});
-    const Math::Vec3 worldAxis = geometry.Value().worldAxes[0];
-    const float alignment = Math::Dot(worldAxis, viewDirection.Value());
-    const float axisLength = 96.0F * std::sqrt(1.0F - alignment * alignment);
-    const ImVec2 direction = geometry.Value().screenDirections[0];
-    const ImVec2 handle{geometry.Value().center->x + direction.x * (axisLength - 9.0F),
-                        geometry.Value().center->y + direction.y * (axisLength - 9.0F)};
-    for (const float along : {-9.0F, 9.0F}) {
-        for (const float across : {-9.0F, 9.0F}) {
-            const ImVec2 corner{handle.x + direction.x * along - direction.y * across,
-                                handle.y + direction.y * along + direction.x * across};
-            float nearest = std::numeric_limits<float>::max();
-            for (int vertexIndex = firstVertex; vertexIndex < drawList.VtxBuffer.Size; ++vertexIndex) {
-                const ImDrawVert &vertex = drawList.VtxBuffer[vertexIndex];
-                if (vertex.col == redFace)
-                    nearest = std::min(nearest, std::hypot(vertex.pos.x - corner.x, vertex.pos.y - corner.y));
+    for (const auto space : {EditorTransformSpace::World, EditorTransformSpace::Local}) {
+        context.worldTransform =
+            Math::Transform{
+                .rotation = Math::Quaternion::FromEulerRadians({0.2F, 0.3F, -0.15F}),
+                .scale = {2.0F, 0.75F, 1.5F},
             }
-            REQUIRE(nearest < 1.0F);
+                .ToMatrix();
+        for (const auto projection : {Runtime::CameraProjection::Perspective, Runtime::CameraProjection::Orthographic}) {
+            context.camera.projection = projection;
+            for (const Math::Vec3 eye : {Math::Vec3{4, 3, 5}, Math::Vec3{-5, 2, 4}, Math::Vec3{4, -3, -5}, Math::Vec3{0.4F, 1, 5}}) {
+                context.camera.position = eye;
+                const auto forward = Math::TryNormalize(context.camera.target - eye).Value();
+                const auto right = Math::TryNormalize(Math::Cross(forward, context.camera.up)).Value();
+                const auto up = Math::TryNormalize(Math::Cross(right, forward)).Value();
+                auto request = context.request;
+                request.tool = EditorTransformTool::Scale;
+                request.space = space;
+                request.hovered = false;
+                auto &drawList = context.DrawList();
+                const int firstVertex = drawList.VtxBuffer.Size;
+                const auto geometry = DrawTransformGizmoGeometry(drawList, request);
+                REQUIRE(geometry.HasValue());
+                REQUIRE(geometry.Value().center);
+                const auto center = *geometry.Value().center;
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (!geometry.Value().projectedAxisVisible[axis])
+                        continue;
+                    const auto cubeCenter = geometry.Value().worldAxes[axis] * 87.0F;
+                    const auto project = [&](const Math::Vec3 point) {
+                        return ImVec2{center.x + Math::Dot(point, right), center.y - Math::Dot(point, up)};
+                    };
+                    ImRect bounds{center, center};
+                    for (int corner = 0; corner < 8; ++corner) {
+                        auto point = cubeCenter;
+                        for (int component = 0; component < 3; ++component)
+                            point = point + geometry.Value().worldAxes[component] * ((corner & (1 << component)) ? 9.0F : -9.0F);
+                        bounds.Add(project(point));
+                    }
+                    bounds.Expand(5.0F);
+                    for (int vertex = firstVertex; vertex < drawList.VtxBuffer.Size; ++vertex) {
+                        const auto &drawn = drawList.VtxBuffer[vertex];
+                        const auto color = ImGui::ColorConvertU32ToFloat4(drawn.col);
+                        const std::array components{color.x, color.y, color.z};
+                        if (color.w > 0 && components[axis] > 0.25F && components[axis] > components[(axis + 1) % 3] * 1.2F &&
+                            components[axis] > components[(axis + 2) % 3] * 1.2F) {
+                            CAPTURE(axis, eye.x, eye.y, eye.z, drawn.pos.x, drawn.pos.y, bounds.Min.x, bounds.Min.y, bounds.Max.x,
+                                    bounds.Max.y);
+                            CHECK(bounds.Contains(drawn.pos));
+                        }
+                    }
+                    // Each visible corner must belong to the actual projected equal-edge cube,
+                    // including side faces that a screen-aligned square cannot represent.
+                    for (int corner = 0; corner < 8; ++corner) {
+                        auto point = cubeCenter;
+                        bool visible{};
+                        for (int component = 0; component < 3; ++component) {
+                            const float sign = (corner & (1 << component)) ? 1.0F : -1.0F;
+                            point = point + geometry.Value().worldAxes[component] * (9.0F * sign);
+                            visible |= Math::Dot(geometry.Value().worldAxes[component] * sign, forward * -1.0F) > 0.0001F;
+                        }
+                        if (!visible)
+                            continue;
+                        const auto expected = project(point);
+                        float distance = std::numeric_limits<float>::max();
+                        for (int vertex = firstVertex; vertex < drawList.VtxBuffer.Size; ++vertex) {
+                            const auto &drawn = drawList.VtxBuffer[vertex];
+                            const auto color = ImGui::ColorConvertU32ToFloat4(drawn.col);
+                            const std::array components{color.x, color.y, color.z};
+                            if (color.w == 0 || components[axis] <= 0.25F || components[axis] <= components[(axis + 1) % 3] * 1.2F ||
+                                components[axis] <= components[(axis + 2) % 3] * 1.2F)
+                                continue;
+                            distance = std::min(distance, std::hypot(drawn.pos.x - expected.x, drawn.pos.y - expected.y));
+                        }
+                        REQUIRE(distance < 1.2F);
+                    }
+                    request.pointer = project(cubeCenter);
+                    request.hovered = true;
+                    const auto hovered = DrawTransformGizmoGeometry(drawList, request);
+                    REQUIRE(hovered.HasValue());
+                    CHECK(hovered.Value().hoveredAxis == axis);
+                    request.hovered = false;
+                }
+            }
         }
+    }
+}
+
+TEST_CASE("Overlapping scale cubes pick the camera-nearest axis", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    for (const float sign : {-1.0F, 1.0F}) {
+        context.camera.position = {4 * sign, 0, -4 * sign};
+        auto request = context.request;
+        request.tool = EditorTransformTool::Scale;
+        request.hovered = false;
+        const auto frame = DrawTransformGizmoGeometry(context.DrawList(), request);
+        REQUIRE(frame.HasValue());
+        const int nearest = sign > 0 ? 0 : 2;
+        const auto direction = frame.Value().screenDirections[nearest];
+        request.pointer = {frame.Value().center->x + direction.x * 87.0F / std::sqrt(2.0F), frame.Value().center->y};
+        request.hovered = true;
+        const auto hovered = DrawTransformGizmoGeometry(context.DrawList(), request);
+        REQUIRE(hovered.HasValue());
+        CHECK(hovered.Value().hoveredAxis == nearest);
     }
 }
 
 TEST_CASE("Transform gizmo scale handles remain bounded near end-on views", "[unit][editor][viewport][gizmo]") {
     ImGuiGizmoGeometryTestContext context;
     ImDrawList &drawList = context.DrawList();
-    const ImU32 blueScaleColor = ImGui::GetColorU32(ImVec4{0.25F, 0.51F, 0.96F, 1.0F});
 
     context.camera.target = {};
     context.camera.position = {1.4F, 0.0F, 4.0F};
-    const auto blueFromRight = MeasureBlueTransformGizmoScaleHandle(drawList, context.camera, context.worldTransform, blueScaleColor);
+    const auto blueFromRight = MeasureBlueTransformGizmoScaleHandle(drawList, context.camera, context.worldTransform);
     context.camera.position = {-1.4F, 0.0F, 4.0F};
-    const auto blueFromLeft = MeasureBlueTransformGizmoScaleHandle(drawList, context.camera, context.worldTransform, blueScaleColor);
+    const auto blueFromLeft = MeasureBlueTransformGizmoScaleHandle(drawList, context.camera, context.worldTransform);
     REQUIRE(blueFromRight.first > 25.0F);
     REQUIRE(blueFromRight.first < 48.0F);
     REQUIRE(blueFromLeft.first > 25.0F);

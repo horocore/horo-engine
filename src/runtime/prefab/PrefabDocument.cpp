@@ -358,30 +358,44 @@ namespace Horo::Prefab {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Validate borrowed canonical data before copying or publishing content. */
+        Result<void> ValidateCandidate(const PrefabDocumentData &candidate, const PrefabLimitProfile &limits) {
+            const PrefabProjectPolicy &policy = limits.Policy();
+            if (!candidate.assetId.IsValid() || !Detail::IsCanonicalProjectVersion(candidate.projectVersion))
+                return Result<void>::Failure(MakeError(PrefabErrors::DocumentInvalid));
+            if (candidate.objects.size() > policy.maximumObjectCount)
+                return Result<void>::Failure(MakeError(PrefabErrors::ObjectCountExceeded));
+            const auto referenceValidation = ValidateReferences(candidate.referencedAssets, policy);
+            if (referenceValidation.HasError())
+                return Result<void>::Failure(referenceValidation.ErrorValue());
+            std::size_t payloadBytes = referenceValidation.Value();
+
+            ObjectDepths objectDepths;
+            if (const bool isVariant = candidate.composition && candidate.composition->variantParent; !isVariant) {
+                auto hierarchyValidation = ValidateHierarchy(candidate.objects, payloadBytes, policy);
+                if (hierarchyValidation.HasError())
+                    return Result<void>::Failure(hierarchyValidation.ErrorValue());
+                objectDepths = std::move(hierarchyValidation).Value();
+            }
+
+            if (const auto compositionValidation = ValidateComposition(candidate, objectDepths, policy); compositionValidation.HasError())
+                return Result<void>::Failure(compositionValidation.ErrorValue());
+
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc PrefabDocument::Create */
     Result<PrefabDocument> PrefabDocument::Create(PrefabDocumentData candidate, const PrefabLimitProfile &limits) {
-        const PrefabProjectPolicy &policy = limits.Policy();
-        if (!candidate.assetId.IsValid() || !Detail::IsCanonicalProjectVersion(candidate.projectVersion))
-            return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::DocumentInvalid));
-        if (candidate.objects.size() > policy.maximumObjectCount)
-            return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::ObjectCountExceeded));
-        const auto referenceValidation = ValidateReferences(candidate.referencedAssets, policy);
-        if (referenceValidation.HasError())
-            return Result<PrefabDocument>::Failure(referenceValidation.ErrorValue());
-        std::size_t payloadBytes = referenceValidation.Value();
-
-        ObjectDepths objectDepths;
-        if (const bool isVariant = candidate.composition && candidate.composition->variantParent; !isVariant) {
-            auto hierarchyValidation = ValidateHierarchy(candidate.objects, payloadBytes, policy);
-            if (hierarchyValidation.HasError())
-                return Result<PrefabDocument>::Failure(hierarchyValidation.ErrorValue());
-            objectDepths = std::move(hierarchyValidation).Value();
-        }
-
-        if (const auto compositionValidation = ValidateComposition(candidate, objectDepths, policy); compositionValidation.HasError())
-            return Result<PrefabDocument>::Failure(compositionValidation.ErrorValue());
-
+        if (auto validated = ValidateCandidate(candidate, limits); validated.HasError())
+            return Result<PrefabDocument>::Failure(std::move(validated).ErrorValue());
         return Result<PrefabDocument>::Success(PrefabDocument{std::move(candidate)});
+    }
+
+    /** @copydoc PrefabDocument::ValidateLimits */
+    Result<void> PrefabDocument::ValidateLimits(const PrefabLimitProfile &limits) const {
+        return ValidateCandidate(data_, limits);
     }
 
     /** @copydoc PrefabDocument::Data */

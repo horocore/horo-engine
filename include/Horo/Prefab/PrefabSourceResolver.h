@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Prefab/PrefabCompositionOrigin.h"
 #include "Horo/Prefab/PrefabDependencyGraph.h"
 
 #include <span>
@@ -17,14 +18,16 @@ namespace Horo::Prefab {
         Assets::AssetId asset;      /**< Exact source identity, never an input-vector position. */
         Sha256Digest digest;        /**< Digest of SerializeCanonical bytes, independent of the caller's claimed revision. */
         std::size_t encodedBytes{}; /**< Exact canonical wire length for bounded cache/admission accounting. */
+        [[nodiscard]] bool operator==(const PrefabCanonicalSourceCommitment &) const noexcept = default;
     };
 
     /** @brief Exact immutable source context captured for one root resolution. */
     struct PrefabResolutionRevision final {
-        Assets::AssetRegistryRevision registry;         /**< Asset Registry publication used for every lookup. */
-        PrefabSourceRevision rootSource;                /**< Root document revision used for expansion. */
-        std::vector<PrefabDependencyNode> dependencies; /**< Canonical reachable nodes, including the root; no paths. */
-        std::vector<PrefabDependencyEdge> edges;        /**< Canonical reachable semantic edges used by expansion. */
+        Assets::AssetRegistryRevision registry;                        /**< Asset Registry publication used for every lookup. */
+        PrefabSourceRevision rootSource;                               /**< Root document revision used for expansion. */
+        std::vector<PrefabDependencyNode> dependencies;                /**< Canonical reachable nodes, including the root; no paths. */
+        std::vector<PrefabDependencyEdge> edges;                       /**< Canonical reachable semantic edges used by expansion. */
+        std::vector<PrefabCanonicalSourceCommitment> canonicalSources; /**< Actual canonical bytes, independent of claimed revisions. */
 
         [[nodiscard]] bool operator==(const PrefabResolutionRevision &) const noexcept = default;
     };
@@ -37,6 +40,7 @@ namespace Horo::Prefab {
         PrefabObjectNode object;                       /**< Owned authored object data; contains no source path. */
         Math::Transform effectiveLocalTransform;       /**< Placement-adjusted transform used by Scene conversion. */
         Math::Transform placementTransform; /**< Exact mount TRS applied to a nested root; identity for ordinary source objects. */
+        std::vector<PrefabCompositionOriginStep> originChain; /**< Bounded actual application lineage, independent of paths/labels. */
 
         [[nodiscard]] bool operator==(const ResolvedPrefabObject &) const noexcept = default;
     };
@@ -48,6 +52,12 @@ namespace Horo::Prefab {
         [[nodiscard]] Assets::AssetId RootAsset() const noexcept;
         /** @brief Returns the exact registry, reachable source and graph revisions used. @return Immutable revision context. */
         [[nodiscard]] const PrefabResolutionRevision &Revision() const noexcept;
+
+        /** @brief Returns owned numeric observation handles, excluded from semantic identity. @return Immutable configuration. */
+        [[nodiscard]] const PrefabMetricHandles &Metrics() const noexcept {
+            return metrics_;
+        }
+
         /** @brief Returns the canonical expanded hierarchy. @return Borrowed immutable objects. */
         [[nodiscard]] std::span<const ResolvedPrefabObject> Objects() const noexcept;
         /** @brief Read exact instance value-intent commitment. @return Zero for unmodified source expansion. */
@@ -59,12 +69,13 @@ namespace Horo::Prefab {
         friend class PrefabExpansionCache;
 
         EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision, std::vector<ResolvedPrefabObject> objects,
-                                 const Sha256Digest &valueOverrides = {}) noexcept;
+                                 const Sha256Digest &valueOverrides = {}, const PrefabMetricHandles &metrics = {}) noexcept;
 
         Assets::AssetId rootAsset_{};
         PrefabResolutionRevision revision_{};
         std::vector<ResolvedPrefabObject> objects_;
         Sha256Digest valueOverrides_{};
+        PrefabMetricHandles metrics_;
     };
 
     /** @brief Self-contained immutable prefab documents and dependency graph from one registry revision. */
@@ -72,6 +83,12 @@ namespace Horo::Prefab {
     public:
         /** @brief Returns the pinned Asset Registry revision. @return Exact immutable publication. */
         [[nodiscard]] Assets::AssetRegistryRevision RegistryRevision() const noexcept;
+
+        /** @brief Returns explicitly captured numeric observation handles. @return Owned configuration with no host borrow. */
+        [[nodiscard]] const PrefabMetricHandles &Metrics() const noexcept {
+            return metrics_;
+        }
+
         /** @brief Returns all owned source documents. @return Borrowed immutable sources. */
         [[nodiscard]] std::span<const PrefabDependencySource> Sources() const noexcept;
         /**
@@ -123,14 +140,16 @@ namespace Horo::Prefab {
         [[nodiscard]] Result<PrefabResolutionRevision> CaptureRevision(Assets::AssetId rootAsset, PrefabExpansionBudget &budget) const;
         friend Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &,
                                                                                       std::vector<PrefabDependencySource>,
-                                                                                      const PrefabLimitProfile &);
+                                                                                      const PrefabLimitProfile &,
+                                                                                      const PrefabMetricHandles &);
 
         PrefabSourceResolverSnapshot(PrefabDependencyGraphSnapshot graph, std::vector<PrefabDependencySource> sources,
-                                     std::vector<PrefabCanonicalSourceCommitment> commitments) noexcept;
+                                     std::vector<PrefabCanonicalSourceCommitment> commitments, const PrefabMetricHandles &metrics) noexcept;
 
         PrefabDependencyGraphSnapshot graph_;
         std::vector<PrefabDependencySource> sources_;
         std::vector<PrefabCanonicalSourceCommitment> commitments_;
+        PrefabMetricHandles metrics_;
     };
 
     /**
@@ -138,13 +157,15 @@ namespace Horo::Prefab {
      * @param registry Pinned registry snapshot used by every lookup.
      * @param sources Owned immutable validated source documents and semantic revisions.
      * @param limits Captured project policy bounding snapshot construction.
+     * @param metrics Explicit host-prebound handles retained by value, excluded from semantic commitments.
      * @return Resolver snapshot or a typed dependency consistency, source encoding or allocation error.
      * @details Admission computes exact canonical digest/length evidence from each owned validated document;
      * claimed source revisions remain separate graph evidence and do not supply those commitments.
      */
     [[nodiscard]] Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &registry,
                                                                                          std::vector<PrefabDependencySource> sources,
-                                                                                         const PrefabLimitProfile &limits);
+                                                                                         const PrefabLimitProfile &limits,
+                                                                                         const PrefabMetricHandles &metrics = {});
 
     /**
      * @brief Fences a completed worker candidate against the current publication context.

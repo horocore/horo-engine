@@ -226,26 +226,30 @@ namespace Horo::Editor {
                 text += std::format("  |  {}: {}", localization.Get("editor", "workspace.viewport.vertices"), *state.vertexCount);
             if (state.triangleCount.has_value())
                 text += std::format("  |  {}: {}", localization.Get("editor", "workspace.viewport.triangles"), *state.triangleCount);
-            const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
-            const ImVec2 min{origin.x + SideInset, origin.y + size.y - textSize.y - 24.0F};
+            const auto row = ResolveViewportStatusRow(origin, size, state.objectCount, localization);
+            if (row.objectsWidth <= 0.0F)
+                return;
+            const ImVec2 min = row.objectsPosition;
+            const ImVec2 max{min.x + row.objectsWidth, min.y + row.height};
+            const auto &tokens = Theme::GetActiveTokens();
+            const auto &metrics = DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Small);
             ImDrawList &drawList = *ImGui::GetWindowDrawList();
-            drawList.AddRectFilled({min.x - 9.0F, min.y - 6.0F}, {min.x + textSize.x + 9.0F, min.y + textSize.y + 6.0F},
-                                   Theme::U32(Theme::Bg1()), 5.0F);
-            drawList.AddRect({min.x - 9.0F, min.y - 6.0F}, {min.x + textSize.x + 9.0F, min.y + textSize.y + 6.0F},
-                             Theme::U32(Theme::Border()), 5.0F);
-            drawList.AddText(min, Theme::U32(Theme::Muted()), text.c_str());
+            drawList.AddRectFilled(min, max, Theme::U32(Theme::Bg1()), tokens.radii.control);
+            drawList.AddRect(min, max, Theme::U32(Theme::Border()), tokens.radii.control);
+            drawList.PushClipRect(min, max, true);
+            drawList.AddText({min.x + metrics.paddingX, min.y + (row.height - ImGui::GetTextLineHeight()) * 0.5F},
+                             Theme::U32(Theme::Muted()), objects.c_str());
+            drawList.PopClipRect();
+            if (ImGui::IsMouseHoveringRect(min, max))
+                Ui::ShowTooltip(text.c_str());
         }
 
         /** @brief Draws viewport transform tools and reports the selected action. */
-        void DrawViewportTools(const ImVec2 origin, const ImVec2 size, const float gridX, const ViewportOverlayState &state,
-                               const Theme::Fonts &fonts, const ILocalizationService &localization, ViewportOverlayAction &action) {
-            const float groupWidth = ButtonWidth * 5.0F + ToolGap * 4.0F;
-            float toolX = gridX + ButtonWidth + ToolGap;
-            float toolY = origin.y + TopInset;
-            if (toolX + groupWidth > origin.x + size.x - SideInset) {
-                toolX = origin.x + SideInset;
-                toolY += ControlHeight + 8.0F;
-            }
+        void DrawViewportTools(const ImVec2 origin, const ImVec2 size, const ViewportOverlayState &state, const Theme::Fonts &fonts,
+                               const ILocalizationService &localization, ViewportOverlayAction &action) {
+            const auto toolbar = ResolveViewportToolbar(origin, size);
+            float toolX = toolbar.toolsPosition.x;
+            const float toolY = toolbar.toolsPosition.y;
             const std::array tools{EditorTransformTool::Select, EditorTransformTool::Move, EditorTransformTool::Rotate,
                                    EditorTransformTool::Scale};
             const std::array glyphs{OverlayGlyph::Select, OverlayGlyph::Move, OverlayGlyph::Rotate, OverlayGlyph::Scale};
@@ -264,6 +268,39 @@ namespace Horo::Editor {
                 action.focusSelection = true;
         }
     }  // namespace
+
+    /** @copydoc ResolveViewportToolbar */
+    ViewportToolbarLayout ResolveViewportToolbar(const ImVec2 origin, const ImVec2 size) {
+        const auto &tokens = Theme::GetActiveTokens();
+        const float rowHeight = ControlHeight * tokens.sizes.uiScale;
+        const float gap = tokens.spacing.propertyRowGap;
+        const float gridX = origin.x + SideInset + 140.0F + ControlGap + 116.0F + ControlGap;
+        ImVec2 tools{gridX + ButtonWidth + ToolGap, origin.y + TopInset};
+        if (tools.x + ButtonWidth * 5.0F + ToolGap * 4.0F > origin.x + size.x - SideInset)
+            tools = {origin.x + SideInset, tools.y + rowHeight + gap};
+        const ImVec2 options{origin.x + SideInset, tools.y + rowHeight + gap};
+        return {.toolsPosition = tools, .optionsPosition = options, .bottom = tools.y + rowHeight};
+    }
+
+    /** @copydoc ResolveViewportStatusRow */
+    ViewportStatusRowLayout ResolveViewportStatusRow(const ImVec2 origin, const ImVec2 size, const std::size_t objectCount,
+                                                     const ILocalizationService &localization) {
+        const auto &tokens = Theme::GetActiveTokens();
+        const auto &metrics = DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Small);
+        const float gap = tokens.spacing.propertyRowGap;
+        const float inset = std::min(tokens.spacing.sidebarPaddingX, std::max(0.0F, size.x * 0.5F));
+        const float available = std::max(0.0F, size.x - inset * 2.0F);
+        const std::string objects =
+            std::vformat(localization.Get("editor", "workspace.viewport.object_count"), std::make_format_args(objectCount));
+        const float objectsWidth = std::min(available, ImGui::CalcTextSize(objects.c_str()).x + metrics.paddingX * 2.0F);
+        const float height = std::max(metrics.minimumHeight, ImGui::GetTextLineHeight() + metrics.paddingY * 2.0F);
+        const ImVec2 position{origin.x + inset, origin.y + std::max(0.0F, size.y - height - gap)};
+        return {.objectsPosition = position,
+                .objectsWidth = objectsWidth,
+                .actionsPosition = {position.x + objectsWidth + gap, position.y},
+                .actionsWidth = std::max(0.0F, available - objectsWidth - gap),
+                .height = height};
+    }
 
     /** @copydoc DrawViewportOverlay */
     ViewportOverlayAction DrawViewportOverlay(const ImVec2 origin, const ImVec2 size, const ViewportOverlayState &state,
@@ -296,7 +333,7 @@ namespace Horo::Editor {
                               localization.Get("editor", "workspace.viewport.grid").c_str(), fonts))
             action.toggleGrid = true;
 
-        DrawViewportTools(origin, size, gridX, state, fonts, localization, action);
+        DrawViewportTools(origin, size, state, fonts, localization, action);
 
         if (size.x >= 740.0F)
             action.axisView = DrawCompass(*ImGui::GetWindowDrawList(), {origin.x + size.x - 48.0F, origin.y + 64.0F}, state.camera);

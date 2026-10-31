@@ -5,10 +5,14 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 
 #include <algorithm>
+#include <array>
+#include <cfloat>
 #include <filesystem>
 #include <ranges>
+#include <string>
 
 namespace Horo::Editor {
     namespace {
@@ -16,12 +20,12 @@ namespace Horo::Editor {
                              const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
             const ILocalizationService &localization = context.localization;
             ImGui::BeginDisabled(clipboardMode == ContentBrowserClipboardMode::None);
-            const bool activated = Ui::ContextMenuItem(localization
-                                                           .Get("editor", clipboardMode == ContentBrowserClipboardMode::Move
-                                                                              ? "workspace.content_browser.action.move_here"
-                                                                              : "workspace.content_browser.action.paste_here")
-                                                           .c_str(),
-                                                       "Ctrl+V", context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.paste");
+            const bool activated =
+                Ui::ContextMenuItem(AssetBrowserPane::kTextScope
+                                        .Text(localization,
+                                              clipboardMode == ContentBrowserClipboardMode::Move ? "action.move_here" : "action.paste_here")
+                                        .c_str(),
+                                    "Ctrl+V", context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.paste");
             ImGui::EndDisabled();
             if (activated)
                 command = AssetBrowserInteractionSession::Paste(destination.string());
@@ -31,14 +35,14 @@ namespace Horo::Editor {
                                        EditorWorkspaceViewCommandData &command) {
             using enum Ui::ContextMenuItemTone;
             const ILocalizationService &localization = context.localization;
-            if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.duplicate").c_str(), "Ctrl+D",
+            if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.duplicate").c_str(), "Ctrl+D",
                                     context.theme.fonts, Normal, "action.duplicate"))
                 command = AssetBrowserInteractionSession::Duplicate(entry.absolutePath);
-            if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.copy").c_str(), "Ctrl+C",
-                                    context.theme.fonts, Normal, "action.copy"))
+            if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.copy").c_str(), "Ctrl+C", context.theme.fonts,
+                                    Normal, "action.copy"))
                 command = AssetBrowserInteractionSession::Copy(entry.absolutePath);
-            if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.cut").c_str(), "Ctrl+X",
-                                    context.theme.fonts, Normal, "action.cut"))
+            if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.cut").c_str(), "Ctrl+X", context.theme.fonts,
+                                    Normal, "action.cut"))
                 command = AssetBrowserInteractionSession::Cut(entry.absolutePath);
         }
 
@@ -46,7 +50,7 @@ namespace Horo::Editor {
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
             DrawPasteAction(entry.absolutePath, viewModel.contentBrowserClipboard.mode, context, command);
             if (const ILocalizationService &localization = context.localization;
-                Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.import_here").c_str(), nullptr,
+                Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.import_here").c_str(), nullptr,
                                     context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.import"))
                 command = AssetBrowserInteractionSession::ImportHere(entry.absolutePath);
             Ui::ContextMenuSeparator();
@@ -58,7 +62,7 @@ namespace Horo::Editor {
                 return;
             const ILocalizationService &localization = context.localization;
             if (std::filesystem::path{entry.absolutePath}.extension() == ".horo_script" &&
-                Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.open_external_ide").c_str(), nullptr,
+                Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.open_external_ide").c_str(), nullptr,
                                     context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.open")) {
                 command.command = EditorWorkspaceViewCommand::OpenSourceFile;
                 command.sourceOpenRequest = SourceOpenRequest{
@@ -68,7 +72,7 @@ namespace Horo::Editor {
                 };
             }
             ImGui::BeginDisabled(!entry.canReimport);
-            if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.reimport").c_str(), nullptr,
+            if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.reimport").c_str(), nullptr,
                                     context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.refresh"))
                 command = AssetBrowserInteractionSession::Reimport(entry.absolutePath);
             ImGui::EndDisabled();
@@ -78,39 +82,55 @@ namespace Horo::Editor {
     /** @copydoc DrawAssetBrowserBackgroundActions */
     void DrawAssetBrowserBackgroundActions(const EditorWorkspaceViewModel &viewModel, AssetBrowserInteractionSession &interactionSession,
                                            EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+        const ILocalizationService &localization = context.localization;
+        constexpr std::array actionKeys = {"action.paste_here",
+                                           "action.move_here",
+                                           "action.create_folder",
+                                           "action.create_lua_behavior",
+                                           "action.create_native_behavior",
+                                           "action.import_here",
+                                           "action.refresh"};
+        float widestLabel = 0.0F;
+        for (const char *key : actionKeys) {
+            const std::string &label = AssetBrowserPane::kTextScope.Text(localization, key);
+            widestLabel =
+                std::max(widestLabel, context.theme.fonts.sans->CalcTextSizeA(Theme::TextPx::Label(), FLT_MAX, 0.0F, label.c_str()).x);
+        }
+        const float width =
+            std::clamp(widestLabel + Ui::ScaledLayoutValue(64.0F), Ui::ScaledLayoutValue(176.0F), Ui::ScaledLayoutValue(340.0F));
+        ImGui::SetNextWindowSize({width, 0.0F});
         if (!Ui::BeginContextWindowMenu("##ContentBrowserBackgroundMenu"))
             return;
 
         const ContentBrowserDirectory &directory = viewModel.contentBrowser;
-        const ILocalizationService &localization = context.localization;
         DrawPasteAction(directory.absoluteCurrentPath, viewModel.contentBrowserClipboard.mode, context, command);
         Ui::ContextMenuSeparator();
-        if (Ui::ContextMenuItem((localization.Get("editor", "workspace.content_browser.action.create_folder") +
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_folder") +
                                  "###content_browser_action_create_folder")
                                     .c_str(),
                                 nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
             interactionSession.OpenCreateFolder();
         }
-        if (Ui::ContextMenuItem((localization.Get("editor", "workspace.content_browser.action.create_lua_behavior") +
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_lua_behavior") +
                                  "###content_browser_create_lua_behavior")
                                     .c_str(),
                                 nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create_lua_behavior")) {
             command.command = EditorWorkspaceViewCommand::CreateLuaBehavior;
             command.stringPayload = directory.absoluteCurrentPath;
         }
-        if (Ui::ContextMenuItem((localization.Get("editor", "workspace.content_browser.action.create_native_behavior") +
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_native_behavior") +
                                  "###content_browser_create_native_behavior")
                                     .c_str(),
                                 nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create_native_behavior")) {
             command.command = EditorWorkspaceViewCommand::CreateNativeBehavior;
             command.stringPayload = directory.absoluteCurrentPath;
         }
-        if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.import_here").c_str(), nullptr,
-                                context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.import")) {
+        if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.import_here").c_str(), nullptr, context.theme.fonts,
+                                Ui::ContextMenuItemTone::Normal, "action.import")) {
             command = AssetBrowserInteractionSession::ImportHere(directory.absoluteCurrentPath);
         }
-        if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.refresh").c_str(), nullptr,
-                                context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.refresh")) {
+        if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.refresh").c_str(), nullptr, context.theme.fonts,
+                                Ui::ContextMenuItemTone::Normal, "action.refresh")) {
             command = AssetBrowserInteractionSession::Refresh();
         }
         Ui::EndContextMenu();
@@ -130,28 +150,27 @@ namespace Horo::Editor {
             DrawDirectoryActions(entry, viewModel, command, context);
         }
         const ILocalizationService &localization = context.localization;
-        if (Ui::ContextMenuItem((localization.Get("editor", "workspace.content_browser.action.rename") + "###content_browser_action_rename")
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.rename") + "###content_browser_action_rename")
                                     .c_str(),
                                 "F2", context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.rename")) {
             interactionSession.OpenRename(entry);
         }
-        if (Ui::ContextMenuItem((localization.Get("editor", "workspace.content_browser.action.asset_info") +
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.asset_info") +
                                  "###content_browser_action_asset_info")
                                     .c_str(),
                                 nullptr, context.theme.fonts)) {
             interactionSession.OpenInfo(entry);
         }
         DrawAssetEntrySpecificActions(entry, command, context);
-        if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.reveal").c_str(), nullptr,
-                                context.theme.fonts)) {
+        if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.reveal").c_str(), nullptr, context.theme.fonts)) {
             command = AssetBrowserInteractionSession::Reveal(entry.absolutePath);
         }
-        if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.copy_path").c_str(), nullptr,
+        if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, "action.copy_path").c_str(), nullptr,
                                 context.theme.fonts)) {
             ImGui::SetClipboardText(entry.absolutePath.c_str());
         }
         Ui::ContextMenuSeparator();
-        if (Ui::ContextMenuItem((localization.Get("editor", "workspace.content_browser.action.delete") + "###content_browser_action_delete")
+        if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.delete") + "###content_browser_action_delete")
                                     .c_str(),
                                 "Delete", context.theme.fonts, Ui::ContextMenuItemTone::Danger, "action.delete")) {
             interactionSession.OpenDelete(entry);

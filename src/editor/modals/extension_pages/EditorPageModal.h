@@ -6,6 +6,9 @@ namespace Horo::Editor {
     /** @brief Real transient extension workflow owned by EditorModalHost, including its normal focus/input/lifecycle gate. */
     class EditorPageModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"extensions.pages"};
+
         EditorPageModal(const EditorGuiContext &context, std::shared_ptr<Extensions::EditorPageHost> host,
                         const Extensions::EditorSurfaceDescriptor &surface, std::shared_ptr<const Extensions::EditorThemeFrame> theme);
         ModalId Id() const override;

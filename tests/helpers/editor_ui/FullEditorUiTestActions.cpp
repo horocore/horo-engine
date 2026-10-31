@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
+#include "editor/modals/settings/SettingsModalInternal.h"
 
 #include <fstream>
 #include <imgui_test_engine/imgui_te_context.h>
@@ -59,13 +60,20 @@ namespace Horo::Tests::FullEditorActions {
                 ui.Yield();
             }
             IM_CHECK(ui.ItemExists("//**/###InspectorAddComponent"));
-            constexpr const char *componentItems[]{"//**/###inspector_component_camera", "//**/###inspector_component_light",
-                                                   "//**/###inspector_component_trigger_volume",
-                                                   "//**/###inspector_component_audio_source"};
-            for (const char *const item : componentItems) {
+            struct ComponentItem {
+                const char *category;
+                const char *item;
+            };
+            constexpr ComponentItem componentItems[]{
+                {"workspace.inspector.add_rendering", "component.camera"},
+                {"workspace.inspector.add_rendering", "component.light"},
+                {"workspace.inspector.add_gameplay", "component.trigger_volume"},
+                {"workspace.inspector.add_audio", "component.audio_source"},
+            };
+            for (const auto &entry : componentItems) {
                 ui.ItemClick("//**/###InspectorAddComponent");
-                ui.Yield();
-                ui.ItemClick(item);
+                ui.ItemClick(("//**/###" + std::string{entry.category}).c_str());
+                ui.ItemClick(("//**/###" + std::string{entry.item}).c_str());
                 ui.Yield();
             }
 
@@ -124,8 +132,8 @@ namespace Horo::Tests::FullEditorActions {
                 dispatch({Editor::EditorMenuAction::None, std::nullopt});
 
                 dispatch({Editor::EditorMenuAction::OpenProject, std::nullopt});
-                IM_CHECK(ui.ItemExists("//**/Unsaved Changes"));
-                ui.ItemClick("//**/Stay Here");
+                IM_CHECK(ui.ItemExists("//**/LeaveConfirmation"));
+                ui.KeyPress(ImGuiKey_Escape);
                 ui.Yield();
                 IM_CHECK(editor.ActiveRoute() == Editor::GuiRouteKind::EditorWorkspace);
             });
@@ -184,11 +192,17 @@ namespace Horo::Tests::FullEditorActions {
             });
         }
 
+        /** @brief Selects the typed destination independently of duplicate or translated labels. */
+        void SelectSettingsTab(ImGuiTestContext &ui, const Editor::SettingsModalInternal::SettingsTab tab) {
+            ui.ItemClick(("//**/$$" + std::to_string(static_cast<int>(tab)) + "/nav").c_str());
+            ui.Yield();
+        }
+
         void ExerciseSettingsNetworkAndPackages(ImGuiTestContext &ui) {
-            ui.ItemClick("//**/Network/nav");
+            SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::Network);
             ui.Yield();
             ui.ItemInputValue("//**/##max-clients", "6");
-            ui.ItemClick("//**/Packages/nav");
+            SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::Packages);
             ui.Yield();
             ui.ItemInputValue("//**/##download-threads", "3");
         }
@@ -199,40 +213,41 @@ namespace Horo::Tests::FullEditorActions {
                     Editor::EditorMenuInvocation{Editor::EditorMenuAction::OpenEditorSettings, std::nullopt});
                 ui.Yield();
                 IM_CHECK(ui.ItemExists("//**/###settings_apply"));
-                ui.ItemClick("//**/###startup");
+                ui.ItemClick("//**/Combo#####startup");
                 ui.ItemClick("//**/###combo_option_1");
                 ui.ItemClick("//**/confirm-exit/toggle");
                 ui.ItemClick("//**/restore-workspace/toggle");
                 ui.ItemInputValue("//**/##default-scene", "assets/scenes/coverage.horo");
-                ui.ItemClick("//**/Appearance/nav");
+                SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::Appearance);
                 ui.Yield();
                 ui.ItemInputValue("//**/##custom-theme", "coverage-theme.json");
+                SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::CodeEditorAppearance);
                 ui.ItemInputValue("//**/##font-size", "15");
-                ui.ItemClick("//**/Input/nav");
+                SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::Input);
                 ui.Yield();
                 ui.ItemClick("//**/invert-y/toggle");
-                ui.ItemClick("//**/Rendering/nav");
+                SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::Rendering);
                 ui.Yield();
-                ui.ItemClick("//**/###viewport");
+                ui.ItemClick("//**/Combo#####viewport");
                 ui.ItemClick("//**/###combo_option_2");
                 ui.ItemClick("//**/grid/toggle");
-                ui.ItemClick("//**/###tier");
+                ui.ItemClick("//**/Combo#####tier");
                 ui.ItemClick("//**/###combo_option_2");
                 ui.ItemInputValue("//**/##texture-budget", "768 MB");
-                ui.ItemClick("//**/Audio/nav");
+                SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::Audio);
                 ui.Yield();
-                ui.ItemClick("//**/###audio-device");
+                ui.ItemClick("//**/Combo#####audio-device");
                 ui.ItemClick("//**/###combo_option_1");
                 ui.ItemClick("//**/audio-enabled/toggle");
                 ExerciseSettingsNetworkAndPackages(ui);
-                ui.ItemClick("//**/Diagnostics/nav");
+                SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::Diagnostics);
                 ui.Yield();
-                ui.ItemClick("//**/###log-level");
+                ui.ItemClick("//**/Combo#####log-level");
                 ui.ItemClick("//**/###combo_option_2");
                 ui.ItemClick("//**/write-log/toggle");
                 ui.ItemClick("//**/capture-stutter/toggle");
                 ui.ItemInputValue("//**/##stutter", "24.5");
-                ui.ItemClick("//**/Extensions/nav");
+                SelectSettingsTab(ui, Editor::SettingsModalInternal::SettingsTab::Plugins);
                 ui.Yield();
                 ui.ItemClick("//**/Restore Defaults");
                 ui.ItemClick("//**/###settings_apply");

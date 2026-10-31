@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Extensions/EditorPageDefinition.h"
 #include "Horo/Extensions/ExtensionErrors.h"
@@ -141,7 +142,7 @@ namespace Horo::Editor {
         if (const auto parsed = std::from_chars(text.data(), text.data() + text.size(), number);
             parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
             return EditorInspectorScalar{number};
-        entry.failure = MakeError(ExtensionErrors::EditorUiFormInvalid);
+        entry.failure = MakeError(GuiLive::HostSymbol<&ExtensionErrors::EditorUiFormInvalid>());
         return {};
     }
 

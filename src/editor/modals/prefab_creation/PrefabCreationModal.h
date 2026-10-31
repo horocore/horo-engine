@@ -10,6 +10,9 @@ namespace Horo::Editor {
     /** @brief Shared-control presentation; durable mutations remain in the workspace transaction owner. */
     class PrefabCreationModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.prefab"};
+
         using Submit = std::function<std::optional<std::string>(PrefabCreationIntent)>;
         /** @brief Captures immutable selection/opening identity and a typed owner callback.
          * @param context Borrowed GUI services. @param intent Exact selected subtree fence.

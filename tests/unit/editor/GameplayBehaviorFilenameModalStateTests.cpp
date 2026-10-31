@@ -35,6 +35,21 @@ namespace {
         REQUIRE(!state.Dispatch(GameplayBehaviorFilenameModalAction::Cancel).has_value());
     }
 
+    TEST_CASE("Behavior filename modal revalidates language and destination changes", "[unit][editor][behavior]") {
+        GameplayBehaviorFilenameModalState state(GameplayBehaviorKind::Lua, "/project/Assets/Scripts", "Player Movement");
+        REQUIRE(state.Validation().HasValue());
+
+        state.SetKind(GameplayBehaviorKind::Native, "/project/source/gameplay");
+        REQUIRE(state.Validation().HasError());
+        state.SetBaseName("PlayerMovement");
+        REQUIRE(state.Validation().HasValue());
+        REQUIRE(state.Confirm()->kind == GameplayBehaviorKind::Native);
+
+        state.SetKind(GameplayBehaviorKind::Lua, "/project/Assets/Scripts");
+        state.SetDestination("/project/Assets/Scripts/Actors");
+        REQUIRE(state.Confirm()->destination == "/project/Assets/Scripts/Actors");
+    }
+
     TEST_CASE("Behavior filename modal confirm returns no request while invalid", "[unit][editor][behavior]") {
         GameplayBehaviorFilenameModalState state(GameplayBehaviorKind::Lua, "relative/scripts", "PlayerBehavior");
 

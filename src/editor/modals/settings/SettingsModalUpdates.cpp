@@ -1,3 +1,4 @@
+#include "Horo/Editor/SettingsModal.h"
 #include "SettingsModalInternal.h"
 #include "editor/update/UpdateExperienceSession.h"
 
@@ -47,10 +48,10 @@ namespace Horo::Editor::SettingsModalInternal {
         }
 
         void DrawNotes(const EditorUpdateSnapshot &snapshot, const EditorGuiContext &ctx) {
-            const std::string notesTitle = ctx.localization.Get("editor", "settings.updates.release_notes");
+            const std::string notesTitle = SettingsModal::kTextScope.Text(ctx.localization, "updates.release_notes");
             Ui::SectionTitle(notesTitle.c_str(), ctx.theme.fonts);
             if (!snapshot.offer) {
-                const std::string empty = ctx.localization.Get("editor", "settings.updates.no_offer");
+                const std::string empty = SettingsModal::kTextScope.Text(ctx.localization, "updates.no_offer");
                 ImGui::TextWrapped("%s", empty.c_str());
                 return;
             }
@@ -60,7 +61,7 @@ namespace Horo::Editor::SettingsModalInternal {
             if (snapshot.offer->compatibilityImpacts.empty())
                 return;
             ImGui::Spacing();
-            const std::string impactTitle = ctx.localization.Get("editor", "settings.updates.compatibility");
+            const std::string impactTitle = SettingsModal::kTextScope.Text(ctx.localization, "updates.compatibility");
             ImGui::TextUnformatted(impactTitle.c_str());
             for (const std::string &impact : snapshot.offer->compatibilityImpacts) {
                 ImGui::Bullet();
@@ -103,7 +104,7 @@ namespace Horo::Editor::SettingsModalInternal {
                 ImGui::OpenPopup("##update-channel-confirmation");
             if (!ImGui::BeginPopupModal("##update-channel-confirmation", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
                 return;
-            const std::string prompt = ctx.localization.Get("editor", "settings.updates.confirm.channel");
+            const std::string prompt = SettingsModal::kTextScope.Text(ctx.localization, "updates.confirm.channel");
             ImGui::TextWrapped("%s", prompt.c_str());
             if (const bool cancel = ActionButton(ctx, "settings.updates.cancel", true); cancel || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 state.pendingUpdateChannel = -1;
@@ -120,15 +121,15 @@ namespace Horo::Editor::SettingsModalInternal {
 
         void DrawChannelControl(SettingsState &state, UpdateExperienceSession &session, const EditorGuiContext &ctx) {
             const auto &snapshot = session.Snapshot();
-            const std::array<std::string, 5> channelNames{ctx.localization.Get("editor", "settings.updates.channel.stable"),
-                                                          ctx.localization.Get("editor", "settings.updates.channel.preview"),
-                                                          ctx.localization.Get("editor", "settings.updates.channel.nightly"),
-                                                          ctx.localization.Get("editor", "settings.updates.channel.enterprise"),
-                                                          ctx.localization.Get("editor", "settings.updates.channel.offline")};
+            const std::array<std::string, 5> channelNames{SettingsModal::kTextScope.Text(ctx.localization, "updates.channel.stable"),
+                                                          SettingsModal::kTextScope.Text(ctx.localization, "updates.channel.preview"),
+                                                          SettingsModal::kTextScope.Text(ctx.localization, "updates.channel.nightly"),
+                                                          SettingsModal::kTextScope.Text(ctx.localization, "updates.channel.enterprise"),
+                                                          SettingsModal::kTextScope.Text(ctx.localization, "updates.channel.offline")};
             const std::array<const char *, 5> channelLabels{channelNames[0].c_str(), channelNames[1].c_str(), channelNames[2].c_str(),
                                                             channelNames[3].c_str(), channelNames[4].c_str()};
-            const std::string channelLabel = ctx.localization.Get("editor", "settings.updates.channel");
-            const std::string channelDescription = ctx.localization.Get("editor", "settings.updates.channel.description");
+            const std::string channelLabel = SettingsModal::kTextScope.Text(ctx.localization, "updates.channel");
+            const std::string channelDescription = SettingsModal::kTextScope.Text(ctx.localization, "updates.channel.description");
             Ui::SettingRow(channelLabel.c_str(), channelDescription.c_str(), ctx.theme.fonts,
                            [&snapshot, &channelLabels, &ctx, &state, &session]() {
                 auto selected = static_cast<int>(snapshot.channel.kind);
@@ -147,15 +148,16 @@ namespace Horo::Editor::SettingsModalInternal {
             const auto &snapshot = session.Snapshot();
             DrawChannelControl(state, session, ctx);
             bool automatic = snapshot.automaticDownload;
-            const std::string automaticLabel = ctx.localization.Get("editor", "settings.updates.automatic_download");
-            const std::string automaticDescription = ctx.localization.Get("editor", "settings.updates.automatic_download.description");
+            const std::string automaticLabel = SettingsModal::kTextScope.Text(ctx.localization, "updates.automatic_download");
+            const std::string automaticDescription =
+                SettingsModal::kTextScope.Text(ctx.localization, "updates.automatic_download.description");
             Ui::SettingRow(automaticLabel.c_str(), automaticDescription.c_str(), ctx.theme.fonts, [&automatic, &ctx, &session]() {
                 if (Ui::ToggleControl("update-automatic-download", &automatic, ctx.theme.fonts))
                     session.SetAutomaticDownload(automatic);
             });
             bool installOnExit = snapshot.installOnExit;
-            const std::string exitLabel = ctx.localization.Get("editor", "settings.updates.install_on_exit");
-            const std::string exitDescription = ctx.localization.Get("editor", "settings.updates.install_on_exit.description");
+            const std::string exitLabel = SettingsModal::kTextScope.Text(ctx.localization, "updates.install_on_exit");
+            const std::string exitDescription = SettingsModal::kTextScope.Text(ctx.localization, "updates.install_on_exit.description");
             Ui::SettingRow(exitLabel.c_str(), exitDescription.c_str(), ctx.theme.fonts, [&installOnExit, &ctx, &session]() {
                 if (Ui::ToggleControl("update-install-on-exit", &installOnExit, ctx.theme.fonts))
                     session.SetInstallOnExit(installOnExit);
@@ -171,7 +173,7 @@ namespace Horo::Editor::SettingsModalInternal {
                 ImGui::ProgressBar(fraction, {-1.0F, 0.0F}, std::format("{} / {}", snapshot.transferredBytes, snapshot.totalBytes).c_str());
             }
             if (!snapshot.diagnostic.empty()) {
-                const std::string diagnostics = ctx.localization.Get("editor", "settings.updates.diagnostics");
+                const std::string diagnostics = SettingsModal::kTextScope.Text(ctx.localization, "updates.diagnostics");
                 ImGui::TextUnformatted(diagnostics.c_str());
                 ImGui::TextWrapped("%s", snapshot.diagnostic.c_str());
             }
@@ -197,10 +199,10 @@ namespace Horo::Editor::SettingsModalInternal {
     }  // namespace
 
     void DrawUpdates(SettingsState &state, const EditorGuiContext &ctx) {
-        const std::string title = ctx.localization.Get("editor", "settings.nav.updates");
+        const std::string title = SettingsModal::kTextScope.Text(ctx.localization, "nav.updates");
         Ui::SectionTitle(title.c_str(), ctx.theme.fonts);
         if (!ctx.updates) {
-            const std::string unavailable = ctx.localization.Get("editor", "settings.updates.unconfigured");
+            const std::string unavailable = SettingsModal::kTextScope.Text(ctx.localization, "updates.unconfigured");
             ImGui::TextWrapped("%s", unavailable.c_str());
             return;
         }

@@ -55,7 +55,15 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<EditorSettingsSnapshot> Commit(const EditorSettingsDraft &draft);
 
+        /** @brief Publishes owner-lane live module command metadata; absent modules retain dormant user bindings.
+         * @param actions Inert command descriptors, copied into the authority.
+         */
+        void SetContributedInputActions(std::vector<Input::ActionDescriptor> actions);
+        /** @brief Returns the current live module command descriptors until the next publication. */
+        [[nodiscard]] std::span<const Input::ActionDescriptor> ContributedInputActions() const noexcept;
+
     private:
+        std::vector<Input::ActionDescriptor> m_contributedActions;
         EditorSettings m_committed;
         std::uint64_t m_revision = 0;
         ConfigurationService &m_configuration;

@@ -105,6 +105,48 @@ save publication is owned by the revision-fenced EDT-003.5 service below. Histor
 recovery and widget-specific integration remain separate source-editor tickets; they
 cannot mark an unpersisted buffer saved.
 
+### Source presentation and keymaps
+
+Pinned workspace surfaces (including Viewport) and source document tabs use the
+same shared tab component, label font role, strip height, hover fill and active
+underline. Viewport disables its close target; document tabs embed a padded
+trailing close target and emit the existing typed
+close request; dirty-close ownership is unchanged. Tab reordering remains a
+workspace command, without per-tab move buttons. Source Save and the borderless
+Undo/Redo/Find/Go-to-line icons share one toolbar row, using shared controls and
+localized tooltips.
+
+`BuildEditorInputActions` and `RegisteredEditorInputActions` define the inert
+command registry. Runtime Input owns the binding representation, validation and
+canonical physical keys (including Equal and Minus). Settings > Input projects
+registered digital actions, records a complete chord, supports per-action reset,
+and commits only a valid profile through the existing atomic settings workflow.
+The committed profile is serialized with Input's versioned serializer under
+`input.bindingProfile` in `editor_settings.json`; the GUI never maintains a
+second live keymap. Startup imports a legacy `.horo/input/editor.json` only when
+that canonical field is absent. The legacy file is retained, and subsequent
+settings commits establish canonical ownership. Both workspace action routing
+and focused source interaction use the committed effective bindings. Modals and
+unfocused source views cannot dispatch source shortcuts.
+
+`EditorSettings` and its modal draft now carry the typed keymap value. Editor
+Services, GUI, executable hosts and Settings consumers must be rebuilt together;
+an already-running host cannot hot-reload this layout change. Equal and Minus
+are appended physical-key identities, preserving earlier numeric IDs, while
+Input snapshot consumers must rebuild for the larger key-state array. Existing
+valid Settings JSON without the new field remains supported; no project or
+source-file format changes.
+
+Cmd/Ctrl + Equal (with or without Shift), Minus and 0 adjust/reset view-local
+font zoom. The persisted Settings code font size remains the base. Zoom and
+selection do not change document bytes, revisions or dirty state. The private
+Zep bridge forms half-open UTF-8 selections across complete captured pointer
+gestures after current-frame glyph hit testing; it disables whitespace glyphs
+by default. Newline plans consult the admitted lexical family for block
+indentation, ignore string/comment delimiters, retain exact newline bytes and
+publish through the canonical revision-fenced source planner. Lexical support
+is not a language server or an alternate document/parser authority.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.
@@ -873,7 +915,6 @@ lease and queries only after an owner revision changes. See the
 [world document migration guide](../../guides/partitioned-world-document-migration.md#object-assignment-and-bounds-inspection-wst-0095)
 for diagnostics, budgets, lifecycle and consumer migration.
 
-
 ## World Composition projection
 
 The registered persistent `WorldCompositionTab` is a presentation surface over the
@@ -910,3 +951,15 @@ roots and incomplete pairs before a controller is published. Host capture errors
 retain their typed identity. GUI code consumes these interfaces and never selects
 a native reader as a fallback. Concrete native creation belongs in application
 or test composition roots.
+
+### Source idle autosave
+
+The source document owner also owns opt-in idle-save timers. A new revision resets
+its idle delay. A due update admits at most one save with the current exact
+revision and no disk-overwrite approval. It uses the ordinary source Save contract,
+including disk-base comparison, durable receipt and dirty/conflict retention.
+Failed or uncertain writes back off for at least 30 seconds. Closing the document
+removes its timer; disabling the preference resets pending work. Unchanged idle
+updates perform no I/O or source-byte scans. The current save transition executes
+synchronously on the owner lane, outside GUI drawing; future background saving
+must retain the same revision and publication contract.

@@ -1,7 +1,8 @@
-#include "editor/screens/welcome/WelcomeView.h"
+#include "WelcomeView.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiScreenHost.h"
+#include "editor/screens/welcome/WelcomeView.h"
 
 #include <Horo/Editor/Localization/ILocalizationService.h>
 #include <algorithm>
@@ -59,7 +60,7 @@ namespace Horo::Editor {
             if (project.compatibility.has_value()) {
                 versionText = project.compatibility->projectVersion.has_value()
                                   ? "Horo " + Application::FormatHoroVersion(project.compatibility->projectVersion->value)
-                                  : ctx.localization.Get("editor", "welcome.project.compatibility.version_unavailable");
+                                  : WelcomeTextScope.Text(ctx.localization, "project.compatibility.version_unavailable");
                 statusText = ctx.localization.Get("editor", CompatibilityLabelKey(*project.compatibility));
             }
 
@@ -91,16 +92,18 @@ namespace Horo::Editor {
         }
 
         /// @brief Draws one recent-project card and its context menu.
-        [[nodiscard]] WelcomeViewCommand DrawProjectCard(const RecentProjectEntry &project, const int index, const EditorGuiContext &ctx) {
+        [[nodiscard]] WelcomeViewCommand DrawProjectCard(const RecentProjectEntry &project, const int index, const EditorGuiContext &ctx,
+                                                         const WelcomeLayout &layout) {
             using namespace Theme;
 
             WelcomeViewCommand action = WelcomeViewCommand::None;
             ImGui::PushID(index);
             {
-                Ui::ScopedCard card("ProjectCard", {-1.0F, 64.0F}, 14.0F, 12.0F);
+                const float contentHeight = Ui::ScaledLayoutValue(40.0F);
+                Ui::ScopedCard card("ProjectCard", {-1.0F, contentHeight + 2.0F * layout.cardPadding}, layout.cardPadding,
+                                    layout.cardPadding);
 
                 const ImVec2 contentMin = ImGui::GetCursorScreenPos();
-                constexpr float contentHeight = 40.0F;
                 const float contentWidth = ImGui::GetContentRegionAvail().x;
                 if (ImGui::InvisibleButton("Project card###welcome_project_card", {contentWidth, contentHeight}))
                     action = WelcomeViewCommand::OpenRecentProject;
@@ -126,8 +129,8 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] float NewsCardHeight(const char *tag, const char *title, const char *description, const float width,
-                                           const EditorGuiContext &ctx) {
-            const float padding = Ui::ScaledLayoutValue(14.0F);
+                                           const EditorGuiContext &ctx, const WelcomeLayout &layout) {
+            const float padding = layout.cardPadding;
             const ImGuiStyle &style = ImGui::GetStyle();
             const float contentWidth = std::max(1.0F, width - (padding + style.ChildBorderSize) * 2.0F);
             const float itemSpacing = style.ItemSpacing.y;
@@ -145,10 +148,11 @@ namespace Horo::Editor {
             return std::ceil((padding + style.ChildBorderSize) * 2.0F + contentHeight);
         }
 
-        void DrawNewsCard(const char *tag, const char *title, const char *description, const ImVec2 size, const EditorGuiContext &ctx) {
+        void DrawNewsCard(const char *tag, const char *title, const char *description, const ImVec2 size, const EditorGuiContext &ctx,
+                          const WelcomeLayout &layout) {
             using namespace Theme;
 
-            const float padding = Ui::ScaledLayoutValue(14.0F);
+            const float padding = layout.cardPadding;
             Ui::ScopedCard card(title, size, padding, padding, ImVec4{0.0F, 0.0F, 0.0F, 0.0F});
             {
                 ScopedTextStyle textStyle(ctx.theme.fonts.sansCompact, TextPx::Label(), FontPx::SansCompact);
@@ -209,7 +213,7 @@ namespace Horo::Editor {
                 ImFont *subtitleFont = ctx.theme.fonts.sans ? ctx.theme.fonts.sans : ImGui::GetFont();
                 const ImVec2 subtitlePos = ImGui::GetCursorScreenPos();
                 const float subtitlePx = TextPx::Caption();
-                const std::string subtitleText = ctx.localization.Get("editor", "welcome.subtitle");
+                const std::string subtitleText = WelcomeTextScope.Text(ctx.localization, "subtitle");
                 const char *subtitle = subtitleText.c_str();
                 ImGui::GetWindowDrawList()->AddText(subtitleFont, subtitlePx, subtitlePos, U32(Muted()), subtitle);
                 const ImVec2 subtitleSize = subtitleFont->CalcTextSizeA(subtitlePx, FLT_MAX, 0.0F, subtitle);
@@ -221,10 +225,10 @@ namespace Horo::Editor {
         /** @brief Draws welcome navigation actions and records the selected command. */
         void DrawWelcomeSidebarActions(const EditorGuiContext &ctx, WelcomeViewResult &result) {
             using enum Ui::ButtonVariant;
-            const std::string newProject = ctx.localization.Get("editor", "welcome.new_project") + "###welcome_new_project";
-            const std::string openProject = ctx.localization.Get("editor", "welcome.open_project") + "###welcome_open_project";
-            const std::string openSettings = ctx.localization.Get("editor", "welcome.open_settings") + "###welcome_open_settings";
-            const std::string pluginStore = ctx.localization.Get("editor", "welcome.plugin_store") + "###welcome_plugin_store";
+            const std::string newProject = WelcomeTextScope.Text(ctx.localization, "new_project") + "###welcome_new_project";
+            const std::string openProject = WelcomeTextScope.Text(ctx.localization, "open_project") + "###welcome_open_project";
+            const std::string openSettings = WelcomeTextScope.Text(ctx.localization, "open_settings") + "###welcome_open_settings";
+            const std::string pluginStore = WelcomeTextScope.Text(ctx.localization, "plugin_store") + "###welcome_plugin_store";
             if (DrawWelcomeActionButton(newProject.c_str(), Primary, ctx)) {
                 result.command = WelcomeViewCommand::NewProject;
             }
@@ -244,12 +248,12 @@ namespace Horo::Editor {
         }
 
         /** @brief Draws the welcome sidebar within its own ImGui child window. */
-        void DrawWelcomeSidebar(const WelcomeViewAssets &assets, const EditorGuiContext &ctx, WelcomeViewResult &result) {
+        void DrawWelcomeSidebar(const WelcomeViewAssets &assets, const EditorGuiContext &ctx, WelcomeViewResult &result,
+                                const WelcomeLayout &layout) {
             using namespace Theme;
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{Layout::WelcomePad, Layout::WelcomePad});
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{layout.sidebarPaddingX, layout.sidebarPaddingY});
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg2());
-            ImGui::BeginChild("Side", {Layout::WelcomeSideW, 0.0F}, false,
-                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_AlwaysUseWindowPadding);
+            ImGui::BeginChild("Side", {layout.sidebarWidth, 0.0F}, false, ImGuiWindowFlags_AlwaysUseWindowPadding);
             DrawWelcomeBrand(assets, ctx);
             DrawWelcomeSidebarActions(ctx, result);
             ImGui::EndChild();
@@ -286,61 +290,64 @@ namespace Horo::Editor {
     namespace {
         /** @brief Draws the search and sort controls and visible recent-project cards. */
         void DrawWelcomeProjects(const WelcomeViewModel &viewModel, WelcomeViewState &state, const EditorGuiContext &ctx,
-                                 WelcomeViewResult &result) {
+                                 WelcomeViewResult &result, const WelcomeLayout &layout) {
             using namespace Theme;
             const float scale = std::max(GetActiveTokens().sizes.uiScale, 0.01F);
             const float rowWidth = ImGui::GetContentRegionAvail().x;
-            const float gap = Ui::ScaledLayoutValue(12.0F);
+            const float gap = layout.gridGap;
             const float sortWidth = std::min(Ui::ScaledLayoutValue(200.0F), rowWidth * 0.44F);
             const float searchWidth = std::max(1.0F, rowWidth - sortWidth - gap);
-            const std::string &searchHint = ctx.localization.Get("editor", "welcome.search_projects");
+            const std::string &searchHint = WelcomeTextScope.Text(ctx.localization, "search_projects");
             const bool searchChanged =
                 Ui::InputTextControl("##welcome_project_search", state.search.data(), state.search.size(), ctx.theme.fonts,
                                      {.width = searchWidth / scale,
                                       .hint = searchHint.c_str(),
                                       .componentSize = Ui::ComponentSize::Medium});
             ImGui::SameLine(0.0F, gap);
-            const std::array<const char *, 3> sortItems{ctx.localization.Get("editor", "welcome.sort.last_edited").c_str(),
-                                                        ctx.localization.Get("editor", "welcome.sort.name").c_str(),
-                                                        ctx.localization.Get("editor", "welcome.sort.path").c_str()};
+            const std::array<const char *, 3> sortItems{WelcomeTextScope.Text(ctx.localization, "sort.last_edited").c_str(),
+                                                        WelcomeTextScope.Text(ctx.localization, "sort.name").c_str(),
+                                                        WelcomeTextScope.Text(ctx.localization, "sort.path").c_str()};
             ImGui::SetNextItemWidth(sortWidth);
             const bool sortChanged =
                 Ui::ComboControl("##welcome_project_sort", &state.sortSelection, sortItems.data(), static_cast<int>(sortItems.size()),
                                  ctx.theme.fonts, {.componentSize = Ui::ComponentSize::Medium});
-            ImGui::Dummy({0.0F, 14.0F});
+            ImGui::Dummy({0.0F, layout.gridGap});
 
             if (state.visibleProjectsDirty || searchChanged || sortChanged) {
                 state.visibleProjectIndices = VisibleWelcomeProjectIndices(viewModel, state);
                 state.visibleProjectsDirty = false;
             }
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{ImGui::GetStyle().ItemSpacing.x, layout.gridGap});
             for (const std::size_t index : state.visibleProjectIndices) {
-                const WelcomeViewCommand action = DrawProjectCard(viewModel.recentProjects[index], static_cast<int>(index), ctx);
+                const WelcomeViewCommand action = DrawProjectCard(viewModel.recentProjects[index], static_cast<int>(index), ctx, layout);
                 if (action != WelcomeViewCommand::None) {
                     result.command = action;
                     result.openRecentIndex = static_cast<int>(index);
                 }
             }
+            ImGui::PopStyleVar();
         }
 
-        /** @brief Draws localized news cards in paired rows. */
-        void DrawWelcomeNews(const WelcomeViewModel &viewModel, const EditorGuiContext &ctx) {
+        /** @brief Draws localized news cards in responsive rows. */
+        void DrawWelcomeNews(const WelcomeViewModel &viewModel, const EditorGuiContext &ctx, const WelcomeLayout &layout) {
             using namespace Theme;
-            ImGui::Dummy({0.0F, 28.0F});
+            ImGui::Dummy({0.0F, layout.sectionGap});
             {
                 ScopedTextStyle textStyle(ctx.theme.fonts.sansEmphasis, TextPx::Label(), FontPx::SansEmphasis);
-                const std::string whatsNewStr = ctx.localization.Get("editor", "welcome.whats_new");
+                const std::string whatsNewStr = WelcomeTextScope.Text(ctx.localization, "whats_new");
                 ImGui::TextDisabled("%s", whatsNewStr.c_str());
             }
-            ImGui::Dummy({0.0F, 14.0F});
+            ImGui::Dummy({0.0F, layout.gridGap});
 
-            const float newsGap = Ui::ScaledLayoutValue(12.0F);
-            const float newsWidth = (ImGui::GetContentRegionAvail().x - newsGap) * 0.5F;
-            for (std::size_t rowStart = 0; rowStart < viewModel.whatsNew.size(); rowStart += 2) {
+            const float newsGap = layout.gridGap;
+            const auto columns = layout.newsColumns;
+            const float newsWidth = std::max(1.0F, (ImGui::GetContentRegionAvail().x - newsGap * (columns - 1)) / columns);
+            for (std::size_t rowStart = 0; rowStart < viewModel.whatsNew.size(); rowStart += columns) {
                 float rowHeight = 0.0F;
-                const std::size_t rowEnd = std::min(rowStart + 2, viewModel.whatsNew.size());
+                const std::size_t rowEnd = std::min(rowStart + columns, viewModel.whatsNew.size());
                 for (std::size_t i = rowStart; i < rowEnd; ++i) {
                     const auto &entry = viewModel.whatsNew[i];
-                    rowHeight = std::max(rowHeight, NewsCardHeight(entry.tag, entry.title, entry.body, newsWidth, ctx));
+                    rowHeight = std::max(rowHeight, NewsCardHeight(entry.tag, entry.title, entry.body, newsWidth, ctx, layout));
                 }
 
                 for (std::size_t i = rowStart; i < rowEnd; ++i) {
@@ -348,12 +355,26 @@ namespace Horo::Editor {
                         ImGui::SameLine(0.0F, newsGap);
                     const auto &entry = viewModel.whatsNew[i];
                     ImGui::PushID(static_cast<int>(i));
-                    DrawNewsCard(entry.tag, entry.title, entry.body, {newsWidth, rowHeight}, ctx);
+                    DrawNewsCard(entry.tag, entry.title, entry.body, {newsWidth, rowHeight}, ctx, layout);
                     ImGui::PopID();
                 }
             }
         }
     }  // namespace
+
+    /** @copydoc ResolveWelcomeLayout */
+    WelcomeLayout ResolveWelcomeLayout(const GuiContentRegion &region) {
+        const auto &tokens = Theme::GetActiveTokens();
+        WelcomeLayout layout{tokens.sizes.welcomeSideWidth, tokens.spacing.sidebarPaddingX, tokens.spacing.sidebarPaddingY,
+                             tokens.spacing.bodyPaddingX,   tokens.spacing.bodyPaddingY,    tokens.spacing.cardPadding,
+                             tokens.spacing.gridGap,        tokens.spacing.bodyPaddingY};
+        const float scale = std::max(tokens.sizes.uiScale, 0.01F);
+        layout.sidebarWidth = std::clamp(layout.sidebarWidth, 120.0F * scale, std::max(120.0F * scale, region.width - 280.0F * scale));
+        const float mainWidth = region.width - layout.sidebarWidth - 2.0F * layout.bodyPaddingX;
+        if (mainWidth < 560.0F * scale + layout.gridGap)
+            layout.newsColumns = 1;
+        return layout;
+    }
 
     [[nodiscard]] WelcomeViewResult DrawWelcomeView(const WelcomeViewModel &viewModel, WelcomeViewState &state, const EditorGuiContext &ctx,
                                                     const WelcomeViewAssets &assets, const GuiContentRegion &contentRegion) {
@@ -371,6 +392,7 @@ namespace Horo::Editor {
         ImGui::Begin("Welcome", nullptr, flags);
 
         const ImVec2 available = ImGui::GetContentRegionAvail();
+        const auto layout = ResolveWelcomeLayout({0.0F, 0.0F, available.x, available.y});
 
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, Layout::RadiusModal);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0F, 0.0F});
@@ -381,19 +403,18 @@ namespace Horo::Editor {
         auto *cardDrawList = ImGui::GetWindowDrawList();
         const ImVec2 cardMin = ImGui::GetWindowPos();
 
-        DrawWelcomeSidebar(assets, ctx, result);
+        DrawWelcomeSidebar(assets, ctx, result, layout);
 
-        cardDrawList->AddLine({cardMin.x + Layout::WelcomeSideW, cardMin.y}, {cardMin.x + Layout::WelcomeSideW, cardMin.y + available.y},
+        cardDrawList->AddLine({cardMin.x + layout.sidebarWidth, cardMin.y}, {cardMin.x + layout.sidebarWidth, cardMin.y + available.y},
                               U32(Border()), 1.0F);
 
         ImGui::SameLine(0.0F, 0.0F);
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{Layout::WelcomePad, Layout::WelcomePad});
-        ImGui::BeginChild("Main", {0.0F, 0.0F}, false,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_AlwaysUseWindowPadding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{layout.bodyPaddingX, layout.bodyPaddingY});
+        ImGui::BeginChild("Main", {0.0F, 0.0F}, false, ImGuiWindowFlags_AlwaysUseWindowPadding);
 
-        DrawWelcomeProjects(viewModel, state, ctx, result);
-        DrawWelcomeNews(viewModel, ctx);
+        DrawWelcomeProjects(viewModel, state, ctx, result, layout);
+        DrawWelcomeNews(viewModel, ctx, layout);
 
         ImGui::EndChild();
         ImGui::PopStyleVar();

@@ -3,6 +3,7 @@
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/NavigationProjectSettingsSession.h"
+#include "Horo/Editor/PrefabProjectSettingsSession.h"
 
 #include <array>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <string>
 
 namespace Horo::Extensions {
+    class EditorActivityHost;
     class ExtensionInventory;
     class ExtensionMarketplaceService;
 }  // namespace Horo::Extensions
@@ -33,11 +35,17 @@ namespace Horo::Editor {
         std::string customThemePath = "~/.horo/themes/my-theme.json";
         int uiScale = 100;
         std::string editorFontSize = "14";
+        std::string uiFontFamily = "Inter";
+        std::string codeFontFamily = "IBM Plex Mono";
+        CodeEditorSettings codeEditor;
         std::string accentHex = "#04A5FC";
         int pendingThemeIndex = -1;
+        std::string themeId;
     };
 
     struct SettingsInputTab {
+        EditorKeymapSettings keymap;
+        std::string recordingAction;
         int orbitSensitivity = 100;
         int panSensitivity = 100;
         bool invertOrbitY = false;
@@ -145,6 +153,23 @@ namespace Horo::Editor {
     [[nodiscard]] Result<void> RemoveCollisionItem(SettingsCollisionDraft &draft);
 
     /** @brief Modal-owned mutable draft for the editor settings workflow. */
+    struct SettingsPrefabDraft final {
+        std::weak_ptr<PrefabProjectSettingsSession> owner;
+        std::shared_ptr<const PrefabProjectSettingsView> view;
+        std::array<std::array<char, 22>, Application::PrefabLimitFieldCount> text{};
+        std::array<std::string, Application::PrefabLimitFieldCount> ceilings;
+        std::string ceilingPattern;
+        std::string hardPattern;
+        std::string hardSafety;
+        std::string work;
+        std::optional<std::size_t> workValue;
+        std::array<std::string, 4> actionText;
+        std::array<std::string, 4> actionLabels;
+        std::string statusKey;
+        std::optional<Error> error; /**< Original typed failure retained separately from localized presentation. */
+    };
+
+    /** @brief Modal-owned mutable draft for the editor settings workflow. */
     struct SettingsState {  // NOSONAR(cpp:S1820)
         using GeneralTab = SettingsGeneralTab;
 
@@ -173,6 +198,7 @@ namespace Horo::Editor {
         std::uint64_t settingsRevision = 0;
 
         SettingsCollisionDraft collision;
+        SettingsPrefabDraft prefab;
         GeneralTab general{};
         AppearanceTab appearance{};
         InputTab input{};
@@ -189,6 +215,7 @@ namespace Horo::Editor {
 
         std::shared_ptr<EditorPageView>
             extensionPages; /**< Transient host-rendered extension workflow; never part of EditorSettings persistence. */
+        std::shared_ptr<Extensions::EditorActivityHost> extensionCommands;
         int pluginSectionTab = 0;
         Extensions::ExtensionInventory *extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr;

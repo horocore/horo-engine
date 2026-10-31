@@ -167,3 +167,61 @@ namespace {
         REQUIRE((!controller.BuildCreationRequest().has_value()));
     }
 }  // namespace
+
+TEST_CASE("Parent folder resolution validates the named child without modifying the parent", "[unit][editor][project-creation-location]") {
+    using namespace Horo::Editor;
+    TemporaryDirectory temporary;
+    const auto parent = temporary.Path() / "Games Üst Klasör";
+    std::filesystem::create_directories(parent);
+    std::ofstream{parent / "existing-game.txt"} << "keep";
+    ProjectCreationController controller{DefaultAvailability()};
+
+    controller.SetProjectParentDirectory(parent);
+    REQUIRE(controller.Draft().projectPath.empty());
+    REQUIRE_FALSE(controller.BuildCreationRequest().has_value());
+
+    controller.SetProjectName("My Super Proje");
+    controller.SetProjectParentDirectory(parent);
+    REQUIRE(controller.Validate().IsValid());
+    const auto request = controller.BuildCreationRequest();
+    REQUIRE(request.has_value());
+    REQUIRE(request->projectRoot == parent / "My Super Proje");
+    REQUIRE_FALSE(std::filesystem::exists(request->projectRoot));
+    REQUIRE(std::filesystem::exists(parent / "existing-game.txt"));
+
+    controller.SetProjectName("Renamed");
+    controller.SetProjectParentDirectory(parent);
+    REQUIRE(std::filesystem::path{controller.Draft().projectPath} == parent / "Renamed");
+    std::filesystem::create_directories(parent / "Renamed");
+    REQUIRE(controller.Validate().IsValid());
+    std::ofstream{parent / "Renamed" / "keep.txt"} << "keep";
+    HasDiagnostic(controller.Validate(), ProjectCreationDiagnosticCode::ProjectPathOccupied);
+    REQUIRE_FALSE(controller.BuildCreationRequest().has_value());
+
+    controller.SetProjectName("Games Üst Klasör");
+    controller.SetProjectParentDirectory(parent);
+    REQUIRE(std::filesystem::path{controller.Draft().projectPath} == parent / "Games Üst Klasör");
+    controller.DiscardDraft();
+    REQUIRE(controller.Draft().projectName.empty());
+    REQUIRE(controller.Draft().projectPath.empty());
+}
+
+TEST_CASE("Parent folder resolution requires a single child name and a parent", "[unit][editor][project-creation-location]") {
+    using namespace Horo::Editor;
+    TemporaryDirectory temporary;
+    ProjectCreationController controller{DefaultAvailability()};
+    for (const auto name : {".", "..", "../escape", "bad/name", "bad\\name", "C:escape", "   "}) {
+        controller.SetProjectName(name);
+        controller.SetProjectParentDirectory(temporary.Path());
+        REQUIRE(controller.Draft().projectPath.empty());
+        REQUIRE_FALSE(controller.Validate().IsValid());
+        REQUIRE_FALSE(controller.BuildCreationRequest().has_value());
+    }
+    controller.SetProjectName("Valid");
+    controller.SetProjectParentDirectory({});
+    REQUIRE(controller.Draft().projectPath.empty());
+    controller.SetProjectParentDirectory(temporary.Path() / "new parent");
+    REQUIRE(controller.Validate().IsValid());
+    REQUIRE(std::filesystem::path{controller.Draft().projectPath} == temporary.Path() / "new parent" / "Valid");
+    REQUIRE_FALSE(std::filesystem::exists(temporary.Path() / "new parent"));
+}

@@ -15,24 +15,24 @@ namespace Horo::Editor {
             using enum Application::GameplayBuildState;
             switch (state) {
                 case Queued:
-                    return "workspace.global_dock.build_output.active_state.queued";
+                    return "active_state.queued";
                 case AcquiringLock:
-                    return "workspace.global_dock.build_output.active_state.acquiring_lock";
+                    return "active_state.acquiring_lock";
                 case WaitingForExternalBuild:
-                    return "workspace.global_dock.build_output.active_state.waiting";
+                    return "active_state.waiting";
                 case Configuring:
-                    return "workspace.global_dock.build_output.active_state.configuring";
+                    return "active_state.configuring";
                 case Building:
-                    return "workspace.global_dock.build_output.active_state.building";
+                    return "active_state.building";
                 case Validating:
-                    return "workspace.global_dock.build_output.active_state.validating";
+                    return "active_state.validating";
                 case Succeeded:
                 case Failed:
                 case Cancelled:
                 case TimedOut:
-                    return "workspace.global_dock.build_output.active_state.queued";
+                    return "active_state.queued";
             }
-            return "workspace.global_dock.build_output.active_state.queued";
+            return "active_state.queued";
         }
 
     }  // namespace
@@ -42,8 +42,8 @@ namespace Horo::Editor {
                                                     const EditorGuiContext &context, const float height) const {
         const GlobalDockToolbarChipProps cancel{
             .id = "BuildCancelActive",
-            .label = context.localization.Get("editor", snapshot.cancellationRequested ? "workspace.global_dock.build_output.cancelling"
-                                                                                       : "workspace.global_dock.build_output.cancel"),
+            .label =
+                GlobalDockBuildOutputPane::kTextScope.Text(context.localization, snapshot.cancellationRequested ? "cancelling" : "cancel"),
             .tone = GlobalDockTone::Warning,
             .disabled = snapshot.cancellationRequested,
         };
@@ -58,9 +58,9 @@ namespace Horo::Editor {
         const std::string progress =
             snapshot.progress.has_value() ? std::format(" · {}%", static_cast<int>(*snapshot.progress * 100.0F)) : std::string{};
         const std::string label =
-            std::format("{} · {}{} · {}:{:02d}", context.localization.Get("editor", "workspace.global_dock.build_output.active"),
-                        context.localization.Get("editor", ActiveBuildStateKey(snapshot.state)), progress, elapsed.count() / 60,
-                        elapsed.count() % 60);
+            std::format("{} · {}{} · {}:{:02d}", GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "active"),
+                        GlobalDockBuildOutputPane::kTextScope.Text(context.localization, ActiveBuildStateKey(snapshot.state)), progress,
+                        elapsed.count() / 60, elapsed.count() % 60);
         const float textY = y + (height - Theme::TextPx::Label()) * 0.5F;
         DrawGlobalDockClippedText(*ImGui::GetWindowDrawList(), context.theme.fonts.sansCompact, Theme::TextPx::Label(),
                                   {regions.contentOrigin.x + metrics.contentPadding, textY}, {buttonX - metrics.toolbarGap, y + height},

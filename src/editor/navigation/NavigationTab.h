@@ -11,6 +11,9 @@ namespace Horo::Editor {
     /** @brief Closed-by-default bottom panel; the executable retains all accepted work. */
     class NavigationTab final : public IWorkspacePanel {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.navigation_bake"};
+
         /** @brief Borrows host capabilities and modal composition. @param access Project owner callbacks. @param modals Modal host. */
         NavigationTab(NavigationBakeWorkspaceAccess access, EditorModalHost &modals);
 

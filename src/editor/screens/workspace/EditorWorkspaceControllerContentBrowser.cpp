@@ -28,11 +28,13 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::RebuildContentBrowserProjection(const std::filesystem::path &projectRoot,
                                                                     const std::filesystem::path &requestedDirectory) {
+        RefreshPhysicsMaterials();
         m_viewModel.contentBrowser = BuildContentBrowserDirectory(projectRoot, requestedDirectory, m_assetRegistry, m_importerCatalog);
         ScheduleContentBrowserPreviews();
     }
 
     void EditorWorkspaceController::ScheduleContentBrowserPreviews() {
+        m_contentBrowserPreviewSchemaRevision = m_navigationPrefabSchemas ? m_navigationPrefabSchemas->Revision() : Sha256Digest{};
         for (const PendingContentBrowserPreview &pending : m_pendingContentBrowserPreviews)
             if (pending.handle.has_value())
                 static_cast<void>(pending.handle->RequestCancel());
@@ -67,6 +69,12 @@ namespace Horo::Editor {
                 auto asset = Assets::AssetId::Parse(entry.assetId);
                 if (asset.HasError())
                     continue;
+                const auto limits = PrefabLimits();
+                if (limits.HasError()) {
+                    entry.previewError = limits.ErrorValue();
+                    entry.previewState = ContentBrowserPreviewState::Unavailable;
+                    continue;
+                }
                 request = Assets::AssetPreviewRequest{
                     .contributionId = "core.prefab.thumbnail",
                     .moduleId = "horo.editor",
@@ -75,7 +83,14 @@ namespace Horo::Editor {
                     .providerVersion = std::to_string(m_contentBrowserPreviewGeneration),
                     .absoluteAssetPath = entry.absolutePath,
                     .assetType = *entry.registeredType,
-                    .provider = CreatePrefabAssetPreviewProvider(m_assetRegistry, asset.Value(), m_prefabSourceCapture),
+                    .provider = CreatePrefabAssetPreviewProvider(m_assetRegistry, asset.Value(), m_prefabSourceCapture, &limits.Value(),
+                                                                 [values = PrefabAssetPreviewValues{.schemas = m_navigationPrefabSchemas,
+                                                                                                    .publication =
+                                                                                                        m_contentBrowserPreviewGeneration}](
+                                                                     const CancellationToken &) {
+                    return Result<PrefabAssetPreviewValues>::Success(values);
+                }),
+                    .requiresRevision = true,
                 };
             } else if (m_importerCatalog != nullptr)
                 request = BuildPreviewRequest(entry, *m_importerCatalog);
@@ -98,6 +113,11 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::PollContentBrowserPreviews() {
+        const auto currentSchema = m_navigationPrefabSchemas ? m_navigationPrefabSchemas->Revision() : Sha256Digest{};
+        if (m_contentBrowserPreviewSchemaRevision != currentSchema) {
+            ScheduleContentBrowserPreviews();
+            return;
+        }
         std::erase_if(m_pendingContentBrowserPreviews, [this](PendingContentBrowserPreview &pending) {
             return PollContentBrowserPreview(pending);
         });
@@ -204,11 +224,11 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ReconcileContentBrowserNavigation() {
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteRootPath);
+        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.projectRoot);
         const std::filesystem::path current = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteCurrentPath);
         const auto isValidHistoryEntry = [&root, &current](const std::filesystem::path &entry) {
             const std::filesystem::path normalized = NormalizeAbsolute(entry);
-            return !normalized.empty() && normalized != current && IsContentBrowserDirectoryTargetAllowed(root, normalized);
+            return !normalized.empty() && normalized != current && IsProjectContentBrowserDirectoryTargetAllowed(root, normalized);
         };
         std::erase_if(m_contentBrowserBackHistory, [&isValidHistoryEntry](const std::filesystem::path &entry) {
             return !isValidHistoryEntry(entry);
@@ -221,9 +241,9 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::NavigateContentBrowser(const std::filesystem::path &absoluteDirectory, const bool recordHistory) {
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteRootPath);
+        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.projectRoot);
         const std::filesystem::path destination = NormalizeAbsolute(absoluteDirectory);
-        if (!IsContentBrowserDirectoryTargetAllowed(root, destination)) {
+        if (!IsProjectContentBrowserDirectoryTargetAllowed(root, destination)) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_target";
             return;
         }
@@ -251,7 +271,7 @@ namespace Horo::Editor {
         while (!m_contentBrowserBackHistory.empty()) {
             const std::filesystem::path destination = m_contentBrowserBackHistory.back();
             m_contentBrowserBackHistory.pop_back();
-            if (!IsContentBrowserDirectoryTargetAllowed(m_viewModel.contentBrowser.absoluteRootPath, destination)) {
+            if (!IsProjectContentBrowserDirectoryTargetAllowed(m_viewModel.projectRoot, destination)) {
                 continue;
             }
             if (!current.empty())
@@ -270,7 +290,7 @@ namespace Horo::Editor {
         while (!m_contentBrowserForwardHistory.empty()) {
             const std::filesystem::path destination = m_contentBrowserForwardHistory.back();
             m_contentBrowserForwardHistory.pop_back();
-            if (!IsContentBrowserDirectoryTargetAllowed(m_viewModel.contentBrowser.absoluteRootPath, destination)) {
+            if (!IsProjectContentBrowserDirectoryTargetAllowed(m_viewModel.projectRoot, destination)) {
                 continue;
             }
             if (!current.empty())

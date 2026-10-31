@@ -1,5 +1,25 @@
 #include "editor/menu/EditorMenuPlatform.h"
 
+#include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Platform/FileManager.h"
+
+#include <exception>
+
+namespace Horo::Editor {
+    /** @copydoc RevealInNativeFileManager */
+    bool RevealInNativeFileManager(const std::filesystem::path &absolutePath) noexcept {
+        try {
+            const auto result = RevealInFileManager(absolutePath);
+            if (result.HasValue())
+                return true;
+            LOG_ERROR("editor.file_manager", "%s: %s", result.ErrorValue().code.Value().c_str(), result.ErrorValue().message.c_str());
+        } catch (const std::exception &error) {
+            LOG_ERROR("editor.file_manager", "File Manager request failed: %s", error.what());
+        }
+        return false;
+    }
+}  // namespace Horo::Editor
+
 #if !defined(__APPLE__)
 namespace Horo::Editor {
     /** @copydoc UsesNativeEditorMenuBar */
@@ -15,11 +35,6 @@ namespace Horo::Editor {
     /** @copydoc PollNativeEditorMenuAction */
     std::optional<EditorMenuInvocation> PollNativeEditorMenuAction() noexcept {
         return std::nullopt;
-    }
-
-    /** @copydoc RevealInNativeFileManager */
-    bool RevealInNativeFileManager(const std::filesystem::path &) noexcept {
-        return false;
     }
 
     /** @copydoc OpenInExternalEditor */

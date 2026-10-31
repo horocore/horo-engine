@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "InspectorContributionView.h"
+#include "add_component/AddComponentMenu.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanelInternal.h"
 
 #include <algorithm>
@@ -22,8 +23,8 @@ namespace Horo::Editor {
         /** @brief Draws the localized multi-selection heading without borrowing panel state. */
         void DrawMultiSelectionTitle(const std::size_t selectedObjectCount, const EditorGuiContext &context) {
             ImGui::SetCursorPos({14.0F, ImGui::GetCursorPosY() + 14.0F});
-            const std::string label =
-                std::format("{} {}", selectedObjectCount, context.localization.Get("editor", "workspace.inspector.objects_selected"));
+            const std::string label = std::format("{} {}", selectedObjectCount,
+                                                  InspectorPanel::kTextScope.Text(context.localization, "inspector.objects_selected"));
             {
                 Theme::ScopedTextStyle textStyle(context.theme.fonts.sansEmphasis, std::max(14.0F, Theme::TextPx::Title() * 0.92F),
                                                  Theme::FontPx::SansEmphasis);
@@ -36,7 +37,8 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc InspectorPanel::InspectorPanel */
-    InspectorPanel::InspectorPanel() = default;
+    InspectorPanel::InspectorPanel() : IWorkspacePanel(kTextScope) {}
+
     /** @copydoc InspectorPanel::~InspectorPanel */
     InspectorPanel::~InspectorPanel() = default;
 
@@ -54,6 +56,7 @@ namespace Horo::Editor {
         m_prefabPresentation.reset();
         m_nameInputContext.Reset();
         m_physicsSession.Clear();
+        m_addComponents.ClearProjectBehaviors();
         m_navigationSession.Clear();
         m_inputRouter = nullptr;
         m_workspaceInputContext = nullptr;
@@ -73,8 +76,8 @@ namespace Horo::Editor {
                                    EditorWorkspaceViewCommandData &cmd, const EditorGuiContext &ctx) {
         const float tabHeight = 36.0F * Theme::GetActiveTokens().sizes.uiScale;
         const std::array tabNames{
-            ctx.localization.Get("editor", "workspace.panel.inspector").c_str(),
-            ctx.localization.Get("editor", "workspace.panel.scene").c_str(),
+            InspectorPanel::kTextScope.Text(ctx.localization, "panel.inspector").c_str(),
+            InspectorPanel::kTextScope.Text(ctx.localization, "panel.scene").c_str(),
         };
         m_activeTab = Ui::DrawSideDockTabs(tabNames, m_activeTab, ctx.theme.fonts);
 
@@ -83,7 +86,7 @@ namespace Horo::Editor {
                           ImGuiWindowFlags_NoSavedSettings);
 
         if (m_activeTab != 0) {
-            Ui::Hint(ctx.localization.Get("editor", "workspace.inspector.scene_unavailable").c_str(), ctx.theme.fonts);
+            Ui::Hint(InspectorPanel::kTextScope.Text(ctx.localization, "inspector.scene_unavailable").c_str(), ctx.theme.fonts);
             ImGui::EndChild();
             ImGui::PopStyleVar();
             return;
@@ -113,6 +116,7 @@ namespace Horo::Editor {
             }
         } else {
             m_physicsSession.Clear();
+            m_addComponents.ClearProjectBehaviors();
             m_navigationSession.Clear();
             DrawEmptyState(cmd, ctx);
         }
@@ -138,10 +142,11 @@ namespace Horo::Editor {
             const InspectorNameEdit nameEdit = DrawObjectTitleWidgets(*primaryObject, command, context);
             ApplyNameEdit(nameEdit, *primaryObject, command);
             DrawValidationMessageIfInvalid(IsValidSceneObjectName(m_editSession.Draft().name),
-                                           context.localization.Get("editor", "workspace.inspector.name_invalid"), context.theme.fonts,
-                                           6.0F, 4.0F);
+                                           InspectorPanel::kTextScope.Text(context.localization, "inspector.name_invalid"),
+                                           context.theme.fonts, 6.0F, 4.0F);
         } else {
             m_physicsSession.Clear();
+            m_addComponents.ClearProjectBehaviors();
             m_nameInputContext.Reset();
             DrawMultiSelectionTitle(m_editSession.Draft().selectedObjectCount, context);
         }
@@ -149,8 +154,8 @@ namespace Horo::Editor {
         const InspectorTransformEdit transformEdit = DrawTransformWidgets(context);
         ApplyTransformEdit(transformEdit, command);
         DrawValidationMessageIfInvalid(m_editSession.IsTransformValid(),
-                                       context.localization.Get("editor", "workspace.inspector.transform_invalid"), context.theme.fonts,
-                                       8.0F);
+                                       InspectorPanel::kTextScope.Text(context.localization, "inspector.transform_invalid"),
+                                       context.theme.fonts, 8.0F);
 
         DrawNavigationInspector(m_navigationSession, viewModel, command, context);
         if (m_editSession.Draft().selectedObjectCount == 1)
@@ -162,7 +167,7 @@ namespace Horo::Editor {
     void InspectorPanel::DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
                                           EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         const std::string addComponentLabel =
-            "+  " + context.localization.Get("editor", "workspace.inspector.add_component") + "###InspectorAddComponent";
+            "+  " + InspectorPanel::kTextScope.Text(context.localization, "inspector.add_component") + "###InspectorAddComponent";
         ImGui::PushStyleColor(ImGuiCol_Border, Theme::Accent());
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0F);
         const bool addComponentPressed = Ui::Button({.label = addComponentLabel.c_str(),
@@ -178,8 +183,16 @@ namespace Horo::Editor {
         }
 
         if (Ui::BeginMenuPopup("AddComponentPopup")) {
-            DrawAddComponentMenuItems(object, viewModel, command, context);
-            DrawAddPhysicsComponents(object, viewModel, context);
+            const auto synchronized = m_addComponents.SynchronizeBehaviors(viewModel.projectRoot, viewModel.availableBehaviorsRevision,
+                                                                           viewModel.availableBehaviors);
+            if (synchronized.HasError()) {
+                Ui::ErrorText(synchronized.ErrorValue().message.c_str(), context.theme.fonts);
+            } else {
+                const AddComponentContext state{object, m_physicsSession.Draft(), viewModel.physicsContext.canEdit,
+                                                !viewModel.projectRoot.empty(), command.command == EditorWorkspaceViewCommand::None};
+                if (const auto action = DrawAddComponentMenu(m_addComponents, state, context))
+                    ApplyAddComponentAction(*action, object, viewModel.projectRoot, m_physicsSession, command);
+            }
             Ui::EndMenuPopup();
         }
     }
@@ -196,8 +209,8 @@ namespace Horo::Editor {
     void InspectorPanel::DrawBehaviors(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const {
         const std::array<const char *, 2> enabledEntries{
-            context.localization.Get("editor", "workspace.value.off").c_str(),
-            context.localization.Get("editor", "workspace.value.on").c_str(),
+            InspectorPanel::kTextScope.Text(context.localization, "value.off").c_str(),
+            InspectorPanel::kTextScope.Text(context.localization, "value.on").c_str(),
         };
         for (const Gameplay::BehaviorComponent &attached : object.components.behaviors) {
             const auto descriptorIt =
@@ -230,7 +243,7 @@ namespace Horo::Editor {
     InspectorNameEdit InspectorPanel::DrawObjectTitleWidgets(const SceneObject &object, EditorWorkspaceViewCommandData &command,
                                                              const EditorGuiContext &context) {
         InspectorObjectDraft &draft = m_editSession.Draft();
-        const std::string &optionsLabel = context.localization.Get("editor", "workspace.inspector.object_options");
+        const std::string &optionsLabel = InspectorPanel::kTextScope.Text(context.localization, "inspector.object_options");
         const ObjectTitleLayout layout = ResolveObjectTitleLayout();
         const ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
         const float rowWidth = ImGui::GetContentRegionAvail().x;
@@ -263,16 +276,16 @@ namespace Horo::Editor {
         bool cancelRequested{false};
         {
             Ui::Card card(Ui::CardProps{.id = "##TransformCard"});
-            header = DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.transform").c_str(),
+            header = DrawComponentTitleBar(card, InspectorPanel::kTextScope.Text(context.localization, "inspector.transform").c_str(),
                                            {.enabled = true, .canReset = true, .canToggleEnabled = false, .canRemove = false}, context);
             cancelRequested = m_editSession.HasTransformPreview() && IsInspectorCardEscapeRequested();
             if (card.BeginBody()) {
-                position = Ui::DrawFloat3PropRow(context.localization.Get("editor", "workspace.inspector.position").c_str(), "position",
-                                                 draft.position, context.theme.fonts, 0.05F, draft.mixed.position);
-                rotation = Ui::DrawFloat3PropRow(context.localization.Get("editor", "workspace.inspector.rotation").c_str(), "rotation",
-                                                 draft.rotationDegrees, context.theme.fonts, 0.25F, draft.mixed.rotation);
-                scale = Ui::DrawFloat3PropRow(context.localization.Get("editor", "workspace.inspector.scale").c_str(), "scale", draft.scale,
-                                              context.theme.fonts, 0.05F, draft.mixed.scale);
+                position = Ui::DrawFloat3PropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.position").c_str(),
+                                                 "position", draft.position, context.theme.fonts, 0.05F, draft.mixed.position);
+                rotation = Ui::DrawFloat3PropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.rotation").c_str(),
+                                                 "rotation", draft.rotationDegrees, context.theme.fonts, 0.25F, draft.mixed.rotation);
+                scale = Ui::DrawFloat3PropRow(InspectorPanel::kTextScope.Text(context.localization, "inspector.scale").c_str(), "scale",
+                                              draft.scale, context.theme.fonts, 0.05F, draft.mixed.scale);
             }
         }
 
@@ -339,7 +352,7 @@ namespace Horo::Editor {
 
         ImGui::SetCursorPosX(14.0F);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 14.0F);
-        Ui::Hint(context.localization.Get("editor", "workspace.inspector.empty").c_str(), context.theme.fonts);
+        Ui::Hint(InspectorPanel::kTextScope.Text(context.localization, "inspector.empty").c_str(), context.theme.fonts);
     }
 
     void InspectorPanel::AdoptCommand(EditorWorkspaceViewCommandData &destination, EditorWorkspaceViewCommandData source) {

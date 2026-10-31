@@ -164,6 +164,7 @@ set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_projec
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(common/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC common/EditorProjectSceneHost.cpp)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::PrefabProjectSettings)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlayXrHostInterface HoroEditorPlaySceneHostInternal HoroScenePhysicsHost
@@ -181,6 +182,7 @@ add_library(HoroNetworkProductHost STATIC
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
@@ -383,6 +385,7 @@ if(HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditor
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
+        HoroEditor/app/EditorWindowChrome.cpp
         HoroEditor/app/EditorNavigationBakeHost.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
@@ -394,7 +397,21 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
     )
 
+    if(APPLE)
+        target_sources(HoroEditor PRIVATE HoroEditor/app/EditorWindowChromeMac.mm)
+        set_source_files_properties(HoroEditor/app/EditorWindowChromeMac.mm PROPERTIES
+            LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++")
+        target_link_libraries(HoroEditor PRIVATE "-framework AppKit")
+    elseif(WIN32)
+        target_link_libraries(HoroEditor PRIVATE dwmapi)
+    endif()
+
     target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles)
+    include(HoroEditorGuiLiveReloadHost)
+    if(HORO_EDITOR_LIVE_UI)
+        include(HoroEditorLiveUi)
+    endif()
+    horo_attach_gui_live_host(HoroEditor)
 
     if(APPLE)
         # SDL_GetBasePath resolves to Contents/Resources for an application bundle.
@@ -510,6 +527,7 @@ if(HORO_BUILD_EDITOR_GUI)
             HORO_BUILD_CONFIGURATION="$<CONFIG>"
             HORO_GAMEPLAY_SDK_PACKAGE_DIR="${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
             HORO_GAMEPLAY_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+            HORO_GAMEPLAY_CMAKE_EXECUTABLE="${CMAKE_COMMAND}"
     )
 
     target_link_libraries(HoroEditor
@@ -569,10 +587,6 @@ if(HORO_BUILD_EDITOR_GUI)
         target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
     endif()
 
-    if(HORO_ENABLE_OPENTELEMETRY)
-        target_compile_definitions(HoroEditor PRIVATE HORO_HAS_OPENTELEMETRY=1)
-        target_link_libraries(HoroEditor PRIVATE HoroEngine::OpenTelemetry)
-    endif()
 
     # Development composition: concrete backends are linked explicitly at the
     # executable boundary until RenderModuleHost owns installed-product loading.

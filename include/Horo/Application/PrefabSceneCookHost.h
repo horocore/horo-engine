@@ -10,6 +10,7 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Packages/PackageRestore.h"
 #include "Horo/Prefab/PrefabLimits.h"
+#include "Horo/Prefab/PrefabMetrics.h"
 #include "Horo/Release/ReleasePipelineExecutor.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "Horo/Scene/ScenePrefabExpansionOwner.h"
@@ -53,6 +54,12 @@ namespace Horo::Application {
          * @return Success only for current schemas and compatible behavior fields/multiplicity. */
         [[nodiscard]] Result<void> Validate(std::span<const Gameplay::SerializedComponent> components,
                                             std::span<const Gameplay::BehaviorComponent> behaviors) const;
+        /** @brief Commits only explicitly used type contracts from this immutable validating authority.
+         * @param components Complete used component type set. @param behaviors Complete used behavior type set.
+         * @return Canonical descriptor digest or typed missing/budget failure; caller order and duplicates are irrelevant.
+         */
+        [[nodiscard]] Result<Sha256Digest> DigestForTypes(std::span<const Gameplay::ComponentTypeId> components,
+                                                          std::span<const Gameplay::BehaviorTypeId> behaviors) const;
         /** @brief Returns the complete captured schema/settings commitment. @return Owned immutable digest. */
         [[nodiscard]] const Sha256Digest &Digest() const noexcept;
 
@@ -75,6 +82,7 @@ namespace Horo::Application {
                                                                              Trust/activation remains the package host's authority. */
         std::vector<Assets::AssetId> runtimePrefabRoots; /**< Explicit unique runtime-spawnable roots; empty preserves static-only
                                                         cooking. Source-only nested/variant prefabs are never published as templates. */
+        Prefab::PrefabMetricHandles metrics; /**< Explicit process-prebound numeric observations, excluded from cook identity. */
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Explicit project sensor/material capture. */
     };
 

@@ -2032,7 +2032,13 @@ def header_context(entries: list[dict], headers: list[Path], root: Path) -> dict
     found = {}
     if any(not path.is_file() for path in headers):
         raise AnalysisError("Selected header is missing")
-    for entry in entries:
+    # Prefer nearby consumers before traversing unrelated engine include graphs.
+    # The complete entry list remains available for public/transitive contracts.
+    header_directories = {header.parent for header in headers}
+    header_stems = {header.stem for header in headers}
+    counterparts = [entry for entry in entries if entry["source"].stem in header_stems]
+    ordered = sorted(entries, key=lambda item: item["source"].parent not in header_directories)
+    for index, entry in enumerate(counterparts + ordered):
         if CANCELLED.is_set():
             raise AnalysisError("Header context search cancelled")
         pending = [entry["source"]]
@@ -2045,6 +2051,12 @@ def header_context(entries: list[dict], headers: list[Path], root: Path) -> dict
             visited.add(path)
             if path in headers:
                 found.setdefault(path, entry)
+                if all(header in found for header in headers):
+                    return found
+                # Find each public header's direct implementation before walking its dependencies.
+                # The complete fallback pass still proves transitive consumers when names differ.
+                if index < len(counterparts) and path.stem == entry["source"].stem:
+                    break
             if path not in contents:
                 contents[path] = include_pattern.findall(path.read_text(encoding="utf-8", errors="replace"))
             for include in contents[path]:
@@ -2092,7 +2104,7 @@ def prepare(root: Path, cache: Path, files: list[Path], existing: Path | None,
         command.extend(["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug", "-DBUILD_TESTING=ON"])
         if sys.platform == "linux":
             command.extend(["-DHORO_BUILD_RENDER_VULKAN=ON", "-DHORO_ENABLE_IMGUI_UI_TESTS=ON",
-                            "-DHORO_ENABLE_OPENTELEMETRY=ON", "-DHORO_BUILD_NETWORK_GNS=ON"])
+                            "-DHORO_BUILD_NETWORK_GNS=ON"])
     configured = quality_run(command, root, timeout)
     if configured.returncode:
         raise AnalysisError("CMake configuration failed; " + configured.stderr[-2000:])

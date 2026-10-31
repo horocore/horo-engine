@@ -1,6 +1,7 @@
 #include "editor/modals/world_layer/CreateWorldLayerModal.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Utf8.h"
 
@@ -9,7 +10,7 @@
 namespace Horo::Editor {
     /** @copydoc CreateWorldLayerModal::CreateWorldLayerModal */
     CreateWorldLayerModal::CreateWorldLayerModal(const EditorGuiContext &context, const WorldDocumentFence &expected, Create create)
-        : context_(context), expected_(expected), create_(std::move(create)) {}
+        : EditorModal(kTextScope), context_(context), expected_(expected), create_(std::move(create)) {}
 
     /** @copydoc CreateWorldLayerModal::Id */
     ModalId CreateWorldLayerModal::Id() const {
@@ -28,7 +29,7 @@ namespace Horo::Editor {
 
     /** @copydoc CreateWorldLayerModal::OnOpen */
     Result<void> CreateWorldLayerModal::OnOpen(EditorModalContext &) {
-        return create_ ? Result<void>::Success() : Result<void>::Failure(MakeError(WorldDocumentErrors::Lifecycle));
+        return create_ ? Result<void>::Success() : Result<void>::Failure(MakeError(GuiLive::HostSymbol<&WorldDocumentErrors::Lifecycle>()));
     }
 
     /** @copydoc CreateWorldLayerModal::CanClose */
@@ -39,7 +40,7 @@ namespace Horo::Editor {
     /** @copydoc CreateWorldLayerModal::DrawName */
     bool CreateWorldLayerModal::DrawName() {
         const auto &fonts = context_.theme.fonts;
-        const auto label = context_.localization.Get("editor", "workspace.world_layers.name");
+        const auto label = CreateWorldLayerModal::kTextScope.Text(context_.localization, "name");
         Ui::FieldLabel(label.c_str(), fonts);
         if (Ui::InputTextControl("##LayerName", name_, 1025, fonts))
             failureKey_.clear();
@@ -47,13 +48,13 @@ namespace Horo::Editor {
         if (!failureKey_.empty())
             Ui::ErrorText(context_.localization.Get("editor", failureKey_).c_str(), fonts);
         else if (!valid)
-            Ui::Hint(context_.localization.Get("editor", "workspace.world_layers.name_hint").c_str(), fonts);
+            Ui::Hint(CreateWorldLayerModal::kTextScope.Text(context_.localization, "name_hint").c_str(), fonts);
         return valid;
     }
 
     /** @copydoc CreateWorldLayerModal::Draw */
     ModalFrameResult CreateWorldLayerModal::Draw() {
-        const auto title = context_.localization.Get("editor", "workspace.world_layers.create");
+        const auto title = CreateWorldLayerModal::kTextScope.Text(context_.localization, "create");
         const auto &fonts = context_.theme.fonts;
         const float footerHeight = 2.0F * DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium).minimumHeight +
                                    ImGui::GetStyle().ItemSpacing.y + 2.0F * Theme::Layout::CardPad;
@@ -68,7 +69,7 @@ namespace Horo::Editor {
         const bool valid = DrawName();
         ImGui::EndChild();
         shell.BeginFooter({Theme::Layout::CardPad, Theme::Layout::CardPad});
-        if (const auto cancel = context_.localization.Get("editor", "workspace.world_layers.cancel");
+        if (const auto cancel = CreateWorldLayerModal::kTextScope.Text(context_.localization, "cancel");
             Ui::Button({.label = cancel.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans})) {
             shell.EndFooter();
             return ModalFrameResult::RequestClose(ModalCloseReason::Cancelled);
@@ -82,7 +83,8 @@ namespace Horo::Editor {
             if (result.HasValue())
                 return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
             const auto &code = result.ErrorValue().code.Value();
-            failureKey_ = code == WorldDocumentErrors::Stale.code.Value() || code == WorldDocumentErrors::Lifecycle.code.Value()
+            failureKey_ = code == GuiLive::HostSymbol<&WorldDocumentErrors::Stale>().code.Value() ||
+                                  code == GuiLive::HostSymbol<&WorldDocumentErrors::Lifecycle>().code.Value()
                               ? "workspace.world_layers.stale"
                               : "workspace.world_layers.rejected";
         }

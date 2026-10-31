@@ -13,8 +13,17 @@
 #include <optional>
 
 namespace Horo::Editor {
+    class TerrainViewportTool;
+
     class ViewportPanel final : public IWorkspacePanel {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.viewport"};
+
+        /** @brief Creates a surface with its required localization scope. */
+        ViewportPanel();
+        ~ViewportPanel() override;
+
         [[nodiscard]] std::string GetId() const override;
 
         [[nodiscard]] std::string GetDisplayName() const override;
@@ -55,6 +64,9 @@ namespace Horo::Editor {
         [[nodiscard]] bool ViewportInputEligible() const noexcept;
         void RequestViewportExtent(float width, float height) const noexcept;
         void ConfigureRenderer(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context) const;
+        /** @brief Present an explicitly selected asset-local terrain source without Scene interaction or runtime fallback. */
+        bool DrawTerrainSource(ImDrawList &draw, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &model,
+                               EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,
                                      EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
                                      Math::ClipDepthRange depthRange);
@@ -77,6 +89,7 @@ namespace Horo::Editor {
         Input::InputContextToken *workspaceInputContext_{nullptr};
         ViewportInteractionController interaction_;
         WorldSourceViewportTool worldSourceTool_;
+        std::unique_ptr<TerrainViewportTool> terrainTool_;
         const NavigationViewportAccess *navigationOverlays_{};
         NavigationOverlayLayer navigationLayer_;
         std::filesystem::path navigationProjectRoot_;

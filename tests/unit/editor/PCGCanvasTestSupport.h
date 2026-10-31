@@ -66,6 +66,7 @@ namespace Horo::Editor::PCGCanvasTestSupport {
             command.command = EditorWorkspaceViewCommand::OpenSourceFile;
             command.sourceOpenRequest = SourceOpenRequest{.path = project.path, .mode = SourceOpenMode::EmbeddedOnly};
             controller->ProcessCommand(command);
+            INFO("Source activation diagnostic: " << controller->ViewModel().contentBrowserOperationError);
             REQUIRE(controller->ViewModel().pcgDocuments.size() == 1);
         }
 

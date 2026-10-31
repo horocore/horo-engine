@@ -21,6 +21,19 @@ namespace Horo::Editor {
     };
 
     /** @brief Read-only source-qualified row; no component mutation authority is carried. */
+    struct PrefabValueDiffPresentation final {
+        std::string target;
+        std::string source;
+        std::string effective;
+        std::optional<std::string> schemaDefault;
+        const char *originKey{}; /**< Closed localized vocabulary chosen from canonical origin evidence during preparation. */
+        const char *stateKey{};  /**< Null for resolved values; preserved conflict/orphan/opaque state otherwise. */
+        bool changed{};
+        bool sourcePresent{true};
+        bool effectivePresent{true};
+    };
+
+    /** @brief Read-only source-qualified row; no component mutation authority is carried. */
     struct PrefabHierarchyEntry final {
         PrefabHierarchyTarget target;
         std::optional<PrefabHierarchyTarget> parent;
@@ -30,6 +43,9 @@ namespace Horo::Editor {
         bool hasOverrides{};
         std::optional<Error> failure;
         std::optional<Prefab::PrefabSceneObjectId> sceneObject; /**< Canonical collision-checked remap, never a panel alias. */
+        std::vector<PrefabValueDiffPresentation> valueDiff;
+        bool valueDiffIncomplete{};
+        std::optional<Error> valueInspectionFailure;
     };
 
     /** @brief Complete detached projection pinned to its source resolution; published only after preparation succeeds. */

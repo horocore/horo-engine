@@ -1,3 +1,4 @@
+#include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Packages/PackageLockfile.h"
 #include "Horo/Packages/PackageRequest.h"
@@ -161,6 +162,14 @@ namespace Horo::Application {
         Result<HostCapture> CaptureHost(const PrefabSceneCookRequest &request, const ProjectCompatibilityInspector &compatibility,
                                         const Release::ReleaseExecutionPlan *releasePlan) {
             const auto classified = compatibility.Inspect(request.assets.sourceRoot);
+            const auto prefabSettings = LoadPrefabProjectSettings(request.assets.sourceRoot);
+            if (prefabSettings.HasError())
+                return Result<HostCapture>::Failure(prefabSettings.ErrorValue());
+            const auto configured = PrefabPolicyFieldValues(prefabSettings.Value().settings->Limits().Policy());
+            const auto requested = PrefabPolicyFieldValues(request.prefabPolicy);
+            for (std::size_t index = 0; index < configured.size(); ++index)
+                if (requested[index] > configured[index])
+                    return Result<HostCapture>::Failure(MakeError(PrefabSceneCookErrors::Stale));
             using enum ProjectCompatibilityStatus;
             if ((classified.status != Current && classified.status != CompatibleReleaseLine) || classified.markerUpdateRequired ||
                 !classified.metadata)
@@ -189,7 +198,7 @@ namespace Horo::Application {
             Append(semantic, FormatPersistentContractHash(metadata.persistentContract));
             Append(semantic, packages.Value());
             Append(semantic, PolicyIdentity(request));
-            Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
+            Append(semantic, prefabSettings.Value().settings->Configuration().ToJson());
             if (releasePlan) {
                 if (const auto actualLockDigest = rawPackages.Value() ? ComputeSha256(std::as_bytes(std::span{*rawPackages.Value()}))
                                                                       : ComputeSha256(std::span<const std::byte>{});
@@ -199,10 +208,14 @@ namespace Horo::Application {
                 Append(semantic, FormatSha256(releasePlan->Identities().policy));
                 Append(semantic, FormatSha256(releasePlan->Identities().toolchain));
             }
+            const auto cacheDigest = ComputeSha256(std::as_bytes(std::span{semantic}));
+            Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
             return Result<HostCapture>::Success(
-                {metadata, ComputeSha256(std::as_bytes(std::span{semantic})), ComputeSha256(std::as_bytes(std::span{*rawProject.Value()})),
+                {metadata, ComputeSha256(std::as_bytes(std::span{semantic})), cacheDigest,
+                 ComputeSha256(std::as_bytes(std::span{*rawProject.Value()})),
                  rawPackages.Value() ? std::optional{ComputeSha256(std::as_bytes(std::span{*rawPackages.Value()}))} : std::nullopt,
-                 rawIntent.Value() ? std::optional{ComputeSha256(std::as_bytes(std::span{*rawIntent.Value()}))} : std::nullopt});
+                 rawIntent.Value() ? std::optional{ComputeSha256(std::as_bytes(std::span{*rawIntent.Value()}))} : std::nullopt,
+                 prefabSettings.Value().identity});
         }
 
         /** @copydoc VerifyHost */
@@ -214,6 +227,8 @@ namespace Horo::Application {
             if (current.Value().projectBytes != capture.projectBytes || current.Value().packageBytes != capture.packageBytes ||
                 current.Value().packageIntentBytes != capture.packageIntentBytes ||
                 current.Value().semanticDigest != capture.semanticDigest)
+                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
+            if (current.Value().prefabSettings != capture.prefabSettings)
                 return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
             return Result<void>::Success();
         }

@@ -148,7 +148,10 @@ namespace Horo::Assets {
          * @param batch Fully validated batch with items in deterministic order.
          * @param idGenerator Injected identity generator.
          * @param cancellation Cancellation token for cooperative abort.
-         * @return Success or a typed commit failure. The registry is not modified on failure.
+         * @return Success or a typed commit failure. A host must distinguish failure before publication from an irreversible
+         * reconciliation outcome: durable source pairs and a published registry remain valid if later derived-index persistence fails.
+         * Such a host returns a durability/reconciliation diagnostic and retains its concrete publication receipt; callers must not
+         * infer that a failure authorizes overwriting or deleting the destination.
          */
         [[nodiscard]] virtual Result<void> Commit(const PreparedAssetImportBatch &batch, IAssetIdGenerator &idGenerator,
                                                   const CancellationToken &cancellation) = 0;

@@ -114,12 +114,13 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::SaveCollisionSettings */
-    Result<void> EditorWorkspaceController::SaveCollisionSettings() const {
+    Result<void> EditorWorkspaceController::SaveCollisionSettings() {
         if (!HasDirtyCollisionSettings())
             return Result<void>::Success();
         auto saved = m_collisionSettings->Save();
         if (saved.HasError())
             return Result<void>::Failure(saved.ErrorValue());
+        RefreshPhysicsProfiles();
         if (saved.Value().durabilityError)
             return Result<void>::Failure(*saved.Value().durabilityError);
         return Result<void>::Success();

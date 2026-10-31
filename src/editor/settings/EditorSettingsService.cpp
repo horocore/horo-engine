@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Configuration.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/EditorServiceErrors.h"
+#include "editor/input/EditorInputActions.h"
 
 #include <string>
 #include <utility>
@@ -50,6 +51,11 @@ namespace Horo::Editor {
             LogCommitFailure("editor validation", error);
             return Result<EditorSettingsSnapshot>::Failure(std::move(error));
         }
+
+        if (!Input::ValidateBindingProfile(EditorKeymapActions(candidate.keymap.profile, m_contributedActions), candidate.keymap.profile)
+                 .IsValid())
+            return Result<EditorSettingsSnapshot>::Failure(
+                SettingsError(SettingsErrors::ValidationFailed, "Editor keymap conflicts with a live module command."));
 
         const bool languageChanged = candidate.languageTag != m_committed.languageTag;
         if (languageChanged) {
@@ -103,4 +109,15 @@ namespace Horo::Editor {
                  activated.settings.languageTag.c_str());
         return Result<EditorSettingsSnapshot>::Success(activated);
     }
+
+    /** @copydoc EditorSettingsService::SetContributedInputActions */
+    void EditorSettingsService::SetContributedInputActions(std::vector<Input::ActionDescriptor> actions) {
+        m_contributedActions = std::move(actions);
+    }
+
+    /** @copydoc EditorSettingsService::ContributedInputActions */
+    std::span<const Input::ActionDescriptor> EditorSettingsService::ContributedInputActions() const noexcept {
+        return m_contributedActions;
+    }
+
 }  // namespace Horo::Editor

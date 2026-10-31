@@ -1,3 +1,4 @@
+#include "EditorInputActions.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsEvents.h"
@@ -5,15 +6,18 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
+#include "support/OwnedTestDirectory.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -102,6 +106,12 @@ namespace {
         REQUIRE((error.empty()));
         REQUIRE((doc.path == home / ".horo" / "editor_settings.json"));
         REQUIRE((std::filesystem::is_regular_file(doc.path)));
+
+        std::ifstream persisted{doc.path};
+        const auto serialized = nlohmann::json::parse(persisted, nullptr, false);
+        REQUIRE_FALSE(serialized.is_discarded());
+        CHECK(serialized["schemaVersion"] == 1);
+        CHECK(serialized["editor"]["languageTag"] == doc.settings.languageTag);
 
         const EditorSettingsDocument loaded = LoadEditorSettingsDocument();
         REQUIRE((loaded.loadedFromDisk));
@@ -228,9 +238,13 @@ namespace {
         EditorSettingsDocument persisted;
         persisted.settings = DefaultEditorSettings();
         persisted.settings.themePreset = EditorThemePreset::Light;
+        persisted.settings.themeId = "example.editor.theme";
         persisted.settings.accentColorHex = "#112233";
         persisted.settings.uiScalePercent = 125;
         persisted.settings.codeFontSizePx = 16;
+        persisted.settings.codeFontFamily = "Menlo";
+        persisted.settings.codeEditor.showWhitespace = true;
+        persisted.settings.codeEditor.autoSaveDelaySeconds = 3;
         std::string error;
         REQUIRE((SaveEditorSettingsDocument(&persisted, &error)));
 
@@ -259,9 +273,16 @@ namespace {
         RequireSettingValue<std::string>(after, "editor.appearance.accent_color", "#112233");
         RequireSettingValue<std::int64_t>(after, "editor.appearance.ui_scale_percent", 125);
         RequireSettingValue<std::int64_t>(after, "editor.appearance.code_font_size_px", 16);
+        RequireSettingValue<std::string>(after, "editor.theme.package_id", "example.editor.theme");
+        RequireSettingValue<std::string>(after, "editor.appearance.code_font_family", "Menlo");
+        RequireSettingValue<bool>(after, "editor.code.codeShowWhitespace", true);
+        RequireSettingValue<std::int64_t>(after, "editor.code.codeAutoSaveDelaySeconds", 3);
         REQUIRE((observed.revision == after.Revision()));
-        RequireChangedKeys(observed, {"editor.theme.active", "editor.appearance.accent_color", "editor.appearance.ui_scale_percent",
-                                      "editor.appearance.code_font_size_px"});
+        RequireChangedKeys(observed,
+                           {"editor.theme.active", "editor.theme.package_id", "editor.appearance.accent_color",
+                            "editor.appearance.ui_scale_percent", "editor.appearance.code_font_size_px",
+                            "editor.appearance.code_font_family", "editor.code.codeShowLineNumbers", "editor.code.codeShowWhitespace",
+                            "editor.code.codeWordWrap", "editor.code.codeShowScrollBar", "editor.code.codeAutoSaveDelaySeconds"});
     }
 
     TEST_CASE("Failed Or Stale Authority Commit Retains Committed Snapshot And Does Not Publish", "[unit][editor]") {
@@ -347,3 +368,213 @@ namespace {
         REQUIRE((observed.changedDomains == SettingsDomain::All));
     }
 }  // namespace
+
+namespace {
+    /** @brief Isolates Settings/profile migration without changing the user's configuration directory. */
+    struct KeymapHome final {
+        Horo::Tests::OwnedTestDirectory directory{"keymap-settings"};
+        std::string previous;
+        bool existed{};
+
+        KeymapHome() {
+#if defined(_WIN32)
+            const char *value = std::getenv("USERPROFILE");
+#else
+            const char *value = std::getenv("HOME");
+#endif
+            existed = value != nullptr;
+            if (value)
+                previous = value;
+            SetHomeForTest(directory.Path());
+        }
+
+        ~KeymapHome() {
+#if defined(_WIN32)
+            _putenv_s("USERPROFILE", previous.c_str());
+#else
+            if (existed)
+                setenv("HOME", previous.c_str(), 1);
+            else
+                unsetenv("HOME");
+#endif
+        }
+    };
+}  // namespace
+
+TEST_CASE("Settings keymaps round trip typed punctuation chords and reject conflicting replacements", "[unit][editor][keymap]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    KeymapHome home;
+    EditorSettingsDocument document;
+    document.settings.keymap.profile.overrides.push_back(
+        {Input::ActionId{kActionSourceZoomIn},
+         {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Equal, .requiredModifiers = {.shift = true, .command = true}}}});
+    REQUIRE(Input::ValidateBindingProfile(RegisteredEditorInputActions(), document.settings.keymap.profile).IsValid());
+    std::string error;
+    REQUIRE(SaveEditorSettingsDocument(&document, &error));
+    const auto loaded = LoadEditorSettingsDocument();
+    REQUIRE_FALSE(loaded.parseError);
+    REQUIRE(loaded.settings.keymap == document.settings.keymap);
+    std::ifstream originalFile(ResolveEditorSettingsPath());
+    const std::string original{std::istreambuf_iterator<char>{originalFile}, {}};
+    document.settings.keymap.profile.overrides.front().bindings.front().key = Input::Key::S;
+    document.settings.keymap.profile.overrides.front().bindings.front().requiredModifiers.shift = false;
+    REQUIRE_FALSE(SaveEditorSettingsDocument(&document, &error));
+    REQUIRE_FALSE(error.empty());
+    std::ifstream afterFile(ResolveEditorSettingsPath());
+    REQUIRE(std::string{std::istreambuf_iterator<char>{afterFile}, {}} == original);
+    const auto reset = LoadEditorSettingsDocument();
+    REQUIRE(reset.settings.keymap == loaded.settings.keymap);
+}
+
+TEST_CASE("Standalone editor keymaps migrate once and retain the old file without competing authority", "[unit][editor][keymap]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    KeymapHome home;
+    const auto legacyPath = home.directory.Path() / ".horo/input/editor.json";
+    std::filesystem::create_directories(legacyPath.parent_path());
+    Input::InputBindingProfile profile;
+    profile.overrides.push_back(
+        {Input::ActionId{kActionSourceZoomIn},
+         {{.kind = Input::BindingControlKind::Key, .key = Input::Key::F2, .requiredModifiers = {.command = true}}}});
+    REQUIRE(Input::SaveBindingProfileAtomically(legacyPath, profile).HasValue());
+    auto imported = LoadEditorSettingsDocument();
+    REQUIRE(imported.settings.keymap.profile.overrides.size() == 1);
+    REQUIRE(imported.settings.keymap.profile.overrides.front().bindings.front().key == Input::Key::F2);
+    std::string error;
+    REQUIRE(SaveEditorSettingsDocument(&imported, &error));
+    profile.overrides.front().bindings.front().key = Input::Key::F3;
+    REQUIRE(Input::SaveBindingProfileAtomically(legacyPath, profile).HasValue());
+    const auto canonical = LoadEditorSettingsDocument();
+    REQUIRE(canonical.settings.keymap.profile.overrides.front().bindings.front().key == Input::Key::F2);
+    REQUIRE(std::filesystem::exists(legacyPath));
+    std::ifstream input(ResolveEditorSettingsPath());
+    auto data = nlohmann::json::parse(input);
+    data["input"]["bindingProfile"] = "malformed";
+    std::ofstream(ResolveEditorSettingsPath()) << data.dump();
+    const auto malformed = LoadEditorSettingsDocument();
+    REQUIRE(malformed.parseError);
+    REQUIRE(malformed.settings.keymap.profile.overrides.empty());
+}
+
+TEST_CASE("Every registered digital editor command has English and Turkish Settings copy", "[unit][editor][keymap][localization]") {
+    using namespace Horo::Editor;
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        LocalizationService service{LocaleTag{locale}};
+        REQUIRE(service.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                        (std::string{locale} + ".json")));
+        REQUIRE(service.Prepare(LocaleTag{locale}));
+        REQUIRE(service.ActivatePrepared());
+        for (const auto &action : RegisteredEditorInputActions()) {
+            if (action.valueType != Horo::Input::ActionValueType::Digital)
+                continue;
+            const auto key = "settings.keymap." + action.id.Value();
+            REQUIRE(service.Get("editor", key) != key);
+            REQUIRE_FALSE(service.Get("editor", key).empty());
+        }
+    }
+}
+
+TEST_CASE("Canonical keymap JSON rejects duplicate fields unsupported versions wrong types and oversized input", "[unit][editor][keymap]") {
+    using namespace Horo::Editor;
+    KeymapHome home;
+    std::filesystem::create_directories(ResolveEditorSettingsPath().parent_path());
+    const auto profile = Horo::Input::SerializeBindingProfile({});
+    REQUIRE(profile.HasValue());
+    const auto check = [&](const std::string &text) {
+        std::ofstream(ResolveEditorSettingsPath()) << text;
+        const auto loaded = LoadEditorSettingsDocument();
+        CHECK(loaded.parseError);
+        CHECK(loaded.settings.keymap.profile.overrides.empty());
+    };
+    check(R"({"schemaVersion":1,"input":{"bindingProfile":true}})");
+    check(R"({"schemaVersion":1,"input":{"bindingProfile":)" + profile.Value() + R"(,"bindingProfile":)" + profile.Value() + "}}");
+    check(R"({"input":{"bindingProfile":)" + profile.Value() + R"(},"schemaVersion":2})");
+    check(R"({"schemaVersion":1,"input":{"bindingProfile":)" + profile.Value() + R"(},"padding":")" + std::string(2 * 1024 * 1024, 'x') +
+          "\"}");
+}
+
+TEST_CASE("Module keymap overrides remain dormant while absent and validate against live commands", "[editor][keymap][extensions]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    const auto parsed = ParseEditorShortcut("Meta+Shift+P");
+    REQUIRE(parsed);
+    CHECK(parsed->key == Input::Key::P);
+    CHECK(parsed->requiredModifiers.command);
+    CHECK(parsed->requiredModifiers.shift);
+    CHECK_FALSE(ParseEditorShortcut("Meta+Meta+P"));
+    CHECK_FALSE(ParseEditorShortcut("Ctrl+UnsupportedKey"));
+    KeymapHome home;
+    EditorSettingsDocument document;
+    document.settings.themeId = "example.editor.theme";
+    document.settings.keymap.profile.overrides.push_back({Input::ActionId{"example.editor.run"}, {*parsed}});
+    REQUIRE(SaveEditorSettingsDocument(&document));
+    const auto loaded = LoadEditorSettingsDocument();
+    REQUIRE_FALSE(loaded.parseError);
+    CHECK(loaded.settings.themeId == document.settings.themeId);
+    CHECK(loaded.settings.keymap == document.settings.keymap);
+    CHECK(BuiltinEditorInputProfile(loaded.settings.keymap.profile).overrides.empty());
+    auto dormant = loaded.settings.keymap.profile;
+    dormant.overrides.front().bindings = {*ParseEditorShortcut("Ctrl+S")};
+    CHECK(Input::ValidateBindingProfile(EditorKeymapActions(dormant), dormant).IsValid());
+
+    const std::vector<Input::ActionDescriptor> actions{{Input::ActionId{"example.editor.run"},
+                                                        Input::ActionValueType::Digital,
+                                                        Input::InputContextId{kEditorWorkspaceInputContext},
+                                                        false,
+                                                        {}},
+                                                       {Input::ActionId{"example.editor.other"},
+                                                        Input::ActionValueType::Digital,
+                                                        Input::InputContextId{kEditorWorkspaceInputContext},
+                                                        false,
+                                                        {*parsed}}};
+    CHECK_FALSE(Input::ValidateBindingProfile(EditorKeymapActions(loaded.settings.keymap.profile, actions), loaded.settings.keymap.profile)
+                    .IsValid());
+}
+
+TEST_CASE("Settings section headings retain localized title casing", "[editor][settings][localization]") {
+    using namespace Horo::Editor;
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        LocalizationService service{LocaleTag{locale}};
+        REQUIRE(service.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                        (std::string{locale} + ".json")));
+        REQUIRE(service.Prepare(LocaleTag{locale}));
+        REQUIRE(service.ActivatePrepared());
+        CHECK(service.Get("editor", "settings.input.mappings_group") ==
+              (std::string_view{locale} == "en-US" ? "Input Mapping" : "Giriş Eşlemeleri"));
+        for (const auto key :
+             {"appearance.theme_group", "appearance.typography_group", "audio.output_group", "diagnostics.logging_group",
+              "diagnostics.profiler_group", "general.session_group", "general.startup_group", "input.navigation_group",
+              "input.mappings_group", "network.multiplayer_group", "packages.download_group", "extensions.details",
+              "extensions.installed_heading", "extensions.lifecycle", "rendering.quality_group", "rendering.viewport_group"}) {
+            const auto text = service.Get("editor", std::string{"settings."} + key);
+            INFO(locale << " " << key << " " << text);
+            CHECK(std::ranges::any_of(text, [](const char c) {
+                return c >= 'a' && c <= 'z';
+            }));
+        }
+    }
+}
+
+TEST_CASE("Code preferences share typed descriptors across persistence and validation", "[editor][settings][code]") {
+    using namespace Horo::Editor;
+    KeymapHome home;
+    EditorSettingsDocument document;
+    document.settings = DefaultEditorSettings();
+    document.settings.codeFontFamily = "Menlo";
+    document.settings.uiFontFamily = "Custom UI";
+    for (const auto &entry : CodeEditorBooleanSettings())
+        document.settings.codeEditor.*entry.member = !(document.settings.codeEditor.*entry.member);
+    document.settings.codeEditor.autoSaveDelaySeconds = 3;
+    REQUIRE(SaveEditorSettingsDocument(&document));
+    const auto loaded = LoadEditorSettingsDocument();
+    REQUIRE_FALSE(loaded.parseError);
+    CHECK(loaded.settings == document.settings);
+    auto invalid = loaded.settings;
+    invalid.codeEditor.autoSaveDelaySeconds = 999;
+    REQUIRE_FALSE(ValidateEditorSettings(invalid));
+    CHECK(invalid.codeEditor.autoSaveDelaySeconds == 300);
+    invalid.codeEditor.autoSaveDelaySeconds = -1;
+    REQUIRE_FALSE(ValidateEditorSettings(invalid));
+    CHECK(invalid.codeEditor.autoSaveDelaySeconds == 0);
+}

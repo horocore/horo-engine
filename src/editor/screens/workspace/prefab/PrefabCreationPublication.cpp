@@ -1,3 +1,4 @@
+#include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Foundation/Paths.h"
@@ -241,8 +242,12 @@ namespace Horo::Editor {
             if (snapshot.Value().session != context.session || snapshot.Value().revision != context.revision ||
                 snapshot.Value().state != context.state || !context.canEdit || context.cancellation.IsCancellationRequested())
                 return Return::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Stale)));
-            const auto source = PreparePrefabSelectionSource(snapshot.Value(), request.root, request.asset, request.version,
-                                                             request.registry, request.behaviors, outcome.boundaries);
+            const auto settings = Application::LoadPrefabProjectSettings(request.projectRoot);
+            if (settings.HasError())
+                return Return::Failure(settings.ErrorValue());
+            const auto source =
+                PreparePrefabSelectionSource(snapshot.Value(), request.root, request.asset, request.version, request.registry,
+                                             request.behaviors, outcome.boundaries, &settings.Value().settings->Limits());
             if (source.HasError())
                 return Return::Failure(source.ErrorValue());
             auto encoded = source.Value().SerializeCanonical();

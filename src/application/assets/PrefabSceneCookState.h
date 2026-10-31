@@ -2,6 +2,7 @@
 
 /** @file PrefabSceneCookState.h @brief Target-private immutable host capture and cooker candidate handoff. */
 #include "Horo/Application/PrefabSceneCookHost.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 
 namespace Horo::Application::PrefabCookDetail {
@@ -9,9 +10,11 @@ namespace Horo::Application::PrefabCookDetail {
     struct HostCapture final {
         ProjectMetadata metadata;
         Sha256Digest semanticDigest;
+        Sha256Digest cacheDigest;
         Sha256Digest projectBytes;
         std::optional<Sha256Digest> packageBytes;
         std::optional<Sha256Digest> packageIntentBytes;
+        Assets::AssetSourceIdentity prefabSettings;
     };
 
     /** @brief Owned source and schema evidence retained through the synchronous dependent-template callback. */
@@ -32,6 +35,7 @@ namespace Horo::Application::PrefabCookDetail {
     struct PreparedCatalog final {
         std::shared_ptr<const Assets::CookerCatalogSnapshot> catalog;
         std::shared_ptr<const Assets::AssetCookDependentPhase> templates;
+        std::shared_ptr<const Assets::AssetCookKeyProjection> keyProjection;
     };
 
     /** @brief Validates explicit roots and owns every input retained until staged resource envelopes become available. */

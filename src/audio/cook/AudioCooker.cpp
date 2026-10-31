@@ -202,6 +202,12 @@ namespace Horo::Audio {
 
         class AudioCookerStrategy final : public Assets::ICookerStrategy {
         public:
+            /** @brief Declares a source-only producer; all other byte-affecting settings are captured by CacheIdentity. */
+            Result<std::optional<std::vector<Assets::AssetId>>> InputDependencies(const Assets::CookSourceView &,
+                                                                                  const CancellationToken &) const override {
+                return Result<std::optional<std::vector<Assets::AssetId>>>::Success(std::vector<Assets::AssetId>{});
+            }
+
             AudioCookerStrategy(AudioCookProfile profile, AssetCookTargetId target, AudioCookToolchain toolchain,
                                 const Sha256Digest &configurationDigest)
                 : profile_(std::move(profile)), target_(std::move(target)), toolchain_(std::move(toolchain)),

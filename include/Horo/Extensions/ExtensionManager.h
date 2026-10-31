@@ -139,6 +139,10 @@ namespace Horo::Extensions {
          * @return Vector of extension IDs.
          */
         std::vector<std::string> GetLoadedExtensionIds() const;
+        /** @brief Borrows the admitted manifest for a live package on the owner lane.
+         * @param id Exact loaded package identity. @return Manifest until next retirement/load, or null.
+         */
+        [[nodiscard]] const ExtensionManifest *LoadedManifest(std::string_view id) const noexcept;
 
     private:
         Assets::AssetImporterCatalog *m_importerCatalog{};

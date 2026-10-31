@@ -78,7 +78,7 @@ namespace Horo::Prefab {
     private:
         friend Result<PrefabDependencyGraphSnapshot> BuildPrefabDependencyGraph(const Assets::AssetRegistrySnapshot &,
                                                                                 const std::vector<PrefabDependencySource> &,
-                                                                                const PrefabLimitProfile &);
+                                                                                const PrefabLimitProfile &, const PrefabMetricHandles &);
 
         PrefabDependencyGraphSnapshot(Assets::AssetRegistryRevision registryRevision, std::vector<PrefabDependencyNode> nodes,
                                       std::vector<PrefabDependencyEdge> edges, std::vector<PrefabDependencyEdge> reverseEdges) noexcept;
@@ -94,9 +94,11 @@ namespace Horo::Prefab {
      * @param registry Pinned Asset Registry snapshot used for every identity and type lookup.
      * @param sources Borrowed validated prefab documents and their exact semantic revisions.
      * @param limits Captured project policy whose operation budget bounds graph construction.
+     * @param metrics Explicit prebound observer copied only into operation observation.
      * @return Canonical immutable graph, or a typed consistency, availability, type, revision or budget error.
      */
     [[nodiscard]] Result<PrefabDependencyGraphSnapshot> BuildPrefabDependencyGraph(const Assets::AssetRegistrySnapshot &registry,
                                                                                    const std::vector<PrefabDependencySource> &sources,
-                                                                                   const PrefabLimitProfile &limits);
+                                                                                   const PrefabLimitProfile &limits,
+                                                                                   const PrefabMetricHandles &metrics = {});
 }  // namespace Horo::Prefab

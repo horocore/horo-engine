@@ -110,6 +110,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
         std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
         std::optional<WorldDocumentFence> worldFence;
+        std::uint64_t prefabSettingsRevision{};
+        std::vector<std::pair<DocumentInstanceId, std::uint64_t>> terrainRevisions;
     };
 
     /** @brief Routes source document commands while fencing delayed close decisions to the workspace session. */
@@ -135,6 +137,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @brief Owns workspace presentation and controller lifetime inside the GUI host. */
     class EditorWorkspaceScreen final : public GuiScreen {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace"};
+
         /** @brief Binds borrowed application capabilities before any project activation. */
         explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages);
         /** @brief Revokes any failed-enter XR connection before the existing context member is destroyed. */
@@ -145,6 +150,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Result<void> OnEnter(const GuiRoute &route) override;
         /** @brief Returns navigation settings from the current controller. */
         Result<NavigationProjectSettingsSession *> NavigationSettings() override;
+        Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings() override;
         /** @brief Updates canonical owners and derived presentation for the current frame. */
         void OnUpdate(float dt) override;
         /** @brief Captures gameplay input only while Play owns simulation. */

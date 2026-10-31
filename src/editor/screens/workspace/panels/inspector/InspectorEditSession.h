@@ -52,10 +52,7 @@ namespace Horo::Editor {
         std::array<float, 3> scale{1.0F, 1.0F, 1.0F};
         InspectorTransformMixedValues mixed;
         std::optional<Runtime::CameraComponent> camera;
-        float cameraFieldOfViewDegrees{60.0F};
         std::optional<Runtime::LightComponent> light;
-        float lightInnerConeDegrees{20.0F};
-        float lightOuterConeDegrees{45.0F};
         std::optional<Runtime::TriggerVolumeComponent> triggerVolume;
         std::optional<Runtime::AudioSourceComponent> audioSource;
         std::optional<Runtime::CharacterControllerComponent> characterController;

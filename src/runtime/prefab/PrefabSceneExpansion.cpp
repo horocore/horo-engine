@@ -242,36 +242,47 @@ namespace Horo::Prefab {
                                                                 const PrefabSceneIdentityMap &identities,
                                                                 const std::span<const PrefabRuntimeComponentProjection> components,
                                                                 const PrefabRuntimePlacement &placement, const PrefabLimitProfile &limits) {
-        using Output = Result<ExpandedPrefabSceneSubtree>;
-        if (auto valid = ValidateInputs(candidate, identities, components, placement, limits); valid.HasError())
-            return Output::Failure(valid.ErrorValue());
-        const auto objects = candidate.Objects();
+        PrefabMetricOperation observation{candidate.Metrics(), PrefabMetricPhase::Expand};
+        auto result = [&]() -> Result<ExpandedPrefabSceneSubtree> {
+            using Output = Result<ExpandedPrefabSceneSubtree>;
+            if (auto valid = ValidateInputs(candidate, identities, components, placement, limits); valid.HasError())
+                return Output::Failure(valid.ErrorValue());
+            const auto objects = candidate.Objects();
 
-        PrefabExpansionBudget budget{limits};
-        std::vector<Runtime::RuntimeEntityDefinition> entities;
-        std::vector<std::size_t> depths;
-        entities.reserve(objects.size());
-        depths.reserve(objects.size());
-        std::size_t payloadBytes{};
-        for (std::size_t index = 0; index < objects.size(); ++index) {
-            const auto &object = objects[index];
-            if (auto charge = budget.Consume(1 + components.size() + index); charge.HasError())
-                return Output::Failure(charge.ErrorValue());
-            auto projection = FindProjection(components, object.key);
-            if (projection.HasError())
-                return Output::Failure(projection.ErrorValue());
-            const auto &typed = projection.Value()->components;
-            auto depth = ValidateObject(object, *projection.Value(), objects.first(index), depths, limits, budget);
-            if (depth.HasError())
-                return Output::Failure(depth.ErrorValue());
-            if (auto charge = ChargeComponents(typed, payloadBytes, limits.Policy().maximumExpandedPayloadBytes, budget); charge.HasError())
-                return Output::Failure(charge.ErrorValue());
-            auto entity = ProjectEntity(object, identities, *projection.Value(), placement, index);
-            if (entity.HasError())
-                return Output::Failure(entity.ErrorValue());
-            entities.push_back(std::move(entity).Value());
-            depths.push_back(depth.Value());
+            PrefabExpansionBudget budget{limits};
+            std::vector<Runtime::RuntimeEntityDefinition> entities;
+            std::vector<std::size_t> depths;
+            entities.reserve(objects.size());
+            depths.reserve(objects.size());
+            std::size_t payloadBytes{};
+            for (std::size_t index = 0; index < objects.size(); ++index) {
+                const auto &object = objects[index];
+                if (auto charge = budget.Consume(1 + components.size() + index); charge.HasError())
+                    return Output::Failure(charge.ErrorValue());
+                auto projection = FindProjection(components, object.key);
+                if (projection.HasError())
+                    return Output::Failure(projection.ErrorValue());
+                const auto &typed = projection.Value()->components;
+                auto depth = ValidateObject(object, *projection.Value(), objects.first(index), depths, limits, budget);
+                if (depth.HasError())
+                    return Output::Failure(depth.ErrorValue());
+                if (auto charge = ChargeComponents(typed, payloadBytes, limits.Policy().maximumExpandedPayloadBytes, budget);
+                    charge.HasError())
+                    return Output::Failure(charge.ErrorValue());
+                auto entity = ProjectEntity(object, identities, *projection.Value(), placement, index);
+                if (entity.HasError())
+                    return Output::Failure(entity.ErrorValue());
+                entities.push_back(std::move(entity).Value());
+                depths.push_back(depth.Value());
+            }
+            return Output::Success(ExpandedPrefabSceneSubtree{candidate.Revision(), std::move(entities)});
+        }();
+        if (result.HasError())
+            observation.Fail(result.ErrorValue());
+        else {
+            observation.Observe(PrefabMetricItem::RuntimeEntities, result.Value().Entities().size());
+            observation.Complete();
         }
-        return Output::Success(ExpandedPrefabSceneSubtree{candidate.Revision(), std::move(entities)});
+        return result;
     }
 }  // namespace Horo::Prefab

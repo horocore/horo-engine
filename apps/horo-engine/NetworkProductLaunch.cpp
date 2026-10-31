@@ -325,7 +325,9 @@ namespace Horo::Application::Internal {
                                                .registry = resources->registry,
                                                .loads = *resources->loads,
                                                .load = resources->load,
-                                               .prefabLoads = resources->prefabLoads.get()};
+                                               .prefabLoads = resources->prefabLoads.get(),
+                                               .prefabMetrics = resources->prefabMetrics,
+                                               .prefabPolicy = resources->prefabPolicy};
             return ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay,
                                                        replicationAdmission);
         }
@@ -461,7 +463,7 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     int RunNetworkProduct(const std::span<char *> arguments, std::shared_ptr<const NetworkProductAdmission> admission,
-                          std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity) {
+                          std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity, const Prefab::PrefabMetricHandles &metrics) {
         auto launch = ParseNetworkProductLaunch(arguments);
         if (launch.HasError()) {
             std::cerr << "horo-engine: " << launch.ErrorValue().message << '\n';
@@ -479,6 +481,8 @@ namespace Horo::Application::Internal {
             std::cerr << "horo-engine: product metadata/Scene failed (" << failure.code.Value() << "): " << failure.message << '\n';
             return 3;
         }
+        if (resources)
+            resources->prefabMetrics = metrics;
         const auto worlds = WorldsFor(launch.Value().role);
         auto clock = std::make_shared<SteadyClock>();
         Net::NetworkTargetDiagnostic diagnostic;

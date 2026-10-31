@@ -17,7 +17,8 @@ namespace Horo::Editor {
         /** @brief Detects any attempted Scene command escape from the read-only authoring viewport. */
         class PanelProbe final : public IWorkspacePanel {
         public:
-            explicit PanelProbe(std::string id, WorkspaceDockArea area) : id_(std::move(id)), area_(area) {}
+            explicit PanelProbe(std::string id, WorkspaceDockArea area)
+                : IWorkspacePanel("test.PanelProbe"), id_(std::move(id)), area_(area) {}
 
             std::size_t draws{};
 

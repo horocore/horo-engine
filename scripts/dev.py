@@ -9,11 +9,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Mapping, Sequence
-from urllib.parse import ParseResult, quote, urlencode, urlparse
+from urllib.parse import quote, urlencode
 import argparse
 import asyncio
 import calendar
 import contextlib
+import ctypes
 import datetime
 import errno
 import hashlib
@@ -25,10 +26,11 @@ import re
 import shlex
 import shutil
 import signal
-import socket
+import struct
 import subprocess
 import sys
 import tarfile
+import textwrap
 import time
 import uuid
 import zipfile
@@ -302,33 +304,149 @@ def _cleanup(process: subprocess.Popen, known: dict[int, _Identity]) -> None:
     raise CleanupError("Developer subprocess cleanup could not verify all owned descendants terminated") from last_error
 
 
+class _WindowsJob:
+    """Contain descendants before user code runs; verify an empty kernel-owned job before release."""
+
+    def __init__(self) -> None:
+        from ctypes import wintypes as w
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [("process_time", ctypes.c_int64), ("job_time", ctypes.c_int64),
+                        ("flags", w.DWORD), ("min_ws", ctypes.c_size_t), ("max_ws", ctypes.c_size_t),
+                        ("active", w.DWORD), ("affinity", ctypes.c_size_t), ("priority", w.DWORD), ("scheduling", w.DWORD)]
+
+        class Limits(ctypes.Structure):
+            _fields_ = [("basic", BasicLimits), ("io", ctypes.c_uint64 * 6),
+                        ("process_memory", ctypes.c_size_t), ("job_memory", ctypes.c_size_t),
+                        ("peak_process", ctypes.c_size_t), ("peak_job", ctypes.c_size_t)]
+
+        class ThreadEntry(ctypes.Structure):
+            _fields_ = [("size", w.DWORD), ("usage", w.DWORD), ("tid", w.DWORD), ("pid", w.DWORD),
+                        ("base_priority", w.LONG), ("delta_priority", w.LONG), ("flags", w.DWORD)]
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [("user", ctypes.c_int64), ("kernel", ctypes.c_int64),
+                        ("period_user", ctypes.c_int64), ("period_kernel", ctypes.c_int64),
+                        ("faults", w.DWORD), ("total", w.DWORD), ("active", w.DWORD), ("terminated", w.DWORD)]
+
+        self._thread_entry, self._accounting = ThreadEntry, Accounting
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        signatures = {
+            "CreateJobObjectW": ([ctypes.c_void_p, w.LPCWSTR], w.HANDLE),
+            "SetInformationJobObject": ([w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD], w.BOOL),
+            "AssignProcessToJobObject": ([w.HANDLE, w.HANDLE], w.BOOL),
+            "TerminateJobObject": ([w.HANDLE, w.UINT], w.BOOL),
+            "QueryInformationJobObject": ([w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.c_void_p], w.BOOL),
+            "CloseHandle": ([w.HANDLE], w.BOOL),
+            "CreateToolhelp32Snapshot": ([w.DWORD, w.DWORD], w.HANDLE),
+            "Thread32First": ([w.HANDLE, ctypes.POINTER(ThreadEntry)], w.BOOL),
+            "Thread32Next": ([w.HANDLE, ctypes.POINTER(ThreadEntry)], w.BOOL),
+            "OpenThread": ([w.DWORD, w.BOOL, w.DWORD], w.HANDLE),
+            "GetProcessIdOfThread": ([w.HANDLE], w.DWORD),
+            "WaitForSingleObject": ([w.HANDLE, w.DWORD], w.DWORD),
+            "ResumeThread": ([w.HANDLE], w.DWORD),
+        }
+        for name, (arguments, result) in signatures.items():
+            function = getattr(self.kernel, name)
+            function.argtypes, function.restype = arguments, result
+        self.handle = self.check(self.kernel.CreateJobObjectW(None, None))
+        try:
+            limits = Limits()
+            limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE; no breakaway permission.
+            self.check(self.kernel.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+        except BaseException:
+            self.close()
+            raise
+
+    @staticmethod
+    def check(value):
+        if not value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return value
+
+    def attach_and_resume(self, process: subprocess.Popen) -> None:
+        self.check(self.kernel.AssignProcessToJobObject(self.handle, int(process._handle)))
+        # Popen closes the initial thread handle. Locate its sole suspended thread,
+        # pin it, and check both its owner and the still-live original process handle.
+        snapshot = self.kernel.CreateToolhelp32Snapshot(4, 0)
+        if snapshot == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            entry = self._thread_entry()
+            entry.size = ctypes.sizeof(entry)
+            threads = []
+            available = self.kernel.Thread32First(snapshot, ctypes.byref(entry))
+            while available:
+                if entry.pid == process.pid:
+                    threads.append(entry.tid)
+                available = self.kernel.Thread32Next(snapshot, ctypes.byref(entry))
+            if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+                raise ctypes.WinError(ctypes.get_last_error())
+            if len(threads) != 1:
+                raise OSError("Cannot identify sole suspended developer process thread")
+            thread = self.check(self.kernel.OpenThread(0x0802, False, threads[0]))  # QUERY_LIMITED_INFORMATION | SUSPEND_RESUME
+            try:
+                if (self.check(self.kernel.GetProcessIdOfThread(thread)) != process.pid
+                        or self.kernel.WaitForSingleObject(int(process._handle), 0) != 258):
+                    raise OSError("Suspended developer process identity changed")
+                if self.kernel.ResumeThread(thread) != 1:
+                    raise OSError("Unexpected developer process thread suspend count")
+            finally:
+                self.check(self.kernel.CloseHandle(thread))
+        finally:
+            self.check(self.kernel.CloseHandle(snapshot))
+
+    def stop(self) -> None:
+        self.check(self.kernel.TerminateJobObject(self.handle, 130))
+        deadline = time.monotonic() + 5
+        while True:
+            accounting = self._accounting()
+            self.check(self.kernel.QueryInformationJobObject(
+                self.handle, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None))
+            if accounting.active == 0:
+                return
+            if time.monotonic() >= deadline:
+                raise OSError("Timed out waiting for owned Windows developer process tree")
+            time.sleep(0.01)
+
+    def close(self) -> None:
+        self.check(self.kernel.CloseHandle(self.handle))
+
+
 def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None) -> int:
-    """Preserve ordinary Windows execution; interrupted tree cleanup is unqualified."""
-    # Caller-authorized executable and argv are validated by run; no command shell parses arguments.
-    # S8705: this local developer runner accepts operator-selected tool arguments, not agent-tool input.
-    # Sonar properties use single -DKEY=VALUE entries; extra scanner flags are explicit CLI options.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    with subprocess.Popen(command, cwd=cwd, env=env, shell=False,  # NOSONAR  # nosec B603
-                          creationflags=subprocess.CREATE_NEW_PROCESS_GROUP) as process:
+    """Start suspended, contain the complete tree, and return 130 only after verified cancellation."""
+    job = _WindowsJob()
+    process = None
+    try:
+        # CREATE_SUSPENDED prevents child creation before containment, including during attach failures.
+        process = subprocess.Popen(command, cwd=cwd, env=env, shell=False,
+                                   creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | 0x4)
+        job.attach_and_resume(process)
         try:
             return process.wait()
-        except KeyboardInterrupt as error:
+        except KeyboardInterrupt:
+            return 130
+    finally:
+        try:
+            job.stop()
+            if process is not None:
+                if process.poll() is None:  # Attach may have failed with the root still suspended outside the job.
+                    process.terminate()
+                process.wait(timeout=5)
+        except (KeyboardInterrupt, SystemExit) as cleanup_error:
+            raise cleanup_error from CleanupError("Windows developer process cleanup was not confirmed")
+        except Exception as cleanup_error:
+            raise CleanupError("Windows developer process cleanup was not confirmed") from cleanup_error
+        finally:
             try:
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
-            except (KeyboardInterrupt, SystemExit) as cleanup_error:
-                raise cleanup_error from CleanupError("Windows interrupted process cleanup was not confirmed")
-            except Exception as cleanup_error:
-                raise CleanupError("Windows interrupted process cleanup was not confirmed") from cleanup_error
-            raise CleanupError("Windows interruption cleanup cannot verify descendant termination") from error
+                if process is not None:
+                    process._handle.Close()
+            finally:
+                job.close()
 
 
 def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None) -> int:
-    """Run argv without a shell; return 130 only after verified POSIX tree cleanup."""
+    """Run argv without a shell; return 130 only after verified owned-tree cleanup."""
     command = validated_command(command, cwd, env)
     if os.name == "nt":
         return _windows_run(command, cwd, env)
@@ -1077,8 +1195,11 @@ def notes_main(argv=None) -> int:
         entry = select_version(parse_changelog(args.source.read_text(encoding="utf-8")), args.version)
         snapshot = make_snapshot(entry, args.product)
         snapshot_path, header_path = generated_outputs()
-        snapshot_path.write_bytes(snapshot_bytes(snapshot))
-        header_path.write_text(render_header(snapshot), encoding="utf-8")
+        for path, content in ((snapshot_path, snapshot_bytes(snapshot)),
+                              (header_path, render_header(snapshot).encode("utf-8"))):
+            # Preserve timestamps so an unchanged configure does not rebuild Welcome.
+            if not path.exists() or path.read_bytes() != content:
+                path.write_bytes(content)
     except (OSError, UnicodeError, NotesError) as error:
         print(f"[release-notes] {error}", file=sys.stderr)
         return 1
@@ -2144,7 +2265,6 @@ DEFAULT_ENV_FILE_NAME = ".env.local"
 DEFAULT_ENV_FILE = REPOSITORY_ROOT / DEFAULT_ENV_FILE_NAME
 DEFAULT_BUILD_DIRECTORY = REPOSITORY_ROOT / "build" / "dev-editor"
 DEFAULT_CI_BUILD_DIRECTORY = REPOSITORY_ROOT / "build" / "ci"
-DEFAULT_OTLP_ENDPOINT = "http://127.0.0.1:4318"
 _ENVIRONMENT_KEY = re.compile(r"^[A-Za-z_]\w*$", re.ASCII)
 
 # Diagnostic Item String Constants (Sonar S1192)
@@ -2155,7 +2275,6 @@ _TOOLCHAIN_CLANG_FORMAT_NAME = "clang-format"
 _TOOLCHAIN_CCACHE_NAME = "ccache"
 _PYTHON_PYTEST_NAME = "pytest Module"
 _GRAPHICS_DISPLAY_NAME = "Interactive Display"
-_OBSERVABILITY_OTLP_NAME = "OTLP Collector"
 _SONAR_TOKEN_ENV_KEY = "HORO_SONAR_TOKEN"
 _SONAR_DEFAULT_COMPILE_COMMANDS = "build/ci/compile_commands.json"
 
@@ -2174,23 +2293,6 @@ class CheckStatus(Enum):
     WARN = "WARN"
     ERROR = "ERROR"
     INFO = "INFO"
-
-
-@dataclass(frozen=True)
-class Endpoint:
-    """Validated OTLP base endpoint and its TCP reachability address."""
-
-    url: str
-    host: str
-    port: int
-
-
-@dataclass(frozen=True)
-class DeveloperSettings:
-    """Resolved settings consumed only by this developer runner."""
-
-    otel_export_enabled: bool
-    endpoint: Endpoint
 
 
 @dataclass
@@ -2341,70 +2443,6 @@ def parse_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
-def parse_enabled(value: str, setting_name: str = "HORO_DEV_OTEL_EXPORT") -> bool:
-    """Parse the explicit ON/OFF developer switch."""
-    normalized = value.strip().upper()
-    if normalized == "ON":
-        return True
-    if normalized == "OFF":
-        return False
-    raise ConfigurationError(f"{setting_name} must be ON or OFF")
-
-
-def _validate_url_structure(parsed: ParseResult, setting_name: str) -> None:
-    """Validate protocol and general URL constraints."""
-    if parsed.scheme not in {"http", "https"}:
-        raise ConfigurationError(f"{setting_name} must use http or https")
-    if parsed.username is not None or parsed.password is not None:
-        raise ConfigurationError(f"{setting_name} must not include credentials")
-    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
-        raise ConfigurationError(f"{setting_name} must be a base URL without a path, query, or fragment")
-
-
-def validate_endpoint(value: str) -> Endpoint:
-    """Validate an OTLP HTTP base URL without sending protocol traffic."""
-    if any(character.isspace() for character in value) or "?" in value or "#" in value:
-        raise ConfigurationError("HORO_OTEL_ENDPOINT must not contain whitespace, a query, or a fragment")
-    try:
-        parsed = urlparse(value)
-        port = parsed.port
-    except ValueError as error:
-        raise ConfigurationError(f"HORO_OTEL_ENDPOINT is invalid: {error}") from error
-
-    _validate_url_structure(parsed, "HORO_OTEL_ENDPOINT")
-    if parsed.hostname is None or port is None:
-        raise ConfigurationError("HORO_OTEL_ENDPOINT must include a host and explicit port")
-    if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-        raise ConfigurationError("plaintext HORO_OTEL_ENDPOINT is allowed only for localhost")
-
-    return Endpoint(url=value.rstrip("/"), host=parsed.hostname, port=port)
-
-
-def load_settings(path: Path = DEFAULT_ENV_FILE, environ: Mapping[str, str] | None = None) -> DeveloperSettings:
-    """Resolve defaults, local configuration, then process-environment overrides."""
-    process_environment = os.environ if environ is None else environ
-    resolved = {
-        "HORO_DEV_OTEL_EXPORT": "OFF",
-        "HORO_OTEL_ENDPOINT": DEFAULT_OTLP_ENDPOINT,
-        **parse_dotenv(path),
-        **process_environment,
-    }
-    export_enabled = parse_enabled(resolved["HORO_DEV_OTEL_EXPORT"])
-    return DeveloperSettings(
-        otel_export_enabled=export_enabled,
-        endpoint=validate_endpoint(resolved["HORO_OTEL_ENDPOINT"] if export_enabled else DEFAULT_OTLP_ENDPOINT),
-    )
-
-
-def collector_is_reachable(endpoint: Endpoint, timeout_seconds: float = 0.5) -> bool:
-    """Check only whether a TCP listener is reachable at the configured address."""
-    try:
-        with socket.create_connection((endpoint.host, endpoint.port), timeout=timeout_seconds):
-            return True
-    except OSError:
-        return False
-
-
 def _compiler_cache_arguments(
     compiler_launcher: str | None,
     msvc_debug_information_format: str | None,
@@ -2422,7 +2460,6 @@ def _compiler_cache_arguments(
 
 
 def configure_command(
-    settings: DeveloperSettings | None = None,
     build_directory: Path = DEFAULT_BUILD_DIRECTORY,
     build_type: str = "Debug",
     testing: bool = False,
@@ -2430,7 +2467,6 @@ def configure_command(
     render_opengl: bool = True,
     render_metal: bool | None = None,
     telemetry: bool = True,
-    opentelemetry: bool | None = None,
     imgui_ui_tests: bool = False,
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
@@ -2439,8 +2475,6 @@ def configure_command(
     """Build the typed, parameterizable CMake configure command."""
     if render_metal is None:
         render_metal = sys.platform == "darwin" and editor_gui
-    if opentelemetry is None:
-        opentelemetry = settings.otel_export_enabled if settings else False
 
     command = [
         "cmake",
@@ -2456,7 +2490,6 @@ def configure_command(
         f"-DHORO_BUILD_RENDER_METAL={'ON' if render_metal else 'OFF'}",
         f"-DBUILD_TESTING={'ON' if testing else 'OFF'}",
         f"-DHORO_ENABLE_TELEMETRY={'ON' if telemetry else 'OFF'}",
-        f"-DHORO_ENABLE_OPENTELEMETRY={'ON' if opentelemetry else 'OFF'}",
         f"-DHORO_ENABLE_IMGUI_UI_TESTS={'ON' if imgui_ui_tests else 'OFF'}",
     ]
     command.extend(_compiler_cache_arguments(compiler_launcher, msvc_debug_information_format))
@@ -2491,36 +2524,83 @@ def editor_executable(build_directory: Path = DEFAULT_BUILD_DIRECTORY, platform_
     return build_directory / "apps" / "HoroEditor"
 
 
-def child_environment(settings: DeveloperSettings, environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Create the editor environment with an explicit export policy."""
-    child = dict(os.environ if environ is None else environ)
-    child.pop("HORO_OTEL_EXPORT_APPROVED", None)
-    child.pop("HORO_OTEL_ENDPOINT", None)
-    child.pop("HORO_DEV_OTEL_EXPORT", None)
-    if settings.otel_export_enabled:
-        child["HORO_OTEL_EXPORT_APPROVED"] = "1"
-        child["HORO_OTEL_ENDPOINT"] = settings.endpoint.url
-    return child
+class _RunnerConsole:
+    """Small append-only terminal display; child diagnostics keep their original streams."""
+
+    def __init__(self) -> None:
+        self.width = max(16, min(78, shutil.get_terminal_size((80, 24)).columns - 4))
+        self.color = sys.stdout.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
+
+    def paint(self, text: str, style: str) -> str:
+        return f"\033[{style}m{text}\033[0m" if self.color else text
+
+    def banner(self) -> None:
+        logo = (
+            r" _   _  ___  ____   ___ ",
+            r"| | | |/ _ \|  _ \ / _ \ ",
+            r"| |_| | | | | |_) | | | |",
+            r"|  _  | |_| |  _ <| |_| |",
+            r"|_| |_|\___/|_| \_\\___/",
+            "       E N G I N E",
+        )
+        print()
+        for line in logo if self.width >= 28 else ("HORO ENGINE",):
+            print("  " + self.paint(line, "1;36"))
+        print("\n  " + self.paint("DEVELOPER RUNNER", "1"))
+
+    def panel(self, title: str, rows: Sequence[tuple[str, str]]) -> None:
+        content_width = self.width - 4
+        label_width = 16
+        heading = f" {title} "[:self.width - 2].ljust(self.width - 2, "-")
+        print("  " + self.paint("+" + heading + "+", "2"))
+        for label, value in rows:
+            compact = content_width < 36
+            lines = textwrap.wrap(f"{label}: {value}" if compact else value,
+                                  width=content_width if compact else content_width - label_width - 1) or [""]
+            for index, line in enumerate(lines):
+                prefix = "" if compact else f"{label if index == 0 else '':<{label_width}} "
+                style = "1;32" if value.startswith("ON") else "2" if value == "OFF" else "1"
+                padding = " " * (content_width - len(prefix) - len(line))
+                print("  " + self.paint("| ", "2") + self.paint(prefix, "2") + self.paint(line, style)
+                      + padding + self.paint(" |", "2"))
+        print("  " + self.paint("+" + "-" * (self.width - 2) + "+", "2"))
+
+    def stage(self, number: int, title: str) -> None:
+        print("\n  " + self.paint(f"[{number}/3]", "1;36") + " " + self.paint(title.upper(), "1") + "\n", flush=True)
+
+    def run_step(self, number: int, title: str, command: Sequence[str], env: Mapping[str, str] | None) -> int:
+        self.stage(number, title)
+        started = time.monotonic()
+        code = execute_subprocess(command, env=env)
+        status = self.paint("[OK]", "1;32") if code == 0 else self.paint(f"[FAIL {code}]", "1;31")
+        print(f"\n  {status} {title} / {time.monotonic() - started:.1f}s", flush=True)
+        return code
 
 
-def print_summary(settings: DeveloperSettings, collector_status: str, build_directory: Path = DEFAULT_BUILD_DIRECTORY) -> None:
+def print_summary(build_directory: Path = DEFAULT_BUILD_DIRECTORY,
+                  *, live_ui: bool = False, theme_file: Path | None = None) -> _RunnerConsole:
     """Print the effective non-secret developer configuration."""
     try:
         displayed_build_directory = build_directory.relative_to(REPOSITORY_ROOT)
     except ValueError:
         displayed_build_directory = build_directory
-    print("Horo Developer Runner")
-    print()
-    print("Target:          HoroEditor")
-    print(f"Build directory: {displayed_build_directory}")
-    print("Build type:      Debug")
-    print(f"OpenTelemetry:   {'enabled' if settings.otel_export_enabled else 'disabled'}")
-    if settings.otel_export_enabled:
-        print(f"OTLP endpoint:   {settings.endpoint.url}")
-        print(f"Collector:       {collector_status}")
-    else:
-        print("Collector:       not checked")
-    print()
+    console = _RunnerConsole()
+    console.banner()
+    console.panel("SESSION", [
+        ("Target", "HoroEditor"),
+        ("Build type", "Debug"),
+        ("Host", f"{platform.system()} / {platform.machine()}"),
+        ("Build directory", str(displayed_build_directory)),
+    ])
+    theme_source = str(theme_file) if theme_file is not None else os.environ.get("HORO_THEME_OVERRIDE", "")
+    live_rows = [("Live C++", "ON / RCC++" if live_ui else "OFF"),
+                 ("Live theme", "ON / JSON" if theme_source else "OFF")]
+    if theme_source:
+        live_rows.append(("Theme file", theme_source))
+    console.panel("LIVE DEVELOPMENT", live_rows)
+    console.panel("DIAGNOSTICS", [("Logs / metrics / profiler", "LOCAL")])
+    sys.stdout.flush()
+    return console
 
 
 def execute_subprocess(command: Sequence[str], cwd: Path = REPOSITORY_ROOT, env: Mapping[str, str] | None = None) -> int:
@@ -2607,7 +2687,7 @@ def _cmake_enabled(value: str) -> bool:
 
 def _configure_and_build(command: Sequence[str], build_directory: Path, target: str | None,
                          compiler_launcher: str | None = None, use_cache: bool = True,
-                         jobs: int = 2, clean: bool = False) -> int:
+                         jobs: int = 2, clean: bool = False, console: _RunnerConsole | None = None) -> int:
     """Lease a completed main checkpoint for the complete configure/build lifecycle."""
     try:
         with heavy_build_lock(REPOSITORY_ROOT):
@@ -2623,32 +2703,32 @@ def _configure_and_build(command: Sequence[str], build_directory: Path, target: 
                     arguments.extend(_compiler_cache_arguments(binding.launcher, None))
                     arguments = _cache_configure_arguments(arguments, build_directory, REPOSITORY_ROOT)
                     environment = binding.env
-                code = execute_subprocess(arguments, env=environment)
+                code = console.run_step(1, "Configure", arguments, environment) if console else execute_subprocess(arguments, env=environment)
                 if code:
                     return code
-                return execute_subprocess(build_command(build_directory, target, jobs=jobs), env=environment)
+                build = build_command(build_directory, target, jobs=jobs)
+                return console.run_step(2, "Build", build, environment) if console else execute_subprocess(build, env=environment)
     except (CacheError, OSError, ValueError) as error:
         print(f"error: local build setup failed: {error}", file=sys.stderr)
         return 2
 
 
-def run_editor(settings: DeveloperSettings, editor_arguments: Sequence[str], build_directory: Path = DEFAULT_BUILD_DIRECTORY) -> int:
+def run_editor(editor_arguments: Sequence[str], build_directory: Path = DEFAULT_BUILD_DIRECTORY,
+               theme_file: Path | None = None, live_ui: bool = False) -> int:
     """Configure, build, and launch HoroEditor without invoking a shell."""
-    collector_status = "not checked"
-    if settings.otel_export_enabled:
-        collector_status = "reachable" if collector_is_reachable(settings.endpoint) else "unreachable"
-    print_summary(settings, collector_status, build_directory)
+    if theme_file is not None:
+        theme_file = theme_file.resolve()
+        if not theme_file.is_file():
+            print(f"error: theme file not found: {theme_file}", file=sys.stderr)
+            return 2
+    if live_ui and sys.platform not in ("win32", "darwin"):
+        print("error: --live-ui requires native Windows x64/MSVC or macOS/AppleClang", file=sys.stderr)
+        return 2
+    console = print_summary(build_directory, live_ui=live_ui, theme_file=theme_file)
 
-    if settings.otel_export_enabled and collector_status == "unreachable":
-        print(
-            f"warning: OpenTelemetry endpoint {settings.endpoint.host}:{settings.endpoint.port} is not reachable.\n"
-            "The editor will continue with local diagnostics only.",
-            file=sys.stderr,
-        )
-
-    print("Configuring HoroEditor...", flush=True)
     build_code = _configure_and_build(
-        configure_command(settings, build_directory=build_directory), build_directory, "HoroEditor"
+        configure_command(build_directory=build_directory,
+                          extra_cmake_args=[f"-DHORO_EDITOR_LIVE_UI={'ON' if live_ui else 'OFF'}"]), build_directory, "HoroEditor", console=console
     )
     if build_code != 0:
         return build_code
@@ -2659,11 +2739,16 @@ def run_editor(settings: DeveloperSettings, editor_arguments: Sequence[str], bui
         print(f"error: HoroEditor executable was not produced at {executable}", file=sys.stderr)
         return 1
 
-    print("Launching...", flush=True)
+    console.stage(3, "Launch")
+    if live_ui:
+        print("  Live C++: save a registered GUI .cpp to recompile and reload.\n", flush=True)
+    environment = dict(os.environ)
+    if theme_file is not None:
+        environment["HORO_THEME_OVERRIDE"] = str(theme_file)
     return execute_subprocess(
         [str(executable), *editor_arguments],
         cwd=REPOSITORY_ROOT,
-        env=child_environment(settings),
+        env=environment,
     )
 
 
@@ -2694,7 +2779,6 @@ def run_build(
         render_opengl=True,
         render_metal=(sys.platform == "darwin"),
         telemetry=True,
-        opentelemetry=True,
         imgui_ui_tests=imgui_ui_tests,
         compiler_launcher=compiler_launcher,
         msvc_debug_information_format=msvc_debug_information_format,
@@ -3076,8 +3160,8 @@ def check_platform_and_graphics(report: DoctorReport) -> None:
         _check_linux_graphics(report)
 
 
-def check_observability_and_services(report: DoctorReport, settings: DeveloperSettings | None) -> None:
-    """Check validity of developer settings and service reachability."""
+def check_local_configuration(report: DoctorReport) -> None:
+    """Check the optional local developer tool configuration without network access."""
     env_file = DEFAULT_ENV_FILE
     if env_file.exists():
         try:
@@ -3087,19 +3171,6 @@ def check_observability_and_services(report: DoctorReport, settings: DeveloperSe
             report.add("Configuration", DEFAULT_ENV_FILE_NAME, CheckStatus.ERROR, f"Syntax/validation error: {error}")
     else:
         report.add("Configuration", DEFAULT_ENV_FILE_NAME, CheckStatus.INFO, f"No local {DEFAULT_ENV_FILE_NAME} file (using defaults)")
-
-    if settings is None:
-        report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.WARN, "Settings could not be loaded due to configuration error")
-        return
-
-    if settings.otel_export_enabled:
-        reachable = collector_is_reachable(settings.endpoint)
-        if reachable:
-            report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.OK, f"Reachable at {settings.endpoint.url}")
-        else:
-            report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.WARN, f"Unreachable at {settings.endpoint.url} (fallback to local logs)")
-    else:
-        report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.INFO, "OpenTelemetry export disabled (HORO_DEV_OTEL_EXPORT=OFF)")
 
 
 def _find_sonar_scanner() -> Path | None:
@@ -3246,14 +3317,8 @@ def run_sonar(
     return execute_subprocess(command)
 
 
-def run_doctor(settings: DeveloperSettings | None = None) -> DoctorReport:
+def run_doctor() -> DoctorReport:
     """Execute all diagnostic checks and assemble the report."""
-    if settings is None:
-        try:
-            settings = load_settings()
-        except (ConfigurationError, OSError):
-            settings = None
-
     report = DoctorReport()
     check_compiler(report)
     check_cmake(report)
@@ -3261,12 +3326,12 @@ def run_doctor(settings: DeveloperSettings | None = None) -> DoctorReport:
     check_ccache(report)
     check_python_environment(report)
     check_platform_and_graphics(report)
-    check_observability_and_services(report, settings)
+    check_local_configuration(report)
     return report
 
 
 _EPILOG_EXAMPLES = """examples:
-  python3 scripts/dev.py doctor             Diagnose development toolchain and services
+  python3 scripts/dev.py doctor             Diagnose development toolchain and local configuration
   python3 scripts/dev.py test               Run unit and integration test suite
   python3 scripts/dev.py test Scene         Run tests matching 'Scene'
   python3 scripts/dev.py check              Run full CI-parity verification pass
@@ -3307,7 +3372,7 @@ def run_cache_prepare(parsed: argparse.Namespace) -> int:
         arguments = configure_command(
             build_directory=directory, build_type=parsed.type,
             testing=not parsed.no_testing, compiler_launcher=binding.launcher,
-            telemetry=True, opentelemetry=True,
+            telemetry=True,
             extra_cmake_args=parsed.cmake_arg,
         )
         arguments[2] = str(source)
@@ -3383,6 +3448,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
     # run command
     run = commands.add_parser("run", help="configure, build, and run a supported target")
     run.add_argument("target_or_args", nargs="*", default=[], help="target (default 'editor') or arguments forwarded")
+    run.add_argument("--theme-file", type=Path, default=None, help="load and live-reload an external theme JSON in Debug")
+    run.add_argument("--live-ui", action="store_true", help="enable the RCC++ live GUI presentation (Windows/MSVC or macOS/AppleClang Debug)")
 
     # doctor command
     doc = commands.add_parser("doctor", help="diagnose toolchain, graphics, and environment health")
@@ -3477,7 +3544,7 @@ def _handle_sonar(parsed: argparse.Namespace, extra_args: Sequence[str]) -> int:
     )
 
 
-def _handle_run(parsed: argparse.Namespace, settings: DeveloperSettings, extra_args: Sequence[str] | None = None) -> int:
+def _handle_run(parsed: argparse.Namespace, extra_args: Sequence[str] | None = None) -> int:
     """Handle run subcommand."""
     raw_args = list(parsed.target_or_args)
     if extra_args:
@@ -3487,14 +3554,14 @@ def _handle_run(parsed: argparse.Namespace, settings: DeveloperSettings, extra_a
     if raw_args and raw_args[0] == "--":
         raw_args.pop(0)
     try:
-        return run_editor(settings, raw_args)
+        return run_editor(raw_args, theme_file=parsed.theme_file, live_ui=parsed.live_ui)
     except KeyboardInterrupt:
         return 130
 
 
-def _handle_doctor(parsed: argparse.Namespace, settings: DeveloperSettings | None) -> int:
+def _handle_doctor(parsed: argparse.Namespace) -> int:
     """Handle doctor subcommand."""
-    report = run_doctor(settings)
+    report = run_doctor()
     if getattr(parsed, "json", False):
         print(json.dumps(report.to_dict(), indent=2))
     else:
@@ -3567,11 +3634,7 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
         return _handle_cache(parsed)
 
     if parsed.command == "doctor":
-        try:
-            doc_settings = load_settings()
-        except (ConfigurationError, OSError):
-            doc_settings = None
-        return _handle_doctor(parsed, doc_settings)
+        return _handle_doctor(parsed)
 
     if parsed.command == "format":
         _require_no_unparsed(parser, unparsed)
@@ -3629,14 +3692,7 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             extra_cmake_args=parsed.cmake_arg,
         )
 
-    # run command
-    try:
-        settings = load_settings()
-    except (ConfigurationError, OSError) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
-
-    return _handle_run(parsed, settings, unparsed)
+    return _handle_run(parsed, unparsed)
 
 
 def developer_main(arguments: Sequence[str] | None = None) -> int:
@@ -3710,7 +3766,97 @@ def select_lavapipe_main(argv=None) -> int:
     return 0
 
 
-TOOL_COMMANDS = {"select-lavapipe-icd": select_lavapipe_main, "setup": setup_main, "open-pr": open_pr_main, 'ci-cache-identity': ci_cache_main, 'release-notes': notes_main, 'verify-release-archive': archive_main, 'verify-release-notes': release_main, 'pr-annotations': pr_main, 'qualify-scene': scene_main, 'qualify-character': character_main, 'qualify-extension': extension_main, 'qualify-save': save_main}
+def _gui_live_symbols(path: Path):
+    """Read ordinary and bigobj COFF external symbols without executing dumpbin."""
+    data = path.read_bytes()
+    if data[:4] == b'\x00\x00\xff\xff':
+        start, count = struct.unpack_from('<II', data, 48)
+        size, section_format, storage = 20, '<i', 18
+    else:
+        start, count = struct.unpack_from('<II', data, 8)
+        size, section_format, storage = 18, '<h', 16
+    strings = start + count * size
+    index = 0
+    while index < count:
+        offset = start + index * size
+        section = struct.unpack_from(section_format, data, offset + 12)[0]
+        symbol_type = struct.unpack_from('<H', data, offset + storage - 2)[0]
+        if data[offset + storage] == 2:
+            raw = data[offset:offset + 8]
+            if raw[:4] == b'\x00' * 4:
+                at = strings + struct.unpack_from('<I', raw, 4)[0]
+                name = data[at:data.index(0, at)].decode('utf-8')
+            else:
+                name = raw.split(b'\x00')[0].decode('utf-8')
+            yield name, symbol_type, section == 0
+        index += 1 + data[offset + storage + 1]
+
+
+def _generate_gui_live_bridge(database: Path, output: Path, image: str, target_platform: str = "win32"):
+    entries = json.loads(database.read_text(encoding='utf-8'))
+    gui = [entry for entry in entries
+           if 'HoroGui.dir' in (entry.get('command') or ' '.join(entry.get('arguments', [])))]
+    if not gui:
+        raise ValueError('No HoroGui compile commands in the selected build')
+    if target_platform == "darwin":
+        _generate_gui_live_mac_flags(gui[0], output)
+        return
+    exports = set()
+    for entry in gui:
+        match = re.search(r'(?:^|\s)/Fo(?:"([^"]+)"|(\S+))', entry['command'])
+        if not match:
+            raise ValueError(f"Missing MSVC object path for {entry['file']}")
+        obj = Path(entry['directory']) / (match[1] or match[2])
+        for name, kind, undefined in _gui_live_symbols(obj):
+            shared_function = undefined and ('@Horo@@' in name or name.startswith('?Im') or any(owner in name for owner in ('ImGui', 'ImFont', 'ImDraw')))
+            if kind == 0x20 and (shared_function or name.startswith('??$HostAddress@')):
+                exports.add(name)
+    # ImGui API imports use the very same owner-thread context as the executable.
+    exports.add('?GImGui@@3PEAUImGuiContext@@EA DATA')
+    if not exports or len(exports) >= 65535:
+        raise ValueError(f'Invalid GUI bridge export count: {len(exports)}')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text('EXPORTS\n' + ''.join(f'    {name}\n' for name in sorted(exports)), encoding='utf-8')
+    definitions = re.findall(r'(?:^|\s)([-/]D(?:"[^"\n]+"|\S+))', gui[0]['command'])
+    # RCC++ selects /EHa for its protected runtime calls; do not override it with /EHsc.
+    flags = [ '/std:c++20', '/utf-8', '/D_DEBUG', '/DNOMINMAX', '/DHORO_GUI_RUNTIME_COMPILATION=1', '/DIMGUI_API=__declspec(dllimport)', *definitions]
+    output.with_suffix('.rsp').write_text('\n'.join(flags) + '\n', encoding='utf-8')
+    print(f'Generated {len(exports)} private GUI host imports for {image}')
+
+
+def _generate_gui_live_mac_flags(entry: dict, output: Path) -> None:
+    """Preserve the host's definitions, SDK, target architecture and C++ ABI."""
+    arguments = entry.get("arguments") or shlex.split(entry["command"])
+    flags = []
+    paired = {"-D", "-U", "-isysroot", "-arch", "-target", "--target", "-stdlib"}
+    iterator = iter(arguments[1:])
+    for argument in iterator:
+        if argument in paired:
+            try:
+                flags.extend((argument, next(iterator)))
+            except StopIteration as error:
+                raise ValueError(f"Missing GUI compiler argument after {argument}") from error
+        elif argument.startswith(("-D", "-U", "-std=", "-stdlib=", "-mmacosx-version-min=", "--sysroot=", "--target=")):
+            flags.append(argument)
+    flags.extend(("-std=c++20", "-DHORO_GUI_RUNTIME_COMPILATION=1"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Clang response files use double-quoted arguments, not shell quoting.
+    output.write_text("".join('"' + flag.replace('\\', '\\\\').replace('"', '\\"') + '"\n' for flag in flags), encoding="utf-8")
+
+
+def gui_live_bridge_main(argv=None) -> int:
+    """Generate the private native GUI import bridge for a configured development host."""
+    parser = argparse.ArgumentParser(description=gui_live_bridge_main.__doc__)
+    parser.add_argument("--compile-commands", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--image", required=True)
+    parser.add_argument("--platform", choices=("win32", "darwin"), default="win32")
+    args = parser.parse_args(argv)
+    _generate_gui_live_bridge(args.compile_commands, args.output, args.image, args.platform)
+    return 0
+
+
+TOOL_COMMANDS = {"gui-live-bridge": gui_live_bridge_main, "select-lavapipe-icd": select_lavapipe_main, "setup": setup_main, "open-pr": open_pr_main, 'ci-cache-identity': ci_cache_main, 'release-notes': notes_main, 'verify-release-archive': archive_main, 'verify-release-notes': release_main, 'pr-annotations': pr_main, 'qualify-scene': scene_main, 'qualify-character': character_main, 'qualify-extension': extension_main, 'qualify-save': save_main}
 
 
 def main(argv=None) -> int:

@@ -4,6 +4,241 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab.diff.component_added": {"text": "Örnek tarafından bileşen eklendi"},
+    "workspace.prefab.diff.component_removed": {"text": "Örnek tarafından bileşen kaldırıldı"},
+    "workspace.prefab.diff.origin.source": {"text": "Kaynak değeri"},
+    "workspace.prefab.diff.origin.variant": {"text": "Varyant mirası"},
+    "workspace.prefab.diff.origin.nested": {"text": "İç içe prefab"},
+    "workspace.prefab.diff.origin.instance": {"text": "Sahne örneği geçersiz kılması"},
+    "workspace.prefab.diff.source_value": {"text": "Kaynak"},
+    "workspace.prefab.diff.effective_value": {"text": "Etkin değer / amaç"},
+    "workspace.prefab.diff.schema_default": {"text": "Şema varsayılanı (yalnızca inceleme)"},
+    "workspace.prefab.diff.conflict": {"text": "Çakışan amaç korundu"},
+    "workspace.prefab.diff.orphan": {"text": "Sahipsiz amaç korundu"},
+    "workspace.prefab.diff.unavailable": {"text": "Türlü özellikler kullanılamıyor; opak kaynak korundu"},
+    "workspace.prefab.diff.omitted": {"text": "Ek değerler inceleme bütçesi nedeniyle gösterilmiyor"},
+    "terrain.import.width": {"text": "X eksenindeki yükseklik örnekleri"},
+    "terrain.import.height": {"text": "Z eksenindeki yükseklik örnekleri"},
+    "terrain.import.width_help": {"text": "RAW-F32 sütun sayısı; en az iki. Genişlik × yükseklik en çok 1.048.576 örnek olabilir."},
+    "terrain.import.height_help": {"text": "RAW-F32 satır sayısı. Dosya her örnek için metre cinsinden, sonlu bir küçük uçlu float32 yükseklik içermelidir."},
+    "terrain.import.spacing_x": {"text": "X aralığı (metre)"},
+    "terrain.import.spacing_z": {"text": "Z aralığı (metre)"},
+    "terrain.import.spacing_help": {"text": "Pozitif örnek aralığı. Yontma yalnızca yükseklik içeren asıl varlığı düzenler; ağırlık veya delik kanalı varsayılmaz."},
+    "terrain.import.origin_x": {"text": "Kaynak başlangıcı X (metre)"},
+    "terrain.import.origin_z": {"text": "Kaynak başlangıcı Z (metre)"},
+    "terrain.import.origin_help": {"text": "Korunan veri kümesi koordinatları. Yalıtılmış kaynak görünümü bu ilk örneğe göre konumlandırılır."},
+    "terrain.import.crs": {"text": "İzdüşüm koordinat sistemi (isteğe bağlı)"},
+    "terrain.import.crs_help": {"text": "Yerel metre için boş bırakın; diğer durumlarda EPSG, iki nokta ve rakamlar kullanın. Coğrafi dereceler önce dönüştürülmelidir."},
+    "terrain.tools.title": {"text": "Arazi yontma araçları"},
+    "terrain.tools.raise": {"text": "Yükselt"},
+    "terrain.tools.lower": {"text": "Alçalt"},
+    "terrain.tools.smooth": {"text": "Yumuşat"},
+    "terrain.tools.flatten": {"text": "Düzleştir"},
+    "terrain.tools.noise": {"text": "Gürültü"},
+    "terrain.tools.operation": {"text": "İşlem"},
+    "terrain.tools.radius": {"text": "Yarıçap (metre)"},
+    "terrain.tools.amount": {"text": "Her izde yükseklik (metre)"},
+    "terrain.tools.blend": {"text": "Yumuşatma / düzleştirme oranı (0–1)"},
+    "terrain.tools.flatten_help": {"text": "Düzleştirme, hedef yüksekliği çizim başladığında örnekler. Gürültü her çizim için açık ve belirli bir tohum kullanır."},
+    "terrain.tools.undo": {"text": "Arazi çizimini geri al"},
+    "terrain.tools.redo": {"text": "Arazi çizimini yinele"},
+    "terrain.tools.save": {"text": "Arazi kaynağını kaydet"},
+    "terrain.tools.close": {"text": "Arazi belgesini kapat"},
+    "terrain.tools.discard": {"text": "Değişiklikleri at ve kapat"},
+    "terrain.tools.instructions": {"text": "Gerçek arazi yüzeyinde sürükleyin. Bırakma, tek bir yama işlemini uygular. Escape, odak kaybı veya görünüm değişimi uygulanmamış çizimi iptal eder. Bir çizim en çok 64 iz ve 16.384 etkilenen örnek içerebilir."},
+    "terrain.tools.unavailable": {"text": "Bu varlık veya düzenleyici bileşimi için arazi düzenleme kullanılamıyor."},
+    "terrain.tools.failed": {"text": "Arazi işlemi tamamlanamadı. Kabul veya uygulama başarısız olduğunda kaynak ve geri alma geçmişi korunur. Asıl tanı için Konsola bakın."},
+    "terrain.tools.conflict": {"text": "Arazi kaynağı veya içe aktarma ayarları diskte değişti. Kaydetme engellendi. Bu belgeyi koruyun veya açıkça atıp yeniden açın."},
+    "terrain.tools.dirty_close": {"text": "Bu arazi belgesinde kaydedilmemiş değişiklikler var. Kaydedin, değişiklikleri atıp kapatın veya düzenlemeye devam edin."},
+
+    "leave_confirmation.title": {"text": "Kaydedilmemiş Değişiklikler"},
+    "leave_confirmation.operation_title": {"text": "İşlem Devam Ediyor"},
+    "leave_confirmation.dirty_document": {"text": "Ayrılmadan önce değişikliklerinizi kaydetmek ister misiniz?"},
+    "leave_confirmation.unsaved_draft": {"text": "Proje kurulumunda kaydedilmemiş değişiklikler var. Değişiklikleri silip ayrılmak ister misiniz?"},
+    "leave_confirmation.running_operation": {"text": "Bir işlem devam ediyor. Ayrılmadan önce iptal etmek ister misiniz?"},
+    "leave_confirmation.recovery": {"text": "Ayrılmadan önce bekleyen kurtarma kararını tamamlayın."},
+    "leave_confirmation.native_dialog": {"text": "Ayrılmadan önce açık iletişim kutusunu tamamlayın."},
+    "leave_confirmation.save": {"text": "Kaydet ve Ayrıl"},
+    "leave_confirmation.discard": {"text": "Kaydetmeden Ayrıl"},
+    "leave_confirmation.cancel_operation": {"text": "İşlemi İptal Et"},
+    "leave_confirmation.keep_running": {"text": "Çalışmaya Devam Et"},
+    "leave_confirmation.wait": {"text": "Bekle"},
+    "leave_confirmation.stay": {"text": "Burada Kal"},
+
+    "workspace.prepare_release.identity": {"text": "Kimlik"},
+    "workspace.prepare_release.product_name": {"text": "Ürün adı"},
+    "workspace.prepare_release.version": {"text": "Sürüm (SemVer)"},
+    "workspace.prepare_release.source": {"text": "Kaynak revizyonu veya etiketi"},
+    "workspace.prepare_release.notes": {"text": "Sürüm notları (projeye göre)"},
+    "workspace.prepare_release.target_content": {"text": "Hedef ve içerik"},
+    "workspace.prepare_release.product_profile": {"text": "Ürün yayın profili"},
+    "workspace.prepare_release.package_format": {"text": "Paket biçimi"},
+    "workspace.prepare_release.portable": {"text": "Taşınabilir arşiv"},
+    "workspace.prepare_release.installer": {"text": "Platform yükleyicisi"},
+    "workspace.prepare_release.store_package": {"text": "Mağaza paketi"},
+    "workspace.prepare_release.content": {"text": "İçerik seçimi"},
+    "workspace.prepare_release.base_content": {"text": "Temel oyun ve gerekli parçalar"},
+    "workspace.prepare_release.quality_gates": {"text": "Kalite kontrolleri"},
+    "workspace.prepare_release.test_profile": {"text": "Proje test profili"},
+    "workspace.prepare_release.smoke": {"text": "Yalnızca yayın temel çalışırlık testi"},
+    "workspace.prepare_release.fast_smoke": {"text": "Hızlı testler ve yayın temel çalışırlık testi"},
+    "workspace.prepare_release.full_smoke": {"text": "Tüm proje testleri ve yayın temel çalışırlık testi"},
+    "workspace.prepare_release.smoke_required": {"text": "Paketlenmiş oynatıcının temel çalışırlık testi ve son doğrulama her zaman gereklidir."},
+    "workspace.prepare_release.gates_notice": {"text": "Aday yayımlanmaya uygun sayılmadan önce sürüm/etiket/notlar, sabitlenmiş paket kilidi, lisanslar, uyumluluk, imzalar, sağlama toplamları ve paketlenmiş oynatıcının açılışı denetlenmelidir."},
+    "workspace.prepare_release.security_output": {"text": "Güvenlik ve çıktı"},
+    "workspace.prepare_release.signing_reference": {"text": "İmzalama profili referansı"},
+    "workspace.prepare_release.protection": {"text": "Arşiv koruma profili"},
+    "workspace.prepare_release.output_root": {"text": "Çıktı kök dizini"},
+    "workspace.prepare_release.local_only": {"text": "Bu işlem yalnızca yerel bir aday hazırlar. Yayımlamak için Adayı Yayımla akışı ayrıca açılmalıdır."},
+    "workspace.prepare_release.review_heading": {"text": "Yayın isteğini incele"},
+    "workspace.prepare_release.review_hint": {"text": "Yerel adayı hazırlamadan önce kaynağı, hedefi ve kontrolleri gözden geçirin."},
+    "workspace.prepare_release.release_identity": {"text": "Yayın kimliği"},
+    "workspace.prepare_release.target_package": {"text": "Hedef ve paket"},
+    "workspace.prepare_release.verification_security": {"text": "Doğrulama ve güvenlik"},
+    "workspace.prepare_release.local_output": {"text": "Yerel çıktı"},
+    "workspace.prepare_release.candidate_path": {"text": "Yerel aday yolu"},
+    "workspace.prepare_release.path_pending": {"text": "Aday yolunu görmek için sürüm ve çıktı kök dizinini girin."},
+    "workspace.prepare_release.path_unavailable": {"text": "Bağlı yayın servisi bu bilgiyi sağlamıyor."},
+    "workspace.prepare_release.review_notice": {"text": "Aday tüm zorunlu kontrolleri geçmelidir. Hazırlama için host tarafından doğrulanmış bir yürütme planı gerekir; bu hostta istek ön kontrolü henüz bağlı değil."},
+    "workspace.prepare_release.review_request": {"text": "İsteği incele"},
+    "workspace.prepare_release.prepare_local": {"text": "Yerel adayı hazırla"},
+    "workspace.prepare_release.final_verified": {"text": "Yerel aday son doğrulamayı geçti."},
+    "workspace.build.title": {"text": "Derle"},
+    "workspace.build.profile": {"text": "Derleme profili"},
+    "workspace.build.host_profile": {"text": "Geçerli uygulama yapılandırması"},
+    "workspace.build.manage_profiles": {"text": "Profilleri yönet"},
+    "workspace.build.profiles_unavailable": {"text": "Kayıtlı derleme profilleri bu uygulamada henüz bağlı değil."},
+    "workspace.build.product": {"text": "Ürün"},
+    "workspace.build.dedicated_server": {"text": "Özel Oyun Sunucusu"},
+    "workspace.build.engine_cli": {"text": "Motor Komut Satırı"},
+    "workspace.build.sdk": {"text": "SDK"},
+    "workspace.build.workflow": {"text": "İş akışı"},
+    "workspace.build.playable": {"text": "Oynanabilir derleme"},
+    "workspace.build.compile_only": {"text": "Yalnızca derle"},
+    "workspace.build.qa_package": {"text": "QA için paketle"},
+    "workspace.build.content": {"text": "İçerik"},
+    "workspace.build.all_content": {"text": "Tüm oyun içeriği"},
+    "workspace.build.selected_content": {"text": "Seçili sahneler ve bağımlılıklar"},
+    "workspace.build.test_after": {"text": "Derlemeden sonra test et"},
+    "workspace.build.run_after": {"text": "Derlemeden sonra çalıştır"},
+    "workspace.build.advanced": {"text": "Gelişmiş derleme seçenekleri"},
+    "workspace.build.native_scope": {"text": "Bu uygulama, bu makinedeki Game Runtime gameplay modülleri için Yalnızca derle iş akışını destekliyor. Oynanabilir paketleme, içerik hazırlama, test ve çalıştırma henüz bağlı değil."},
+    "workspace.build.new_job": {"text": "Yeni derleme"},
+    "workspace.build.background": {"text": "Arka planda devam et"},
+    "workspace.build_release.stage_validate": {"text": "01 Doğrula"},
+    "workspace.build_release.stage_configure": {"text": "02 Yapılandır"},
+    "workspace.build_release.stage_build": {"text": "03 Derle"},
+    "workspace.build_release.stage_cook": {"text": "04 İçerik hazırla"},
+    "workspace.build_release.stage_package": {"text": "05 Paketle"},
+    "workspace.build_release.stage_preverify": {"text": "06 Ön doğrulama"},
+    "workspace.build_release.stage_sign": {"text": "07 İmzala"},
+    "workspace.build_release.stage_finalize": {"text": "08 Sonlandır"},
+    "workspace.build_release.stage_verify": {"text": "09 Son doğrulama"},
+    "workspace.build_release.stage_publish": {"text": "10 Yayımla"},
+    "workspace.build_release.product_profile": {"text": "Ürün Profili"},
+    "workspace.build_release.game_runtime": {"text": "Oyun Çalışma Zamanı"},
+    "workspace.build_release.dedicated_server": {"text": "Adanmış Sunucu"},
+    "workspace.build_release.engine_editor": {"text": "Motor Editörü"},
+    "workspace.build_release.diagnostics": {"text": "Tanılama"},
+    "workspace.build_release.target": {"text": "Hedef"},
+    "workspace.build_release.platform": {"text": "Platform"},
+    "workspace.build_release.windows": {"text": "Windows"},
+    "workspace.build_release.macos": {"text": "macOS"},
+    "workspace.build_release.linux": {"text": "Linux"},
+    "workspace.build_release.architecture": {"text": "Mimari"},
+    "workspace.build_release.x64": {"text": "x86 64"},
+    "workspace.build_release.arm64": {"text": "ARM64"},
+    "workspace.build_release.shipping": {"text": "Dağıtım"},
+    "workspace.build_release.development": {"text": "Geliştirme"},
+    "workspace.build_release.test_config": {"text": "Test"},
+    "workspace.build_release.security": {"text": "Güvenlik"},
+    "workspace.build_release.signing_profile": {"text": "İmzalama Profili"},
+    "workspace.build_release.none": {"text": "Yok"},
+    "workspace.build_release.configured_identity": {"text": "Yapılandırılmış kimlik referansı"},
+    "workspace.build_release.archive_protection": {"text": "Arşiv Koruması"},
+    "workspace.build_release.project_policy": {"text": "Proje ilkesi"},
+    "workspace.build_release.credential_hint": {"text": "İmzalama kimlikleri referans olarak seçilir. Kimlik bilgileri bu formda tutulmaz."},
+    "workspace.build_release.release_name": {"text": "Sürüm Adı"},
+    "workspace.build_release.version_string": {"text": "Sürüm Numarası"},
+    "workspace.build_release.semver_hint": {"text": "Anlamsal sürüm kullanın: ana.alt.yama; isteğe bağlı ön sürüm ve derleme bilgisi eklenebilir."},
+    "workspace.build_release.notes_path": {"text": "Sürüm Notları Yolu"},
+    "workspace.build_release.minimum_engine": {"text": "En Düşük Motor Sürümü"},
+    "workspace.build_release.compatibility_hint": {"text": "Çalıştırmadan önce proje uyumluluğu ve sürüm bilgileri sürüm ön kontrolünde doğrulanmalıdır."},
+    "workspace.build_release.include_symbols": {"text": "Kaynak düzeyinde hata ayıklama sembollerini ayrı arşive ekle"},
+    "workspace.build_release.crash_reporter": {"text": "Çökme raporlayıcı entegrasyon dosyaları oluştur"},
+    "workspace.build_release.allow_downgrades": {"text": "Daha yeni derlemelerden eski sürüme dönmeye izin ver"},
+    "workspace.build_release.toolchain": {"text": "Araç Zinciri"},
+    "workspace.build_release.host_toolchain": {"text": "Uygulamada yapılandırılmış araç zinciri"},
+    "workspace.build_release.parallel_jobs": {"text": "Paralel İş Sayısı"},
+    "workspace.build_release.jobs_invalid": {"text": "Paralel iş sayısı 1 ile 256 arasında olmalıdır."},
+    "workspace.build_release.defines": {"text": "Önişlemci Tanımları"},
+    "workspace.build_release.pre_build": {"text": "Derleme Öncesi Betik"},
+    "workspace.build_release.post_build": {"text": "Derleme Sonrası Betik"},
+    "workspace.build_release.lto": {"text": "Bağlama zamanı optimizasyonunu (LTO) etkinleştir"},
+    "workspace.build_release.strip_editor": {"text": "Yalnızca editöre ait üst verileri kaldır"},
+    "workspace.build_release.unit_test_runner": {"text": "Birim testi çalıştırıcısını derle"},
+    "workspace.build_release.scripts_hint": {"text": "Bunlar taslak tercihleridir. Bu formu açmak veya düzenlemek betik çalıştırmaz."},
+    "workspace.build_release.inclusion_mode": {"text": "Paket Dahil Etme Biçimi"},
+    "workspace.build_release.all_referenced": {"text": "Referans verilenlerin tümü"},
+    "workspace.build_release.explicit_list": {"text": "Açık liste"},
+    "workspace.build_release.core_only": {"text": "Yalnızca çekirdek"},
+    "workspace.build_release.packages_unavailable": {"text": "Sürüm paket envanteri bağlı değil. Paket adları, sürümleri ve dahil edilme durumları kullanılamıyor."},
+    "workspace.build_release.fail_unresolved": {"text": "Çözümlenemeyen paket bağımlılığında işlemi durdur"},
+    "workspace.build_release.distribution_targets": {"text": "Dağıtım Hedefleri"},
+    "workspace.build_release.destinations_unavailable": {"text": "Yayımlama hedefleri yapılandırılmış sürüm sağlayıcısından alınmalıdır. Bu uygulamada bağlı sağlayıcı yok."},
+    "workspace.build_release.channel": {"text": "Kanal"},
+    "workspace.build_release.stable": {"text": "Kararlı"},
+    "workspace.build_release.beta": {"text": "Beta"},
+    "workspace.build_release.alpha": {"text": "Alfa"},
+    "workspace.build_release.visibility": {"text": "Görünürlük"},
+    "workspace.build_release.public": {"text": "Herkese açık"},
+    "workspace.build_release.private": {"text": "Özel"},
+    "workspace.build_release.cdn_endpoint": {"text": "CDN Uç Noktası"},
+    "workspace.build_release.delta_patch": {"text": "Önceki sürümden fark yaması oluştur"},
+    "workspace.build_release.output_path": {"text": "Çıktı Yolu Şablonu"},
+    "workspace.build_release.source_revision": {"text": "Kaynak Revizyonu / Dal"},
+    "workspace.build_release.symbol_store": {"text": "Sembol Deposu Yolu"},
+    "workspace.build_release.manifest_output": {"text": "Bildirim Çıktısı"},
+    "workspace.build_release.compress_archive": {"text": "Son arşivi sıkıştır"},
+    "workspace.build_release.output_hint": {"text": "Yollar taslak değerleridir. Düzenleme sırasında dosya oluşturulmaz veya üzerine yazılmaz."},
+    "workspace.build_release.native_build": {"text": "Yerel gameplay derleme araçları"},
+    "workspace.build_release.title": {"text": "Derleme ve Sürüm"},
+    "workspace.build_release.draft_badge": {"text": "TASLAK"},
+    "workspace.build_release.draft_hint": {"text": "Bu uygulamada sürüm yürütücüsü bağlı değil. Form değerleri geçici taslaktır; hazırlama ve yayımlama kullanılamıyor."},
+    "workspace.build_release.tab_configuration": {"text": "Yapılandırma"},
+    "workspace.build_release.tab_build": {"text": "Derleme Seçenekleri"},
+    "workspace.build_release.tab_packages": {"text": "Paketler"},
+    "workspace.build_release.tab_distribution": {"text": "Dağıtım"},
+    "workspace.build_release.tab_output": {"text": "Çıktı"},
+    "workspace.build_release.tab_logs": {"text": "Günlükler"},
+    "workspace.build_release.prepare": {"text": "Sürüm Hazırla"},
+    "workspace.build_release.build_title": {"text": "Derleme İşi"},
+    "workspace.build_release.release_title": {"text": "Sürüm Hazırla"},
+    "workspace.build_release.build_hint": {"text": "Editörün yapılandırılmış araç zinciriyle projenin yerel gameplay modülünü derler. Oynatıcı paketi oluşturmaz."},
+    "workspace.build_release.project": {"text": "Proje"},
+    "workspace.build_release.configuration": {"text": "Yapılandırma"},
+    "workspace.build_release.no_project": {"text": "Derleme başlatmak için bir proje açın."},
+    "workspace.build_release.build_unavailable": {"text": "Yerel derleme servisi veya gameplay SDK kullanılamıyor."},
+    "workspace.build_release.release_hint": {"text": "Sürüm işleri ortak sürüm servisine aittir. Bu pencereyi açmak sürüm işlemi başlatmaz veya aday yayımlamaz."},
+    "workspace.build_release.release_unavailable": {"text": "Bu editörde sürüm hazırlama servisi henüz bağlı değil. Bu pencereden aday oluşturulamaz veya yayımlanamaz."},
+    "workspace.build_release.no_jobs": {"text": "Etkin veya yakın tarihli sürüm işi yok."},
+    "workspace.build_release.status": {"text": "Durum"},
+    "workspace.build_release.start": {"text": "Yerel gameplay derle"},
+    "workspace.build_release.cancel": {"text": "İşi iptal et"},
+    "workspace.build_release.close": {"text": "Kapat"},
+    "workspace.build_release.background": {"text": "Bu pencereyi kapattığınızda çalışan işler arka planda devam eder."},
+    "workspace.build_release.queued": {"text": "Kuyrukta"},
+    "workspace.build_release.locking": {"text": "Derleme kilidi alınıyor"},
+    "workspace.build_release.waiting": {"text": "Başka bir derleme bekleniyor"},
+    "workspace.build_release.configuring": {"text": "Yapılandırılıyor"},
+    "workspace.build_release.building": {"text": "Derleniyor"},
+    "workspace.build_release.validating": {"text": "Doğrulanıyor"},
+    "workspace.build_release.succeeded": {"text": "Başarılı"},
+    "workspace.build_release.failed": {"text": "Başarısız"},
+    "workspace.build_release.cancelled": {"text": "İptal edildi"},
+    "workspace.build_release.timed_out": {"text": "Zaman aşımı"},
+    "workspace.build_release.running": {"text": "Çalışıyor"},
+    "workspace.build_release.cancelling": {"text": "İptal istendi"},
     "workspace.prefab_document.source_controls": { "text": "Prefab kaynak kontrolleri belgededir. Sahneyi düzenlemek için Sahne görünümüne dönün." },
     "workspace.prefab_document.undo": { "text": "Kaynak düzenlemesini geri al" },
     "workspace.prefab_document.redo": { "text": "Kaynak düzenlemesini yinele" },
@@ -499,11 +734,50 @@
     "workspace.play_topology.storage": {
       "text": "Profiller okunamadı veya kaydedilemedi. Proje depolama erişimini kontrol edin."
     },
+    "workspace.global_dock.network.field.records": {"text": "Kayıtlar"},
+    "workspace.global_dock.network.field.dropped": {"text": "Düşürülen"},
+    "workspace.global_dock.network.field.evicted": {"text": "Çıkarılan"},
+    "workspace.global_dock.network.empty.filter": {"text": "Eşleşen kayıt yok"},
+    "workspace.global_dock.network.status.live": {"text": "Canlı"},
+    "workspace.global_dock.network.status.paused": {"text": "Duraklatıldı"},
+    "workspace.global_dock.network.status.stale": {"text": "Güncel değil"},
+    "workspace.global_dock.network.status.disabled": {"text": "Devre dışı"},
+    "workspace.global_dock.network.status.detached": {"text": "Çevrimdışı"},
+    "workspace.global_dock.network.column.record": {"text": "#"},
+    "workspace.global_dock.network.column.event": {"text": "Olay"},
+    "workspace.global_dock.network.column.connection": {"text": "Bağlantı"},
+    "workspace.global_dock.network.column.summary": {"text": "Özet"},
+    "workspace.global_dock.network.details.title": {"text": "Kayıt Ayrıntıları"},
+    "workspace.global_dock.network.details.close": {"text": "Kapat"},
+    "workspace.global_dock.network.empty.title": {"text": "Ağ etkinliği yok"},
+    "workspace.global_dock.network.empty.live": {"text": "Çalışma zamanından ağ kayıtları bekleniyor."},
+    "workspace.global_dock.network.empty.offline": {"text": "Ağ etkinliğini incelemek için ağ desteği açık bir çalışma zamanı başlatın."},
+    "workspace.global_dock.network.field.bytes": {"text": "Bayt"},
+    "workspace.global_dock.network.field.session": {"text": "Eş oturum nesli"},
+    "workspace.global_dock.network.field.admitted": {"text": "Oyun oturumuna kabul edildi"},
+    "workspace.global_dock.network.field.registered": {"text": "Kaydedilen"},
+    "workspace.global_dock.network.field.retired": {"text": "Kaldırılan"},
+    "workspace.global_dock.network.field.considered": {"text": "Değerlendirilen"},
+    "workspace.global_dock.network.field.published": {"text": "Yayınlanan"},
+    "workspace.global_dock.network.field.failed": {"text": "Başarısız"},
+    "workspace.global_dock.network.field.deferred": {"text": "Ertelenen"},
+    "workspace.global_dock.network.field.accepted": {"text": "Kabul edilen"},
+    "workspace.global_dock.network.field.succeeded": {"text": "Başarılı"},
+    "workspace.global_dock.network.field.cancelled": {"text": "İptal edilen"},
+    "workspace.global_dock.network.field.local_tick": {"text": "Yerel tik"},
+    "workspace.global_dock.network.field.server_tick": {"text": "Sunucu tiki"},
+    "workspace.global_dock.network.field.sample_age": {"text": "Örnek yaşı (tik)"},
+    "workspace.global_dock.network.field.mapping": {"text": "Tik eşlemesi"},
+    "workspace.global_dock.network.field.relevant": {"text": "İlgili"},
+    "workspace.global_dock.network.field.sequence": {"text": "Sıra"},
+    "workspace.global_dock.network.field.amount": {"text": "Miktar"},
+    "workspace.global_dock.network.value.yes": {"text": "Evet"},
+    "workspace.global_dock.network.value.no": {"text": "Hayır"},
     "workspace.global_dock.network.event.admitted": {
       "text": "Oyun oturumu onaylandı"
     },
     "workspace.global_dock.network.replication": {
-      "text": "176 nesne çoğaltılıyor · RPC kuyruğu: 0"
+      "text": "Replikasyon"
     },
     "workspace.global_dock.network.rpc": {
       "text": "RPC"
@@ -599,19 +873,19 @@
       "text": "PROJE DİZİNİ"
     },
     "project_creation.identity.location": {
-      "text": "PROJE KONUMU"
-    },
-    "project_creation.identity.location.hint": {
-      "text": "Boş bir klasör veya yazılabilir bir üst dizine sahip eksik bir konum seçin."
+      "text": "PROJE KLASÖRÜ"
     },
     "project_creation.identity.location.select": {
-      "text": "Proje Konumunu Seçin"
+      "text": "Yeni Proje İçin Konum Seç"
     },
     "project_creation.identity.name": {
       "text": "PROJE İSMİ"
     },
+    "project_creation.identity.name.invalid_folder": {
+      "text": "Geçerli bir klasör adı girin; . veya .. ya da iki nokta kullanmayın."
+    },
     "project_creation.identity.name.hint": {
-      "text": "project.json ismi olarak saklanır; projectId bir kez oluşturulur."
+      "text": "Projeniz için bir isim girin."
     },
     "project_creation.identity.scene": {
       "text": "VARSAYILAN SAHNE"
@@ -789,13 +1063,20 @@
     "workspace.scene_compare.field.components": { "text": "Componentler" },
     "workspace.scene_compare.empty": { "text": "Anlamsal nesne farkı kalmadı. Dosya yalnızca biçimlendirme açısından farklı olabilir." },
     "workspace.gameplay_behavior.create.title": { "text": "Gameplay Behavior Oluştur" },
-    "workspace.gameplay_behavior.create.type": { "text": "TÜR" },
+    "workspace.gameplay_behavior.create.type": { "text": "Betik Dili" },
     "workspace.gameplay_behavior.create.lua": { "text": "Lua" },
     "workspace.gameplay_behavior.create.native": { "text": "Native C++" },
-    "workspace.gameplay_behavior.create.destination": { "text": "HEDEF" },
-    "workspace.gameplay_behavior.create.filename": { "text": "DOSYA ADI" },
+    "workspace.gameplay_behavior.create.destination": { "text": "Hedef" },
+    "workspace.gameplay_behavior.create.filename": { "text": "Davranış Adı" },
     "workspace.gameplay_behavior.create.invalid_filename": { "text": "Uzantı veya yol ayırıcıları içermeyen geçerli bir dosya adı girin." },
-    "workspace.gameplay_behavior.create.confirm": { "text": "Oluştur" },
+    "workspace.gameplay_behavior.create.available": { "text": "Geçerli ad, kullanıma uygun" },
+    "workspace.gameplay_behavior.create.name_exists": { "text": "Bu konumda aynı adlı bir davranış zaten var." },
+    "workspace.gameplay_behavior.create.invalid_destination": { "text": "Assets/Scripts içindeki bir klasör seçin." },
+    "workspace.gameplay_behavior.create.browse": { "text": "Gözat..." },
+    "workspace.gameplay_behavior.create.browse_title": { "text": "Davranış hedef klasörünü seçin" },
+    "workspace.gameplay_behavior.create.template": { "text": "Başlangıç Şablonu" },
+    "workspace.gameplay_behavior.create.basic_template": { "text": "Temel Davranış" },
+    "workspace.gameplay_behavior.create.confirm": { "text": "Davranış Oluştur" },
     "workspace.gameplay_behavior.create.cancel": { "text": "İptal" },
     "project_loading.status.cancelling": {
       "text": "İptal ediliyor..."
@@ -821,6 +1102,19 @@
     "settings.appearance.accent_color.description": {
       "text": "Odak halkaları, aktif durumlar ve birincil eylemler için kullanılır."
     },
+    "settings.code_editor.font_family": {"text": "Yazı Tipi Ailesi"},
+    "settings.code_editor.font_family.description": {"text": "Yüklü bir eş aralıklı yazı tipi seçin. Değişiklik açık kaynak sekmelerine uygulanır."},
+    "settings.code_editor.behavior": {"text": "Düzenleme & Kaydetme"},
+    "settings.code_editor.codeShowLineNumbers": {"text": "Satır Numaraları"},
+    "settings.code_editor.codeShowLineNumbers.description": {"text": "Kaynak metnin yanında satır numaralarını gösterir."},
+    "settings.code_editor.codeShowWhitespace": {"text": "Boşluk İşaretleri"},
+    "settings.code_editor.codeShowWhitespace.description": {"text": "Dosyayı değiştirmeden boşluk ve sekme karakterlerini gösterir."},
+    "settings.code_editor.codeWordWrap": {"text": "Satır Kaydırma"},
+    "settings.code_editor.codeWordWrap.description": {"text": "Uzun satırları kaynak görünümünün genişliğine göre kaydırır."},
+    "settings.code_editor.codeShowScrollBar": {"text": "Kaydırma Çubuğu"},
+    "settings.code_editor.codeShowScrollBar.description": {"text": "Kaynak editörünün kaydırma çubuğunu gösterir."},
+    "settings.code_editor.codeAutoSaveDelaySeconds": {"text": "Otomatik Kayıt Gecikmesi (saniye)"},
+    "settings.code_editor.codeAutoSaveDelaySeconds.description": {"text": "Değişen kaynak dosyalarını bu bekleme süresinden sonra kaydeder. Sıfır kapatır. Dış değişikliklerin üzerine otomatik yazılmaz."},
     "settings.appearance.code_font_size": {
       "text": "Kod Yazı Boyutu"
     },
@@ -840,10 +1134,10 @@
       "text": "JSON tema dosyasının yolu. Yerleşik tema için boş bırakın."
     },
     "settings.appearance.theme_group": {
-      "text": "TEMA"
+      "text": "Tema"
     },
     "settings.appearance.typography_group": {
-      "text": "TİPOGRAFİ & ÖLÇEK"
+      "text": "Tipografi & Ölçek"
     },
     "settings.appearance.ui_scale": {
       "text": "Arayüz Ölçeği"
@@ -876,7 +1170,7 @@
       "text": "Editör sesi için tercih edilen oynatma aygıtı."
     },
     "settings.audio.output_group": {
-      "text": "ÇIKIŞ"
+      "text": "Çıkış"
     },
     "settings.audio.speakers": {
       "text": "Hoparlörler"
@@ -909,10 +1203,10 @@
       "text": "Editör konsol çıktısında gösterilecek minimum önem seviyesi."
     },
     "settings.diagnostics.logging_group": {
-      "text": "LOGLAMA"
+      "text": "Loglama"
     },
     "settings.diagnostics.profiler_group": {
-      "text": "PROFİLEYİCİ"
+      "text": "Profilleyici"
     },
     "settings.diagnostics.stutter_threshold": {
       "text": "Takılma Eşiği (ms)"
@@ -954,7 +1248,7 @@
       "text": "Son oturumdaki sekmeleri ve panel düzenini yeniden aç."
     },
     "settings.general.session_group": {
-      "text": "EDİTÖR OTURUMU"
+      "text": "Editör Oturumu"
     },
     "settings.general.startup_behavior": {
       "text": "Başlangıç Davranışı"
@@ -966,7 +1260,7 @@
       "text": "Proje tarayıcı"
     },
     "settings.general.startup_group": {
-      "text": "BAŞLANGIÇ & PROJE"
+      "text": "Başlangıç & Proje"
     },
     "settings.general.startup_last": {
       "text": "Son proje"
@@ -981,7 +1275,7 @@
       "text": "Dikey yörünge yönünü tersine çevirir."
     },
     "settings.input.navigation_group": {
-      "text": "NAVİGASYON"
+      "text": "Navigasyon"
     },
     "settings.input.orbit_sensitivity": {
       "text": "Yörünge Hassasiyeti"
@@ -996,10 +1290,79 @@
       "text": "Viewport kamerasını kaydırmak için fare sürükleme çarpanı."
     },
     "settings.input.mappings_description": {
-      "text": "Kısayolları, gamepad bağlarını, profilleri ve oyuncu atamalarını düzenlemek için sağ etkinlik çubuğundan Giriş Eşleme panelini açın."
+      "text": "Bir komut seçin, kısayoluna basın ve Uygula’ya tıklayın. Sıfırla varsayılan tuşları geri yükler."
+    },
+    "settings.keymap.editor.save": {
+      "text": "Kaydet"
+    },
+    "settings.keymap.editor.undo": {
+      "text": "Geri al"
+    },
+    "settings.keymap.editor.redo": {
+      "text": "Yinele"
+    },
+    "settings.keymap.editor.source.select_all": {
+      "text": "Tüm kaynak metnini seç"
+    },
+    "settings.keymap.editor.source.copy": {
+      "text": "Kaynak seçimini kopyala"
+    },
+    "settings.keymap.editor.source.paste": {
+      "text": "Kaynağa yapıştır"
+    },
+    "settings.keymap.editor.source.cut": {
+      "text": "Kaynak seçimini kes"
+    },
+    "settings.keymap.editor.source.find": {
+      "text": "Kaynakta bul"
+    },
+    "settings.keymap.editor.source.go_to_line": {
+      "text": "Satıra git"
+    },
+    "settings.keymap.editor.source.zoom_in": {
+      "text": "Kod yazı boyutunu artır"
+    },
+    "settings.keymap.editor.source.zoom_out": {
+      "text": "Kod yazı boyutunu azalt"
+    },
+    "settings.keymap.editor.source.zoom_reset": {
+      "text": "Kod yazı boyutunu sıfırla"
+    },
+    "settings.keymap.editor.duplicate": {
+      "text": "Seçimi çoğalt"
+    },
+    "settings.keymap.editor.delete": {
+      "text": "Seçimi sil"
+    },
+    "settings.keymap.editor.tool.select": {
+      "text": "Seçim aracı"
+    },
+    "settings.keymap.editor.tool.move": {
+      "text": "Taşıma aracı"
+    },
+    "settings.keymap.editor.tool.rotate": {
+      "text": "Döndürme aracı"
+    },
+    "settings.keymap.editor.tool.scale": {
+      "text": "Ölçekleme aracı"
+    },
+    "settings.keymap.editor.viewport.focus_selected": {
+      "text": "Seçime odaklan"
+    },
+    "settings.keymap.unassigned": {
+      "text": "Atanmamış"
+    },
+    "settings.keymap.recording": {
+      "text": "Kısayola basın (Escape ile iptal)"
+    },
+    "settings.keymap.reset": {
+      "text": "Sıfırla"
+    },
+    "settings.keymap.conflict": {
+      "text": "Çakışan veya geçersiz kısayol. Uygulamadan önce başka bir tuş seçin."
     },
     "settings.input.mappings_group": {
-      "text": "GİRİŞ EŞLEMELERİ"
+      "text": "Giriş Eşlemeleri"
     },
     "settings.input.mappings_label": {
       "text": "Merkezi Giriş Eşleme"
@@ -1030,6 +1393,12 @@
     },
     "settings.nav.diagnostics": {
       "text": "Tanılama"
+    },
+    "settings.nav.code_editor": {
+      "text": "Kod Editörü"
+    },
+    "settings.nav.keymaps": {
+      "text": "Kısayollar"
     },
     "settings.nav.editor": {
       "text": "Editör"
@@ -1182,7 +1551,7 @@
       "text": "Maksimum eşzamanlı PIE (Editörde Oynat) istemci bağlantısı."
     },
     "settings.network.multiplayer_group": {
-      "text": "ÇOK OYUNCULU ÖNİZLEME"
+      "text": "Çok Oyunculu Önizleme"
     },
     "settings.network.simulate_latency": {
       "text": "Gecikmeyi Simüle Et"
@@ -1191,7 +1560,7 @@
       "text": "Loopback üzerine eklenen yapay tek yönlü gecikme (ms)."
     },
     "settings.packages.download_group": {
-      "text": "PAKET EDİNİMİ"
+      "text": "Paket Edinimi"
     },
     "settings.packages.download_threads": {
       "text": "İndirme İş Parçacıkları"
@@ -1308,7 +1677,7 @@
       "text": "Katkılar"
     },
     "settings.extensions.details": {
-      "text": "UZANTI DETAYLARI"
+      "text": "Uzantı Detayları"
     },
     "settings.extensions.empty": {
       "text": "Bu filtreyle eşleşen uzantı yok."
@@ -1329,10 +1698,10 @@
       "text": "Kurulu paketler"
     },
     "settings.extensions.installed_heading": {
-      "text": "KURULU UZANTILAR"
+      "text": "Kurulu Uzantılar"
     },
     "settings.extensions.lifecycle": {
-      "text": "ETKİNLEŞTİRME YAŞAM DÖNGÜSÜ"
+      "text": "Etkinleştirme Yaşam Döngüsü"
     },
     "settings.extensions.marketplace": {
       "text": "Marketplace"
@@ -1437,7 +1806,7 @@
       "text": "Aydınlatılmış"
     },
     "settings.rendering.quality_group": {
-      "text": "KALİTE"
+      "text": "Kalite"
     },
     "settings.rendering.shaded": {
       "text": "Gölgelendirilmiş"
@@ -1458,7 +1827,7 @@
       "text": "Aydınlatmasız"
     },
     "settings.rendering.viewport_group": {
-      "text": "GÖRÜNÜM ALANI"
+      "text": "Görünüm Alanı"
     },
     "settings.rendering.viewport_mode": {
       "text": "Varsayılan Viewport Modu"
@@ -2313,12 +2682,12 @@
     "workspace.global_dock.audio.master": {"text": "−3.2 dB · Sesler: 12 / 64"},
     "workspace.global_dock.audio.busses": {"text": "Ana, Müzik, SFX, Ortam, Ses"},
     "workspace.global_dock.audio.device": {"text": "Stereo 48 kHz · Gecikme: 10.7 ms"},
-    "workspace.global_dock.network.search": {"text": "Bağlantı ve mesajlarda ara..."},
+    "workspace.global_dock.network.search": {"text": "Ağ kayıtlarını filtrele..."},
     "workspace.global_dock.network.session.current": {"text": "Geçerli oturum"},
     "workspace.global_dock.network.session.all": {"text": "Tüm oturumlar"},
     "workspace.global_dock.network.connections": {"text": "Bağlantılar"},
     "workspace.global_dock.network.queues": {"text": "Kuyruklar"},
-    "workspace.global_dock.network.trace": {"text": "İz"},
+    "workspace.global_dock.network.trace": {"text": "Tüm etkinlik"},
     "workspace.global_dock.network.pause_capture": {"text": "Yakalamayı duraklat"},
     "workspace.global_dock.network.resume_capture": {"text": "Yakalamayı sürdür"},
     "workspace.global_dock.network.clear": {"text": "Temizle"},
@@ -2363,6 +2732,9 @@
     "workspace.content_browser.view.list": {"text": "Liste görünümü"},
     "workspace.content_browser.location.favorites": {"text": "Favoriler"},
     "workspace.content_browser.location.recent": {"text": "Son kullanılanlar"},
+    "workspace.content_browser.location.assets": {"text": "Varlıklar"},
+    "workspace.content_browser.location.native_sources": {"text": "Kaynaklar"},
+    "workspace.content_browser.asset.native_source": {"text": "Kaynak dosyası"},
     "workspace.content_browser.location.sources": {"text": "Kaynaklar"},
     "workspace.content_browser.location.packages": {"text": "Paketler"},
     "workspace.content_browser.location.dependencies": {"text": "Bağımlılıklar"},
@@ -2439,7 +2811,7 @@
     "workspace.content_browser.operation.reimport_unavailable": {"text": "Bu varlık yeniden içe aktarma kaynağını kaydetmiyor."},
     "workspace.content_browser.operation.reimport_importer_missing": {"text": "Bu varlıkta kayıtlı içe aktarıcı modülü kullanılamıyor."},
     "workspace.content_browser.operation.reimport_failed": {"text": "Varlık yeniden içe aktarılamadı; önceki payload korundu."},
-    "workspace.content_browser.operation.reveal_unavailable": {"text": "Dosya Yöneticisi entegrasyonu bu platformda kullanılamıyor."},
+    "workspace.content_browser.operation.reveal_unavailable": {"text": "Dosya Yöneticisi açılamadı. Masaüstü kullanılabilirliğini ve dosya izinlerini kontrol edin."},
     "workspace.content_browser.scenes": {"text": "sahneler"},
     "workspace.content_browser.models": {"text": "modeller"},
     "workspace.content_browser.textures": {"text": "dokular"},
@@ -2805,6 +3177,17 @@
     "workspace.physics.gizmo_hint": {"text": "Çarpıştırıcı düzenleme · Ctrl: 0,1 m / 15° / %10 yakala · Ctrl-tık: alt öğeyi seç · Escape: iptal"},
     "workspace.physics.gizmo_rejected": {"text": "Çarpıştırıcı düzenlemesi reddedildi. Pozitif sınırlar ve küre/kapsül için eş ölçek kullanın. Tanılamaya bakın."},
     "workspace.physics.gizmo_unsupported": {"text": "Pişirilmiş şeklin alt öğeleri kendi kaynak belgesini gerektirir; görünümde düzenlenemez."},
+    "workspace.inspector.add_rendering": {"text": "Görselleştirme"},
+    "workspace.inspector.add_audio": {"text": "Ses"},
+    "workspace.inspector.add_gameplay": {"text": "Oynanış"},
+    "workspace.inspector.add_scripts": {"text": "Betikler"},
+    "workspace.inspector.create_script": {"text": "Betik Oluştur…"},
+    "workspace.physics.details": {"text": "Ayrıntılar"},
+    "workspace.physics.choose_reference": {"text": "Seçin…"},
+    "workspace.physics.missing_reference": {"text": "Eksik başvuru"},
+    "workspace.physics.no_profiles": {"text": "Editor Settings > Project Collision alanında bir çarpışma profili oluşturun."},
+    "workspace.physics.no_materials": {"text": "Buradan seçmek için bir Fizik Malzemesi varlığı içe aktarın."},
+    "workspace.physics.add_trigger": {"text": "Tetikleyici Çarpıştırıcı"},
     "workspace.physics.title": {
       "text": "Fizik"
     },
@@ -2818,16 +3201,16 @@
       "text": "Katı cisim"
     },
     "workspace.physics.collider": {
-      "text": "Çarpışma şekli / algılayıcı"
+      "text": "Çarpıştırıcı"
     },
     "workspace.physics.constraint": {
-      "text": "Kısıt"
+      "text": "Fizik Bağlantısı"
     },
     "workspace.physics.enabled": {
       "text": "Etkin"
     },
     "workspace.physics.sensor": {
-      "text": "Algılayıcı (yalnızca örtüşme, fiziksel tepki yok)"
+      "text": "Tetikleyici"
     },
     "workspace.physics.static": {
       "text": "Sabit"
@@ -2884,7 +3267,7 @@
       "text": "Cisim yuvası kimliği"
     },
     "workspace.physics.profile": {
-      "text": "Çarpışma profili UUID"
+      "text": "Çarpışma Profili"
     },
     "workspace.physics.shape": {
       "text": "Şekil kaynağı"
@@ -2929,13 +3312,13 @@
       "text": "Malzeme yuvası kimliği"
     },
     "workspace.physics.material_asset": {
-      "text": "Fizik malzemesi varlığı UUID"
+      "text": "Fizik Malzemesi"
     },
     "workspace.physics.remove_material": {
-      "text": "Malzeme eşlemesini kaldır"
+      "text": "Malzemeyi Kaldır"
     },
     "workspace.physics.add_material": {
-      "text": "Açık malzeme eşlemesi ekle"
+      "text": "Malzeme Ekle"
     },
     "workspace.physics.first_endpoint": {
       "text": "İlk cisim ucu"
@@ -2965,28 +3348,28 @@
       "text": "Bu Sahne şeması menteşe ve kızak kısıtlarını desteklemez."
     },
     "workspace.physics.remove_body": {
-      "text": "Cisim kaldırmayı hazırla"
+      "text": "Gövdeyi Kaldır"
     },
     "workspace.physics.remove_collider": {
-      "text": "Çarpışma şeklini kaldırmayı hazırla"
+      "text": "Çarpıştırıcıyı Kaldır"
     },
     "workspace.physics.remove_constraint": {
-      "text": "Kısıt kaldırmayı hazırla"
+      "text": "Bağlantıyı Kaldır"
     },
     "workspace.physics.add_body": {
-      "text": "Cisim ve kutu çarpışma şekli hazırla"
+      "text": "Fizik Gövdesi + Kutu Çarpıştırıcı"
     },
     "workspace.physics.add_collider": {
-      "text": "Çarpışma şekli / algılayıcı hazırla"
+      "text": "Kutu Çarpıştırıcı"
     },
     "workspace.physics.add_constraint": {
-      "text": "Kısıt hazırla"
+      "text": "Fizik Bağlantısı"
     },
     "workspace.physics.apply": {
-      "text": "Fizik düzenlemesini uygula"
+      "text": "Uygula"
     },
     "workspace.physics.cancel": {
-      "text": "Hazırlanan fizik düzenlemesini at"
+      "text": "Değişiklikleri İptal Et"
     },
     "workspace.physics.invalid_identity": {
       "text": "Uygulamadan önce geçerli sıfır olmayan ondalık kimlikler ve kanonik proje UUID değerleri girin."
@@ -3913,6 +4296,48 @@
     },
     "workspace.ui_inspector.preparing_theme": {
       "text": "Stil varlıkları hazırlanıyor…"
-    }
+    },
+    "settings.prefab.title": {"text": "Prefab Sınırları"},
+    "settings.prefab.description": {"text": "Yeni düzenleme, genişletme ve derleme işlemleri için proje ilkesi. Çalışan işlemler ve canlı sahneler yakaladıkları ilkeyi korur. Proje ilkesini kullanıcı tercihlerinden ayrı kaydedin."},
+    "settings.prefab.ceiling": {"text": "Motor güvenlik üst sınırı: {}"},
+    "settings.prefab.derived_work": {"text": "Türetilmiş genişletme işi"},
+    "settings.prefab.derived_help": {"text": "Doğrulanmış ilkenin tamamından hesaplanan, salt okunur iş üst sınırı."},
+    "settings.prefab.hard_safety": {"text": "Ayrıştırıcı güvenliği motor tarafından sabitlenir: {} kodlanmış kaynak baytı ve {} JSON seviyesi. Nesne adı bayt sınırı da sabittir."},
+    "settings.prefab.invalid": {"text": "Tüm alanlar geçerli olana kadar kullanılamaz"},
+    "settings.prefab.unavailable": {"text": "İlkeyi düzenlemek için geçerli ve erişilebilir prefab ayar belgesi olan bir proje açın."},
+    "settings.prefab.reset": {"text": "Motor varsayılanlarına sıfırla"},
+    "settings.prefab.discard": {"text": "İlke düzenlemelerini bırak"},
+    "settings.prefab.reload": {"text": "Proje ilkesini yeniden yükle"},
+    "settings.prefab.save": {"text": "Proje ilkesini kaydet"},
+    "settings.prefab.saved": {"text": "Proje ilkesi güncellendi. Yeni işlemler kabul edilen ilkeyi yakalar."},
+    "settings.prefab.error.command": {"text": "Proje ilkesi değiştirilemedi. Eşzamanlı düzenleme, erişilemeyen proje veya yazma hatası giderildikten sonra yeniden yükleyin."},
+    "settings.prefab.error.number": {"text": "Ek karakter içermeyen bir tam sayı girin."},
+    "settings.prefab.error.range": {"text": "Motor güvenlik üst sınırını aşmayan pozitif bir tam sayı kullanın."},
+    "settings.prefab.error.value_set": {"text": "Tek değer için geçersiz kılma bayt sınırı, toplam geçersiz kılma bayt sınırını aşamaz."},
+    "settings.prefab.error.summary": {"text": "Proje ilkesi geçersiz. Kaydetmeden veya yeni işlem başlatmadan önce işaretli alanları düzeltin."},
+    "settings.prefab.error.durability": {"text": "Dosya değiştirildi ancak kalıcılık doğrulanamadı. Başarılı kayda kadar ilke kaydedilmemiş olarak kalır."},
+    "settings.prefab.fields.hierarchy_depth": {"text": "Kaynak hiyerarşi derinliği"},
+    "settings.prefab.fields.object_count": {"text": "Genişletilmiş nesne sayısı"},
+    "settings.prefab.fields.source_payload_bytes": {"text": "Kaynak yükü baytları"},
+    "settings.prefab.fields.expanded_payload_bytes": {"text": "Genişletilmiş yük baytları"},
+    "settings.prefab.fields.cooked_payload_bytes": {"text": "Derlenmiş yük baytları"},
+    "settings.prefab.fields.components_per_object": {"text": "Nesne başına bileşen"},
+    "settings.prefab.fields.referenced_assets": {"text": "Başvurulan varlıklar"},
+    "settings.prefab.fields.direct_nested_placements": {"text": "Doğrudan iç içe yerleşimler"},
+    "settings.prefab.fields.variant_depth": {"text": "Varyant kalıtım derinliği"},
+    "settings.prefab.fields.nested_depth": {"text": "İç içe prefab derinliği"},
+    "settings.prefab.fields.override_records": {"text": "Geçersiz kılma kayıtları"},
+    "settings.prefab.fields.unresolved_records": {"text": "Çakışan ve yetim kayıtlar"},
+    "settings.prefab.fields.property_path_segments": {"text": "Özellik yolu parçaları"},
+    "settings.prefab.fields.override_value_bytes": {"text": "Geçersiz kılma değeri baytları"},
+    "settings.prefab.fields.override_set_bytes": {"text": "Toplam geçersiz kılma baytları"},
+    "settings.prefab.fields.binding_slots": {"text": "Bağlama yuvaları"},
+    "settings.prefab.fields.binding_uses": {"text": "Bağlama kullanımları"},
+    "settings.prefab.fields.instance_bindings": {"text": "Örnek bağlamaları"},
+    "settings.prefab.fields.runtime_spawn_depth": {"text": "Çalışma zamanı oluşturma soy derinliği"},
+    "settings.prefab.draft_updated": {"text": "İlke taslağı güncellendi. Yeni işlemlerde kullanmak için kaydedin."},
+    "settings.prefab.reloaded": {"text": "Proje ilkesi yeniden yüklendi."},
+    "settings.prefab.discarded": {"text": "Kaydedilmemiş ilke düzenlemeleri bırakıldı."},
+    "settings.prefab.save_first": {"text": "Kullanıcı tercihlerini uygulamadan önce proje prefab ilkesini kaydedin veya bırakın."}
   }
 }

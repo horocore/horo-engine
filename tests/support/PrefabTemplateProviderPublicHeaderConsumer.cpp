@@ -1,6 +1,12 @@
 #include "Horo/Prefab/PrefabTemplateProvider.h"
 
 #include <type_traits>
+#include <utility>
+
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Prefab::PrefabTemplateProvider &>().LimitProfile()),
+                             const Horo::Prefab::PrefabLimitProfile &>);
+
+#include <type_traits>
 
 static_assert(!std::is_copy_constructible_v<Horo::Prefab::PrefabTemplateLoadHandle>);
 static_assert(std::is_nothrow_move_constructible_v<Horo::Prefab::PrefabTemplateLoadHandle>);

@@ -163,50 +163,103 @@ namespace Horo::Editor {
         /** @brief Owns immutable source identity; captures and verifies the full closure under the host lease. */
         class Provider final : public Assets::IAssetPreviewProvider {
         public:
-            Provider(Assets::AssetRegistrySnapshot registry, Assets::AssetId asset, PrefabHierarchySourceCapture capture)
-                : registry_(std::move(registry)), asset_(asset), capture_(std::move(capture)) {}
+            Provider(Assets::AssetRegistrySnapshot registry, Assets::AssetId asset, PrefabHierarchySourceCapture capture,
+                     Prefab::PrefabLimitProfile limits, PrefabAssetPreviewValueCapture values)
+                : registry_(std::move(registry)), asset_(asset), capture_(std::move(capture)), limits_(std::move(limits)),
+                  values_(std::move(values)) {}
+
+            /** @copydoc Assets::IAssetPreviewProvider::CaptureRevision */
+            Result<std::optional<Sha256Digest>> CaptureRevision(const Assets::AssetPreviewInput &input,
+                                                                const CancellationToken &cancellation) const override {
+                auto captured = Capture(input, cancellation);
+                if (captured.HasError())
+                    return Result<std::optional<Sha256Digest>>::Failure(captured.ErrorValue());
+                return Result<std::optional<Sha256Digest>>::Success(captured.Value().proof);
+            }
 
             /** @copydoc Assets::IAssetPreviewProvider::GeneratePreview */
             Result<Assets::AssetPreviewImage> GeneratePreview(const Assets::AssetPreviewInput &input,
                                                               const CancellationToken &cancellation) const override {
-                if (static const auto prefabType = Assets::AssetTypeId::Parse("core.prefab").Value();
-                    !capture_ || input.assetType != prefabType)
-                    return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                auto limits = Prefab::PrefabLimitProfile::Create({});
-                const std::array roots{asset_};
-                // Release the project lease before CPU rasterization so background previews do not hold up source saves.
-                auto captured = [&]() {
-                    auto prepared = capture_(registry_, roots, limits.Value(), cancellation);
-                    if (prepared.HasError())
-                        return Result<PrefabHierarchySources>::Failure(prepared.ErrorValue());
-                    return Result<PrefabHierarchySources>::Success(std::move(prepared).Value().sources);
-                }();
+                auto captured = Capture(input, cancellation);
                 if (captured.HasError())
                     return PreviewResult::Failure(captured.ErrorValue());
-                if (const auto *source = captured.Value().inputs.Find(asset_);
-                    !source || !std::ranges::equal(source->bytes, input.editorPayload))
+                if (input.capturedRevision && input.capturedRevision != captured.Value().proof)
                     return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
-                auto candidate =
-                    captured.Value().resolver.Resolve(asset_, Prefab::PrefabInstanceId::Create(1).Value(), limits.Value(), cancellation);
-                if (candidate.HasError())
-                    return PreviewResult::Failure(candidate.ErrorValue());
-                auto image = RenderPrefabAssetPreview(candidate.Value(), input.width, input.height, cancellation);
+                auto context = std::move(captured).Value();
+                if (context.values.delta) {
+                    auto resolved = Prefab::ResolvePrefabValueOverrides(context.candidate, *context.values.delta,
+                                                                        context.values.schemas ? &*context.values.schemas : nullptr,
+                                                                        limits_, cancellation);
+                    if (resolved.HasError())
+                        return PreviewResult::Failure(resolved.ErrorValue());
+                    if (!resolved.Value().effective)
+                        return PreviewResult::Failure(
+                            MakeError(resolved.Value().rebased.conflicts.empty() && resolved.Value().rebased.componentConflicts.empty()
+                                          ? Prefab::PrefabErrors::OverrideOrphan
+                                          : Prefab::PrefabErrors::OverrideConflict));
+                    context.candidate = std::move(*resolved.Value().effective);
+                }
+                auto image = RenderPrefabAssetPreview(context.candidate, input.width, input.height, cancellation);
                 if (image.HasError())
                     return image;
-                auto current = capture_(registry_, roots, limits.Value(), cancellation);
+                auto current = Capture(input, cancellation);
                 if (current.HasError())
                     return PreviewResult::Failure(current.ErrorValue());
-                if (current.Value().sources.inputs.ClosureDigest() != captured.Value().inputs.ClosureDigest())
+                if (current.Value().proof != context.proof)
                     return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
-                if (auto unchanged = current.Value().sources.inputs.VerifyUnchanged(cancellation); unchanged.HasError())
-                    return PreviewResult::Failure(unchanged.ErrorValue());
                 return image;
             }
 
         private:
+            struct Captured final {
+                Prefab::EffectivePrefabCandidate candidate;
+                PrefabAssetPreviewValues values;
+                Sha256Digest proof;
+            };
+
+            /** @brief Captures only immutable authorities under the explicit host lease; no document is read by the worker. */
+            Result<Captured> Capture(const Assets::AssetPreviewInput &input, const CancellationToken &cancellation) const {
+                if (static const auto prefabType = Assets::AssetTypeId::Parse("core.prefab").Value();
+                    !capture_ || input.assetType != prefabType)
+                    return Result<Captured>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+                const std::array roots{asset_};
+                auto prepared = capture_(registry_, roots, limits_, cancellation);
+                if (prepared.HasError())
+                    return Result<Captured>::Failure(prepared.ErrorValue());
+                auto &sources = prepared.Value().sources;
+                const auto *source = sources.inputs.Find(asset_);
+                if (!source || !std::ranges::equal(source->bytes, input.editorPayload))
+                    return Result<Captured>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
+                auto values = values_ ? values_(cancellation) : Result<PrefabAssetPreviewValues>::Success({});
+                if (values.HasError())
+                    return Result<Captured>::Failure(values.ErrorValue());
+                auto candidate = sources.resolver.Resolve(asset_, Prefab::PrefabInstanceId::Create(1).Value(), limits_, cancellation);
+                if (candidate.HasError())
+                    return Result<Captured>::Failure(candidate.ErrorValue());
+                auto revision =
+                    Prefab::CapturePrefabValueSnapshotRevision(candidate.Value(), values.Value().delta,
+                                                               values.Value().schemas ? &*values.Value().schemas : nullptr, limits_);
+                if (revision.HasError())
+                    return Result<Captured>::Failure(revision.ErrorValue());
+                std::array<std::byte, 104> bytes{};
+                const auto closure = sources.inputs.ClosureDigest();
+                for (std::size_t index = 0; index < 32; ++index) {
+                    bytes[index] = std::byte{closure.bytes[index]};
+                    bytes[index + 32] = std::byte{revision.Value().schema.bytes[index]};
+                    bytes[index + 64] = std::byte{revision.Value().delta.bytes[index]};
+                }
+                for (std::size_t index = 0; index < 8; ++index)
+                    bytes[index + 96] = std::byte{static_cast<std::uint8_t>(values.Value().publication >> (index * 8U))};
+                if (auto unchanged = sources.inputs.VerifyUnchanged(cancellation); unchanged.HasError())
+                    return Result<Captured>::Failure(unchanged.ErrorValue());
+                return Result<Captured>::Success({std::move(candidate).Value(), std::move(values).Value(), ComputeSha256(bytes)});
+            }
+
             Assets::AssetRegistrySnapshot registry_;
             Assets::AssetId asset_;
             PrefabHierarchySourceCapture capture_;
+            Prefab::PrefabLimitProfile limits_;
+            PrefabAssetPreviewValueCapture values_;
         };
     }  // namespace
 
@@ -236,7 +289,11 @@ namespace Horo::Editor {
     /** @copydoc CreatePrefabAssetPreviewProvider */
     std::shared_ptr<const Assets::IAssetPreviewProvider> CreatePrefabAssetPreviewProvider(Assets::AssetRegistrySnapshot registry,
                                                                                           const Assets::AssetId asset,
-                                                                                          PrefabHierarchySourceCapture capture) {
-        return std::make_shared<const Provider>(std::move(registry), asset, std::move(capture));
+                                                                                          PrefabHierarchySourceCapture capture,
+                                                                                          const Prefab::PrefabLimitProfile *projectLimits,
+                                                                                          PrefabAssetPreviewValueCapture values) {
+        return std::make_shared<const Provider>(std::move(registry), asset, std::move(capture),
+                                                projectLimits ? *projectLimits : Prefab::PrefabLimitProfile::Create({}).Value(),
+                                                std::move(values));
     }
 }  // namespace Horo::Editor

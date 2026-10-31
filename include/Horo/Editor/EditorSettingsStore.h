@@ -1,8 +1,11 @@
 #pragma once
 
 #include "Horo/Network/NetworkProjectSettings.h"
+#include "Horo/Runtime/Input.h"
 
+#include <algorithm>
 #include <filesystem>
+#include <span>
 #include <string>
 
 namespace Horo::Editor {
@@ -67,6 +70,48 @@ namespace Horo::Editor {
         bool operator==(const EditorNavigationOverlayPreferences &) const = default;
     };
 
+    /** @brief User binding overrides using the Runtime Input profile schema and validation rules. */
+    struct EditorKeymapSettings final {
+        Input::InputBindingProfile profile;
+
+        /** @brief Compares profile values without introducing another binding representation. */
+        bool operator==(const EditorKeymapSettings &other) const {
+            return profile.schemaVersion == other.profile.schemaVersion && profile.profileId == other.profile.profileId &&
+                   std::ranges::equal(profile.overrides, other.profile.overrides, [](const auto &left, const auto &right) {
+                return left.action == right.action && left.bindings == right.bindings;
+            });
+        }
+    };
+
+    /** @brief Source-view preferences; documents and language services retain source ownership. */
+    struct CodeEditorSettings final {
+        bool showLineNumbers{true};
+        bool showWhitespace{false};
+        bool wordWrap{true};
+        bool showScrollBar{true};
+        int autoSaveDelaySeconds{0}; /**< Zero disables source saves; positive values save after an idle delay. */
+        bool operator==(const CodeEditorSettings &) const = default;
+    };
+
+    /** @brief Typed builtin boolean setting shared by presentation and persistence. */
+    struct CodeEditorBooleanSetting final {
+        const char *key; /**< Stable persistence and localization identity. */
+        bool CodeEditorSettings::*member;
+    };
+
+    /** @brief Typed builtin integer setting with shared validation and control bounds. */
+    struct CodeEditorIntegerSetting final {
+        const char *key;
+        int CodeEditorSettings::*member;
+        int minimum;
+        int maximum;
+    };
+
+    /** @brief Returns inert builtin source toggle metadata. @return Process-lifetime descriptor span. */
+    [[nodiscard]] std::span<const CodeEditorBooleanSetting> CodeEditorBooleanSettings() noexcept;
+    /** @brief Returns inert builtin source numeric metadata. @return Process-lifetime descriptor span. */
+    [[nodiscard]] std::span<const CodeEditorIntegerSetting> CodeEditorIntegerSettings() noexcept;
+
     /** @brief User-level editor settings persisted in the user configuration directory. */
     struct EditorSettings {  // NOSONAR(cpp:S1820)
         EditorStartupBehavior startupBehavior = EditorStartupBehavior::WelcomeScreen;
@@ -78,15 +123,19 @@ namespace Horo::Editor {
         std::string languageTag = "en-US";
 
         EditorThemePreset themePreset = EditorThemePreset::HoroDark;
+        std::string themeId; /**< Stable installed package theme identity; empty selects themePreset. */
         std::string accentColorHex = "#04A5FC";
         int uiScalePercent = 100;
         int codeFontSizePx = 14;
         std::string uiFontFamily = "Inter";           /**< Preferred system sans family; bundled Inter remains fallback. */
         std::string codeFontFamily = "IBM Plex Mono"; /**< Preferred system monospace family; bundled font remains fallback. */
 
+        CodeEditorSettings codeEditor;
+
         int orbitSensitivity = 100;
         int panSensitivity = 100;
         bool invertOrbitY = false;
+        EditorKeymapSettings keymap;
 
         EditorViewportMode viewportMode = EditorViewportMode::Shaded;
         bool gridOverlay = true;

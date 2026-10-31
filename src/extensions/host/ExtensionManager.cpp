@@ -805,4 +805,10 @@ namespace Horo::Extensions {
         return Result<std::string>::Success(std::move(extensionId));
     }
 
+    /** @copydoc ExtensionManager::LoadedManifest */
+    const ExtensionManifest *ExtensionManager::LoadedManifest(const std::string_view id) const noexcept {
+        const auto found = m_loadedExtensions.find(id);
+        return found == m_loadedExtensions.end() || found->second->retiring ? nullptr : &found->second->manifest;
+    }
+
 }  // namespace Horo::Extensions

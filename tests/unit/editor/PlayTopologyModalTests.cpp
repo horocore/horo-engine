@@ -5,6 +5,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <fstream>
@@ -51,8 +52,8 @@ namespace {
             REQUIRE(modalHost.OpenRoot(std::make_unique<PlayTopologyModal>(context, std::move(store))).HasValue());
         }
 
-        void Draw() {
-            ImGui::GetIO().DisplaySize = {320, 600};
+        void Draw(const ImVec2 size = {320, 600}) {
+            ImGui::GetIO().DisplaySize = size;
             ImGui::NewFrame();
             modalHost.Draw();
             ImGui::Render();
@@ -111,4 +112,61 @@ TEST_CASE("Play profile modal displays storage failure with persistence disabled
     CHECK(std::filesystem::file_size(harness.root / "project.json") == 2);
     CHECK_FALSE(std::filesystem::exists(harness.root / "user.json"));
     REQUIRE(harness.modalHost.RequestCloseAllForShutdown().HasValue());
+}
+
+TEST_CASE("Play profile form uses padded responsive columns and compact footer actions", "[editor][gui][network][play_topology]") {
+    for (const auto *locale : {"en-US", "tr-TR"}) {
+        for (const float width : {320.0F, 900.0F}) {
+            Harness harness;
+            REQUIRE(harness.localization.Prepare(LocaleTag{locale}));
+            REQUIRE(harness.localization.ActivatePrepared());
+            harness.Open();
+            harness.Draw({width, 700});
+            harness.Draw({width, 700});
+            ImGuiWindow *body{}, *footer{};
+            for (auto *window : ImGui::GetCurrentContext()->Windows) {
+                const std::string_view name{window->Name};
+                if (name.find("PlayTopologyProfiles") == std::string_view::npos)
+                    continue;
+                if (name.find("##TopologyBody") != std::string_view::npos)
+                    body = window;
+                if (name.find("##ModalFooter") != std::string_view::npos)
+                    footer = window;
+                CHECK(window->ScrollMax.x == 0);
+            }
+            REQUIRE(body);
+            REQUIRE(footer);
+            CHECK(body->WindowPadding.x >= 20);
+            CHECK(body->WindowPadding.y >= 14);
+            const auto *table = ImGui::GetCurrentContext()->Tables.GetByKey(body->GetID("##TopologyIdentity"));
+            if (width == 900) {
+                REQUIRE(table);
+                REQUIRE(table->ColumnsCount == 2);
+                CHECK(table->Columns[0].WidthGiven == Catch::Approx(table->Columns[1].WidthGiven).margin(1));
+                float leftLabelY = 10000, rightLabelY = 10000;
+                for (const auto &vertex : body->DrawList->VtxBuffer) {
+                    if (vertex.col != Theme::U32(Theme::Dim()))
+                        continue;
+                    if (vertex.pos.x >= table->Columns[0].WorkMinX && vertex.pos.x < table->Columns[0].WorkMaxX)
+                        leftLabelY = std::min(leftLabelY, vertex.pos.y);
+                    if (vertex.pos.x >= table->Columns[1].WorkMinX && vertex.pos.x < table->Columns[1].WorkMaxX)
+                        rightLabelY = std::min(rightLabelY, vertex.pos.y);
+                }
+                REQUIRE(leftLabelY < 10000);
+                REQUIRE(rightLabelY < 10000);
+                CHECK(leftLabelY == Catch::Approx(rightLabelY).margin(1));
+            } else {
+                CHECK(table == nullptr);
+            }
+            ImRect closeBounds{{10000, 10000}, {-10000, -10000}};
+            for (const auto &vertex : footer->DrawList->VtxBuffer)
+                if (vertex.col == Theme::U32(Theme::Bg3()))
+                    closeBounds.Add(vertex.pos);
+            REQUIRE(closeBounds.GetWidth() > 0);
+            CHECK(closeBounds.GetWidth() < footer->Size.x * 0.5F);
+            CHECK(closeBounds.Min.x >= footer->Pos.x + 20);
+            CHECK_FALSE(std::filesystem::exists(harness.root / "project.json"));
+            CHECK_FALSE(std::filesystem::exists(harness.root / "user.json"));
+        }
+    }
 }

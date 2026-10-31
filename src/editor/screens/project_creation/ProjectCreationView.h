@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Editor/ProjectCreationController.h"
 #include "Horo/Runtime/Input.h"
 #include "editor/project_model/RendererAvailability.h"
@@ -10,6 +11,8 @@
 #include <string>
 
 namespace Horo::Editor {
+    /** @brief Shared route-screen and view localization scope. */
+    inline constexpr GuiLocalizationScope ProjectCreationTextScope{"project_creation"};
     struct GuiContentRegion;
 
     /** @brief Transient ImGui state retained by the ProjectCreation route view presentation. */
@@ -19,7 +22,8 @@ namespace Horo::Editor {
         int highestUnlockedStep = 1;
         int lastRenderedStep = 0;
         std::string projectName;
-        std::string projectPath;
+        std::string
+            projectParentDirectory; /**< Naming anchor for picker-derived destinations; the controller owns the editable final root. */
         std::string projectVersion;
         std::string defaultScene;
         std::string targetFps;

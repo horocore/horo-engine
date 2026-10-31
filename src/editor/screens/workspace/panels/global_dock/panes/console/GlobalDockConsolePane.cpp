@@ -94,10 +94,10 @@ namespace Horo::Editor {
 
         [[nodiscard]] const char *SeverityLabelKey(const Severity severity) noexcept {
             if (severity == Severity::Warning)
-                return "workspace.global_dock.console.row.warning";
+                return "row.warning";
             if (severity == Severity::Error)
-                return "workspace.global_dock.console.row.error";
-            return "workspace.global_dock.console.row.info";
+                return "row.error";
+            return "row.info";
         }
 
         [[nodiscard]] bool ContainsInsensitive(const std::string_view text, const std::string_view query) {
@@ -296,13 +296,13 @@ namespace Horo::Editor {
         const Layout l = GetLayout();
         const auto &fonts = context.theme.fonts;
         const bool narrow = width < 980.0F * l.scale;
-        const std::string &allLabel = context.localization.Get("editor", "workspace.global_dock.console.filter.all");
-        const std::string &infoLabel = context.localization.Get("editor", "workspace.global_dock.console.filter.info");
-        const std::string &warningLabel = context.localization.Get("editor", "workspace.global_dock.console.filter.warn");
-        const std::string &errorLabel = context.localization.Get("editor", "workspace.global_dock.console.filter.error");
-        const std::string &collapseLabel = context.localization.Get("editor", "workspace.global_dock.console.collapse");
-        const std::string &autoScrollLabel = context.localization.Get("editor", "workspace.global_dock.console.auto_scroll");
-        const std::string &clearLabel = context.localization.Get("editor", "workspace.global_dock.console.clear");
+        const std::string &allLabel = GlobalDockConsolePane::kTextScope.Text(context.localization, "filter.all");
+        const std::string &infoLabel = GlobalDockConsolePane::kTextScope.Text(context.localization, "filter.info");
+        const std::string &warningLabel = GlobalDockConsolePane::kTextScope.Text(context.localization, "filter.warn");
+        const std::string &errorLabel = GlobalDockConsolePane::kTextScope.Text(context.localization, "filter.error");
+        const std::string &collapseLabel = GlobalDockConsolePane::kTextScope.Text(context.localization, "collapse");
+        const std::string &autoScrollLabel = GlobalDockConsolePane::kTextScope.Text(context.localization, "auto_scroll");
+        const std::string &clearLabel = GlobalDockConsolePane::kTextScope.Text(context.localization, "clear");
         const float allWidth =
             narrow ? 46.0F * l.scale
                    : ToolbarButtonWidth(fonts.sansCompact, allLabel.c_str(), Ui::UiIcon::None, m_matchingRecordCount, 54.0F);
@@ -345,7 +345,7 @@ namespace Horo::Editor {
         ImGui::SetCursorScreenPos({x, y});
         if (Ui::InputTextControl("##ConsoleSearch", m_search.data(), m_search.size(), fonts,
                                  {.width = toolbar.search / l.scale,
-                                  .hint = context.localization.Get("editor", "workspace.global_dock.console.search").c_str(),
+                                  .hint = GlobalDockConsolePane::kTextScope.Text(context.localization, "search").c_str(),
                                   .prefixIconWidth = 18.0F,
                                   .surface = Ui::InputTextSurface::BottomDockToolbar}))
             m_filterDirty = true;
@@ -365,26 +365,25 @@ namespace Horo::Editor {
             x += buttonWidth + l.gap;
         };
         const auto label = [&](const char *key) {
-            return toolbar.narrow ? nullptr : context.localization.Get("editor", key).c_str();
+            return toolbar.narrow ? nullptr : GlobalDockConsolePane::kTextScope.Text(context.localization, key).c_str();
         };
         filter(toolbar.all, LevelFilter::All,
-               {"##All", Ui::UiIcon::None, label("workspace.global_dock.console.filter.all"), m_matchingRecordCount, Theme::Muted(),
-                m_levelFilter == LevelFilter::All});
+               {"##All", Ui::UiIcon::None, label("filter.all"), m_matchingRecordCount, Theme::Muted(), m_levelFilter == LevelFilter::All});
         filter(toolbar.info, LevelFilter::Info,
-               {"##Info", Ui::UiIcon::Info, label("workspace.global_dock.console.filter.info"), m_visibleLevelCounts[0],
-                Theme::ConsoleInfo(), m_levelFilter == LevelFilter::Info});
+               {"##Info", Ui::UiIcon::Info, label("filter.info"), m_visibleLevelCounts[0], Theme::ConsoleInfo(),
+                m_levelFilter == LevelFilter::Info});
         filter(toolbar.warning, LevelFilter::Warning,
-               {"##Warning", Ui::UiIcon::Warning, label("workspace.global_dock.console.filter.warn"), m_visibleLevelCounts[1],
-                Theme::ConsoleWarning(), m_levelFilter == LevelFilter::Warning});
+               {"##Warning", Ui::UiIcon::Warning, label("filter.warn"), m_visibleLevelCounts[1], Theme::ConsoleWarning(),
+                m_levelFilter == LevelFilter::Warning});
         filter(toolbar.error, LevelFilter::Error,
-               {"##Error", Ui::UiIcon::Error, label("workspace.global_dock.console.filter.error"), m_visibleLevelCounts[2],
-                Theme::ConsoleError(), m_levelFilter == LevelFilter::Error});
+               {"##Error", Ui::UiIcon::Error, label("filter.error"), m_visibleLevelCounts[2], Theme::ConsoleError(),
+                m_levelFilter == LevelFilter::Error});
     }
 
     void GlobalDockConsolePane::DrawToolbarSource(float &x, const float y, const ToolbarLayout &toolbar, const EditorGuiContext &context) {
         const auto &fonts = context.theme.fonts;
         ImGui::SetCursorScreenPos({x, y});
-        const std::string &allSources = context.localization.Get("editor", "workspace.global_dock.console.source.all");
+        const std::string &allSources = GlobalDockConsolePane::kTextScope.Text(context.localization, "source.all");
         std::vector<const char *> sourceItems;
         sourceItems.reserve(m_sources.size() + 1U);
         sourceItems.push_back(allSources.c_str());
@@ -409,25 +408,20 @@ namespace Horo::Editor {
         const Layout l = GetLayout();
         const auto &fonts = context.theme.fonts;
         const auto label = [&](const char *key) {
-            return toolbar.narrow ? nullptr : context.localization.Get("editor", key).c_str();
+            return toolbar.narrow ? nullptr : GlobalDockConsolePane::kTextScope.Text(context.localization, key).c_str();
         };
         if (ToolbarButton({x, y}, {toolbar.collapse, l.control},
-                          {"##Collapse", Ui::UiIcon::ViewList, label("workspace.global_dock.console.collapse"), std::nullopt,
-                           Theme::Muted(), m_compactRows},
-                          fonts))
+                          {"##Collapse", Ui::UiIcon::ViewList, label("collapse"), std::nullopt, Theme::Muted(), m_compactRows}, fonts))
             m_compactRows = !m_compactRows;
         x += toolbar.collapse + l.gap;
         if (ToolbarButton({x, y}, {toolbar.autoScroll, l.control},
-                          {"##AutoScroll", m_autoScroll ? Ui::UiIcon::Check : Ui::UiIcon::CheckboxUnchecked,
-                           label("workspace.global_dock.console.auto_scroll"), std::nullopt,
-                           m_autoScroll ? Theme::Accent() : Theme::Muted(), m_autoScroll},
+                          {"##AutoScroll", m_autoScroll ? Ui::UiIcon::Check : Ui::UiIcon::CheckboxUnchecked, label("auto_scroll"),
+                           std::nullopt, m_autoScroll ? Theme::Accent() : Theme::Muted(), m_autoScroll},
                           fonts))
             m_autoScroll = !m_autoScroll;
         x += toolbar.autoScroll + l.gap;
         if (ToolbarButton({x, y}, {toolbar.clear, l.control},
-                          {"##Clear", Ui::UiIcon::Delete, label("workspace.global_dock.console.clear"), std::nullopt, Theme::Muted(),
-                           false},
-                          fonts)) {
+                          {"##Clear", Ui::UiIcon::Delete, label("clear"), std::nullopt, Theme::Muted(), false}, fonts)) {
             if (!m_snapshot.records.empty())
                 m_clearedThroughSequence = m_snapshot.records.back()->sequence;
             m_filterDirty = true;
@@ -443,15 +437,15 @@ namespace Horo::Editor {
         const float y = minimum.y + (l.header - size) * 0.5F;
         float x = minimum.x + l.padding;
         const auto header = [&](const char *key, const float column) {
-            const std::string &label = context.localization.Get("editor", key);
+            const std::string &label = GlobalDockConsolePane::kTextScope.Text(context.localization, key);
             ClippedText(*drawList, context.theme.fonts.sans, size, {x, y}, {x + column - l.columnGap, minimum.y + l.header}, Theme::Muted(),
                         label);
             x += column + l.columnGap;
         };
-        header("workspace.global_dock.console.column.time", l.time);
-        header("workspace.global_dock.console.column.level", l.level);
-        header("workspace.global_dock.console.column.source", l.source);
-        header("workspace.global_dock.console.column.message", std::max(0.0F, minimum.x + width - x - l.padding));
+        header("column.time", l.time);
+        header("column.level", l.level);
+        header("column.source", l.source);
+        header("column.message", std::max(0.0F, minimum.x + width - x - l.padding));
     }
 
     void GlobalDockConsolePane::DrawLogRows(const float width, const float height, const EditorGuiContext &context) {
@@ -476,7 +470,7 @@ namespace Horo::Editor {
     void GlobalDockConsolePane::DrawEmptyLogState(const float height, const EditorGuiContext &context) const {
         const float fontSize = Theme::TextPx::Caption();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
-        const std::string &empty = context.localization.Get("editor", "workspace.global_dock.console.empty");
+        const std::string &empty = GlobalDockConsolePane::kTextScope.Text(context.localization, "empty");
         const float availableWidth = ImGui::GetContentRegionAvail().x;
         const float textWidth = TextWidth(context.theme.fonts.sans, fontSize, empty.c_str());
         ImGui::GetWindowDrawList()->AddText(context.theme.fonts.sans, fontSize,
@@ -514,7 +508,7 @@ namespace Horo::Editor {
         Ui::DrawEditorIcon(drawList, SeverityIcon(severity), {x, origin.y + (height - l.icon) * 0.5F}, {l.icon, l.icon},
                            Theme::U32(SeverityColor(severity)), context.theme.fonts.icon);
         ClippedText(*drawList, context.theme.fonts.sans, fontSize, {x + l.icon + l.gap, y}, {x + l.level, maximum.y},
-                    SeverityColor(severity), context.localization.Get("editor", SeverityLabelKey(severity)));
+                    SeverityColor(severity), GlobalDockConsolePane::kTextScope.Text(context.localization, SeverityLabelKey(severity)));
         x += l.level + l.columnGap;
         const std::string source = SourceLabel(record);
         ClippedText(*drawList, context.theme.fonts.sans, fontSize, {x, y}, {x + l.source, maximum.y}, Theme::ConsoleSourceText(), source);

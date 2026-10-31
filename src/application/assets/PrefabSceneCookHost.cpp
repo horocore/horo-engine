@@ -1,3 +1,4 @@
+#include "Horo/Application/PrefabProjectSettings.h"
 #include "PrefabSceneCookState.h"
 
 #include <algorithm>
@@ -51,7 +52,17 @@ namespace Horo::Application {
     /** @copydoc PrefabSceneCookHost::Cook */
     Result<Assets::AssetCookReport> PrefabSceneCookHost::Cook(const PrefabSceneCookRequest &request,
                                                               const CancellationToken &cancellation) {
-        return CookImpl(request, cancellation, nullptr);
+        Prefab::PrefabMetricOperation observation{request.metrics, Prefab::PrefabMetricPhase::Cook};
+        auto result = CookImpl(request, cancellation, nullptr);
+        if (result.HasError()) {
+            if (result.ErrorValue().domain.Value() == PrefabSceneCookErrors::Cancelled.domain.Value() &&
+                result.ErrorValue().code.Value() == PrefabSceneCookErrors::Cancelled.code.Value())
+                observation.Complete(Prefab::PrefabMetricOutcome::Cancelled);
+            else
+                observation.Fail(result.ErrorValue());
+        } else
+            observation.Complete();
+        return result;
     }
 
     /** @copydoc PrefabSceneCookHost::CookImpl */
@@ -63,8 +74,7 @@ namespace Horo::Application {
         if (!catalog_ || !request.assets.publicationFiles || !request.assets.newPublicationOperationId ||
             request.runtimePrefabRoots.size() > request.assets.limits.maximumAssets)
             return Result<Assets::AssetCookReport>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-        auto limits = Prefab::PrefabLimitProfile::Create(request.prefabPolicy);
-        if (limits.HasError())
+        if (const auto limits = Prefab::PrefabLimitProfile::Create(request.prefabPolicy); limits.HasError())
             return Result<Assets::AssetCookReport>::Failure(limits.ErrorValue());
         auto attempt = request.assets.newPublicationOperationId();
         if (attempt.HasError())
@@ -73,8 +83,21 @@ namespace Horo::Application {
                 mutations_.TryAcquire({request.assets.sourceRoot, Editor::ProjectMutationOwner::Asset, attempt.Value().ToString()});
             projectLease.HasError())
             return Result<Assets::AssetCookReport>::Failure(projectLease.ErrorValue());
-        else
-            return CookWithProjectLease(request, limits.Value(), cancellation, releasePlan, std::move(projectLease).Value());
+        else {
+            const auto settings = LoadPrefabProjectSettings(request.assets.sourceRoot);
+            if (settings.HasError())
+                return Result<Assets::AssetCookReport>::Failure(settings.ErrorValue());
+            auto values = PrefabPolicyFieldValues(request.prefabPolicy);
+            const auto projectValues = PrefabPolicyFieldValues(settings.Value().settings->Limits().Policy());
+            for (std::size_t index = 0; index < values.size(); ++index)
+                values[index] = std::min(values[index], projectValues[index]);
+            const auto validated = ValidatePrefabPolicyValues(values);
+            if (!validated.profile)
+                return Result<Assets::AssetCookReport>::Failure(MakeError(Prefab::PrefabErrors::LimitProfileInvalid));
+            auto effective = request;
+            effective.prefabPolicy = validated.profile->Policy();
+            return CookWithProjectLease(effective, *validated.profile, cancellation, releasePlan, std::move(projectLease).Value());
+        }
     }
 
     /** @copydoc PrefabSceneCookHost::CookWithProjectLease */
@@ -111,6 +134,7 @@ namespace Horo::Application {
         Assets::AssetCookRequest cook = request.assets;
         cook.registry = std::move(selected).Value();
         cook.pinnedInputs = inputs;
+        cook.keyProjection = composed.Value().keyProjection;
         cook.dependentPhase = composed.Value().templates;
         // Capture references are synchronous: AssetCook joins all accepted work before returning, and the owned project lease outlives it.
         cook.validateHostInputs = [this, &request, &host, &cancellation, releasePlan, capturedRevision] {

@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Prefab/PrefabMetrics.h"
 
 /** @file HeadlessProjectScene.h
  * @brief Application-owned project Scene inputs and immutable load resources for one explicit mode host.
@@ -35,6 +36,8 @@ namespace Horo::Application::Internal {
         HeadlessSceneLoadBoundary load;
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         std::optional<Physics::PhysicsSceneActivationSettings> settings;
+        Prefab::PrefabMetricHandles prefabMetrics; /**< Process-prebound numeric observations retained by host resources. */
+        Prefab::PrefabProjectPolicy prefabPolicy;  /**< Project-launch capture, passed by value to source-free world composition. */
     };
 
     /** @brief Captures one real authored/cooked project Scene and its selected schema/resource authorities.

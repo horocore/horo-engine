@@ -11,10 +11,12 @@
 #include "Horo/Editor/NavigationProjectSettingsSession.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Editor/PCGGraphDocumentService.h"
+#include "Horo/Editor/PrefabProjectSettingsSession.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorldStreamingPreviewRuntime.h"
+#include "Horo/Foundation/Sha256.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -177,7 +179,7 @@ namespace Horo::Editor {
         /** @brief Includes collision semantics and uncertain durability in the workspace leave guard. */
         [[nodiscard]] bool HasDirtyCollisionSettings() const noexcept;
         /** @brief Saves the exact collision draft with complete reference review. @return Original typed outcome. */
-        [[nodiscard]] Result<void> SaveCollisionSettings() const;
+        [[nodiscard]] Result<void> SaveCollisionSettings();
         /** @brief Revokes modal access before Scene owners retire. @param discardDirty Explicit discard decision.
          * @return Unchanged dirty rejection or successful owner shutdown. */
         [[nodiscard]] Result<void> ShutdownCollisionSettings(bool discardDirty = false);
@@ -221,6 +223,10 @@ namespace Horo::Editor {
         /** @brief Saves all dirty sources through their owner; uncertain durability keeps navigation blocked.
          * @return Success only after every source is durably clean. */
         [[nodiscard]] Result<void> SaveSourceDocuments();
+        /** @brief Capture terrain instances/revisions for exact delayed workspace leave decisions. */
+        [[nodiscard]] std::vector<std::pair<DocumentInstanceId, std::uint64_t>> TerrainDocumentRevisions() const;
+        /** @brief Settle asset-rooted terrain owners after explicit save/discard navigation. */
+        [[nodiscard]] Result<void> ShutdownTerrainDocuments(bool discard = false);
 
         /** @brief Last typed single-source save/Save As outcome from the actual workspace command route. */
         [[nodiscard]] const std::optional<Result<SourceSaveResult>> &SourceSaveOutcome() const noexcept {
@@ -335,6 +341,20 @@ namespace Horo::Editor {
 
         /** @brief Lazily composes actual project navigation sources with this exact active Scene/history owner. */
         [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings();
+        /** @brief Compose the exact project prefab document owner; no UI or runtime authority is created. */
+        [[nodiscard]] Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings();
+        /** @brief Capture the accepted immutable profile for a new authoring/conversion operation. */
+        [[nodiscard]] Result<Prefab::PrefabLimitProfile> PrefabLimits();
+        /** @brief Observe accepted publication and invalidate authoring projections only at the host boundary. */
+        void UpdatePrefabSettingsProjection();
+        /** @brief Include settings edits in ordinary project save/leave semantics. */
+        [[nodiscard]] bool HasDirtyPrefabSettings() const;
+        /** @brief Save exact current settings draft before project leave. */
+        [[nodiscard]] Result<void> SavePrefabSettings();
+        /** @brief Close the exact opening after explicit save/discard policy. */
+        [[nodiscard]] Result<void> ShutdownPrefabSettings(bool discard = false);
+        /** @brief Read the draft fence captured by delayed leave consent; zero means no opening. */
+        [[nodiscard]] std::uint64_t PrefabSettingsRevision() const;
         /** @brief Includes all navigation authoring owners in the ordinary leave guard. */
         [[nodiscard]] bool HasDirtyNavigationDocuments() const;
         /** @brief Saves each dirty navigation owner through actual Assets publication. */
@@ -410,6 +430,10 @@ namespace Horo::Editor {
          * @param intervalMinutes Zero disables autosave; positive values schedule recovery writes.
          */
         void UpdateAutosave(float elapsedSeconds, int intervalMinutes);
+        /** @brief Advances canonical source autosave with the committed idle-delay preference.
+         * @param elapsedSeconds Host update delta. @param delaySeconds Zero disables source saves.
+         */
+        void UpdateSourceAutosave(float elapsedSeconds, int delaySeconds);
         /**
          * @brief Schedules and drains non-blocking canonical scene identity inspections.
          * @param elapsedSeconds Owner-thread elapsed frame time.
@@ -454,6 +478,17 @@ namespace Horo::Editor {
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
         std::optional<Result<std::vector<SourceSaveAllItem>>> m_sourceSaveAllOutcome;
         std::optional<Result<bool>> m_sourceCloseOutcome;
+        /** @brief Intercept only explicitly registered terrain assets; generic source routing remains unchanged. */
+        bool TryOpenTerrainDocument(const SourceOpenRequest &request);
+        bool ProcessTerrainDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        void RefreshTerrainDocuments();
+        void ProcessFocusedTerrainCommand(const EditorWorkspaceViewCommandData &command);
+        [[nodiscard]] Result<void> SaveTerrainDocuments();
+        [[nodiscard]] Result<void> CloseTerrainDocument(DocumentInstanceId instance, bool discard);
+        std::vector<std::shared_ptr<TerrainDocumentHost>> m_terrainDocuments;
+        std::optional<DocumentInstanceId> m_activeTerrainDocument;
+        std::optional<EditorViewportCamera> m_terrainPriorCamera;
+        std::uint64_t m_nextTerrainOperation{1};
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;
@@ -531,6 +566,10 @@ namespace Horo::Editor {
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
         /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
         void RefreshPhysicsInspectorPort();
+        /** @brief Refreshes named committed collision profiles outside the frame draw path. */
+        void RefreshPhysicsProfiles();
+        /** @brief Projects registered Physics materials from the owner-pinned asset snapshot. */
+        void RefreshPhysicsMaterials();
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
         /** @brief Admit one atomic navigation gesture through existing document/history owners. */
         void ApplyNavigationInspectorCommand(const EditorWorkspaceViewCommandData &command);
@@ -562,6 +601,8 @@ namespace Horo::Editor {
         std::shared_ptr<CollisionProjectSettingsSession> m_collisionSettings;
         std::unique_ptr<SceneDocumentTransactions> m_navigationScene;
         std::unique_ptr<NavigationProjectSettingsSession> m_navigationSettings;
+        std::shared_ptr<PrefabProjectSettingsSession> m_prefabSettings;
+        std::uint64_t m_prefabSettingsPublication{};
         std::uint64_t m_navigationOpening{1};
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
         Assets::AssetId m_inspectorDocumentOwner;
@@ -627,6 +668,7 @@ namespace Horo::Editor {
 
         std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;
         std::uint64_t m_contentBrowserPreviewGeneration{};
+        Sha256Digest m_contentBrowserPreviewSchemaRevision;
         std::size_t m_contentBrowserNextPreviewEntry{};
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_pcgAutosaveElapsedSeconds{};

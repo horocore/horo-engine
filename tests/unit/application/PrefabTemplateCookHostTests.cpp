@@ -3,8 +3,10 @@
 #include "PrefabSceneCookHostFixture.h"
 
 #include <algorithm>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 
 namespace {
@@ -13,6 +15,32 @@ namespace {
     using namespace Horo::Assets;
     using namespace Horo::Assets::ServiceTestSupport;
     using namespace Horo::Application::PrefabCookTestSupport;
+
+    /** @brief Exercises complete, unavailable and cyclic source dependency declarations through the real host. */
+    class DependencyCooker final : public ICookerStrategy {
+    public:
+        std::optional<std::vector<AssetId>> dependencies;
+        std::shared_ptr<std::atomic<unsigned>> calls;
+        std::optional<AssetId> dependencySource;
+        bool throwDeclaration{};
+
+        DependencyCooker(std::optional<std::vector<AssetId>> values, std::shared_ptr<std::atomic<unsigned>> counter)
+            : dependencies(std::move(values)), calls(std::move(counter)) {}
+
+        Result<std::optional<std::vector<AssetId>>> InputDependencies(const CookSourceView &source,
+                                                                      const CancellationToken &) const override {
+            if (throwDeclaration)
+                throw std::runtime_error("test dependency provider");
+            if (dependencySource && source.id != *dependencySource)
+                return Result<std::optional<std::vector<AssetId>>>::Success(std::vector<AssetId>{});
+            return Result<std::optional<std::vector<AssetId>>>::Success(dependencies);
+        }
+
+        Result<CookOutputSink> Cook(const CookSourceView &, const CancellationToken &) const override {
+            ++*calls;
+            return Result<CookOutputSink>::Success({{1}, {}, {}});
+        }
+    };
 
     /** @brief Reads actual published envelope bytes without treating a cache directory as authority. */
     Result<AssetCookArtifact> GenerationArtifact(const AssetCookGeneration &generation, const AssetId id) {
@@ -323,9 +351,28 @@ TEST_CASE("Dynamic host captures required portable schemas and rejects their abs
                                                     Prefab::PrefabLimitProfile::Create({}).Value());
     REQUIRE(cooked.HasValue());
     CHECK(std::get<Prefab::RawComponentPayload>(cooked.Value().Data().entities[0].members[0]).component.typeId == type);
+    Gameplay::ComponentRegistry changedRegistry;
+    REQUIRE(changedRegistry
+                .Register({.typeId = type,
+                           .schemaVersion = 1,
+                           .displayName = "Data",
+                           .category = "Tests",
+                           .properties = {{Gameplay::ComponentPropertyId::Parse("optional").Value(), "Optional",
+                                           Gameplay::ComponentPropertyKind::String, false}}})
+                .HasValue());
+    REQUIRE(changedRegistry.Freeze().HasValue());
+    const auto changedSchemas = PrefabCookSchemaContext::Capture(changedRegistry, {});
+    REQUIRE(changedSchemas.HasValue());
+    fixture.request.schemas = changedSchemas.Value();
+    const auto changed = fixture.Cook();
+    REQUIRE(changed.HasValue());
+    CHECK(changed.Value().cacheHits == 2);  // Resource and scene do not consume this component schema.
+    const auto changedArtifact = GenerationArtifact(changed.Value().generation, fixture.prefabId);
+    REQUIRE(changedArtifact.HasValue());
+    CHECK(changedArtifact.Value().cacheKeyDigest != artifact.Value().cacheKeyDigest);
     fixture.request.schemas.reset();
     REQUIRE(fixture.Cook().HasError());
-    fixture.AssertRetained(first.Value().generation);
+    fixture.AssertRetained(changed.Value().generation);
 }
 
 TEST_CASE("Dynamic template payload ceilings accept the exact encoded boundary and reject the next byte",
@@ -342,4 +389,156 @@ TEST_CASE("Dynamic template payload ceilings accept the exact encoded boundary a
     --fixture.request.prefabPolicy.maximumCookedPayloadBytes;
     REQUIRE(fixture.Cook().HasError());
     fixture.AssertRetained(exact.Value().generation);
+}
+
+TEST_CASE("Dependency local cook keys retain unrelated template scene and resource hits", "[native][prefab-cook][host][closure-key]") {
+    HostFixture fixture;
+    const auto unrelated = fixture.AddSpawnableRoot();
+    fixture.request.runtimePrefabRoots = {fixture.prefabId, unrelated};
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    fixture.WritePrefab(19);
+    const auto changed = fixture.Cook();
+    REQUIRE(changed.HasValue());
+    CHECK(changed.Value().cacheHits == 2);  // Independent template and resource.
+    for (const auto id : {unrelated, TestMeshRecord().id}) {
+        const auto before = GenerationArtifact(first.Value().generation, id);
+        const auto after = GenerationArtifact(changed.Value().generation, id);
+        REQUIRE(before.HasValue());
+        REQUIRE(after.HasValue());
+        CHECK(before.Value().cacheKeyDigest == after.Value().cacheKeyDigest);
+        CHECK(before.Value().payload == after.Value().payload);
+    }
+    for (const auto id : {fixture.prefabId, fixture.sceneId}) {
+        const auto before = GenerationArtifact(first.Value().generation, id);
+        const auto after = GenerationArtifact(changed.Value().generation, id);
+        REQUIRE(before.HasValue());
+        REQUIRE(after.HasValue());
+        CHECK(before.Value().cacheKeyDigest != after.Value().cacheKeyDigest);
+        CHECK(before.Value().payload != after.Value().payload);
+    }
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto reduced = fixture.Cook();
+    REQUIRE(reduced.HasValue());
+    CHECK(reduced.Value().cacheHits == 3);
+    fixture.request.runtimePrefabRoots = {unrelated, fixture.prefabId};
+    const auto restored = fixture.Cook();
+    REQUIRE(restored.HasValue());
+    CHECK(restored.Value().cacheHits == 4);
+}
+
+TEST_CASE("Unreferenced source and unused schema changes preserve semantic cook keys", "[native][prefab-cook][host][closure-key]") {
+    HostFixture fixture;
+    const auto unused = fixture.AddSpawnableRoot();
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    auto document = Prefab::PrefabDocument::Create({.projectVersion = fixture.version,
+                                                    .assetId = unused,
+                                                    .objects = {{.localId = {0},
+                                                                 .name = "Unrelated changed object",
+                                                                 .localTransform = {.translation = {0, 7, 0}}}}},
+                                                   Prefab::PrefabLimitProfile::Create({}).Value());
+    REQUIRE(document.HasValue());
+    fixture.WriteText("assets/second.prefab", document.Value().SerializeCanonical().Value());
+    Gameplay::ComponentRegistry components;
+    REQUIRE(components
+                .Register({.typeId = Gameplay::ComponentTypeId::Parse("game.unused.schema").Value(),
+                           .schemaVersion = 1,
+                           .displayName = "Unused",
+                           .category = "Tests"})
+                .HasValue());
+    REQUIRE(components.Freeze().HasValue());
+    const auto schemas = PrefabCookSchemaContext::Capture(components, {});
+    REQUIRE(schemas.HasValue());
+    fixture.request.schemas = schemas.Value();
+    const auto changed = fixture.Cook();
+    REQUIRE(changed.HasValue());
+    CHECK(changed.Value().cacheHits == 3);
+    CHECK(first.Value().generation.manifestDigest == changed.Value().generation.manifestDigest);
+    const auto revision = fixture.registry.Snapshot().Revision();
+    fixture.PublishRegistry();  // Publication counters are freshness evidence, never content identity.
+    CHECK(fixture.registry.Snapshot().Revision() != revision);
+    const auto republished = fixture.Cook();
+    REQUIRE(republished.HasValue());
+    CHECK(republished.Value().cacheHits == 3);
+}
+
+TEST_CASE("Incomplete missing and cyclic resource closures fail before output and retain the prior generation",
+          "[native][prefab-cook][host][closure-key]") {
+    HostFixture fixture;
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    auto calls = std::make_shared<std::atomic<unsigned>>(0);
+    std::optional<std::vector<AssetId>> dependencies;
+    SECTION("undeclared producer") {
+        dependencies = std::nullopt;
+    }
+    SECTION("missing dependency") {
+        dependencies = std::vector{Id("00000000-0000-0000-0000-000000000099")};
+    }
+    SECTION("cyclic dependency") {
+        dependencies = std::vector{TestMeshRecord().id};
+    }
+    CookerCatalog catalog;
+    REQUIRE(catalog
+                .Register({"test.dependency",
+                           Type("core.mesh"),
+                           {fixture.request.assets.target},
+                           std::make_shared<const DependencyCooker>(dependencies, calls)})
+                .HasValue());
+    const auto published = catalog.Publish();
+    REQUIRE(published.HasValue());
+    PrefabSceneCookHost host{fixture.jobs, published.Value(), fixture.registry, fixture.inspector, fixture.mutations, fixture.migrations};
+    const auto rejected = host.Cook(fixture.request);
+    REQUIRE(rejected.HasError());
+    CHECK(calls->load() == 0);
+    fixture.AssertRetained(first.Value().generation);
+}
+
+TEST_CASE("Transitive resource source changes invalidate only their dependent cook branch", "[native][prefab-cook][host][closure-key]") {
+    HostFixture fixture;
+    const auto unrelated = fixture.AddSpawnableRoot();
+    const auto second = AddSecondMesh(fixture.project);
+    auto records = std::vector<AssetRecord>{fixture.registry.Snapshot().Records().begin(), fixture.registry.Snapshot().Records().end()};
+    records.push_back(second);
+    REQUIRE(fixture.registry.Publish(std::move(records)).status == AssetRegistryBuildStatus::Complete);
+    fixture.WritePrefab(4, {TestMeshRecord().id});
+    fixture.request.runtimePrefabRoots = {fixture.prefabId, unrelated};
+    auto calls = std::make_shared<std::atomic<unsigned>>(0);
+    auto strategy = std::make_shared<DependencyCooker>(std::vector{second.id}, calls);
+    strategy->dependencySource = TestMeshRecord().id;
+    CookerCatalog catalog;
+    REQUIRE(catalog.Register({"test.transitive", Type("core.mesh"), {fixture.request.assets.target}, strategy}).HasValue());
+    const auto published = catalog.Publish();
+    REQUIRE(published.HasValue());
+    PrefabSceneCookHost host{fixture.jobs, published.Value(), fixture.registry, fixture.inspector, fixture.mutations, fixture.migrations};
+    const auto first = host.Cook(fixture.request);
+    REQUIRE(first.HasValue());
+    WriteFile(fixture.project.assetsDir / "second_mesh.fbx", std::array<std::uint8_t, 2>{8, 9});
+    const auto changed = host.Cook(fixture.request);
+    REQUIRE(changed.HasValue());
+    CHECK(changed.Value().cacheHits == 1);
+    for (const auto id : {TestMeshRecord().id, second.id, fixture.prefabId, fixture.sceneId}) {
+        const auto before = GenerationArtifact(first.Value().generation, id);
+        const auto after = GenerationArtifact(changed.Value().generation, id);
+        REQUIRE(before.HasValue());
+        REQUIRE(after.HasValue());
+        CHECK(before.Value().cacheKeyDigest != after.Value().cacheKeyDigest);
+    }
+    const auto before = GenerationArtifact(first.Value().generation, unrelated);
+    const auto after = GenerationArtifact(changed.Value().generation, unrelated);
+    REQUIRE(before.HasValue());
+    REQUIRE(after.HasValue());
+    CHECK(before.Value().cacheKeyDigest == after.Value().cacheKeyDigest);
+    auto throwing = std::make_shared<DependencyCooker>(std::vector<AssetId>{}, calls);
+    throwing->throwDeclaration = true;
+    CookerCatalog failedCatalog;
+    REQUIRE(failedCatalog.Register({"test.throwing", Type("core.mesh"), {fixture.request.assets.target}, throwing}).HasValue());
+    const auto failedPublished = failedCatalog.Publish();
+    REQUIRE(failedPublished.HasValue());
+    PrefabSceneCookHost failing{fixture.jobs,      failedPublished.Value(), fixture.registry,
+                                fixture.inspector, fixture.mutations,       fixture.migrations};
+    REQUIRE(failing.Cook(fixture.request).HasError());
+    fixture.AssertRetained(changed.Value().generation);
 }

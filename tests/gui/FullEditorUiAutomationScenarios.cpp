@@ -116,8 +116,11 @@ namespace {
             ui.ItemClick(runtime == GameplayRuntimeKind::Lua ? "//**/###content_browser_create_lua_behavior"
                                                              : "//**/###content_browser_create_native_behavior");
             ui.Yield();
+            ui.ItemInputValue("//**/##GameplayBehaviorFilename", "DraftBehavior");
+            ui.Yield();
+            IM_CHECK(ui.ItemExists("//**/##GameplayBehaviorFilename"));
             ui.ItemInputValue("//**/##GameplayBehaviorFilename", "NewBehavior");
-            ui.ItemClick("//**/Create");
+            ui.ItemClick("//**/Create Behavior");
         });
     }
 
@@ -145,8 +148,9 @@ namespace {
                                    const GameplayRuntimeKind runtime) {
         pipeline.Step("Attach behavior through Inspector", [projectRoot, runtime, behaviorTypeId, &editor](ImGuiTestContext &ui) {
             const std::uint64_t beforeAttachment = editor.ViewportDocumentRevision();
-            const std::string behaviorItem = "//**/###inspector_behavior_" + behaviorTypeId;
+            const std::string behaviorItem = "//**/###behavior." + behaviorTypeId;
             ui.ItemClick("//**/###InspectorAddComponent");
+            ui.ItemClick("//**/###workspace.inspector.add_scripts");
             bool ready = false;
             for (int frame = 0; frame < 1500; ++frame) {
                 const bool currentInputs = runtime == GameplayRuntimeKind::Lua || editor.IsGameplayBuildUpToDate(projectRoot);
@@ -165,7 +169,11 @@ namespace {
             ui.Yield();
             IM_CHECK(editor.ViewportDocumentRevision() > beforeAttachment);
             ui.ItemClick("//**/###InspectorAddComponent");
-            IM_CHECK(!ui.ItemExists(behaviorItem.c_str()));
+            ui.ItemClick("//**/###workspace.inspector.add_scripts");
+            const auto duplicate = ui.ItemInfo(behaviorItem.c_str());
+            IM_CHECK(duplicate.ID != 0);
+            IM_CHECK((duplicate.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+            ui.KeyPress(ImGuiKey_Escape);
             ui.KeyPress(ImGuiKey_Escape);
         });
     }
@@ -178,16 +186,16 @@ namespace {
             const auto before = editor.FirstViewportObjectPosition();
             IM_CHECK(before.has_value());
             const std::uint64_t authoringRevision = editor.ViewportDocumentRevision();
-            if (!ui.ItemExists("//**/###workspace_play_play")) {
+            if (!ui.ItemExists("//**/workspace_play_toggle/##icon-button")) {
                 ui.LogInfo("Play toolbar unavailable; display size %.0f x %.0f", ImGui::GetIO().DisplaySize.x,
                            ImGui::GetIO().DisplaySize.y);
                 ImGuiTestItemList items;
                 ui.GatherItems(&items, "//##MenuBar");
                 ui.LogItemList(&items);
             }
-            ui.ItemClick("//**/###workspace_play_play");
+            ui.ItemClick("//**/workspace_play_toggle/##icon-button");
             for (int frame = 0; frame < 120; ++frame) {
-                const ImGuiTestItemInfo pause = ui.ItemInfo("//**/###workspace_play_pause", ImGuiTestOpFlags_NoError);
+                const ImGuiTestItemInfo pause = ui.ItemInfo("//**/workspace_play_pause/##icon-button", ImGuiTestOpFlags_NoError);
                 if (pause.ID != 0 && (pause.ItemFlags & ImGuiItemFlags_Disabled) == 0)
                     break;
                 ui.Yield();
@@ -197,23 +205,23 @@ namespace {
             const auto movementTick = editor.AdvanceFixedTicks(1);
             ui.Yield();
             IM_CHECK(editor.CompletedFixedTicks() == movementTick);
-            IM_CHECK(ui.ItemExists("//**/###workspace_play_pause"));
+            IM_CHECK(ui.ItemExists("//**/workspace_play_pause/##icon-button"));
             const auto moved = editor.FirstViewportObjectPosition();
             IM_CHECK(moved.has_value());
             IM_CHECK(moved->x == before->x + 1.0F);
 
-            ui.ItemClick("//**/###workspace_play_pause");
+            ui.ItemClick("//**/workspace_play_pause/##icon-button");
             const auto pausedTick = editor.AdvanceFixedTicks(1);
             ui.Yield();
             IM_CHECK(editor.CompletedFixedTicks() == pausedTick);
             IM_CHECK(editor.FirstViewportObjectPosition()->x == moved->x);
-            ui.ItemClick("//**/###workspace_play_step");
+            ui.ItemClick("//**/workspace_play_step/##icon-button");
             const auto steppedTick = editor.AdvanceFixedTicks(1);
             ui.Yield();
             IM_CHECK(editor.CompletedFixedTicks() == steppedTick);
             IM_CHECK(editor.FirstViewportObjectPosition()->x == moved->x + 1.0F);
             ui.KeyUp(ImGuiKey_RightArrow);
-            ui.ItemClick("//**/###workspace_play_stop");
+            ui.ItemClick("//**/workspace_play_toggle/##icon-button");
             ui.Yield();
             IM_CHECK(editor.ViewportDocumentRevision() == authoringRevision);
             IM_CHECK(editor.FirstViewportObjectPosition()->x == before->x);
@@ -347,7 +355,7 @@ namespace {
         }, [&editor, project](Tests::UiScenarioPipe &pipeline) {
             Tests::FullEditorSetups::CreateProjectAndOpenWorkspace(pipeline, editor, project);
             pipeline.Step("Workspace retains Play controls alongside the host menu", [](ImGuiTestContext &ui) {
-                IM_CHECK(ui.ItemExists("//**/###workspace_play_play"));
+                IM_CHECK(ui.ItemExists("//**/workspace_play_toggle/##icon-button"));
                 IM_CHECK(ui.ItemExists("//**/###workspace_play_profiles"));
             });
         }, Tests::EditorUiScenarioBudget::Extended(1400), &editor.Input());

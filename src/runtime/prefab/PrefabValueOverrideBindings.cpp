@@ -11,7 +11,8 @@ namespace Horo::Prefab::ValueDetail {
                                 const std::size_t object, const std::optional<std::size_t> component,
                                 const PrefabValuePropertySchema *schema, const PrefabValueOrigin origin) {
             const auto size = EncodeTarget(target).dump(0).size() + 2 * EncodeValue(value).dump(0).size() +
-                              (schema ? EncodeValue(schema->defaultValue).dump(0).size() : 0) + sizeof(ValueBinding);
+                              (schema ? EncodeValue(schema->defaultValue).dump(0).size() : 0) + sizeof(ValueBinding) +
+                              state.objects[object].originChain.size() * sizeof(PrefabCompositionOriginStep);
             if (state.bindings.size() >= PrefabHardLimits::OverrideRecords ||
                 state.provenanceBytes > state.limits.Policy().maximumOverrideSetBytes ||
                 size > state.limits.Policy().maximumOverrideSetBytes - state.provenanceBytes)
@@ -22,7 +23,8 @@ namespace Horo::Prefab::ValueDetail {
                                              schema ? std::optional{schema->defaultValue} : std::nullopt,
                                              value,
                                              std::move(value),
-                                             state.objects[object].sourcePrefab};
+                                             state.objects[object].sourcePrefab,
+                                             state.objects[object].originChain};
             state.bindings.emplace_back(std::move(provenance), object, component, schema);
             return Result<void>::Success();
         }
@@ -59,7 +61,9 @@ namespace Horo::Prefab::ValueDetail {
             auto target = PrefabPropertyAddress::Create(source.key.object, schema.componentType, payload.instance, schema.property);
             if (target.HasError())
                 return Result<void>::Failure(target.ErrorValue());
-            const auto origin = source.sourcePrefab == state.source.RootAsset() ? PrefabValueOrigin::Source : PrefabValueOrigin::Inherited;
+            const auto origin = source.originChain.empty()                                           ? PrefabValueOrigin::Source
+                                : source.originChain.back().kind == PrefabCompositionOrigin::Variant ? PrefabValueOrigin::Variant
+                                                                                                     : PrefabValueOrigin::Nested;
             return AddBinding(state, std::move(target).Value(), std::move(value).Value(), object, component, &schema, origin);
         }
 
@@ -130,7 +134,9 @@ namespace Horo::Prefab::ValueDetail {
             if (auto charged = state.budget.Consume(1); charged.HasError())
                 return charged;
             const auto &object = state.objects[i];
-            const auto origin = object.sourcePrefab == state.source.RootAsset() ? PrefabValueOrigin::Source : PrefabValueOrigin::Inherited;
+            const auto origin = object.originChain.empty()                                           ? PrefabValueOrigin::Source
+                                : object.originChain.back().kind == PrefabCompositionOrigin::Variant ? PrefabValueOrigin::Variant
+                                                                                                     : PrefabValueOrigin::Nested;
             if (auto added = AddBinding(state, object.key.object, object.object.localTransform, i, std::nullopt, nullptr, origin);
                 added.HasError())
                 return added;
@@ -148,11 +154,16 @@ namespace Horo::Prefab::ValueDetail {
         auto found = std::ranges::lower_bound(state.bindings, target, TargetLess, [](const ValueBinding &binding) -> const auto & {
             return binding.provenance.target;
         });
-        return found != state.bindings.end() && found->provenance.target == target ? std::to_address(found) : nullptr;
+        return found != state.bindings.end() && found->provenance.target == target &&
+                       found->provenance.disposition == PrefabValueDisposition::Present
+                   ? std::to_address(found)
+                   : nullptr;
     }
 
     /** @brief Apply one validated value solely to operation-owned objects, preserving a nested root's original mount transform. */
     Result<void> WriteBinding(ResolutionState &state, ValueBinding &binding, const PrefabOverrideValue &value) {
+        if (binding.provenance.disposition != PrefabValueDisposition::Present)
+            return Result<void>::Failure(MakeError(PrefabErrors::OverrideOrphan));
         if (!binding.component.has_value()) {
             auto &object = state.objects[binding.object];
             const auto &transform = std::get<Math::Transform>(value);

@@ -193,15 +193,20 @@ namespace Horo::Prefab::ValueDetail {
                     std::ranges::sort(object.object.components, {}, &RawComponentPayload::instance);
                 }
             }
-            std::erase_if(state.bindings, [&state](const auto &binding) {
+            for (auto &binding : state.bindings) {
                 const auto *property = std::get_if<PrefabPropertyAddress>(&binding.provenance.target);
                 if (!property)
-                    return false;
+                    continue;
                 const auto &components = state.objects[binding.object].object.components;
-                return std::ranges::none_of(components, [property](const auto &component) {
+                if (auto charged = state.budget.Consume(components.size()); charged.HasError())
+                    return charged;
+                if (std::ranges::none_of(components, [property](const auto &component) {
                     return component.instance == property->ComponentInstance() && component.component.typeId == property->ComponentType();
-                });
-            });
+                })) {
+                    binding.provenance.disposition = PrefabValueDisposition::RemovedByInstance;
+                    binding.provenance.origin = PrefabValueOrigin::Instance;
+                }
+            }
             return Result<void>::Success();
         }
     }  // namespace

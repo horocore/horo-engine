@@ -78,15 +78,17 @@ namespace {
         REQUIRE((!reimport->enabledByDefault));
     }
 
-    TEST_CASE("Build Menu Keeps Unimplemented Workflows Disabled", "[unit][editor]") {
+    TEST_CASE("Build menu opens native workflows and keeps unsupported execution commands disabled", "[unit][editor][build_release]") {
         const EditorMenuItem &build = GetEditorMenuModel().menus[6];
         REQUIRE((build.children.size() == 4));
         constexpr std::array keys{"web_workspace.menu.build_job", "web_workspace.menu.run_tests", "web_workspace.menu.prepare_release",
                                   "web_workspace.menu.publish_candidate"};
+        constexpr std::array actions{EditorMenuAction::OpenBuild, EditorMenuAction::None, EditorMenuAction::OpenRelease,
+                                     EditorMenuAction::None};
         for (std::size_t index = 0; index < keys.size(); ++index) {
-            REQUIRE((build.children[index].action == EditorMenuAction::None));
+            REQUIRE((build.children[index].action == actions[index]));
             REQUIRE((build.children[index].labelKey == keys[index]));
-            REQUIRE((!build.children[index].enabledByDefault));
+            REQUIRE((build.children[index].enabledByDefault == (actions[index] != EditorMenuAction::None)));
         }
     }
 

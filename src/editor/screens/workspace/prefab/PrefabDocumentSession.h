@@ -64,6 +64,9 @@ namespace Horo::Editor {
         };
 
     public:
+        /** @brief Adopt an accepted next-operation project policy without changing source, history or active stage.
+         * @param limits Complete validated profile. @return Current-source validation outcome; saves/edits use the new profile. */
+        [[nodiscard]] Result<void> UpdateLimitProfile(const Prefab::PrefabLimitProfile &limits);
         /** @brief Internal factory construction; only Open can create the admission key.
          * @param root Canonical project root. @param path Canonical source. @param identity Shared identity.
          * @param owner Workspace incarnation. @param limits Validated policy. */

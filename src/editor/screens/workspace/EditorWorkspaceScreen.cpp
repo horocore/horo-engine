@@ -13,7 +13,7 @@
 namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::EditorWorkspaceScreen */
     EditorWorkspaceScreen::EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
-        : packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
+        : GuiScreen(kTextScope), packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
           modalHost_(services.Get<EditorModalHost>()), context_(services.GetConst<EditorGuiContext>()),
           contributions_{services.Get<WorkspacePanelRegistry>(), services.Get<EditorStatusItemRegistry>()},
           input_(services.Get<Input::InputRouter>()), xr_{services.TryGet<IEditorPlayXrHost>()},
@@ -100,6 +100,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return controller_ ? controller_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
     }
 
+    /** @copydoc GuiScreen::PrefabSettings */
+    Result<std::shared_ptr<PrefabProjectSettingsSession>> EditorWorkspaceScreen::PrefabSettings() {
+        return controller_ ? controller_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
+    }
+
     /** @copydoc EditorWorkspaceScreen::OnUpdate */
     void EditorWorkspaceScreen::OnUpdate(float dt) {
         if (controller_) {
@@ -118,7 +123,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             }
             controller_->UpdateNavigationSettingsProjection();
             controller_->UpdateUiCanvasResources();
-            controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
+            const auto preferences = settings_.Snapshot();
+            controller_->UpdateAutosave(dt, preferences.settings.autoSaveIntervalMinutes);
+            controller_->UpdateSourceAutosave(dt, preferences.settings.codeEditor.autoSaveDelaySeconds);
             controller_->UpdateExternalSceneWatch(dt);
             controller_->UpdateGameplaySources(dt);
             if (projectServices_.assetRegistry != nullptr) {
@@ -168,7 +175,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum EditorWorkspaceViewCommand;
         EditorWorkspaceViewCommandData command;
         controller_->RefreshWorldDocumentProjection();
-        view_.Draw(controller_->ViewModel(), command, contentRegion);
+        GuiLive::Invoke<&EditorWorkspaceView::Draw>(context_.theme.liveReload, view_, controller_->ViewModel(), command, contentRegion);
 
         if (command.command == None && !command.menuInvocation.has_value()) {
             sourceCommands_.RouteInput(input_.router, input_.context, *controller_, command);
@@ -206,7 +213,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         PublishViewportSceneIfChanged();
 
         if (snackbarHost_) {
-            const std::optional<SnackbarActionInvokedEvent> action = snackbarHost_->Draw(context_, ImGui::GetIO().DeltaTime);
+            const std::optional<SnackbarActionInvokedEvent> action =
+                GuiLive::Invoke<&EditorSnackbarHost::Draw>(context_.theme.liveReload, *snackbarHost_, context_, ImGui::GetIO().DeltaTime);
             if (action.has_value() && action->actionId == "open_logs") {
                 controller_->ProcessCommand(
                     EditorWorkspaceViewCommandData{.command = ChangeActivePanel, .stringPayload = "horo.global_dock"});

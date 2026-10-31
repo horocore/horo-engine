@@ -230,25 +230,6 @@ target_link_libraries(HoroModelProviderAdapters
         PUBLIC HoroEngine::ModelProvider
         PRIVATE nlohmann_json::nlohmann_json CURL::libcurl)
 
-if (HORO_ENABLE_OPENTELEMETRY)
-    add_library(HoroOpenTelemetry STATIC
-            foundation/telemetry/OpenTelemetrySink.cpp
-    )
-    add_library(HoroEngine::OpenTelemetry ALIAS HoroOpenTelemetry)
-    target_compile_features(HoroOpenTelemetry PUBLIC cxx_std_20)
-    target_include_directories(HoroOpenTelemetry
-            PUBLIC
-            ${PROJECT_SOURCE_DIR}/include
-    )
-    target_link_libraries(HoroOpenTelemetry
-            PUBLIC
-            HoroEngine::Foundation
-            PRIVATE
-            nlohmann_json::nlohmann_json
-            CURL::libcurl
-    )
-endif ()
-
 add_library(HoroPlatform STATIC
         platform/Platform.cpp
         platform/PlatformRead.cpp
@@ -297,6 +278,27 @@ target_include_directories(HoroPlatform
 )
 target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Security)
 target_link_libraries(HoroPlatform PRIVATE HoroRootedStorageNativeInternal)
+
+# Desktop integration is optional and never adds native UI dependencies to the baseline platform target.
+add_library(HoroPlatformDesktop STATIC platform/desktop/FileManager.cpp)
+add_library(HoroEngine::PlatformDesktop ALIAS HoroPlatformDesktop)
+target_compile_features(HoroPlatformDesktop PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformDesktop PUBLIC HoroEngine::Foundation)
+if (HORO_BUILD_EDITOR_GUI AND WIN32)
+    target_sources(HoroPlatformDesktop PRIVATE platform/desktop/FileManagerWindows.cpp)
+    target_link_libraries(HoroPlatformDesktop PRIVATE shell32 ole32)
+elseif (HORO_BUILD_EDITOR_GUI AND APPLE)
+    set(_HORO_FILE_MANAGER_MAC_SOURCE platform/desktop/FileManagerMac.mm)
+    set_source_files_properties(${_HORO_FILE_MANAGER_MAC_SOURCE} PROPERTIES
+            LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++")
+    target_sources(HoroPlatformDesktop PRIVATE ${_HORO_FILE_MANAGER_MAC_SOURCE})
+    target_link_libraries(HoroPlatformDesktop PRIVATE "-framework AppKit")
+elseif (HORO_BUILD_EDITOR_GUI AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(HoroPlatformDesktop PRIVATE platform/desktop/FileManagerLinux.cpp)
+    target_link_libraries(HoroPlatformDesktop PRIVATE ${HORO_SDL3_TARGET})
+else ()
+    target_sources(HoroPlatformDesktop PRIVATE platform/desktop/FileManagerUnsupported.cpp)
+endif ()
 target_include_directories(HoroPlatform PRIVATE
         "$<TARGET_PROPERTY:HoroPublicationLockInternal,INTERFACE_INCLUDE_DIRECTORIES>")
 
@@ -563,6 +565,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveNamespace.cpp
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
+        runtime/save/RuntimeSaveSession.cpp
         runtime/save/SaveRestoreTransaction.cpp
         runtime/save/SaveGameplayCheckpoint.cpp
         runtime/save/SaveRestoreTransactionReferences.cpp
@@ -943,6 +946,11 @@ add_library(HoroEngine::ProjectMutationGuard ALIAS HoroProjectMutationGuard)
 target_compile_features(HoroProjectMutationGuard PUBLIC cxx_std_20)
 target_link_libraries(HoroProjectMutationGuard PUBLIC HoroEngine::Foundation)
 
+add_library(HoroProjectAssetImportApplication STATIC application/assets/ProjectAssetImportCommitter.cpp)
+add_library(HoroEngine::ProjectAssetImportApplication ALIAS HoroProjectAssetImportApplication)
+target_compile_features(HoroProjectAssetImportApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectAssetImportApplication PUBLIC HoroEngine::Assets HoroEngine::Foundation HoroEngine::ProjectMutationGuard)
+
 add_library(HoroUiTemplateHost STATIC
         application/ui/UiTemplateCaptureControls.cpp
         application/ui/UiTemplateInputLease.cpp
@@ -1214,6 +1222,7 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/AssetCookService.cpp
         runtime/assets/cooker/AssetCookPreparation.cpp
         runtime/assets/cooker/AssetCookInputSnapshot.cpp
+        runtime/assets/cooker/AssetCookKeyProjection.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp
         runtime/assets/AssetSourcePublication.cpp
@@ -1221,7 +1230,6 @@ add_library(HoroAssets STATIC
         runtime/assets/importer/AssetImportOperation.cpp
         runtime/assets/importer/AssetImportFileFacts.cpp
         runtime/assets/importer/AssetReimport.cpp
-        runtime/assets/importer/ProjectAssetImportCommitter.cpp
         runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.cpp
         runtime/assets/importer/builtin/obj_mesh/ObjMeshPreviewProvider.cpp
         runtime/assets/importer/builtin/fbx_mesh/FbxMeshImporter.cpp
@@ -2412,6 +2420,7 @@ target_include_directories(HoroJsonEncodingInternal INTERFACE
 target_link_libraries(HoroJsonEncodingInternal INTERFACE nlohmann_json::nlohmann_json)
 
 add_library(HoroPrefab STATIC
+        runtime/prefab/PrefabMetrics.cpp
         runtime/prefab/CookedPrefab.cpp
         runtime/prefab/CookedPrefabCodec.cpp
         runtime/prefab/PrefabErrors.cpp
@@ -2421,6 +2430,12 @@ add_library(HoroPrefab STATIC
 add_library(HoroEngine::Prefab ALIAS HoroPrefab)
 target_compile_features(HoroPrefab PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::GameplayApi)
+
+# Explicit application bridge; generic Application/ProjectSettings never depend back on Prefab.
+add_library(HoroPrefabProjectSettings STATIC application/project/PrefabProjectSettings.cpp)
+add_library(HoroEngine::PrefabProjectSettings ALIAS HoroPrefabProjectSettings)
+target_compile_features(HoroPrefabProjectSettings PUBLIC cxx_std_20)
+target_link_libraries(HoroPrefabProjectSettings PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Prefab)
 
 # Runtime-only integration: Scene remains independent from Prefab and source authoring.
 add_library(HoroPrefabRuntime STATIC
@@ -2450,6 +2465,7 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabExpansionCache.cpp
         runtime/prefab/PrefabDiagnostics.cpp
+        runtime/prefab/PrefabDebugSnapshot.cpp
         runtime/prefab/PrefabDocumentBehaviorComposition.cpp
         runtime/prefab/PrefabDocumentCanonical.cpp
         runtime/prefab/PrefabDocument.cpp
@@ -2459,6 +2475,7 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabValueOverrideAddresses.cpp
         runtime/prefab/PrefabValueOverrideBindings.cpp
         runtime/prefab/PrefabValueOverrideResolution.cpp
+        runtime/prefab/PrefabValueSnapshot.cpp
         runtime/prefab/PrefabValueOverrideSerialization.cpp
         runtime/prefab/PrefabValueOverrideValues.cpp
         runtime/prefab/PrefabValueSchemas.cpp
@@ -3294,6 +3311,7 @@ target_link_libraries(HoroEditorPlayXrHostInterface INTERFACE HoroEngine::Input)
 target_compile_features(HoroEditorPlayXrHostInterface INTERFACE cxx_std_20)
 
 add_library(HoroEditorServices STATIC
+        editor/navigation/NavigationBakeWorkspace.cpp
         editor/document/WorkspaceReadSources.cpp
         editor/navigation/NavigationViewportSnapshot.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
@@ -3365,6 +3383,7 @@ add_library(HoroEditorServices STATIC
         editor/project_model/ProjectMetadata.cpp
         editor/project_model/RendererAvailability.cpp
         editor/settings/EditorConfiguration.cpp
+        editor/settings/PrefabProjectSettingsSession.cpp
         editor/settings/EditorSettingsService.cpp
         editor/navigation/NavigationProjectSettingsSession.cpp
         editor/settings/EditorSettingsStore.cpp
@@ -3375,7 +3394,6 @@ add_library(HoroEditorServices STATIC
         editor/hierarchy/HierarchyModel.cpp
         editor/NotificationService.cpp
         editor/input/EditorInputActions.cpp
-        editor/input/EditorScrollSmoother.cpp
         editor/modals/EditorModalHost.cpp
         editor/screens/workspace/WorkspaceLayout.cpp
         editor/screens/workspace/WorkspacePanelHost.cpp
@@ -3392,6 +3410,7 @@ target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEn
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
@@ -3567,6 +3586,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
             editor/app/EditorTheme.cpp
+            editor/app/EditorThemeLiveReload.cpp
             editor/menu/EditorMenuPlatform.cpp
             editor/status_bar/EditorStatusBar.cpp
             editor/modals/settings/SettingsModal.cpp
@@ -3580,6 +3600,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalNavigation.cpp
             editor/modals/settings/SettingsModalNavigationProject.cpp
             editor/modals/settings/SettingsModalNavigationPolicy.cpp
+            editor/modals/settings/SettingsModalPrefab.cpp
             editor/modals/settings/SettingsModalUpdates.cpp
             editor/modals/settings/SettingsModalPluginDetails.cpp
             editor/modals/settings/SettingsModalPluginList.cpp
@@ -3594,6 +3615,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/play_topology/PlayTopologyModal.cpp
             editor/modals/source_document/SourceDocumentCloseModal.cpp
             editor/modals/packages/PackageModal.cpp
+            editor/modals/build_release/BuildReleaseModal.cpp
+            editor/modals/build_release/BuildModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
             editor/modals/prefab_creation/PrefabCreationModal.cpp
@@ -3604,6 +3627,14 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/EditorWorkspaceControllerTerrain.cpp
+            editor/screens/workspace/EditorWorkspaceViewTerrain.cpp
+            editor/screens/workspace/terrain/TerrainSculptProducer.cpp
+            editor/screens/workspace/terrain/TerrainViewportPicking.cpp
+            editor/screens/workspace/terrain/TerrainAssetFormat.cpp
+            editor/screens/workspace/terrain/TerrainDocumentHost.cpp
+            editor/screens/workspace/terrain/TerrainViewportTool.cpp
+            editor/screens/workspace/panels/viewport/ViewportTerrainSource.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
@@ -3622,6 +3653,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/NavigationInspectorSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelNavigation.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
+            editor/screens/workspace/panels/inspector/add_component/AddComponentRegistry.cpp
+            editor/screens/workspace/panels/inspector/add_component/BuiltinAddComponentDefinitions.cpp
+            editor/screens/workspace/panels/inspector/add_component/AddComponentMenu.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsConstraint.cpp
@@ -3672,6 +3706,7 @@ if (HORO_BUILD_EDITOR_GUI)
         editor/screens/workspace/EditorWorkspaceControllerAudio.cpp
         editor/screens/workspace/EditorWorkspaceControllerCollision.cpp
         editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
+        editor/screens/workspace/EditorWorkspaceControllerPrefabSettings.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldSources.cpp
@@ -3761,7 +3796,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication HoroThirdParty::Zep)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::ProjectAssetImportApplication HoroEngine::TerrainAuthoring HoroEngine::PlayTopologyApplication HoroThirdParty::Zep)
 # Existing workspace view-model consumers require the same unchanged Play-state declaration.
 target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
     target_link_libraries(HoroGui
@@ -3784,6 +3819,7 @@ target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
         target_sources(HoroGui PRIVATE ${_HORO_EDITOR_MENU_MAC_SOURCE})
         target_link_libraries(HoroGui PRIVATE "-framework AppKit")
     endif ()
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformDesktop)
 endif ()
 
 add_library(HoroExtensions STATIC
@@ -3998,6 +4034,7 @@ endif ()
 # production target has been declared.
 add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabCookSchemaContext.cpp
+        application/assets/PrefabCookSemanticInputs.cpp
         application/assets/PrefabSceneCookHost.cpp
         application/assets/PrefabSceneCookCapture.cpp
         application/assets/PrefabSceneCookCatalog.cpp
@@ -4005,6 +4042,7 @@ add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabSceneCookState.h)
 add_library(HoroEngine::PrefabCookHost ALIAS HoroPrefabCookHost)
 target_compile_features(HoroPrefabCookHost PUBLIC cxx_std_20)
+target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::PrefabProjectSettings)
 target_link_libraries(HoroPrefabCookHost
         PUBLIC HoroEngine::Application HoroEngine::Assets HoroEngine::EditorServices
                HoroPackageSecurity HoroEngine::PrefabAuthoring HoroEngine::SceneCook

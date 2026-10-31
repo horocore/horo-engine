@@ -3,6 +3,7 @@
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/GuiRoute.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Foundation/Diagnostics.h"
 #include "Horo/Foundation/Result.h"
 
@@ -14,6 +15,7 @@
 
 namespace Horo::Editor {
     class NavigationProjectSettingsSession;
+    class PrefabProjectSettingsSession;
 
     /**
      * @file GuiScreen.h
@@ -123,7 +125,10 @@ namespace Horo::Editor {
     };
 
     /** @brief Abstract contract for a top-level GUI screen inside HoroEditor. */
-    class GuiScreen {
+    class GuiScreen : public LocalizedGui {
+    protected:
+        using LocalizedGui::LocalizedGui;
+
     public:
         virtual ~GuiScreen() = default;
 
@@ -133,6 +138,11 @@ namespace Horo::Editor {
          */
         [[nodiscard]] virtual Result<NavigationProjectSettingsSession *> NavigationSettings() {
             return Result<NavigationProjectSettingsSession *>::Success(nullptr);
+        }
+
+        /** @brief Returns the current project-owned prefab settings session. @return Weak-borrowable exact owner or null. */
+        [[nodiscard]] virtual Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings() {
+            return Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
         }
 
         /** @brief Returns stable identifier for this screen class. */

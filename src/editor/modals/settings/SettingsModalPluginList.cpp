@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -124,17 +125,17 @@ namespace Horo::Editor::SettingsModalInternal {
     void DrawPluginList(SettingsState &st, const EditorGuiContext &ctx, float /*listW*/) {  // NOSONAR(cpp:S1144)
         DrawPluginFilter(st, ctx);
 
-        const std::string mcpDesc = ctx.localization.Get("editor", "settings.plugins.mcp.desc");
-        const std::string mcpStatus = ctx.localization.Get("editor", "settings.plugins.status.trusted");
-        const std::string mcpCat = ctx.localization.Get("editor", "settings.plugins.category.editor");
+        const std::string mcpDesc = SettingsModal::kTextScope.Text(ctx.localization, "plugins.mcp.desc");
+        const std::string mcpStatus = SettingsModal::kTextScope.Text(ctx.localization, "plugins.status.trusted");
+        const std::string mcpCat = SettingsModal::kTextScope.Text(ctx.localization, "plugins.category.editor");
 
-        const std::string fmodDesc = ctx.localization.Get("editor", "settings.plugins.fmod.desc");
-        const std::string fmodStatus = ctx.localization.Get("editor", "settings.plugins.status.vendor");
-        const std::string fmodCat = ctx.localization.Get("editor", "settings.plugins.category.audio");
+        const std::string fmodDesc = SettingsModal::kTextScope.Text(ctx.localization, "plugins.fmod.desc");
+        const std::string fmodStatus = SettingsModal::kTextScope.Text(ctx.localization, "plugins.status.vendor");
+        const std::string fmodCat = SettingsModal::kTextScope.Text(ctx.localization, "plugins.category.audio");
 
-        const std::string steamDesc = ctx.localization.Get("editor", "settings.plugins.steam.desc");
-        const std::string steamStatus = ctx.localization.Get("editor", "settings.plugins.status.disabled");
-        const std::string steamCat = ctx.localization.Get("editor", "settings.plugins.category.platform");
+        const std::string steamDesc = SettingsModal::kTextScope.Text(ctx.localization, "plugins.steam.desc");
+        const std::string steamStatus = SettingsModal::kTextScope.Text(ctx.localization, "plugins.status.disabled");
+        const std::string steamCat = SettingsModal::kTextScope.Text(ctx.localization, "plugins.category.platform");
 
         const std::array<PluginSpec, 3> kPlugins = {{
             {"Horo MCP Bridge", mcpDesc.c_str(), "v0.4.0", mcpStatus.c_str(), BadgeTone::Success, mcpCat.c_str(), 0,

@@ -40,6 +40,8 @@
 #include <vector>
 
 namespace Horo::Editor {
+    class TerrainDocumentHost;
+    struct TerrainToolCommand;
     /** @brief Typed presentation kind projected from authored scene components. */
     enum class SceneObjectKind : std::uint8_t {
         Mesh,
@@ -223,6 +225,7 @@ namespace Horo::Editor {
         DockWorkspacePanel,
         ResizePanel,
         OpenPlayTopologyProfiles,
+        TerrainTool,
     };
 
     enum class BottomDockMode {
@@ -362,6 +365,7 @@ namespace Horo::Editor {
         std::optional<WorldDocumentFence> worldDocumentFence;
         std::optional<OperationId> worldBakeOperation; /**< Exact accepted operation targeted by a cancellation intent. */
         std::optional<WorldSourceToolCommand> worldSource;
+        std::shared_ptr<const TerrainToolCommand> terrainTool;
         std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<DocumentInstanceId> documentMoveBefore;
@@ -455,6 +459,18 @@ namespace Horo::Editor {
         std::shared_ptr<NavigationDefinitionEditorState> editor;
     };
 
+    /** @brief Name and stable identity of a project collision profile available to the Inspector. */
+    struct PhysicsProfileChoice {
+        Physics::CollisionProfileId id;
+        std::string name;
+    };
+
+    /** @brief Name and stable identity of a registered Physics material. */
+    struct PhysicsMaterialChoice {
+        Assets::AssetId id;
+        std::string name;
+    };
+
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
         WorldViewportBinding worldViewport;
         std::shared_ptr<const WorldStreamingPreviewGeometry> worldStreamingPreview;
@@ -478,6 +494,7 @@ namespace Horo::Editor {
         std::optional<Error> audioPreviewFailure;
         std::vector<NavigationDefinitionEditorTab> navigationDocuments;
         std::string projectRoot;
+        std::string projectName;                   /**< Display name projected from canonical project metadata. */
         std::filesystem::path navigationScenePath; /**< Exact project-relative Scene namespace for saved navigation overlays. */
         Assets::AssetRegistryRevision assetRegistryRevision{};
         ContentBrowserDirectory contentBrowser;
@@ -493,6 +510,8 @@ namespace Horo::Editor {
         std::uint64_t selectionRevision{};
         std::vector<InspectorProviderApproval> inspectorApprovals;
         SceneTransactionContext physicsContext;
+        std::vector<PhysicsProfileChoice> physicsProfiles;
+        std::vector<PhysicsMaterialChoice> physicsMaterials;
         std::vector<NavigationDefinitionSnapshot> navigationDefinitions;
         std::string navigationEditError;
         std::uint64_t physicsSelectionRevision{};
@@ -508,6 +527,7 @@ namespace Horo::Editor {
         std::optional<Error> prefabPostCommitError;
         bool prefabHierarchyUnavailable{}; /**< Preparation failed; retained rows are inspection-only, never a fresh publication. */
         std::vector<Gameplay::BehaviorDescriptor> availableBehaviors;
+        std::uint64_t availableBehaviorsRevision{}; /**< Owner publication fence for menu/schema projections. */
         std::optional<SceneObjectId> hierarchyRevealObject;
         DocumentRevision hierarchyRevealRevision{};
         std::optional<SceneObjectId> primarySelection;
@@ -549,6 +569,8 @@ namespace Horo::Editor {
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
         std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
+        std::vector<std::shared_ptr<const TerrainDocumentHost>> terrainDocuments;
+        std::optional<Error> terrainDocumentError;
         std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::optional<Error> prefabDocumentError;
         bool prefabRecoveryAvailable{};
