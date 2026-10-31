@@ -151,6 +151,40 @@ namespace Horo::Runtime {
         private:
             Work &work_;
         };
+
+        bool JobPending(JobState state) noexcept {
+            return state == JobState::Queued || state == JobState::Running;
+        }
+
+        /** @brief Publish detached completion at most once; preserve original worker failure and outcome. */
+        Result<void> PublishCompletion(Work &work, SaveSafePointCoordinator &safePoints, SaveRuntimeGeneration generation,
+                                       const JobSnapshot &job) {
+            if (work.completionPublished)
+                return Result<void>::Success();
+            const bool succeeded = job.state == JobState::Succeeded;
+            auto completed = safePoints.PublishWorkerCompletion(
+                {work.handle.Id(), generation, succeeded ? SaveWorkerCompletionOutcome::Succeeded : SaveWorkerCompletionOutcome::Failed,
+                 succeeded ? std::optional<Error>{}
+                           : std::optional<Error>{job.error.value_or(MakeError(SaveErrors::LifecycleCallbackFailed))}});
+            work.completionPublished = true;
+            if (completed.HasError())
+                return Fail(work, std::move(completed).ErrorValue());
+            if (!succeeded)
+                return Fail(work, job.error.value_or(MakeError(SaveErrors::LifecycleCallbackFailed)));
+            return Result<void>::Success();
+        }
+
+        /** @brief Activate staged restore through the same safe-point owner and forward its terminal error. */
+        Result<void> CommitRestore(Work &work, SaveSafePointCoordinator &safePoints, SaveRuntimeGeneration generation) {
+            Executor executor(work);
+            auto drained = safePoints.CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation, 1, executor);
+            if (drained.HasError())
+                return Result<void>::Failure(std::move(drained).ErrorValue());
+            const auto result = work.handle.Snapshot();
+            if (result->terminalError)
+                return Result<void>::Failure(*result->terminalError);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc RuntimeSaveRequest::RuntimeSaveRequest */
@@ -330,6 +364,32 @@ namespace Horo::Runtime {
         }
     }
 
+    /** @brief Capture and release the owner barrier before dispatching detached save work. */
+    Result<void> RuntimeSaveSession::CaptureAndDispatch(const RuntimeSaveCaptureProvenance &provenance) {
+        auto &work = *work_;
+        if (work.producer.ObserveCancellation() == SaveCancellationObservation::Cancelled) {
+            ReleaseBarrier();
+            return Result<void>::Success();
+        }
+        (void)work.producer.PublishProgress(SaveOperationStage::CapturingSnapshot, {});
+        auto outcome =
+            barrier_.CaptureAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, provenance, participants_, limits_);
+        if (outcome.HasError())
+            return Fail(work, std::move(outcome).ErrorValue());
+        if (!outcome.Value().capture) {
+            if (outcome.Value().barrier.state == SaveBarrierState::Pending)
+                return Result<void>::Success();
+            return Fail(work, outcome.Value().error ? std::move(*outcome.Value().error) : MakeError(SaveErrors::LifecycleUnavailable));
+        }
+        work.capture = std::move(*outcome.Value().capture);
+        ReleaseBarrier();
+        Executor executor(work);
+        auto drained = safePoints_->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, 1, executor);
+        if (drained.HasError())
+            return Fail(work, std::move(drained).ErrorValue());
+        return Dispatch(work_);
+    }
+
     /** @copydoc RuntimeSaveSession::Pump */
     Result<void> RuntimeSaveSession::Pump(const RuntimeSaveCaptureProvenance &provenance) {
         if (!work_)
@@ -339,55 +399,18 @@ namespace Horo::Runtime {
             ReleaseBarrier();
             return Result<void>::Success();
         }
-        if (!work.job && work.writer) {
-            if (work.producer.ObserveCancellation() == SaveCancellationObservation::Cancelled) {
-                ReleaseBarrier();
-                return Result<void>::Success();
-            }
-            (void)work.producer.PublishProgress(SaveOperationStage::CapturingSnapshot, {});
-            auto outcome =
-                barrier_.CaptureAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, provenance, participants_, limits_);
-            if (outcome.HasError())
-                return Fail(work, std::move(outcome).ErrorValue());
-            if (!outcome.Value().capture) {
-                if (outcome.Value().barrier.state == SaveBarrierState::Pending)
-                    return Result<void>::Success();
-                return Fail(work, outcome.Value().error ? std::move(*outcome.Value().error) : MakeError(SaveErrors::LifecycleUnavailable));
-            }
-            work.capture = std::move(*outcome.Value().capture);
-            ReleaseBarrier();
-            Executor executor(work);
-            auto drained = safePoints_->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, 1, executor);
-            if (drained.HasError())
-                return Fail(work, std::move(drained).ErrorValue());
-            return Dispatch(work_);
-        }
+        if (!work.job && work.writer)
+            return CaptureAndDispatch(provenance);
         if (!work.job)
             return Result<void>::Success();
         const auto job = work.job->Snapshot();
-        if (!job || job->state == JobState::Queued || job->state == JobState::Running)
+        if (!job || JobPending(job->state))
             return Result<void>::Success();
-        if (!work.completionPublished) {
-            const bool succeeded = job->state == JobState::Succeeded;
-            auto completed = safePoints_->PublishWorkerCompletion(
-                {work.handle.Id(), generation_, succeeded ? SaveWorkerCompletionOutcome::Succeeded : SaveWorkerCompletionOutcome::Failed,
-                 succeeded ? std::optional<Error>{}
-                           : std::optional<Error>{job->error.value_or(MakeError(SaveErrors::LifecycleCallbackFailed))}});
-            work.completionPublished = true;
-            if (completed.HasError())
-                return Fail(work, std::move(completed).ErrorValue());
-            if (!succeeded)
-                return Fail(work, job->error.value_or(MakeError(SaveErrors::LifecycleCallbackFailed)));
-        }
-        if (!work.writer) {
-            Executor executor(work);
-            auto drained = safePoints_->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, 1, executor);
-            if (drained.HasError())
-                return Result<void>::Failure(std::move(drained).ErrorValue());
-            const auto result = work.handle.Snapshot();
-            if (result->terminalError)
-                return Result<void>::Failure(*result->terminalError);
-        }
+        auto completed = PublishCompletion(work, *safePoints_, generation_, *job);
+        if (completed.HasError())
+            return completed;
+        if (!work.writer)
+            return CommitRestore(work, *safePoints_, generation_);
         return Result<void>::Success();
     }
 

@@ -125,6 +125,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ValidateOwner() const;
         [[nodiscard]] Result<std::shared_ptr<RuntimeSaveSessionDetail::Work>> Admit(SaveOperationDescriptor operation);
         [[nodiscard]] Result<void> Dispatch(const std::shared_ptr<RuntimeSaveSessionDetail::Work> &work);
+        /** @brief Capture under the owner transition fence, then dispatch the admitted save work. */
+        [[nodiscard]] Result<void> CaptureAndDispatch(const RuntimeSaveCaptureProvenance &provenance);
         [[nodiscard]] Result<void> Pump(const RuntimeSaveCaptureProvenance &provenance);
         /** @brief Retire beneath an already held owner transition fence, including stale safe-point admission. */
         [[nodiscard]] Result<void> RetireInternal();
