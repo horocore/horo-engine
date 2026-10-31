@@ -279,9 +279,7 @@ namespace Horo::Editor {
         if (tools.x + ButtonWidth * 5.0F + ToolGap * 4.0F > origin.x + size.x - SideInset)
             tools = {origin.x + SideInset, tools.y + rowHeight + gap};
         const ImVec2 options{origin.x + SideInset, tools.y + rowHeight + gap};
-        return {.toolsPosition = tools,
-                .optionsPosition = options,
-                .bottom = tools.y + rowHeight};
+        return {.toolsPosition = tools, .optionsPosition = options, .bottom = tools.y + rowHeight};
     }
 
     /** @copydoc ResolveViewportStatusRow */

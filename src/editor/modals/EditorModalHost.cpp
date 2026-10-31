@@ -1,6 +1,6 @@
 #include "Horo/Editor/EditorModalHost.h"
-#include "Horo/Editor/GuiLiveReload.h"
 
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/EditorServiceErrors.h"
 

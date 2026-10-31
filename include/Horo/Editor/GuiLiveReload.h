@@ -82,7 +82,8 @@ namespace Horo::Editor::GuiLive {
         __attribute__((used))
 #endif
 #endif
-        decltype(Address) HostAddress() noexcept
+        decltype(Address)
+        HostAddress() noexcept
 #if defined(HORO_GUI_RUNTIME_COMPILATION)
             ;
 #else

@@ -1,8 +1,8 @@
-#include "Horo/Editor/GuiLiveReload.h"
 #include "EditorPageView.h"
 
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/Logging/Logger.h"

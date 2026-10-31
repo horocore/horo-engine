@@ -1,5 +1,5 @@
-#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
@@ -70,7 +70,9 @@ TEST_CASE("Theme watcher publishes valid replacements and retains the last good 
     JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
     EditorDataBus events;
     int reloads{};
-    const auto subscription = events.Subscribe<Theme::ThemeReloadedEvent>([&](const auto &) { ++reloads; });
+    const auto subscription = events.Subscribe<Theme::ThemeReloadedEvent>([&](const auto &) {
+        ++reloads;
+    });
     Theme::LiveReload watcher{jobs, events};
     const auto pumpUntil = [&](const auto &ready) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -80,7 +82,9 @@ TEST_CASE("Theme watcher publishes valid replacements and retains the last good 
         }
         REQUIRE(ready());
     };
-    pumpUntil([&] { return reloads == 1; });
+    pumpUntil([&] {
+        return reloads == 1;
+    });
     directory.Write("theme.json", "{invalid");
     for (int attempt = 0; attempt < 30; ++attempt) {
         watcher.Update(0.5);
@@ -89,7 +93,9 @@ TEST_CASE("Theme watcher publishes valid replacements and retains the last good 
     CHECK(reloads == 1);
     CHECK(Theme::Bg0().x == 17.0F / 255.0F);
     directory.Write("theme.json", R"({"colors":{"WindowBg":"#445566"},"tokens":{"radii":{"control":9},"layoutSizes":{"modalWidth":820}}})");
-    pumpUntil([&] { return reloads == 2; });
+    pumpUntil([&] {
+        return reloads == 2;
+    });
     CHECK(Theme::Bg0().x == 68.0F / 255.0F);
     CHECK(ImGui::GetStyle().FrameRounding == 9.0F);
     CHECK(Theme::GetActiveTokens().sizes.modalWidth == 820.0F);
@@ -100,7 +106,9 @@ TEST_CASE("Theme watcher publishes valid replacements and retains the last good 
     }
     CHECK(reloads == 2);
     directory.Write("theme.json", R"({"colors":{"WindowBg":"#778899"}})");
-    pumpUntil([&] { return reloads == 3; });
+    pumpUntil([&] {
+        return reloads == 3;
+    });
     CHECK(Theme::Bg0().x == 119.0F / 255.0F);
     Theme::SelectThemeByIndex(0);
     watcher.Update(0.5);
@@ -121,7 +129,9 @@ TEST_CASE("Switching to a built-in theme fences a pending background candidate",
     JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
     EditorDataBus events;
     int reloads{};
-    const auto subscription = events.Subscribe<Theme::ThemeReloadedEvent>([&](const auto &) { ++reloads; });
+    const auto subscription = events.Subscribe<Theme::ThemeReloadedEvent>([&](const auto &) {
+        ++reloads;
+    });
     Theme::LiveReload watcher{jobs, events};
     watcher.Update(0.5);
     Theme::SelectThemeByIndex(0);

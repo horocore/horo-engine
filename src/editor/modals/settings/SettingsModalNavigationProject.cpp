@@ -68,26 +68,29 @@ namespace Horo::Editor {
                 const auto profile = GuiLive::HostSymbol<&Nav::NavigationAgentProfileId::Create>()(*id).Value();
                 edits.emplace_back(PutNavigationProfile{{profile, draft.name, draft.geometry}});
                 if (rename)
-                    edits.emplace_back(RemoveNavigationProfile{GuiLive::HostSymbol<&Nav::NavigationAgentProfileId::Create>()(*old).Value(), profile});
+                    edits.emplace_back(
+                        RemoveNavigationProfile{GuiLive::HostSymbol<&Nav::NavigationAgentProfileId::Create>()(*old).Value(), profile});
             } else if (draft.catalog == 1) {
                 const auto area = GuiLive::HostSymbol<&Nav::NavigationAreaId::Create>()(*id).Value();
-                edits.emplace_back(PutNavigationArea{
-                    {area,
-                     {Nav::NavigationDescriptorSourceKind::Project, GuiLive::HostSymbol<&Nav::NavigationDescriptorSourceId::Create>()(*source).Value()},
-                     draft.traversalCost,
-                     {*flags}}});
+                edits.emplace_back(PutNavigationArea{{area,
+                                                      {Nav::NavigationDescriptorSourceKind::Project,
+                                                       GuiLive::HostSymbol<&Nav::NavigationDescriptorSourceId::Create>()(*source).Value()},
+                                                      draft.traversalCost,
+                                                      {*flags}}});
                 if (rename)
                     edits.emplace_back(RemoveNavigationArea{GuiLive::HostSymbol<&Nav::NavigationAreaId::Create>()(*old).Value(), area});
             } else {
                 const auto filter = GuiLive::HostSymbol<&Nav::NavigationFilterId::Create>()(*id).Value();
-                edits.emplace_back(PutNavigationFilter{
-                    {filter,
-                     {Nav::NavigationDescriptorSourceKind::Project, GuiLive::HostSymbol<&Nav::NavigationDescriptorSourceId::Create>()(*source).Value()},
-                     {*flags},
-                     {*excluded},
-                     draft.overrides}});
+                edits.emplace_back(
+                    PutNavigationFilter{{filter,
+                                         {Nav::NavigationDescriptorSourceKind::Project,
+                                          GuiLive::HostSymbol<&Nav::NavigationDescriptorSourceId::Create>()(*source).Value()},
+                                         {*flags},
+                                         {*excluded},
+                                         draft.overrides}});
                 if (rename)
-                    edits.emplace_back(RemoveNavigationFilter{GuiLive::HostSymbol<&Nav::NavigationFilterId::Create>()(*old).Value(), filter});
+                    edits.emplace_back(
+                        RemoveNavigationFilter{GuiLive::HostSymbol<&Nav::NavigationFilterId::Create>()(*old).Value(), filter});
             }
             Preview(state, definition.asset, std::move(edits));
         }
@@ -103,19 +106,25 @@ namespace Horo::Editor {
             }
             std::vector<NavigationDefinitionEdit> edits;
             if (draft.catalog == 0)
-                edits.emplace_back(RemoveNavigationProfile{GuiLive::HostSymbol<&Nav::NavigationAgentProfileId::Create>()(*id).Value(),
-                                                           *replacement
-                                                               ? std::optional{GuiLive::HostSymbol<&Nav::NavigationAgentProfileId::Create>()(*replacement).Value()}
-                                                               : std::nullopt});
+                edits.emplace_back(
+                    RemoveNavigationProfile{GuiLive::HostSymbol<&Nav::NavigationAgentProfileId::Create>()(*id).Value(),
+                                            *replacement
+                                                ? std::optional{GuiLive::HostSymbol<&Nav::NavigationAgentProfileId::Create>()(*replacement)
+                                                                    .Value()}
+                                                : std::nullopt});
             else if (draft.catalog == 1)
                 edits.emplace_back(
                     RemoveNavigationArea{GuiLive::HostSymbol<&Nav::NavigationAreaId::Create>()(*id).Value(),
-                                         *replacement ? std::optional{GuiLive::HostSymbol<&Nav::NavigationAreaId::Create>()(*replacement).Value()} : std::nullopt});
+                                         *replacement
+                                             ? std::optional{GuiLive::HostSymbol<&Nav::NavigationAreaId::Create>()(*replacement).Value()}
+                                             : std::nullopt});
             else
-                edits.emplace_back(RemoveNavigationFilter{GuiLive::HostSymbol<&Nav::NavigationFilterId::Create>()(*id).Value(),
-                                                          *replacement
-                                                              ? std::optional{GuiLive::HostSymbol<&Nav::NavigationFilterId::Create>()(*replacement).Value()}
-                                                              : std::nullopt});
+                edits.emplace_back(
+                    RemoveNavigationFilter{GuiLive::HostSymbol<&Nav::NavigationFilterId::Create>()(*id).Value(),
+                                           *replacement
+                                               ? std::optional{GuiLive::HostSymbol<&Nav::NavigationFilterId::Create>()(*replacement)
+                                                                   .Value()}
+                                               : std::nullopt});
             Preview(state, definition.asset, std::move(edits));
         }
 
