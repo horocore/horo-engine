@@ -110,6 +110,10 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             if (error || !std::filesystem::is_regular_file(status))
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
+            // Save As without overwrite consent requires absence, even when a newly
+            // appeared destination happens to contain the original source bytes.
+            if (allowAbsent)
+                return Result<void>::Failure(MakeError(SourceDocumentErrors::SaveConflict));
             auto disk = Detail::LoadSourceText(path, maximum, cancellation);
             if (disk.HasError())
                 return Result<void>::Failure(disk.ErrorValue());

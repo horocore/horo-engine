@@ -1334,7 +1334,10 @@ single/batch/close outcomes remain queryable on the controller; presentation dec
 how to ask the user and display each error without writing files itself. Save As
 retargets the workspace registry through `SourceFileOpenService`, preserving instance
 identity. No widget teardown, presentation detach or implicit watcher event authorizes
-save, overwrite, or dirty discard.
+save, overwrite, or dirty discard. Save As without overwrite consent requires an
+absent destination at both disk checks around private staging. A destination that
+appears during staging is a conflict even if its bytes match the original source
+base; explicit consent must name the observed destination bytes before retrying.
 
 ### Source editing history and view restoration (HORO-223)
 

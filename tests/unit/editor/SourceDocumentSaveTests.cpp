@@ -66,6 +66,7 @@ namespace {
         std::optional<Error> writeError;
         bool failReplace{};
         bool failAfterCommit{};
+        std::function<void()> afterWrite;
         std::function<void()> beforeReplace;
         std::function<void()> afterCommit;
 
@@ -81,7 +82,10 @@ namespace {
                     return written;
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
             }
-            return native.WritePrivateDurable(path, bytes, created, permissions);
+            auto result = native.WritePrivateDurable(path, bytes, created, permissions);
+            if (result.HasValue() && afterWrite)
+                afterWrite();
+            return result;
         }
 
         Result<void> AtomicReplace(const std::filesystem::path &, const std::filesystem::path &) override {
@@ -598,4 +602,38 @@ TEST_CASE("Source autosave retains failed text and retries with bounded backoff"
     REQUIRE(retried->HasValue());
     CHECK(project.Read("code.cpp") == edited.Text());
     CHECK_FALSE(documents.UpdateAutosave(300, 1, files));
+}
+
+TEST_CASE("Source Save As rejects destinations created during private staging even with matching base bytes", "[source][save][conflict]") {
+    const std::string base = GENERATE(std::string{}, std::string{"base"});
+    Project project;
+    project.Put("code.cpp", base);
+    SourceFileOpenService open(project.root);
+    Files files;
+    const auto edited = OpenEdit(open);
+    const std::filesystem::path destination{u8"concurrent ü.cpp"};
+    files.afterWrite = [&] {
+        project.Put(destination, base);
+    };
+
+    const auto denied = open.SaveAs(Request(edited), destination, files);
+    REQUIRE(denied.HasError());
+    CHECK(denied.ErrorValue().code.Value() == SourceDocumentErrors::SaveConflict.code.Value());
+    CHECK(project.Read(destination) == base);
+    CHECK(project.Read("code.cpp") == base);
+    CHECK(open.DocumentRegistry().Find(edited.Identity().instance) == edited.Identity());
+    const auto current = open.Documents().Snapshot(edited.Identity().instance);
+    REQUIRE(current.HasValue());
+    CHECK(current.Value().SharesStateWith(edited));
+    auto temporary = project.root / destination;
+    temporary += ".horo-source.temporary";
+    CHECK_FALSE(std::filesystem::exists(temporary));
+
+    files.afterWrite = {};
+    auto approved = Request(edited);
+    approved.approvedDiskBytes = base;
+    const auto saved = open.SaveAs(approved, destination, files);
+    REQUIRE(saved.HasValue());
+    CHECK_FALSE(saved.Value().snapshot.Dirty());
+    CHECK(project.Read(destination) == edited.Text());
 }
