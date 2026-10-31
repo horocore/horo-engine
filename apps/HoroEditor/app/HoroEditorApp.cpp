@@ -88,7 +88,6 @@
 #include "editor/EditorServiceErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
-#include "editor/input/EditorScrollSmoother.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
@@ -1589,15 +1588,7 @@ namespace Horo::Editor {
             /** @brief Routes one event while retaining window-specific recovery and close ownership. */
             void DispatchPlatformEvent(const SDL_Event &event) {
                 ObserveSurfaceRecoveryEvent(event);
-                if (const bool smoothWheel = event.type == SDL_EVENT_MOUSE_WHEEL &&
-                                             event.wheel.windowID == SDL_GetWindowID(p_->presentation.window) &&
-                                             !p_->modalHost.HasOpenModal() && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
-                    smoothWheel) {
-                    scrollSource_ = event.wheel.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse;
-                    scrollSmoother_.Queue(-event.wheel.x, event.wheel.y);
-                } else {
-                    ImGui_ImplSDL3_ProcessEvent(&event);
-                }
+                ImGui_ImplSDL3_ProcessEvent(&event);
                 p_->inputBackend.ProcessEvent(event);
 
                 // SDL3 drag-and-drop: forward dropped file paths to the active import modal.
@@ -1648,13 +1639,6 @@ namespace Horo::Editor {
 #endif
                     if (const Result<void> guiBegun = p_->presentation.guiRenderer.BeginFrame(); guiBegun.HasError()) {
                         return guiBegun;
-                    }
-                    // Modal controls follow the wheel directly; workspace momentum must not leak into them.
-                    if (p_->modalHost.HasOpenModal())
-                        scrollSmoother_.Reset();
-                    if (const EditorScrollDelta scrollDelta = scrollSmoother_.Consume(ImGui::GetIO().DeltaTime); !scrollDelta.IsEmpty()) {
-                        ImGui::GetIO().AddMouseSourceEvent(scrollSource_);
-                        ImGui::GetIO().AddMouseWheelEvent(scrollDelta.horizontal, scrollDelta.vertical);
                     }
                     ImGui::NewFrame();
                     frameState_.guiFrameStarted = true;
@@ -2089,8 +2073,6 @@ namespace Horo::Editor {
             };
 
             FrameState frameState_;
-            EditorScrollSmoother scrollSmoother_;
-            ImGuiMouseSource scrollSource_{ImGuiMouseSource_Mouse};
             bool nativeMenuInstalled_{false};
         };
 

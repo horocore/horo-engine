@@ -11,7 +11,6 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "OwnedTestDirectory.h"
 #include "WorldCompositionSourceTestSupport.h"
-#include "editor/input/EditorScrollSmoother.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
@@ -139,35 +138,6 @@ namespace {
         REQUIRE((ResolveGlobalDockSearchWidth(800.0F, 500.0F) == 280.0F));
         REQUIRE((ResolveGlobalDockSearchWidth(400.0F, 500.0F) == 1.0F));
         REQUIRE((ResolveGlobalDockSearchWidth(800.0F, -20.0F) == 780.0F));
-    }
-
-    TEST_CASE("Editor wheel smoothing preserves precision and bounds discrete input per frame", "[unit][editor][gui]") {
-        using namespace Horo::Editor;
-
-        EditorScrollSmoother smoother;
-        smoother.Queue(0.0F, 1.0F);
-        const EditorScrollDelta first = smoother.Consume(1.0F / 60.0F);
-        REQUIRE((first.vertical > 0.0F));
-        REQUIRE((first.vertical < 0.2F));
-
-        float total = first.vertical;
-        for (int frame = 0; frame < 7; ++frame)
-            total += smoother.Consume(1.0F / 60.0F).vertical;
-        REQUIRE((std::abs(total - 1.0F) < 0.001F));
-        REQUIRE(smoother.Consume(1.0F / 60.0F).IsEmpty());
-
-        smoother.Queue(0.05F, -0.05F);
-        const EditorScrollDelta precise = smoother.Consume(1.0F / 60.0F);
-        REQUIRE((std::abs(precise.horizontal - 0.05F) < 0.001F));
-        REQUIRE((std::abs(precise.vertical + 0.05F) < 0.001F));
-
-        smoother.Queue(0.0F, 1.0F);
-        static_cast<void>(smoother.Consume(1.0F / 60.0F));
-        smoother.Queue(0.0F, -1.0F);
-        REQUIRE((smoother.Consume(1.0F / 60.0F).vertical < 0.0F));
-        smoother.Queue(1.0F, -1.0F);
-        smoother.Reset();
-        REQUIRE(smoother.Consume(1.0F / 60.0F).IsEmpty());
     }
 
     TEST_CASE("Default workspace composes module-provided global dock panes", "[unit][editor][gui]") {
