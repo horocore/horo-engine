@@ -9,10 +9,13 @@
 #include "OwnedTestDirectory.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
+#include "editor/screens/workspace/panels/global_dock/panes/operations/GlobalDockOperationsPane.h"
 #include "editor/source_editor/SourceEditorTools.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <cfloat>
 #include <fstream>
 #include <imgui_internal.h>
 #include <imgui_test_engine/imgui_te_context.h>
@@ -231,6 +234,80 @@ TEST_CASE("Project browser reaches native gameplay files through the Sources roo
         ui->ItemDoubleClick("//**/$$1/##AssetCard");
         ui->Yield(2);
         IM_CHECK(fixture.source.Text() == "void slide() {}\n");
+    });
+    INFO(result.testEngineLog);
+    REQUIRE(result.Succeeded());
+}
+
+TEST_CASE("Operations rows show bounded live progress and usable text actions", "[ui][imgui][editor][operations]") {
+    SourceToolsUi fixture;
+    const auto locale = GENERATE("en-US", "tr-TR");
+    REQUIRE(fixture.localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                                 (std::string{locale} + ".json")));
+    REQUIRE(fixture.localization.Prepare(Horo::Editor::LocaleTag{locale}));
+    REQUIRE(fixture.localization.ActivatePrepared());
+    const float width = GENERATE(1100.0F, 420.0F);
+    Horo::OperationStore store{8, 8};
+    const auto failed = store.Begin({.kind = Horo::OperationKind::Build, .title = "Build gameplay module", .progress = 0.1F});
+    REQUIRE(failed);
+    REQUIRE(store.Update(*failed, {.state = Horo::OperationState::Failed, .message = "configure exited with code 1.", .progress = 0.1F}));
+    Horo::Editor::GlobalDockOperationsPane pane;
+    pane.Attach(&store, &store);
+    bool detailsOpen = false;
+    bool cancelled = false;
+    bool runningAdded = false;
+    float meterWidth = 0;
+    ImGuiID rowsWindow{};
+    const auto result = fixture.harness.Run("horo_operations", "row_layout", [&](ImGuiTestContext *) {
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({width, 350});
+        ImGui::Begin("OpsLayout", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+        pane.Draw(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail().x, fixture.context);
+        detailsOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        float left = FLT_MAX;
+        float right = -FLT_MAX;
+        for (const auto *child : ImGui::GetCurrentWindow()->DC.ChildWindows) {
+            if (std::string_view{child->Name}.find("OperationsRows") == std::string_view::npos)
+                continue;
+            rowsWindow = child->ID;
+            const auto metrics = Horo::Editor::ResolveGlobalDockPaneMetrics();
+            const float rowsTop = child->DC.CursorStartPos.y + metrics.tableHeaderHeight +
+                                  (runningAdded ? metrics.tableRowHeight + ImGui::GetStyle().ItemSpacing.y : 0.0F);
+            const float rowsBottom = rowsTop + metrics.tableRowHeight;
+            for (const auto &vertex : child->DrawList->VtxBuffer) {
+                if (vertex.col == Horo::Editor::Theme::U32(Horo::Editor::Theme::Accent()) && vertex.pos.y >= rowsTop &&
+                    vertex.pos.y <= rowsBottom) {
+                    left = std::min(left, vertex.pos.x);
+                    right = std::max(right, vertex.pos.x);
+                }
+            }
+        }
+        meterWidth = right >= left ? right - left : 0;
+        ImGui::End();
+    }, [&](ImGuiTestContext *ui) {
+        ui->Yield(3);
+        IM_CHECK_EQ(meterWidth, 0.0F);
+        ui->ScrollToX(rowsWindow, 10000.0F);
+        ui->Yield(2);
+        ui->ItemClick("//**/$$0/OperationAction");
+        ui->Yield(2);
+        IM_CHECK(detailsOpen);
+        ui->KeyPress(ImGuiKey_Escape);
+        ui->MouseMoveToPos({0, 0});
+        ui->Yield(2);
+        const auto running = store.Begin(
+            {.kind = Horo::OperationKind::Cook, .title = "Cook assets", .progress = 0.5F, .cancellable = true, .requestCancel = [&] {
+            cancelled = true;
+        }});
+        IM_CHECK(running.has_value());
+        runningAdded = true;
+        IM_CHECK(store.Update(*running, {.state = Horo::OperationState::Running, .message = "Cooking assets", .progress = 0.5F}));
+        ui->Yield(3);
+        IM_CHECK(meterWidth > 0);
+        IM_CHECK_LE(meterWidth, 77.0F * Horo::Editor::Theme::GetActiveTokens().sizes.uiScale);
+        ui->ItemClick("//**/$$1/OperationAction");
+        ui->Yield(2);
+        IM_CHECK(cancelled);
     });
     INFO(result.testEngineLog);
     REQUIRE(result.Succeeded());

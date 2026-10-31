@@ -180,7 +180,7 @@ namespace Horo::Editor {
     struct GlobalDockOperationsPane::TableLayout {
         float operation;
         float state;
-        float progress;
+        float message;
         float elapsed;
         float action;
         float actionWidth;
@@ -328,15 +328,40 @@ namespace Horo::Editor {
         const Theme::Fonts &fonts = context.theme.fonts;
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
+        float stateWidth = 0;
+        for (const auto state : {OperationState::Queued, OperationState::Running, OperationState::Waiting, OperationState::Cancelling,
+                                 OperationState::Succeeded, OperationState::Failed, OperationState::Cancelled})
+            stateWidth =
+                std::max(stateWidth, MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(),
+                                                                kTextScope.Text(context.localization, StatusLocalizationKey(state))) +
+                                         30.0F * scale);
+        float actionWidth = 0;
+        for (const auto *key : {"details", "cancel", "remove", "column.action"})
+            actionWidth = std::max(actionWidth, MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Label(),
+                                                                           kTextScope.Text(context.localization, key)) +
+                                                    16.0F * scale);
+        const float elapsedWidth =
+            std::max(70.0F * scale, MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(),
+                                                               kTextScope.Text(context.localization, "column.elapsed")));
+        const float fixedWidth = metrics.contentPadding * 2 + metrics.columnGap * 4 + stateWidth + elapsedWidth + actionWidth;
+        const float tableWidth = std::max(regions.contentWidth - ImGui::GetStyle().ScrollbarSize, fixedWidth + 420.0F * scale);
+        ImGui::SetCursorScreenPos(regions.contentOrigin);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::BottomDockContentSurface());
+        ImGui::SetNextWindowContentSize({tableWidth, 0});
+        ImGui::BeginChild("##OperationsRows", {regions.contentWidth, regions.contentHeight}, false,
+                          ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_AlwaysVerticalScrollbar |
+                              ImGuiWindowFlags_NoSavedSettings);
+        const bool wasAtBottom = ImGui::GetScrollY() >= std::max(0.0F, ImGui::GetScrollMaxY() - 2.0F);
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        const ImVec2 headerMin = regions.contentOrigin;
-        DrawGlobalDockTableHeaderSurface(headerMin, regions.contentWidth, metrics.tableHeaderHeight);
-        const float actionWidth = 72.0F * scale;
-        const float elapsedWidth = 70.0F * scale;
-        const float actionX = headerMin.x + regions.contentWidth - metrics.contentPadding - actionWidth;
+        const ImVec2 headerMin = ImGui::GetCursorScreenPos();
+        DrawGlobalDockTableHeaderSurface(headerMin, tableWidth, metrics.tableHeaderHeight);
+        const float operationWidth = std::clamp((tableWidth - fixedWidth) * 0.45F, 220.0F * scale, 520.0F * scale);
+        const float stateX = headerMin.x + metrics.contentPadding + operationWidth + metrics.columnGap;
+        const float actionX = headerMin.x + tableWidth - metrics.contentPadding - actionWidth;
         const TableLayout layout{.operation = headerMin.x + metrics.contentPadding,
-                                 .state = headerMin.x + metrics.contentPadding + 120.0F * scale + metrics.columnGap,
-                                 .progress = headerMin.x + metrics.contentPadding + 220.0F * scale + metrics.columnGap * 2.0F,
+                                 .state = stateX,
+                                 .message = stateX + stateWidth + metrics.columnGap,
                                  .elapsed = actionX - metrics.columnGap - elapsedWidth,
                                  .action = actionX,
                                  .actionWidth = actionWidth};
@@ -347,20 +372,13 @@ namespace Horo::Editor {
         };
         headerText(layout.operation, "column.operation");
         headerText(layout.state, "column.status");
-        headerText(layout.progress, "column.progress");
+        headerText(layout.message, "column.message");
         headerText(layout.elapsed, "column.elapsed");
         headerText(layout.action, "column.action");
 
-        const ImVec2 rowsOrigin{regions.contentOrigin.x, regions.contentOrigin.y + metrics.tableHeaderHeight};
-        const float rowsHeight = std::max(1.0F, regions.contentHeight - metrics.tableHeaderHeight);
-        ImGui::SetCursorScreenPos(rowsOrigin);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::BottomDockContentSurface());
-        ImGui::BeginChild("##OperationsRows", {regions.contentWidth, rowsHeight}, false,
-                          ImGuiWindowFlags_AlwaysVerticalScrollbar | ImGuiWindowFlags_NoSavedSettings);
-        const bool wasAtBottom = ImGui::GetScrollY() >= std::max(0.0F, ImGui::GetScrollMaxY() - 2.0F);
+        ImGui::SetCursorScreenPos({headerMin.x, headerMin.y + metrics.tableHeaderHeight});
         for (std::size_t visibleIndex = 0; visibleIndex < m_filteredIndices.size(); ++visibleIndex)
-            DrawOperationRow(m_snapshot.operations[m_filteredIndices[visibleIndex]], visibleIndex, regions.contentWidth, layout, context);
+            DrawOperationRow(m_snapshot.operations[m_filteredIndices[visibleIndex]], visibleIndex, tableWidth, layout, context);
         if (snapshotChanged && (wasAtBottom || m_initialFollowTail))
             ImGui::SetScrollHereY(1.0F);
         m_initialFollowTail = false;
@@ -377,30 +395,35 @@ namespace Horo::Editor {
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
         ImGui::PushID(static_cast<int>(visibleIndex));
-        ImGui::InvisibleButton("##operation", {width, metrics.tableRowHeight});
+        ImGui::Dummy({width, metrics.tableRowHeight});
+        const ImVec2 nextRow = ImGui::GetCursorScreenPos();
         if (const bool hovered = ImGui::IsItemHovered(); hovered)
             drawList->AddRectFilled(rowMin, {rowMin.x + width, rowMin.y + metrics.tableRowHeight}, Theme::U32(Theme::Hover()));
         drawList->AddLine({rowMin.x, rowMin.y + metrics.tableRowHeight - scale},
                           {rowMin.x + width, rowMin.y + metrics.tableRowHeight - scale}, Theme::U32(Theme::Border()));
         const float textY = rowMin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
-        DrawGlobalDockClippedText(*drawList, fonts.sansCompact, Theme::TextPx::Label(), {layout.operation, textY},
-                                  {layout.state - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Text(),
-                                  OperationTitle(operation, context));
+        DrawGlobalDockEllipsizedText(*drawList, fonts.sansCompact, Theme::TextPx::Label(), {layout.operation, textY},
+                                     {layout.state - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Text(),
+                                     OperationTitle(operation, context));
         const std::string stateLabel =
             GlobalDockOperationsPane::kTextScope.Text(context.localization, StatusLocalizationKey(operation.state));
         static_cast<void>(DrawGlobalDockStatePill({layout.state, rowMin.y + (metrics.tableRowHeight - 22.0F * scale) * 0.5F}, stateLabel,
                                                   StatusTone(operation.state), fonts));
-        const float progressRight = layout.elapsed - metrics.columnGap;
-        const std::string progressLabel = OperationProgressLabel(operation);
-        DrawGlobalDockClippedText(*drawList, fonts.sansCompact, Theme::TextPx::Caption(), {layout.progress, textY},
-                                  {progressRight, rowMin.y + metrics.tableRowHeight}, Theme::Muted(), progressLabel);
-        if (operation.progress.has_value())
-            DrawGlobalDockProgressBar({layout.progress, rowMin.y + metrics.tableRowHeight - 8.0F * scale},
-                                      std::max(1.0F, progressRight - layout.progress), *operation.progress);
+        const float messageRight = layout.elapsed - metrics.columnGap;
+        const bool showProgress = IsRunningState(operation.state) && operation.progress.has_value();
+        const float meterWidth = showProgress ? 76.0F * scale : 0;
+        const float messageEnd = showProgress ? messageRight - meterWidth - metrics.columnGap : messageRight;
+        const std::string message = OperationProgressLabel(operation);
+        DrawGlobalDockEllipsizedText(*drawList, fonts.sansCompact, Theme::TextPx::Caption(), {layout.message, textY},
+                                     {messageEnd, rowMin.y + metrics.tableRowHeight}, Theme::Muted(), message);
+        if (showProgress)
+            DrawGlobalDockProgressBar({messageRight - meterWidth, rowMin.y + (metrics.tableRowHeight - 5.0F * scale) * 0.5F}, meterWidth,
+                                      *operation.progress);
         DrawGlobalDockClippedText(*drawList, fonts.sansCompact, Theme::TextPx::Label(), {layout.elapsed, textY},
                                   {layout.action - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Text(),
                                   FormatElapsed(operation));
         DrawOperationAction(operation, rowMin, layout, context);
+        ImGui::SetCursorScreenPos(nextRow);
         ImGui::PopID();
     }
 
@@ -409,16 +432,24 @@ namespace Horo::Editor {
         const Theme::Fonts &fonts = context.theme.fonts;
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const bool canCancel = CanCancel(operation);
-        if (const bool showDetails = operation.state == OperationState::Failed; canCancel || showDetails) {
-            const GlobalDockToolbarChipProps action{.id = "OperationAction",
-                                                    .label = GlobalDockOperationsPane::kTextScope.Text(context.localization,
-                                                                                                       ActionKey(operation)),
-                                                    .tone = canCancel ? GlobalDockTone::Error : GlobalDockTone::Neutral,
-                                                    .toneLabel = canCancel};
-            if (DrawGlobalDockToolbarChip({layout.action, rowMinimum.y + (metrics.tableRowHeight - metrics.controlHeight) * 0.5F},
-                                          layout.actionWidth, action, fonts) &&
-                canCancel && m_operationControl != nullptr)
-                static_cast<void>(m_operationControl->RequestCancel(operation.id));
+        if (canCancel || operation.state == OperationState::Failed) {
+            const auto &label = kTextScope.Text(context.localization, ActionKey(operation));
+            const float height = std::max(Theme::TextPx::Label(), 20.0F);
+            ImGui::SetCursorScreenPos({layout.action, rowMinimum.y + (metrics.tableRowHeight - height) * 0.5F});
+            if (Ui::TextLink("OperationAction", label.c_str(), fonts.sansCompact, Theme::TextPx::Label())) {
+                if (canCancel && m_operationControl != nullptr)
+                    static_cast<void>(m_operationControl->RequestCancel(operation.id));
+                else if (operation.state == OperationState::Failed)
+                    ImGui::OpenPopup("##OperationDetails");
+            }
+            if (ImGui::BeginPopup("##OperationDetails")) {
+                DrawGlobalDockWrappedText(400.0F * Theme::GetActiveTokens().sizes.uiScale, OperationTitle(operation, context),
+                                          GlobalDockTone::Neutral, fonts);
+                ImGui::Spacing();
+                DrawGlobalDockWrappedText(400.0F * Theme::GetActiveTokens().sizes.uiScale, OperationProgressLabel(operation),
+                                          GlobalDockTone::Error, fonts);
+                ImGui::EndPopup();
+            }
         }
     }
 
