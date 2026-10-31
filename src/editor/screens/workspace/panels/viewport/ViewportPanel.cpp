@@ -7,6 +7,7 @@
 #include "ViewportOverlay.h"
 #include "ViewportStreamingPreview.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
+#include "editor/screens/workspace/terrain/TerrainViewportTool.h"
 #include "visualizers/light/LightMarkerLayer.h"
 
 #include <algorithm>
@@ -105,6 +106,7 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnDetach */
     void ViewportPanel::OnDetach() {
         worldSourceTool_.Cancel();
+        terrainTool_->Cancel();
         interaction_.Detach();
         contributions_ = nullptr;
         activeContribution_ = {};
@@ -120,6 +122,7 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnPresentationHidden */
     void ViewportPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &command) {
         worldSourceTool_.Cancel();
+        terrainTool_->Cancel();
         if (!activeContribution_)
             return;
         interaction_.CancelContribution();
@@ -160,6 +163,11 @@ namespace Horo::Editor {
             .ground = ground,
         };
 
+        if (DrawTerrainSource(drawList, surfaceLayout, viewModel, command, context)) {
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            return;
+        }
         RequestViewportExtent(width, height);
         ConfigureRenderer(viewModel, context);
         const EditorViewportTextureView textureView =

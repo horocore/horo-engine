@@ -40,6 +40,8 @@
 #include <vector>
 
 namespace Horo::Editor {
+    class TerrainDocumentHost;
+    struct TerrainToolCommand;
     /** @brief Typed presentation kind projected from authored scene components. */
     enum class SceneObjectKind : std::uint8_t {
         Mesh,
@@ -223,6 +225,7 @@ namespace Horo::Editor {
         DockWorkspacePanel,
         ResizePanel,
         OpenPlayTopologyProfiles,
+        TerrainTool,
     };
 
     enum class BottomDockMode {
@@ -362,6 +365,7 @@ namespace Horo::Editor {
         std::optional<WorldDocumentFence> worldDocumentFence;
         std::optional<OperationId> worldBakeOperation; /**< Exact accepted operation targeted by a cancellation intent. */
         std::optional<WorldSourceToolCommand> worldSource;
+        std::shared_ptr<const TerrainToolCommand> terrainTool;
         std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<DocumentInstanceId> documentMoveBefore;
@@ -565,6 +569,8 @@ namespace Horo::Editor {
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
         std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
+        std::vector<std::shared_ptr<const TerrainDocumentHost>> terrainDocuments;
+        std::optional<Error> terrainDocumentError;
         std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::optional<Error> prefabDocumentError;
         bool prefabRecoveryAvailable{};

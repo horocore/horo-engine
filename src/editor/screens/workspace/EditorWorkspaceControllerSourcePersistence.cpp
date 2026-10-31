@@ -20,6 +20,13 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::HasDirtySourceDocuments */
     bool EditorWorkspaceController::HasDirtySourceDocuments() {
         RefreshSourceDocumentProjection();
+        RefreshTerrainDocuments();
+        for (const auto &[instance, revision] : TerrainDocumentRevisions()) {
+            static_cast<void>(revision);
+            for (const auto &tab : m_viewModel.workspacePanelHost.DocumentTabs())
+                if (tab.identity.instance == instance && tab.dirty)
+                    return true;
+        }
         return std::ranges::any_of(m_viewModel.workspacePanelHost.DocumentTabs(), [](const WorkspaceDocumentTab &tab) {
             return (tab.identity.key.kind == DocumentKind::Source || tab.identity.key.kind == DocumentKind::UiCanvas) && tab.dirty;
         });
@@ -50,7 +57,7 @@ namespace Horo::Editor {
                 return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
         }
         RefreshUiCanvasProjection();
-        return Result<void>::Success();
+        return SaveTerrainDocuments();
     }
 
     /** @copydoc EditorWorkspaceController::RefreshSourceDocumentProjection */

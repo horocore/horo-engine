@@ -36,7 +36,7 @@ namespace Horo::Input {
 
 namespace Horo::Assets {
     class AssetImporterCatalogSnapshot;
-    class ProjectAssetImportCommitter;
+    class IAssetImportCommitter;
 }  // namespace Horo::Assets
 
 namespace Horo::Editor {
@@ -46,11 +46,12 @@ namespace Horo::Editor {
 
     /** @brief Optional borrowed capabilities used by the import workflow, valid for its lifetime. */
     struct AssetImportModalServices {
-        Assets::AssetRegistry *assetRegistry{};     /**< Registry updated after committed imports. */
-        OperationStore *operationStore{};           /**< User-facing operation authority. */
-        const ILocalizationService *localization{}; /**< Editor presentation copy. */
-        NativeDialogs *nativeDialogs{};             /**< Host-owned native file picker. */
-        Input::InputRouter *inputRouter{};          /**< Input context owner while a picker is open. */
+        Assets::AssetRegistry *assetRegistry{};                   /**< Registry updated after committed imports. */
+        OperationStore *operationStore{};                         /**< User-facing operation authority. */
+        const ILocalizationService *localization{};               /**< Editor presentation copy. */
+        NativeDialogs *nativeDialogs{};                           /**< Host-owned native file picker. */
+        Input::InputRouter *inputRouter{};                        /**< Input context owner while a picker is open. */
+        std::shared_ptr<Assets::IAssetImportCommitter> committer; /**< Explicit host storage authority; absent refuses publication. */
     };
 
     /**
@@ -343,7 +344,7 @@ namespace Horo::Editor {
 
         std::unique_ptr<Assets::AssetImportOperation> m_operation;
         std::unique_ptr<AssetImportSourcePreview> m_sourcePreview;
-        std::unique_ptr<Assets::ProjectAssetImportCommitter> m_committer;
+        std::shared_ptr<Assets::IAssetImportCommitter> m_committer;
         Assets::AssetImportSnapshot m_snapshot;
         std::vector<bool> m_itemCompleted;
         std::vector<bool> m_includedItems;

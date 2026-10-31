@@ -946,6 +946,11 @@ add_library(HoroEngine::ProjectMutationGuard ALIAS HoroProjectMutationGuard)
 target_compile_features(HoroProjectMutationGuard PUBLIC cxx_std_20)
 target_link_libraries(HoroProjectMutationGuard PUBLIC HoroEngine::Foundation)
 
+add_library(HoroProjectAssetImportApplication STATIC application/assets/ProjectAssetImportCommitter.cpp)
+add_library(HoroEngine::ProjectAssetImportApplication ALIAS HoroProjectAssetImportApplication)
+target_compile_features(HoroProjectAssetImportApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectAssetImportApplication PUBLIC HoroEngine::Assets HoroEngine::Foundation HoroEngine::ProjectMutationGuard)
+
 add_library(HoroUiTemplateHost STATIC
         application/ui/UiTemplateCaptureControls.cpp
         application/ui/UiTemplateInputLease.cpp
@@ -1225,7 +1230,6 @@ add_library(HoroAssets STATIC
         runtime/assets/importer/AssetImportOperation.cpp
         runtime/assets/importer/AssetImportFileFacts.cpp
         runtime/assets/importer/AssetReimport.cpp
-        runtime/assets/importer/ProjectAssetImportCommitter.cpp
         runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.cpp
         runtime/assets/importer/builtin/obj_mesh/ObjMeshPreviewProvider.cpp
         runtime/assets/importer/builtin/fbx_mesh/FbxMeshImporter.cpp
@@ -3623,6 +3627,14 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/EditorWorkspaceControllerTerrain.cpp
+            editor/screens/workspace/EditorWorkspaceViewTerrain.cpp
+            editor/screens/workspace/terrain/TerrainSculptProducer.cpp
+            editor/screens/workspace/terrain/TerrainViewportPicking.cpp
+            editor/screens/workspace/terrain/TerrainAssetFormat.cpp
+            editor/screens/workspace/terrain/TerrainDocumentHost.cpp
+            editor/screens/workspace/terrain/TerrainViewportTool.cpp
+            editor/screens/workspace/panels/viewport/ViewportTerrainSource.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
@@ -3784,7 +3796,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication HoroThirdParty::Zep)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::ProjectAssetImportApplication HoroEngine::TerrainAuthoring HoroEngine::PlayTopologyApplication HoroThirdParty::Zep)
 # Existing workspace view-model consumers require the same unchanged Play-state declaration.
 target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
     target_link_libraries(HoroGui

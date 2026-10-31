@@ -3,6 +3,7 @@
 #include "../modals/extension_pages/EditorPageModal.h"
 #include "../modals/extension_pages/EditorPageThemeCapture.h"
 #include "EditorPageFileStore.h"
+#include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -12,6 +13,7 @@
 #include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/ProjectCreationService.h"
+#include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/EditorActivityAbi.h"
 #include "Horo/Extensions/EditorActivityHost.h"
@@ -39,6 +41,7 @@
 #include "editor/status_bar/EditorStatusBar.h"
 #include "editor/update/UpdateExperienceSession.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
+#include "workspace/terrain/TerrainAssetFormat.h"
 
 #include <algorithm>
 #include <array>
@@ -72,7 +75,9 @@ namespace Horo::Editor {
             if (inventory != nullptr && !inventory->IsEnabled("horo.builtin.assets"))
                 return;
 
-            const Result<void> registered = RegisterAllBuiltinImporters(catalog);
+            Result<void> registered = RegisterAllBuiltinImporters(catalog);
+            if (registered.HasValue())
+                registered = catalog.Register(TerrainRawImporterContribution());
             if (inventory == nullptr)
                 return;
             if (registered.HasError()) {
@@ -828,6 +833,13 @@ namespace Horo::Editor {
                 return;
             case ImportAssets:
                 if (modalHost_ && !modalHost_->HasOpenModal()) {
+                    std::shared_ptr<Assets::IAssetImportCommitter> committer;
+                    if (auto *mutations = services_.TryGet<ProjectMutationCoordinator>()) {
+                        if (auto *files = services_.TryGet<DurableFileSystem>())
+                            committer =
+                                std::make_shared<Application::ProjectAssetImportCommitter>(*mutations, *files,
+                                                                                           services_.TryGet<Assets::AssetRegistry>());
+                    }
                     auto modal =
                         std::make_unique<AssetImportModal>(context_.theme.fonts, m_importJobs, importerCatalog_,
                                                            AssetImportModalServices{.assetRegistry =
@@ -835,8 +847,9 @@ namespace Horo::Editor {
                                                                                     .operationStore = services_.TryGet<OperationStore>(),
                                                                                     .localization = localization_,
                                                                                     .nativeDialogs = nativeDialogs_,
-                                                                                    .inputRouter = inputRouter_});
-                    modal->SetProjectRoot(CurrentProjectRoot());
+                                                                                    .inputRouter = inputRouter_,
+                                                                                    .committer = std::move(committer)});
+                    modal->SetProjectRoot(currentProjectRoot_);
                     if (invocation.assetDestination.has_value())
                         modal->SetDefaultDestination(*invocation.assetDestination);
                     static_cast<void>(modalHost_->OpenRoot(std::move(modal)));

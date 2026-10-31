@@ -1707,6 +1707,35 @@ add_executable(HoroTerrainAuthoringTests unit/editor/TerrainAuthoringDocumentTes
 target_compile_features(HoroTerrainAuthoringTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainAuthoringTests PRIVATE HoroEngine::TerrainAuthoring)
 horo_register_catch_test(HoroTerrainAuthoringTests LABELS "unit;editor;terrain;headless;lifecycle")
+
+add_executable(HoroTerrainSculptProducerTests unit/editor/TerrainSculptProducerTests.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainSculptProducer.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainViewportPicking.cpp)
+target_compile_features(HoroTerrainSculptProducerTests PRIVATE cxx_std_20)
+target_include_directories(HoroTerrainSculptProducerTests PRIVATE ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace)
+target_link_libraries(HoroTerrainSculptProducerTests PRIVATE HoroEngine::TerrainAuthoring HoroEngine::Foundation)
+horo_register_catch_test(HoroTerrainSculptProducerTests LABELS "unit;editor;terrain;headless")
+
+add_executable(HoroTerrainAssetHostTests unit/editor/TerrainImportPublicationTests.cpp unit/editor/TerrainDocumentHostTests.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentHost.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainAssetFormat.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainSculptProducer.cpp)
+target_compile_features(HoroTerrainAssetHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroTerrainAssetHostTests PRIVATE ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
+        ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroTerrainAssetHostTests PRIVATE HoroEngine::TerrainAuthoring HoroEngine::ProjectAssetImportApplication
+        HoroEngine::Platform HoroEngine::EditorServices)
+horo_register_catch_test(HoroTerrainAssetHostTests LABELS "unit;editor;terrain;headless;lifecycle")
+
+if(HORO_BUILD_EDITOR_GUI)
+    add_executable(HoroTerrainWorkspaceTests unit/editor/TerrainWorkspaceTests.cpp)
+    target_compile_features(HoroTerrainWorkspaceTests PRIVATE cxx_std_20)
+    target_include_directories(HoroTerrainWorkspaceTests PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
+            ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroTerrainWorkspaceTests PRIVATE HoroEngine::Gui HoroEngine::TerrainAuthoring HoroEngine::Platform)
+    target_compile_definitions(HoroTerrainWorkspaceTests PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    horo_register_catch_test(HoroTerrainWorkspaceTests LABELS "unit;editor;terrain;headless;gui")
+endif()
 target_sources(HoroTerrainAuthoringPublicHeaderConsumer PRIVATE support/TerrainAuthoringPublicHeaderConsumer.cpp)
 add_executable(HoroTerrainTileCookTests
         unit/runtime/terrain/TerrainTileCookTests.cpp
@@ -2509,6 +2538,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroAssetImportModalLifecycleTests PRIVATE cxx_std_20)
     target_link_libraries(HoroAssetImportModalLifecycleTests
             PRIVATE
+            HoroEngine::ProjectAssetImportApplication
             HoroEngine::Gui
             HoroEngine::EditorServices
             HoroEngine::Assets
@@ -4844,7 +4874,7 @@ add_executable(HoroModularAssetImportIntegrationTests
 )
 target_compile_features(HoroModularAssetImportIntegrationTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroModularAssetImportIntegrationTests PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(HoroModularAssetImportIntegrationTests PRIVATE HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)
+target_link_libraries(HoroModularAssetImportIntegrationTests PRIVATE HoroEngine::ProjectAssetImportApplication HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)
 target_include_directories(HoroModularAssetImportIntegrationTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/importer

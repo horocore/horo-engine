@@ -111,6 +111,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
         std::optional<WorldDocumentFence> worldFence;
         std::uint64_t prefabSettingsRevision{};
+        std::vector<std::pair<DocumentInstanceId, std::uint64_t>> terrainRevisions;
     };
 
     /** @brief Routes source document commands while fencing delayed close decisions to the workspace session. */

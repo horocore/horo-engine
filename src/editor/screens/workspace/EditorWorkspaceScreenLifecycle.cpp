@@ -11,6 +11,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             leaveCapture_.prefabSettingsRevision = controller_->PrefabSettingsRevision();
             static_cast<void>(controller_->HasDirtySourceDocuments());
             leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
+            leaveCapture_.terrainRevisions = controller_->TerrainDocumentRevisions();
             leaveCapture_.prefabDocuments = controller_->ViewModel().prefabDocuments;
             auto graphs = controller_->PCGDocuments().Snapshots();
             if (graphs.HasError())
@@ -53,6 +54,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
         if (const auto settings = controller_->ShutdownPrefabSettings(); settings.HasError())
             return Result<LeaveDecision>::Failure(settings.ErrorValue());
+        if (const auto terrain = controller_->ShutdownTerrainDocuments(); terrain.HasError())
+            return Result<LeaveDecision>::Failure(terrain.ErrorValue());
         if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())
             return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
         if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
@@ -74,6 +77,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(collision.ErrorValue());
         if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+        if (const auto terrain = controller_->ShutdownTerrainDocuments(true); terrain.HasError())
+            return Result<LeaveDecision>::Failure(terrain.ErrorValue());
         if (const auto prefabs = controller_->ShutdownPrefabDocuments(true); prefabs.HasError())
             return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
         if (const auto current = leaveCapture_.ValidateLeaveWorld(*controller_); current.HasError())
@@ -92,6 +97,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (resolution.subject != 1 || resolution.revision != 1)
             return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
         if (controller_ && resolution.action != Stay) {
+            if (controller_->TerrainDocumentRevisions() != leaveCapture_.terrainRevisions)
+                return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             if (controller_->PrefabSettingsRevision() != leaveCapture_.prefabSettingsRevision)
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             static_cast<void>(controller_->HasDirtySourceDocuments());
@@ -132,6 +139,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
             SaveExtensionWorkspace();
             controller_->FlushAutosave();
+            if (const auto terrain = controller_->ShutdownTerrainDocuments(); terrain.HasError())
+                LOG_ERROR("editor.terrain", "Terrain document shutdown incomplete: %s", terrain.ErrorValue().message.c_str());
             if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())
                 LOG_ERROR("editor.prefab_document", "Prefab recovery shutdown incomplete: %s", prefabs.ErrorValue().message.c_str());
             if (const auto gameplay = controller_->ShutdownGameplayModules(); gameplay.HasError())

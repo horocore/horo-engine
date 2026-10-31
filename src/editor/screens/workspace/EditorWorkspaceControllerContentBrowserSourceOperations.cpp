@@ -37,6 +37,8 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::OpenSourceFile(const SourceOpenRequest &request) {
         m_viewModel.contentBrowserOperationError.clear();
+        if (TryOpenTerrainDocument(request))
+            return;
         if (request.path.extension() == ".horoworld") {
             const auto relative =
                 request.path.is_absolute() ? request.path.lexically_relative(m_sourceOpenService.ProjectRoot()) : request.path;

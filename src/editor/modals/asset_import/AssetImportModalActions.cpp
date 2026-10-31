@@ -113,10 +113,7 @@ namespace Horo::Editor {
         if (paths.empty())
             return;
         CancellationToken cancellation;
-        if (m_projectRoot.empty())
-            static_cast<void>(BeginImport(paths, cancellation));
-        else
-            static_cast<void>(BeginImport(paths, m_projectRoot, cancellation));
+        static_cast<void>(BeginImport(paths, m_projectRoot, cancellation));
     }
 
     /** @copydoc AssetImportModal::BrowseSourceFiles */

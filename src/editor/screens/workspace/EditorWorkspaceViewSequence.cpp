@@ -34,6 +34,8 @@ namespace Horo::Editor {
                             m_context.theme.fonts);
             return;
         }
+        if (area == WorkspaceDockArea::Document && DrawTerrainDocument(viewModel, outCommand))
+            return;
         if (area == WorkspaceDockArea::Document &&
             (m_uiCanvasView.Draw(viewModel, outCommand) || DrawPrefabDocument(viewModel, outCommand) ||
              DrawSourceDocument(viewModel, outCommand) || DrawNavigationDocument(viewModel) || DrawPCGDocument(viewModel, outCommand) ||

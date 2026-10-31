@@ -223,6 +223,10 @@ namespace Horo::Editor {
         /** @brief Saves all dirty sources through their owner; uncertain durability keeps navigation blocked.
          * @return Success only after every source is durably clean. */
         [[nodiscard]] Result<void> SaveSourceDocuments();
+        /** @brief Capture terrain instances/revisions for exact delayed workspace leave decisions. */
+        [[nodiscard]] std::vector<std::pair<DocumentInstanceId, std::uint64_t>> TerrainDocumentRevisions() const;
+        /** @brief Settle asset-rooted terrain owners after explicit save/discard navigation. */
+        [[nodiscard]] Result<void> ShutdownTerrainDocuments(bool discard = false);
 
         /** @brief Last typed single-source save/Save As outcome from the actual workspace command route. */
         [[nodiscard]] const std::optional<Result<SourceSaveResult>> &SourceSaveOutcome() const noexcept {
@@ -474,6 +478,17 @@ namespace Horo::Editor {
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
         std::optional<Result<std::vector<SourceSaveAllItem>>> m_sourceSaveAllOutcome;
         std::optional<Result<bool>> m_sourceCloseOutcome;
+        /** @brief Intercept only explicitly registered terrain assets; generic source routing remains unchanged. */
+        bool TryOpenTerrainDocument(const SourceOpenRequest &request);
+        bool ProcessTerrainDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        void RefreshTerrainDocuments();
+        void ProcessFocusedTerrainCommand(const EditorWorkspaceViewCommandData &command);
+        [[nodiscard]] Result<void> SaveTerrainDocuments();
+        [[nodiscard]] Result<void> CloseTerrainDocument(DocumentInstanceId instance, bool discard);
+        std::vector<std::shared_ptr<TerrainDocumentHost>> m_terrainDocuments;
+        std::optional<DocumentInstanceId> m_activeTerrainDocument;
+        std::optional<EditorViewportCamera> m_terrainPriorCamera;
+        std::uint64_t m_nextTerrainOperation{1};
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;

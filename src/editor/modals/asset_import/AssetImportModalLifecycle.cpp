@@ -4,13 +4,13 @@
 
 #include "AssetImportSourcePreview.h"
 #include "Horo/Assets/AssetImporter.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/ErrorCode.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Sha256.h"
-#include "runtime/assets/importer/ProjectAssetImportCommitter.h"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +22,17 @@
 namespace Horo::Editor {
     namespace {
         constexpr std::size_t kMaximumImportHistory = 50;
+
+        /** @brief Capture one existing project namespace before passing it to native publication authorities. */
+        Result<std::filesystem::path> CanonicalProjectRoot(const std::filesystem::path &root) {
+            std::error_code error;
+            if (root.empty())
+                return Result<std::filesystem::path>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
+            auto canonical = std::filesystem::canonical(root, error);
+            if (error || !std::filesystem::is_directory(canonical, error) || error)
+                return Result<std::filesystem::path>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
+            return Result<std::filesystem::path>::Success(std::move(canonical));
+        }
 
         [[nodiscard]] std::string PresetScopeKey(const Assets::AssetImportItem &item) {
             return item.importerContributionId + '\n' + item.sourceExtension;
@@ -161,7 +172,7 @@ namespace Horo::Editor {
                                        const AssetImportModalServices &services) noexcept
         : EditorModal(kTextScope), m_fonts(fonts), m_jobs(jobs), m_catalog(std::move(catalog)), m_assetRegistry(services.assetRegistry),
           m_operationStore(services.operationStore), m_localization(services.localization), m_nativeDialogs(services.nativeDialogs),
-          m_inputRouter(services.inputRouter) {}
+          m_inputRouter(services.inputRouter), m_committer(services.committer) {}
 
     /** @copydoc AssetImportModal::~AssetImportModal */
     AssetImportModal::~AssetImportModal() = default;
@@ -333,9 +344,18 @@ namespace Horo::Editor {
     }
 
     void AssetImportModal::SetProjectRoot(const std::filesystem::path &root) noexcept {
-        m_projectRoot = root;
-        if (!root.empty())
-            m_defaultDestinationFolder = ProjectLayout::AssetRoot(root).filename().string();
+        try {
+            auto canonical = CanonicalProjectRoot(root);
+            if (canonical.HasValue()) {
+                m_projectRoot = std::move(canonical).Value();
+                m_defaultDestinationFolder = ProjectLayout::AssetRoot(m_projectRoot).filename().string();
+                return;
+            }
+        } catch (...) {
+            // A void presentation setter cannot grant a root when capture/allocation fails.
+        }
+        m_projectRoot.clear();
+        m_defaultDestinationFolder.clear();
     }
 
     /** @copydoc AssetImportModal::SetDefaultDestination */
@@ -591,6 +611,8 @@ namespace Horo::Editor {
 
     Result<void> AssetImportModal::BeginImport(const std::vector<std::filesystem::path> &sourceFiles,
                                                const CancellationToken &cancellation) {
+        if (sourceFiles.empty())
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
         // Walk up from the first file to find the project root (the directory containing .horo/).
         std::filesystem::path projectRoot = sourceFiles.front().parent_path();
         while (!projectRoot.empty() && projectRoot != projectRoot.root_path()) {
@@ -612,17 +634,21 @@ namespace Horo::Editor {
             return Result<void>::Failure(err);
         }
 
-        m_projectRoot = projectRoot;
-        m_committer = Assets::MakeProjectCommitter(m_assetRegistry);
+        auto canonical = CanonicalProjectRoot(projectRoot);
+        if (canonical.HasError())
+            return Result<void>::Failure(std::move(canonical).ErrorValue());
+        if (m_operation && m_projectRoot != canonical.Value())
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        m_projectRoot = std::move(canonical).Value();
 
         // If operation already exists, append files; otherwise start a new one.
         if (m_operation)
-            return AppendImportFiles(sourceFiles, projectRoot, cancellation);
+            return AppendImportFiles(sourceFiles, m_projectRoot, cancellation);
 
         m_operation = std::make_unique<Assets::AssetImportOperation>(m_jobs, m_catalog);
 
         Assets::AssetImportRequest request{
-            .projectRoot = projectRoot,
+            .projectRoot = m_projectRoot,
             .sourceFiles = sourceFiles,
         };
 
@@ -767,6 +793,11 @@ namespace Horo::Editor {
                                                                                     .message = "Waiting for conflict resolution"}));
         } else {
             // Commit to project storage
+            if (!m_committer) {
+                auto error = MakeError(Assets::AssetSourceErrors::Authority);
+                FailVisibleOperation(error, "commit");
+                return Result<void>::Failure(std::move(error));
+            }
             if (m_committer) {
                 Assets::PreparedAssetImportBatch batch{
                     .operationId = m_snapshot.operationId,
@@ -892,6 +923,10 @@ namespace Horo::Editor {
         FixedAssetIdGenerator idGen{assetId};
 
         CancellationToken noCancel;
+        if (!m_committer) {
+            FailVisibleOperation(MakeError(Assets::AssetSourceErrors::Authority), "commit");
+            return false;
+        }
         if (const auto commitResult = m_committer->Commit(batch, idGen, noCancel); commitResult.HasError()) {
             LOG_ERROR("editor.asset_import", "Commit failed for %s: %s", assetName.c_str(), commitResult.ErrorValue().message.c_str());
             FailVisibleOperation(commitResult.ErrorValue(), "commit");

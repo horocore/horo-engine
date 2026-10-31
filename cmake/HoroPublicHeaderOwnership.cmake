@@ -412,6 +412,7 @@ horo_configure_target_header_boundary(HoroUiTemplateInstances PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDocumentOwner.h
 )
 
+horo_configure_target_header_boundary(HoroProjectAssetImportApplication PUBLIC_HEADERS Horo/Application/ProjectAssetImportCommitter.h)
 horo_configure_target_header_boundary(HoroProjectMutationGuard PUBLIC_HEADERS
     Horo/Editor/ProjectMutation.h
 )
