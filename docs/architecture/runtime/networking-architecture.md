@@ -1262,7 +1262,13 @@ simulation ticks.
 The editor Net pane receives those capabilities through `PanelContext`; it owns
 only search/view state and copied evidence. Controls use shared dock primitives;
 long text wraps at the semantic body size and the toolbar scrolls horizontally at
-narrow widths. Standalone editor Play publishes the actual cloned Scene as disabled
+narrow widths. A padded toolbar is followed by a separate filter row, a bounded
+record table, and selected-record details. Details move below the table in narrow
+panes. Selection copies one typed record with its exact source/revision and is
+revoked on source replacement, category change, detach or an accepted clear
+request. A record is an owner observation or aggregate report, not necessarily a
+wire packet; the pane does not invent packet timestamps, durations or payloads.
+Drop/eviction counters remain visible. Standalone editor Play publishes the actual cloned Scene as disabled
 and revokes publication on stop, failure and reload. Real transport events,
 committed mapping/capture reports, admitted RPC terminal totals and tick alignment
 are optional explicit producers. Missing interest/rollback producers remain

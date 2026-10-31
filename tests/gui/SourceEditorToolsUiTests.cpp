@@ -9,6 +9,7 @@
 #include "OwnedTestDirectory.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
+#include "editor/screens/workspace/panels/global_dock/panes/network/GlobalDockNetworkPane.h"
 #include "editor/screens/workspace/panels/global_dock/panes/operations/GlobalDockOperationsPane.h"
 #include "editor/source_editor/SourceEditorTools.h"
 
@@ -308,6 +309,89 @@ TEST_CASE("Operations rows show bounded live progress and usable text actions", 
         ui->ItemClick("//**/$$1/OperationAction");
         ui->Yield(2);
         IM_CHECK(cancelled);
+    });
+    INFO(result.testEngineLog);
+    REQUIRE(result.Succeeded());
+}
+
+TEST_CASE("Network records filter and open source-fenced responsive details", "[ui][imgui][editor][network]") {
+    SourceToolsUi fixture;
+    const auto locale = GENERATE("en-US", "tr-TR");
+    REQUIRE(fixture.localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                                 (std::string{locale} + ".json")));
+    REQUIRE(fixture.localization.Prepare(Horo::Editor::LocaleTag{locale}));
+    REQUIRE(fixture.localization.ActivatePrepared());
+    const float width = GENERATE(1100.0F, 520.0F);
+    Horo::Application::NetworkDebuggerService service;
+    REQUIRE(service.Begin(17, 6, true, Horo::Network::NetworkDiagnosticProvider::Deterministic));
+    const auto connection = Horo::Network::ConnectionHandle::Create(0, 1).Value();
+    REQUIRE(
+        service.Producer().Observe(service.Producer().Source(),
+                                   Horo::Network::NetworkConnectionRecord{.connection = connection,
+                                                                          .event = Horo::Network::NetworkTransportEventKind::Connected}));
+    REQUIRE(
+        service.Producer().Observe(service.Producer().Source(),
+                                   Horo::Network::NetworkConnectionRecord{.connection = connection,
+                                                                          .event = Horo::Network::NetworkTransportEventKind::PacketReceived,
+                                                                          .bytes = 4096}));
+    REQUIRE(service.Publish(service.Producer().Source()));
+    Horo::Editor::GlobalDockNetworkPane pane;
+    pane.Attach(&service, &service);
+    bool replaceSource = false;
+    bool detailsVisible = false;
+    ImVec2 listPosition{}, detailsPosition{};
+    std::string visibleText;
+    const auto result = fixture.harness.Run("horo_network", "record_details", [&](ImGuiTestContext *) {
+        if (replaceSource) {
+            REQUIRE(service.Begin(18, 7, true));
+            replaceSource = false;
+        }
+        REQUIRE(service.Publish(service.Producer().Source()));
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({width, 650});
+        ImGui::Begin("NetworkLayout", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+        ImGui::LogToBuffer();
+        pane.Draw(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail().x, fixture.context);
+        visibleText = ImGui::GetCurrentContext()->LogBuffer.c_str();
+        ImGui::LogFinish();
+        detailsVisible = false;
+        for (const auto *window : ImGui::GetCurrentContext()->Windows) {
+            if (!window->Active)
+                continue;
+            if (std::string_view{window->Name}.find("##NetworkEvidence") != std::string_view::npos)
+                listPosition = window->Pos;
+            if (std::string_view{window->Name}.find("##NetworkDetails") != std::string_view::npos) {
+                detailsVisible = true;
+                detailsPosition = window->Pos;
+            }
+        }
+        ImGui::End();
+    }, [&](ImGuiTestContext *ui) {
+        ui->Yield(3);
+        IM_CHECK(!detailsVisible);
+        ui->ItemClick("//**/connections/##chip");
+        ui->Yield(2);
+        const auto &received = fixture.localization.Get("editor", "workspace.global_dock.network.event.received");
+        ui->ItemInputValue("//**/##NetworkSearch", received.c_str());
+        ui->Yield(2);
+        ui->ItemClick("//**/$$0/2");
+        ui->Yield(3);
+        IM_CHECK(detailsVisible);
+        IM_CHECK(visibleText.find("4096") != std::string::npos);
+        if (width >= 760)
+            IM_CHECK(detailsPosition.x > listPosition.x);
+        else
+            IM_CHECK(detailsPosition.y > listPosition.y);
+        ui->ItemClick("//**/NetworkCloseDetails");
+        ui->Yield(2);
+        IM_CHECK(!detailsVisible);
+        ui->ItemClick("//**/$$0/2");
+        ui->Yield(2);
+        IM_CHECK(detailsVisible);
+        replaceSource = true;
+        ui->Yield(3);
+        IM_CHECK(!detailsVisible);
+        IM_CHECK(pane.Projection().snapshot.source.scene == 18);
     });
     INFO(result.testEngineLog);
     REQUIRE(result.Succeeded());
