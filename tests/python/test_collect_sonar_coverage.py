@@ -285,3 +285,17 @@ def test_executable_host_test_sources_are_collected(target_name: str) -> None:
     host = (repository / ".github/scripts/collect_sonar_coverage.sh").read_text()
     for source in application_sources:
         assert f'"$workspace/{source}"' in host
+
+
+def test_xr_bootstrap_coverage_is_selected_without_widening_the_editor_host_root() -> None:
+    """Keep the exercised production bootstrap while preserving the executable-root boundary."""
+    import shlex
+
+    host = (SCRIPTS.parent / ".github/scripts/collect_sonar_coverage.sh").read_text()
+    selection = host.split("includes=(", 1)[1].split("\n)", 1)[0]
+    includes = shlex.split(selection)
+    assert "$workspace/apps/HoroEditor/app/EditorOpenXRBootstrap.cpp" in includes
+    assert "$workspace/apps/common/" in includes
+    assert "$workspace/apps/HoroEditor/app/" not in includes
+    assert "$workspace/apps/HoroEditor/" not in includes
+    assert "$workspace/apps/" not in includes

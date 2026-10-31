@@ -44,7 +44,7 @@ namespace Horo::XR::OpenXRInternal {
             const std::string_view text{storage.data(), count - 1};
             for (std::size_t begin = 0; begin < text.size();) {
                 const auto end = text.find(' ', begin);
-                const auto length = (end == text.npos ? text.size() : end) - begin;
+                const auto length = (end == std::string_view::npos ? text.size() : end) - begin;
                 if (!length || names.size() == 32)
                     return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
                 names.emplace_back(text.substr(begin, length));
@@ -168,11 +168,11 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRSelectedVulkanBinding::Prepare */
     Result<const XrBaseInStructure *> OpenXRSelectedVulkanBinding::Prepare(XrInstance instance, XrSystemId system,
-                                                                           PFN_xrGetInstanceProcAddr dispatch) {
+                                                                           NativeOpenXRDispatch dispatch) {
         using Outcome = Result<const XrBaseInStructure *>;
         if (const auto lane = CheckLane(); lane.HasError())
             return Outcome::Failure(lane.ErrorValue());
-        if (bound_ || instance != instance_ || system != system_ || dispatch != dispatch_ || !graphics_ || !graphics_->Port())
+        if (bound_ || instance != instance_ || system != system_ || dispatch.getProc != dispatch_ || !graphics_ || !graphics_->Port())
             return Outcome::Failure(MakeError(XRErrors::CapabilityStale));
         auto current = graphics_->Port()->QueryDevice();
         if (current.HasError())

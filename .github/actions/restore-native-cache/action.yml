@@ -180,6 +180,9 @@ runs:
           sccache --stop-server || true
           sccache --start-server
           sccache --zero-stats
+        elif python3 .github/scripts/compiler_registry.py reconcile && ccache --zero-stats; then
+          echo 'Compiler cache: local accounting and budget reconciled'
         else
-          ccache --zero-stats
+          echo '::warning::Local compiler cache maintenance unavailable; compile without ccache'
+          echo 'CCACHE_DISABLE=1' >> "$GITHUB_ENV"
         fi

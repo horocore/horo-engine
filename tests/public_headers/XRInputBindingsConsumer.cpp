@@ -16,3 +16,9 @@ static_assert(requires(const Horo::Input::InputActionCollection &port, const Hor
     { projection.Bind(candidate, issuedRevision) } -> std::same_as<Horo::Result<void>>;
     { XRInputProjection::Create(port, candidate, plan, issuedRevision) } -> std::same_as<Horo::Result<XRInputProjection>>;
 });
+
+static_assert(requires(const XRInputProjection &projection, const Horo::XR::XRTrackingSnapshot &snapshot,
+                       const Horo::XR::XRSessionId &session, Horo::XR::XRTrackingSnapshotRevision revision,
+                       Horo::XR::XRWorldOriginRevision origin, const Horo::Input::InputCollectionFrame &frame) {
+    { projection.Append(snapshot, session, revision, origin, std::uint64_t{1}, frame) } -> std::same_as<Horo::Result<void>>;
+});

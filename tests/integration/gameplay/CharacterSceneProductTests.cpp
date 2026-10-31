@@ -9,12 +9,17 @@
 
 namespace Horo::Application::CharacterSceneProductTest {
     namespace {
+        // The >1 MiB/8192-object fixture also runs under parallel MSVC Debug CI.
+        // Keep startup bounded independently of the child process's cleanup budget.
+        constexpr auto SceneLoadTimeout = std::chrono::seconds{60};
+        constexpr auto CliProcessTimeout = SceneLoadTimeout + std::chrono::seconds{30};
+
         ExternalProcessResult RunCli(std::vector<std::string> arguments) {
             NativeExternalProcessRunner runner;
             std::string output;
             ExternalProcessRequest request{.executable = HORO_TEST_CHARACTER_CLI_PATH,
                                            .arguments = std::move(arguments),
-                                           .timeout = std::chrono::seconds{30},
+                                           .timeout = CliProcessTimeout,
                                            .onOutput = [&output](ProcessOutputLine line) {
                 output += line.text + '\n';
             }};
@@ -48,7 +53,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                     "--cook-target",
                     fixture.project.request.assets.target.Value(),
                     "--load-timeout-ms",
-                    "10000"};
+                    std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(SceneLoadTimeout).count())};
         }
     }  // namespace
 

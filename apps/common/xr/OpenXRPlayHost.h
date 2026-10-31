@@ -57,6 +57,15 @@ namespace Horo::Application::Internal {
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
                                  private XR::IXRBindingNeutralizer {
     public:
+        /** @brief Factory-only authority for adopting an already prepared native session. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class OpenXRPlayHost;
+        };
+
+        /** @brief Adopts the existing composition after its native preparation succeeded. */
+        OpenXRPlayHost(const ConstructionKey &key, OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation);
+
         /** @brief Composes actual existing native and scheduler parents without publishing Ready.
          * @param composition Exact selected application owners; all borrowed parents outlive the host.
          * @return Concrete host or preserved native/declaration/currentness failure; no fallback renderer is selected.
@@ -67,11 +76,13 @@ namespace Horo::Application::Internal {
          * @return True only after actual frame/image/GUI/native retirement; false/error retains every parent for retry.
          * @pre Owner lane outside callbacks. No normal-frame wait or guessed completion; explicit App teardown
          * retains this owner and the selected device/loader until success. Repeated calls preserve original debt.
+         * A retained terminal compositor Begin/End fault revokes the SAME session to Lost before bounded cleanup;
+         * closing still rejects new work. Only actual native destruction permits the quiescent frame reset.
          */
         [[nodiscard]] Result<bool> Close();
         [[nodiscard]] Result<void> AttachInput(const Input::InputActionCollection &input,
                                                const Editor::EditorXrSceneSourcePort &geometry) override;
-        [[nodiscard]] Result<void> UpdateScene(Runtime::RuntimeSceneView scene) override;
+        [[nodiscard]] Result<void> UpdateScene(const Runtime::RuntimeSceneView &scene) override;
         [[nodiscard]] Result<void> SetPlayState(Editor::EditorPlayState state) override;
         [[nodiscard]] Result<void> DetachInput() override;
         void RevokeInput() noexcept override;
@@ -133,18 +144,11 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override;
 
     private:
-        /** @brief Prepares native/Input/renderer resources and activates the same canonical Scene candidate inside its rollback scope.
-         * @param tracking Actual calibrated tracking-root request. @return Original native/resource/activation error.
-         * @pre Owner operation and candidate-owned rollback remain active in PrepareScene; no Scene publication occurs here.
-         */
-        [[nodiscard]] Result<void> PrepareSceneResources(const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
-
-        OpenXRPlayHost(OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation);
         [[nodiscard]] Result<void> Prepare(XR::XRSessionPreparation stage, const XR::XRSessionId &candidate,
                                            const XR::XRFeaturePlan &plan) override;
         void Release(XR::XRSessionPreparation stage, const XR::XRSessionId &session) noexcept override;
         void Neutralize(const XR::XRSessionId &session, std::uint64_t revision) noexcept override;
-        [[nodiscard]] Result<void> AppendInput(const Runtime::FrameContext &context, Input::InputCollectionFrame &frame);
+        [[nodiscard]] Result<void> AppendInput(const Runtime::FrameContext &context, const Input::InputCollectionFrame &frame);
         [[nodiscard]] Result<void> Lane() const;
         struct FrameState;
         [[nodiscard]] Result<void> ProgressTail();
@@ -160,20 +164,28 @@ namespace Horo::Application::Internal {
             bool published{};
             bool retiring{};
             bool nativeRetired{}; /**< Exact candidate's successful physical destruction, retained across bookkeeping retry. */
+            /** @brief Prepares native/Input/render children for this exact state under the canonical Scene rollback scope.
+             * @param host Same retained application owner. @param tracking Actual calibrated tracking-root request.
+             * @return Original native/resource/activation error; no Scene publication occurs here.
+             */
+            [[nodiscard]] Result<void> PrepareResources(OpenXRPlayHost &host,
+                                                        const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
+            /** @brief Revalidates this exact current state without issuing a replacement identity.
+             * @param host Same retained owner. @return Source/native/currentness failure or success.
+             */
+            [[nodiscard]] Result<void> Validate(const OpenXRPlayHost &host) const;
+            /** @brief Revokes this state only; native/GUI debt remains independently retained for retry.
+             * @param host Same creating owner; owner lane required. Late retirement cannot revoke a replacement.
+             */
+            void Retire(OpenXRPlayHost &host) noexcept;
+            /** @brief Polls the same current state's physical debt; absence is already retired.
+             * @param host Same creating owner. @return False while debt remains, original error, or complete retirement.
+             */
+            [[nodiscard]] static Result<bool> ProgressRetirement(OpenXRPlayHost &host);
         };
         class SceneCandidate;
         class SceneParticipant;
-        /** @brief Prepares only the actual canonical Scene and owns all native failure debt outside outgoing Scene storage. */
-        [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareScene(const Runtime::RuntimeSceneDefinition &definition,
-                                                                       Runtime::RuntimeSceneView scene);
-        /** @brief Revalidates SAME source/registration/native candidate without issuing or replacing identity. */
-        [[nodiscard]] Result<void> ValidateScene(const SceneState &scene) const;
-        /** @brief Revokes this exact Scene only, retaining owned geometry/native debt independently of Scene lifetime. */
-        void RetireScene(const std::shared_ptr<SceneState> &scene) noexcept;
-        /** @brief Polls physical native/image cleanup; false retains debt and forbids a replacement Play. */
-        [[nodiscard]] Result<bool> ProgressRetirement();
-        /** @brief Closes only physically drained graph/image/clock/native owners, preserving every original retry failure. */
-        [[nodiscard]] Result<bool> RetireFrameResources(const XR::XRSessionId &candidate);
+
         /** @brief Drops logical frame/event debt only after this candidate's native session was actually destroyed.
          * @param candidate Exact retained Scene candidate whose nativeRetired receipt was committed on success.
          * @return Original bookkeeping error; failure retains the receipt and remaining owners for retry.
@@ -208,6 +220,9 @@ namespace Horo::Application::Internal {
         void FinishOperation() noexcept;
 
         struct Operation final {
+            Operation(const Operation &) = delete;
+            Operation &operator=(const Operation &) = delete;
+
             OpenXRPlayHost &host;
 
             explicit Operation(OpenXRPlayHost &owner) noexcept : host(owner) {
@@ -237,7 +252,9 @@ namespace Horo::Application::Internal {
             Runtime::RuntimeDispatchSource dispatch;
             Duration fixedStep;
             Runtime::SceneObjectId trackingRoot;
-        } composition_;
+        };
+
+        Parents composition_;
 
         XR::OpenXRInternal::OpenXRNativeSession &native_;
         PFN_xrGetInstanceProcAddr getProc_;

@@ -423,7 +423,7 @@ namespace Horo::XR::OpenXRInternal {
             return current;
         if (nativeSessionIncarnation_ == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Native session creation receipt exhausted"));
-        auto binding = graphics_->Prepare(instance_, system_, dispatch_.getProc);
+        auto binding = graphics_->Prepare(instance_, system_, {dispatch_.getProc});
         if (binding.HasError())
             return Result<void>::Failure(binding.ErrorValue());
         graphicsPrepared_ = true;

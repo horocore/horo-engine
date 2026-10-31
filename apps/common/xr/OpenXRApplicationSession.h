@@ -127,13 +127,13 @@ namespace Horo::Application::Internal {
          * @param port Existing workspace context/player-bound collection; cannot create actions or assignments.
          * @param router SAME application router whose live Actions are the sole semantic schema authority.
          * @param bindings Explicit installer-owned immutable physical catalog retained through Play retirement.
-         * @param tracking Current canonical origin and observed native base space, supplied by the actual scene host.
+         * @param tracking Current canonical origin and native base; snapshotted before foreign admission/loader callbacks.
          * @return Resolved declaration/profile/Input outcome; failures retain native debt for explicit Close.
          * @post No Horo session or binding revision is predicted and no snapshot/Input value can be published.
          */
         [[nodiscard]] Result<void> PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
                                                 const OpenXRApplicationBindings &bindings,
-                                                XR::OpenXRInternal::NativeTrackingSpaceRequest tracking);
+                                                const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
         /** @brief Binds the same prepared native children/Input reservation during canonical resource preparation.
          * @param candidate Actual candidate issued by XRSessionLifecycle and already activated on the SAME native session.
          * @param coordinator Candidate's sole canonical binding publication/revision owner.
@@ -160,7 +160,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> AppendInput(const XR::XRSessionLifecycle &sessions, const XR::XRActionBindingCoordinator &coordinator,
                                                XR::RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                const Runtime::FrameContext &context, XR::XRWorldOriginRevision origin,
-                                               Input::InputCollectionFrame &frame);
+                                               const Input::InputCollectionFrame &frame);
         /** @brief Borrows the exact resolved preparation until input retirement; no native identity or sampling authority. */
         [[nodiscard]] const XR::XRResolvedActionBindings *PreparedBindings() const noexcept;
         /** @brief Returns the exact native-created calibrated World identity for the bound candidate.
@@ -172,6 +172,11 @@ namespace Horo::Application::Internal {
          * @return Fenced native borrow; no borrow survives another owner operation or retirement.
          */
         [[nodiscard]] Result<XrSpace> BorrowWorldSpace(const XR::XRCoordinateSpace &space) const;
+        /** @brief Borrows the current presentation base for synchronous native projection composition.
+         * @param space Exact complete reference identity returned by LocatePresentation.
+         * @return Fenced native base borrow, or original currentness/stale error; no borrow survives another owner operation.
+         */
+        [[nodiscard]] Result<XrSpace> BorrowPresentationReference(const XR::XRCoordinateSpace &space) const;
         /** @brief Samples complete actual primary views and calibrated reference at one native frame prediction.
          * @param candidate Exact active session. @param time Actual converted sample and runtime frame prediction, no simulation timestamp.
          * @return Fixed bounded native evidence using the SAME observed system view count; never synthesized cameras or availability.
@@ -215,19 +220,25 @@ namespace Horo::Application::Internal {
     private:
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
-        /** @brief Normalizes same-cutoff native values, publishes through the sole tracking owner, then appends without committing.
-         * @param poses Complete observed packet. @param actions Same synced scalar packet. @param state Same admitted session snapshot.
-         * @param time Actual converted cutoff. @param origin Current origin. @param bindingRevision Already validated binding revision.
+
+        /** @brief Borrowed normalized packet from one already-fenced native Input cutoff. No borrow survives this call. */
+        struct PreparedInputSample final {
+            const XR::OpenXRInternal::NativePoseObservations &poses;
+            const XR::OpenXRInternal::NativeScalarActionSamples &actions;
+            const XR::XRSessionSnapshot &state;
+            const XR::XRTimeEvidence &time;
+            XR::XRWorldOriginRevision origin;
+            std::uint64_t bindingRevision;
+        };
+
+        /** @brief Publishes the same bounded cutoff through the sole tracking owner and appends without committing.
+         * @param sample Complete synchronous evidence captured before publication.
          * @param publication Canonical tracking owner. @param frame Same Input transaction.
-         * @return Original publication/projection error; a rejected append revokes the candidate publication.
-         * @pre Owner lane and all currentness fences validated after native sampling; fixed-capacity frame work only.
+         * @return Original publication/projection error; rejected append revokes the candidate publication.
          */
-        [[nodiscard]] Result<void> AppendPreparedInput(const XR::OpenXRInternal::NativePoseObservations &poses,
-                                                       const XR::OpenXRInternal::NativeScalarActionSamples &actions,
-                                                       const XR::XRSessionSnapshot &state, const XR::XRTimeEvidence &time,
-                                                       XR::XRWorldOriginRevision origin, std::uint64_t bindingRevision,
+        [[nodiscard]] Result<void> AppendPreparedInput(const PreparedInputSample &sample,
                                                        XR::RuntimeInternal::XRTrackingPublication &publication,
-                                                       Input::InputCollectionFrame &frame);
+                                                       const Input::InputCollectionFrame &frame);
 
         /** @brief Validates the same owner/attempt/device and complete native projection protocol before capability construction.
          * @param viewport Same selected renderer owner. @return Actual observed system or the original admission/stale/native error.
@@ -239,8 +250,14 @@ namespace Horo::Application::Internal {
         XR::XRProjectSettings settings_;
         std::optional<OpenXRInstalledProductCandidate> product_;
         OpenXRInstalledProductPolicy policy_;
-        std::shared_ptr<const Packages::VerifiedPackageInstallRecord> installed_;
-        XR::XRInstallRecordId installIdentity_;
+
+        /** @brief Exact sealed install bytes and the bound compact identity captured from the same verified component. */
+        struct InstalledComponentSnapshot final {
+            std::shared_ptr<const Packages::VerifiedPackageInstallRecord> record;
+            XR::XRInstallRecordId identity;
+        };
+
+        InstalledComponentSnapshot installed_;
         const std::thread::id lane_{std::this_thread::get_id()};
         XR::OpenXRInternal::OpenXRSelectedVulkanBinding graphics_;
         std::shared_ptr<const OpenXRLoaderLease> loader_;
@@ -259,7 +276,9 @@ namespace Horo::Application::Internal {
             std::optional<XR::XRInputProjection> projection;
             std::optional<XR::XRResolvedActionBindings> bindings;
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */
-        } input_;
+        };
+
+        InputPreparation input_;
 
         bool closing_{};
         bool retiringSession_{};

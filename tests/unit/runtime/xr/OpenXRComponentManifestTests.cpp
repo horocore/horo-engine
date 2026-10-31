@@ -1,4 +1,5 @@
 #include "OpenXRComponentManifest.h"
+#include "OpenXRLoaderLease.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -7,6 +8,9 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Application::Internal;
+
+    static_assert(!std::is_default_constructible_v<OpenXRLoaderLease::ConstructionKey>);
+    static_assert(!std::is_aggregate_v<OpenXRLoaderLease::ConstructionKey>);
 
     nlohmann::json ComponentDocument() {
         const auto digest = FormatSha256(ComputeSha256({}));

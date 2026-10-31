@@ -35,7 +35,9 @@ KEY_PATTERN = re.compile(
     r"sonar-v3-Linux-X64-gcc-[0-9]+(?:\.[0-9]+)+-gcc-[0-9]+(?:\.[0-9]+)+-main-)"
     r"([1-9][0-9]*)-([1-9][0-9]*)")
 # Never import remote configuration, operational locks, or per-run counters.
-LOCAL_FILES = {"ccache.conf", "stats", "stats.log", "cachedir.tag", MANIFEST}
+CCACHE_CONFIGURATION = "ccache.conf"
+LOCAL_FILES = {CCACHE_CONFIGURATION, "stats", "stats.log", "cachedir.tag", MANIFEST}
+CI_CCACHE_DIRECTORIES = {".ci-cache/compiler", ".ci-cache/compiler-variants", ".sonar/ccache"}
 
 
 def split_key(key: str) -> tuple[str, tuple[int, int]]:
@@ -60,6 +62,62 @@ def cache_root(namespace: str) -> Path:
     if "-native-variants-v1-Mixed-main-" in namespace:
         relative = ".ci-cache/compiler-variants"
     return package.workspace_path(Path(relative))
+
+
+def ccache_directory() -> Path:
+    """Resolve only an explicitly selected CI store, without cache aliases."""
+    workspace = Path.cwd().resolve(strict=True)
+    selected = Path(os.environ.get("CCACHE_DIR", ""))
+    if not selected.is_absolute() or ".." in selected.parts:
+        raise ValueError("The compiler cache directory must be explicit and normalized")
+    root = package.workspace_path(selected)
+    if root.relative_to(workspace).as_posix() not in CI_CCACHE_DIRECTORIES:
+        raise ValueError("The compiler cache directory is not a CI-owned store")
+    for parent in selected.parents:
+        if parent.resolve() == workspace:
+            break
+        if parent.is_symlink():
+            raise ValueError("The compiler cache directory must not use symlink aliases")
+    if (root / CCACHE_CONFIGURATION).is_symlink():
+        raise ValueError("The local compiler configuration must not be a symlink")
+    return root
+
+
+def ccache_budget() -> str:
+    """Require a positive explicit CI budget within the archive's expanded bound."""
+    budget = os.environ.get("CCACHE_MAXSIZE", "")
+    match = re.fullmatch(r"([1-9]\d{0,8})([KMG])(iB|B)?", budget, flags=re.ASCII)
+    if not match:
+        raise ValueError("The compiler cache budget must be explicit and positive")
+    unit = 1024 if match[3] == "iB" else 1000
+    maximum = int(match[1]) * unit ** {"K": 1, "M": 2, "G": 3}[match[2]]
+    if maximum > MAX_EXPANDED_BYTES:
+        raise ValueError("The compiler cache budget exceeds its transport bound")
+    return budget
+
+
+def reconcile() -> None:
+    """Recount and bound only the selected workspace-owned ccache before builds."""
+    if os.environ.get("HORO_COMPILER_LAUNCHER") != "ccache":
+        raise ValueError("Local ccache maintenance requires the ccache launcher")
+    root, budget = ccache_directory(), ccache_budget()
+    executable = shutil.which("ccache")
+    if not executable:
+        raise ValueError("ccache unavailable for local maintenance")
+    executable = str(Path(executable).resolve(strict=True))
+    root.mkdir(parents=True, exist_ok=True)
+    # Bind every write to the selected store. Reading local settings is allowed;
+    # importing settings or changing a global configuration is not maintenance.
+    environment = dict(os.environ, CCACHE_DIR=str(root),
+                       CCACHE_CONFIGPATH=str(root / CCACHE_CONFIGURATION), CCACHE_MAXSIZE=budget)
+    # Imported stores have no counters. The first pass rebuilds them; ccache
+    # chooses eviction limits from the counters present at the start of a pass.
+    # A second bounded pass therefore applies the budget to the recounted store.
+    for _pass in range(2):
+        subprocess.run(["ccache", "--dir", str(root), "--cleanup"], executable=executable,
+                       shell=False, check=True, capture_output=True, text=True,
+                       timeout=30, env=environment)
+    print(f"Reconciled local compiler cache within configured budget {budget}")
 
 
 def is_payload_name(name: str) -> bool:
@@ -226,6 +284,8 @@ def publish(key: str) -> None:
     namespace, order = split_key(key)
     if not trusted_publisher(os.environ, namespace):
         raise ValueError("Only the owning main build may publish compiler entries")
+    if not namespace.startswith("native-v1-Windows-") and "CCACHE_DISABLE" in os.environ:
+        raise ValueError("Disabled ccache stores cannot publish compiler entries")
     ref = reference(namespace)
     source = cache_root(namespace)
     with tempfile.TemporaryDirectory(dir=source.parent) as temporary:
@@ -252,16 +312,27 @@ def publish(key: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("fetch", "publish"))
-    parser.add_argument("--key", required=True,
-                        help="Compatible namespace for fetch; restored main source key for publish")
+    commands = parser.add_subparsers(dest="operation", required=True)
+    for operation in ("fetch", "publish"):
+        command = commands.add_parser(operation)
+        command.add_argument("--key", required=True,
+                             help="Compatible namespace for fetch; main source key for publish")
+    commands.add_parser("reconcile")
     args = parser.parse_args()
     try:
-        {"fetch": fetch, "publish": publish}[args.operation](args.key)
+        if args.operation == "reconcile":
+            reconcile()
+        else:
+            {"fetch": fetch, "publish": publish}[args.operation](args.key)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, TimeoutError,
             subprocess.SubprocessError, tarfile.TarError) as error:
         # Exception messages/arguments may contain client credentials or output.
-        print(f"Public compiler checkpoint unavailable ({type(error).__name__}); retain ordinary compilation")
+        operation = ("Local compiler cache maintenance" if args.operation == "reconcile"
+                     else "Public compiler checkpoint")
+        detail = type(error).__name__
+        if isinstance(error, subprocess.CalledProcessError):
+            detail += f", exit {error.returncode}"
+        print(f"{operation} unavailable ({detail}); retain ordinary compilation")
         return 1
     return 0
 

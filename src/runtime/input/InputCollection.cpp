@@ -35,8 +35,8 @@ namespace Horo::Input {
             return Result<void>::Failure(owner.ErrorValue());
         if (slot >= sources.size() || generation == 0)
             return Stale<void>();
-        const auto &source = sources[slot];
-        if (source.generation != generation || source.retiring || source.configuration != router->impl_->configurationRevision ||
+        if (const auto &source = sources[slot];
+            source.generation != generation || source.retiring || source.configuration != router->impl_->configurationRevision ||
             source.assignment != router->impl_->assignmentRevision || !router->TokenActive(source.context) ||
             (source.device &&
              (!router->Snapshot().FindGamepad(*source.device) || router->PlayerForGamepad(*source.device) != source.player)))
@@ -143,10 +143,10 @@ namespace Horo::Input {
 
     void InputCollectionLifetime::Accumulate(const std::size_t action, const std::optional<PlayerId> player, ActionValue &value) noexcept {
         for (auto &entry : entries) {
-            if (entry.generation == 0 || entry.action != action || (player && sources[entry.source].player != player))
+            if (entry.generation == 0 || entry.action != action || (player.has_value() && sources[entry.source].player != player))
                 continue;
-            const auto &source = sources[entry.source];
-            if (source.configuration != router->impl_->configurationRevision || source.assignment != router->impl_->assignmentRevision)
+            if (const auto &source = sources[entry.source];
+                source.configuration != router->impl_->configurationRevision || source.assignment != router->impl_->assignmentRevision)
                 continue;
             const bool down = entry.current.active && (entry.current.x != 0.0F || entry.current.y != 0.0F);
             const bool previous = entry.previous.active && (entry.previous.x != 0.0F || entry.previous.y != 0.0F);
@@ -161,7 +161,7 @@ namespace Horo::Input {
 
     /** @copydoc InputRouter::ActionCollection */
     Result<InputActionCollection> InputRouter::ActionCollection(const InputContextToken &context,
-                                                                const std::optional<GamepadDeviceId> assignedDevice) {
+                                                                const std::optional<GamepadDeviceId> assignedDevice) const {
         if (auto owner = impl_->collection->Borrow(); owner.HasError())
             return Result<InputActionCollection>::Failure(owner.ErrorValue());
         const auto routing = RoutingState(context);
@@ -175,7 +175,7 @@ namespace Horo::Input {
         port.device_ = assignedDevice;
         if (assignedDevice) {
             port.player_ = PlayerForGamepad(*assignedDevice);
-            if (!port.player_ || !Snapshot().FindGamepad(*assignedDevice))
+            if (!port.player_.has_value() || !Snapshot().FindGamepad(*assignedDevice))
                 return Invalid<InputActionCollection>();
         }
         return Result<InputActionCollection>::Success(std::move(port));
@@ -189,9 +189,9 @@ namespace Horo::Input {
         auto router = owner->Borrow();
         if (router.HasError())
             return Result<InputActionSourceToken>::Failure(router.ErrorValue());
-        const auto &impl = *router.Value()->impl_;
-        if (configuration_ != impl.configurationRevision || assignment_ != impl.assignmentRevision ||
-            !router.Value()->TokenActive(context_) || owner->collecting || actions.empty())
+        if (const auto &impl = *router.Value()->impl_; configuration_ != impl.configurationRevision ||
+                                                       assignment_ != impl.assignmentRevision || !router.Value()->TokenActive(context_) ||
+                                                       owner->collecting || actions.empty())
             return Stale<InputActionSourceToken>();
         auto registered = owner->Register({.context = context_,
                                            .configuration = configuration_,
@@ -251,10 +251,11 @@ namespace Horo::Input {
             return entry.generation == 0 || (sources[entry.source].retiring && sources[entry.source].neutralCommitted);
         };
         const auto free = std::ranges::count_if(entries, reclaimable);
-        const bool slotAvailable = std::ranges::any_of(sources, [](const auto &value) {
+        if (const bool slotAvailable = std::ranges::any_of(sources,
+                                                           [](const auto &value) {
             return value.generation == 0 || (value.retiring && value.neutralCommitted);
         });
-        if (!slotAvailable || actions.size() > static_cast<std::size_t>(free) || nextGeneration == 0)
+            !slotAvailable || actions.size() > static_cast<std::size_t>(free) || nextGeneration == 0)
             return Result<Registration>::Failure(MakeError(Errors::CollectionCapacity));
         // Reclamation is a successful registration mutation, never a side effect of rejected metadata.
         ReclaimNeutral();
@@ -300,7 +301,8 @@ namespace Horo::Input {
     }
 
     /** @copydoc InputCollectionFrame::Append */
-    Result<void> InputCollectionFrame::Append(const InputActionSourceToken &source, const std::span<const CollectedActionValue> values) {
+    Result<void> InputCollectionFrame::Append(const InputActionSourceToken &source,
+                                              const std::span<const CollectedActionValue> values) const {
         const auto owner = owner_.lock();
         if (!owner || owner != source.owner_.lock())
             return Stale<void>();

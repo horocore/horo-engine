@@ -13,6 +13,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -43,6 +44,22 @@ namespace {
         CHECK(configuration.Snapshot().Revision() == 0);
         host.DeactivateAll();
         CHECK(std::get<std::string>(configuration.Snapshot().Get(SettingKey{"editor.theme.active"})) == "light");
+    }
+
+    TEST_CASE("Editor sealed schemas construct an owned authority without moving the service", "[unit][editor][configuration]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+
+        auto settings = DefaultEditorSettings();
+        settings.themePreset = EditorThemePreset::Light;
+        auto schema = CreateEditorConfigurationSchema(settings);
+        REQUIRE(schema.IsSealed());
+        const auto configuration = std::make_unique<ConfigurationService>(std::move(schema));
+        CHECK(std::get<std::string>(configuration->Snapshot().Get(SettingKey{"editor.theme.active"})) == "light");
+        settings.themePreset = EditorThemePreset::Midnight;
+        REQUIRE(configuration->Commit(MakeEditorAppearanceConfigurationDraft(configuration->Snapshot(), settings)).HasValue());
+        CHECK(configuration->Snapshot().Revision() == 1);
+        CHECK(std::get<std::string>(configuration->Snapshot().Get(SettingKey{"editor.theme.active"})) == "midnight");
     }
 
     template <typename T> void RequireSettingValue(const Horo::ConfigurationSnapshot &snapshot, const char *key, const T &expected) {

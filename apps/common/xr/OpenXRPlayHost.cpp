@@ -1,13 +1,14 @@
 #include "OpenXRPlayHost.h"
 
 #include "Horo/Foundation/Assertions.h"
+#include "OpenXRPlayFrameState.h"
 
 namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
 
     /** @copydoc OpenXRPlayHost::OpenXRPlayHost */
-    OpenXRPlayHost::OpenXRPlayHost(OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation)
+    OpenXRPlayHost::OpenXRPlayHost(const ConstructionKey &, OpenXRPlayHostComposition composition, OpenXRApplicationPreparation preparation)
         : composition_{composition.session,
                        composition.viewport,
                        composition.frontend,
@@ -24,13 +25,12 @@ namespace Horo::Application::Internal {
         if (!composition.bindings || !composition.dispatch.IsValid() || composition.fixedStep.ToNanoseconds() <= 0 ||
             !composition.trackingRoot.IsValid())
             return Result<std::unique_ptr<OpenXRPlayHost>>::Failure(MakeError(XRErrors::OperationUnavailable));
-        const auto prepared = composition.session.PrepareSession();
-        if (prepared.HasError())
+        if (const auto prepared = composition.session.PrepareSession(); prepared.HasError())
             return Result<std::unique_ptr<OpenXRPlayHost>>::Failure(prepared.ErrorValue());
         const auto facts = composition.session.BorrowPreparation();
         if (facts.HasError())
             return Result<std::unique_ptr<OpenXRPlayHost>>::Failure(facts.ErrorValue());
-        std::unique_ptr<OpenXRPlayHost> host{new OpenXRPlayHost(std::move(composition), facts.Value())};
+        auto host = std::make_unique<OpenXRPlayHost>(ConstructionKey{}, std::move(composition), facts.Value());
         if (auto clock = host->clock_.PrepareScheduler(host->composition_.dispatch, host->composition_.fixedStep); clock.HasError())
             return Result<std::unique_ptr<OpenXRPlayHost>>::Failure(clock.ErrorValue());
         return Result<std::unique_ptr<OpenXRPlayHost>>::Success(std::move(host));
@@ -46,14 +46,17 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_ || busy_)
             return Result<bool>::Failure(MakeError(XRErrors::OperationIncompatible));
         closing_ = true;
+        // A failed native Begin/End cannot be retried as a successful zero-layer frame. The same host
+        // revokes admission and retains all image/queue prefixes until its existing Lost cleanup proves quiescence.
+        if (render_ && render_->compositor.RetainedFault())
+            RevokeEventAdmission();
         if (scene_)
-            RetireScene(scene_);
+            scene_->Retire(*this);
         RevokeInput();
         const Operation operation{*this};
         if (scene_)
-            return ProgressRetirement();
-        auto retired = composition_.session.RetirePreparation();
-        if (retired.HasError())
+            return SceneState::ProgressRetirement(*this);
+        if (auto retired = composition_.session.RetirePreparation(); retired.HasError())
             return Result<bool>::Failure(retired.ErrorValue());
         return Result<bool>::Success(true);
     }
@@ -96,16 +99,16 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::SetPlayState */
     Result<void> OpenXRPlayHost::SetPlayState(const Editor::EditorPlayState state) {
+        using enum Horo::Editor::EditorPlayState;
         if (auto lane = Lane(); lane.HasError()) {
             return lane;
         }
-        if (state > Editor::EditorPlayState::Failed) {
+        if (state > Failed) {
             RevokeSource();
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         }
         input_.play = state;
-        if (state == Editor::EditorPlayState::Idle || state == Editor::EditorPlayState::Stopping ||
-            state == Editor::EditorPlayState::Failed)
+        if (state == Idle || state == Stopping || state == Failed)
             RevokeSource();
         return Result<void>::Success();
     }
@@ -147,13 +150,13 @@ namespace Horo::Application::Internal {
             return lane;
         const Operation operation{*this};
         if (sessions_.Snapshot().state == XRSessionState::Lost && scene_)
-            RetireScene(scene_);
+            scene_->Retire(*this);
         if (auto tail = ProgressTail(); tail.HasError()) {
             RevokeEventAdmission();
             return tail;
         }
         if (scene_ && scene_->retiring) {
-            const auto retired = ProgressRetirement();
+            const auto retired = SceneState::ProgressRetirement(*this);
             if (retired.HasError())
                 return Result<void>::Failure(retired.ErrorValue());
             if (!retired.Value())
@@ -172,7 +175,7 @@ namespace Horo::Application::Internal {
         eventsPending_ = observed.Value().morePending;
         if (sessions_.Snapshot().state == XRSessionState::Lost) {
             if (scene_)
-                RetireScene(scene_);
+                scene_->Retire(*this);
             return Result<void>::Success();
         }
         if (observed.Value().bindingsChanged || observed.Value().originChanged || observed.Value().exitRequested) {
@@ -184,21 +187,20 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::RevokeEventAdmission */
     void OpenXRPlayHost::RevokeEventAdmission() noexcept {
-        const auto state = sessions_.Snapshot();
-        if (state.session.IsValid()) {
+        if (const auto state = sessions_.Snapshot(); state.session.IsValid()) {
             // The copied publication is current on this serialized lane. SessionLost is legal from
             // every published state and only revokes admission; it never destroys native children.
             const auto lost = sessions_.ApplyEvent(state.session, XRSessionEvent::SessionLost);
             HORO_INVARIANT_MSG(lost.HasValue(), "Current XR event failure must revoke canonical frame admission");
         }
         if (scene_)
-            RetireScene(scene_);
+            scene_->Retire(*this);
         else
             RevokeSource();
     }
 
     /** @copydoc OpenXRPlayHost::AppendInput */
-    Result<void> OpenXRPlayHost::AppendInput(const Runtime::FrameContext &context, Input::InputCollectionFrame &frame) {
+    Result<void> OpenXRPlayHost::AppendInput(const Runtime::FrameContext &context, const Input::InputCollectionFrame &frame) {
         if (!input_.coordinator)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         return composition_.session.AppendInput(sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame);
@@ -225,15 +227,13 @@ namespace Horo::Application::Internal {
         auto frame = std::move(opened).Value();
         const auto sampled = AppendInput(context, frame);
         if (pendingRevoke_) {
-            const auto canceled = frame.Cancel();
-            if (canceled.HasError())
+            if (const auto canceled = frame.Cancel(); canceled.HasError())
                 return canceled;
             input_.router->BeginFrame(raw);
             return sampled.HasError() ? sampled : Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         }
         // One empty-source commit on native failure preserves physical edges and neutralizes old XR values.
-        const auto committed = frame.Commit();
-        if (committed.HasError()) {
+        if (const auto committed = frame.Commit(); committed.HasError()) {
             RevokeSource();
             return committed;
         }

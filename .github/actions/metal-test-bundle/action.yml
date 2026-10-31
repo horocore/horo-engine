@@ -1,0 +1,47 @@
+name: Package complete Metal test selection
+description: Publish this run's compiled Metal tests for native hardware execution.
+outputs:
+  artifact-id:
+    value: ${{ steps.upload.outputs.artifact-id }}
+    description: Immutable artifact produced by this job.
+  artifact-digest:
+    value: ${{ steps.upload.outputs.artifact-digest }}
+    description: Server-verified SHA256 of the artifact envelope.
+  payload-digest:
+    value: ${{ steps.pack.outputs.payload-digest }}
+    description: SHA256 of the bounded runtime payload inside the artifact.
+  producer-attempt:
+    value: ${{ steps.pack.outputs.producer-attempt }}
+    description: Immutable workflow attempt that compiled and uploaded the payload.
+runs:
+  using: composite
+  steps:
+    - name: Inventory and package the complete native selection
+      id: pack
+      shell: bash
+      env:
+        PACKAGE_DIRECTORY: ${{ github.workspace }}/build/metal-test-bundle
+      run: |
+        mkdir -m 700 "$PACKAGE_DIRECTORY"
+        "$HORO_QUALIFICATION_PYTHON" .github/scripts/metal_test_bundle.py pack > "$PACKAGE_DIRECTORY/result.json"
+        python3 - <<'PYTHON'
+        import json
+        import os
+        from pathlib import Path
+
+        report = json.loads((Path(os.environ['PACKAGE_DIRECTORY']) / 'result.json').read_text())
+        with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
+            output.write(f"payload-digest={report['sha256']}\n")
+            output.write(f"producer-attempt={report['identity']['attempt']}\n")
+        print(f"Packaged {report['testCount']} tests, {report['bytes']} compressed bytes")
+        PYTHON
+
+    - name: Upload immutable runtime payload
+      id: upload
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: metal-tests-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ github.workspace }}/build/metal-test-bundle/metal-tests.tar.gz
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 1

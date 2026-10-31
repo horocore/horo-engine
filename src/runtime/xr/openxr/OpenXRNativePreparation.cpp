@@ -34,9 +34,9 @@ namespace Horo::XR::OpenXRInternal {
                 request.requestedApi > selection.admittedLoaderVersions.maximum || request.requestedApi.major != 1 ||
                 request.requestedApi.minor > XR_VERSION_MINOR(XR_CURRENT_API_VERSION))
                 return Result<void>::Failure(MakeError(XRErrors::LoaderIncompatible));
-            const bool override = selection.runtimeSelection == XRRuntimeSelectionPolicy::ApprovedDeveloperOverride;
-            if (override != selection.developerOverrideApproved ||
-                (override && selection.productMode != XRPreflightProductMode::Development))
+            if (const bool developerOverride = selection.runtimeSelection == XRRuntimeSelectionPolicy::ApprovedDeveloperOverride;
+                developerOverride != selection.developerOverrideApproved ||
+                (developerOverride && selection.productMode != XRPreflightProductMode::Development))
                 return Result<void>::Failure(MakeError(XRErrors::RuntimeOverrideRejected));
             return Result<void>::Success();
         }
@@ -50,8 +50,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Retire the previous native owner before preparation"));
         if (const auto selected = ValidateSelection(request); selected.HasError())
             return selected;
-        discovery_.emplace(DiscoveryState{request.selection, request.requestedApi});
-        const auto prepared = CapturePreparation([&] {
+        discovery_.emplace(request.selection, request.requestedApi);
+        const auto prepared = CapturePreparation([this, &request] {
             return PrepareDiscoveryTransaction(request);
         });
         return prepared.HasError() ? Fail(prepared.ErrorValue()) : prepared;
@@ -122,10 +122,10 @@ namespace Horo::XR::OpenXRInternal {
         if (const auto current = CheckPreparation(request); current.HasError())
             return current;
         discovery_->phase = DiscoveryPhase::PreparingSession;
-        const auto prepared = CapturePreparation([&] {
+        if (const auto prepared = CapturePreparation([this, &request] {
             return CreateSession(request);
         });
-        if (prepared.HasError())
+            prepared.HasError())
             return Fail(prepared.ErrorValue());
         retainedPreflight_ = request.preflight;
         discovery_->phase = DiscoveryPhase::SessionPrepared;
@@ -170,11 +170,11 @@ namespace Horo::XR::OpenXRInternal {
         preparing_ = request.candidate;
         lastRuntime_ = request.candidate.system.runtime.Value();
         lastSessionGeneration_ = request.candidate.slot.generation;
-        const auto activated = CapturePreparation([&] {
+        if (const auto activated = CapturePreparation([this, &request] {
             auto current = CheckPreparation({request.preflight, request.activeAttempt});
             return current.HasError() ? current : CheckCurrent(request);
         });
-        if (activated.HasError())
+            activated.HasError())
             // The staged caller may already own attached action/reference-space children.
             // Preserve their native parents until that caller retires them in reverse order.
             // Legacy Create still owns atomic rollback through FinishCreate.

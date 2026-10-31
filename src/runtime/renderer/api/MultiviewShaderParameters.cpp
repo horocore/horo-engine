@@ -90,8 +90,8 @@ namespace Horo::Render {
             return Result<MaterialParameterBinding>::Failure(size.ErrorValue());
         try {
             MaterialParameterBinding result{std::vector<std::byte>(size.Value())};
-            const auto written = PackMultiviewShaderParameters(layout, views, localToWorld, layers, std::span{result.bytes});
-            if (written.HasError())
+            if (const auto written = PackMultiviewShaderParameters(layout, views, localToWorld, layers, std::span{result.bytes});
+                written.HasError())
                 return Result<MaterialParameterBinding>::Failure(written.ErrorValue());
             return Result<MaterialParameterBinding>::Success(std::move(result));
         } catch (const std::bad_alloc &) {

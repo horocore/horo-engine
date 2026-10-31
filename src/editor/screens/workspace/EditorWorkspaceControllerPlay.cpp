@@ -278,8 +278,7 @@ namespace Horo::Editor {
         if (!playScene)
             return;
         if (m_selectedXrPlayHost) {
-            const auto updated = m_selectedXrPlayHost->UpdateScene(*playScene);
-            if (updated.HasError()) {
+            if (const auto updated = m_selectedXrPlayHost->UpdateScene(*playScene); updated.HasError()) {
                 LOG_ERROR("editor.xr", "XR Scene presentation revoked: %s", updated.ErrorValue().message.c_str());
                 StopPlaySession();
             }

@@ -501,3 +501,33 @@ def test_versioned_outage_or_invalid_manifest_never_tries_legacy(snapshot, monke
         compiler.fetch(namespace)
     assert calls == [("manifest", "fetch", compiler.reference(namespace))]
     assert not compiler.cache_root(namespace).exists()
+
+
+def test_disabled_ccache_cannot_open_the_publication_store(monkeypatch):
+    for name, value in {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
+                        "GITHUB_REPOSITORY": "horocore/horo-engine",
+                        "GITHUB_WORKFLOW": "SonarCloud", "CCACHE_DISABLE": "1"}.items():
+        monkeypatch.setenv(name, value)
+
+    def forbidden_store(_namespace):
+        pytest.fail("Disabled ccache publication reached the local cache")
+
+    monkeypatch.setattr(compiler, "cache_root", forbidden_store)
+    with pytest.raises(ValueError, match="Disabled ccache"):
+        compiler.publish(KEY)
+
+
+def test_disabled_ccache_does_not_change_legacy_sccache_publication(monkeypatch):
+    namespace = "native-v1-Windows-X64-msvc-19.44.35229-msvc-19.44.35229-native-tests-v1-Debug-main-"
+    for name, value in {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main",
+                        "GITHUB_REPOSITORY": "horocore/horo-engine", "GITHUB_WORKFLOW": "CI",
+                        "CCACHE_DISABLE": "1"}.items():
+        monkeypatch.setenv(name, value)
+
+    def legacy_store(selected):
+        assert selected == namespace
+        raise LookupError("Legacy sccache store selected")
+
+    monkeypatch.setattr(compiler, "cache_root", legacy_store)
+    with pytest.raises(LookupError, match="Legacy sccache"):
+        compiler.publish(namespace + "400-1")

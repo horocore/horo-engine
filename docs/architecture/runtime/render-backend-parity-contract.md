@@ -729,6 +729,12 @@ synchronization, N-view semantics, completion evidence and deferred retirement. 
 handles remain private, and XROpenXR retains acquire/release/end-frame ownership. A
 backend may use multipass or native multiview internally, but cannot omit/reorder views
 or claim an unqualified greater-than-two configuration.
+The existing `maxMultiviewViews` limit denotes a complete view workload, including
+owned single-sample Depth32Float attachment layers. A shader-routing feature bit
+alone does not grant that storage. Matching integrations admit it through the
+noninstalled frontend resource-access boundary and the same registry, budget,
+upload and retirement owners. Ordinary texture creation retains its current
+single-layer envelope; unsupported peers return a typed failure without fallback.
 The common module metadata, window requirements, editor lifecycle, generic mesh
 snapshot, target handles, submission contract, and parity test harness are shared.
 
@@ -758,3 +764,13 @@ No-renderer repair routing: PASS
 
 Until this gate is met, backend selection remains an engineering/debug control
 and is not exposed as a completed Project Settings feature.
+
+For a multiview attachment CLEAR/STORE, planned whole-resource contents become
+defined only after full-extent writes cover every allocation layer and mip.
+Color and depth mappings are evaluated independently. Partial writes preserve
+prior contents evidence but cannot define fresh whole storage. The concrete
+backend retains this proof in its existing transactional graph state journal:
+recording is not publication, and aborted or failed submissions cannot publish
+planned contents. A same-frame GUI tail may consume the proven planned contents
+under the same completion lease. No backend may fabricate staging data to replace
+an actual attachment producer or infer contents merely from a declared Write use.

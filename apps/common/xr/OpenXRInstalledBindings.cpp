@@ -3,6 +3,8 @@
 #include "JsonUtils.h"
 
 #include <limits>
+#include <ranges>
+#include <span>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -40,10 +42,10 @@ namespace Horo::Application::Internal {
                                     std::pair{"controls", XR::XRActionBindingLimits::MaximumBindings},
                                     std::pair{"suggestions", XR::XRActionBindingLimits::MaximumBindings},
                                     std::pair{"poses", std::size_t{4}}};
-            for (const auto &[name, maximum] : counts)
-                if (!root.at(name).is_array() || root.at(name).size() > maximum)
-                    return false;
-            return true;
+            return std::ranges::all_of(counts, [&root](const auto &count) {
+                const auto &[name, maximum] = count;
+                return root.at(name).is_array() && root.at(name).size() <= maximum;
+            });
         }
 
         /** @brief Native identity payloads stay bounded while semantic strings remain exact Input keys. */
@@ -52,9 +54,9 @@ namespace Horo::Application::Internal {
         }
 
         bool Role(const Json &value) {
-            return Number(value, static_cast<std::uint64_t>(XR::XRTrackedDeviceRole::RightController), true) &&
-                   (value == static_cast<std::uint64_t>(XR::XRTrackedDeviceRole::LeftController) ||
-                    value == static_cast<std::uint64_t>(XR::XRTrackedDeviceRole::RightController));
+            using enum Horo::XR::XRTrackedDeviceRole;
+            return Number(value, static_cast<std::uint64_t>(RightController), true) &&
+                   (value == static_cast<std::uint64_t>(LeftController) || value == static_cast<std::uint64_t>(RightController));
         }
 
         bool Type(const Json &value) {
@@ -83,7 +85,7 @@ namespace Horo::Application::Internal {
                                                  {entry.at("set").get<std::uint32_t>()},
                                                  static_cast<XR::XRTrackedDeviceRole>(entry.at("role").get<std::uint64_t>()),
                                                  entry.at("required").get<bool>()});
-                output.actionLabels.push_back({id, entry.at("label").get<std::string>()});
+                output.actionLabels.emplace_back(id, entry.at("label").get<std::string>());
             }
             return Result<void>::Success();
         }
@@ -122,11 +124,11 @@ namespace Horo::Application::Internal {
         /** @brief Private schema supports only the existing grip/aim controller roles, not head/gaze/haptics. */
         Result<void> Poses(const Json &root, OpenXRApplicationBindings &output) {
             for (const auto &entry : root.at("poses")) {
+                using enum Horo::XR::XRTrackedPoseKind;
                 if (!Foundation::HasAllowedFields(entry, {"profile", "set", "role", "kind", "path", "label"}) ||
                     !Identity(entry.at("profile")) || !Identity(entry.at("set")) || !Role(entry.at("role")) ||
-                    !Number(entry.at("kind"), static_cast<std::uint64_t>(XR::XRTrackedPoseKind::Aim), true) ||
-                    (entry.at("kind") != static_cast<std::uint64_t>(XR::XRTrackedPoseKind::Grip) &&
-                     entry.at("kind") != static_cast<std::uint64_t>(XR::XRTrackedPoseKind::Aim)) ||
+                    !Number(entry.at("kind"), static_cast<std::uint64_t>(Aim), true) ||
+                    (entry.at("kind") != static_cast<std::uint64_t>(Grip) && entry.at("kind") != static_cast<std::uint64_t>(Aim)) ||
                     !Text(entry.at("path"), XR_MAX_PATH_LENGTH - 1) || !Text(entry.at("label"), XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1))
                     return Result<void>::Failure(InvalidBindings());
                 output.poses.push_back({{entry.at("profile").get<std::uint32_t>()},
@@ -152,8 +154,10 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(InvalidBindings());
         try {
             Foundation::JsonParseGuard guard{6};
-            const auto first = reinterpret_cast<const char *>(bytes.Value().data());
-            const auto root = guard.Parse(first, first + bytes.Value().size());
+            const auto text = std::span<const std::byte>{bytes.Value()} | std::views::transform([](const std::byte value) {
+                return std::to_integer<unsigned char>(value);
+            });
+            const auto root = guard.Parse(text.begin(), text.end());
             if (guard.HasDuplicate() || guard.IsTooDeep() || !Shape(root))
                 return Outcome::Failure(InvalidBindings());
             auto output = std::make_shared<OpenXRApplicationBindings>();

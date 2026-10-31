@@ -28,7 +28,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> ValidatePreparation() const override;
         [[nodiscard]] Result<void> Validate(const XRSessionId &candidate) const override;
         [[nodiscard]] Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system,
-                                                                PFN_xrGetInstanceProcAddr dispatch) override;
+                                                                NativeOpenXRDispatch dispatch) override;
         void Release() noexcept override;
         /** @brief Borrows the exact stable binding used for this native session's creation.
          * @param candidate Exact activated Horo session, fenced against this selected device.

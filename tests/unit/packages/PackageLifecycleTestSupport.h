@@ -1,5 +1,6 @@
 #pragma once
 /** @file PackageLifecycleTestSupport.h @brief Shared verified-archive and concrete native lifecycle fixture ownership. */
+#include "FixtureFileRead.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Packages/NativePackageModuleHost.h"
@@ -12,7 +13,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdio>
-#include <fstream>
 #include <iterator>
 #include <thread>
 
@@ -57,9 +57,7 @@ namespace Horo::Packages::Tests::Support {
     }
 
     inline std::string FileBytes(const std::filesystem::path &path) {
-        std::ifstream input(path, std::ios::binary);
-        REQUIRE(input.good());
-        return {std::istreambuf_iterator<char>{input}, {}};
+        return ::Horo::Tests::ReadFixtureBytes(path);
     }
 
     inline nlohmann::json NativeDescriptor(const std::string &packageId, const std::string &nativeName, const bool emptyModule) {

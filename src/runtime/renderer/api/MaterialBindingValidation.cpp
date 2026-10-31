@@ -218,15 +218,16 @@ namespace Horo::Render {
         template <typename Visitor> bool VisitParameter(const ShaderReflectedParameter &parameter, Visitor &&visit) {
             const bool matrix = parameter.rows > 1 && parameter.columns > 1;
             for (std::size_t array = 0; array < parameter.arrayCount; ++array)
-                for (std::size_t row = 0; row < parameter.rows; ++row)
-                    for (std::size_t column = 0; column < parameter.columns; ++column) {
-                        const auto vector = parameter.columnMajor ? column : row;
-                        const auto component = parameter.columnMajor ? row : column;
-                        const auto offset = parameter.byteOffset + array * parameter.arrayStride +
-                                            (matrix ? vector * parameter.matrixStride + component * 4 : (row + column) * 4);
-                        if (!visit(offset, (array * parameter.rows + row) * parameter.columns + column))
-                            return false;
-                    }
+                for (std::size_t scalar = 0; scalar < static_cast<std::size_t>(parameter.rows) * parameter.columns; ++scalar) {
+                    const auto row = scalar / parameter.columns;
+                    const auto column = scalar % parameter.columns;
+                    const auto vector = parameter.columnMajor ? column : row;
+                    const auto component = parameter.columnMajor ? row : column;
+                    const auto offset = parameter.byteOffset + array * parameter.arrayStride +
+                                        (matrix ? vector * parameter.matrixStride + component * 4 : (row + column) * 4);
+                    if (!visit(offset, (array * parameter.rows + row) * parameter.columns + column))
+                        return false;
+                }
             return true;
         }
 
@@ -246,6 +247,18 @@ namespace Horo::Render {
             }, value.components);
         }
 
+        /** @brief Marks one already-bounded four-byte scalar in the same caller-owned overlap bitmap. */
+        bool MarkScalarBytes(std::span<std::uint64_t> occupied, const std::size_t offset) {
+            for (std::size_t byte = offset; byte < offset + 4; ++byte) {
+                const auto bit = std::uint64_t{1} << (byte % 64);
+                auto &word = occupied[byte / 64];
+                if (word & bit)
+                    return false;
+                word |= bit;
+            }
+            return true;
+        }
+
         /** @brief Validates all values and occupied bytes transactionally using a fixed 8 KiB bitmap, never heap storage. */
         bool ValidatePackValues(const MaterialBindingLayout &layout, const ShaderBindingId binding,
                                 const std::span<const MaterialParameterValue> values, const std::span<std::byte> destination) {
@@ -255,19 +268,12 @@ namespace Horo::Render {
                 if (!IsBlockParameter(parameter, binding))
                     continue;
                 ++count;
-                const auto value = std::ranges::find(values, parameter.id, &MaterialParameterValue::parameter);
-                if (value == values.end() || std::ranges::count(values, parameter.id, &MaterialParameterValue::parameter) != 1 ||
+                if (const auto value = std::ranges::find(values, parameter.id, &MaterialParameterValue::parameter);
+                    value == values.end() || std::ranges::count(values, parameter.id, &MaterialParameterValue::parameter) != 1 ||
                     !UniqueParameter(layout, parameter) || !MatchesParameter(*value, parameter) || Aliases(*value, destination))
                     return false;
                 if (!VisitParameter(parameter, [&occupied](const std::size_t offset, std::size_t) {
-                    for (std::size_t byte = offset; byte < offset + 4; ++byte) {
-                        const auto bit = std::uint64_t{1} << (byte % 64);
-                        auto &word = occupied[byte / 64];
-                        if (word & bit)
-                            return false;
-                        word |= bit;
-                    }
-                    return true;
+                    return MarkScalarBytes(occupied, offset);
                 }))
                     return false;
             }
@@ -281,9 +287,9 @@ namespace Horo::Render {
                 if (!IsBlockParameter(parameter, binding))
                     continue;
                 const auto value = std::ranges::find(values, parameter.id, &MaterialParameterValue::parameter);
-                (void)VisitParameter(parameter, [&](const std::size_t offset, const std::size_t component) {
+                (void)VisitParameter(parameter, [&destination, value](const std::size_t offset, const std::size_t component) {
                     const auto bits = std::bit_cast<std::array<std::byte, 4>>(ParameterBits(*value, component));
-                    std::copy(bits.begin(), bits.end(), destination.begin() + offset);
+                    std::ranges::copy(bits, destination.begin() + offset);
                     return true;
                 });
             }
@@ -318,7 +324,7 @@ namespace Horo::Render {
         if (Aliases(std::as_bytes(std::span{layout.parameters}), prefix) || Aliases(std::as_bytes(values), prefix) ||
             !ValidatePackValues(layout, binding, values, prefix))
             return Result<std::size_t>::Failure(Invalid());
-        std::fill(prefix.begin(), prefix.end(), std::byte{0});
+        std::ranges::fill(prefix, std::byte{0});
         WritePackValues(layout, binding, values, prefix);
         return Result<std::size_t>::Success(bytes.Value());
     }

@@ -66,6 +66,12 @@ add_library(HoroEngine::HostErrors ALIAS HoroHostErrors)
 target_compile_features(HoroHostErrors PUBLIC cxx_std_20)
 target_link_libraries(HoroHostErrors PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
 
+# Data-only detached envelope ownership; importing it never links verification or crypto providers.
+add_library(HoroSecurityEnvelope INTERFACE)
+add_library(HoroEngine::SecurityEnvelope ALIAS HoroSecurityEnvelope)
+target_compile_features(HoroSecurityEnvelope INTERFACE cxx_std_20)
+target_link_libraries(HoroSecurityEnvelope INTERFACE HoroEngine::Foundation)
+
 add_library(HoroSecurity STATIC
         security/AgentPolicy.cpp
         security/SecurityErrors.cpp
@@ -76,7 +82,7 @@ add_library(HoroSecurity STATIC
 )
 add_library(HoroEngine::Security ALIAS HoroSecurity)
 target_compile_features(HoroSecurity PUBLIC cxx_std_20)
-target_link_libraries(HoroSecurity PUBLIC HoroEngine::Foundation PRIVATE MbedTLS::mbedcrypto)
+target_link_libraries(HoroSecurity PUBLIC HoroEngine::Foundation HoroEngine::SecurityEnvelope PRIVATE MbedTLS::mbedcrypto)
 
 add_library(HoroCliHost STATIC
         cli/CliCommandRegistry.cpp
@@ -332,6 +338,7 @@ target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEng
 
 add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp
+        packages/cache/PackageCachePublisherEnvelope.cpp
         packages/resolver/PackageDependencyResolver.cpp
         packages/resolver/PackageLockfile.cpp
         packages/resolver/PackageRequest.cpp
@@ -342,7 +349,7 @@ add_library(HoroPackages STATIC
 )
 add_library(HoroEngine::Packages ALIAS HoroPackages)
 target_compile_features(HoroPackages PUBLIC cxx_std_20)
-target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
+target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation HoroEngine::SecurityEnvelope PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
 
 add_library(HoroPackageSecurity STATIC
         packages/restore/GameplaySourceLibrary.cpp
@@ -1716,6 +1723,11 @@ add_library(HoroEngine::AnimationApi ALIAS HoroAnimationApi)
 target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
+add_library(HoroAnimationEditorModel STATIC editor/animation/AnimationPreviewSession.cpp)
+add_library(HoroEngine::AnimationEditorModel ALIAS HoroAnimationEditorModel)
+target_compile_features(HoroAnimationEditorModel PUBLIC cxx_std_20)
+target_link_libraries(HoroAnimationEditorModel PUBLIC HoroEngine::AnimationApi)
+
 add_library(HoroAnimationStateMachineInternal INTERFACE)
 target_include_directories(HoroAnimationStateMachineInternal INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/animation/state_machine)
@@ -2712,6 +2724,12 @@ add_library(HoroRenderFrontend STATIC
 )
 add_library(HoroEngine::RenderFrontend ALIAS HoroRenderFrontend)
 
+# Backend-neutral proof only; native state and submission publication remain with the concrete backend.
+add_library(HoroRenderGraphContentsInternal INTERFACE)
+target_include_directories(HoroRenderGraphContentsInternal INTERFACE
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/graph_contents/include>")
+target_link_libraries(HoroRenderGraphContentsInternal INTERFACE HoroEngine::RenderApi)
+
 # Non-installed matching-backend adapter; expose only the existing typed resource access declaration.
 set(_horo_frontend_access_root "${CMAKE_CURRENT_BINARY_DIR}/internal/render-frontend-access")
 file(MAKE_DIRECTORY "${_horo_frontend_access_root}")
@@ -2970,7 +2988,7 @@ if (HORO_BUILD_RENDER_VULKAN)
     target_compile_features(HoroRenderVulkan PUBLIC cxx_std_20)
     target_link_libraries(HoroRenderVulkan
             PUBLIC HoroEngine::RenderBackendRegistry
-            PRIVATE Vulkan::Headers HoroRenderVulkanExternalImagesInterface HoroRenderVulkanHostInterface
+            PRIVATE Vulkan::Headers HoroRenderVulkanExternalImagesInterface HoroRenderVulkanHostInterface HoroRenderGraphContentsInternal
     )
 endif ()
 
@@ -3303,6 +3321,8 @@ add_library(HoroEditorServices STATIC
         editor/audio/AudioEditorDocument.cpp
         editor/audio/AudioComponentPreview.cpp
         editor/audio/MixerAssetDocument.cpp
+        editor/animation/AnimationGraphDocument.cpp
+        editor/animation/AnimationGraphDocumentBounds.cpp
         editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
         editor/EditorServiceErrors.cpp
@@ -3372,6 +3392,7 @@ target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEn
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices

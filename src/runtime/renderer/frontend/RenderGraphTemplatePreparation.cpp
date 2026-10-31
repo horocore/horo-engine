@@ -22,7 +22,7 @@ namespace Horo::Render::Detail {
             return Outcome::Failure(MakeError(RenderGraphErrors::CapacityExceeded));
         // A typed private declaration, never a forged public resident identity or a generic validation bypass.
         const RenderGraphResourceId resource{builder.owner_, static_cast<std::uint32_t>(builder.resources_.size() + 1)};
-        builder.resources_.push_back({resource, RenderGraphResourceKind::Texture, RenderGraphResourceClass::External, std::monostate{}});
+        builder.resources_.emplace_back(resource, RenderGraphResourceKind::Texture, RenderGraphResourceClass::External, std::monostate{});
         builder.exportedResources_.push_back(0);
         return Outcome::Success({resource, descriptor, acquired, requiredFinal, deviceIncarnation});
     }
@@ -53,6 +53,7 @@ namespace Horo::Render::Detail {
     /** @copydoc PreparedRenderGraphTemplate::ValidateOptionalReads */
     Result<void> PreparedRenderGraphTemplate::ValidateOptionalReads(const RenderGraph &graph,
                                                                     std::span<const RenderGraphOptionalRead> reads) {
+        using enum RenderGraphUsageKind;
         if (reads.empty())
             return Result<void>::Success();
         if (graph.Passes().size() != 1 || graph.Passes().front().kind != RenderPassKind::Graphics ||
@@ -61,14 +62,12 @@ namespace Horo::Render::Detail {
         std::array<std::uint8_t, RenderGraphLimits::HardMaxResources> selected{};
         for (const auto &read : reads) {
             if (read.resource.owner != graph.Owner() || read.resource.value == 0 || read.resource.value > graph.Resources().size() ||
-                (read.role != RenderGraphUsageKind::VertexBuffer && read.role != RenderGraphUsageKind::IndexBuffer &&
-                 read.role != RenderGraphUsageKind::UniformBuffer))
+                (read.role != VertexBuffer && read.role != IndexBuffer && read.role != UniformBuffer))
                 return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
             const auto index = read.resource.value - 1;
-            const auto &resource = graph.Resources()[index];
-            if (selected[index] || resource.kind != RenderGraphResourceKind::Buffer ||
-                resource.resourceClass != RenderGraphResourceClass::Persistent ||
-                !std::holds_alternative<RenderBufferHandle>(resource.binding))
+            if (const auto &resource = graph.Resources()[index]; selected[index] || resource.kind != RenderGraphResourceKind::Buffer ||
+                                                                 resource.resourceClass != RenderGraphResourceClass::Persistent ||
+                                                                 !std::holds_alternative<RenderBufferHandle>(resource.binding))
                 return Result<void>::Failure(MakeError(RenderGraphErrors::InvalidImport));
             selected[index] = 1;
             if (std::ranges::count_if(graph.Usages(),
@@ -115,8 +114,8 @@ namespace Horo::Render::Detail {
             std::vector<RenderGraphImportedState> imports{residentStates.begin(), residentStates.end()};
             std::vector<RenderGraphFinalState> finals;
             for (const auto &slot : slots) {
-                imports.push_back({slot.resource, slot.acquired, RenderGraphInitialContents::Preserved});
-                finals.push_back({slot.resource, slot.requiredFinal});
+                imports.emplace_back(slot.resource, slot.acquired, RenderGraphInitialContents::Preserved);
+                finals.emplace_back(slot.resource, slot.requiredFinal);
             }
             auto schedule = CompileRenderGraph(graph);
             if (schedule.HasError())

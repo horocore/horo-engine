@@ -36,6 +36,22 @@ namespace Horo::Render::Detail {
                     .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
         }
 
+        /** @brief Selects only an already prepared exact attachment or bounded layer; never creates a borrowed view. */
+        [[nodiscard]] VkImageView PreparedExternalView(const RenderTextureViewDescriptor &descriptor,
+                                                       const RenderTextureDescriptor &texture,
+                                                       const VulkanExternalNativeViews &prepared) noexcept {
+            using enum RenderTextureViewDimension;
+            if (const bool full = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.baseLayer == 0 &&
+                                  descriptor.layerCount == texture.layerCount &&
+                                  descriptor.dimension == (texture.layerCount == 1 ? TwoD : TwoDArray);
+                full)
+                return prepared.attachment;
+            const bool layer = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.layerCount == 1 &&
+                               descriptor.baseLayer < prepared.layerCount && descriptor.baseLayer < prepared.layers.size() &&
+                               descriptor.dimension == TwoD;
+            return layer ? prepared.layers[descriptor.baseLayer] : VK_NULL_HANDLE;
+        }
+
     }  // namespace
 
     struct VulkanResourceRuntime::Impl {
@@ -158,7 +174,9 @@ namespace Horo::Render::Detail {
             std::shared_ptr<VulkanExternalAllocationPool> pool;
             VulkanExternalRegistryNodes<Texture> textures;
             VulkanExternalRegistryNodes<View> views;
-        } external;
+        };
+
+        ExternalStorage external;
 
         std::uint64_t maximumIdentity{0};
         std::uint64_t nextIdentity{1};
@@ -614,17 +632,10 @@ namespace Horo::Render::Detail {
         view->texture = impl_->textures.at(textureIdentity);
         view->aspect = descriptor.aspect;
         view->descriptor = descriptor;
-        const auto prepared =
-            texture->externalSource != nullptr ? texture->externalSource->PreparedNativeViews() : VulkanExternalNativeViews{};
-        if (prepared.attachment != VK_NULL_HANDLE) {
-            const bool full = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.baseLayer == 0 &&
-                              descriptor.layerCount == texture->descriptor.layerCount &&
-                              descriptor.dimension == (texture->descriptor.layerCount == 1 ? RenderTextureViewDimension::TwoD
-                                                                                           : RenderTextureViewDimension::TwoDArray);
-            const bool layer = descriptor.baseMip == 0 && descriptor.mipCount == 1 && descriptor.layerCount == 1 &&
-                               descriptor.baseLayer < prepared.layerCount && descriptor.baseLayer < prepared.layers.size() &&
-                               descriptor.dimension == RenderTextureViewDimension::TwoD;
-            view->handle = full ? prepared.attachment : layer ? prepared.layers[descriptor.baseLayer] : VK_NULL_HANDLE;
+        if (const auto prepared =
+                texture->externalSource != nullptr ? texture->externalSource->PreparedNativeViews() : VulkanExternalNativeViews{};
+            prepared.attachment != VK_NULL_HANDLE) {
+            view->handle = PreparedExternalView(descriptor, texture->descriptor, prepared);
             if (view->handle == VK_NULL_HANDLE)
                 return Result<std::uint64_t>::Failure(
                     ResourceError(VulkanBackendErrors::ResourceUnsupported, "External view was not prepared before acquisition."));

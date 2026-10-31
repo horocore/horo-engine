@@ -1,5 +1,6 @@
 #include "EditorOpenXRBootstrap.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <string>
 #include <vector>
@@ -27,6 +28,18 @@ namespace Horo::Editor::Tests {
               "[xr][host][bootstrap]") {
         SECTION("partial host selection") {
             CHECK(Bootstrap({"HoroEditor", "--xr-host-roots", "/missing"}).HasError());
+        }
+        SECTION("trailing selected flag has no value") {
+            CHECK(Bootstrap({"HoroEditor", "--xr-host-roots"}).HasError());
+        }
+        SECTION("a selected flag cannot become another flag's path") {
+            CHECK(Bootstrap({"HoroEditor", "--xr-host-roots", "--xr-host-catalog", "/missing"}).HasError());
+        }
+        SECTION("null process argument is rejected before creating a text view") {
+            char executable[] = "HoroEditor";
+            std::array<char *, 2> arguments{executable, nullptr};
+            const auto directory = std::filesystem::temp_directory_path();
+            CHECK(EditorOpenXRBootstrap::Create(arguments, directory / "horo-xr-project", directory / "horo-xr-cache", {}).HasError());
         }
         SECTION("unknown host authority") {
             CHECK(Bootstrap({"HoroEditor", "--xr-host-trust-project", "true"}).HasError());

@@ -33,7 +33,7 @@ namespace Horo::Editor {
                                                   std::span<const Render::RenderMeshResourceView> meshes,
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
-                                                  const Render::RenderGraphLogicalState &final);
+                                                  const Render::RenderGraphLogicalState &requiredFinal);
         /** @brief Bind one real acquisition before BeginFrame, using fixed owner storage and exact live publications.
          * @param viewport Existing owner. @param color Fresh native import. @param views Exact layer views.
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.
@@ -57,7 +57,7 @@ namespace Horo::Editor {
         [[nodiscard]] static EditorViewportTextureView Mirror(const EditorViewportRendererVulkan &viewport, std::uint64_t frame,
                                                               Render::RenderTextureViewHandle expected) noexcept;
         /** @brief Revokes only the borrowed mirror receipt on exact Scene loss/retirement; native queue debt stays owned. */
-        static void RevokeMirror(EditorViewportRendererVulkan &viewport) noexcept;
+        static void RevokeMirror(const EditorViewportRendererVulkan &viewport) noexcept;
         /** @brief Releases cold XR graph backing only after the App proved every acquisition/scene/GUI reference retired.
          * @param viewport SAME selected owner. @pre Exact native image retirement is already complete; owner lane.
          */

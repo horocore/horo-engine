@@ -28,6 +28,7 @@ includes=(
     "$workspace/apps/horo-package/"
     "$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp"
     "$workspace/apps/HoroEditor/app/EditorUserStateMigration.cpp"
+    "$workspace/apps/HoroEditor/app/EditorOpenXRBootstrap.cpp"
     "$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp"
     "$workspace/apps/HoroEditor/app/RenderGraphInspectionPane.cpp"
     "$workspace/apps/HoroEditor/app/EditorSurfaceLifecycleQualification.cpp"

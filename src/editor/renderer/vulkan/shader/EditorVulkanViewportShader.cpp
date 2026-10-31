@@ -82,15 +82,14 @@ namespace Horo::Editor {
 
     /** @copydoc EditorVulkanMultiviewShaderManifest */
     Render::ShaderManifest EditorVulkanMultiviewShaderManifest() {
+        using enum Horo::Render::ShaderValueType;
         using namespace Render;
         return {.schemaVersion = 1,
                 .sourceIdentity = "assets/shaders/runtime/multiview_mesh.hlsl",
                 .sourceRevision = 1,
                 .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
                 .bindings = {{{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Vertex}},
-                .parameters = {{{1}, {1}, ShaderValueType::Float32, 4, 4, 32},
-                               {{2}, {1}, ShaderValueType::Float32, 4, 4, 1},
-                               {{3}, {1}, ShaderValueType::Uint32, 1, 1, 32}},
+                .parameters = {{{1}, {1}, Float32, 4, 4, 32}, {{2}, {1}, Float32, 4, 4, 1}, {{3}, {1}, Uint32, 1, 1, 32}},
                 .targets = {EditorVulkanViewportShaderTarget()}};
     }
 

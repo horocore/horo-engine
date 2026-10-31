@@ -71,6 +71,10 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Math/WorldCoordinate64.h
 )
 
+horo_configure_target_header_boundary(HoroSecurityEnvelope PUBLIC_HEADERS
+    Horo/Security/ArtifactSignatureEnvelope.h
+)
+
 horo_configure_target_header_boundary(HoroSecurity PUBLIC_HEADERS
     Horo/Security/AgentPolicy.h
     Horo/Security/ArtifactSignature.h
@@ -247,6 +251,7 @@ horo_configure_target_header_boundary(HoroReleaseService PUBLIC_HEADERS
     Horo/Release/ReleaseService.h
     Horo/Release/ReleaseRunHistory.h
 )
+# PackageCache carries neutral detached envelopes through its explicit SecurityEnvelope dependency; publisher authority stays separate.
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageDependencyResolver.h
     Horo/Packages/PackageLockfile.h
@@ -745,6 +750,9 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSight.h
+)
+horo_configure_target_header_boundary(HoroAnimationEditorModel PUBLIC_HEADERS
+    Horo/Editor/AnimationPreviewSession.h
 )
 horo_configure_target_header_boundary(HoroAnimationGraphSourceCodec PUBLIC_HEADERS
     Horo/Animation/AnimationGraphSource.h
@@ -1268,6 +1276,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/AudioEditorDocument.h
     Horo/Editor/AudioComponentPreview.h
     Horo/Editor/MixerAssetDocument.h
+    Horo/Editor/AnimationGraphDocument.h
     Horo/Editor/CinematicPropertyBindings.h
     Horo/Editor/ActivityBarLayout.h
     Horo/Editor/EditorConfiguration.h

@@ -19,8 +19,8 @@ namespace Horo::Application::Internal {
                 root.at("loaderDigest") != FormatSha256(manifest.loader.digest) ||
                 !Foundation::HasAllowedFields(root.at("platform"), {"os", "architecture", "sdkAbi"}))
                 return false;
-            const auto &platform = root.at("platform");
-            if (platform.at("os") != policy.platform.operatingSystem || platform.at("architecture") != policy.platform.architecture ||
+            if (const auto &platform = root.at("platform");
+                platform.at("os") != policy.platform.operatingSystem || platform.at("architecture") != policy.platform.architecture ||
                 platform.at("sdkAbi") != policy.platform.sdkAbi || !root.at("bundledDependencies").is_array() ||
                 !root.at("bundledDependencies").empty() || !manifest.dependencies.empty())
                 return false;
@@ -48,8 +48,8 @@ namespace Horo::Application::Internal {
                                                                       const Security::ArtifactVerifier &verifier,
                                                                       const OpenXRComponentHostPolicy &policy) {
         using Outcome = Result<VerifiedOpenXRDeployment>;
-        const auto &publisher = component.Install()->Graph()->packages[component.PackageIndex()].publisher;
-        if (bytes.empty() || bytes.size() > 16U * 1024U || policy.deploymentContract.empty() || !publisher ||
+        if (const auto &publisher = component.Install()->Graph()->packages[component.PackageIndex()].publisher;
+            bytes.empty() || bytes.size() > 16U * 1024U || policy.deploymentContract.empty() || !publisher ||
             publisher->publisher != policy.publisher || publisher->keyId != policy.signingKey ||
             envelope.publisherId != policy.publisher.Value() || envelope.keyId != policy.signingKey ||
             component.Manifest().platform != policy.platform || component.Manifest().identity.backend != policy.backend)
@@ -72,7 +72,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc VerifiedOpenXRDeployment::VerifiedOpenXRDeployment */
-    VerifiedOpenXRDeployment::VerifiedOpenXRDeployment(const Sha256Digest component, Security::VerifiedArtifactEvidence evidence)
+    VerifiedOpenXRDeployment::VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence)
         : component_(component), evidence_(std::move(evidence)) {}
 
     /** @copydoc VerifiedOpenXRDeployment::ComponentIdentity */
