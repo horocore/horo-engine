@@ -389,12 +389,14 @@ TEST_CASE("Loading recovery actions keep padding and failures use error colors",
     int errorVertices{};
     const float footerTop = modal->Pos.y + modal->Size.y - inset - metrics.minimumHeight;
     for (const auto &vertex : modal->DrawList->VtxBuffer) {
-        if (vertex.col == ImGui::GetColorU32(Theme::Err())) {
+        if (vertex.col == ImGui::GetColorU32(Theme::Err()))
             ++errorVertices;
-            if (vertex.uv.x == whitePixel.x && vertex.uv.y == whitePixel.y)
-                progressBottom = std::max(progressBottom, vertex.pos.y);
-        }
-        if (vertex.col == ImGui::GetColorU32(Theme::Bg3())) {
+        // Include the antialiased fringe when recovering fill bounds; its alpha varies with tessellation.
+        constexpr ImU32 rgbMask = ~IM_COL32_A_MASK;
+        if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Err()) & rgbMask) && vertex.uv.x == whitePixel.x &&
+            vertex.uv.y == whitePixel.y)
+            progressBottom = std::max(progressBottom, vertex.pos.y);
+        if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Bg3()) & rgbMask)) {
             buttonTop = std::min(buttonTop, vertex.pos.y);
             buttonRight = std::max(buttonRight, vertex.pos.x);
             buttonBottom = std::max(buttonBottom, vertex.pos.y);
