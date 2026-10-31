@@ -3037,7 +3037,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroSourceEditorWidgetTests PRIVATE cxx_std_20)
     target_include_directories(HoroSourceEditorWidgetTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/editor/source_editor ${PROJECT_SOURCE_DIR}/tests)
-    target_link_libraries(HoroSourceEditorWidgetTests PRIVATE HoroEngine::Gui HoroEngine::Platform HoroThirdParty::ImGui)
+    target_link_libraries(HoroSourceEditorWidgetTests PRIVATE HoroEngine::Gui HoroEngine::Platform HoroThirdParty::ImGui HoroThirdParty::Zep)
     # These ImGui-context cases require the GUI library but no display/backend. Native CI must execute them.
     horo_register_catch_test(HoroSourceEditorWidgetTests LABELS "unit;editor;source;headless;sonar-coverage")
     add_executable(HoroSourceSyntaxTests unit/editor/SourceSyntaxTests.cpp)
@@ -3157,7 +3157,8 @@ if (HORO_BUILD_EDITOR_GUI)
             support/AllocationProbe.cpp)
     target_sources(HoroGuiPublicHeaderConsumer PRIVATE support/GuiScreenHostPublicContract.cpp)
     target_compile_features(HoroExtensionActivityViewTests PRIVATE cxx_std_20)
-    target_include_directories(HoroExtensionActivityViewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+    target_include_directories(HoroExtensionActivityViewTests PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests)
     target_link_libraries(HoroExtensionActivityViewTests PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroThirdParty::ImGui)
     add_executable(HoroEditorUiComponentsRenderTests
             unit/editor/EditorUiComponentsRenderTests.cpp
