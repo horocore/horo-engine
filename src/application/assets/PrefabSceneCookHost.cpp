@@ -5,8 +5,7 @@
 
 namespace Horo::Application {
     namespace {
-        /** @brief Selects resources and explicit template roots without changing
-         * captured source closure or revision authority. */
+        /** @brief Selects resources and explicit template roots without changing captured source closure or revision authority. */
         Result<Assets::AssetRegistrySnapshot> SelectRuntimeRecords(const Assets::AssetCookInputSnapshot &inputs,
                                                                    const std::span<const Assets::AssetId> runtimeRoots) {
             std::vector<Assets::AssetRecord> runtimeRecords;
@@ -20,8 +19,7 @@ namespace Horo::Application {
             return Result<Assets::AssetRegistrySnapshot>::Success(selected.Snapshot());
         }
 
-        /** @brief Borrows capture authorities only during the joined cook; rechecks the
-         * live registry and host before publication. */
+        /** @brief Borrows capture authorities only during the joined cook; rechecks the live registry and host before publication. */
         Result<void> ValidateCurrentHost(const PrefabSceneCookRequest &request, const Assets::AssetRegistry &registry,
                                          const ProjectCompatibilityInspector &compatibility, const PrefabCookDetail::HostCapture &capture,
                                          const CancellationToken &cancellation, const Release::ReleaseExecutionPlan *releasePlan,
@@ -47,9 +45,8 @@ namespace Horo::Application {
     /** @copydoc PrefabSceneCookHost::~PrefabSceneCookHost */
     PrefabSceneCookHost::~PrefabSceneCookHost() {
         static_cast<void>(expansion_.Shutdown({WaitPolicy::MainThreadPumpAllowed, Duration::FromMilliseconds(30'000)}));
-        // If interrupted, the expansion member retains and drains the exact owned
-        // attempt before destruction can release host authorities. No worker captures
-        // those authorities.
+        // If interrupted, the expansion member retains and drains the exact owned attempt before
+        // destruction can release host authorities. No worker captures those authorities.
     }
 
     /** @copydoc PrefabSceneCookHost::Cook */
@@ -121,9 +118,8 @@ namespace Horo::Application {
             return Result<Assets::AssetCookReport>::Failure(captured.ErrorValue());
         auto inputs = std::make_shared<const Assets::AssetCookInputSnapshot>(std::move(captured).Value());
         const auto capturedRevision = inputs->Registry().Revision();
-        // Each cook owns a detached source session. Replacement drains any
-        // interrupted previous operation before this session can admit work; source
-        // closure precedes asset publication.
+        // Each cook owns a detached source session. Replacement drains any interrupted previous
+        // operation before this session can admit work; source closure precedes asset publication.
         const JoinOptions sourceJoin{WaitPolicy::MainThreadPumpAllowed, Duration::FromMilliseconds(30'000)};
         if (auto replaced = expansion_.ReplaceScene(sourceJoin); replaced.HasError())
             return Result<Assets::AssetCookReport>::Failure(replaced.ErrorValue());
@@ -138,9 +134,9 @@ namespace Horo::Application {
         Assets::AssetCookRequest cook = request.assets;
         cook.registry = std::move(selected).Value();
         cook.pinnedInputs = inputs;
+        cook.keyProjection = composed.Value().keyProjection;
         cook.dependentPhase = composed.Value().templates;
-        // Capture references are synchronous: AssetCook joins all accepted work
-        // before returning, and the owned project lease outlives it.
+        // Capture references are synchronous: AssetCook joins all accepted work before returning, and the owned project lease outlives it.
         cook.validateHostInputs = [this, &request, &host, &cancellation, releasePlan, capturedRevision] {
             return ValidateCurrentHost(request, registry_, compatibility_, host.Value(), cancellation, releasePlan, capturedRevision);
         };

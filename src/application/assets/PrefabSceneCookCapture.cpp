@@ -199,7 +199,6 @@ namespace Horo::Application {
             Append(semantic, packages.Value());
             Append(semantic, PolicyIdentity(request));
             Append(semantic, prefabSettings.Value().settings->Configuration().ToJson());
-            Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
             if (releasePlan) {
                 if (const auto actualLockDigest = rawPackages.Value() ? ComputeSha256(std::as_bytes(std::span{*rawPackages.Value()}))
                                                                       : ComputeSha256(std::span<const std::byte>{});
@@ -209,8 +208,11 @@ namespace Horo::Application {
                 Append(semantic, FormatSha256(releasePlan->Identities().policy));
                 Append(semantic, FormatSha256(releasePlan->Identities().toolchain));
             }
+            const auto cacheDigest = ComputeSha256(std::as_bytes(std::span{semantic}));
+            Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
             return Result<HostCapture>::Success(
-                {metadata, ComputeSha256(std::as_bytes(std::span{semantic})), ComputeSha256(std::as_bytes(std::span{*rawProject.Value()})),
+                {metadata, ComputeSha256(std::as_bytes(std::span{semantic})), cacheDigest,
+                 ComputeSha256(std::as_bytes(std::span{*rawProject.Value()})),
                  rawPackages.Value() ? std::optional{ComputeSha256(std::as_bytes(std::span{*rawPackages.Value()}))} : std::nullopt,
                  rawIntent.Value() ? std::optional{ComputeSha256(std::as_bytes(std::span{*rawIntent.Value()}))} : std::nullopt,
                  prefabSettings.Value().identity});

@@ -1217,6 +1217,7 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/AssetCookService.cpp
         runtime/assets/cooker/AssetCookPreparation.cpp
         runtime/assets/cooker/AssetCookInputSnapshot.cpp
+        runtime/assets/cooker/AssetCookKeyProjection.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp
         runtime/assets/AssetSourcePublication.cpp
@@ -4020,6 +4021,7 @@ endif ()
 # production target has been declared.
 add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabCookSchemaContext.cpp
+        application/assets/PrefabCookSemanticInputs.cpp
         application/assets/PrefabSceneCookHost.cpp
         application/assets/PrefabSceneCookCapture.cpp
         application/assets/PrefabSceneCookCatalog.cpp

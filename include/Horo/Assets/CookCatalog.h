@@ -11,6 +11,7 @@
 #include "Horo/Foundation/Result.h"
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -59,6 +60,20 @@ namespace Horo::Assets {
         /** @brief Returns deterministic strategy version and effective settings for cache isolation. */
         [[nodiscard]] virtual CookerCacheIdentity CacheIdentity() const noexcept {
             return {};
+        }
+
+        /** @brief Declares the complete source dependency set for producer-local cache projection.
+         * @param source Exact immutable input. @param cancellation Cooperative preparation stop.
+         * @return Owned dependency IDs; an empty vector explicitly declares a leaf. Absence means this producer
+         * has not declared its inputs and callers must retain whole-capture identity or reject narrowing.
+         * @details Tooling preparation only, before output work. Include every source read or output dependency;
+         * hidden filesystem/registry reads are forbidden. Byte-affecting configuration belongs in CacheIdentity.
+         */
+        [[nodiscard]] virtual Result<std::optional<std::vector<AssetId>>> InputDependencies(const CookSourceView &source,
+                                                                                            const CancellationToken &cancellation) const {
+            (void)source;
+            (void)cancellation;
+            return Result<std::optional<std::vector<AssetId>>>::Success(std::nullopt);
         }
 
         /**

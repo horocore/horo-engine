@@ -1273,3 +1273,34 @@ These are logical operation events, not proof of an implemented CPU/GPU profiler
 capture backend. See [Prefab metrics](../../guides/prefab-metrics.md) for ownership,
 series bounds, integration and focused validation.
 
+### Dependency-local incremental cook identity
+
+`PrefabSceneCookHost` retains the whole immutable source/sidecar capture and project,
+package, policy and provider publication fences through generation publication.
+Cache reuse is a separate decision: each scene or explicit runtime template commits
+its own canonical source closure, including nested placements, variant parents,
+declared resource dependencies and only the component/behavior descriptors it uses.
+The scene definition revision derives from that same local closure. Source paths,
+registry publication counters and unrelated selected template roots do not alter
+semantic keys. Target, format, selected producer/tool settings and project-wide
+compatibility/package/policy settings remain inputs.
+
+Resource strategies must explicitly declare their complete source dependencies
+through `ICookerStrategy::InputDependencies` before the host schedules output. An
+empty vector means a source-only producer; an absent declaration is unsupported
+for dependency-local cooking. The bounded iterative traversal rejects missing
+sources, cycles, unsupported scene conversion contexts and exhausted work before
+output. Strategies must not read undisclosed paths or mutable registries. Output
+dependencies are checked against the admitted closure. Built-in mesh, material,
+audio and collision producers are source-only; UI style uses its admitted document
+references. Native collision importers already forbid opening paths.
+
+Generic Assets cooks retain their complete captured-input identity unless a domain
+producer supplies an `AssetCookKeyProjection` tied to the exact immutable capture.
+The projection canonicalizes actual source/sidecar pairs; the domain producer owns
+closure completeness. Dependent template keys include only verified candidate
+resource envelopes belonging to that template's closure. Publication still uses the
+existing joined staging and atomic selector authority: cancellation, stale capture,
+corrupt cache, failed reload or failed selector publication retains the prior valid
+generation. This does not extend the authored nested/variant forms beyond the
+currently admitted source contracts or claim completion of their separate tickets.

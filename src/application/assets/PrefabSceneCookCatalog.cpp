@@ -2,6 +2,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
+#include "PrefabCookSemanticInputs.h"
 #include "PrefabSceneCookState.h"
 
 #include <algorithm>
@@ -9,16 +10,14 @@
 
 namespace Horo::Application::PrefabCookDetail {
     namespace {
-        /** @brief Length-delimits registered semantic values without paths or mutable
-         * catalog publication counters. */
+        /** @brief Length-delimits registered semantic values without paths or mutable catalog publication counters. */
         void Append(std::string &value, const std::string_view field) {
             value += std::to_string(field.size());
             value += ':';
             value += field;
         }
 
-        /** @brief Derives a nonzero compact runtime identity; the host checks
-         * containing-scene collisions before publication. */
+        /** @brief Derives a nonzero compact runtime identity; the host checks containing-scene collisions before publication. */
         std::uint64_t Compact(const Sha256Digest &digest) {
             std::uint64_t value{};
             for (std::size_t index = 0; index < 8; ++index)
@@ -26,8 +25,7 @@ namespace Horo::Application::PrefabCookDetail {
             return value == 0 ? 1 : value;
         }
 
-        /** @brief Parses every captured prefab and commits its canonical revision
-         * before any resolver is built. */
+        /** @brief Parses every captured prefab and commits its canonical revision before any resolver is built. */
         Result<std::vector<Prefab::PrefabDependencySource>> PrefabSources(const Assets::AssetCookInputSnapshot &inputs,
                                                                           const HostCapture &host, const Prefab::PrefabLimitProfile &limits,
                                                                           const CancellationToken &cancellation,
@@ -63,8 +61,7 @@ namespace Horo::Application::PrefabCookDetail {
             return Result<std::vector<Prefab::PrefabDependencySource>>::Success(std::move(sources));
         }
 
-        /** @brief Immutable, fully validated domain output; no raw source or mutable
-         * resolver escapes the host operation. */
+        /** @brief Immutable, fully validated domain output; no raw source or mutable resolver escapes the host operation. */
         struct PreparedScene final {
             Assets::AssetId asset;
             Sha256Digest sourceDigest;
@@ -72,10 +69,10 @@ namespace Horo::Application::PrefabCookDetail {
             Runtime::SceneDefinitionRevision revision;
             std::vector<std::uint8_t> payload;
             std::vector<Assets::AssetId> dependencies;
+            Assets::AssetCookKeySelection key;
         };
 
-        /** @brief Pure strategy over exact prepared outputs; Assets owns envelope
-         * construction and publication. */
+        /** @brief Pure strategy over exact prepared outputs; Assets owns envelope construction and publication. */
         class SceneStrategy final : public Assets::ICookerStrategy {
         public:
             SceneStrategy(std::vector<PreparedScene> scenes, const Sha256Digest &settings, const SceneCook::CookedSceneLimits limits)
@@ -103,16 +100,14 @@ namespace Horo::Application::PrefabCookDetail {
                 if (const auto decoded = SceneCook::DecodeCookedSceneDefinition(payload, scene->id, scene->revision, limits_);
                     decoded.HasError())
                     return Result<void>::Failure(decoded.ErrorValue());
-                // A valid but different payload under the requested full key is not a
-                // usable cache hit.
+                // A valid but different payload under the requested full key is not a usable cache hit.
                 if (!std::ranges::equal(payload, scene->payload))
                     return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
                 return Result<void>::Success();
             }
 
         private:
-            /** @brief Requires exact admitted source identity for both fresh output and
-             * cached domain validation. */
+            /** @brief Requires exact admitted source identity for both fresh output and cached domain validation. */
             const PreparedScene *Find(const Assets::CookSourceView &source) const {
                 const auto found = std::ranges::find(scenes_, source.id, &PreparedScene::asset);
                 return found != scenes_.end() && found->sourceDigest == source.sourceDigest ? std::to_address(found) : nullptr;
@@ -123,8 +118,7 @@ namespace Horo::Application::PrefabCookDetail {
             const SceneCook::CookedSceneLimits limits_;
         };
 
-        /** @brief Preserves registered resource strategies while adding actual host
-         * semantics to every derived cache key. */
+        /** @brief Preserves registered resource strategies while adding actual host semantics to every derived cache key. */
         class HostKeyStrategy final : public Assets::ICookerStrategy {
         public:
             HostKeyStrategy(std::shared_ptr<const Assets::ICookerStrategy> strategy, const Sha256Digest &host,
@@ -140,6 +134,11 @@ namespace Horo::Application::PrefabCookDetail {
 
             Assets::CookerCacheIdentity CacheIdentity() const noexcept override {
                 return identity_;
+            }
+
+            Result<std::optional<std::vector<Assets::AssetId>>> InputDependencies(const Assets::CookSourceView &source,
+                                                                                  const CancellationToken &cancellation) const override {
+                return strategy_->InputDependencies(source, cancellation);
             }
 
             Result<Assets::CookOutputSink> Cook(const Assets::CookSourceView &source,
@@ -160,16 +159,15 @@ namespace Horo::Application::PrefabCookDetail {
             }
 
         private:
-            /** @brief Validates the actual selected material source and cooked/cache
-             * bytes before generation publication. */
+            /** @brief Validates the actual selected material source and cooked/cache bytes before generation publication. */
             Result<void> ValidateBinding(const Assets::CookSourceView &source, const std::span<const std::uint8_t> payload) const {
                 if (triggerBinding_ && source.id == triggerBinding_->binding.material.id &&
                     (source.type != triggerBinding_->binding.material.expectedType ||
                      source.sourceDigest != triggerBinding_->materialSourceDigest ||
                      ComputeSha256(std::as_bytes(payload)) != triggerBinding_->binding.materialPayloadDigest))
-                    return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale,
-                                                           "The real project material source or cooked payload "
-                                                           "differs from the trigger binding capture."));
+                    return Result<void>::Failure(
+                        MakeError(PrefabSceneCookErrors::Stale,
+                                  "The real project material source or cooked payload differs from the trigger binding capture."));
                 return Result<void>::Success();
             }
 
@@ -178,24 +176,21 @@ namespace Horo::Application::PrefabCookDetail {
             const std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding_;
         };
 
-        /** @brief Admits retained project schemas and rejects unsupported required mesh
-         * projections before conversion. */
+        /** @brief Admits retained project schemas and rejects unsupported required mesh projections before conversion. */
         Result<void> AdmitSceneObjects(const std::span<const SceneSource::SceneObjectSnapshot> objects,
                                        const std::shared_ptr<const PrefabCookSchemaContext> &schemas) {
             for (const auto &object : objects) {
                 if ((!schemas && (!object.components.gameplayComponents.empty() || !object.components.behaviors.empty())) ||
                     (schemas && schemas->Validate(object.components.gameplayComponents, object.components.behaviors).HasError()))
                     return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-                // RuntimeEntityDefinition has no imported-mesh field: never silently drop a
-                // required authored asset reference.
+                // RuntimeEntityDefinition has no imported-mesh field: never silently drop a required authored asset reference.
                 if (object.meshAsset)
                     return Result<void>::Failure(MakeError(SceneCook::SceneCookErrors::Unsupported));
             }
             return Result<void>::Success();
         }
 
-        /** @brief Selects the authored prefab roots whose transitive assets belong in a
-         * cooked scene. */
+        /** @brief Selects the authored prefab roots whose transitive assets belong in a cooked scene. */
         std::vector<Assets::AssetId> PrefabRoots(const SceneSource::SceneSourceView &source) {
             std::vector<Assets::AssetId> roots;
             for (const auto &placement : source.prefabInstances)
@@ -203,17 +198,17 @@ namespace Horo::Application::PrefabCookDetail {
             return roots;
         }
 
-        /** @brief Coherent host operation context borrowed only through the synchronous
-         * joined preparation. */
+        /** @brief Coherent host operation context borrowed only through the synchronous joined preparation. */
         struct ScenePreparationContext final {
             const PrefabSceneCookRequest &request;
             const Sha256Digest &settings;
+            const Assets::AssetCookInputSnapshot &inputs;
+            const Assets::CookerCatalogSnapshot &catalog;
             const CancellationToken &cancellation;
             SceneSource::ScenePrefabExpansionOwner &expansion;
         };
 
-        /** @brief Submits and joins one detached Scene attempt; a failed join drains
-         * ownership before returning. */
+        /** @brief Submits and joins one detached Scene attempt; a failed join drains ownership before returning. */
         Result<Runtime::RuntimeSceneDefinition> ExpandScene(const SceneSource::SceneSourceDocument &source,
                                                             const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                             const Prefab::PrefabLimitProfile &limits,
@@ -246,8 +241,7 @@ namespace Horo::Application::PrefabCookDetail {
             }
         }
 
-        /** @brief Validates the same typed Scene requirements against the pinned
-         * registry even when no Prefab is authored. */
+        /** @brief Validates the same typed Scene requirements against the pinned registry even when no Prefab is authored. */
         Result<std::vector<Runtime::SceneAssetDependency>> SceneDependencies(const Runtime::RuntimeSceneDefinition &definition,
                                                                              const Assets::AssetRegistrySnapshot &registry,
                                                                              const Prefab::PrefabDependencyGraphSnapshot &graph,
@@ -280,20 +274,20 @@ namespace Horo::Application::PrefabCookDetail {
             return Result<std::vector<Runtime::SceneAssetDependency>>::Success({dependencies.begin(), dependencies.end()});
         }
 
-        /** @brief Builds the complete source-free dependency closure and bounded cooked
-         * payload after Scene conversion. */
+        /** @brief Builds the complete source-free dependency closure and bounded cooked payload after Scene conversion. */
         Result<PreparedScene> FinishScene(const Assets::AssetCookPinnedSource &input, const Runtime::RuntimeSceneDefinition &definition,
                                           const Assets::AssetRegistrySnapshot &registry, const Prefab::PrefabDependencyGraphSnapshot &graph,
-                                          const std::span<const Assets::AssetId> roots, const SceneCook::CookedSceneLimits &limits) {
+                                          const std::span<const Assets::AssetId> roots, const SceneCook::CookedSceneLimits &limits,
+                                          const Runtime::SceneDefinitionRevision revision) {
             if (definition.Entities().size() > limits.maximumEntities)
                 return Result<PreparedScene>::Failure(MakeError(SceneCook::SceneCookErrors::TooLarge));
             auto closure = SceneDependencies(definition, registry, graph, roots, limits.maximumDependencies);
             if (closure.HasError())
                 return Result<PreparedScene>::Failure(closure.ErrorValue());
-            Runtime::SceneDefinitionBuilder builder{definition.Id(), definition.Revision()};
+            Runtime::SceneDefinitionBuilder builder{definition.Id(), revision};
             for (const auto &entity : definition.Entities())
                 builder.Add(entity);
-            PreparedScene prepared{input.record.id, input.sourceDigest, definition.Id(), definition.Revision(), {}, {}};
+            PreparedScene prepared{input.record.id, input.sourceDigest, definition.Id(), revision, {}, {}, {}};
             for (const auto &dependency : closure.Value()) {
                 if (auto admitted = builder.RequireAsset(dependency); admitted.HasError())
                     return Result<PreparedScene>::Failure(admitted.ErrorValue());
@@ -312,8 +306,7 @@ namespace Horo::Application::PrefabCookDetail {
             return Result<PreparedScene>::Success(std::move(prepared));
         }
 
-        /** @brief Admits canonical authored values before invoking owned expansion and
-         * source-free cooking. */
+        /** @brief Admits canonical authored values before invoking owned expansion and source-free cooking. */
         Result<PreparedScene> PrepareScene(const Assets::AssetCookPinnedSource &input, const Assets::AssetRegistrySnapshot &registry,
                                            const Prefab::PrefabSourceResolverSnapshot &resolver,
                                            const Prefab::PrefabDependencyGraphSnapshot &graph, const Prefab::PrefabLimitProfile &limits,
@@ -334,25 +327,43 @@ namespace Horo::Application::PrefabCookDetail {
             const auto definition = ExpandScene(source, resolver, limits, context, id, revision);
             if (definition.HasError())
                 return Result<PreparedScene>::Failure(definition.ErrorValue());
-            return FinishScene(input, definition.Value(), registry, graph, PrefabRoots(view), context.request.sceneLimits);
+            std::vector<Assets::AssetId> resources;
+            for (const auto &dependency : definition.Value().AssetDependencies())
+                resources.push_back(dependency.id);
+            auto semantic = CaptureSemanticCookInputs(context.inputs, graph, resolver, input.record.id, context.request.schemas,
+                                                      context.catalog, context.request.assets.target,
+                                                      context.request.assets.limits.maximumAssets, context.cancellation, resources);
+            if (semantic.HasError())
+                return Result<PreparedScene>::Failure(semantic.ErrorValue());
+            Assets::AssetCookKeySelection selection{input.record.id, std::move(semantic.Value().sources),
+                                                    semantic.Value().producerSettings};
+            auto key = Assets::AssetCookKeyProjection::Create(context.inputs, {selection}, context.request.assets.limits.maximumAssets);
+            if (key.HasError())
+                return Result<PreparedScene>::Failure(key.ErrorValue());
+            const std::string finalIdentity = FormatSha256(context.settings) + FormatSha256(key.Value()->Digest(input.record.id));
+            const Runtime::SceneDefinitionRevision finalRevision{Compact(ComputeSha256(std::as_bytes(std::span{finalIdentity})))};
+            auto prepared =
+                FinishScene(input, definition.Value(), registry, graph, PrefabRoots(view), context.request.sceneLimits, finalRevision);
+            if (prepared.HasError())
+                return prepared;
+            auto value = std::move(prepared).Value();
+            value.key = std::move(selection);
+            return Result<PreparedScene>::Success(std::move(value));
         }
 
-        /** @brief Couples admitted resource strategies with the complete source, host
-         * and resource-settings commitment. */
+        /** @brief Couples admitted resource strategies with the complete source, host and resource-settings commitment. */
         struct ResourceCatalogInputs final {
             std::vector<Assets::CookerContribution> contributions;
             Sha256Digest settings;
         };
 
-        /** @brief Captures every registered resource strategy identity before
-         * constructing scene or resource wrappers. */
+        /** @brief Captures every registered resource strategy identity before constructing scene or resource wrappers. */
         Result<ResourceCatalogInputs> PrepareResourceCatalogInputs(const PrefabSceneCookRequest &request, const HostCapture &host,
                                                                    const Assets::AssetCookInputSnapshot &inputs,
                                                                    const Assets::CookerCatalogSnapshot &catalog,
                                                                    const CancellationToken &cancellation) {
             std::string identity{"horo.static-scene-cook.resolver-v1.output-v1"};
-            Append(identity, FormatSha256(host.semanticDigest));
-            Append(identity, FormatSha256(inputs.ClosureDigest()));
+            Append(identity, FormatSha256(host.cacheDigest));
             std::vector<Assets::CookerContribution> contributions;
             for (const auto &input : inputs.Sources()) {
                 if (cancellation.IsCancellationRequested())
@@ -362,12 +373,6 @@ namespace Horo::Application::PrefabCookDetail {
                 const auto *original = catalog.FindContribution(input.record.type, request.assets.target);
                 if (!original || !original->strategy)
                     return Result<ResourceCatalogInputs>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-                const auto cache = original->strategy->CacheIdentity();
-                Append(identity, input.record.type.Value());
-                Append(identity, original->contributionId);
-                Append(identity, cache.version);
-                Append(identity, FormatSha256(cache.settingsDigest));
-                Append(identity, std::to_string(cache.settingsSchemaVersion));
                 if (std::ranges::find(contributions, input.record.type, &Assets::CookerContribution::assetType) == contributions.end())
                     contributions.push_back(*original);
             }
@@ -377,8 +382,7 @@ namespace Horo::Application::PrefabCookDetail {
             return Result<ResourceCatalogInputs>::Success({std::move(contributions), settings});
         }
 
-        /** @brief Owns complete source-free scenes after aggregate payload and
-         * compact-identity collision admission. */
+        /** @brief Owns complete source-free scenes after aggregate payload and compact-identity collision admission. */
         Result<std::vector<PreparedScene>> PrepareScenes(const PrefabSceneCookRequest &request,
                                                          const Assets::AssetCookInputSnapshot &inputs,
                                                          const Prefab::PrefabSourceResolverSnapshot &resolver,
@@ -386,6 +390,7 @@ namespace Horo::Application::PrefabCookDetail {
                                                          const Prefab::PrefabLimitProfile &limits, const ScenePreparationContext &context) {
             std::vector<PreparedScene> scenes;
             std::uint64_t totalPayloadBytes{};
+            std::size_t totalInputReferences{};
             for (const auto &input : inputs.Sources()) {
                 if (context.cancellation.IsCancellationRequested())
                     return Result<std::vector<PreparedScene>>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
@@ -399,14 +404,16 @@ namespace Horo::Application::PrefabCookDetail {
                     return existing.id == scene.Value().id;
                 }))
                     return Result<std::vector<PreparedScene>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+                if (scene.Value().key.inputs.size() > 1'048'576U - totalInputReferences)
+                    return Result<std::vector<PreparedScene>>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
+                totalInputReferences += scene.Value().key.inputs.size();
                 totalPayloadBytes += scene.Value().payload.size();
                 scenes.push_back(std::move(scene).Value());
             }
             return Result<std::vector<PreparedScene>>::Success(std::move(scenes));
         }
 
-        /** @brief Publishes prepared Scene/resource strategies as one isolated catalog
-         * registration transaction. */
+        /** @brief Publishes prepared Scene/resource strategies as one isolated catalog registration transaction. */
         Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>> PublishContributions(ResourceCatalogInputs resources,
                                                                                           std::vector<PreparedScene> scenes,
                                                                                           const PrefabSceneCookRequest &request) {
@@ -424,8 +431,7 @@ namespace Horo::Application::PrefabCookDetail {
             return candidate.Publish();
         }
 
-        /** @brief Attaches a fully admitted dependent-template phase to the prepared
-         * catalog. */
+        /** @brief Attaches a fully admitted dependent-template phase to the prepared catalog. */
         Result<PreparedCatalog> AttachTemplatePhase(PreparedCatalog prepared, TemplateCookState state) {
             auto phase = PrepareTemplatePhase(std::move(state));
             if (phase.HasError())
@@ -455,13 +461,38 @@ namespace Horo::Application::PrefabCookDetail {
         if (resources.HasError())
             return Result<PreparedCatalog>::Failure(resources.ErrorValue());
         const auto settings = resources.Value().settings;
-        auto scenes = PrepareScenes(request, inputs, resolver.Value(), graph.Value(), limits, {request, settings, cancellation, expansion});
+        auto scenes = PrepareScenes(request, inputs, resolver.Value(), graph.Value(), limits,
+                                    {request, settings, inputs, catalog, cancellation, expansion});
         if (scenes.HasError())
             return Result<PreparedCatalog>::Failure(scenes.ErrorValue());
+        std::vector<Assets::AssetCookKeySelection> selections;
+        std::size_t totalInputReferences{};
+        for (const auto &scene : scenes.Value()) {
+            totalInputReferences += scene.key.inputs.size();
+            selections.push_back(scene.key);
+        }
+        for (const auto &input : inputs.Sources()) {
+            if (input.record.type.Value() == "core.scene")
+                continue;
+            if (input.record.type.Value() == "core.prefab" &&
+                std::ranges::find(request.runtimePrefabRoots, input.record.id) == request.runtimePrefabRoots.end())
+                continue;
+            auto semantic = CaptureSemanticCookInputs(inputs, graph.Value(), resolver.Value(), input.record.id, request.schemas, catalog,
+                                                      request.assets.target, request.assets.limits.maximumAssets, cancellation);
+            if (semantic.HasError())
+                return Result<PreparedCatalog>::Failure(semantic.ErrorValue());
+            if (semantic.Value().sources.size() > 1'048'576U - totalInputReferences)
+                return Result<PreparedCatalog>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
+            totalInputReferences += semantic.Value().sources.size();
+            selections.push_back({input.record.id, std::move(semantic.Value().sources), semantic.Value().producerSettings});
+        }
+        auto projection = Assets::AssetCookKeyProjection::Create(inputs, std::move(selections), request.assets.limits.maximumAssets);
+        if (projection.HasError())
+            return Result<PreparedCatalog>::Failure(projection.ErrorValue());
         auto published = PublishContributions(std::move(resources).Value(), std::move(scenes).Value(), request);
         if (published.HasError())
             return Result<PreparedCatalog>::Failure(published.ErrorValue());
-        PreparedCatalog prepared{published.Value(), {}};
+        PreparedCatalog prepared{published.Value(), {}, std::move(projection).Value()};
         if (request.runtimePrefabRoots.empty())
             return Result<PreparedCatalog>::Success(std::move(prepared));
         return AttachTemplatePhase(std::move(prepared), {std::move(resolver).Value(), std::move(graph).Value(), inputs.Registry(),

@@ -175,7 +175,6 @@ namespace Horo::Application::PrefabCookDetail {
         for (const auto root : state.roots) {
             if (const auto *node = state.graph.FindNode(root); !node || !node->sourceRevision)
                 return Result<std::shared_ptr<const Assets::AssetCookDependentPhase>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-            identity += root.ToString();
         }
         state.settings = ComputeSha256(std::as_bytes(std::span{identity}));
         auto phase = std::make_shared<Assets::AssetCookDependentPhase>();

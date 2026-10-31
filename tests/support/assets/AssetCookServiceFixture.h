@@ -114,6 +114,11 @@ namespace Horo::Assets::ServiceTestSupport {
     /** @brief Test strategy whose effective settings must participate in AST cache admission. */
     class SettingsCooker final : public ICookerStrategy {
     public:
+        /** @brief Declares a source-only producer; all other byte-affecting settings are captured by CacheIdentity. */
+        Result<std::optional<std::vector<AssetId>>> InputDependencies(const CookSourceView &, const CancellationToken &) const override {
+            return Result<std::optional<std::vector<AssetId>>>::Success(std::vector<AssetId>{});
+        }
+
         explicit SettingsCooker(const std::uint8_t setting) : setting_(setting) {}
 
         [[nodiscard]] CookerCacheIdentity CacheIdentity() const noexcept override {
