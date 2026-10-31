@@ -14,11 +14,6 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
     inputs:
-      use_macos_metal_runner:
-        description: Use the provisioned custom macOS Metal runner instead of GitHub hosted macOS
-        type: boolean
-        required: false
-        default: false
       save_allocation_diagnostics:
         description: Run bounded Windows Save allocation stack diagnostics
         type: boolean
@@ -363,10 +358,7 @@ jobs:
 
   test:
     name: Test · ${{ matrix.name }}
-    # Same-run Linux MSL production is an explicit dependency. This intentionally
-    # waits the complete shader matrix; unrelated Windows shader failure must
-    # not skip native validation. Missing Linux data fails the Mac consumer.
-    needs: [tooling, shaders]
+    needs: tooling
     if: ${{ !cancelled() && needs.tooling.result == 'success' && !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
     permissions:
       contents: read
@@ -392,12 +384,6 @@ jobs:
             cxx: g++
             launcher: ccache
             preset: ci-linux-debug
-          - name: macOS / Clang
-            runner: ${{ github.event_name == 'workflow_dispatch' && inputs.use_macos_metal_runner && vars.HORO_MACOS_METAL_RUNNER != '' && vars.HORO_MACOS_METAL_RUNNER || 'macos-latest' }}
-            cc: clang
-            cxx: clang++
-            launcher: ccache
-            preset: ci-macos-debug
           # The full Windows suite is still disabled. This preset builds the
           # existing focused contracts together in one headless composition.
           - name: Windows / MSVC
@@ -413,17 +399,17 @@ jobs:
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
 
-      - name: Prepare native macOS Metal compiler
-        if: matrix.name == 'macOS / Clang'
-        timeout-minutes: 10
-        run: bash .github/scripts/prepare_macos_toolchain.sh
-
       # Native publication requires a canonical parent. macOS TMPDIR may contain
       # /var aliases; establish the host temp root before tools and tests use it.
       - name: Canonicalize macOS temporary directory
         if: matrix.name == 'macOS / Clang'
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" != macOS ]]; then
+            echo '::error::The macOS qualification runner must be a native Mac.'
+            exit 1
+          fi
+          xcrun --sdk macosx metal --version
           python3 - <<'PYTHON'
           import os
           import pathlib
@@ -462,7 +448,7 @@ jobs:
           profile: native-tests-v1
           dependency-profile: ${{ needs.tooling.outputs.network == 'true' && 'native-gns-v1' || '' }}
           mode: Debug
-          max-size: 2G
+          max-size: ${{ matrix.launcher == 'ccache' && '3G' || '2G' }}
 
       - name: Setup optional dependency registry client
         continue-on-error: true
@@ -524,13 +510,13 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           python3 .github/scripts/ui_paint_fixture.py apple \
-            --root "$RUNNER_TEMP/ui-paint-msl" --output "$RUNNER_TEMP/ui-paint-offline"
-          printf 'HORO_UI_PAINT_METAL_FIXTURE=%s\n' "$RUNNER_TEMP/ui-paint-offline" >> "$GITHUB_ENV"
+            --root "$RUNNER_TEMP/ui-paint-msl" --output "$GITHUB_WORKSPACE/build/ci-metal/tests/ui-paint-fixture"
+          printf 'HORO_UI_PAINT_METAL_FIXTURE=%s\n' "$GITHUB_WORKSPACE/build/ci-metal/tests/ui-paint-fixture" >> "$GITHUB_ENV"
       # Switch after Debug's checkpoint so auxiliary configurations never evict
       # its primary working set. This uses the existing platform job and tools.
       - name: Restore auxiliary compiler variants
         id: variants_cache
-        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.cache.outcome == 'success' }}
         uses: ./.github/actions/restore-native-cache
         with:
           compiler-storage: registry
@@ -539,11 +525,19 @@ jobs:
           max-size: 2G
           compiler-only: 'true'
 
+      - name: Resolve canonical Metal source directory
+        if: runner.os == 'macOS'
+        run: |
+          source_root="$("$HORO_QUALIFICATION_PYTHON" .github/scripts/metal_test_bundle.py source-root)"
+          echo "HORO_METAL_SOURCE=$source_root" >> "$GITHUB_ENV"
+
       - name: Configure Metal shader and presentation tests
         if: runner.os == 'macOS'
         run: >-
-          cmake --preset ci-macos-debug -B build/ci-metal
+          cmake --preset ci-macos-debug -S "$HORO_METAL_SOURCE" -B "$HORO_METAL_SOURCE/build/ci-metal"
           -DPython3_EXECUTABLE="$HORO_QUALIFICATION_PYTHON"
+          -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk"
+          -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON
           -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_RENDER_OPENGL=OFF
           -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
 
@@ -556,56 +550,10 @@ jobs:
           HoroEditorViewportMetalSmoke HoroMetalUploadShutdownSmoke
           HoroRenderApiPublicHeaderConsumer HoroRenderFrontendPublicHeaderConsumer
 
-      - name: Test Metal shaders and presentation
+      - name: Package Metal hardware tests
         if: runner.os == 'macOS'
-        env:
-          MTL_DEBUG_LAYER: '1'
-        run: |
-          cat > "$RUNNER_TEMP/metal-device.m" <<'OBJC'
-          #import <Metal/Metal.h>
-          #include <stdio.h>
-          int main(void) { @autoreleasepool {
-          #if defined(__aarch64__) || defined(__arm64__)
-            NSString *architecture = @"arm64";
-          #elif defined(__x86_64__)
-            NSString *architecture = @"x86_64";
-          #else
-            NSString *architecture = @"unsupported";
-          #endif
-            id<MTLDevice> selected = MTLCreateSystemDefaultDevice();
-            NSMutableArray *devices = [NSMutableArray array];
-            for (id<MTLDevice> device in MTLCopyAllDevices()) {
-              [devices addObject:@{
-                @"name": device.name ?: @"",
-                @"registryId": @(device.registryID),
-                @"selected": @(selected != nil && device.registryID == selected.registryID),
-                @"apple7": @([device supportsFamily:MTLGPUFamilyApple7]),
-                @"mac2": @([device supportsFamily:MTLGPUFamilyMac2])
-              }];
-            }
-            NSData *json = [NSJSONSerialization dataWithJSONObject:@{
-              @"processArchitecture": architecture,
-              @"os": NSProcessInfo.processInfo.operatingSystemVersionString,
-              @"devices": devices
-            } options:0 error:nil];
-            if (json == nil) return 1;
-            fwrite(json.bytes, 1, json.length, stdout);
-            fputc('\n', stdout);
-            return selected == nil ? 77 : 0;
-          } }
-          OBJC
-          xcrun clang -fobjc-arc "$RUNNER_TEMP/metal-device.m" -framework Metal -framework Foundation -o "$RUNNER_TEMP/metal-device"
-          status=0
-          "$RUNNER_TEMP/metal-device" || status=$?
-          if [ "$status" = 77 ]; then
-            echo '::notice::Metal GPU tests skipped: this runner has no Metal device.'
-          elif [ "$status" != 0 ]; then
-            exit "$status"
-          else
-            ctest --test-dir build/ci-metal --parallel 1 --timeout 90 --output-on-failure --no-tests=error \
-              -R '^(HoroRender(Display|Frontend|BackendRegistry|Metal)Tests::|HoroEditorViewportMetalSmoke::|HoroMetalUploadShutdownSmoke::|HoroEditorMetalFirstFrame$|HoroMetal(ShaderPreparation|GraphExecution)Smoke$)' \
-              --output-junit ctest.xml
-          fi
+        id: metal_bundle
+        uses: ./.github/actions/metal-test-bundle
 
       # Debug audio is already in the build above. Release verifies NDEBUG
       # behavior using only the real-time audio group, on this same runner.
@@ -614,14 +562,14 @@ jobs:
 
       - name: Build Release audio checks
         id: release_build
-        run: cmake --build --preset ci-audio-release
+        run: cmake --build --preset ci-audio-release --parallel ${{ runner.os == 'Windows' && 4 || 2 }}
 
       # MSVC Debug container moves may allocate iterator proxies inside noexcept.
       # Keep the complete admission/callback allocation sweep mandatory in Release.
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -1020,7 +968,7 @@ jobs:
             build/ci*/ctest.xml
             build/ci-metal/tests/MetalPreparationFixture.metallib
             ${{ runner.temp }}/ui-paint-msl/
-            ${{ runner.temp }}/ui-paint-offline/
+            build/ci-metal/tests/ui-paint-fixture/
             build/ci-metal/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
@@ -1037,6 +985,116 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # Build macOS work on a standard hosted ARM64 runner. The hardware job
+  # depends only on this producer, so Windows/Linux cannot occupy the M3 queue.
+  macos-build:
+    name: Build · ${{ matrix.name }}
+    # Only macOS consumes the same-run Linux MSL artifact. A Windows shader
+    # failure must not skip this consumer; missing Linux data fails its download.
+    needs: [tooling, shaders]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' && !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) }}
+    permissions:
+      contents: read
+      packages: read
+    runs-on: macos-latest
+    timeout-minutes: 180
+    defaults: *native_defaults
+    env: *native_environment
+    strategy: &macos_build_strategy
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - name: macOS / Clang
+            cc: clang
+            cxx: clang++
+            launcher: ccache
+            preset: ci-macos-debug
+    outputs: &macos_bundle_outputs
+      artifact-id: ${{ steps.metal_bundle.outputs.artifact-id }}
+      artifact-digest: ${{ steps.metal_bundle.outputs.artifact-digest }}
+      payload-digest: ${{ steps.metal_bundle.outputs.payload-digest }}
+      producer-attempt: ${{ steps.metal_bundle.outputs.producer-attempt }}
+    steps: *native_steps
+
+  macos-build-main:
+    concurrency:
+      group: ${{ github.workflow }}-native-macos-producer-${{ github.ref }}
+      cancel-in-progress: false
+    name: Build · ${{ matrix.name }} (main)
+    needs: [tooling, shaders-main]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: macos-latest
+    timeout-minutes: 180
+    defaults: *native_defaults
+    env: *native_environment
+    strategy: *macos_build_strategy
+    outputs: *macos_bundle_outputs
+    steps: *native_steps
+
+  macos-metal:
+    name: Test · macOS / Clang${{ github.ref == 'refs/heads/main' && ' (main)' || '' }}
+    needs: [macos-build, macos-build-main]
+    if: ${{ always() && !cancelled() }}
+    permissions:
+      contents: read
+      actions: read
+    # A failed producer fails the required check on a small hosted runner.
+    # It neither occupies the hardware lane nor produces a skipped-green check.
+    runs-on: ${{ (needs.macos-build.result == 'success' || needs.macos-build-main.result == 'success') && (vars.HORO_MACOS_METAL_RUNNER != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.HORO_MACOS_METAL_RUNNER || 'macos-latest') || 'ubuntu-slim' }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require the complete macOS producer to succeed
+        env:
+          PRODUCER_RESULT: ${{ needs.macos-build.result }}
+          MAIN_PRODUCER_RESULT: ${{ needs.macos-build-main.result }}
+        run: |
+          if [[ "$PRODUCER_RESULT" != success && "$MAIN_PRODUCER_RESULT" != success ]]; then
+            echo '::error::The complete macOS build and CPU qualification did not succeed.'
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Prepare isolated runtime verification Python
+        run: |
+          python3 -m venv --copies "$RUNNER_TEMP/metal-runtime-python"
+          verifier="$RUNNER_TEMP/metal-runtime-python/bin/python"
+          "$verifier" -m pip install --no-cache-dir --only-binary=:all: --no-deps defusedxml==0.7.1
+          echo "METAL_RUNTIME_PYTHON=$verifier" >> "$GITHUB_ENV"
+
+      - name: Verify immutable artifact and run every Metal case
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.macos-build.outputs.artifact-id || needs.macos-build-main.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ needs.macos-build.outputs.artifact-digest || needs.macos-build-main.outputs.artifact-digest }}
+          PAYLOAD_DIGEST: ${{ needs.macos-build.outputs.payload-digest || needs.macos-build-main.outputs.payload-digest }}
+          PRODUCER_NAME: ${{ needs.macos-build.result == 'success' && 'Build · macOS / Clang' || 'Build · macOS / Clang (main)' }}
+          PRODUCER_ATTEMPT: ${{ needs.macos-build.outputs.producer-attempt || needs.macos-build-main.outputs.producer-attempt }}
+        run: |
+          "$METAL_RUNTIME_PYTHON" .github/scripts/metal_test_bundle.py consume \
+            --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" \
+            --payload-digest "$PAYLOAD_DIGEST" --producer-name "$PRODUCER_NAME" \
+            --producer-attempt "$PRODUCER_ATTEMPT"
+
+      - name: Upload native Metal qualification results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: metal-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/ci-metal/ctest.xml
+            build/ci-metal/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+          retention-days: 7
+
   # Identical build/test steps, but only trusted main receives a write token.
   # Exactly one matrix is selected per run; PR check names stay unchanged.
   test-main:
@@ -1044,7 +1102,7 @@ jobs:
       group: ${{ github.workflow }}-native-${{ matrix.name }}-${{ github.ref }}
       cancel-in-progress: false
     name: Test · ${{ matrix.name }} (main)
-    needs: [tooling, shaders]
+    needs: tooling
     if: ${{ !cancelled() && needs.tooling.result == 'success' && github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     permissions:
       contents: read

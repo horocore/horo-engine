@@ -198,6 +198,92 @@ def test_apple_does_not_execute_any_tool_when_handoff_is_invalid(handoff, monkey
     assert calls == []
 
 
+@pytest.fixture
+def installed_apple_tools(tmp_path, monkeypatch):
+    tools = tmp_path.resolve() / "installed"
+    tools.mkdir()
+    (tools / "metal").write_bytes(b"installed compiler")
+    (tools / "air-lld").write_bytes(b"installed linker")
+    (tools / "metallib").symlink_to("air-lld")
+    monkeypatch.setattr(FIXTURE.subprocess, "check_output",
+                        lambda command, **kwargs: str(tools / command[-1]) + "\n")
+    return tools
+
+
+def test_installed_same_directory_metallib_alias_is_attested(installed_apple_tools):
+    tools = installed_apple_tools
+    evidence = FIXTURE.installed_apple_tool("metallib")
+    assert evidence == {"path": str(tools / "metallib"), "physical_path": str(tools / "air-lld"),
+                        "alias": "air-lld", "sha256": FIXTURE.digest(b"installed linker")}
+    assert FIXTURE.installed_apple_tool("metal")["alias"] is None
+
+
+@pytest.mark.parametrize("mutation", ["dangling", "cycle", "escape", "absolute", "compiler_alias"])
+def test_installed_tool_alias_cannot_escape_or_chain(installed_apple_tools, mutation):
+    tools = installed_apple_tools
+    if mutation == "dangling":
+        (tools / "air-lld").unlink()
+    elif mutation == "cycle":
+        (tools / "air-lld").unlink()
+        (tools / "air-lld").symlink_to("metallib")
+    elif mutation in ("escape", "absolute"):
+        (tools / "metallib").unlink()
+        target = "../outside" if mutation == "escape" else str(tools / "air-lld")
+        (tools / "metallib").symlink_to(target)
+    else:
+        (tools / "metal").unlink()
+        (tools / "metal").symlink_to("air-lld")
+    with pytest.raises(ValueError):
+        FIXTURE.installed_apple_tool("metal" if mutation == "compiler_alias" else "metallib")
+
+
+@pytest.mark.parametrize("when", ["before", "during"])
+@pytest.mark.parametrize("mutation", ["alias", "bytes", "advertised"])
+def test_tool_changes_rejected_around_actual_dispatch(installed_apple_tools, monkeypatch, when, mutation):
+    tools = installed_apple_tools
+    installed = {"metallib": FIXTURE.installed_apple_tool("metallib")}
+    calls = []
+
+    def change():
+        if mutation == "alias":
+            (tools / "metallib").unlink()
+            (tools / "metallib").write_bytes(b"different executable")
+        elif mutation == "bytes":
+            (tools / "air-lld").write_bytes(b"changed installed linker")
+        else:
+            monkeypatch.setattr(FIXTURE.subprocess, "check_output",
+                                lambda *args, **kwargs: str(tools / "other") + "\n")
+
+    def dispatch(command):
+        calls.append(command)
+        change()
+
+    monkeypatch.setattr(FIXTURE, "run", dispatch)
+    if when == "before":
+        change()
+    with pytest.raises(ValueError):
+        FIXTURE.run_apple_tool("metallib", ["input.air", "-o", "output.metallib"], installed)
+    assert len(calls) == (when == "during")
+    if calls:
+        assert calls[0] == [FIXTURE.XCRUN, "-sdk", "macosx", "metallib", "input.air", "-o", "output.metallib"]
+
+
+def test_installed_alias_does_not_allow_symlink_output(handoff, installed_apple_tools, tmp_path, monkeypatch):
+    root, _ = handoff
+    monkeypatch.setattr(FIXTURE, "native_bindings", lambda path: [0, 1, 2, 3])
+    monkeypatch.setattr(FIXTURE, "verify", lambda *args: {})
+    monkeypatch.setattr(FIXTURE, "bounded", lambda *args: b"installed bytes")
+    target = tmp_path.resolve() / "outside"
+    target.mkdir()
+    output = tmp_path.resolve() / "output"
+    output.symlink_to(target, target_is_directory=True)
+    args = type("Arguments", (), {"root": root, "source": ROOT, "output": output,
+                                   "xcrun": Path(FIXTURE.XCRUN)})()
+    with pytest.raises(ValueError, match="Symlink output directory forbidden"):
+        FIXTURE.apple(args)
+    assert not list(target.iterdir())
+
+
 def test_native_mapping_must_agree_between_actual_generated_stages(handoff):
     root, _ = handoff
     vertex = "constant PaintParameters& p [[buffer(0)]]"
@@ -258,9 +344,6 @@ def test_native_guard_rejects_missing_or_weakened_required_gates(guard):
 def test_workflow_keeps_same_run_metal_handoff_and_independent_native_checks():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     native = workflow.split("\n  test:\n", 1)[1]
-    assert "needs: [tooling, shaders]" in native
-    assert_native_guard(native)
-    assert_native_guard(workflow.split("\n  test-main:\n", 1)[1])
     artifact = "ui-paint-metal-msl-${{ github.sha }}-${{ github.run_attempt }}"
     assert workflow.count("name: " + artifact) == 2
     assert workflow.index("uses: ./.github/actions/cook-vulkan-viewport") < workflow.index("ui_paint_fixture.py produce")
@@ -268,6 +351,19 @@ def test_workflow_keeps_same_run_metal_handoff_and_independent_native_checks():
     assert 'HORO_UI_PAINT_METAL_FIXTURE=%s' in native
     assert 'HoroMetalGraphExecutionSmoke' in native
     assert "--no-tests=error" in native
+
+
+@pytest.mark.parametrize("name,dependencies", [
+    ("test", "tooling"), ("test-main", "tooling"),
+    ("macos-build", "[tooling, shaders]"), ("macos-build-main", "[tooling, shaders-main]"),
+])
+def test_only_metal_consumers_wait_for_the_selected_same_run_shader_producer(name, dependencies):
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.MULTILINE | re.DOTALL)
+    assert match is not None
+    block = match[1]
+    assert re.search(r"^    needs: (.+)$", block, re.MULTILINE)[1] == dependencies
+    assert_native_guard(block)
 
 
 def test_producer_rejects_unattested_executable_before_any_process_or_output(tmp_path, monkeypatch):

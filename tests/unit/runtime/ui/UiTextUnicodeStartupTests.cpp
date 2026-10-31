@@ -1,12 +1,10 @@
 #include "Horo/Runtime/Ui/UiTextUnicode.h"
+#include "support/FixtureFileRead.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
-#include <fstream>
-#include <iterator>
 #include <unicode/uclean.h>
 #include <utility>
-#include <vector>
 
 namespace {
     struct NativeAllocationState final {
@@ -47,9 +45,7 @@ static void HoroUnicodeTestFree(const void *context, void *pointer) noexcept {
 }
 
 TEST_CASE("Unicode startup rolls partial native allocation back before releasing registered data", "[runtime_ui][unicode][startup]") {
-    std::ifstream input(HORO_UNICODE_DATA_FILE, std::ios::binary);
-    REQUIRE(input.good());
-    std::vector<char> bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    auto bytes = Horo::Tests::ReadFixtureBytes(HORO_UNICODE_DATA_FILE);
     REQUIRE_FALSE(bytes.empty());
     REQUIRE(Horo::Runtime::Ui::UiTextUnicodeRuntime::Create({}).HasError());
     REQUIRE(Horo::Runtime::Ui::UiTextUnicodeRuntime::Create(std::as_bytes(std::span(bytes)).first(bytes.size() - 1)).HasError());

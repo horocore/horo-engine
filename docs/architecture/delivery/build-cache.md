@@ -196,6 +196,13 @@ versions and runner labels may change without changing those contracts.
 
 ### Native macOS qualification runner
 
+The macOS producer uses the standard hosted ARM64 image and retains the complete
+Debug, audio, navigation, network and XR qualifications. It compiles the same Metal
+selection with the existing options, then publishes one immutable runtime bundle.
+The physical Mac executes that full selection after the producer succeeds. Linux
+and Windows remain a two-entry native matrix; the hardware consumer depends only
+on its macOS producer. This adds one job per run, without per-test fanout.
+
 Normal pull-request and push jobs use `macos-latest`, so an unavailable custom
 runner cannot leave ordinary CI queued indefinitely. A manual dispatch can opt
 in with `use_macos_metal_runner` to the repository runner selected by the
@@ -215,29 +222,105 @@ custom hosts must already have the component; CI does not modify their Xcode
 installation. The existing device query and GPU-test selection remain separate
 from compiler readiness.
 
-Only explicitly opted-in manual dispatches select this runner. Pushes and all
-pull requests retain the hosted label. Installing a runner
-therefore authorizes repository branch code on that host; do not assign this
-label to a general-purpose or differently qualified runner. Workflow routing
-alone is not a host access boundary: provision a host-owned
+Only explicitly opted-in manual dispatches select the physical runner. Pushes
+and all pull requests retain the hosted label. Installing a runner therefore
+authorizes repository branch code on that host; do not assign this label to a
+general-purpose or differently qualified runner. Workflow routing alone is not
+a host access boundary: provision a host-owned
 `ACTIONS_RUNNER_HOOK_JOB_STARTED` script outside the runner application and
 checkout; install a reviewed copy of
-`.github/scripts/macos_runner_admission.sh` there. Before any job steps, it must reject missing/malformed payloads,
-other repositories, unexpected events and pull requests whose head repository
-differs. Do not approve a fork workflow that attempts to change this policy.
-The job also rejects a non-macOS host before configuration. Existing CPU, Metal, audio, network and XR
-qualification stays in the same platform job with the existing matrix width.
-One runner accepts one job at a time; superseded runs retain workflow
-cancellation. Additional PRs queue rather than multiplying local build workers.
+`.github/scripts/macos_runner_admission.sh` there. Before any job steps, it must
+reject missing/malformed payloads, other repositories, unexpected events and
+pull requests whose head repository differs. Do not approve a fork workflow that
+attempts to change this policy. The job also rejects a non-macOS host before
+configuration. Existing CPU, Metal, audio, network and XR qualification stays
+in the same platform job with the existing matrix width. One runner accepts one
+job at a time; superseded runs retain workflow cancellation. Additional PRs
+queue rather than multiplying local build workers.
 
-Use an isolated runner installation and work directory, a user-session service,
-and a runner-local Python virtual environment providing both `python` and
-`python3`; the allocation verifier installs into that environment. Keep runner
-auto-update enabled. Coordinate this host's CI execution with local heavy
-builds. Unset the repository variable to route subsequent runs back to hosted
-machines, and stop the user service before host maintenance. Hosted fallback
-still needs its own hardware qualification and must not be reported as a native
-Metal pass when the required device family is absent.
+Routing is not a host access boundary. Install a reviewed copy of
+`.github/scripts/macos_runner_admission.sh` outside the runner application and
+checkout as the host-owned `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook. Before any job
+step it must reject missing/malformed payloads, other repositories, unexpected
+events and PRs whose head repository differs. Do not approve a fork workflow
+that changes this policy. Use an isolated installation/work directory, a
+user-session service and Python 3; retain runner auto-update. Coordinate physical
+CI execution with local heavy builds. Unset the repository variable and stop the
+service before host maintenance. A hosted fallback without the required device
+family is not a Metal pass.
+
+The required `Test · macOS / Clang` context belongs to the final hardware
+qualification. A producer failure fails that context on a small hosted runner;
+it does not produce a skipped-success check or occupy the physical Mac. Existing
+same-repository admission and fork routing remain mandatory. This design does not
+authorize permanent listener operation or fork execution on a personal computer.
+
+Both hosts use their own canonical checkout and `build/ci-metal` directory;
+neither creates a shared temporary source alias. Only executable paths,
+build-local working directories and the existing private HOME/TMP settings are
+relocated. The shader-preparation fixture is compiled as a relative filename and
+its explicit CTest working directory is the directory containing that fixture.
+Arguments, test names, labels, locks, serial requirements, failure patterns,
+skip codes and timeouts are preserved. Fresh consumer CTest discovery must equal the complete producer
+selection before execution. Hardware success requires complete JUnit evidence
+with no failed or skipped cases.
+
+Metal bundle schema 2 records exactly one canonical physical producer build
+root. Producer packaging, consumer validation and typed CTest relocation move
+together; schema 1 bundles with logical/physical alias roots are rejected rather
+than guessed or rewritten. Source identity already prevents cross-head reuse.
+An earlier attempt still requires a compatible schema and the exact run/head/tree
+checks described below.
+
+The selected editor case opens the welcome route and exits after its first
+presented frame; it does not request a project or invoke a gameplay build.
+The linked editor's absolute gameplay SDK setting is stored as a capability but
+is not resolved by this case. This bundle does not qualify gameplay compilation
+on another host. SDK files remain staged and integrity-checked. Extending the
+selection to gameplay builds requires auditing that additional path contract.
+
+The consumer checks the successful producer, run, attempt, head and immutable
+artifact through the GitHub API, including the server artifact digest. It then
+checks the producer payload digest and every file in private quarantine. Bounded
+USTAR parsing rejects links, special members, PAX/sparse extensions, traversal,
+duplicates, case collisions, undeclared files and excessive sizes before
+installation. Mach-O architecture, SDK/deployment identity and system-library
+closure are checked before execution. Source identity and installed bytes remain
+checked across the test run. A manifest cannot replace independent provenance.
+
+The producer writes only `build/metal-test-bundle/metal-tests.tar.gz` beneath its
+canonical checkout. The CLI has no output-path argument. The output directory is
+owner-private, linked parents and existing outputs are rejected, and exclusive
+file creation prevents overwriting a file introduced after validation. The
+artifact upload reads that same fixed file. A failed package attempt requires
+an explicitly fresh output directory before retrying.
+
+The producer publishes its immutable attempt number with the artifact outputs.
+A hardware-only retry may consume that earlier successful attempt from the same
+run, provided the commit, source head, tree and verified artifact still match.
+Provenance checks query the explicit producer attempt's jobs; they never search
+the latest jobs or another run for a convenient successful build. The consumer's
+own attempt remains unchanged in its source guards. Future attempts and missing
+outputs fail closed. If GitHub does not retain the producer outputs for a retry,
+rerun all jobs to create a new verified bundle. Actual GitHub retry behavior must
+be qualified alongside the first cross-host experiment.
+
+Runtime bundles expire after one day and do not use the Actions cache namespace.
+Shared dependency/compiler checkpoints remain public GHCR data with trusted-main
+publishers and ordinary source-build fallback. Producer package write permissions
+are restricted to canonical main; the consumer has content and Actions read
+permissions. See [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [runner limits](https://docs.github.com/en/actions/reference/limits) for the
+public standard-runner policy and current limits. The free standard plan has five
+concurrent macOS jobs; one physical runner supplies one hardware slot. A global
+PR concurrency group must not cancel another PR's pending required check.
+
+An actual hosted-producer-to-physical-Mac experiment is required. Local archive
+fixtures and source-path probes do not prove runtime asset completeness, cache
+reuse, portability or the 10–15 minute target. Record cold/warm producer time,
+transfer size/time, actual hardware execution and multi-PR queue behavior before
+claiming the target. Until delivery and validation finish, source preparation is
+not operational qualification.
 
 ### Cache Storage Ownership
 
@@ -259,6 +342,29 @@ Existing caches are not removed by changing writer policy. Main must complete
 its initial checkpoints before other refs can benefit from them, and old main
 generations still share the repository quota and eviction policy. Cache cleanup
 must identify exact refs/keys and preserve needed main checkpoints.
+
+### Restored Compiler Cache Accounting
+
+Public compiler checkpoints contain verified entries, while operational cache
+statistics and configuration remain local. Imported entries therefore require
+ccache to recount its local file count and disk usage before compilation; a high
+hit rate or the counters copied from another runner do not prove the local budget.
+
+The owning native restore and Sonar configure steps call the compiler transport
+helper's `reconcile` operation after tools are installed. It accepts only the
+selected canonical `.ci-cache/compiler`, `.ci-cache/compiler-variants`, or
+`.sonar/ccache` store within the checkout, requires the ccache launcher and an
+explicit positive budget within the existing transport bound, and runs a bounded
+two-pass cleanup with that exact directory and budget. Imported stores have no
+operational counters: the first pass recounts entries, and the second applies
+eviction using those counters. Each pass has a 30-second timeout; a failure stops
+maintenance and selects ordinary compilation. Legacy Windows sccache stores keep
+their own server lifecycle.
+
+If maintenance fails, that job uses ordinary compilation through ccache's disable
+mode and does not publish a ccache checkpoint. Native tests, coverage generation,
+analysis and quality gates retain their existing selection and behavior. Archive
+schema and recency metadata semantics remain unchanged by this accounting fix.
 
 ### Native Test And Audio Checkpoints
 
@@ -282,6 +388,16 @@ Successful main builds publish them directly through
 Focused profiles retain Actions storage. This rollout uses the existing
 explicit CMake compositions; it does not assume the target preset/profile tools
 described below already exist.
+
+The native Debug store uses a 3G budget when its declared compiler backend is
+ccache; the legacy Windows sccache backend keeps 2G. A measured Debug checkpoint
+already occupied approximately 2.2 GB, so enforcing a 2G budget can evict part of
+the working set before compilation. The 3G budget fits the existing 3 GiB archive
+and 4 GiB expanded-payload limits. It does not change the format or relax compiler
+compatibility checks. Shader, auxiliary and Sonar stores remain at 2G.
+Different checkpoint/source revisions affect cache results, so this headroom
+requires actual subsequent hit/miss and job-duration measurements; it is not a
+15-minute performance guarantee.
 
 - Compiler snapshots are isolated by OS, architecture, full C and C++ compiler
   versions, build profile, and Debug/Release mode. The composite action probes
@@ -764,9 +880,10 @@ inside the destination. Digests detect corruption; transport authentication and
 trusted-writer restrictions establish provenance. An archive's own digest list
 does not establish publisher trust.
 
-The first CMake integration is Unicode/ICU. Configure a producer with
-`HORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON` and build `horo-package-unicode` after the
-normal native build. Archives appear in `build-dir/dependency-sdk/packages`.
+The CMake integrations cover Unicode/ICU and the pinned static HarfBuzz shaping
+library. Configure a producer with `HORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON` and
+build `horo-package-dependencies`, or the individual `horo-package-unicode` and
+`horo-package-harfbuzz` targets. Archives appear in `build-dir/dependency-sdk/packages`.
 A consumer sets `HORO_DEPENDENCY_SDK_CACHE` to a directory of trusted archives.
 `HoroDependencySdk.cmake` computes the identity from the recipe, compiler,
 platform SDK and effective global build flags. It restores only the matching
@@ -774,6 +891,16 @@ archive and verifies an existing restored payload again on reconfigure.
 Unicode keeps the same target/alias, interface definitions and data installation
 contract. A missing Python 3.11 interpreter, missing archive or failed verification
 uses the existing source build. Both options are disabled/empty by default.
+
+HarfBuzz keeps the exportable `harfbuzz` target used by gameplay modules. Its
+package contains the static archive, upstream public header inventory, generated
+feature header and license. A verified hit bypasses upstream configuration as
+well as compilation. Custom platform shaping integrations and shared-library
+builds retain the upstream source path. The existing main-only SDK workflow
+publishes both recipes without adding PR jobs or writers. HarfBuzz round-trip,
+external gameplay linkage, corrupt-package fallback and instrumentation fallback
+are covered by small offline fixtures; real vendor and hosted timing qualification
+must be recorded separately.
 
 The initial integration supports single-configuration native builds. Coverage,
 profiling and sanitizer flags deliberately retain source compilation until
@@ -797,7 +924,8 @@ The current transport is public GHCR through
 `.github/scripts/dependency_registry.py`; readers use an empty credential store
 and only canonical main producers publish. The native SDK producer has completed
 on Linux, macOS and Windows, and Linux job `120596826395` verified a published
-package and configured without recompiling Unicode. Other dependency recipes,
+package and configured without recompiling Unicode. The HarfBuzz extension,
+other dependency recipes,
 full platform consumers and stable hosted timing still require qualification.
 The earlier bucket capacity planner remains an offline alternative, not a
 configured R2 service. Core compiler checkpoints use GHCR directly, independently
@@ -909,12 +1037,30 @@ from successful auxiliary compilation even if a later test fails.
 
 The existing native build publishes both primary and auxiliary namespaces at
 their respective compile boundaries. PRs restore each store only at its owning
-phase, without uploading. The temporary runner may hold up to 4G of native
-compiler entries across these two stores; the Debug working set cannot be
+phase, without uploading. The temporary runner may hold up to 5G of native
+compiler entries with ccache, or 4G with legacy sccache, across these two stores;
+restore archives and quarantine require additional temporary disk space. Verified
+entries are renamed from quarantine rather than copied into a third full store.
+The Debug working set cannot be
 evicted by later Release/provider compilation. This does not prove all variants
 fit the auxiliary budget. Per-phase hit rates and pressure still require hosted
 measurement. Publication does not depend on an Actions staging entry or another
 runner becoming available. A missing publication still builds normally.
+
+### Sonar analysis after completed main tests
+
+A failing C++ coverage suite on main keeps its failing step and job conclusion,
+but may still refresh the branch analysis cache. Before collection, the workflow
+compares CTest's JUnit report with an independent `--show-only=json-v1` discovery
+using the same preset and filters. Every selected test must have exactly one
+terminal record, including explicitly disabled or skipped cases. Missing,
+truncated or inconsistent reports stop publication. Python coverage tests and
+coverage collection must succeed before analysis; build failures and cancelled
+runs cannot analyze. The scanner still waits for the complete Quality Gate.
+
+This continuation is main-only. Failed PR suites retain early termination,
+avoiding extra scanner work across concurrent failing PRs. No new jobs, test
+selection changes, tolerated test failures or quality exclusions are introduced.
 
 ### Symptoms of a stale build
 
