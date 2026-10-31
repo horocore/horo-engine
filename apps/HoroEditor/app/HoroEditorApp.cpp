@@ -2583,10 +2583,10 @@ namespace Horo::Editor {
                 screenHost.Shutdown();
                 return std::nullopt;
             }
-            auto participant =
-                std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui, rendererRestart, clock,
-                                                           EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
-                                                                                    runtimeSources.Value()});
+            auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui,
+                                                                          rendererRestart, clock,
+                                                                          EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
+                                                                                                   runtimeSources.Value()});
             participant->BindHost(*runtime);
             EditorRuntimeParticipant *pacingParticipant = participant.get();
             Result<void> startup = runtime->AddParticipant(std::move(participant));

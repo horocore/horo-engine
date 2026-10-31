@@ -1,11 +1,13 @@
 #include "CommittedSceneAssets.h"
 #include "EditorProjectSceneHost.h"
+#include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "PrefabSceneCookHostFixture.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 
 #include <chrono>
+#include <functional>
 #include <thread>
 
 namespace Horo::Application::PrefabEditorProductTest {
@@ -15,6 +17,7 @@ namespace Horo::Application::PrefabEditorProductTest {
             std::shared_ptr<const Gameplay::GameplayPrefabContext> context;
             std::optional<Prefab::PrefabOperation> operation;
             std::size_t calls{};
+            std::function<void(Gameplay::BehaviorContext &)> onTick;
         };
 
         class SpawnBehavior final : public Gameplay::IBehaviorInstance {
@@ -22,6 +25,10 @@ namespace Horo::Application::PrefabEditorProductTest {
             explicit SpawnBehavior(Observation &observation) : observation_(observation) {}
 
             void OnFixedUpdate(Gameplay::BehaviorContext &context, Gameplay::FixedDeltaTime) override {
+                if (observation_.onTick) {
+                    observation_.onTick(context);
+                    return;
+                }
                 ++observation_.calls;
                 if (observation_.calls != 1)
                     return;
@@ -407,4 +414,109 @@ namespace Horo::Application::PrefabEditorProductTest {
         CHECK(play.SceneView()->Find({1}).has_value());
     }
 
+    TEST_CASE("New Editor prefab hosts capture project depth while existing hosts retain their admitted policy",
+              "[prefab][editor][product][settings]") {
+        PrefabCookTestSupport::HostFixture fixture;
+        Observation observation;
+        const auto registry = Registry(observation);
+        const auto components = Components();
+        const std::array descriptors{registry.Registrations().front().descriptor};
+        const auto schemas = PrefabCookSchemaContext::Capture(components, descriptors);
+        REQUIRE(schemas.HasValue());
+        fixture.request.schemas = schemas.Value();
+        auto source = Prefab::PrefabDocument::Create({.projectVersion = fixture.version,
+                                                      .assetId = fixture.prefabId,
+                                                      .objects = {{.localId = {0},
+                                                                   .name = "Runtime policy child",
+                                                                   .behaviors = {{{1}, Type(), 1, true, {}}}}}},
+                                                     Prefab::PrefabLimitProfile::Create({}).Value());
+        REQUIRE(source.HasValue());
+        fixture.WriteText("assets/hierarchy.prefab", source.Value().SerializeCanonical().Value());
+        const auto writeDepth = [&](const std::int64_t depth) {
+            auto values = PrefabPolicyFieldValues({});
+            values[static_cast<std::size_t>(PrefabLimitField::RuntimeSpawnDepth)] = depth;
+            const auto settings = PrefabProjectSettings::Create(values);
+            REQUIRE(settings.HasValue());
+            fixture.WriteText(".horo/prefab.json", settings.Value().Configuration().ToJson());
+        };
+        writeDepth(2);
+        PrepareProject(fixture, observation);
+        const auto secondId = PrefabCookTestSupport::Id("00000000-0000-0000-0000-0000000000b2");
+        auto secondSource = Prefab::PrefabDocument::Create({.projectVersion = fixture.version,
+                                                            .assetId = secondId,
+                                                            .objects = {{.localId = {0}, .name = "Second runtime target"}}},
+                                                           Prefab::PrefabLimitProfile::Create({}).Value());
+        REQUIRE(secondSource.HasValue());
+        fixture.WriteText("assets/second.prefab", secondSource.Value().SerializeCanonical().Value());
+        fixture.WriteText("assets/second.prefab.horo", PrefabCookTestSupport::SidecarJson(secondId.ToString(), "core.prefab"));
+        const auto snapshot = fixture.registry.Snapshot();
+        const auto records = snapshot.Records();
+        std::vector<Assets::AssetRecord> expandedRecords{records.begin(), records.end()};
+        expandedRecords.push_back({.id = secondId,
+                                   .type = Assets::AssetTypeId::Parse("core.prefab").Value(),
+                                   .sourcePath = ProjectPath::Parse("assets/second.prefab").Value(),
+                                   .metadataPath = ProjectPath::Parse("assets/second.prefab.horo").Value()});
+        REQUIRE(fixture.registry.Publish(std::move(expandedRecords)).status == Assets::AssetRegistryBuildStatus::Complete);
+        fixture.request.runtimePrefabRoots.push_back(secondId);
+        REQUIRE(fixture.Cook().HasValue());
+        auto committed =
+            Internal::CommittedSceneAssets::Capture(NativeDurableFileSystem{}, {fixture.cooked.path, fixture.request.assets.target},
+                                                    fixture.registry.Snapshot());
+        REQUIRE(committed.HasValue());
+        auto firstBytes = committed.Value()->ArtifactProvider().Load(fixture.prefabId, {});
+        REQUIRE(firstBytes.HasValue());
+        observation.request.source.artifactDigest = ComputeSha256(std::as_bytes(std::span(firstBytes.Value())));
+        auto secondBytes = committed.Value()->ArtifactProvider().Load(secondId, {});
+        REQUIRE(secondBytes.HasValue());
+        const Prefab::PrefabTemplateLoadRequest secondTarget{secondId, ComputeSha256(std::as_bytes(std::span(secondBytes.Value()))),
+                                                             fixture.request.assets.target};
+        const auto descendant = [&](Editor::EditorPlaySessionController &play) {
+            observation.operation.reset();
+            std::shared_ptr<const Gameplay::GameplayPrefabContext> inherited;
+            observation.onTick = [&](Gameplay::BehaviorContext &context) {
+                if (!observation.operation) {
+                    auto started = context.PrefabContext()->Spawn(observation.request);
+                    REQUIRE(started.HasValue());
+                    observation.operation = std::move(started).Value();
+                } else if (observation.operation->State() == Prefab::PrefabSpawnState::Committed &&
+                           context.Entity().index == observation.operation->Spawned().Value().Root().entity.index)
+                    inherited = context.PrefabContext();
+            };
+            REQUIRE(play.Start(Source(), registry, components, Factory(fixture, true, Physics::PhysicsRuntimeMode::Null)).HasValue());
+            PresentUntil(play, [&] {
+                return play.State() == Editor::EditorPlaySessionState::Playing;
+            });
+            REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
+            REQUIRE(observation.operation);
+            PresentUntil(play, [&] {
+                return observation.operation->State() != Prefab::PrefabSpawnState::Pending;
+            });
+            if (const auto *failure = observation.operation->Failure())
+                INFO(failure->code.Value() << ": " << failure->message);
+            REQUIRE(observation.operation->State() == Prefab::PrefabSpawnState::Committed);
+            REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
+            REQUIRE(inherited);
+            observation.onTick = {};
+            return inherited;
+        };
+        Editor::EditorPlaySessionController oldPlay;
+        const auto retained = descendant(oldPlay);
+        writeDepth(1);
+        auto another = observation.request;
+        // A separately cooked target proves policy admission independently of recursion and missing-source rejection.
+        another.source = secondTarget;
+        another.notBeforeTick = retained->CurrentTick().Value();
+        auto admitted = retained->Spawn(another);
+        REQUIRE(admitted.HasValue());
+        admitted.Value().Cancel();
+        oldPlay.Stop();
+        CHECK(retained->Spawn(another).HasError());
+        Editor::EditorPlaySessionController newPlay;
+        const auto current = descendant(newPlay);
+        another.notBeforeTick = current->CurrentTick().Value();
+        const auto rejected = current->Spawn(another);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == Prefab::PrefabErrors::SpawnDepthExceeded.code.Value());
+        newPlay.Stop();
+    }
 }  // namespace Horo::Application::PrefabEditorProductTest

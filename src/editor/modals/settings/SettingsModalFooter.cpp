@@ -47,6 +47,10 @@ namespace Horo::Editor::SettingsModalInternal {
             message = st.modalFeedback.c_str();
         else if (!st.statusMessage.empty())
             message = st.statusMessage.c_str();
+        const auto prefab = st.prefab.owner.lock();
+        const auto &prefabHint = SettingsModal::kTextScope.Text(ctx.localization, "prefab.save_first");
+        if (prefab && prefab->IsDirty())
+            message = prefabHint.c_str();
         const auto origin = ImGui::GetWindowPos();
         ImGui::PushClipRect(origin, {origin.x + actionsStartX - 12.0F, origin.y + ImGui::GetWindowHeight()}, true);
         ImGui::TextUnformatted(message);
@@ -56,6 +60,7 @@ namespace Horo::Editor::SettingsModalInternal {
 
     [[nodiscard]] bool DrawFooterActions(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx,
                                          const float centeredActionY, float &actionsStartX) {
+        const auto prefab = st.prefab.owner.lock();
         constexpr float actionH = 32.0F;
         const auto restoreDefaults = SettingsModal::kTextScope.Text(ctx.localization, "restore_defaults");
         const auto cancelLabel = SettingsModal::kTextScope.Text(ctx.localization, "cancel") + "###settings_cancel";
@@ -101,6 +106,7 @@ namespace Horo::Editor::SettingsModalInternal {
         if (Button({.label = applyLabel.c_str(),
                     .size = {applyW, actionH},
                     .variant = ButtonVariant::Primary,
+                    .enabled = !prefab || !prefab->IsDirty(),
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {

@@ -1,3 +1,4 @@
+#include "Horo/Application/PrefabProjectSettings.h"
 #include "PrefabSceneCookState.h"
 
 #include <algorithm>
@@ -63,8 +64,7 @@ namespace Horo::Application {
         if (!catalog_ || !request.assets.publicationFiles || !request.assets.newPublicationOperationId ||
             request.runtimePrefabRoots.size() > request.assets.limits.maximumAssets)
             return Result<Assets::AssetCookReport>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-        auto limits = Prefab::PrefabLimitProfile::Create(request.prefabPolicy);
-        if (limits.HasError())
+        if (const auto limits = Prefab::PrefabLimitProfile::Create(request.prefabPolicy); limits.HasError())
             return Result<Assets::AssetCookReport>::Failure(limits.ErrorValue());
         auto attempt = request.assets.newPublicationOperationId();
         if (attempt.HasError())
@@ -73,8 +73,21 @@ namespace Horo::Application {
                 mutations_.TryAcquire({request.assets.sourceRoot, Editor::ProjectMutationOwner::Asset, attempt.Value().ToString()});
             projectLease.HasError())
             return Result<Assets::AssetCookReport>::Failure(projectLease.ErrorValue());
-        else
-            return CookWithProjectLease(request, limits.Value(), cancellation, releasePlan, std::move(projectLease).Value());
+        else {
+            const auto settings = LoadPrefabProjectSettings(request.assets.sourceRoot);
+            if (settings.HasError())
+                return Result<Assets::AssetCookReport>::Failure(settings.ErrorValue());
+            auto values = PrefabPolicyFieldValues(request.prefabPolicy);
+            const auto projectValues = PrefabPolicyFieldValues(settings.Value().settings->Limits().Policy());
+            for (std::size_t index = 0; index < values.size(); ++index)
+                values[index] = std::min(values[index], projectValues[index]);
+            const auto validated = ValidatePrefabPolicyValues(values);
+            if (!validated.profile)
+                return Result<Assets::AssetCookReport>::Failure(MakeError(Prefab::PrefabErrors::LimitProfileInvalid));
+            auto effective = request;
+            effective.prefabPolicy = validated.profile->Policy();
+            return CookWithProjectLease(effective, *validated.profile, cancellation, releasePlan, std::move(projectLease).Value());
+        }
     }
 
     /** @copydoc PrefabSceneCookHost::CookWithProjectLease */

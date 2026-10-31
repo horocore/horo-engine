@@ -764,6 +764,8 @@ namespace Horo::Editor {
         auto collision = activeScreen_ ? activeScreen_->CollisionSettings()
                                        : Result<std::shared_ptr<CollisionProjectSettingsSession>>::Failure(
                                              MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported)));
+        const auto prefab =
+            activeScreen_ ? activeScreen_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
         auto modal =
             std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
                                             SettingsModalProjectOpening{
@@ -772,10 +774,14 @@ namespace Horo::Editor {
                                                                                   : std::weak_ptr<CollisionProjectSettingsSession>{},
                                                 .collisionError =
                                                     collision.HasError() ? std::optional<Error>{collision.ErrorValue()} : std::nullopt,
+                                                .prefab = prefab.HasValue() ? std::weak_ptr{prefab.Value()}
+                                                                            : std::weak_ptr<PrefabProjectSettingsSession>{},
                                             },
                                             SettingsModalPagePresentation{editorPageHost_,
                                                                           extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr,
                                                                           editorActivityHost_});
+        if (prefab.HasError())
+            modal->Draft().prefab.error = prefab.ErrorValue();
         if (navigation.HasError())
             modal->Draft().navigationStatus = navigation.ErrorValue().message;
         return modal;

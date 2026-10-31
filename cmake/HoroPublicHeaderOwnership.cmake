@@ -193,6 +193,9 @@ horo_configure_target_header_boundary(HoroProjectSettings PUBLIC_HEADERS
     Horo/Application/NavigationProjectSettingsStore.h
     Horo/Application/ProjectNetworkSettings.h
 )
+horo_configure_target_header_boundary(HoroPrefabProjectSettings PUBLIC_HEADERS
+    Horo/Application/PrefabProjectSettings.h
+)
 horo_configure_target_header_boundary(HoroReleaseGitHub PUBLIC_HEADERS
     Horo/Release/GitHubReleasePublication.h
 )
@@ -1276,6 +1279,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/NativeAssetRegistrySource.h
     Horo/Editor/CollisionProjectSettingsSession.h
     Horo/Editor/NavigationProjectSettingsSession.h
+    Horo/Editor/PrefabProjectSettingsSession.h
     Horo/Editor/AudioEditorDocument.h
     Horo/Editor/AudioComponentPreview.h
     Horo/Editor/MixerAssetDocument.h

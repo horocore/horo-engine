@@ -283,6 +283,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::UpdateGameplaySources(const float elapsedSeconds) {
+        UpdatePrefabSettingsProjection();
         if (m_prefabStagePending) {
             m_prefabStagePending = false;
             for (const auto &entry : m_prefabDocuments)

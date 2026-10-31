@@ -1382,7 +1382,6 @@ filesystem and shared GUI context until modal shutdown; the modal owns the store
 and draft and copies committed projections. Cancellation discards only the draft.
 Existing single-session Play behavior remains its own lifecycle authority.
 
-
 ### Admission provider containment and synchronous event observation
 
 The runtime admission provider boundary catches both standard and non-standard

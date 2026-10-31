@@ -915,7 +915,6 @@ lease and queries only after an owner revision changes. See the
 [world document migration guide](../../guides/partitioned-world-document-migration.md#object-assignment-and-bounds-inspection-wst-0095)
 for diagnostics, budgets, lifecycle and consumer migration.
 
-
 ## World Composition projection
 
 The registered persistent `WorldCompositionTab` is a presentation surface over the

@@ -176,6 +176,11 @@ namespace Horo::Prefab {
                                                    PrefabTemplateProviderLimits limits)
         : state_(std::make_unique<Detail::PrefabTemplateProviderState>(registry, loads, scenes, std::move(profile), limits)) {}
 
+    /** @copydoc PrefabTemplateProvider::LimitProfile */
+    const PrefabLimitProfile &PrefabTemplateProvider::LimitProfile() const noexcept {
+        return state_->profile;
+    }
+
     /** @copydoc PrefabTemplateProvider::~PrefabTemplateProvider */
     PrefabTemplateProvider::~PrefabTemplateProvider() {
         Shutdown();
@@ -273,6 +278,8 @@ namespace Horo::Prefab {
             return Result<Tokens>::Failure(admission.ErrorValue());
         if (cancellation.IsCancellationRequested() || options.scopeCancellation.IsCancellationRequested())
             return Result<Tokens>::Failure(MakeError(PrefabErrors::Cancelled));
+        if (options.spawnLineage.size() > state_->profile.Policy().maximumRuntimeSpawnDepth)
+            return Result<Tokens>::Failure(MakeError(PrefabErrors::SpawnDepthExceeded));
         const auto &entities = lease.Template()->Data().entities;
         if (options.rootPlacement && options.rootPlacement->TryToMatrix().HasError())
             return Result<Tokens>::Failure(MakeError(PrefabErrors::InvalidPlacement));

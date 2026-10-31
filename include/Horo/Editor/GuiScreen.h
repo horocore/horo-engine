@@ -15,6 +15,7 @@
 
 namespace Horo::Editor {
     class NavigationProjectSettingsSession;
+    class PrefabProjectSettingsSession;
 
     /**
      * @file GuiScreen.h
@@ -137,6 +138,11 @@ namespace Horo::Editor {
          */
         [[nodiscard]] virtual Result<NavigationProjectSettingsSession *> NavigationSettings() {
             return Result<NavigationProjectSettingsSession *>::Success(nullptr);
+        }
+
+        /** @brief Returns the current project-owned prefab settings session. @return Weak-borrowable exact owner or null. */
+        [[nodiscard]] virtual Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings() {
+            return Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
         }
 
         /** @brief Returns stable identifier for this screen class. */

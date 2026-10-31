@@ -1,5 +1,6 @@
 #include "EditorProjectSceneHost.h"
 
+#include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
@@ -51,6 +52,13 @@ namespace Horo::Application::Internal {
                                  const Runtime::RuntimeSceneDefinition *definition) {
                 if (!identity_.IsValid() || (root.empty() && policy.physicsMode != Physics::PhysicsRuntimeMode::Null))
                     return Result<void>::Failure(MakeError(InvalidProjectScene));
+                std::optional<Prefab::PrefabLimitProfile> prefabLimits;
+                if (policy.prefabGranted) {
+                    const auto captured = LoadPrefabProjectSettings(root);
+                    if (captured.HasError())
+                        return Result<void>::Failure(captured.ErrorValue());
+                    prefabLimits = captured.Value().settings->Limits();
+                }
                 if (auto captured = CaptureAssets(root, jobs, policy, definition); captured.HasError())
                     return captured;
                 auto runtime = Physics::PhysicsRuntime::Create(policy.physicsMode);
@@ -74,11 +82,8 @@ namespace Horo::Application::Internal {
                 if (auto added = RegisterPresentationParticipants(policy); added.HasError())
                     return added;
                 if (policy.prefabGranted) {
-                    auto limits = Prefab::PrefabLimitProfile::Create({});
-                    if (limits.HasError())
-                        return Result<void>::Failure(limits.ErrorValue());
                     prefab_.templates =
-                        std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(limits).Value());
+                        std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(*prefabLimits));
                     return prefab_.templates->Startup({});
                 }
                 return Result<void>::Success();

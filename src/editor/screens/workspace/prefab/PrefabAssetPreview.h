@@ -29,7 +29,8 @@ namespace Horo::Editor {
      * capture owns its project lease during source capture and final closure revalidation; CPU rendering releases it.
      */
     [[nodiscard]] std::shared_ptr<const Assets::IAssetPreviewProvider> CreatePrefabAssetPreviewProvider(
-        Assets::AssetRegistrySnapshot registry, Assets::AssetId asset, PrefabHierarchySourceCapture capture);
+        Assets::AssetRegistrySnapshot registry, Assets::AssetId asset, PrefabHierarchySourceCapture capture,
+        const Prefab::PrefabLimitProfile *projectLimits = nullptr);
 }  // namespace Horo::Editor
 
 #endif

@@ -163,8 +163,9 @@ namespace Horo::Editor {
         /** @brief Owns immutable source identity; captures and verifies the full closure under the host lease. */
         class Provider final : public Assets::IAssetPreviewProvider {
         public:
-            Provider(Assets::AssetRegistrySnapshot registry, Assets::AssetId asset, PrefabHierarchySourceCapture capture)
-                : registry_(std::move(registry)), asset_(asset), capture_(std::move(capture)) {}
+            Provider(Assets::AssetRegistrySnapshot registry, Assets::AssetId asset, PrefabHierarchySourceCapture capture,
+                     Prefab::PrefabLimitProfile limits)
+                : registry_(std::move(registry)), asset_(asset), capture_(std::move(capture)), limits_(std::move(limits)) {}
 
             /** @copydoc Assets::IAssetPreviewProvider::GeneratePreview */
             Result<Assets::AssetPreviewImage> GeneratePreview(const Assets::AssetPreviewInput &input,
@@ -172,11 +173,11 @@ namespace Horo::Editor {
                 if (static const auto prefabType = Assets::AssetTypeId::Parse("core.prefab").Value();
                     !capture_ || input.assetType != prefabType)
                     return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                auto limits = Prefab::PrefabLimitProfile::Create({});
+
                 const std::array roots{asset_};
                 // Release the project lease before CPU rasterization so background previews do not hold up source saves.
                 auto captured = [&]() {
-                    auto prepared = capture_(registry_, roots, limits.Value(), cancellation);
+                    auto prepared = capture_(registry_, roots, limits_, cancellation);
                     if (prepared.HasError())
                         return Result<PrefabHierarchySources>::Failure(prepared.ErrorValue());
                     return Result<PrefabHierarchySources>::Success(std::move(prepared).Value().sources);
@@ -187,13 +188,13 @@ namespace Horo::Editor {
                     !source || !std::ranges::equal(source->bytes, input.editorPayload))
                     return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
                 auto candidate =
-                    captured.Value().resolver.Resolve(asset_, Prefab::PrefabInstanceId::Create(1).Value(), limits.Value(), cancellation);
+                    captured.Value().resolver.Resolve(asset_, Prefab::PrefabInstanceId::Create(1).Value(), limits_, cancellation);
                 if (candidate.HasError())
                     return PreviewResult::Failure(candidate.ErrorValue());
                 auto image = RenderPrefabAssetPreview(candidate.Value(), input.width, input.height, cancellation);
                 if (image.HasError())
                     return image;
-                auto current = capture_(registry_, roots, limits.Value(), cancellation);
+                auto current = capture_(registry_, roots, limits_, cancellation);
                 if (current.HasError())
                     return PreviewResult::Failure(current.ErrorValue());
                 if (current.Value().sources.inputs.ClosureDigest() != captured.Value().inputs.ClosureDigest())
@@ -207,6 +208,7 @@ namespace Horo::Editor {
             Assets::AssetRegistrySnapshot registry_;
             Assets::AssetId asset_;
             PrefabHierarchySourceCapture capture_;
+            Prefab::PrefabLimitProfile limits_;
         };
     }  // namespace
 
@@ -236,7 +238,9 @@ namespace Horo::Editor {
     /** @copydoc CreatePrefabAssetPreviewProvider */
     std::shared_ptr<const Assets::IAssetPreviewProvider> CreatePrefabAssetPreviewProvider(Assets::AssetRegistrySnapshot registry,
                                                                                           const Assets::AssetId asset,
-                                                                                          PrefabHierarchySourceCapture capture) {
-        return std::make_shared<const Provider>(std::move(registry), asset, std::move(capture));
+                                                                                          PrefabHierarchySourceCapture capture,
+                                                                                          const Prefab::PrefabLimitProfile *projectLimits) {
+        return std::make_shared<const Provider>(std::move(registry), asset, std::move(capture),
+                                                projectLimits ? *projectLimits : Prefab::PrefabLimitProfile::Create({}).Value());
     }
 }  // namespace Horo::Editor

@@ -8,6 +8,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum LeaveAction;
         using enum LeaveDisposition;
         if (HasDirtyDocuments()) {
+            leaveCapture_.prefabSettingsRevision = controller_->PrefabSettingsRevision();
             static_cast<void>(controller_->HasDirtySourceDocuments());
             leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
             leaveCapture_.prefabDocuments = controller_->ViewModel().prefabDocuments;
@@ -36,6 +37,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
         if (controller_->HasDirtyWorldDocuments())
             return Result<LeaveDecision>::Failure(MakeError(WorldDocumentErrors::Dirty));
+        if (const auto settings = controller_->SavePrefabSettings(); settings.HasError())
+            return Result<LeaveDecision>::Failure(settings.ErrorValue());
         if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
         if (const auto prefabs = controller_->SavePrefabDocuments(); prefabs.HasError())
@@ -48,6 +51,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Success({.disposition = Deny, .requirement = std::nullopt});
         if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+        if (const auto settings = controller_->ShutdownPrefabSettings(); settings.HasError())
+            return Result<LeaveDecision>::Failure(settings.ErrorValue());
         if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())
             return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
         if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
@@ -63,6 +68,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
         controller_->ProcessCommand(command);
+        if (const auto settings = controller_->ShutdownPrefabSettings(true); settings.HasError())
+            return Result<LeaveDecision>::Failure(settings.ErrorValue());
         if (const auto collision = controller_->ShutdownCollisionSettings(true); collision.HasError())
             return Result<LeaveDecision>::Failure(collision.ErrorValue());
         if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
@@ -85,6 +92,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (resolution.subject != 1 || resolution.revision != 1)
             return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
         if (controller_ && resolution.action != Stay) {
+            if (controller_->PrefabSettingsRevision() != leaveCapture_.prefabSettingsRevision)
+                return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             static_cast<void>(controller_->HasDirtySourceDocuments());
             if (controller_->ViewModel().sourceDocuments.size() != leaveCapture_.sourceDocuments.size())
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
@@ -117,6 +126,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         sourceCommands_.EndSession();
         LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
         if (controller_) {
+            static_cast<void>(controller_->ShutdownPrefabSettings(true));
             static_cast<void>(controller_->ShutdownCollisionSettings(true));
             if (packages_.retire)
                 static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
@@ -157,7 +167,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return controller_ &&
                (controller_->ViewModel().isDirty || controller_->HasDirtyPrefabDocuments() || controller_->HasDirtyPCGDocuments() ||
                 controller_->HasDirtyCollisionSettings() || controller_->HasDirtyNavigationDocuments() ||
-                controller_->HasDirtyWorldDocuments() || controller_->HasDirtySourceDocuments());
+                controller_->HasDirtyPrefabSettings() || controller_->HasDirtyWorldDocuments() || controller_->HasDirtySourceDocuments());
     }
 
     /** @copydoc EditorWorkspaceScreen::ValidateLeaveCapture */

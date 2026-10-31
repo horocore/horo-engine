@@ -110,6 +110,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
         std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
         std::optional<WorldDocumentFence> worldFence;
+        std::uint64_t prefabSettingsRevision{};
     };
 
     /** @brief Routes source document commands while fencing delayed close decisions to the workspace session. */
@@ -148,6 +149,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Result<void> OnEnter(const GuiRoute &route) override;
         /** @brief Returns navigation settings from the current controller. */
         Result<NavigationProjectSettingsSession *> NavigationSettings() override;
+        Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings() override;
         /** @brief Updates canonical owners and derived presentation for the current frame. */
         void OnUpdate(float dt) override;
         /** @brief Captures gameplay input only while Play owns simulation. */

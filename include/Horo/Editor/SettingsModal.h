@@ -35,6 +35,7 @@ namespace Horo::Editor {
         const NavigationProjectSettingsSession *navigation{};     /**< Borrowed only until its revocable opening is captured. */
         std::weak_ptr<CollisionProjectSettingsSession> collision; /**< Never extends the project or Scene owner lifetime. */
         std::optional<Error> collisionError;                      /**< Preserves the original typed opening failure for presentation. */
+        std::weak_ptr<PrefabProjectSettingsSession> prefab;       /**< Exact project opening, revoked by owner shutdown. */
     };
 
     /** @brief Host-owned editor settings workflow and its transient settings draft. */

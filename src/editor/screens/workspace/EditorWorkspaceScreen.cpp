@@ -100,6 +100,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return controller_ ? controller_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
     }
 
+    /** @copydoc GuiScreen::PrefabSettings */
+    Result<std::shared_ptr<PrefabProjectSettingsSession>> EditorWorkspaceScreen::PrefabSettings() {
+        return controller_ ? controller_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
+    }
+
     /** @copydoc EditorWorkspaceScreen::OnUpdate */
     void EditorWorkspaceScreen::OnUpdate(float dt) {
         if (controller_) {

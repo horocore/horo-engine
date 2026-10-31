@@ -917,6 +917,84 @@ enum class PrefabError : std::uint32_t {
 
 ---
 
+## Project policy authoring (HORO-1087 / PFB-006.12)
+
+The application-owned `HoroPrefabProjectSettings` bridge projects the canonical
+Foundation configuration document `.horo/prefab.json` into an immutable
+`PrefabLimitProfile`. Its single typed field registry covers all nineteen
+existing lowerable project-policy members. Engine parser byte/depth safety and
+object-name bytes remain fixed; derived expansion work is read-only and always
+comes from `PrefabLimitProfile::Create`. Unknown keys, unsupported envelopes,
+noninteger values, nonpositive/over-ceiling fields and value/set byte conflicts
+reject admission. A missing module document uses declared defaults, preserving
+existing projects without a migration write or another source-precedence engine.
+
+`PrefabProjectSettingsSession` is the project-owned editing/document authority.
+Settings modal drafts hold weak, exact-opening borrows and presentation text;
+typed commands edit/reset/discard/save/reload against the immutable viewed draft
+revision. Invalid numeric text remains a field finding, never a coerced value.
+Both field-level and summary diagnostics are localized in English and Turkish.
+Save uses the shared project mutation lease and exact Assets source identity,
+native file lock and atomic publication protocol. Failure preserves accepted
+policy and draft; post-rename durability uncertainty advances source identity
+but keeps the document dirty. Dirty reload is rejected until explicit discard.
+Modal cancellation discards transient policy edits. Project leave Save/Discard/
+Stay includes settings state and fences delayed decisions to its draft revision.
+
+Accepted publication is captured at new authoring/conversion operations. The
+workspace invalidates source hierarchy/drop/thumbnail evidence at its owner
+boundary, rebuilds source inspection with the accepted profile, and revalidates
+open prefab documents without changing their authored bytes, saved/history
+identities or active stages. An existing document that exceeds a lowered policy
+remains inspectable and dirty, while subsequent edits/saves fail under the new
+profile until explicit repair or policy adjustment. `PrefabDocument::ValidateLimits`
+reuses canonical validation over borrowed immutable bytes, avoiding a payload copy
+before a smaller policy can reject admission. Its additive public contract is
+covered by the existing owning Prefab Authoring consumer target. Running operations and live
+Scene/stage runtimes keep their captured policy; the Settings modal never
+patches native runtime objects or queues an implicit runtime replacement.
+
+Prefab Cook Host captures the same persisted project configuration under its
+project lease. Existing explicit per-operation limits may lower that policy but
+cannot raise it. The host key includes every effective field and the resolved
+persisted configuration; final publication additionally fences the exact module
+document bytes, including absence. Changed limits require canonical revalidation
+and prevent stale cache reuse. Failure retains the previous complete cooked
+generation. Runtime spawn consumes the profile explicitly supplied by its host;
+this workflow does not rewrite an already running runtime's captured limits.
+
+New Editor project Scene hosts capture accepted policy during composition only
+when the host explicitly grants Prefab services, before native admission. The
+project CLI resource capture passes the same typed policy through
+`HeadlessSceneActivationInput`; this CLI path already requires an authoring
+project root, including its cooked Scene selector. Generic headless/world
+services consume only that typed input and never read `.horo` or discover a
+backend. Packaged composition supplies its admitted policy explicitly; the
+declared engine-default field preserves existing source callers, while invalid
+explicit policies fail before backend construction rather than falling back.
+
+`PrefabTemplateProvider::LimitProfile` exposes only its immutable captured
+profile. Spawn service construction copies the runtime depth and instance
+binding ceilings once; request admission checks them before allocating queued
+work. Prepared-group submission also checks the captured lineage ceiling.
+This corrects previously ineffective project fields and the old hardcoded depth
+of sixteen: the canonical engine maximum is eight, with the target included,
+and projects may lower it. Instance binding admission similarly honors the
+configured ceiling instead of an unconditional sixty-four. Existing hosts keep
+their captured values after project-file changes; newly composed hosts capture
+the successor. Rebuild host and statically linked Prefab frontends together
+because the private shared spawn-state layout changed; the public provider
+getter is additive and the provider's public object layout is unchanged.
+
+Migration is additive: existing projects without `.horo/prefab.json` retain the
+same nineteen defaults. Headless settings/cook consumers link
+`HoroEngine::PrefabProjectSettings`; generic `HoroEngine::Application` and
+`HoroEngine::ProjectSettings` do not acquire Prefab dependencies. UI consumers
+use the project session rather than persisting editor preferences or querying
+files during draw. Explicit pure create-from-selection/thumbnail helpers retain
+their default-profile compatibility overload for callers without project
+context; real project composition passes an accepted profile.
+
 ## Bounded dependency and expansion inspection (HORO-1078 / PFB-008.3)
 
 `HoroPrefabAuthoring` exclusively owns the additive `PrefabDebugSnapshot.h`

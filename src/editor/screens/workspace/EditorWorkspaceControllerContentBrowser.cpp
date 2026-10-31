@@ -68,6 +68,12 @@ namespace Horo::Editor {
                 auto asset = Assets::AssetId::Parse(entry.assetId);
                 if (asset.HasError())
                     continue;
+                const auto limits = PrefabLimits();
+                if (limits.HasError()) {
+                    entry.previewError = limits.ErrorValue();
+                    entry.previewState = ContentBrowserPreviewState::Unavailable;
+                    continue;
+                }
                 request = Assets::AssetPreviewRequest{
                     .contributionId = "core.prefab.thumbnail",
                     .moduleId = "horo.editor",
@@ -76,7 +82,7 @@ namespace Horo::Editor {
                     .providerVersion = std::to_string(m_contentBrowserPreviewGeneration),
                     .absoluteAssetPath = entry.absolutePath,
                     .assetType = *entry.registeredType,
-                    .provider = CreatePrefabAssetPreviewProvider(m_assetRegistry, asset.Value(), m_prefabSourceCapture),
+                    .provider = CreatePrefabAssetPreviewProvider(m_assetRegistry, asset.Value(), m_prefabSourceCapture, &limits.Value()),
                 };
             } else if (m_importerCatalog != nullptr)
                 request = BuildPreviewRequest(entry, *m_importerCatalog);

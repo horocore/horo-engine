@@ -27,7 +27,7 @@ namespace Horo::Editor {
                 static_cast<void>(m_documentRegistry.Close(opened.identity.instance));
         };
         const auto *asset = m_assetRegistry.FindByPath(result.location.document.Value());
-        auto limits = Prefab::PrefabLimitProfile::Create({});
+        auto limits = PrefabLimits();
         if (!asset || asset->type.Value() != "core.prefab" || m_prefabDocuments.size() >= 16 || limits.HasError()) {
             fail(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
             return;
@@ -55,7 +55,11 @@ namespace Horo::Editor {
         m_prefabStageExtractedRevision = 0;
         m_prefabViewportScene = {};
         ++m_viewportSceneRevision;
-        auto limits = Prefab::PrefabLimitProfile::Create({});
+        auto limits = PrefabLimits();
+        if (limits.HasError()) {
+            m_viewModel.prefabDocumentError = limits.ErrorValue();
+            return;
+        }
         const std::array roots{snapshot.source->Data().assetId};
         if (auto captured = m_prefabSourceCapture
                                 ? m_prefabSourceCapture(m_assetRegistry, roots, limits.Value(), m_prefabCancellation.Token())
@@ -280,6 +284,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SavePrefabDocuments */
     Result<void> EditorWorkspaceController::SavePrefabDocuments() {
+        UpdatePrefabSettingsProjection();
         Result<void> outcome = Result<void>::Success();
         bool savedAny{};
         const auto save = [this, &savedAny](PrefabDocumentSession &document, const PrefabDocumentFence &fence) {

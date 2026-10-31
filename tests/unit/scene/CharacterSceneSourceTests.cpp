@@ -1,3 +1,4 @@
+#include "CharacterPropertyCorpus.h"
 #include "Horo/Scene/SceneSource.h"
 
 #include <array>
@@ -163,5 +164,59 @@ namespace Horo::SceneSource {
         const auto result = DecodeSceneSource(duplicate);
         REQUIRE(result.HasError());
         CHECK_FALSE(result.ErrorValue().message.empty());
+    }
+
+    TEST_CASE("Generated Character wire records roundtrip and reject malformed schema payloads",
+              "[scene][character][character-property][serialization][fuzz]") {
+        Character::PropertyTest::Corpus("character-wire", [](const Character::PropertyTest::Recipe &input) -> std::string {
+            auto character = ConfiguredCharacter();
+            character.id = {1ULL + input.words[2]};
+            character.geometry.capsule.radiusMeters = 0.25F + static_cast<float>(input.words[3] % 16) / 16;
+            character.geometry.crouchedCapsule->radiusMeters = character.geometry.capsule.radiusMeters;
+            character.movement.maximumContacts = 1 + input.words[4] % Character::MaximumCharacterContacts;
+            const auto encoded = EncodedCharacter(character);
+            const auto decoded = DecodeSceneSource(encoded);
+            if (decoded.HasError() || decoded.Value().objects.size() != 1 ||
+                decoded.Value().objects[0].components.characterController != character)
+                return "generated wire roundtrip changed durable character";
+            if (EncodeSceneSource({decoded.Value().objects, decoded.Value().prefabInstances}) != encoded)
+                return "canonical character encoding changed on replay";
+            auto document = nlohmann::json::parse(encoded);
+            auto &wire = document["objects"][0]["components"]["characterController"];
+            switch (input.words[0] % 8) {
+                case 0:
+                    wire["schemaVersion"] = 0;
+                    break;
+                case 1:
+                    wire["schemaVersion"] = Runtime::CharacterSceneComponentSchemaVersion + 1ULL + input.words[5];
+                    break;
+                case 2:
+                    document["schemaVersion"] = 1;
+                    break;
+                case 3:
+                    wire["geometry"]["capsule"]["radiusMeters"] = "NaN";
+                    break;
+                case 4:
+                    wire["geometry"]["up"] = nlohmann::json::array({0, 0});
+                    break;
+                case 5:
+                    wire["movement"]["maximumContacts"] = std::numeric_limits<std::uint64_t>::max();
+                    break;
+                case 6:
+                    wire.erase("geometry");
+                    break;
+                default:
+                    wire["collision"]["defaultMaterial"]["asset"] = "malformed";
+                    break;
+            }
+            const auto malformed = document.dump();
+            const auto rejected = DecodeSceneSource(malformed);
+            if (rejected.HasValue() || rejected.ErrorValue().code.Value().empty() || rejected.ErrorValue().message.empty())
+                return "malformed character wire accepted or untyped";
+            const auto truncated = DecodeSceneSource(encoded.substr(0, input.words[6] % encoded.size()));
+            if (truncated.HasValue())
+                return "truncated character wire accepted";
+            return {};
+        });
     }
 }  // namespace Horo::SceneSource

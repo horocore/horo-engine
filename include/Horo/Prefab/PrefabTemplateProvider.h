@@ -112,7 +112,7 @@ namespace Horo::Prefab {
         CancellationToken scopeCancellation; /**< Module revocation sampled again at publication. */
         std::vector<std::vector<Runtime::RuntimeGroupMemberIdentity>> members; /**< Complete occurrence metadata in dense entity order. */
         std::vector<std::vector<Runtime::RuntimeGroupReference>> references;   /**< Typed reference interfaces per entity. */
-        std::vector<Assets::AssetId> spawnLineage; /**< Inherited creation lineage, bounded to 16 unique assets. */
+        std::vector<Assets::AssetId> spawnLineage; /**< Inherited creation lineage, bounded by the captured canonical runtime depth. */
         std::vector<std::optional<Runtime::PrimitiveMeshDescriptor>> primitiveMeshes; /**< Optional dense typed geometry projection. */
     };
 
@@ -138,6 +138,9 @@ namespace Horo::Prefab {
         ~PrefabTemplateProvider() override;
         PrefabTemplateProvider(const PrefabTemplateProvider &) = delete;
         PrefabTemplateProvider &operator=(const PrefabTemplateProvider &) = delete;
+        /** @brief Read the immutable policy captured at provider construction.
+         * @return Borrowed validated profile, valid for this provider's lifetime; never current project state. */
+        [[nodiscard]] const PrefabLimitProfile &LimitProfile() const noexcept;
         /** @brief Captures registry and active scene, then admits a bounded canonical load.
          * @param request Exact root identity, generation digest and cook target.
          * @param cancellation Parent cancellation ancestry.

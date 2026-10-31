@@ -102,7 +102,7 @@ namespace Horo::Editor {
         Result<Runtime::RuntimeSceneDefinition> definition = ConvertSceneDocumentToRuntime(snapshot, m_previewSceneId, m_triggerBinding);
         if (!snapshot.prefabInstances.empty() && m_prefabSources && m_viewModel.prefabHierarchy &&
             !m_viewModel.prefabHierarchyUnavailable && m_viewModel.prefabHierarchy->documentRevision == snapshot.revision.value) {
-            auto limits = Prefab::PrefabLimitProfile::Create({});
+            auto limits = PrefabLimits();
             if (limits.HasValue())
                 definition = ConvertScenePrefabProjectionToRuntime(snapshot, m_previewSceneId, *m_viewModel.prefabHierarchy->sources,
                                                                    m_prefabSources->resolver, limits.Value(), nullptr, m_triggerBinding);

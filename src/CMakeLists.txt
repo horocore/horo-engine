@@ -2424,6 +2424,12 @@ add_library(HoroEngine::Prefab ALIAS HoroPrefab)
 target_compile_features(HoroPrefab PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::GameplayApi)
 
+# Explicit application bridge; generic Application/ProjectSettings never depend back on Prefab.
+add_library(HoroPrefabProjectSettings STATIC application/project/PrefabProjectSettings.cpp)
+add_library(HoroEngine::PrefabProjectSettings ALIAS HoroPrefabProjectSettings)
+target_compile_features(HoroPrefabProjectSettings PUBLIC cxx_std_20)
+target_link_libraries(HoroPrefabProjectSettings PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Prefab)
+
 # Runtime-only integration: Scene remains independent from Prefab and source authoring.
 add_library(HoroPrefabRuntime STATIC
         runtime/prefab/PrefabTemplateProvider.cpp
@@ -3369,6 +3375,7 @@ add_library(HoroEditorServices STATIC
         editor/project_model/ProjectMetadata.cpp
         editor/project_model/RendererAvailability.cpp
         editor/settings/EditorConfiguration.cpp
+        editor/settings/PrefabProjectSettingsSession.cpp
         editor/settings/EditorSettingsService.cpp
         editor/navigation/NavigationProjectSettingsSession.cpp
         editor/settings/EditorSettingsStore.cpp
@@ -3395,6 +3402,7 @@ target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEn
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
@@ -3584,6 +3592,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalNavigation.cpp
             editor/modals/settings/SettingsModalNavigationProject.cpp
             editor/modals/settings/SettingsModalNavigationPolicy.cpp
+            editor/modals/settings/SettingsModalPrefab.cpp
             editor/modals/settings/SettingsModalUpdates.cpp
             editor/modals/settings/SettingsModalPluginDetails.cpp
             editor/modals/settings/SettingsModalPluginList.cpp
@@ -3681,6 +3690,7 @@ if (HORO_BUILD_EDITOR_GUI)
         editor/screens/workspace/EditorWorkspaceControllerAudio.cpp
         editor/screens/workspace/EditorWorkspaceControllerCollision.cpp
         editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
+        editor/screens/workspace/EditorWorkspaceControllerPrefabSettings.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldSources.cpp
@@ -4015,6 +4025,7 @@ add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabSceneCookState.h)
 add_library(HoroEngine::PrefabCookHost ALIAS HoroPrefabCookHost)
 target_compile_features(HoroPrefabCookHost PUBLIC cxx_std_20)
+target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::PrefabProjectSettings)
 target_link_libraries(HoroPrefabCookHost
         PUBLIC HoroEngine::Application HoroEngine::Assets HoroEngine::EditorServices
                HoroPackageSecurity HoroEngine::PrefabAuthoring HoroEngine::SceneCook

@@ -138,6 +138,12 @@ namespace Horo::Prefab {
          * @return Immutable document or a stable prefab/gameplay/application validation error.
          */
         [[nodiscard]] static Result<PrefabDocument> Create(PrefabDocumentData candidate, const PrefabLimitProfile &limits);
+        /** @brief Revalidate this immutable source against an accepted next-operation policy without copying its payload.
+         * @param limits Complete validated project profile.
+         * @return Canonical source/hierarchy/composition/budget validation outcome; this document remains unchanged.
+         * @throws std::bad_alloc If bounded validation scratch storage cannot be allocated.
+         * @details Cold authoring/save boundary only. Metadata scratch storage is bounded by the admitted profile. */
+        [[nodiscard]] Result<void> ValidateLimits(const PrefabLimitProfile &limits) const;
 
         /**
          * @brief Parses, validates and transactionally publishes one complete canonical source candidate.

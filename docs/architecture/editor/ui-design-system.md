@@ -343,6 +343,7 @@ mutate the built-in icon table.
 Panels select icons by meaning rather than by the visual source. The selected
 scene object uses `UiIcon::SceneObject` in both Hierarchy and Inspector; the
 package icon has its own identity even when it currently uses the same glyph.
+
 - Primitive components remain feature-independent.
 - Composite components are built by composing primitives.
 - Screens, panels, and modal workflows orchestrate components and application
@@ -866,7 +867,6 @@ Settings footer actions measure localized labels with the exact button font role
 and component padding. Minimum widths are lower bounds; UI scale applies once.
 The action group remains right aligned and the status is clipped before that
 group so long feedback cannot paint underneath the actions.
-
 
 Settings use a compact supporting-copy role: default 14 logical pixels, derived
 from the active caption size at a 14/18 ratio and bounded below by 14 times UI

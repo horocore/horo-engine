@@ -117,6 +117,8 @@ namespace Horo::Editor {
     [[nodiscard]] bool ApplySettings(SettingsState &state, EditorSettingsService &settings) {
         if (state.navigationProjectDraftDirty)
             return false;
+        if (const auto owner = state.prefab.owner.lock(); owner && owner->IsDirty())
+            return false;
         const EditorSettings draft = CollectDraftSettings(state);
         const Result<EditorSettingsSnapshot> result =
             settings.Commit(EditorSettingsDraft{.baseRevision = state.settingsRevision, .settings = draft});

@@ -54,12 +54,10 @@ namespace Horo::Editor {
      * @param boundaries Receives every unsupported or crossing site before any source is produced.
      * @return Canonical portable source or typed zero-mutation rejection. Reference-bearing unavailable schemas fail closed.
      */
-    [[nodiscard]] Result<Prefab::PrefabDocument> PreparePrefabSelectionSource(const SceneTransactionSnapshot &snapshot,
-                                                                              SceneSource::SceneObjectId root, Assets::AssetId asset,
-                                                                              const Application::HoroVersion &version,
-                                                                              const Assets::AssetRegistrySnapshot &registry,
-                                                                              const Gameplay::BehaviorRegistry *behaviors,
-                                                                              std::vector<PrefabCreationBoundary> &boundaries);
+    [[nodiscard]] Result<Prefab::PrefabDocument> PreparePrefabSelectionSource(
+        const SceneTransactionSnapshot &snapshot, SceneSource::SceneObjectId root, Assets::AssetId asset,
+        const Application::HoroVersion &version, const Assets::AssetRegistrySnapshot &registry, const Gameplay::BehaviorRegistry *behaviors,
+        std::vector<PrefabCreationBoundary> &boundaries, const Prefab::PrefabLimitProfile *projectLimits = nullptr);
 
     /** @brief Last accepted persisted Scene bytes, independent of its dirty in-memory authoring state. */
     struct PrefabCreationSourceFence final {

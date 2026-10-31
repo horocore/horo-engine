@@ -35,6 +35,7 @@ namespace Horo::Editor::SettingsModalInternal {
         ExtensionPages,
         CodeEditorAppearance,
         Keymaps,
+        Prefab,
     };
 
     struct NavItem {
@@ -86,6 +87,8 @@ namespace Horo::Editor::SettingsModalInternal {
     void DrawNavItem(SettingsState &st, const NavItem &item, const EditorGuiContext &ctx);
     void DrawNavigationContent(SettingsState &st, const EditorGuiContext &ctx);
     void DrawNavigationSettings(SettingsState &state, const EditorGuiContext &context);
+    /** @brief Draw the cached project-owned prefab policy through typed commands and shared controls. */
+    void DrawPrefabSettings(SettingsState &state, const EditorGuiContext &context);
     void DrawContent(SettingsState &st, const EditorGuiContext &ctx);
     void DrawCollision(SettingsState &st, const EditorGuiContext &ctx);
     void DrawUpdates(SettingsState &st, const EditorGuiContext &ctx);

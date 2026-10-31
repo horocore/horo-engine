@@ -21,6 +21,7 @@ namespace Horo::Editor {
         m_draft.extensionCommands = std::move(pages.commands);
         m_draft.collision.owner = std::move(projects.collision);
         m_draft.collision.error = std::move(projects.collisionError);
+        m_draft.prefab.owner = std::move(projects.prefab);
         m_pagesUnsupported = pages.host && !pages.theme;
         if (pages.host && pages.theme)
             m_extensionPages = std::make_shared<EditorPageView>(context, std::move(pages.host), std::move(pages.theme));
@@ -77,12 +78,21 @@ namespace Horo::Editor {
 
     CloseDecision SettingsModal::CanClose(const ModalCloseReason reason) {
         m_draft.dirty = CollectDraftSettings(m_draft) != m_draft.committed;
-        if (reason == ModalCloseReason::Cancelled || (!m_draft.dirty && !m_draft.navigationProjectDraftDirty))
+        const auto prefab = m_draft.prefab.owner.lock();
+        if (reason == ModalCloseReason::Cancelled ||
+            (!m_draft.dirty && !m_draft.navigationProjectDraftDirty && (!prefab || !prefab->IsDirty())))
             return CloseDecision::Allow;
         return CloseDecision::Deny;
     }
 
     void SettingsModal::OnClose(const ModalCloseReason reason) {
+        if (reason == ModalCloseReason::Cancelled) {
+            if (const auto owner = m_draft.prefab.owner.lock()) {
+                const auto snapshot = owner->Snapshot();
+                if (snapshot.HasValue())
+                    static_cast<void>(owner->Execute({PrefabSettingsCommandKind::Discard, snapshot.Value()->revision}));
+            }
+        }
         if (m_extensionPages)
             m_extensionPages->Cancel();
         m_draft.dirty = CollectDraftSettings(m_draft) != m_draft.committed;
@@ -101,6 +111,7 @@ namespace Horo::Editor {
             m_revertedPublished = true;
         }
         m_draft.collision = {};
+        m_draft.prefab = {};
         m_draft.navigationSettings = {};
         m_draft.navigationDraft.reset();
         m_navigationSettings = {};

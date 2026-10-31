@@ -164,6 +164,7 @@ set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_projec
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(common/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC common/EditorProjectSceneHost.cpp)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::PrefabProjectSettings)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlayXrHostInterface HoroEditorPlaySceneHostInternal HoroScenePhysicsHost
@@ -181,6 +182,7 @@ add_library(HoroNetworkProductHost STATIC
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua

@@ -110,6 +110,7 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {network.c_str(), "N", Network}, ctx);
         const auto navigation = SettingsModal::kTextScope.Text(ctx.localization, "nav.navigation");
         DrawNavItem(st, {navigation.c_str(), "N", Navigation}, ctx);
+        DrawNavItem(st, {SettingsModal::kTextScope.Text(ctx.localization, "prefab.title").c_str(), "P", Prefab}, ctx);
         DrawNavItem(st, {packages.c_str(), "K", Packages}, ctx);
         DrawNavItem(st, {updates.c_str(), "U", Updates}, ctx);
         DrawNavGroup(tools.c_str(), ctx);
@@ -519,6 +520,9 @@ namespace Horo::Editor::SettingsModalInternal {
                 break;
             case Navigation:
                 DrawNavigationSettings(st, ctx);
+                break;
+            case Prefab:
+                DrawPrefabSettings(st, ctx);
                 break;
             case Packages:
                 DrawPackages(st, ctx);

@@ -4,6 +4,7 @@
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Prefab/PrefabLimits.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "ScenePhysicsHost.h"
 
@@ -32,7 +33,8 @@ namespace Horo::Application::Internal {
         const HeadlessSceneLoadBoundary &load;
         std::span<const AI::AiControllerDescriptor> aiControllers; /**< Immutable explicit catalog, outliving all returned services. */
         AI::AiSceneRuntimeSettings aiSettings{};
-        Assets::AssetLoadService *prefabLoads{}; /**< Optional exact-envelope loader; outlives all granted prefab services. */
+        Assets::AssetLoadService *prefabLoads{};  /**< Optional exact-envelope loader; outlives all granted prefab services. */
+        Prefab::PrefabProjectPolicy prefabPolicy; /**< Explicit host-admitted policy; declared engine defaults preserve old callers. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

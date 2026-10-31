@@ -3,6 +3,7 @@
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/NavigationProjectSettingsSession.h"
+#include "Horo/Editor/PrefabProjectSettingsSession.h"
 
 #include <array>
 #include <cstdint>
@@ -152,6 +153,23 @@ namespace Horo::Editor {
     [[nodiscard]] Result<void> RemoveCollisionItem(SettingsCollisionDraft &draft);
 
     /** @brief Modal-owned mutable draft for the editor settings workflow. */
+    struct SettingsPrefabDraft final {
+        std::weak_ptr<PrefabProjectSettingsSession> owner;
+        std::shared_ptr<const PrefabProjectSettingsView> view;
+        std::array<std::array<char, 22>, Application::PrefabLimitFieldCount> text{};
+        std::array<std::string, Application::PrefabLimitFieldCount> ceilings;
+        std::string ceilingPattern;
+        std::string hardPattern;
+        std::string hardSafety;
+        std::string work;
+        std::optional<std::size_t> workValue;
+        std::array<std::string, 4> actionText;
+        std::array<std::string, 4> actionLabels;
+        std::string statusKey;
+        std::optional<Error> error; /**< Original typed failure retained separately from localized presentation. */
+    };
+
+    /** @brief Modal-owned mutable draft for the editor settings workflow. */
     struct SettingsState {  // NOSONAR(cpp:S1820)
         using GeneralTab = SettingsGeneralTab;
 
@@ -180,6 +198,7 @@ namespace Horo::Editor {
         std::uint64_t settingsRevision = 0;
 
         SettingsCollisionDraft collision;
+        SettingsPrefabDraft prefab;
         GeneralTab general{};
         AppearanceTab appearance{};
         InputTab input{};

@@ -11,6 +11,7 @@
 #include "Horo/Editor/NavigationProjectSettingsSession.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Editor/PCGGraphDocumentService.h"
+#include "Horo/Editor/PrefabProjectSettingsSession.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/UiInspectorResources.h"
@@ -335,6 +336,20 @@ namespace Horo::Editor {
 
         /** @brief Lazily composes actual project navigation sources with this exact active Scene/history owner. */
         [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings();
+        /** @brief Compose the exact project prefab document owner; no UI or runtime authority is created. */
+        [[nodiscard]] Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings();
+        /** @brief Capture the accepted immutable profile for a new authoring/conversion operation. */
+        [[nodiscard]] Result<Prefab::PrefabLimitProfile> PrefabLimits();
+        /** @brief Observe accepted publication and invalidate authoring projections only at the host boundary. */
+        void UpdatePrefabSettingsProjection();
+        /** @brief Include settings edits in ordinary project save/leave semantics. */
+        [[nodiscard]] bool HasDirtyPrefabSettings() const;
+        /** @brief Save exact current settings draft before project leave. */
+        [[nodiscard]] Result<void> SavePrefabSettings();
+        /** @brief Close the exact opening after explicit save/discard policy. */
+        [[nodiscard]] Result<void> ShutdownPrefabSettings(bool discard = false);
+        /** @brief Read the draft fence captured by delayed leave consent; zero means no opening. */
+        [[nodiscard]] std::uint64_t PrefabSettingsRevision() const;
         /** @brief Includes all navigation authoring owners in the ordinary leave guard. */
         [[nodiscard]] bool HasDirtyNavigationDocuments() const;
         /** @brief Saves each dirty navigation owner through actual Assets publication. */
@@ -570,6 +585,8 @@ namespace Horo::Editor {
         std::shared_ptr<CollisionProjectSettingsSession> m_collisionSettings;
         std::unique_ptr<SceneDocumentTransactions> m_navigationScene;
         std::unique_ptr<NavigationProjectSettingsSession> m_navigationSettings;
+        std::shared_ptr<PrefabProjectSettingsSession> m_prefabSettings;
+        std::uint64_t m_prefabSettingsPublication{};
         std::uint64_t m_navigationOpening{1};
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
         Assets::AssetId m_inspectorDocumentOwner;

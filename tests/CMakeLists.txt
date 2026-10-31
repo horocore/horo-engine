@@ -836,6 +836,8 @@ add_executable(HoroPhysicsTests
         support/AllocationProbe.cpp
         unit/runtime/physics/CharacterFoundationQualificationTests.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp
+        unit/runtime/physics/CharacterPropertyFuzzTests.cpp
+        unit/runtime/physics/CharacterGeometryPropertyTests.cpp
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
         unit/runtime/physics/CharacterDebugSnapshotTests.cpp
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
@@ -913,6 +915,8 @@ target_compile_definitions(HoroPhysicsTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<B
 target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::PhysicsTriggerVolumeHost HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
 target_link_libraries(HoroPhysicsTests PRIVATE HoroCharacterScenePlacementInternal HoroPhysicsSceneHostInternal HoroScenePhysicsHost)
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
+add_test(NAME HoroCharacterPropertyFuzzTests COMMAND HoroPhysicsTests "[character-property]")
+set_tests_properties(HoroCharacterPropertyFuzzTests PROPERTIES LABELS "unit;physics;character;property;fuzz;headless" TIMEOUT 90 RUN_SERIAL TRUE)
 
 add_executable(HoroPrefabPhysicsGroupTests unit/runtime/physics/PrefabPhysicsGroupTests.cpp)
 target_compile_features(HoroPrefabPhysicsGroupTests PRIVATE cxx_std_20)
@@ -1846,6 +1850,26 @@ target_compile_features(HoroPrefabTemplateCookTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabTemplateCookTests PRIVATE HoroEngine::PrefabSceneExpansion)
 horo_register_catch_test(HoroPrefabTemplateCookTests LABELS "unit;prefab;headless")
 
+add_executable(HoroPrefabReferenceCorpusTests unit/runtime/prefab/PrefabReferenceCorpusTests.cpp)
+target_compile_features(HoroPrefabReferenceCorpusTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroPrefabReferenceCorpusTests PRIVATE
+    HORO_PREFAB_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/prefab-reference-corpus")
+target_link_libraries(HoroPrefabReferenceCorpusTests PRIVATE
+    HoroEngine::PrefabSceneExpansion HoroEngine::PrefabRuntime HoroEngine::SceneRuntimeConversion
+    nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroPrefabReferenceCorpusTests LABELS "unit;prefab;headless;corpus"
+    PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+
+add_executable(HoroPrefabParserFuzzTests unit/runtime/prefab/PrefabParserFuzzTests.cpp)
+target_compile_features(HoroPrefabParserFuzzTests PRIVATE cxx_std_20)
+target_include_directories(HoroPrefabParserFuzzTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_compile_definitions(HoroPrefabParserFuzzTests PRIVATE
+    HORO_PREFAB_FUZZ_BASELINES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/prefab-reference-corpus")
+target_link_libraries(HoroPrefabParserFuzzTests PRIVATE
+    HoroEngine::PrefabAuthoring HoroEngine::PrefabRuntime nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroPrefabParserFuzzTests LABELS "unit;prefab;fuzz;headless"
+    PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+
 add_executable(HoroPrefabTemplateCookGenerationTests unit/runtime/prefab/PrefabTemplateCookGenerationTests.cpp)
 target_compile_features(HoroPrefabTemplateCookGenerationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabTemplateCookGenerationTests PRIVATE HoroEngine::PrefabAuthoring HoroEngine::PrefabRuntime HoroEngine::Platform)
@@ -1915,6 +1939,7 @@ set_tests_properties(HoroProjectPhysicsCaptureBoundaryConsumer PROPERTIES LABELS
 
 add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
 add_executable(HoroPrefabSceneCookHostTests
+        unit/application/PrefabProjectSettingsCookTests.cpp
         unit/application/PrefabSceneCookHostTests.cpp
         unit/application/CommittedPrefabAssetTests.cpp
         unit/application/PhysicsTriggerVolumeHostTests.cpp
@@ -1922,6 +1947,8 @@ add_executable(HoroPrefabSceneCookHostTests
         unit/application/PrefabCookSchemaContextTests.cpp
         unit/application/PrefabSceneCookQualificationTests.cpp
         unit/application/PrefabSceneCookHostFixture.h)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabProjectSettings)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroNetworkProductHost)
 target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
 # Shared AssetCook test fixtures compile their builtin registration helper even
 # when the host test selects SettingsCooker. Keep that test-only boundary narrow.
@@ -1948,6 +1975,7 @@ target_link_libraries(HoroPrefabTemplateProviderTests PRIVATE HoroEngine::Prefab
 horo_register_catch_test(HoroPrefabTemplateProviderTests LABELS "unit;prefab;headless")
 
 add_executable(HoroPrefabSpawnServiceTests unit/runtime/prefab/PrefabSpawnServiceTests.cpp
+    unit/runtime/prefab/PrefabSpawnProjectPolicyTests.cpp
     unit/runtime/prefab/PrefabSpawnLifecycleTests.cpp)
 target_compile_features(HoroPrefabSpawnServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabSpawnServiceTests PRIVATE HoroEngine::PrefabRuntime HoroEngine::GameplayRuntime)
@@ -2388,6 +2416,7 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroEngine::EditorServices
     )
     add_executable(HoroEditorPresentationTests
+            unit/editor/PrefabSettingsPresentationTests.cpp
             unit/editor/CollisionSettingsPresentationTests.cpp
             unit/editor/SettingsModalPresentationTests.cpp
             unit/editor/NavigationDefinitionPresentationTests.cpp
@@ -2816,6 +2845,19 @@ target_include_directories(HoroNavigationProjectSettingsTests PRIVATE ${CMAKE_CU
 target_link_libraries(HoroNavigationProjectSettingsTests PRIVATE Catch2::Catch2WithMain
         HoroEngine::EditorServices HoroEngine::ProjectSettings HoroEngine::NavigationApi nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroNavigationProjectSettingsTests LABELS "unit;editor;navigation;headless;ci-navigation")
+
+add_executable(HoroPrefabProjectSettingsTests unit/editor/PrefabProjectSettingsTests.cpp
+    unit/application/PrefabProjectSettingsHostTests.cpp)
+target_compile_features(HoroPrefabProjectSettingsTests PRIVATE cxx_std_20)
+target_include_directories(HoroPrefabProjectSettingsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroPrefabProjectSettingsTests PRIVATE HoroEngine::EditorServices HoroEngine::PrefabProjectSettings)
+target_link_libraries(HoroPrefabProjectSettingsTests PRIVATE HoroNetworkProductHost)
+horo_register_catch_test(HoroPrefabProjectSettingsTests LABELS "unit;editor;prefab;headless")
+add_executable(HoroPrefabProjectSettingsPublicConsumer support/PrefabProjectSettingsPublicConsumer.cpp)
+target_compile_features(HoroPrefabProjectSettingsPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabProjectSettingsPublicConsumer PRIVATE HoroEngine::EditorServices HoroEngine::PrefabProjectSettings)
+add_test(NAME HoroPrefabProjectSettingsPublicConsumer COMMAND HoroPrefabProjectSettingsPublicConsumer)
+set_tests_properties(HoroPrefabProjectSettingsPublicConsumer PROPERTIES LABELS "unit;prefab;public_headers;headless")
 add_executable(HoroNavigationProjectSettingsPublicConsumer support/NavigationProjectSettingsPublicConsumer.cpp)
 target_compile_features(HoroNavigationProjectSettingsPublicConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroNavigationProjectSettingsPublicConsumer PRIVATE
@@ -3542,7 +3584,9 @@ add_executable(HoroSceneDocumentTests
         unit/editor/PrefabCreationTests.cpp
         unit/editor/PrefabCreationSchemaTests.cpp
         unit/editor/PrefabDocumentSessionTests.cpp
+        unit/editor/PrefabSettingsDocumentTests.cpp
         unit/editor/PrefabDocumentSessionByteBoundaryTests.cpp
+        unit/runtime/prefab/PrefabParserPersistenceFuzzTests.cpp
         unit/editor/PrefabAssetPreviewTests.cpp
 )
 
@@ -3553,6 +3597,9 @@ target_sources(HoroSceneDocumentTests PRIVATE $<TARGET_OBJECTS:HoroPrefabCreatio
 target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction HoroEngine::SceneCook HoroEngine::EditorServices HoroPrefabHierarchyInternal)
 target_include_directories(HoroSceneDocumentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+add_test(NAME HoroPrefabParserFuzzPersistenceTests COMMAND HoroSceneDocumentTests "[prefab-fuzz][persistence]")
+set_tests_properties(HoroPrefabParserFuzzPersistenceTests PROPERTIES
+    LABELS "unit;prefab;fuzz;headless" TIMEOUT 60 RUN_SERIAL TRUE)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
         unit/editor/SceneDocumentRecoveryPathTests.cpp
@@ -3576,6 +3623,8 @@ target_include_directories(HoroSceneSourceTests PRIVATE ${CMAKE_CURRENT_SOURCE_D
 target_link_libraries(HoroSceneSourceTests PRIVATE HoroEngine::SceneSource Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
 catch_discover_tests(HoroSceneSourceTests TEST_PREFIX "HoroSceneSourceTests::"
         PROPERTIES LABELS "unit;scene;serialization;headless")
+add_test(NAME HoroCharacterWirePropertyFuzzTests COMMAND HoroSceneSourceTests "[character-property]")
+set_tests_properties(HoroCharacterWirePropertyFuzzTests PROPERTIES LABELS "unit;scene;character;property;fuzz;headless" TIMEOUT 90 RUN_SERIAL TRUE)
 add_executable(HoroEditorViewportPickingTests
         unit/editor/EditorViewportPickingTests.cpp
 )

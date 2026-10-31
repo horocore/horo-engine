@@ -384,8 +384,14 @@ namespace Horo::Editor::Ui {
      */
     void SettingGroup(const char *label, const Theme::Fonts &fonts, bool first = false);
 
+    /** @brief Responsive row arrangement; both modes retain the same stable control identity scope. */
+    enum class SettingRowLayout {
+        Columns,
+        Stacked
+    };
+
     /**
-     * @brief Generic two-column settings row.
+     * @brief Generic responsive settings row.
      *
      * Column 0 holds the label + optional description; column 1
      * invokes the control callback and has a fixed width of
@@ -393,9 +399,43 @@ namespace Horo::Editor::Ui {
      * the measured control group and use equal theme-backed vertical padding.
      * Described rows use compact supporting text (14 logical pixels at the default
      * caption size), wrapped to their own column, without reducing primary labels or controls.
+     * @param label Localized visible label.
+     * @param description Optional localized supporting text.
+     * @param f Shared typography roles.
+     * @param control Synchronous presentation callback, invoked once when its table is visible.
+     * @param stableId Optional identity independent of localized copy; absence preserves existing callers.
+     * @param layout Columns or wrapped stacked layout; control identity remains stable across changes.
      */
-    template <typename ControlFn> void SettingRow(const char *label, const char *description, const Theme::Fonts &f, ControlFn &&control) {
-        ImGui::PushID(label);
+    template <typename ControlFn>
+    void SettingRow(const char *label, const char *description, const Theme::Fonts &f, ControlFn &&control, const char *stableId = nullptr,
+                    const SettingRowLayout layout = SettingRowLayout::Columns) {
+        ImGui::PushID(stableId ? stableId : label);
+        if (layout == SettingRowLayout::Stacked) {
+            // Keep the same table/row ID scope as the column layout so active controls survive responsive layout changes.
+            if (ImGui::BeginTable("row", 1, ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("info", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                {
+                    Theme::ScopedTextStyle text(f.sans, Theme::TextPx::Body(), Theme::FontPx::Sans);
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+                    ImGui::TextUnformatted(label);
+                    ImGui::PopTextWrapPos();
+                }
+                if (description && description[0]) {
+                    Theme::ScopedTextStyle text(f.sansCompact, Theme::TextPx::Caption(), Theme::FontPx::SansCompact);
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+                    ImGui::TextUnformatted(description);
+                    ImGui::PopTextWrapPos();
+                }
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                control();
+                ImGui::EndTable();
+            }
+            ImGui::PopID();
+            return;
+        }
         if (description == nullptr || description[0] == '\0') {
             const auto &tokens = Theme::GetActiveTokens();
             const float padding = DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Small);

@@ -325,7 +325,8 @@ namespace Horo::Application::Internal {
                                                .registry = resources->registry,
                                                .loads = *resources->loads,
                                                .load = resources->load,
-                                               .prefabLoads = resources->prefabLoads.get()};
+                                               .prefabLoads = resources->prefabLoads.get(),
+                                               .prefabPolicy = resources->prefabPolicy};
             return ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay,
                                                        replicationAdmission);
         }

@@ -80,7 +80,8 @@ namespace Horo::Prefab::Detail {
                          const Gameplay::ComponentRegistry *registry, const PrefabComponentProjector *codec, SpawnDispatcher spawn,
                          DespawnDispatcher despawn)
             : submitSpawn(std::move(spawn)), submitDespawn(std::move(despawn)), provider(&templates), scenes(&sceneService),
-              components(registry), projector(codec) {
+              components(registry), projector(codec), maximumSpawnDepth(templates.LimitProfile().Policy().maximumRuntimeSpawnDepth),
+              maximumInstanceBindings(templates.LimitProfile().Policy().maximumInstanceBindings) {
             if (const auto active = scenes->ActiveScene())
                 scene = active->RuntimeId();
         }
@@ -151,12 +152,12 @@ namespace Horo::Prefab::Detail {
                                                     const std::span<const Assets::AssetId> lineage) {
             if (auto valid = Admit(request.notBeforeTick, scope, cancellation); valid.HasError())
                 return Result<PrefabOperation>::Failure(valid.ErrorValue());
-            if (lineage.size() >= 16)
+            if (lineage.size() >= maximumSpawnDepth)
                 return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::SpawnDepthExceeded));
             if (std::ranges::find(lineage, request.source.asset) != lineage.end())
                 return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::SpawnRecursionDetected));
             if (request.placement.TryToMatrix().HasError() || request.initialization.size() > MaximumPrefabInitializationValues ||
-                request.bindings.size() > 64)
+                request.bindings.size() > maximumInstanceBindings)
                 return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::AdmissionRejected));
             if (auto valid = ValidateInitialization(request); valid.HasError())
                 return Result<PrefabOperation>::Failure(valid.ErrorValue());
@@ -536,6 +537,8 @@ namespace Horo::Prefab::Detail {
         Runtime::RuntimeSceneService *scenes;
         const Gameplay::ComponentRegistry *components;
         const PrefabComponentProjector *projector;
+        const std::size_t maximumSpawnDepth; /**< Immutable provider policy; retained clients never query mutable project state. */
+        const std::size_t maximumInstanceBindings;
         const std::thread::id owner{std::this_thread::get_id()};
         Runtime::SceneRuntimeId scene;
         std::shared_ptr<const std::byte> identity{std::make_shared<const std::byte>()};

@@ -2,6 +2,7 @@
 
 /** @file PrefabSceneCookState.h @brief Target-private immutable host capture and cooker candidate handoff. */
 #include "Horo/Application/PrefabSceneCookHost.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 
 namespace Horo::Application::PrefabCookDetail {
@@ -12,6 +13,7 @@ namespace Horo::Application::PrefabCookDetail {
         Sha256Digest projectBytes;
         std::optional<Sha256Digest> packageBytes;
         std::optional<Sha256Digest> packageIntentBytes;
+        Assets::AssetSourceIdentity prefabSettings;
     };
 
     /** @brief Owned source and schema evidence retained through the synchronous dependent-template callback. */

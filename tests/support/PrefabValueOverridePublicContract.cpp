@@ -9,3 +9,7 @@ static_assert(!std::is_aggregate_v<Horo::Prefab::PrefabDebugSnapshot>);
 static_assert(std::is_copy_constructible_v<Horo::Prefab::PrefabDebugSnapshot>);
 static_assert(std::is_copy_constructible_v<Horo::Prefab::PrefabValueOverrideSet>);
 static_assert(std::is_nothrow_swappable_v<std::optional<Horo::Prefab::PrefabValueOverrideSet>>);
+
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Prefab::PrefabDocument &>().ValidateLimits(
+                                 std::declval<const Horo::Prefab::PrefabLimitProfile &>())),
+                             Horo::Result<void>>);
