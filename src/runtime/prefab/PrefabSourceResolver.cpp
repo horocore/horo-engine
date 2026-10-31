@@ -64,6 +64,7 @@ namespace Horo::Prefab {
             PrefabExpansionBudget &budget;
             const PrefabLimitProfile &limits;
             const CancellationToken &cancellation;
+            std::vector<PrefabCompositionOriginStep> originChain;
         };
 
         /** @brief Records the complete source path that made a required expansion fail. */
@@ -98,6 +99,8 @@ namespace Horo::Prefab {
             const PrefabDependencySource *parent = FindSource(state.sources, parentAsset);
             if (parent == nullptr)
                 return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), parentAsset);
+            state.originChain.push_back({PrefabCompositionOrigin::Variant, document.assetId, parentAsset, {}});
+            const PopBackGuard originGuard{state.originChain};
             return ExpandSource(state, *parent, nestedDepth, variantDepth + 1, mountParent, mountTransform);
         }
 
@@ -118,6 +121,8 @@ namespace Horo::Prefab {
             for (const PrefabObjectNode &object : document.objects) {
                 if (const auto admitted = AdmitLocalObject(state); admitted.HasError())
                     return admitted;
+                if (const auto charged = state.budget.Consume(state.originChain.size()); charged.HasError())
+                    return Fail(state, charged.ErrorValue());
                 auto address = PrefabObjectAddress::Create(state.scope, object.localId);
                 if (address.HasError())
                     return Fail(state, address.ErrorValue());
@@ -138,7 +143,7 @@ namespace Horo::Prefab {
                     localTransform = composed.Value();
                 }
                 state.objects.emplace_back(document.assetId, key, parent, object, localTransform,
-                                           mountParent && !object.parentLocalId ? mountTransform : Math::Transform{});
+                                           mountParent && !object.parentLocalId ? mountTransform : Math::Transform{}, state.originChain);
             }
             return Result<void>::Success();
         }
@@ -166,6 +171,8 @@ namespace Horo::Prefab {
                 }
                 state.scope.push_back(placement.placementLocalId);
                 const PopBackGuard scopeGuard{state.scope};
+                state.originChain.push_back({PrefabCompositionOrigin::Nested, document.assetId, nestedAsset, placement.placementLocalId});
+                const PopBackGuard originGuard{state.originChain};
                 if (auto expanded = ExpandSource(state, *nested, nestedDepth + 1, variantDepth, mountParent, placement.localRootTransform);
                     expanded.HasError())
                     return expanded;
@@ -322,6 +329,9 @@ namespace Horo::Prefab {
             revision.dependencies.push_back(*graph_.FindNode(asset));
             const auto edges = graph_.DirectDependencies(asset);
             revision.edges.insert(revision.edges.end(), edges.begin(), edges.end());
+            const auto commitment = std::ranges::lower_bound(commitments_, asset, {}, &PrefabCanonicalSourceCommitment::asset);
+            if (commitment != commitments_.end() && commitment->asset == asset)
+                revision.canonicalSources.push_back(*commitment);
         }
         return Result<PrefabResolutionRevision>::Success(std::move(revision));
     }
@@ -340,7 +350,8 @@ namespace Horo::Prefab {
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
         if (const auto &captured = current.Value(); revision.rootSource != captured.rootSource ||
-                                                    revision.dependencies != captured.dependencies || revision.edges != captured.edges)
+                                                    revision.dependencies != captured.dependencies || revision.edges != captured.edges ||
+                                                    revision.canonicalSources != captured.canonicalSources)
             return Result<void>::Failure(MakeError(PrefabErrors::ResolutionStale));
         for (const auto asset : changedAssets) {
             if (!asset.IsValid())

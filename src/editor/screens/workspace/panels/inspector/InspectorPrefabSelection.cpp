@@ -53,6 +53,30 @@ namespace Horo::Editor {
             Ui::Hint(context.localization.Get("editor", "workspace.hierarchy.prefab.overrides").c_str(), context.theme.fonts);
         if (entry->failure)
             Ui::ErrorText(entry->failure->message.c_str(), context.theme.fonts);
+        if (entry->valueInspectionFailure)
+            Ui::ErrorText(entry->valueInspectionFailure->message.c_str(), context.theme.fonts);
+        for (const auto &value : entry->valueDiff) {
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, value.target, Theme::Text(), context.theme.fonts);
+            if (value.originKey)
+                Ui::Hint(context.localization.Get("editor", value.originKey).c_str(), context.theme.fonts);
+            if (value.stateKey)
+                Ui::Hint(context.localization.Get("editor", value.stateKey).c_str(), context.theme.fonts);
+            if (value.sourcePresent) {
+                Ui::Hint(context.localization.Get("editor", "workspace.prefab.diff.source_value").c_str(), context.theme.fonts);
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value.source, Theme::Muted(), context.theme.fonts);
+            }
+            if (value.effectivePresent) {
+                Ui::Hint(context.localization.Get("editor", "workspace.prefab.diff.effective_value").c_str(), context.theme.fonts);
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value.effective, value.changed ? Theme::Text() : Theme::Muted(),
+                                context.theme.fonts);
+            }
+            if (value.schemaDefault) {
+                Ui::Hint(context.localization.Get("editor", "workspace.prefab.diff.schema_default").c_str(), context.theme.fonts);
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, *value.schemaDefault, Theme::Muted(), context.theme.fonts);
+            }
+        }
+        if (entry->valueDiffIncomplete)
+            Ui::Hint(context.localization.Get("editor", "workspace.prefab.diff.omitted").c_str(), context.theme.fonts);
         DrawPrefabOwnershipActions(*entry, *viewModel.prefabHierarchy, command, context);
     }
 

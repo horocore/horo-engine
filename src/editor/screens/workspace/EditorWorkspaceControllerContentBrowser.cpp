@@ -34,6 +34,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ScheduleContentBrowserPreviews() {
+        m_contentBrowserPreviewSchemaRevision = m_navigationPrefabSchemas ? m_navigationPrefabSchemas->Revision() : Sha256Digest{};
         for (const PendingContentBrowserPreview &pending : m_pendingContentBrowserPreviews)
             if (pending.handle.has_value())
                 static_cast<void>(pending.handle->RequestCancel());
@@ -82,7 +83,14 @@ namespace Horo::Editor {
                     .providerVersion = std::to_string(m_contentBrowserPreviewGeneration),
                     .absoluteAssetPath = entry.absolutePath,
                     .assetType = *entry.registeredType,
-                    .provider = CreatePrefabAssetPreviewProvider(m_assetRegistry, asset.Value(), m_prefabSourceCapture, &limits.Value()),
+                    .provider = CreatePrefabAssetPreviewProvider(m_assetRegistry, asset.Value(), m_prefabSourceCapture, &limits.Value(),
+                                                                 [values = PrefabAssetPreviewValues{.schemas = m_navigationPrefabSchemas,
+                                                                                                    .publication =
+                                                                                                        m_contentBrowserPreviewGeneration}](
+                                                                     const CancellationToken &) {
+                    return Result<PrefabAssetPreviewValues>::Success(values);
+                }),
+                    .requiresRevision = true,
                 };
             } else if (m_importerCatalog != nullptr)
                 request = BuildPreviewRequest(entry, *m_importerCatalog);
@@ -105,6 +113,11 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::PollContentBrowserPreviews() {
+        const auto currentSchema = m_navigationPrefabSchemas ? m_navigationPrefabSchemas->Revision() : Sha256Digest{};
+        if (m_contentBrowserPreviewSchemaRevision != currentSchema) {
+            ScheduleContentBrowserPreviews();
+            return;
+        }
         std::erase_if(m_pendingContentBrowserPreviews, [this](PendingContentBrowserPreview &pending) {
             return PollContentBrowserPreview(pending);
         });

@@ -2471,6 +2471,7 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabValueOverrideAddresses.cpp
         runtime/prefab/PrefabValueOverrideBindings.cpp
         runtime/prefab/PrefabValueOverrideResolution.cpp
+        runtime/prefab/PrefabValueSnapshot.cpp
         runtime/prefab/PrefabValueOverrideSerialization.cpp
         runtime/prefab/PrefabValueOverrideValues.cpp
         runtime/prefab/PrefabValueSchemas.cpp

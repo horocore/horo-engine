@@ -1304,3 +1304,29 @@ existing joined staging and atomic selector authority: cancellation, stale captu
 corrupt cache, failed reload or failed selector publication retains the prior valid
 generation. This does not extend the authored nested/variant forms beyond the
 currently admitted source contracts or claim completion of their separate tickets.
+
+### Immutable value inspection and preview currentness (HORO-1035)
+
+`PrefabValueSnapshot` is a bounded read-only projection of the existing canonical
+value/component resolution, not another mutation authority. It owns typed values,
+defaults, actual composition lineage and preserved conflict/orphan/component intent.
+Canonical variant and nested application entry points capture outer-to-inner origin
+steps; source identities and presentation labels never infer a value's origin.
+Scene-instance application retains that lineage and marks removed component values
+as source-only evidence. Unregistered properties remain explicit opaque evidence.
+
+Snapshot source/schema/delta proofs include actual canonical source commitments.
+An absent delta is distinct from an empty authored envelope. Entry/byte ceilings
+retain deterministic prefixes with truthful total coverage, including zero-budget
+captures. Scene inspection shares a separate 4096-row/4-MiB budget and never changes
+otherwise-valid source-only expansion when optional inspection is unavailable.
+Existing authored override failures and publication fences remain authoritative.
+
+Preview provider revision capture runs on the existing worker before cache lookup,
+and the same proof is used for generation and revalidation before cached/fresh image
+delivery. Required unavailable revisions are typed failures. Prefab proof commits
+source closure, schema, delta and owner publication; callbacks read only owned
+immutable captures. The owner retains final generation/schema invalidation before
+display and cancels/requeues stale work, including ready cards. This does not claim
+an atomic filesystem/display snapshot. See [value snapshot contracts and API
+migration](../../guides/prefab-value-snapshots.md).

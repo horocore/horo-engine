@@ -35,27 +35,43 @@ namespace Horo::SceneSource::Detail {
                              const CancellationToken &cancellation) {
         if (!entry.expanded)
             return;
-        if (!entry.authored.valueOverrides) {
-            CaptureDebug(entry, *entry.expanded, limits, nullptr, {}, 0, debugBudget, cancellation);
-            return;
-        }
+        entry.valueSnapshot.reset();
+        entry.valueInspectionFailure.reset();
         entry.schemaRevision = schemas ? schemas->Revision() : Sha256Digest{};
-        if (auto resolved =
-                Prefab::ResolvePrefabValueOverrides(*entry.expanded, *entry.authored.valueOverrides, schemas, limits, cancellation);
+        if (auto resolved = Prefab::PrefabValueSnapshot::Prepare(*entry.expanded, entry.authored.valueOverrides, schemas, limits,
+                                                                 {std::min(debugBudget.remainingValueEntries, std::size_t{256}),
+                                                                  std::min(debugBudget.remainingValueBytes, std::size_t{1024 * 1024})},
+                                                                 cancellation);
             resolved.HasError()) {
-            CaptureDebug(entry, *entry.expanded, limits, &*entry.authored.valueOverrides, {}, 0, debugBudget, cancellation);
-            entry.failure = resolved.ErrorValue();
-            entry.expanded.reset();
+            entry.valueInspectionFailure = resolved.ErrorValue();
+            CaptureDebug(entry, *entry.expanded, limits, entry.authored.valueOverrides ? &*entry.authored.valueOverrides : nullptr, {}, 0,
+                         debugBudget, cancellation);
+            if (entry.authored.valueOverrides) {
+                entry.failure = resolved.ErrorValue();
+                entry.expanded.reset();
+            }
         } else {
-            auto values = std::move(resolved).Value();
-            CaptureDebug(entry, values.effective ? *values.effective : *entry.expanded, limits, &values.rebased, values.provenance,
-                         values.redundantRecords, debugBudget, cancellation);
-            entry.rebasedValues = std::move(values.rebased);
-            entry.valueProvenance = std::move(values.provenance);
-            entry.expanded = std::move(values.effective);
-            if (!entry.expanded)
-                entry.failure = MakeError(entry.rebasedValues->conflicts.empty() ? Prefab::PrefabErrors::OverrideOrphan
-                                                                                 : Prefab::PrefabErrors::OverrideConflict);
+            auto prepared = std::move(resolved).Value();
+            entry.valueSnapshot = std::move(prepared.snapshot);
+            entry.valueInspectionFailure = std::move(prepared.inspectionFailure);
+            if (entry.valueSnapshot) {
+                debugBudget.remainingValueEntries -= entry.valueSnapshot->Coverage().retained;
+                debugBudget.remainingValueBytes -= entry.valueSnapshot->RetainedBytes();
+            }
+            auto &values = prepared.resolution;
+            const auto *intent = entry.authored.valueOverrides ? &values.rebased : nullptr;
+            const auto debugValues = intent ? std::span<const Prefab::PrefabValueProvenance>{values.provenance}
+                                            : std::span<const Prefab::PrefabValueProvenance>{};
+            CaptureDebug(entry, intent && values.effective ? *values.effective : *entry.expanded, limits, intent, debugValues,
+                         intent ? values.redundantRecords : 0, debugBudget, cancellation);
+            if (entry.authored.valueOverrides) {
+                entry.rebasedValues = std::move(values.rebased);
+                entry.expanded = std::move(values.effective);
+                if (!entry.expanded)
+                    entry.failure = MakeError(entry.rebasedValues->conflicts.empty() && entry.rebasedValues->componentConflicts.empty()
+                                                  ? Prefab::PrefabErrors::OverrideOrphan
+                                                  : Prefab::PrefabErrors::OverrideConflict);
+            }
         }
         if (entry.failure)
             AddInstanceContext(*entry.failure, entry);

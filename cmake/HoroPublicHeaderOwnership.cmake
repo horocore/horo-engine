@@ -1086,6 +1086,7 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
     Horo/Prefab/CookedPrefab.h
     Horo/Prefab/PrefabErrors.h
     Horo/Prefab/PrefabIdentity.h
+    Horo/Prefab/PrefabCompositionOrigin.h
     Horo/Prefab/PrefabLimits.h
 )
 
@@ -1102,6 +1103,7 @@ horo_configure_target_header_boundary(HoroPrefabOverrideModel PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
     Horo/Prefab/PrefabValueOverrides.h
+    Horo/Prefab/PrefabValueSnapshot.h
 Horo/Prefab/PrefabAssetDependencyClosure.h
 Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDiagnostics.h

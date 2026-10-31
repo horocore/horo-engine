@@ -4,6 +4,7 @@
  */
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabComponentOverrideTypes.h"
+#include "Horo/Prefab/PrefabCompositionOrigin.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Prefab/PrefabSourceRevision.h"
 
@@ -81,8 +82,15 @@ namespace Horo::Prefab {
     /** @brief Authority supplying the effective value; display text never determines provenance. */
     enum class PrefabValueOrigin : std::uint8_t {
         Source,
-        Inherited,
-        Instance
+        Inherited, /**< Legacy unspecified inheritance; canonical resolution now emits Variant or Nested. */
+        Instance,
+        Variant,
+        Nested
+    };
+    /** @brief Presence of a bound source property after canonical component application. */
+    enum class PrefabValueDisposition : std::uint8_t {
+        Present,
+        RemovedByInstance
     };
 
     /** @brief Value-only editor evidence retaining registry, immediate-source and effective values separately. */
@@ -94,6 +102,10 @@ namespace Horo::Prefab {
         PrefabOverrideValue sourceValue;
         PrefabOverrideValue effectiveValue;
         Assets::AssetId sourcePrefab;
+        std::vector<PrefabCompositionOriginStep>
+            originChain; /**< Actual composition applications retained even for scene-instance edits. */
+        PrefabValueDisposition disposition{
+            PrefabValueDisposition::Present}; /**< Removed values are source evidence, never effective values. */
         [[nodiscard]] bool operator==(const PrefabValueProvenance &) const noexcept = default;
     };
 }  // namespace Horo::Prefab

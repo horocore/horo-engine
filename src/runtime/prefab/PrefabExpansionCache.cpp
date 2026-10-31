@@ -63,6 +63,7 @@ namespace Horo::Prefab {
             if (!budget.Add(sizeof(EffectivePrefabCandidate)) ||
                 !budget.Add(revision.dependencies.capacity(), sizeof(PrefabDependencyNode)) ||
                 !budget.Add(revision.edges.capacity(), sizeof(PrefabDependencyEdge)) ||
+                !budget.Add(revision.canonicalSources.capacity(), sizeof(PrefabCanonicalSourceCommitment)) ||
                 !budget.Add(candidate.Objects().size(), sizeof(ResolvedPrefabObject)))
                 return false;
             for (const auto &node : revision.dependencies) {
@@ -70,7 +71,8 @@ namespace Horo::Prefab {
                     return false;
             }
             for (const auto &resolved : candidate.Objects()) {
-                if (!ChargeObject(budget, resolved.object))
+                if (!ChargeObject(budget, resolved.object) ||
+                    !budget.Add(resolved.originChain.capacity(), sizeof(PrefabCompositionOriginStep)))
                     return false;
             }
             return true;
@@ -238,6 +240,7 @@ namespace Horo::Prefab {
             return Result<std::size_t>::Failure(MakeError(PrefabErrors::ExpansionCacheCapacityExceeded));
         if (!budget.Add(sizeof(Entry)) || !budget.Add(key.revision_.dependencies.capacity(), sizeof(PrefabDependencyNode)) ||
             !budget.Add(key.revision_.edges.capacity(), sizeof(PrefabDependencyEdge)) ||
+            !budget.Add(key.revision_.canonicalSources.capacity(), sizeof(PrefabCanonicalSourceCommitment)) ||
             !budget.Add(key.sources_.capacity(), sizeof(Sha256Digest)) || !ChargeCandidate(budget, candidate))
             return Result<std::size_t>::Failure(MakeError(PrefabErrors::ExpansionCacheCapacityExceeded));
         for (const auto &node : key.revision_.dependencies) {

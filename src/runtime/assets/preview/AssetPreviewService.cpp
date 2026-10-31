@@ -217,12 +217,25 @@ namespace Horo::Assets {
                 pending->Complete(Result<AssetPreviewResult>::Failure(payload.ErrorValue()), cancellation);
                 return;
             }
+            auto revision = CaptureRevision(pending, payload.Value(), cancellation);
+            if (revision.HasError()) {
+                pending->Complete(Result<AssetPreviewResult>::Failure(revision.ErrorValue()), cancellation);
+                return;
+            }
             std::string key = CacheKey(pending->input, payload.Value());
+            if (revision.Value()) {
+                key += ":provider-revision-v1:";
+                key += FormatSha256(*revision.Value());
+            }
             if (auto cached = FindCached(key)) {
+                if (auto current = ValidateRevision(pending, payload.Value(), revision.Value(), cancellation); current.HasError()) {
+                    pending->Complete(Result<AssetPreviewResult>::Failure(current.ErrorValue()), cancellation);
+                    return;
+                }
                 pending->Complete(Result<AssetPreviewResult>::Success({std::move(*cached), true}), cancellation);
                 return;
             }
-            Result<AssetPreviewImage> generated = Generate(pending, payload.Value(), cancellation);
+            Result<AssetPreviewImage> generated = Generate(pending, payload.Value(), revision.Value(), cancellation);
             if (generated.HasError()) {
                 pending->Complete(Result<AssetPreviewResult>::Failure(generated.ErrorValue()), cancellation);
                 return;
@@ -236,12 +249,17 @@ namespace Horo::Assets {
                 pending->Complete(Failure<AssetPreviewResult>(AssetErrors::PreviewCancelled), cancellation);
                 return;
             }
+            if (auto current = ValidateRevision(pending, payload.Value(), revision.Value(), cancellation); current.HasError()) {
+                pending->Complete(Result<AssetPreviewResult>::Failure(current.ErrorValue()), cancellation);
+                return;
+            }
             InsertCached(std::move(key), image);
             pending->Complete(Result<AssetPreviewResult>::Success({std::move(image), false}), cancellation);
         }
 
         [[nodiscard]] static Result<AssetPreviewImage> Generate(const std::shared_ptr<AssetPreviewHandle::Request> &pending,
                                                                 const std::span<const std::uint8_t> payload,
+                                                                const std::optional<Sha256Digest> revision,
                                                                 const CancellationToken &cancellation) {
             try {
                 return pending->input.provider->GeneratePreview(
@@ -251,11 +269,48 @@ namespace Horo::Assets {
                         .assetType = pending->input.assetType,
                         .width = pending->input.width,
                         .height = pending->input.height,
+                        .capturedRevision = revision,
                     },
                     cancellation);
             } catch (...) {  // NOSONAR(cpp:S2738) Extension code cannot be permitted to escape the host boundary.
                 return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::PreviewProviderFailed));
             }
+        }
+
+        /** @brief Contains provider revision code at the same worker/lifetime boundary as generation. */
+        [[nodiscard]] static Result<std::optional<Sha256Digest>> CaptureRevision(
+            const std::shared_ptr<AssetPreviewHandle::Request> &pending, const std::span<const std::uint8_t> payload,
+            const CancellationToken &cancellation) {
+            try {
+                const auto path = pending->input.absoluteAssetPath.string();
+                auto revision = pending->input.provider->CaptureRevision({.editorPayload = payload,
+                                                                          .absoluteAssetPath = path,
+                                                                          .assetType = pending->input.assetType,
+                                                                          .width = pending->input.width,
+                                                                          .height = pending->input.height},
+                                                                         cancellation);
+                if (revision.HasValue() && pending->input.requiresRevision && !revision.Value())
+                    return Failure<std::optional<Sha256Digest>>(AssetErrors::PreviewProviderFailed,
+                                                                "Required preview revision unavailable.");
+                return revision;
+            } catch (...) {  // Provider extensions cannot escape the worker boundary.
+                return Failure<std::optional<Sha256Digest>>(AssetErrors::PreviewProviderFailed);
+            }
+        }
+
+        /** @brief Re-captures all provider authorities before either cached or generated image publication. */
+        [[nodiscard]] static Result<void> ValidateRevision(const std::shared_ptr<AssetPreviewHandle::Request> &pending,
+                                                           const std::span<const std::uint8_t> payload,
+                                                           const std::optional<Sha256Digest> expected,
+                                                           const CancellationToken &cancellation) {
+            if (!expected && !pending->input.requiresRevision)
+                return Result<void>::Success();
+            auto current = CaptureRevision(pending, payload, cancellation);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            if (current.Value() != expected)
+                return Failure<void>(AssetErrors::PreviewProviderFailed, "Preview revision changed before delivery.");
+            return Result<void>::Success();
         }
 
         JobSystem &jobs;

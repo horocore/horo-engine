@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Prefab/PrefabCompositionOrigin.h"
 #include "Horo/Prefab/PrefabDependencyGraph.h"
 
 #include <span>
@@ -17,14 +18,16 @@ namespace Horo::Prefab {
         Assets::AssetId asset;      /**< Exact source identity, never an input-vector position. */
         Sha256Digest digest;        /**< Digest of SerializeCanonical bytes, independent of the caller's claimed revision. */
         std::size_t encodedBytes{}; /**< Exact canonical wire length for bounded cache/admission accounting. */
+        [[nodiscard]] bool operator==(const PrefabCanonicalSourceCommitment &) const noexcept = default;
     };
 
     /** @brief Exact immutable source context captured for one root resolution. */
     struct PrefabResolutionRevision final {
-        Assets::AssetRegistryRevision registry;         /**< Asset Registry publication used for every lookup. */
-        PrefabSourceRevision rootSource;                /**< Root document revision used for expansion. */
-        std::vector<PrefabDependencyNode> dependencies; /**< Canonical reachable nodes, including the root; no paths. */
-        std::vector<PrefabDependencyEdge> edges;        /**< Canonical reachable semantic edges used by expansion. */
+        Assets::AssetRegistryRevision registry;                        /**< Asset Registry publication used for every lookup. */
+        PrefabSourceRevision rootSource;                               /**< Root document revision used for expansion. */
+        std::vector<PrefabDependencyNode> dependencies;                /**< Canonical reachable nodes, including the root; no paths. */
+        std::vector<PrefabDependencyEdge> edges;                       /**< Canonical reachable semantic edges used by expansion. */
+        std::vector<PrefabCanonicalSourceCommitment> canonicalSources; /**< Actual canonical bytes, independent of claimed revisions. */
 
         [[nodiscard]] bool operator==(const PrefabResolutionRevision &) const noexcept = default;
     };
@@ -37,6 +40,7 @@ namespace Horo::Prefab {
         PrefabObjectNode object;                       /**< Owned authored object data; contains no source path. */
         Math::Transform effectiveLocalTransform;       /**< Placement-adjusted transform used by Scene conversion. */
         Math::Transform placementTransform; /**< Exact mount TRS applied to a nested root; identity for ordinary source objects. */
+        std::vector<PrefabCompositionOriginStep> originChain; /**< Bounded actual application lineage, independent of paths/labels. */
 
         [[nodiscard]] bool operator==(const ResolvedPrefabObject &) const noexcept = default;
     };

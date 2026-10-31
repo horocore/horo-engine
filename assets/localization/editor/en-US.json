@@ -4291,6 +4291,19 @@
     "settings.prefab.draft_updated": {"text": "Policy draft updated. Save to use it for new operations."},
     "settings.prefab.reloaded": {"text": "Project policy reloaded."},
     "settings.prefab.discarded": {"text": "Unsaved policy edits discarded."},
-    "settings.prefab.save_first": {"text": "Save or discard the project prefab policy before applying user preferences."}
+    "settings.prefab.save_first": {"text": "Save or discard the project prefab policy before applying user preferences."},
+    "workspace.prefab.diff.origin.source": {"text": "Source value"},
+    "workspace.prefab.diff.origin.variant": {"text": "Variant inheritance"},
+    "workspace.prefab.diff.origin.nested": {"text": "Nested prefab"},
+    "workspace.prefab.diff.origin.instance": {"text": "Scene instance override"},
+    "workspace.prefab.diff.source_value": {"text": "Source"},
+    "workspace.prefab.diff.effective_value": {"text": "Effective value / intent"},
+    "workspace.prefab.diff.schema_default": {"text": "Schema default (inspection only)"},
+    "workspace.prefab.diff.conflict": {"text": "Conflicting intent retained"},
+    "workspace.prefab.diff.orphan": {"text": "Orphaned intent retained"},
+    "workspace.prefab.diff.unavailable": {"text": "Typed properties unavailable; opaque source retained"},
+    "workspace.prefab.diff.omitted": {"text": "Additional values omitted by inspection budget"},
+    "workspace.prefab.diff.component_added": {"text": "Component added by instance"},
+    "workspace.prefab.diff.component_removed": {"text": "Component removed by instance"}
   }
 }

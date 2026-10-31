@@ -4746,6 +4746,7 @@ target_include_directories(HoroAssetProviderTests PRIVATE
 target_link_libraries(HoroAssetProviderTests PRIVATE HoroEngine::Assets)
 add_executable(HoroAssetPreviewServiceTests
         unit/runtime/assets/AssetPreviewServiceTests.cpp
+        unit/runtime/assets/AssetPreviewRevisionTests.cpp
 )
 target_compile_features(HoroAssetPreviewServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetPreviewServiceTests PRIVATE HoroEngine::Assets)

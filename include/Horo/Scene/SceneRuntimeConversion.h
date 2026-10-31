@@ -7,6 +7,7 @@
 #include "Horo/Prefab/PrefabExpansionCache.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Prefab/PrefabValueOverrides.h"
+#include "Horo/Prefab/PrefabValueSnapshot.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "Horo/Scene/SceneSource.h"
 
@@ -27,10 +28,11 @@ namespace Horo::SceneSource {
         ScenePrefabInstance authored;
         std::optional<Prefab::EffectivePrefabCandidate> expanded;
         std::optional<Error> failure;
-        std::optional<Prefab::PrefabValueOverrideSet> rebasedValues; /**< Repairable rebase evidence, never runtime component data. */
-        std::vector<Prefab::PrefabValueProvenance> valueProvenance;  /**< Owned source/default/instance inspection. */
-        Sha256Digest schemaRevision;                                 /**< Exact copied schema context used for value resolution. */
-        bool stale{false}; /**< Retained expansion requires explicit re-resolution before publication. */
+        std::optional<Prefab::PrefabValueOverrideSet> rebasedValues;      /**< Repairable rebase evidence, never runtime component data. */
+        std::shared_ptr<const Prefab::PrefabValueSnapshot> valueSnapshot; /**< Bounded immutable value/default/diff/origin inspection. */
+        std::optional<Error> valueInspectionFailure; /**< Read-only inspection failure never rejects an otherwise valid source expansion. */
+        Sha256Digest schemaRevision;                 /**< Exact copied schema context used for value resolution. */
+        bool stale{false};                           /**< Retained expansion requires explicit re-resolution before publication. */
         std::optional<Prefab::PrefabDebugSnapshot> debugSnapshot; /**< Bounded detached inspection captured during preparation. */
         std::optional<Error> debugCaptureFailure; /**< Inspection failure never changes canonical expansion/publication success. */
         bool debugCaptureOmitted{false};          /**< Shared scene inspection row budget exhausted before this placement. */

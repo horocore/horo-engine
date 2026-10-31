@@ -155,7 +155,8 @@ namespace Horo::Prefab {
                     return Return::Failure(MakeError(PrefabErrors::Cancelled));
                 if (!ValidTarget(value.target, policy.Policy()) || !value.sourcePrefab.IsValid() || !MatchesObject(value, candidate) ||
                     (value.origin != PrefabValueOrigin::Source && value.origin != PrefabValueOrigin::Inherited &&
-                     value.origin != PrefabValueOrigin::Instance))
+                     value.origin != PrefabValueOrigin::Instance && value.origin != PrefabValueOrigin::Variant &&
+                     value.origin != PrefabValueOrigin::Nested))
                     return Return::Failure(MakeError(PrefabErrors::DiagnosticInvalid));
                 result.values_.push_back({value.target, value.origin, value.sourcePrefab});
             }

@@ -4291,6 +4291,19 @@
     "settings.prefab.draft_updated": {"text": "İlke taslağı güncellendi. Yeni işlemlerde kullanmak için kaydedin."},
     "settings.prefab.reloaded": {"text": "Proje ilkesi yeniden yüklendi."},
     "settings.prefab.discarded": {"text": "Kaydedilmemiş ilke düzenlemeleri bırakıldı."},
-    "settings.prefab.save_first": {"text": "Kullanıcı tercihlerini uygulamadan önce proje prefab ilkesini kaydedin veya bırakın."}
+    "settings.prefab.save_first": {"text": "Kullanıcı tercihlerini uygulamadan önce proje prefab ilkesini kaydedin veya bırakın."},
+    "workspace.prefab.diff.origin.source": {"text": "Kaynak değeri"},
+    "workspace.prefab.diff.origin.variant": {"text": "Varyant mirası"},
+    "workspace.prefab.diff.origin.nested": {"text": "İç içe prefab"},
+    "workspace.prefab.diff.origin.instance": {"text": "Sahne örneği geçersiz kılması"},
+    "workspace.prefab.diff.source_value": {"text": "Kaynak"},
+    "workspace.prefab.diff.effective_value": {"text": "Etkin değer / amaç"},
+    "workspace.prefab.diff.schema_default": {"text": "Şema varsayılanı (yalnızca inceleme)"},
+    "workspace.prefab.diff.conflict": {"text": "Çakışan amaç korundu"},
+    "workspace.prefab.diff.orphan": {"text": "Sahipsiz amaç korundu"},
+    "workspace.prefab.diff.unavailable": {"text": "Türlü özellikler kullanılamıyor; opak kaynak korundu"},
+    "workspace.prefab.diff.omitted": {"text": "Ek değerler inceleme bütçesi nedeniyle gösterilmiyor"},
+    "workspace.prefab.diff.component_added": {"text": "Örnek tarafından bileşen eklendi"},
+    "workspace.prefab.diff.component_removed": {"text": "Örnek tarafından bileşen kaldırıldı"}
   }
 }

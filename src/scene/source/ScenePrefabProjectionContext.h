@@ -15,6 +15,8 @@ namespace Horo::SceneSource::Detail {
     struct ScenePrefabDebugCaptureBudget final {
         std::size_t remainingEntries{Prefab::PrefabDebugCaptureLimits::MaximumEntries};
         std::size_t remainingSnapshots{64};
+        std::size_t remainingValueEntries{4096};
+        std::size_t remainingValueBytes{4 * 1024 * 1024};
     };
 
     /** @brief Apply instance values only after source-cache resolution; retain unresolved authoring evidence. */

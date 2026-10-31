@@ -16,6 +16,7 @@
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorldStreamingPreviewRuntime.h"
+#include "Horo/Foundation/Sha256.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -652,6 +653,7 @@ namespace Horo::Editor {
 
         std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;
         std::uint64_t m_contentBrowserPreviewGeneration{};
+        Sha256Digest m_contentBrowserPreviewSchemaRevision;
         std::size_t m_contentBrowserNextPreviewEntry{};
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_pcgAutosaveElapsedSeconds{};

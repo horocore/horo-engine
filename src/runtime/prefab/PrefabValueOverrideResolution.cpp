@@ -187,7 +187,9 @@ namespace Horo::Prefab {
                 auto next = std::move(state.rebased);
                 RemoveTarget(next, edit.target);
                 if (edit.kind == PrefabValueEditKind::Assign) {
-                    const auto binding = std::ranges::find(state.provenance, edit.target, &PrefabValueProvenance::target);
+                    const auto binding = std::ranges::find_if(state.provenance, [&](const auto &value) {
+                        return value.disposition == PrefabValueDisposition::Present && value.target == edit.target;
+                    });
                     if (binding == state.provenance.end())
                         return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::OverrideOrphan));
                     const auto *property = std::get_if<PrefabPropertyAddress>(&edit.target);
