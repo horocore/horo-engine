@@ -110,3 +110,9 @@ Result<std::unique_ptr<IResidentMaterialBinding>> VulkanResourceRuntime::Realize
                                                                                          std::span<const MaterialResidentResource> r) {
     return shaders_.RealizeResolved(d, id, r);
 }
+
+/** @copydoc VulkanResourceRuntime::ValidateVfxMaterial */
+Result<void> VulkanResourceRuntime::ValidateVfxMaterial(const VulkanPreparedMaterialBinding &material,
+                                                        const MaterialBindingLayout &layout) const {
+    return shaders_.ValidateVfxMaterial(material, material.pipelineIdentity, layout);
+}

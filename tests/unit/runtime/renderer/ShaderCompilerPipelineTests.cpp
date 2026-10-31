@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Render/ShaderCompilerPipeline.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/ShaderManifestErrors.h"
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "ShaderCompilerPipelineTestFixture.h"
 #include "support/TypedIdentityTestSupport.h"
 
@@ -12,6 +13,10 @@
 #include <span>
 #include <stdexcept>
 #include <utility>
+
+static_assert(static_cast<std::uint8_t>(Horo::Render::ShaderIntermediateEnvironment::None) == 0);
+static_assert(static_cast<std::uint8_t>(Horo::Render::ShaderIntermediateEnvironment::Vulkan13SpirV16) == 1);
+static_assert(static_cast<std::uint8_t>(Horo::Render::ShaderIntermediateEnvironment::Vulkan12SpirV15) == 2);
 
 namespace {
     using namespace Horo;
@@ -401,4 +406,60 @@ TEST_CASE("Compiler bounds and validates logical reflection requests before invo
     RecordingAdapter adapter;
     CHECK(CompileShaderTargets(request, adapter, {}).HasError());
     CHECK(adapter.keys.empty());
+}
+
+TEST_CASE("Explicit legacy GL intermediate changes artifact identity without changing other backend routes",
+          "[runtime][renderer][shader-compiler]") {
+    auto canonical = ValidRequest();
+    RecordingAdapter firstAdapter;
+    const auto first = CompileShaderTargets(canonical, firstAdapter, {});
+    REQUIRE(first.HasValue());
+    canonical.targets[1].intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan12SpirV15;
+    RecordingAdapter secondAdapter;
+    const auto second = CompileShaderTargets(canonical, secondAdapter, {});
+    REQUIRE(second.HasValue());
+    REQUIRE(first.Value().artifacts.size() == second.Value().artifacts.size());
+    for (std::size_t index = 0; index < first.Value().artifacts.size(); ++index) {
+        if (index == 1)
+            CHECK(first.Value().artifacts[index].artifactKey != second.Value().artifacts[index].artifactKey);
+        else
+            CHECK(first.Value().artifacts[index].artifactKey == second.Value().artifacts[index].artifactKey);
+    }
+}
+
+TEST_CASE("Legacy SPIR-V environment cannot silently replace Vulkan Metal Null or D3D profiles", "[runtime][renderer][shader-compiler]") {
+    for (const std::size_t index : {0U, 2U, 3U, 4U}) {
+        DYNAMIC_SECTION("Target " << index) {
+            auto request = ValidRequest();
+            request.targets[index].intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan12SpirV15;
+            RecordingAdapter adapter;
+            RequireError(CompileShaderTargets(request, adapter, {}), ShaderCompilerPipelineErrors::UnsupportedTarget);
+            CHECK(adapter.keys.empty());
+        }
+    }
+}
+
+TEST_CASE("VFX GL and Metal cook revisions exclude prior incompatible metadata", "[runtime][renderer][shader-compiler][vfx]") {
+    for (const std::size_t index : {1U, 3U}) {
+        DYNAMIC_SECTION("Backend target " << index) {
+            auto request = ValidRequest();
+            request.targets = {request.targets[index]};
+            if (index == 1)
+                request.targets.front().intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan12SpirV15;
+            request.manifest = MakeVfxShaderManifest(request.targets.front().requirement);
+            REQUIRE(request.manifest.sourceRevision == 3);
+            RecordingAdapter currentAdapter;
+            const auto current = CompileShaderTargets(request, currentAdapter, {});
+            REQUIRE(current.HasValue());
+            request.manifest.sourceRevision = 2;
+            RecordingAdapter previousAdapter;
+            const auto previous = CompileShaderTargets(request, previousAdapter, {});
+            REQUIRE(previous.HasValue());
+            REQUIRE(current.Value().artifacts.size() == 1);
+            REQUIRE(previous.Value().artifacts.size() == 1);
+            CHECK(current.Value().artifacts.front().artifactKey != previous.Value().artifacts.front().artifactKey);
+        }
+    }
+    auto target = ValidRequest().targets[2].requirement;
+    CHECK(MakeVfxShaderManifest(target).sourceRevision == 2);
 }

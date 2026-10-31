@@ -1,6 +1,8 @@
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLExecutionAdapter.h"
 #include "OpenGLGraphWorkloads.h"
@@ -79,6 +81,8 @@ namespace Horo::Render {
             switch (format) {
                 case Rgba8Unorm:
                     return {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE};
+                case Rgba16Float:
+                    return {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT};
                 case Depth24Stencil8:
                     return {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8};
                 case Depth32Float:
@@ -90,7 +94,6 @@ namespace Horo::Render {
                 case Bgra8UnormSrgb:
                 case R16Float:
                 case Rg16Float:
-                case Rgba16Float:
                 case R32Float:
                 case Rg32Float:
                 case Rgba32Float:
@@ -114,7 +117,7 @@ namespace Horo::Render {
         [[nodiscard]] bool AspectMatches(const RenderTextureFormat format, const RenderTextureAspect aspect) noexcept {
             using enum RenderTextureAspect;
             using enum RenderTextureFormat;
-            if (format == Rgba8Unorm)
+            if (format == Rgba8Unorm || format == Rgba16Float)
                 return aspect == Color;
             if (format == Depth24Stencil8)
                 return aspect == Depth || aspect == DepthStencil;
@@ -228,6 +231,9 @@ namespace Horo::Render {
                     return Result<FrameToken>::Failure(
                         MakeError(OpenGLBackendErrors::FrameAlreadyActive, "A renderer frame is already active."));
                 }
+                if (vfxPublicationActive_)
+                    return Result<FrameToken>::Failure(
+                        MakeError(OpenGLBackendErrors::FrameBackpressure, "A VFX uniform publication owns this context safe point."));
                 if (constexpr auto maxViewportExtent = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
                     descriptor.frameNumber == 0 || !descriptor.outputExtent.IsValid() ||
                     descriptor.outputExtent.width > maxViewportExtent || descriptor.outputExtent.height > maxViewportExtent) {
@@ -271,6 +277,7 @@ namespace Horo::Render {
 
 #include "OpenGLRenderBackendGraph.inl"
 #include "OpenGLRenderBackendMaterial.inl"
+#include "OpenGLRenderBackendVfx.inl"
 
             /** @copydoc IRenderBackend::Present */
             Result<void> Present(const FrameToken frame) override {
@@ -305,6 +312,13 @@ namespace Horo::Render {
             void AbortActiveFrame() noexcept override {
                 if (!IsOwnerThread())
                     return;
+                if (vfxPublicationActive_) {
+                    // A callback can cancel the frontend while the native adapter still enqueues this frame.
+                    // Keep its frame slot and lease until the synchronous borrow returns before fencing.
+                    vfxAbortDeferred_ = vfxAbortDeferred_ || frameActive_;
+                    return;
+                }
+                vfxAbortDeferred_ = false;
                 if (frameActive_)
                     static_cast<void>(execution_.FenceFrame(activeFrameSlot_));
                 CompleteActiveFrame();
@@ -360,6 +374,12 @@ namespace Horo::Render {
                     return Result<void>::Success();
                 closing_ = true;
                 initialized_ = false;
+                if (vfxPublicationActive_) {
+                    // The borrowed native call may still enqueue commands after its callback returns.
+                    // Its closing fence must be inserted after that call, never inside this callback.
+                    vfxShutdownDeferred_ = true;
+                    return Result<void>::Success();
+                }
                 if (!contextCreated_)
                     return Result<void>::Success();
                 if (const auto current = presentationPort_->MakeCurrent(); current.HasError())
@@ -372,6 +392,7 @@ namespace Horo::Render {
                         return SynchronizationFailure<void>();
                     functions_.sync.flush();
                 }
+                vfxShutdownDeferred_ = false;
                 return Result<void>::Success();
             }
 
@@ -385,6 +406,14 @@ namespace Horo::Render {
                 if (!closing_)
                     return DrainResult::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan,
                                                           "BeginShutdown must close the OpenGL owner before drain polling."));
+                // A synchronous VFX adapter call still borrows prepared material and resource metadata.
+                // Closing revokes publication immediately; destructive drain follows return from that borrow.
+                if (vfxPublicationActive_)
+                    return DrainResult::Success(RenderBackendDrainProgress::Pending);
+                if (vfxShutdownDeferred_) {
+                    if (const auto begun = BeginShutdown(); begun.HasError())
+                        return DrainResult::Failure(begun.ErrorValue());
+                }
                 if (contextCreated_) {
                     if (const auto current = presentationPort_->MakeCurrent(); current.HasError())
                         return DrainResult::Failure(current.ErrorValue());
@@ -505,6 +534,13 @@ namespace Horo::Render {
                 nativeLifetimeCursor_ = {};
             }
 
+            /** @brief Ends the existing native borrow before honoring a callback-requested frame abort. */
+            void ReleaseVfxNativeBorrow() noexcept {
+                vfxPublicationActive_ = false;
+                if (vfxAbortDeferred_)
+                    AbortActiveFrame();
+            }
+
             void CompleteActiveFrame() noexcept {
                 frameActive_ = false;
                 activeFrame_ = {};
@@ -560,6 +596,9 @@ namespace Horo::Render {
                 capabilities_.supportsMeshResources = resourcesAvailable && contextFacts_.maxVertexAttributes > 0;
                 capabilities_.supportsTextureResources = resourcesAvailable && contextFacts_.maxTexture2DSize > 0;
                 capabilities_.supportsRenderTargetResources = resourcesAvailable && contextFacts_.maxColorAttachments > 0;
+                if (capabilities_.supportsExactTransientResourceReuse && functions_.buffers.bufferSubData && functions_.shaders.IsValid() &&
+                    functions_.materials.IsValid() && functions_.materialExecution.IsValid() && functions_.materialExecution.isAvailable())
+                    capabilities_.support.features.Enable(RenderCapability::VfxForwardInstancing);
                 return Result<void>::Success();
             }
 
@@ -727,6 +766,9 @@ namespace Horo::Render {
             bool contextCreated_{false};
             bool ownsContextLease_{false};
             bool frameActive_{false};
+            bool vfxPublicationActive_{false};
+            bool vfxAbortDeferred_{false};    /**< Owner-thread abort waits for the existing synchronous native borrow. */
+            bool vfxShutdownDeferred_{false}; /**< Existing shutdown resumes only after its synchronous native borrow returns. */
             bool closing_{false};
             bool drained_{false};
             std::uintptr_t closingFence_{};

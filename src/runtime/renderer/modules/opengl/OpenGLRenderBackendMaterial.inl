@@ -27,7 +27,7 @@ Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) 
         const auto mesh = prepared_.meshDescriptors.find(static_cast<std::uint32_t>(draw.mesh));
         const auto program = prepared_.graphicsPipelines.find(material->program);
         if (mesh == prepared_.meshDescriptors.end() || program == prepared_.graphicsPipelines.end() ||
-            mesh->second.indexCount > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
+            mesh->second.descriptor.indexCount > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
             program->second.state.colorFormat != target->second.colorFormat ||
             program->second.state.depthFormat != target->second.depthFormat ||
             program->second.state.sampleCount != target->second.sampleCount)
@@ -48,8 +48,8 @@ Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) 
         }
         commands[index] = {material->program,
                            mesh->first,
-                           mesh->second.indexCount,
-                           mesh->second.indexFormat,
+                           mesh->second.descriptor.indexCount,
+                           mesh->second.descriptor.indexFormat,
                            program->second.state,
                            program->second.features,
                            std::span{material->slots}.first(material->count)};
@@ -60,6 +60,13 @@ Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) 
     if (!execution_.RetainFrameLease(activeFrameSlot_, *request.lease))
         return SynchronizationFailure<void>();
     request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
+    // Record every canonical material use, including a non-VFX consumer of a reusable uniform generation.
+    // The existing frame fence covers partial encoding and abort; an update never relies on CPU lease counts.
+    for (const auto &command : std::span{commands}.first(request.draws.size()))
+        for (const auto &slot : command.slots)
+            if (slot.kind == MaterialResidentResourceKind::Buffer)
+                if (auto use = prepared_.uniformFrameUses.find(slot.object); use != prepared_.uniformFrameUses.end())
+                    use->second.frames |= static_cast<std::uint8_t>(1U << activeFrameSlot_);
     const auto encoded = functions_.materialExecution.execute(request, std::span{commands}.first(request.draws.size()));
     if (encoded.HasError())
         AbortActiveFrame();

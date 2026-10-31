@@ -110,6 +110,8 @@ namespace Horo::Render::Detail {
         };
 
         __strong id<MTLDevice> device{nil};
+        __strong MTLRenderPassDescriptor *vfxPass{[MTLRenderPassDescriptor renderPassDescriptor]};
+        std::uint64_t deviceIncarnation{};
         std::shared_ptr<const MetalLightKernelOwnerIdentity> lightKernelOwner{std::make_shared<const MetalLightKernelOwnerIdentity>()};
         std::shared_ptr<const MetalUiPaintOwnerIdentity> uiPaintKernelOwner{std::make_shared<const MetalUiPaintOwnerIdentity>()};
         std::uint64_t lightKernelIncarnation{0}; /**< Monotonic runtime admission generation; old cooked leases cannot cross reset. */
@@ -131,6 +133,12 @@ namespace Horo::Render::Detail {
         /** @brief Resolves one already-admitted resource without allocating native backing or publishing a partial table. */
         [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialResource(ShaderResourceKind kind, const MaterialResidentResource &resident,
                                                                         std::size_t requiredBufferBytes) const;
+        /** @brief Resolves only a graph-pinned native target whose views match the declared whole attachments. */
+        [[nodiscard]] Result<MetalRenderTargetInstance *> VfxTarget(const RenderGraphVfx &workload,
+                                                                    const RenderGraphExecutionRequest &request) const;
+        /** @brief Validates the canonical material and mesh against the exact native uniform publication and graph identities. */
+        [[nodiscard]] Result<void> VfxDraw(const RenderGraphVfx &workload, const VfxPreparedDraw &draw,
+                                           const RenderGraphExecutionRequest &request, const MetalRenderTargetInstance &target) const;
 
         [[nodiscard]] BackingKey Key(const RenderMemoryPoolId pool, const RenderMemoryBlockId block) const noexcept {
             return {.renderer = pool.renderer.value, .pool = pool.value, .block = block.value};

@@ -2,6 +2,7 @@
 
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "ShaderCompilerToolchainSupport.h"
 
 #include <algorithm>
@@ -47,6 +48,10 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     return Failure(ShaderCompilerPipelineErrors::ToolMissing);
 
                 try {
+                    const auto admitted = AdmitRasterCookInterface(invocation_);
+                    if (admitted.HasError())
+                        return Result<ShaderCompilerAdapterOutput>::Failure(admitted.ErrorValue());
+                    vfxInterface_ = admitted.Value();
                     payloadStages_.reserve(invocation_.manifest.entryPoints.size());
                     debugStages_.reserve(invocation_.manifest.entryPoints.size());
                 } catch (const std::bad_alloc &) {
@@ -244,7 +249,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     arguments.emplace_back(std::format("{}={}", define.name, define.value));
                 }
                 if (spirv)
-                    arguments.insert(arguments.end(), {"-spirv", "-fspv-target-env=vulkan1.3", "-fvk-use-gl-layout"});
+                    arguments.insert(arguments.end(),
+                                     {"-spirv", "-fspv-target-env=" + std::string{IntermediateEnvironment()}, "-fvk-use-gl-layout"});
                 arguments.insert(arguments.end(), {"-Fo", output.string(), sourcePath_.string()});
                 return arguments;
             }
@@ -259,7 +265,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 const ShaderCompilerToolInstallation *validator = Lookup(ShaderCompilerTool::SpirvTools);
                 if (validator == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                if (auto validated = Run(*validator, {"--target-env", "vulkan1.3", spirvPath.string()},
+                if (auto validated = Run(*validator, {"--target-env", std::string{IntermediateEnvironment()}, spirvPath.string()},
                                          ShaderCompilerPhase::IntermediateValidation, entry);
                     validated.HasError())
                     return validated;
@@ -309,18 +315,14 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 const ShaderCompilerToolInstallation *translator = Lookup(ShaderCompilerTool::SpirvCross);
                 if (translator == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                std::vector<std::string> arguments{spirvPath.string(),
-                                                   "--output",
-                                                   nativePath.string(),
-                                                   "--entry",
-                                                   entry.name,
-                                                   "--stage",
-                                                   std::string{StageName(entry.stage)}};
-                if (metal)
-                    arguments.insert(arguments.end(), {"--msl", "--msl-version", "20400"});
-                else
-                    arguments.insert(arguments.end(), {"--version", "410", "--no-es", "--no-420pack-extension"});
+                auto arguments = RasterTranslationArguments(entry, spirvPath, nativePath, metal, vfxInterface_);
                 return Run(*translator, std::move(arguments), ShaderCompilerPhase::Translation, entry);
+            }
+
+            /** @brief Uses the explicit descriptor for compilation, validation and debug output without changing other routes. */
+            [[nodiscard]] std::string_view IntermediateEnvironment() const noexcept {
+                return invocation_.target.intermediateEnvironment == ShaderIntermediateEnvironment::Vulkan12SpirV15 ? "vulkan1.2"
+                                                                                                                    : "vulkan1.3";
             }
 
             [[nodiscard]] Result<void> CompileOpenGLRoute(const ShaderEntryPoint &entry, const std::string &stem,
@@ -328,6 +330,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 const std::filesystem::path nativePath = scratch_ / (stem + ".native");
                 if (auto translated = TranslateSpirv(entry, spirvPath, nativePath, false); translated.HasError())
                     return translated;
+                if (auto captured = CaptureNativeReflection(entry, stem, spirvPath, nativePath); captured.HasError())
+                    return captured;
                 if (auto native = ReadValidatedPayload(nativePath, invocation_.limits.maximumPayloadBytes, IsGlsl410); native.HasError()) {
                     return Result<void>::Failure(std::move(native).ErrorValue());
                 } else {
@@ -336,14 +340,17 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 return Result<void>::Success();
             }
 
-            /** @brief Captures actual locked Cross reflection and MSL from the same stage translation before native compilation. */
-            [[nodiscard]] Result<void> CaptureMetalReflection(const ShaderEntryPoint &entry, const std::string &stem,
-                                                              const std::filesystem::path &spirvPath,
-                                                              const std::filesystem::path &nativePath) {
+            /** @brief Captures actual locked Cross reflection and native source from the same stage translation before native compilation.
+             */
+            [[nodiscard]] Result<void> CaptureNativeReflection(const ShaderEntryPoint &entry, const std::string &stem,
+                                                               const std::filesystem::path &spirvPath,
+                                                               const std::filesystem::path &nativePath) {
                 if (!invocation_.reflection)
                     return Result<void>::Success();
                 const auto *cross = Lookup(ShaderCompilerTool::SpirvCross);
-                if (const auto valid = ValidateUiPaintMetalReflection(*invocation_.reflection, cross); valid.HasError())
+                if (const auto valid =
+                        ValidateRasterReflection(invocation_.manifest, invocation_.target.requirement, *invocation_.reflection, cross);
+                    valid.HasError())
                     return valid;
                 const auto reflectionPath = scratch_ / (stem + ".reflection.json");
                 if (auto reflected = Run(*cross, {spirvPath.string(), "--reflect", "--output", reflectionPath.string()},
@@ -351,13 +358,13 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     reflected.HasError())
                     return reflected;
                 auto json = ReadBoundedFile(reflectionPath, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                auto msl = ReadBoundedFile(nativePath, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                auto nativeSource = ReadBoundedFile(nativePath, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
                 if (json.HasError())
                     return Result<void>::Failure(json.ErrorValue());
-                if (msl.HasError())
-                    return Result<void>::Failure(msl.ErrorValue());
+                if (nativeSource.HasError())
+                    return Result<void>::Failure(nativeSource.ErrorValue());
                 reflectionStages_.push_back({entry.stage, entry.name, {json.Value().begin(), json.Value().end()}});
-                translations_.emplace_back(msl.Value().begin(), msl.Value().end());
+                translations_.emplace_back(nativeSource.Value().begin(), nativeSource.Value().end());
                 return Result<void>::Success();
             }
 
@@ -373,7 +380,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                   ShaderCompilerPipelineErrors::ToolOutputInvalid);
                     native.HasError())
                     return Result<void>::Failure(std::move(native).ErrorValue());
-                if (auto reflected = CaptureMetalReflection(entry, stem, spirvPath, nativePath); reflected.HasError())
+                if (auto reflected = CaptureNativeReflection(entry, stem, spirvPath, nativePath); reflected.HasError())
                     return reflected;
                 const std::filesystem::path airPath = scratch_ / (stem + ".air");
                 if (auto compiled = Run(*metal,
@@ -483,9 +490,9 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 }
                 ShaderCompilerAdapterOutput output{invocation_.target.requirement.backend, invocation_.target.requirement.payloadFormat,
                                                    std::move(payload).Value(), std::move(debugPayload), std::move(diagnostics_)};
-                if (invocation_.reflection && output.backend == ShaderTargetBackend::Metal) {
-                    auto reflected = NormalizeUiPaintMetalReflection(invocation_.manifest, invocation_.target.requirement,
-                                                                     reflectionStages_, translations_);
+                if (invocation_.reflection &&
+                    (output.backend == ShaderTargetBackend::Metal || output.backend == ShaderTargetBackend::OpenGL)) {
+                    auto reflected = NormalizeCapturedRasterReflection(invocation_, reflectionStages_, translations_);
                     if (reflected.HasError())
                         return Result<ShaderCompilerAdapterOutput>::Failure(reflected.ErrorValue());
                     CompiledShaderArtifact compiled{output.backend,
@@ -506,6 +513,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             const ShaderCompilerToolchainConfiguration &configuration_;
             IExternalProcessRunner &processes_;
             const ShaderCompilerInvocation &invocation_;
+            bool vfxInterface_{false};
             const CancellationToken &cancellation_;
             const std::filesystem::path &scratch_;
             const std::filesystem::path &sourcePath_;

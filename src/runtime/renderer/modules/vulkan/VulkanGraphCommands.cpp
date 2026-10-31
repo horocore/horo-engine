@@ -27,36 +27,42 @@ namespace Horo::Render::Detail {
 
 #include "VulkanGraphDepthAttachment.inl"
 
+    /** @copydoc VulkanGraphRuntime::Impl::ValidateBufferCopy */
+    Result<void> VulkanGraphRuntime::Impl::ValidateBufferCopy(const RenderGraphBufferCopy &copy) {
+        const auto &source = bindings[copy.source.value - 1];
+        const auto &destination = bindings[copy.destination.value - 1];
+        if (const auto fits =
+                [](const std::size_t offset, const std::size_t count, const std::size_t size) {
+            return offset <= size && count <= size - offset;
+        };
+            source.kind != RenderGraphResourceKind::Buffer || destination.kind != RenderGraphResourceKind::Buffer ||
+            source.buffer == VK_NULL_HANDLE || destination.buffer == VK_NULL_HANDLE || source.buffer == destination.buffer ||
+            copy.byteCount == 0 || !HasBufferUsage(source.bufferDescriptor.usage, RenderBufferUsage::CopySource) ||
+            !HasBufferUsage(destination.bufferDescriptor.usage, RenderBufferUsage::CopyDestination) ||
+            !fits(copy.sourceOffset, copy.byteCount, source.bufferDescriptor.byteSize) ||
+            !fits(copy.destinationOffset, copy.byteCount, destination.bufferDescriptor.byteSize))
+            return Result<void>::Failure(Invalid("Buffer copy differs from native buffer identity, usage or checked byte bounds."));
+        if (!states[copy.source.value - 1].contentsDefined)
+            return Result<void>::Failure(Invalid("Buffer copy source contents are not defined."));
+        if (copy.destinationOffset == 0 && copy.byteCount == destination.bufferDescriptor.byteSize)
+            states[copy.destination.value - 1].contentsDefined = true;
+        return Result<void>::Success();
+    }
+
     /** @brief Validates native descriptor roles and contents before recording; unsupported adjacent capabilities remain explicit. */
     Result<void> VulkanGraphRuntime::Impl::ValidateWorkload(const RenderGraphWorkload &workload, const RenderQueueId queue) {
         if (const auto *multiviewWork = std::get_if<RenderGraphMultiview>(&workload)) {
             PrepareMultiviewContents(*multiviewWork, bindings, states);
             return Result<void>::Success();
         }
+        if (std::holds_alternative<RenderGraphVfx>(workload))
+            return Result<void>::Success();  // Complete native scene admission is performed with the full request in PreparePass.
         if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
             return ValidateDepthAttachment(*depth, queue);
         if (std::holds_alternative<std::monostate>(workload))
             return Result<void>::Success();
-        if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
-            const auto &source = bindings[copy->source.value - 1];
-            const auto &destination = bindings[copy->destination.value - 1];
-            if (const auto fits =
-                    [](const std::size_t offset, const std::size_t count, const std::size_t size) {
-                return offset <= size && count <= size - offset;
-            };
-                source.kind != RenderGraphResourceKind::Buffer || destination.kind != RenderGraphResourceKind::Buffer ||
-                source.buffer == VK_NULL_HANDLE || destination.buffer == VK_NULL_HANDLE || source.buffer == destination.buffer ||
-                copy->byteCount == 0 || !HasBufferUsage(source.bufferDescriptor.usage, RenderBufferUsage::CopySource) ||
-                !HasBufferUsage(destination.bufferDescriptor.usage, RenderBufferUsage::CopyDestination) ||
-                !fits(copy->sourceOffset, copy->byteCount, source.bufferDescriptor.byteSize) ||
-                !fits(copy->destinationOffset, copy->byteCount, destination.bufferDescriptor.byteSize))
-                return Result<void>::Failure(Invalid("Buffer copy differs from native buffer identity, usage or checked byte bounds."));
-            if (!states[copy->source.value - 1].contentsDefined)
-                return Result<void>::Failure(Invalid("Buffer copy source contents are not defined."));
-            if (copy->destinationOffset == 0 && copy->byteCount == destination.bufferDescriptor.byteSize)
-                states[copy->destination.value - 1].contentsDefined = true;
-            return Result<void>::Success();
-        }
+        if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload))
+            return ValidateBufferCopy(*copy);
         if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
             const auto &binding = bindings[color->texture.value - 1];
             if (const auto *nativeQueue = Queue(queue); nativeQueue == nullptr || !nativeQueue->supportsGraphics ||
@@ -166,7 +172,10 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(std::move(buffer).ErrorValue());
             for (std::size_t pass = submission.passes.offset; pass < submission.passes.offset + submission.passes.count; ++pass) {
                 Barriers(buffer.Value(), passes[pass].before);
-                Encode(buffer.Value(), request.workloads[pass].workload);
+                if (std::holds_alternative<RenderGraphVfx>(request.workloads[pass].workload))
+                    EncodeVfx(buffer.Value(), pass);
+                else
+                    Encode(buffer.Value(), request.workloads[pass].workload);
                 Barriers(buffer.Value(), passes[pass].after);
             }
             if (auto finished = commands.Finish(submission.ticket); finished.HasError())

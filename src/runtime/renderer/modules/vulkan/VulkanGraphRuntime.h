@@ -54,6 +54,8 @@ namespace Horo::Render::Detail {
          * @param request Exact frame, offscreen target, immutable draws and explicit frontend submission/lease.
          * @return Success with synchronous lease transfer or typed validation/native recording failure. */
         [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request);
+        /** @brief Publishes an issued VFX block outside active recording, polling the sole native completion owner. */
+        [[nodiscard]] Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update);
         /** @brief Admits the existing GUI completion lease before any executor records native commands. */
         [[nodiscard]] Result<void> PrepareGuiComposition(const GuiCompositionRequest &request);
         /** @brief Records one GUI tail through this frame's sole submission/retention owner. */

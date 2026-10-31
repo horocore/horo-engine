@@ -93,14 +93,18 @@ namespace Horo::Render::Detail {
                     return Result<MetalDeviceCapabilities>::Failure(prepared.ErrorValue());
                 }
 
+                return InitializePreparedPresentation(descriptor, std::move(admitted).Value());
+            }
+
+            /** @brief Installs an admitted presentation and its exact native resource incarnation, rolling back every failure. */
+            Result<MetalDeviceCapabilities> InitializePreparedPresentation(const MetalPresentationDescriptor &descriptor,
+                                                                           MetalDeviceCapabilities capabilities) {
                 maxFramesInFlight_ = descriptor.maxFramesInFlight;
                 feedback_ = std::make_shared<MetalPresentationFeedback>();
                 ownerThread_ = std::this_thread::get_id();
                 submitted_.Initialize(maxFramesInFlight_);
                 MetalEditorGraphicsAccess::PublishPersistent(*editorGraphicsBridge_, (__bridge void *)device_,
                                                              (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
-                resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_);
-                auto capabilities = std::move(admitted).Value();
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError()) {
                     CloseUnsubmittedInitialization();
@@ -108,6 +112,8 @@ namespace Horo::Render::Detail {
                 }
                 capabilities.deviceIncarnation = incarnation.Value();
                 capabilities.implemented.support.deviceIncarnation = incarnation.Value();
+                deviceIncarnation_ = incarnation.Value();
+                resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_, deviceIncarnation_);
                 capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
                 if (SupportsMetalUiPaint(capabilities))
                     capabilities.implemented.support.features.Enable(RenderCapability::UiPaint);
@@ -139,6 +145,14 @@ namespace Horo::Render::Detail {
                     return Preparation::Failure(
                         MakeError(MetalBackendErrors::InvalidExecutionPlan, "UI pipeline realization requires a preparation safe point."));
                 return resources_.RealizeUiPaintKernel(kernel);
+            }
+
+            Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (closing_ || device_ == nil || commandBuffer_ != nil || update.deviceIncarnation != deviceIncarnation_)
+                    return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+                return resources_.UpdateVfxFrame(update);
             }
 
             Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
@@ -451,6 +465,21 @@ namespace Horo::Render::Detail {
                 [renderEncoder_ pushDebugGroup:@"Horo Primary Output"];
                 PublishFrame();
                 return Result<void>::Success();
+            }
+
+            Result<void> ValidateVfxWorkload(const RenderGraphVfx &workload, const RenderGraphExecutionRequest &request) const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (closing_ || commandBuffer_ == nil)
+                    return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+                return resources_.ValidateVfxWorkload(workload, request);
+            }
+
+            Result<void> ExecuteVfxWorkload(const RenderGraphVfx &workload, const RenderGraphExecutionRequest &request) override {
+                if (const auto valid = ValidateVfxWorkload(workload, request); valid.HasError())
+                    return valid;
+                EndPrimaryEncoder();
+                return resources_.ExecuteVfxWorkload((__bridge void *)commandBuffer_, workload, request);
             }
 
             Result<void> ValidateGraphWorkload(const RenderGraphWorkload &workload,
@@ -1049,6 +1078,7 @@ namespace Horo::Render::Detail {
             std::thread::id ownerThread_;
             std::uint32_t maxFramesInFlight_{0};
             MetalResourceRuntime resources_;
+            std::uint64_t deviceIncarnation_{};
             bool surfaceCreated_{false};
             bool closing_{false};
             bool drained_{false};

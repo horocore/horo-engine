@@ -1,10 +1,13 @@
 #include "OpenGLMaterialExecution.h"
 
+#include "Horo/Runtime/Render/VfxDrawData.h"
 #include "OpenGLRenderBackendErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <glad/gl.h>
+#include <string>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -179,7 +182,8 @@ namespace Horo::Render::Detail {
                     return;
                 glActiveTexture(GL_TEXTURE0 + slot.binding);
                 glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture.texture);
-                glGetIntegeri_v(GL_SAMPLER_BINDING, slot.binding, &texture.sampler);
+                // OpenGL 4.1 exposes this binding through the already-selected active texture unit.
+                glGetIntegerv(GL_SAMPLER_BINDING, &texture.sampler);
                 texture.used = true;
             }
 
@@ -333,9 +337,53 @@ namespace Horo::Render::Detail {
             return Result<OpenGLMaterialContextFeatures>::Success({drawBuffers, clips, fixedRestart.Value()});
         }
 
+        /** @brief Binds one already validated immutable command's exact native material resources. */
+        void BindMaterialDraw(const OpenGLMaterialDrawCommand &command) {
+            ApplyPipeline(command.state);
+            glUseProgram(command.program);
+            glBindVertexArray(command.vertexArray);
+            for (const auto &slot : command.slots) {
+                if (slot.kind == MaterialResidentResourceKind::Buffer)
+                    glBindBufferRange(GL_UNIFORM_BUFFER, slot.binding, slot.object, static_cast<GLintptr>(slot.offset),
+                                      static_cast<GLsizeiptr>(slot.byteCount));
+                else {
+                    glActiveTexture(GL_TEXTURE0 + slot.binding);
+                    glBindTexture(GL_TEXTURE_2D, slot.object);
+                    glBindSampler(slot.binding, slot.sampler);
+                }
+            }
+        }
+
+        /** @brief Submits the existing zero-base indexed draw without touching capture/restoration ownership. */
+        void SubmitMaterialDraw(const OpenGLMaterialDrawCommand &command) {
+            const GLenum indexType = command.indexFormat == RenderIndexFormat::UInt16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
+            if (command.instanceCount == 1)
+                glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(command.indexCount), indexType, nullptr);
+            else
+                glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(command.indexCount), indexType, nullptr,
+                                        static_cast<GLsizei>(command.instanceCount));
+        }
+
+        /** @brief Retains the first native failure while every later capture still consumes its own GL error exactly once. */
+        struct MaterialExecutionFailure final {
+            GLenum nativeError{GL_NO_ERROR};
+            const char *stage{"none"};
+
+            bool Capture(const char *currentStage) noexcept {
+                const auto error = glGetError();
+                if (error != GL_NO_ERROR && nativeError == GL_NO_ERROR) {
+                    nativeError = error;
+                    stage = currentStage;
+                }
+                return error != GL_NO_ERROR;
+            }
+        };
+
         /** @brief Encodes bounded indexed draws under allocation-free restoration; no compilation, waits or resource allocation occur. */
         Result<void> Execute(const RenderMaterialExecutionRequest &request, const std::span<const OpenGLMaterialDrawCommand> commands) {
-            if (glGetError() != GL_NO_ERROR || commands.empty())
+            if (glGetError() != GL_NO_ERROR || commands.empty() || std::ranges::any_of(commands, [](const auto &draw) {
+                return draw.instanceCount == 0 || draw.instanceCount > MaximumVfxDrawInstances;
+            }))
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
             const auto features = commands.front().features;
             if (!features.IsValid())
@@ -346,42 +394,35 @@ namespace Horo::Render::Detail {
             glGetBooleanv(GL_TRANSFORM_FEEDBACK_BUFFER_PAUSED, &paused);
             if (feedback && !paused)
                 return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
-            bool failed = false;
+            MaterialExecutionFailure failure;
+            bool failed = failure.Capture("transform feedback inspection");
             {
                 MaterialState state{static_cast<GLuint>(request.target), features.drawBuffers, features.clipDistances,
                                     features.fixedIndexRestart};
                 state.Capture(commands);
-                failed = glGetError() != GL_NO_ERROR;
-                if (!failed)
+                failed = failure.Capture("caller state capture") || failed;
+                if (!failed) {
                     state.Apply(request);
+                    failed = failure.Capture("attachment and raster setup");
+                }
                 for (const auto &command : commands) {
                     if (failed)
                         break;
-                    ApplyPipeline(command.state);
-                    glUseProgram(command.program);
-                    glBindVertexArray(command.vertexArray);
-                    for (const auto &slot : command.slots) {
-                        if (slot.kind == MaterialResidentResourceKind::Buffer)
-                            glBindBufferRange(GL_UNIFORM_BUFFER, slot.binding, slot.object, static_cast<GLintptr>(slot.offset),
-                                              static_cast<GLsizeiptr>(slot.byteCount));
-                        else {
-                            glActiveTexture(GL_TEXTURE0 + slot.binding);
-                            glBindTexture(GL_TEXTURE_2D, slot.object);
-                            glBindSampler(slot.binding, slot.sampler);
-                        }
-                    }
-                    failed = glGetError() != GL_NO_ERROR;
+                    BindMaterialDraw(command);
+                    failed = failure.Capture("pipeline and resource binding");
                     if (!failed) {
-                        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(command.indexCount),
-                                       command.indexFormat == RenderIndexFormat::UInt16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, nullptr);
-                        failed = glGetError() != GL_NO_ERROR;
+                        SubmitMaterialDraw(command);
+                        failed = failure.Capture("indexed draw");
                     }
                 }
             }
-            if (failed || glGetError() != GL_NO_ERROR)
+            const auto restorationError = glGetError();
+            if (failed || restorationError != GL_NO_ERROR)
                 return Result<void>::Failure(
-                    MakeError(OpenGLBackendErrors::CommandFailed,
-                              "OpenGL material draw or native state restoration failed; submitted generations remain completion-owned."));
+                    MakeError(OpenGLBackendErrors::CommandFailed, std::string{"OpenGL material execution failed at "} + failure.stage +
+                                                                      " (native error " + std::to_string(failure.nativeError) +
+                                                                      ", restoration error " + std::to_string(restorationError) +
+                                                                      "); submitted generations remain completion-owned."));
             return Result<void>::Success();
         }
 
@@ -392,7 +433,7 @@ namespace Horo::Render::Detail {
                    glBindSampler && glBindBuffer && glBindBufferBase && glBindBufferRange && glBindFramebuffer && glDrawBuffer &&
                    glDrawBuffers && glViewportIndexedf && glClearColor && glClearDepth && glClear && glColorMaski && glDepthMask &&
                    glDepthFunc && glCullFace && glFrontFace && glPolygonMode && glBlendFuncSeparatei && glBlendEquationSeparatei &&
-                   glDrawElements;
+                   glDrawElements && glDrawElementsInstanced;
         }
     }  // namespace
 

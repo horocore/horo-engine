@@ -37,6 +37,7 @@ namespace Horo::Render {
         ViewIndexedShaders,   /**< Real indexed-draw shader execution through the selected backend. */
         InstancedViewRouting, /**< Enabled native layer routing for the same immutable multiview scene. */
         UiPaint,              /**< Native cooked paint, bounded reusable uploads, clipping/stencil and isolated composition. */
+        VfxForwardInstancing, /**< Issued uniform revisions and canonical indexed billboard/mesh forward draws; not shadow/GBuffer. */
         Count,                /**< Number of defined capabilities; not itself a capability bit. */
     };
 

@@ -1,6 +1,9 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraphErrors.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
+#include "RenderGraphResourceLeasePool.h"
+#include "VfxSchedulingStorage.h"
 
 #include <algorithm>
 #include <array>
@@ -10,22 +13,28 @@
 #include <new>
 
 namespace Horo::Render {
-    namespace Detail {
-        /** @brief One prepared view's six semantic orders and shared sort scratch; workload aliases pin the whole slot. */
-        struct VfxSchedulingSlot final {
-            std::array<VfxDrawOrder, 6> orders;
-            std::vector<VfxDrawReference> scratch;
-        };
-
-        /** @brief Render-owner pool; slots survive frontend destruction while immutable workload aliases remain. */
-        struct VfxSchedulingStorage final {
-            VfxSchedulingBudget budget;
-            std::size_t chargedBytes{};
-            std::vector<std::shared_ptr<VfxSchedulingSlot>> slots;
-        };
-    }  // namespace Detail
-
     namespace {
+        /** @brief Allocates only the cold-reserved canonical scheduling orders and graph-resolution scratch. */
+        std::shared_ptr<Detail::VfxSchedulingStorage> MakeVfxSchedulingStorage(const VfxSchedulingBudget budget,
+                                                                               const std::size_t meshCapacity,
+                                                                               const std::size_t targetCapacity) {
+            auto storage = std::make_shared<Detail::VfxSchedulingStorage>();
+            storage->budget = budget;
+            storage->graphMeshes.reserve(meshCapacity);
+            storage->graphTargets.reserve(targetCapacity);
+            storage->slots.reserve(budget.retainedViewSlots);
+            for (std::uint32_t index = 0; index < budget.retainedViewSlots; ++index) {
+                auto slot = std::make_shared<Detail::VfxSchedulingSlot>();
+                for (auto &order : slot->orders) {
+                    order.instances.reserve(budget.maximumInstances);
+                    order.draws.reserve(budget.maximumDraws);
+                }
+                slot->scratch.reserve(budget.maximumInstances);
+                storage->slots.push_back(std::move(slot));
+            }
+            return storage;
+        }
+
         /** @brief Preserves finite float ordering with canonical zero, then reverses it for back-to-front. */
         std::uint32_t DepthKey(float value) noexcept {
             if (value == 0)
@@ -103,11 +112,11 @@ namespace Horo::Render {
                    request.originRevision == snapshot.OriginRevision() && request.view != 0 && request.viewGeneration != 0 &&
                    Math::IsFinite(request.camera) && Math::IsFinite(request.forward) &&
                    Math::NearlyEqual(Math::Length(request.forward), 1.0F, 0.001F) && request.maximumInstances > 0 &&
-                   request.maximumInstances <= 1'000'000 && request.remainingDrawCalls > 0 && request.remainingDrawCalls <= 12'288 &&
-                   resource(request.sceneColor) && resource(request.sceneDepth) && request.sceneColor != request.sceneDepth &&
-                   anchor(request.opaqueBegin) && anchor(request.opaqueComplete) && anchor(request.outputTransform) &&
-                   request.opaqueBegin != request.opaqueComplete && request.opaqueComplete != request.outputTransform &&
-                   request.opaqueBegin != request.outputTransform;
+                   request.maximumInstances <= 1'000'000 && request.remainingDrawCalls > 0 &&
+                   request.remainingDrawCalls <= MaximumVfxGraphDraws && resource(request.sceneColor) && resource(request.sceneDepth) &&
+                   request.sceneColor != request.sceneDepth && anchor(request.opaqueBegin) && anchor(request.opaqueComplete) &&
+                   anchor(request.outputTransform) && request.opaqueBegin != request.opaqueComplete &&
+                   request.opaqueComplete != request.outputTransform && request.opaqueBegin != request.outputTransform;
         }
 
         /** @brief Declares exact depth/color attachment access for one particle stage. */
@@ -150,6 +159,8 @@ namespace Horo::Render {
         /** @brief Builds one complete per-view stage order using retained source values only. */
         bool PrepareOrder(VfxDrawOrder &order, VfxGraphStage stage, const RenderWorldSnapshot &snapshot, const VfxGraphRequest &request,
                           std::vector<VfxDrawReference> &scratch) {
+            order.draws.clear();
+            order.nativePrepared = false;
             order.instances.clear();
             order.view = request.view;
             order.viewGeneration = request.viewGeneration;
@@ -170,18 +181,6 @@ namespace Horo::Render {
             return true;
         }
 
-        /** @brief Counts exact draw runs after global alpha ordering, including material interleaving. */
-        std::uint32_t DrawRuns(const VfxDrawOrder &order) noexcept {
-            std::uint32_t draws{};
-            std::uint32_t previous = std::numeric_limits<std::uint32_t>::max();
-            for (const auto &reference : order.instances)
-                if (reference.batch != previous) {
-                    ++draws;
-                    previous = reference.batch;
-                }
-            return draws;
-        }
-
         /** @brief Admits all stage metadata before mutating the recipe graph. */
         VfxGraphSchedulingOutcome PrepareSchedule(const RenderWorldSnapshot &snapshot, const VfxGraphRequest &request,
                                                   const std::shared_ptr<Detail::VfxSchedulingSlot> &slot) {
@@ -197,7 +196,7 @@ namespace Horo::Render {
                                                               "VFX canonical view depth is nonfinite; no partial batch can be submitted.");
                 if (order.instances.empty())
                     continue;
-                schedule.drawCalls += DrawRuns(order);
+                schedule.drawCalls += Detail::CountVfxDrawRuns(order);
                 const auto color = stage == GBuffer ? request.gBuffer : request.sceneColor;
                 const auto depth = stage == Shadow ? request.shadowDepth : request.sceneDepth;
                 schedule.records[schedule.recordCount++] = {{}, RenderGraphVfx{stage, color, depth, {slot, &order}, snapshot}};
@@ -364,13 +363,27 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::PrepareVfxScheduling */
     Result<void> RenderFrontend::PrepareVfxScheduling(VfxSchedulingBudget budget) {
+        if (budget.maximumDraws) {
+            if (const auto owner = RequireOpenOwner(); owner.HasError())
+                return owner;
+            if (activeFrameScope_)
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxViewsRetained));
+        }
         if (vfxSchedulingOwner_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
         if (budget.maximumInstances == 0 || budget.maximumInstances > 1'000'000 || budget.retainedViewSlots == 0 ||
-            budget.retainedViewSlots > 16)
+            budget.retainedViewSlots > 16 || budget.maximumDraws > budget.maximumInstances || budget.maximumDraws > MaximumVfxGraphDraws)
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxSchedulingCapacity));
-        const auto bytes = static_cast<std::uint64_t>(budget.retainedViewSlots) *
-                           (sizeof(Detail::VfxSchedulingSlot) + 7ULL * budget.maximumInstances * sizeof(VfxDrawReference));
+        const auto meshCapacity = budget.maximumDraws ? std::min<std::size_t>(RenderGraphLimits::HardMaxResources,
+                                                                              6ULL * budget.maximumDraws * budget.retainedViewSlots +
+                                                                                  MultiviewExtractionLimits::HardMaximumInstances)
+                                                      : 0;
+        const auto targetCapacity = budget.maximumDraws ? 6ULL * budget.retainedViewSlots : 0;
+        const auto bytes =
+            static_cast<std::uint64_t>(budget.retainedViewSlots) *
+                (sizeof(Detail::VfxSchedulingSlot) + 7ULL * budget.maximumInstances * sizeof(VfxDrawReference) +
+                 6ULL * budget.maximumDraws * sizeof(VfxPreparedDraw) + (budget.maximumDraws ? 8ULL * 6ULL * sizeof(RenderGraphVfx) : 0)) +
+            meshCapacity * sizeof(RenderGraphMeshInstance) + targetCapacity * sizeof(RenderGraphTargetInstance);
         if (const auto previousBytes = vfxScheduling_ ? vfxScheduling_->chargedBytes : 0;
             bytes + previousBytes > budget.maximumBytes || budget.maximumBytes > 512ULL * 1024 * 1024)
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxSchedulingCapacity));
@@ -379,17 +392,13 @@ namespace Horo::Render {
         }))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxViewsRetained));
         try {
-            auto storage = std::make_shared<Detail::VfxSchedulingStorage>();
-            storage->budget = budget;
+            auto storage = MakeVfxSchedulingStorage(budget, meshCapacity, targetCapacity);
             storage->chargedBytes = bytes;
-            storage->slots.reserve(budget.retainedViewSlots);
-            for (std::uint32_t index = 0; index < budget.retainedViewSlots; ++index) {
-                auto slot = std::make_shared<Detail::VfxSchedulingSlot>();
-                for (auto &order : slot->orders)
-                    order.instances.reserve(budget.maximumInstances);
-                slot->scratch.reserve(budget.maximumInstances);
-                storage->slots.push_back(std::move(slot));
-            }
+            if (budget.maximumDraws || graphResourceLeases_->VfxRetentionStorageBytes())
+                if (const auto retained =
+                        graphResourceLeases_->PrepareVfxRetention(budget.maximumDraws ? 6ULL * budget.retainedViewSlots : 0);
+                    retained.HasError())
+                    return retained;
             vfxScheduling_ = std::move(storage);
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {

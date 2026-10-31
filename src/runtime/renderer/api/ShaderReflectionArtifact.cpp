@@ -48,7 +48,8 @@ namespace Horo::Render {
         try {
             if (const bool supported =
                     (compiled.backend == ShaderTargetBackend::Vulkan && compiled.payloadFormat == ShaderPayloadFormat::SpirV16) ||
-                    (compiled.backend == ShaderTargetBackend::Metal && compiled.payloadFormat == ShaderPayloadFormat::MetalLibrary24);
+                    (compiled.backend == ShaderTargetBackend::Metal && compiled.payloadFormat == ShaderPayloadFormat::MetalLibrary24) ||
+                    (compiled.backend == ShaderTargetBackend::OpenGL && compiled.payloadFormat == ShaderPayloadFormat::Glsl410);
                 !supported || !ValidEnvelope(artifact) || compiled.backend != artifact.reflection.backend ||
                 compiled.artifactKey != artifact.compiledArtifactKey || compiled.payload.empty() ||
                 compiled.payload.size() > 64U * 1024U * 1024U ||

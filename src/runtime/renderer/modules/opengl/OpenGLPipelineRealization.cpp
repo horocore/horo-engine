@@ -1,9 +1,11 @@
 #include "OpenGLPipelineRealization.h"
 
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "OpenGLRenderBackendErrors.h"
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <glad/gl.h>
 #include <memory>
 #include <string_view>
@@ -54,20 +56,43 @@ namespace Horo::Render::Detail {
             return matrices[columns - 2][rows - 2];
         }
 
+        /** @brief Preserves bounded native-versus-cooked evidence when strict attribute admission fails. */
+        [[nodiscard]] Result<void> AttributeMismatch(const GLuint program, const GLint count, const GLint maximumName,
+                                                     const NormalizedShaderReflection &reflection) {
+            std::string observed;
+            for (GLint index = 0; index < std::min(count, 8); ++index) {
+                std::array<char, 257> name{};
+                GLsizei written{};
+                GLint size{};
+                GLenum type{};
+                glGetActiveAttrib(program, static_cast<GLuint>(index), static_cast<GLsizei>(name.size()), &written, &size, &type,
+                                  name.data());
+                observed += std::format(" [name={}, type={}, size={}, location={}]", name.data(), type, size,
+                                        glGetAttribLocation(program, name.data()));
+            }
+            std::string cooked;
+            for (const auto &input : reflection.stageInterface)
+                if (input.stage == ShaderStage::Vertex && input.direction == ShaderInterfaceDirection::Input)
+                    cooked += std::format(" [name={}, type={}, count={}, location={}]", input.nativeName,
+                                          ValueType(input.type, input.rows, input.columns), input.arrayCount, input.location);
+            return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
+                                                   std::format("Linked vertex attribute count={}, maximumName={}; native:{}; cooked:{}.",
+                                                               count, maximumName, observed, cooked)));
+        }
+
         /** @brief Checks actual active attributes against the established MeshVertex layout and cooked locations. */
-        [[nodiscard]] Result<void> ValidateAttributes(const GLuint program, const NormalizedShaderReflection &reflection) {
+        [[nodiscard]] Result<void> ValidateAttributes(const GLuint program, const RenderGraphicsPipelineDescriptor &descriptor) {
+            const auto &reflection = descriptor.reflection;
             GLint count{};
             GLint maximumName{};
             glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &count);
             glGetProgramiv(program, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, &maximumName);
-            if (const auto expected = std::ranges::count_if(reflection.stageInterface,
-                                                            [](const auto &variable) {
-                return variable.stage == ShaderStage::Vertex && variable.direction == ShaderInterfaceDirection::Input;
-            });
-                count != expected || count < 0 || count > 3 || maximumName > 257)
-                return Mismatch("Linked vertex attributes differ from bounded cooked MeshVertex reflection.");
+            if (count < 0 || count > 4 || maximumName > 257)
+                return AttributeMismatch(program, count, maximumName, reflection);
+            std::array<std::array<char, 257>, 4> names{};
+            std::array<OpenGLVertexAttribute, 4> attributes{};
             for (GLint index = 0; index < count; ++index) {
-                std::array<char, 257> name{};
+                auto &name = names[static_cast<std::size_t>(index)];
                 GLsizei written{};
                 GLint size{};
                 GLenum type{};
@@ -75,18 +100,10 @@ namespace Horo::Render::Detail {
                                   name.data());
                 if (written <= 0 || written >= static_cast<GLsizei>(name.size()))
                     return Mismatch("Linked vertex attribute name exceeds the finite target-name envelope.");
-                const GLint location = glGetAttribLocation(program, name.data());
-                const auto match = std::ranges::find_if(reflection.stageInterface, [location](const auto &variable) {
-                    return variable.stage == ShaderStage::Vertex && variable.direction == ShaderInterfaceDirection::Input &&
-                           location >= 0 && variable.location == static_cast<std::uint32_t>(location);
-                });
-                const GLenum textureCoordinateType = location == 2 ? GL_FLOAT_VEC2 : 0;
-                const GLenum meshType = location == 0 || location == 1 ? GL_FLOAT_VEC3 : textureCoordinateType;
-                if (match == reflection.stageInterface.end() || size != 1 || match->arrayCount != 1 || type != meshType ||
-                    type != ValueType(match->type, match->rows, match->columns))
-                    return Mismatch("Linked vertex attribute type/location does not match cooked reflection and MeshVertex.");
+                attributes[static_cast<std::size_t>(index)] = {std::string_view{name.data(), static_cast<std::size_t>(written)}, type, size,
+                                                               glGetAttribLocation(program, name.data())};
             }
-            return Result<void>::Success();
+            return ValidateOpenGLVertexAttributes(std::span{attributes}.first(static_cast<std::size_t>(count)), descriptor);
         }
 
         /** @brief GL4.1 has output location lookup, not GL4.3 program-interface enumeration. */
@@ -266,7 +283,7 @@ namespace Horo::Render::Detail {
             if (glGetError() != GL_NO_ERROR)
                 return Result<void>::Failure(
                     MakeError(OpenGLBackendErrors::CommandFailed, "Outstanding native error before final program reflection."));
-            if (const auto attributes = ValidateAttributes(program, descriptor.reflection); attributes.HasError())
+            if (const auto attributes = ValidateAttributes(program, descriptor); attributes.HasError())
                 return attributes;
             if (const auto outputs = ValidateOutputs(program, descriptor.reflection); outputs.HasError())
                 return outputs;
@@ -371,6 +388,59 @@ namespace Horo::Render::Detail {
                    glGetUniformLocation && glProgramUniform1iv && glGetIntegerv && glGetError;
         }
     }  // namespace
+
+    /** @copydoc ValidateOpenGLVertexAttributes */
+    Result<void> ValidateOpenGLVertexAttributes(const std::span<const OpenGLVertexAttribute> attributes,
+                                                const RenderGraphicsPipelineDescriptor &descriptor) {
+        if (attributes.size() > 4)
+            return Mismatch("Linked attributes exceed the three MeshVertex inputs and one VFX builtin envelope.");
+        const auto &reflection = descriptor.reflection;
+        const auto expected = std::ranges::count_if(reflection.stageInterface, [](const auto &variable) {
+            return variable.stage == ShaderStage::Vertex && variable.direction == ShaderInterfaceDirection::Input;
+        });
+        if (expected > 3)
+            return Mismatch("Cooked user attributes exceed the fixed MeshVertex layout.");
+        std::uint32_t locations{};
+        std::size_t users{};
+        bool instanceId{};
+        for (const auto &attribute : attributes) {
+            if (attribute.name == "gl_InstanceID") {
+                const auto canonical = MakeVfxShaderManifest(descriptor.target);
+                const auto schema = ComputeShaderInterfaceCompatibilityId(canonical);
+                const auto authored = ComputeShaderInterfaceCompatibilityId(descriptor.manifest);
+                if (instanceId || attribute.type != GL_INT || attribute.arrayCount != 1 ||
+                    descriptor.target.backend != ShaderTargetBackend::OpenGL ||
+                    descriptor.target.payloadFormat != ShaderPayloadFormat::Glsl410 || reflection.backend != ShaderTargetBackend::OpenGL ||
+                    reflection.interfaceSchemaVersion != descriptor.target.interfaceSchemaVersion ||
+                    descriptor.manifest.sourceIdentity != canonical.sourceIdentity ||
+                    descriptor.manifest.sourceRevision != canonical.sourceRevision || schema.HasError() || authored.HasError() ||
+                    schema.Value() != authored.Value() || schema.Value() != reflection.interfaceCompatibility)
+                    return Mismatch("Only the canonical VFX schema admits one scalar-int gl_InstanceID builtin.");
+                // Some GL4.1 drivers enumerate this builtin with a numeric location (including normal's slot 1).
+                // It is generated by instancing, never fetched from or assigned to the physical vertex stream.
+                instanceId = true;
+                continue;
+            }
+            if (attribute.name.starts_with("gl_") || attribute.location < 0 || attribute.location > 2)
+                return Mismatch("Linked attribute is an unsupported builtin or lies outside MeshVertex locations.");
+            const auto location = static_cast<std::uint32_t>(attribute.location);
+            const auto bit = 1U << location;
+            const auto match = std::ranges::find_if(reflection.stageInterface, [location](const auto &variable) {
+                return variable.stage == ShaderStage::Vertex && variable.direction == ShaderInterfaceDirection::Input &&
+                       variable.location == location;
+            });
+            const GLenum meshType = location == 2 ? GL_FLOAT_VEC2 : GL_FLOAT_VEC3;
+            if ((locations & bit) != 0 || match == reflection.stageInterface.end() || attribute.arrayCount != 1 || match->arrayCount != 1 ||
+                attribute.type != meshType || attribute.type != ValueType(match->type, match->rows, match->columns) ||
+                (!match->nativeName.empty() && match->nativeName != attribute.name))
+                return Mismatch("Linked user attribute name/type/location differs from cooked reflection and MeshVertex.");
+            locations |= bit;
+            ++users;
+        }
+        if (users != static_cast<std::size_t>(expected))
+            return Mismatch("Linked user attribute count differs from exact cooked MeshVertex reflection.");
+        return Result<void>::Success();
+    }
 
     /** @copydoc OpenGLReflectedValueType */
     std::uint32_t OpenGLReflectedValueType(const ShaderValueType type, const std::uint8_t rows, const std::uint8_t columns) noexcept {

@@ -1,6 +1,7 @@
 #include "RenderGraphResourceLeasePool.h"
 
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "RenderFrontendErrors.h"
 #include "RenderGraphTransientResourcePool.h"
 #include "RenderResourceOperations.h"
@@ -62,6 +63,32 @@ namespace Horo::Render::Detail {
         return leases_.front().ui.size();
     }
 
+    /** @copydoc RenderGraphResourceLeasePool::VfxRetentionStorageBytes */
+    std::size_t RenderGraphResourceLeasePool::VfxRetentionStorageBytes() const noexcept {
+        std::size_t bytes{};
+        for (const auto &lease : leases_)
+            bytes += lease.vfx.capacity() * sizeof(RenderGraphVfx);
+        return bytes;
+    }
+
+    /** @copydoc RenderGraphResourceLeasePool::PrepareVfxRetention */
+    Result<void> RenderGraphResourceLeasePool::PrepareVfxRetention(const std::size_t maximumCaptures) {
+        if (maximumCaptures > RenderGraphLimits::HardMaxPasses || std::ranges::any_of(leases_, [](const auto &lease) {
+            return lease.active;
+        }))
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+        std::array<std::vector<RenderGraphVfx>, 8> prepared;
+        try {
+            for (auto &captures : prepared)
+                captures.reserve(maximumCaptures);
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::AllocationFailed));
+        }
+        for (std::size_t index = 0; index < leases_.size(); ++index)
+            leases_[index].vfx.swap(prepared[index]);
+        return Result<void>::Success();
+    }
+
     /** @copydoc IRenderGraphResourceLease::Release */
     void RenderGraphResourceLeasePool::Lease::Release() noexcept {
         if (!active) {
@@ -72,6 +99,7 @@ namespace Horo::Render::Detail {
         }
         pool->activePins_ -= pins.size();
         pins.clear();
+        vfx.clear();
         for (std::size_t index = 0; index < materialCount; ++index)
             materials[index].reset();
         materialCount = 0;
@@ -220,6 +248,25 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc RenderGraphResourceLeasePool::Lease::PinVfx */
+    Result<void> RenderGraphResourceLeasePool::Lease::PinVfx(const RenderGraphVfx &workload) {
+        if (vfx.size() == vfx.capacity() || !workload.order || !workload.order->nativePrepared || !workload.target.IsValid())
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        const auto target = workload.target;
+        if (const auto pinned = PinIdentity({RenderResourceClass::RenderTarget, {target.owner, target.slot, target.generation}});
+            pinned.HasError())
+            return pinned;
+        for (const auto &draw : workload.order->draws) {
+            if (!draw.slot || draw.slot->ValidateDraw(workload, draw).HasError())
+                return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+            const auto mesh = draw.mesh;
+            if (const auto pinned = PinIdentity({RenderResourceClass::Mesh, {mesh.owner, mesh.slot, mesh.generation}}); pinned.HasError())
+                return pinned;
+        }
+        vfx.push_back(workload);
+        return Result<void>::Success();
+    }
+
     /** @copydoc RenderGraphResourceLeasePool::Acquire */
     Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::Acquire(
         const std::span<const RenderGraphResource> resources, UiRenderSubmission *ui, RenderGraphTransientResourceSet *transient,
@@ -263,6 +310,10 @@ namespace Horo::Render::Detail {
         }
         if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
             return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
+        for (const auto &entry : workloads)
+            if (const auto *vfx = std::get_if<RenderGraphVfx>(&entry.workload))
+                if (const auto pinned = lease.PinVfx(*vfx); pinned.HasError())
+                    return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
         return Result<IRenderGraphResourceLease *>::Success(transaction.release());
     }
 }  // namespace Horo::Render::Detail

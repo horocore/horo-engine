@@ -190,6 +190,14 @@ namespace Horo::Render {
                 return commandPort_->ExecuteMaterialPass(request);
             }
 
+            Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (activeFrame_.IsValid() || update.deviceIncarnation != capabilities_.support.deviceIncarnation)
+                    return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+                return commandPort_->UpdateVfxFrame(update);
+            }
+
             Result<void> Present(const FrameToken frame) override {
                 if (const auto access = CommandAccess(); access.HasError())
                     return access;

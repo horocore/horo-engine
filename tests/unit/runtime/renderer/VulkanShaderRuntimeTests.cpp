@@ -1,4 +1,5 @@
 #include "../../../support/renderer/MultiviewTestSupport.h"
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "RenderMemoryTestSupport.h"
 #include "VulkanShaderDispatchFixture.h"
 #include "runtime/renderer/modules/vulkan/VulkanBackendInternal.h"
@@ -33,6 +34,7 @@ namespace {
         bool pairedSampler{false};
         bool matrixParameters{false};
         std::size_t resolvedBufferBytes{16};
+        std::uint64_t deviceIncarnation{};
         ShaderTargetRequirement target{.backend = ShaderTargetBackend::Vulkan,
                                        .payloadFormat = ShaderPayloadFormat::SpirV16,
                                        .descriptorVersion = 1,
@@ -89,7 +91,7 @@ namespace {
                 if (r.instance != 99 || kind != ShaderResourceKind::UniformBuffer || r.kind != MaterialResidentResourceKind::Buffer)
                     return Result<VulkanMaterialResource>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
                 return Result<VulkanMaterialResource>::Success({.buffer = Handle<VkBuffer>(99), .bytes = resolvedBufferBytes});
-            });
+            }, VulkanShaderRuntime::DeviceFeatures{deviceIncarnation, false});
         }
 
         void UseSampledMaterial() {
@@ -215,6 +217,9 @@ namespace {
         }
     };
 }  // namespace
+
+// VFX-native cases use the canonical fixture declared above; keep this dependent include after its definition.
+#include "VulkanVfxShaderRuntimeTests.inl"
 
 TEST_CASE("Vulkan realizes shaders pipeline specialization cache and immutable material sets", "[vulkan][shader][material]") {
     Fixture f;

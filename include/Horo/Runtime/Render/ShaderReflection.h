@@ -26,8 +26,9 @@ namespace Horo::Render {
         ShaderResourceKind kind{ShaderResourceKind::UniformBuffer};
         ShaderResourceAccess access{ShaderResourceAccess::ReadOnly};
         std::uint32_t arrayCount{1};
-        ShaderStageVisibility stages{ShaderStageVisibility::None};
-        bool active{true}; /**< False only when final optimization removed the declared resource. */
+        ShaderStageVisibility stages{ShaderStageVisibility::None}; /**< Active: observed nonempty subset of declared visibility.
+                                                                    Inactive: original declared mask; no stage consumes the binding. */
+        bool active{true};                                         /**< False only when final optimization removed the declared resource. */
     };
 
     /** @brief Final target packing evidence for one logical shader parameter. */

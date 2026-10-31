@@ -70,7 +70,8 @@ namespace Horo::Render {
     /** @brief Explicit intermediate validation environment for a compilation route. */
     enum class ShaderIntermediateEnvironment : std::uint8_t {
         None,
-        Vulkan13SpirV16
+        Vulkan13SpirV16,
+        Vulkan12SpirV15 /**< Explicit legacy OpenGL lowering/validation profile; never aliases the Vulkan 1.3 route. */
     };
 
     /** @brief Explicit optimization policy participating in artifact identity. */

@@ -24,6 +24,8 @@ namespace Horo::Render {
     class IRenderGraphResourceLease;
     struct UiPaintFrameBuffers;
     struct UiPaintFrameUpdate;
+    class PreparedVfxFrameSlot;
+    struct VfxPackedDrawInstance;
     enum class RenderGraphExecutionRole : std::uint8_t;
     struct RenderMaterialPass;
     struct RenderGraphQueueSubmission;
@@ -54,6 +56,8 @@ namespace Horo::Render {
         struct UiPaintOwnerRetirement;
         struct RenderResourceIdentity;
         struct VfxSchedulingStorage;
+        struct RenderGraphTransientResourceSet;
+        struct VfxFrontendState;
         class RenderResourceRegistry;
         class RenderResourceUploadQueue;
         class RenderFrontendResourceAccess;
@@ -360,6 +364,17 @@ namespace Horo::Render {
                                                        RenderGraphTransientResourcesHandle transientResources,
                                                        std::span<const RenderGraphQueueSubmission> submissions,
                                                        RenderGraphExecutionRole role);
+        /** @brief Resolves admitted graph resources and transfers their exact lifetime lease under the caller's exception boundary. */
+        [[nodiscard]] Result<void> EncodeResolvedGraph(const CompiledRenderGraphExecution &graph,
+                                                       std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
+                                                       Detail::RenderGraphTransientResourceSet *transient,
+                                                       std::span<const RenderGraphQueueSubmission> submissions,
+                                                       RenderGraphExecutionRole role,
+                                                       const Detail::RenderSubmissionAllocator &submissionHistory);
+        /** @brief Completes an internally assembled request's exact bindings and lease before dispatch to the backend. */
+        [[nodiscard]] Result<void> EncodeGraphBindings(RenderGraphExecutionRequest request, UiRenderSubmission *ui,
+                                                       Detail::RenderGraphTransientResourceSet *transient,
+                                                       const Detail::RenderSubmissionAllocator &submissionHistory);
         /** @brief Requires the unique UI stage between successful scene execution and GUI encoding. */
         [[nodiscard]] Result<void> ValidateUiCompositionAdmission() const;
         struct UiCompositionState;
@@ -614,6 +629,36 @@ namespace Horo::Render {
          * @param buffers Exact resident ring handles. @param update Complete synchronous finite CPU payload.
          * @return Success or typed owner/ready/busy/capacity failure without advancing accepted UI state. */
         [[nodiscard]] Result<void> UpdateUiPaintFrame(const UiPaintFrameBuffers &buffers, const UiPaintFrameUpdate &update);
+        /** @brief Issues one exact VFX schema/material/buffer proof at a cold preparation point.
+         * @param material Canonical ready VFX generation with a dedicated host-visible uniform block at offset zero.
+         * @return Issued slot with fixed staging or typed invalid/unsupported/allocation failure.
+         * @details Host configuration and existing retained-material/resource budgets bound slot count; no
+         * arbitrary draw-count ceiling, separate registry or native backing authority is introduced.
+         * Repeated exact-material preparation returns the same live control block. A conflicting material,
+         * recursive preparation, or expired claim is rejected; only a fresh buffer generation resets the claim.
+         */
+        [[nodiscard]] Result<std::shared_ptr<PreparedVfxFrameSlot>> PrepareVfxFrameSlot(
+            std::shared_ptr<const ResidentMaterialBinding> material);
+        /** @brief Packs and publishes one exact free VFX slot before opening a frame.
+         * @param slot Unique shared-handle owner of this frontend-issued preparation; every facade copy rejects reuse.
+         * @param revision Strictly newer positive revision. @param instances One through128 finite records in draw order.
+         * @param cancellation Observed before native writes. @return Success or original typed failure; never waits.
+         * @details No handle borrowing or reentrant publication during this call. Unique CPU ownership is
+         * conservative admission only; selected-adapter completion independently protects all native aliases.
+         * Admission failure preserves the accepted publication. A native write failure invalidates it.
+         */
+        [[nodiscard]] Result<void> UpdateVfxFrame(const std::shared_ptr<PreparedVfxFrameSlot> &slot, std::uint64_t revision,
+                                                  std::span<const VfxPackedDrawInstance> instances,
+                                                  const CancellationToken &cancellation = {});
+        /** @brief Packs immutable scheduled instances and binds exact ready draw slots before opening a frame.
+         * @param builder Same open graph receiving uniform reads. @param schedule Canonical issued VFX schedule.
+         * @param view Exact captured scene/frame/origin/view projection. @param bindings Complete ordered run-slot assignments.
+         * @return Complete graph-ready preparation or original typed failure; no allocation or wait on success.
+         * @details Capacity is reserved by PrepareVfxScheduling from the explicit scene budget. On failure no partial
+         * graph draw program is published; successful earlier free-slot uploads retain their actual newer revisions.
+         */
+        [[nodiscard]] Result<void> PrepareVfxDraws(RenderGraphBuilder &builder, VfxGraphSchedule &schedule, const VfxDrawView &view,
+                                                   std::span<const VfxGraphDrawBinding> bindings);
 
         /**
          * @brief Realizes a current image page explicitly for alpha-mask sampling.
@@ -817,6 +862,73 @@ namespace Horo::Render {
                        ConstructionKey);
 
     private:
+        /** @brief Plain exact resident facts that may safely cross an injected/native callback. */
+        struct VfxResidentProof {
+            RenderBufferHandle buffer;
+            RenderPipelineHandle pipeline;
+            std::uint64_t bufferInstance{};
+            std::uint64_t pipelineInstance{};
+            std::size_t byteSize{};
+            std::uint64_t deviceIncarnation{};
+        };
+
+        /** @brief Revalidates owner, ready generations, native identity and immutable uniform facts after callbacks. */
+        [[nodiscard]] Result<void> ValidateVfxResidents(const VfxResidentProof &proof) const;
+
+        /** @brief Plain material and resource facts captured before a native size query can reenter. */
+        struct VfxSlotPreparation {
+            VfxResidentProof residents;
+            std::size_t semanticBytes{};
+            std::size_t boundBytes{};
+        };
+
+        /** @brief Validates material schema and snapshots exact native residents before any external callback. */
+        [[nodiscard]] Result<VfxSlotPreparation> InspectVfxSlotMaterial(const ResidentMaterialBinding &material) const;
+        /** @brief Reuses only the same live, nonpublishing slot claim for this exact buffer generation and material. */
+        [[nodiscard]] Result<std::shared_ptr<PreparedVfxFrameSlot>> ExistingVfxFrameSlot(const ResidentMaterialBinding &material,
+                                                                                         RenderBufferHandle buffer) const;
+        /** @brief Revalidates callback-surviving facts before issuing and recording the sole generation claim. */
+        [[nodiscard]] Result<std::shared_ptr<PreparedVfxFrameSlot>> IssueVfxFrameSlot(
+            std::shared_ptr<const ResidentMaterialBinding> material, const VfxResidentProof &proof, std::size_t nativeBytes);
+        /** @brief Checks owner-thread, revision, nonreentrancy and unique writer admission before staging mutation. */
+        [[nodiscard]] Result<void> AdmitVfxFrameMutation(const std::shared_ptr<PreparedVfxFrameSlot> &slot, std::uint64_t revision,
+                                                         const VfxDrawOrder *drawIssuer);
+        /** @brief Publishes a staged slot only after native write evidence and postcallback resident validation. */
+        [[nodiscard]] Result<void> PublishVfxSlot(const std::shared_ptr<PreparedVfxFrameSlot> &retained, const VfxResidentProof &proof,
+                                                  std::uint64_t revision, std::uint32_t instanceCount,
+                                                  const CancellationToken &cancellation);
+        struct VfxDrawPreparation;
+        /** @brief Captures issued draw-order ownership and bounded draw counts before any mutation or callback. */
+        [[nodiscard]] Result<void> CaptureVfxDrawOrders(VfxDrawPreparation &preparation, const VfxGraphSchedule &schedule,
+                                                        std::size_t bindingCount);
+        /** @brief Copies and finite-validates borrowed bindings into reserved immutable-order storage before callbacks. */
+        [[nodiscard]] Result<void> StageVfxDrawBindings(RenderGraphBuilder &builder, VfxDrawPreparation &preparation,
+                                                        std::span<const VfxGraphDrawBinding> bindings);
+        /** @brief Publishes each staged chunk through the canonical guarded frame-slot update authority. */
+        [[nodiscard]] Result<void> PublishVfxDrawFrames(VfxDrawPreparation &preparation);
+        /** @brief Revalidates graph, schedule and exact resident generations after all native callbacks. */
+        [[nodiscard]] Result<void> ValidateVfxDrawPublication(RenderGraphBuilder &builder, const VfxGraphSchedule &schedule,
+                                                              VfxDrawPreparation &preparation);
+        /** @brief Registers exact read roles under the caller's append-only graph-usage rollback transaction. */
+        [[nodiscard]] Result<void> AppendVfxDrawReadUsages(RenderGraphBuilder &builder, VfxDrawPreparation &preparation);
+        /** @brief Releases publication admission and clears uncommitted prepared draws on every exit. */
+        void ClearVfxDrawPreparation(VfxDrawPreparation &preparation, bool committed) noexcept;
+        /** @brief Commits immutable draw capture after all validation and graph usage registration succeed. */
+        void CommitVfxDrawPreparation(VfxGraphSchedule &schedule, VfxDrawPreparation &preparation);
+        /** @brief Checks exact imported draw dependencies against the canonical resident generations. */
+        [[nodiscard]] Result<void> ValidateVfxDrawResources(const RenderGraphBuilder &builder, const RenderGraphVfx &workload,
+                                                            const VfxPreparedDraw &draw) const;
+        /** @brief Clears stale draw records only when their canonical scheduling slot has no external immutable borrowers. */
+        void ReleaseUnborrowedVfxDraws() noexcept;
+        /** @brief Resolves VFX identities into preparation-owned scratch while its frame owner holds synchronous admission. */
+        [[nodiscard]] Result<void> ResolveVfxGraphResources(std::span<const RenderGraphPassWorkload> workloads,
+                                                            std::span<const RenderGraphMeshInstance> existingMeshes,
+                                                            std::span<const RenderGraphMeshInstance> &meshes,
+                                                            std::span<const RenderGraphTargetInstance> &targets);
+        /** @brief Shares native publication logic with the exact synchronous canonical draw transaction. */
+        [[nodiscard]] Result<void> UpdateVfxFrameInternal(const std::shared_ptr<PreparedVfxFrameSlot> &slot, std::uint64_t revision,
+                                                          std::span<const VfxPackedDrawInstance> instances,
+                                                          const CancellationToken &cancellation, const VfxDrawOrder *drawIssuer);
         /** @brief Resolves one ready, single-layer/mip/sample graph attachment in this frontend's resource namespace. */
         [[nodiscard]] const RenderTextureDescriptor *VfxAttachment(const RenderGraphBuilder &builder, RenderGraphResourceId resource) const;
         /** @brief Validates ready scene/workload attachment formats, identities and paired extents. */
@@ -849,6 +961,9 @@ namespace Horo::Render {
         struct BufferRecord {
             std::uint32_t generation{0};
             RenderBufferDescriptor descriptor;
+            std::weak_ptr<PreparedVfxFrameSlot> vfxSlot;
+            bool vfxClaimed{false};   /**< This exact generation cannot restart native publication revisions. */
+            bool vfxPreparing{false}; /**< Blocks same-buffer preparation reentry before any adapter callback. */
         };
 
         struct TextureRecord {
@@ -871,6 +986,7 @@ namespace Horo::Render {
         bool drained_{false};
         std::unique_ptr<RenderMemoryBudget> memoryBudget_;
         std::shared_ptr<Detail::VfxSchedulingStorage> vfxScheduling_;
+        std::shared_ptr<const Detail::VfxFrontendState> vfxFrontendState_;
         std::thread::id vfxSchedulingOwner_{std::this_thread::get_id()};
         RenderFrontendMemoryConfig memoryConfig_;
         friend class UiPaintFrameBufferPool;

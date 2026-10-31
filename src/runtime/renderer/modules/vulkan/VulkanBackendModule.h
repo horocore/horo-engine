@@ -7,6 +7,7 @@
 
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "VulkanHostGraphicsRequirements.h"
 
 #include <cstdint>
@@ -214,6 +215,11 @@ namespace Horo::Render {
         /** @brief Records reflected draws through this same device command owner. */
         [[nodiscard]] virtual Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &) {
             return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+
+        /** @brief Publishes a prepared VFX block only through the canonical command owner's retirement proof. */
+        [[nodiscard]] virtual Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &) {
+            return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
         }
 
         /** @brief Admits GUI ownership on the existing frame; only real matching native ports implement this. */

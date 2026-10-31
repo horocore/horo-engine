@@ -1,7 +1,9 @@
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/Mesh.h"
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "MetalResourceFormats.h"
 #include "MetalResourceRuntimeInternal.h"
+#include "MetalVfxShaderAbi.h"
 
 #include <algorithm>
 #include <cmath>
@@ -133,11 +135,22 @@ namespace Horo::Render::Detail {
                                      std::size_t &size) {
             if (buffer.bufferDataSize == 0 || buffer.bufferDataSize > 65536 || buffer.bufferStructType == nil)
                 return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+            const bool vfxInstances = IsMetalVfxInstances(binding, reflection);
+            if (vfxInstances && buffer.bufferDataSize != 10240)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid,
+                                                       "Metal VFX instance block extent differs from its closed schema."));
             std::size_t count = 0;
             for (const auto &parameter : reflection.parameters) {
                 if (!parameter.active || parameter.binding != binding)
                     continue;
                 ++count;
+                if (vfxInstances) {
+                    if (!HasMetalVfxArray(buffer.bufferStructType, parameter))
+                        return Result<void>::Failure(
+                            MakeError(MetalBackendErrors::ResourceIdentityInvalid,
+                                      "Metal VFX array type, count, offset or stride differs from cooked packing."));
+                    continue;
+                }
                 if (parameter.arrayCount != 1 || parameter.type == ShaderValueType::Bool32 ||
                     (parameter.rows != 1 && parameter.columns != 1))
                     return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation,
@@ -163,7 +176,7 @@ namespace Horo::Render::Detail {
         /** @brief Validates a native resource against the supported direct-binding material envelope. */
         Result<void> ValidateArgument(NSArray<id<MTLBinding>> *arguments, const ShaderReflectedBinding &binding,
                                       const ShaderTargetBindingMapEntry &mapping, const NormalizedShaderReflection &reflection,
-                                      std::array<std::size_t, 31> &sizes) {
+                                      std::array<std::size_t, 31> &sizes, const ShaderStageVisibility stage) {
             MTLBindingType type;
             switch (binding.kind) {
                 case ShaderResourceKind::UniformBuffer:
@@ -179,9 +192,17 @@ namespace Horo::Render::Detail {
                     return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation));
             }
             const id<MTLBinding> actual = FindNativeBinding(arguments, mapping.nativeBinding, type);
-            if (actual == nil || actual.access != MTLBindingAccessReadOnly)
+            if (actual == nil || actual.access != MTLBindingAccessReadOnly) {
+                std::string observed;
+                for (id<MTLBinding> argument in arguments)
+                    observed += std::format(" [index={}, type={}, access={}, used={}]", argument.index, static_cast<long>(argument.type),
+                                            static_cast<long>(argument.access), argument.used);
                 return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid,
-                                                       "Native Metal argument type, access or binding differs from cooked reflection."));
+                                                       std::format("Metal stage {} logical binding {} requires active native type {} "
+                                                                   "at index {} with read-only access; actual bindings:{}.",
+                                                                   static_cast<unsigned>(stage), binding.id.value, static_cast<long>(type),
+                                                                   mapping.nativeBinding, observed)));
+            }
             if (type == MTLBindingTypeBuffer)
                 return ValidateUniform((id<MTLBufferBinding>)actual, binding.id, reflection, sizes[mapping.nativeBinding]);
             if (type == MTLBindingTypeTexture) {
@@ -251,7 +272,7 @@ namespace Horo::Render::Detail {
                     return Result<void>::Failure(
                         MakeError(MetalBackendErrors::UnsupportedResourceOperation,
                                   "Metal requires direct scalar arguments below slot 31; buffer slot 30 is reserved for MeshVertex."));
-                if (const auto validated = ValidateArgument(arguments, binding, *mapping, reflection, sizes); validated.HasError())
+                if (const auto validated = ValidateArgument(arguments, binding, *mapping, reflection, sizes, stage); validated.HasError())
                     return validated;
             }
             const auto active = CountMaterialArguments(arguments, stage, reflection);

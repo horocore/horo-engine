@@ -130,6 +130,13 @@ namespace Horo::Render {
                 return runtime_->RealizeUiPaintKernel(kernel);
             }
 
+            /** @copydoc IRenderBackend::UpdateVfxFrame */
+            Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update) override {
+                if (!initialized_ || shutdownBegun_ || frameActive_ || update.deviceIncarnation != capabilities_.support.deviceIncarnation)
+                    return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+                return runtime_->UpdateVfxFrame(update);
+            }
+
             /** @copydoc IRenderBackend::UpdateUiPaintFrame */
             Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
                 if (!initialized_ || shutdownBegun_)
@@ -483,6 +490,13 @@ namespace Horo::Render {
                 if (const auto state = ValidateActiveFrame(request.frame); state.HasError()) {
                     return RecordingResult::Failure(state.ErrorValue());
                 }
+                if (std::ranges::any_of(request.workloads, [](const auto &entry) {
+                    return std::holds_alternative<RenderGraphVfx>(entry.workload) ||
+                           std::holds_alternative<RenderGraphDepthAttachment>(entry.workload);
+                }))
+                    return RecordingResult::Failure(
+                        MakeError(VfxFrameErrors::Unavailable,
+                                  "VFX currently uses the native owner-thread encoder; worker capture is not implemented."));
                 if (const auto valid = Detail::ValidateMetalRenderGraph(*runtime_, request); valid.HasError()) {
                     return RecordingResult::Failure(valid.ErrorValue());
                 }

@@ -27,6 +27,9 @@ namespace Horo::Render::Detail {
         RenderTextureDescriptor textureDescriptor;
         VulkanGraphResourceState *state{nullptr};
         std::shared_ptr<const void> backing;
+        ShaderBindingId binding; /**< Canonical logical binding, retained with the exact native range. */
+        std::size_t offset{};
+        std::size_t byteCount{};
     };
 
     /** @brief Exact native sampler plus its existing retained backing. */
@@ -52,6 +55,7 @@ namespace Horo::Render::Detail {
         const VulkanShaderOwnerIdentity *owner{nullptr};
         std::uint64_t deviceIncarnation{0};
         RenderGraphicsPipelineState state;
+        std::uint64_t pipelineIdentity{}; /**< Existing shader registry generation retained by pipelineBacking. */
         std::shared_ptr<const void> pipelineBacking;
         std::vector<std::shared_ptr<const void>> samplerBackings;
         std::vector<VulkanMaterialResource> resources;
@@ -99,6 +103,9 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<VulkanSamplerSnapshot> CaptureGuiSampler(std::uint64_t identity) const;
         [[nodiscard]] Result<std::size_t> QueryMaterialParameterBufferSize(std::uint64_t, const MaterialBindingDescriptor &,
                                                                            ShaderBindingId) const;
+        /** @brief Validates the exact prepared VFX material against this live selected-device pipeline owner. */
+        [[nodiscard]] Result<void> ValidateVfxMaterial(const VulkanPreparedMaterialBinding &material, std::uint64_t pipeline,
+                                                       const MaterialBindingLayout &layout) const;
         [[nodiscard]] Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const MaterialBindingDescriptor &, std::uint64_t,
                                                                                         std::span<const MaterialResidentResource>);
 

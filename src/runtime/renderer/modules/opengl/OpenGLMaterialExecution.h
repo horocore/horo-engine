@@ -36,6 +36,7 @@ namespace Horo::Render::Detail {
         RenderGraphicsPipelineState state;
         OpenGLMaterialContextFeatures features;
         std::span<const OpenGLMaterialSlot> slots;
+        std::uint32_t instanceCount{1}; /**< Existing geometry uses one; VFX supplies a validated finite uniform chunk. */
     };
 
     /** @brief Selected-context native consumer dispatch, owning no borrowed request after the call. */

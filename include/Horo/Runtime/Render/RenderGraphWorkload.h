@@ -147,6 +147,7 @@ namespace Horo::Render {
         /**< Exact frontend-resolved mesh instances used by typed multiview geometry; never native API handles. */
         std::span<const RenderGraphTextureViewInstance> views;
         RenderGraphExecutionRole role{RenderGraphExecutionRole::Scene};
+        std::span<const RenderGraphTargetInstance> targets; /**< Exact prepared targets used by typed native VFX. */
     };
 
     /**
@@ -165,4 +166,12 @@ namespace Horo::Render {
      * the frontend's explicit realized-set admission; every native backend must still validate its own objects.
      */
     [[nodiscard]] Result<void> ValidateRenderGraphExecutionRequest(const RenderGraphExecutionRequest &request);
+
+    /** @brief Validates complete issued forward VFX draws and their exact graph resource roles before native encoding.
+     * @param request Immutable graph and frontend-resolved identities. @param pass Retained graphics pass being checked.
+     * @param workload Exact prepared VFX snapshot, view order and attachment target.
+     * @return Success or typed malformed, stale publication or unsupported recipe failure; performs no native work.
+     */
+    [[nodiscard]] Result<void> ValidateVfxGraphWorkload(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
+                                                        const RenderGraphVfx &workload);
 }  // namespace Horo::Render

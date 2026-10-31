@@ -414,6 +414,14 @@ Material parameters remain typed semantic values. Renderer packing uses the
 selected artifact's validated target offsets/strides and binding map; C++ struct
 layout or another backend's reflection cannot substitute for that map.
 
+For active resources, normalized stage visibility is final-artifact evidence:
+it is a nonempty subset of the manifest's declared maximum visibility. Stage-local
+optimization does not alter the authored interface identity or make required
+native bindings optional. The cooker accumulates actual stage evidence, the
+canonical normalizer rejects unknown/undeclared stages, and native material
+preparation validates precisely that observed set. Globally inactive records keep
+their declared mask with `active=false`, preserving the existing metadata schema.
+
 ## Renderer Integration
 
 ### Terrain Material Boundary

@@ -153,8 +153,74 @@ Result<void> VulkanResourceRuntime::WriteHostFrameBuffer(const std::uint64_t ins
         (!HasBufferUsage(buffer->descriptor.usage, RenderBufferUsage::Uniform) && buffer->descriptor.usage != RenderBufferUsage::Vertex) ||
         bytes.size() != buffer->descriptor.byteSize)
         return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+    buffer->vfxPublished = false;
     if (!impl_->Upload(*buffer, bytes))
         return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
     buffer->graphState.contentsDefined = true;
+    return Result<void>::Success();
+}
+
+/** @copydoc VulkanResourceRuntime::VfxPublication */
+Result<VulkanVfxPublication> VulkanResourceRuntime::VfxPublication(const std::uint64_t instance) const {
+    const auto *buffer = Impl::Find(impl_->buffers, instance);
+    if (!buffer)
+        return Result<VulkanVfxPublication>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+    return Result<VulkanVfxPublication>::Success({buffer->handle, buffer->vfxRevision, buffer->vfxInstances, buffer->vfxPublished});
+}
+
+/** @copydoc VulkanResourceRuntime::UpdateVfxFrame */
+Result<void> VulkanResourceRuntime::UpdateVfxFrame(const NativeVfxFrameUpdate &update, const bool &closing) {
+    if (closing || !update.layout || !update.writeStatus || *update.writeStatus != VfxFrameWriteStatus::NotStarted ||
+        update.revision == 0 || update.instanceCount == 0 || update.instanceCount > MaximumVfxDrawInstances)
+        return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+    const auto *material = dynamic_cast<const VulkanPreparedMaterialBinding *>(update.material);
+    const auto found = impl_->buffers.find(update.instance);
+    if (!material || found == impl_->buffers.end() || update.deviceIncarnation != material->deviceIncarnation)
+        return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+    if (const auto valid = shaders_.ValidateVfxMaterial(*material, update.pipeline, *update.layout); valid.HasError())
+        return valid;
+    // Pin the existing generation across native map/unmap; this does not create another resource owner or identity.
+    const auto buffer = found->second;
+    if (buffer->descriptor.usage != RenderBufferUsage::Uniform || buffer->descriptor.access != RenderBufferAccess::HostVisible ||
+        update.parameters.size() != buffer->descriptor.byteSize || update.revision <= buffer->vfxRevision)
+        return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+    std::size_t matches{};
+    for (const auto &resource : material->resources)
+        if (resource.buffer == buffer->handle) {
+            if (resource.binding != VfxShaderParameterIds::Instances || resource.offset != 0 ||
+                resource.byteCount != update.parameters.size() || resource.backing.get() != buffer.get())
+                return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+            ++matches;
+        }
+    if (matches != 1)
+        return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+    if (update.cancellation.IsCancellationRequested())
+        return Result<void>::Failure(MakeError(VfxFrameErrors::Cancelled));
+    // Native dispatch can be injected in qualification. Revalidate the same registry generation after map,
+    // before writing, while the canonical command owner's borrow prevents device retirement on shutdown.
+    void *mapped{};
+    const auto device = impl_->device;
+    if (impl_->dispatch.mapMemory(device, buffer->memory, 0, update.parameters.size(), 0, &mapped) != VK_SUCCESS)
+        return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
+    const auto current = impl_->buffers.find(update.instance);
+    if (closing || current == impl_->buffers.end() || current->second.get() != buffer.get() || !mapped ||
+        update.cancellation.IsCancellationRequested() ||
+        shaders_.ValidateVfxMaterial(*material, update.pipeline, *update.layout).HasError()) {
+        impl_->dispatch.unmapMemory(device, buffer->memory);
+        return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+    }
+    *update.writeStatus = VfxFrameWriteStatus::Attempted;
+    buffer->vfxPublished = false;
+    std::ranges::copy(update.parameters, static_cast<std::byte *>(mapped));
+    impl_->dispatch.unmapMemory(device, buffer->memory);
+    const auto accepted = impl_->buffers.find(update.instance);
+    if (closing || accepted == impl_->buffers.end() || accepted->second.get() != buffer.get() ||
+        shaders_.ValidateVfxMaterial(*material, update.pipeline, *update.layout).HasError())
+        return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+    buffer->graphState.contentsDefined = true;
+    buffer->vfxRevision = update.revision;
+    buffer->vfxInstances = update.instanceCount;
+    buffer->vfxPublished = true;
+    *update.writeStatus = VfxFrameWriteStatus::Committed;
     return Result<void>::Success();
 }

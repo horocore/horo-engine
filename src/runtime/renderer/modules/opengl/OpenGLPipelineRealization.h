@@ -3,7 +3,27 @@
 #include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "OpenGLShaderRealization.h"
 
+#include <span>
+#include <string_view>
+
 namespace Horo::Render::Detail {
+    /** @brief Borrowed final driver attribute record; native enum values remain inside the OpenGL owner. */
+    struct OpenGLVertexAttribute {
+        std::string_view name;
+        std::uint32_t type{};
+        std::int32_t arrayCount{};
+        std::int32_t location{};
+    };
+
+    /** @brief Validates user MeshVertex inputs separately from the exact canonical VFX instance builtin.
+     * @param attributes At most four synchronous driver records; borrowed names expire with this call.
+     * @param descriptor Immutable logical manifest/target and final-target reflection; only the attribute boundary is checked here.
+     * @return Success for the exact cooked user inputs and at most one scalar-int gl_InstanceID on the canonical VFX schema.
+     * @details Pure preparation-time admission; no native calls, state changes, resource publication or frame work.
+     * Builtin locations are diagnostic driver values and never become MeshVertex stream locations. */
+    [[nodiscard]] Result<void> ValidateOpenGLVertexAttributes(std::span<const OpenGLVertexAttribute> attributes,
+                                                              const RenderGraphicsPipelineDescriptor &descriptor);
+
     /** @brief Maps an admitted reflected scalar/vector/matrix shape to its exact private native GL4.1 type.
      * @param type Portable scalar kind. @param rows Row count in the bounded 1..4 envelope.
      * @param columns Column count in the bounded 1..4 envelope.

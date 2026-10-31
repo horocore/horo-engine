@@ -64,6 +64,46 @@ using Horo::Render::ShaderManifest;
 using Horo::Render::ShaderReflectionCandidate;
 using Horo::Render::ShaderReflectionLimits;
 
+TEST_CASE("Active reflection visibility records observed stages within the authored maximum", "[runtime][renderer][shader-reflection]") {
+    using namespace ShaderReflectionTests;
+    const auto manifest = Manifest();
+    auto candidate = Candidate();
+    SECTION("Vertex survived optimization") {
+        candidate.bindings[0].stages = ShaderStageVisibility::Vertex;
+    }
+    SECTION("Fragment survived optimization") {
+        candidate.bindings[0].stages = ShaderStageVisibility::Fragment;
+    }
+    SECTION("Both stages survived optimization") {}
+    const auto normalized = NormalizeShaderReflection(manifest, Target(), candidate, AdmittedIncludes);
+    REQUIRE(normalized.HasValue());
+    CHECK(normalized.Value().bindings[0].stages == candidate.bindings[0].stages);
+    const auto authored = ComputeShaderInterfaceCompatibilityId(manifest);
+    REQUIRE(authored.HasValue());
+    CHECK(normalized.Value().interfaceCompatibility == authored.Value());
+}
+
+TEST_CASE("Active reflection rejects empty unknown undeclared or foreign stage evidence", "[runtime][renderer][shader-reflection]") {
+    using namespace ShaderReflectionTests;
+    auto candidate = Candidate();
+    SECTION("Active without an observed stage") {
+        candidate.bindings[0].stages = ShaderStageVisibility::None;
+    }
+    SECTION("Unknown stage bit") {
+        candidate.bindings[0].stages = static_cast<ShaderStageVisibility>(8);
+    }
+    SECTION("Known but undeclared compute stage") {
+        candidate.bindings[0].stages = ShaderStageVisibility::Compute;
+    }
+    SECTION("Observed vertex texture outside fragment declaration") {
+        candidate.bindings[1].stages = ShaderStageVisibility::Vertex;
+    }
+    SECTION("Foreign target evidence") {
+        candidate.backend = ShaderTargetBackend::Metal;
+    }
+    CHECK(NormalizeShaderReflection(Manifest(), Target(), candidate, AdmittedIncludes).HasError());
+}
+
 TEST_CASE("Shader reflection bounds final target stage names before admitting native lookup", "[runtime][renderer][shader-reflection]") {
     const ShaderManifest manifest = ShaderReflectionTests::Manifest();
     const auto target = ShaderReflectionTests::Target();

@@ -142,7 +142,8 @@ namespace Horo::Render {
                 case Null:
                     return format == ValidationFixture && environment == NoIntermediate;
                 case OpenGL:
-                    return format == Glsl410 && environment == VulkanIntermediate;
+                    return format == Glsl410 &&
+                           (environment == VulkanIntermediate || environment == ShaderIntermediateEnvironment::Vulkan12SpirV15);
                 case Vulkan:
                     return format == SpirV16 && environment == VulkanIntermediate;
                 case Metal:

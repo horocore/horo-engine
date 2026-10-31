@@ -130,10 +130,12 @@ target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicH
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
 target_sources(HoroVfxApiPublicHeaderConsumer PRIVATE support/VfxWorldPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/VfxDrawPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/ShaderArtifactPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphInspectionPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderFrontendInspectionPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/LightFramePoolPublicHeaderConsumer.cpp)
+target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/VfxFramePublicHeaderConsumer.cpp)
 if(TARGET HoroGuiPublicHeaderConsumer)
     target_sources(HoroGuiPublicHeaderConsumer PRIVATE support/EditorWrappedTextPublicHeaderConsumer.cpp)
 endif()
@@ -1105,6 +1107,8 @@ add_executable(HoroVfxRenderExtractionTests
         support/AllocationProbe.cpp
         unit/runtime/vfx/VfxRenderExtractionTests.cpp
         unit/runtime/vfx/VfxSchedulingTests.cpp
+        unit/runtime/vfx/VfxDrawDataTests.cpp
+        unit/runtime/vfx/VfxShaderParametersTests.cpp
 )
 target_compile_features(HoroVfxRenderExtractionTests PRIVATE cxx_std_20)
 target_include_directories(HoroVfxRenderExtractionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -2025,6 +2029,7 @@ target_include_directories(HoroGameplayRuntimeTests PRIVATE "${PROJECT_SOURCE_DI
 target_link_libraries(HoroGameplayRuntimeTests PRIVATE HoroEngine::GameplayRuntime)
 horo_add_gameplay_module(HoroTestGameModule
         MODULE_ID game.tests
+        INPUT_MANIFEST_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroTestGameModule/input-manifest.txt"
         NO_MANIFEST
         SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/TestGameModule.cpp
                 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/CharacterClientBehavior.cpp
@@ -3750,9 +3755,13 @@ target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform)
 add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp
-    unit/runtime/renderer/UiPaintReflectionCookTests.cpp)
+    unit/runtime/renderer/UiPaintReflectionCookTests.cpp
+    unit/runtime/renderer/VfxReflectionCookTests.cpp
+    support/LockedVfxShaderFixture.cpp)
 target_compile_features(HoroShaderReflectionCookTests PRIVATE cxx_std_20)
-target_include_directories(HoroShaderReflectionCookTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(HoroShaderReflectionCookTests PRIVATE
+        HORO_VFX_LOCKED_FIXTURE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shaders/vfx_locked")
+target_include_directories(HoroShaderReflectionCookTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/support")
 target_link_libraries(HoroShaderReflectionCookTests PRIVATE HoroEditorVulkanShaderInternal)
 horo_register_catch_test(HoroShaderReflectionCookTests LABELS "unit;renderer;shader;headless")
 
@@ -5135,6 +5144,7 @@ if (HORO_BUILD_RENDER_OPENGL)
             HoroEngine::RenderFrontend
             HoroEngine::RenderOpenGL
             HoroOpenGLHostAdmissionInternal
+            HoroEngine::VfxApi
     )
     if (HORO_ENABLE_GPU_SMOKE_TESTS)
         add_executable(HoroOpenGLSurfaceLifecycleSmoke integration/renderer/OpenGLSurfaceLifecycleSmoke.cpp)
@@ -5144,14 +5154,18 @@ if (HORO_BUILD_RENDER_OPENGL)
                 HoroEngine::RenderOpenGL HoroThirdParty::Glad HoroOpenGLHostAdmissionInternal)
         horo_register_catch_test(HoroOpenGLSurfaceLifecycleSmoke LABELS "gpu;display;opengl;surface")
         add_executable(HoroOpenGLMaterialSmoke integration/renderer/OpenGLMaterialSmoke.cpp)
+        target_sources(HoroOpenGLMaterialSmoke PRIVATE integration/renderer/OpenGLVfxSmoke.cpp support/LockedVfxShaderFixture.cpp)
+        target_compile_definitions(HoroOpenGLMaterialSmoke PRIVATE
+                HORO_VFX_LOCKED_FIXTURE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shaders/vfx_locked")
         target_compile_features(HoroOpenGLMaterialSmoke PRIVATE cxx_std_20)
         target_include_directories(HoroOpenGLMaterialSmoke PRIVATE
                 ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/opengl
                 ${PROJECT_SOURCE_DIR}/src/runtime/renderer/frontend
+                ${PROJECT_SOURCE_DIR}/tests/support
                 ${PROJECT_SOURCE_DIR}/tests/unit/runtime/renderer)
         target_link_libraries(HoroOpenGLMaterialSmoke PRIVATE Catch2::Catch2WithMain
                 HoroEngine::RenderFrontend HoroEngine::RenderOpenGL HoroThirdParty::Glad ${HORO_SDL3_TARGET}
-                HoroOpenGLHostAdmissionInternal)
+                HoroOpenGLHostAdmissionInternal HoroShaderReflectionCookInternal HoroEngine::VfxApi)
         # Xvfb coverage executes the same pixel/state contract, not hardware qualification.
         # The original native case remains registered for opt-in device qualification.
         catch_discover_tests(HoroOpenGLMaterialSmoke
@@ -5281,17 +5295,46 @@ if (HORO_BUILD_RENDER_METAL)
     if (HORO_ENABLE_GPU_SMOKE_TESTS)
         find_program(HORO_METAL_FIXTURE_XCRUN xcrun REQUIRED)
         set(metal_preparation_fixture "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.metallib")
+        # These fixture tools consume no engine-produced files. Avoid inheriting executable archive dependencies
+        # so their Apple-only tool environment cannot accidentally rebuild engine C/C++ with another developer profile.
+        set(metal_fixture_dependency_options)
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.27")
+            list(APPEND metal_fixture_dependency_options DEPENDS_EXPLICIT_ONLY)
+        endif()
         add_custom_command(OUTPUT "${metal_preparation_fixture}"
                 COMMAND "${HORO_METAL_FIXTURE_XCRUN}" -sdk macosx metal -std=macos-metal2.4 -mmacosx-version-min=14.0
                         -c "${CMAKE_CURRENT_SOURCE_DIR}/integration/renderer/MetalPreparationFixture.metal"
                         -o "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.air"
                 COMMAND "${HORO_METAL_FIXTURE_XCRUN}" -sdk macosx metallib "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.air"
                         -o "${metal_preparation_fixture}"
-                DEPENDS integration/renderer/MetalPreparationFixture.metal VERBATIM)
+                DEPENDS integration/renderer/MetalPreparationFixture.metal ${metal_fixture_dependency_options} VERBATIM)
         add_executable(HoroMetalShaderPreparationSmoke integration/renderer/MetalShaderPreparationSmoke.mm "${metal_preparation_fixture}")
+        # Compile the authentic locked translations through the existing native-fixture authority.
+        # Separate libraries preserve independent stage structs and ordinary/masked entry-point identities.
+        set(vfx_metal_fixtures)
+        foreach(vfx_stage IN ITEMS vs ps masked-ps)
+            set(vfx_library "${CMAKE_CURRENT_BINARY_DIR}/VfxLocked-${vfx_stage}.metallib")
+            add_custom_command(OUTPUT "${vfx_library}"
+                    COMMAND "${HORO_METAL_FIXTURE_XCRUN}" -sdk macosx metal -std=macos-metal2.4 -mmacosx-version-min=14.0
+                            -c "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shaders/vfx_locked/${vfx_stage}.metal"
+                            -o "${CMAKE_CURRENT_BINARY_DIR}/VfxLocked-${vfx_stage}.air"
+                    COMMAND "${HORO_METAL_FIXTURE_XCRUN}" -sdk macosx metallib
+                            "${CMAKE_CURRENT_BINARY_DIR}/VfxLocked-${vfx_stage}.air" -o "${vfx_library}"
+                    DEPENDS "fixtures/shaders/vfx_locked/${vfx_stage}.metal" ${metal_fixture_dependency_options} VERBATIM)
+            # Portable native tests admit these six exact captured inputs alongside the three real libraries.
+            foreach (vfx_suffix IN ITEMS metal reflection.json)
+                configure_file("${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shaders/vfx_locked/${vfx_stage}.${vfx_suffix}"
+                        "${CMAKE_CURRENT_BINARY_DIR}/vfx_locked/${vfx_stage}.${vfx_suffix}" COPYONLY)
+            endforeach ()
+            list(APPEND vfx_metal_fixtures "${vfx_library}")
+        endforeach()
+        target_sources(HoroMetalShaderPreparationSmoke PRIVATE integration/renderer/MetalVfxPreparationSmoke.mm
+                support/LockedVfxShaderFixture.cpp ${vfx_metal_fixtures})
         target_compile_features(HoroMetalShaderPreparationSmoke PRIVATE cxx_std_20)
         target_compile_options(HoroMetalShaderPreparationSmoke PRIVATE -fobjc-arc)
         target_compile_definitions(HoroMetalShaderPreparationSmoke PRIVATE HORO_METAL_PREPARATION_FIXTURE="MetalPreparationFixture.metallib")
+        target_compile_definitions(HoroMetalShaderPreparationSmoke PRIVATE HORO_VFX_METAL_FIXTURE_DIRECTORY="."
+                HORO_VFX_LOCKED_FIXTURE_DIRECTORY="vfx_locked")
         target_include_directories(HoroMetalShaderPreparationSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/support)
         target_link_libraries(HoroMetalShaderPreparationSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal HoroShaderReflectionCookInternal "-framework Metal")
         add_test(NAME HoroMetalShaderPreparationSmoke COMMAND HoroMetalShaderPreparationSmoke)

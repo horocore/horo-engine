@@ -28,7 +28,7 @@ namespace Horo::Render::Detail {
 
         /** @brief Reports actual baseline copy dispatch readiness after context loading. */
         bool ProductionIsGraphAvailable() noexcept {
-            return glCopyBufferSubData != nullptr;
+            return glCopyBufferSubData && glClearBufferfv && glDepthMask && glGetBooleanv;
         }
 
         /** @brief Copies checked resident ranges through the owning context's baseline dispatch. */
@@ -45,6 +45,18 @@ namespace Horo::Render::Detail {
 
         void ProductionClear(const std::uint32_t mask) noexcept {
             glClear(mask);
+        }
+
+        /** @brief Clears only depth without changing the stored clear value, stencil or caller's write mask. */
+        bool ProductionClearDepthBuffer(const float depth) noexcept {
+            if (!glClearBufferfv || !glDepthMask || !glGetBooleanv)
+                return false;
+            GLboolean writeMask{};
+            glGetBooleanv(GL_DEPTH_WRITEMASK, &writeMask);
+            glDepthMask(GL_TRUE);
+            glClearBufferfv(GL_DEPTH, 0, &depth);
+            glDepthMask(writeMask);
+            return true;
         }
 
         void ProductionGetInteger(const std::uint32_t name, const std::span<std::int32_t> values) noexcept {
@@ -125,6 +137,10 @@ namespace Horo::Render::Detail {
 
         void ProductionBindBuffer(const std::uint32_t target, const std::uint32_t object) {
             glBindBuffer(target, object);
+        }
+
+        void ProductionBufferSubData(const std::uint32_t target, const std::span<const std::byte> data) noexcept {
+            glBufferSubData(target, 0, static_cast<GLsizeiptr>(data.size()), data.data());
         }
 
         void ProductionBufferData(const std::uint32_t target, const std::size_t byteSize, const std::span<const std::byte> data,
@@ -213,6 +229,7 @@ namespace Horo::Render::Detail {
             .viewport = &ProductionViewport,
             .clearColor = &ProductionClearColor,
             .clear = &ProductionClear,
+            .clearDepthBuffer = &ProductionClearDepthBuffer,
             .state = {.getInteger = &ProductionGetInteger,
                       .getFloat = &ProductionGetFloat,
                       .getBoolean = &ProductionGetBoolean,
@@ -228,7 +245,8 @@ namespace Horo::Render::Detail {
                         .deleteBuffers = &ProductionDeleteBuffers,
                         .bindBuffer = &ProductionBindBuffer,
                         .bufferData = &ProductionBufferData,
-                        .copyBufferSubData = &ProductionCopyBufferSubData},
+                        .copyBufferSubData = &ProductionCopyBufferSubData,
+                        .bufferSubData = &ProductionBufferSubData},
             .vertexArrays = {.generateVertexArrays = &ProductionGenerateVertexArrays,
                              .deleteVertexArrays = &ProductionDeleteVertexArrays,
                              .bindVertexArray = &ProductionBindVertexArray,

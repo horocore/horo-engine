@@ -48,6 +48,14 @@ namespace Horo::Render::OpenGLResourceTests {
             OpenGLBackendTests::commandState.error = 0x0502U;
     }
 
+    /** @brief Records only depth dispatch at the actual selected graph framebuffer; no GPU image is synthesized. */
+    bool GraphClearDepth(const float value) noexcept {
+        ++graphCommandState.depthClears;
+        graphCommandState.depthValue = value;
+        graphCommandState.depthFramebuffer = OpenGLBackendTests::commandState.framebuffer;
+        return !graphCommandState.failDepthClear;
+    }
+
     void ProbeNoOp(std::uint32_t) noexcept {
         // This probe intentionally records no state.
     }
@@ -124,14 +132,19 @@ namespace Horo::Render::OpenGLResourceTests {
         // Texture parameters are outside this resource test's scope.
     }
 
-    void ProbeTextureImage(const Detail::OpenGLTextureImageDescriptor &) {
-        // Texture uploads are outside this resource test's scope.
+    void ProbeTextureImage(const Detail::OpenGLTextureImageDescriptor &image) {
+        resourceCommandState.imageInternalFormat = image.internalFormat;
+        resourceCommandState.imageFormat = image.format;
+        resourceCommandState.imageType = image.type;
+        resourceCommandState.imageBytes = image.initialData.size();
     }
 
-    void ProbeFramebufferTexture(std::uint32_t, std::uint32_t, const std::uint32_t texture, std::int32_t) {
+    void ProbeFramebufferTexture(std::uint32_t, const std::uint32_t attachment, const std::uint32_t texture, std::int32_t) {
         const auto slot = static_cast<std::size_t>(resourceCommandState.attachments++);
-        if (slot < resourceCommandState.attachedTextures.size())
+        if (slot < resourceCommandState.attachedTextures.size()) {
             resourceCommandState.attachedTextures[slot] = texture;
+            resourceCommandState.attachmentPoints[slot] = attachment;
+        }
     }
 
     std::uint32_t ProbeCheckFramebuffer(std::uint32_t) {
@@ -183,11 +196,8 @@ namespace Horo::Render::OpenGLResourceTests {
         return std::move(created).Value();
     }
 
-    /** @copydoc CreateGraphFrontend */
-    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateGraphFrontend(ResourcePresentationPort &port) {
-        resourceCommandState = {};
-        graphCommandState = {};
-        OpenGLBackendTests::commandState = {};
+    /** @copydoc GraphProbeFunctions */
+    [[nodiscard]] Detail::OpenGLCommandFunctions GraphProbeFunctions() noexcept {
         auto functions = ResourceProbeFunctions();
         functions.isGraphAvailable = +[]() noexcept {
             return true;
@@ -197,6 +207,16 @@ namespace Horo::Render::OpenGLResourceTests {
         functions.buffers.copyBufferSubData = &GraphCopy;
         functions.clear = &OpenGLBackendTests::ProbeClear;
         functions.clearColor = &OpenGLBackendTests::ProbeClearColor;
+        functions.clearDepthBuffer = &GraphClearDepth;
+        return functions;
+    }
+
+    /** @copydoc CreateGraphFrontend */
+    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateGraphFrontend(ResourcePresentationPort &port) {
+        resourceCommandState = {};
+        graphCommandState = {};
+        OpenGLBackendTests::commandState = {};
+        const auto functions = GraphProbeFunctions();
         RenderBackendRegistry registry;
         REQUIRE(Detail::RegisterOpenGLRenderBackendWithFunctions(registry, port, {}, functions).HasValue());
         REQUIRE(registry.Seal().HasValue());
@@ -371,6 +391,48 @@ namespace Horo::Render::OpenGLResourceTests {
         backend.DestroyTextureView(colorView.Value());
         backend.DestroyTexture(color.Value());
         Check(resourceCommandState.deletedTextures == 2);
+    }
+
+    TEST_CASE("OpenGL scene-linear half-float storage preserves exact typed byte and attachment admission",
+              "[unit][runtime][renderer][resource][vfx]") {
+        resourceCommandState = {};
+        ResourcePresentationPort port;
+        auto backend = CreateInitializedResourceBackend(port);
+        const RenderTextureDescriptor descriptor{.extent = {2, 2},
+                                                 .format = RenderTextureFormat::Rgba16Float,
+                                                 .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+        CHECK(backend->Capabilities().support.formats.Supports(descriptor));
+        const auto cost = backend->QueryTextureMemoryCost(descriptor);
+        REQUIRE(cost.HasValue());
+        CHECK(cost.Value().payloadBytes == 32);
+        const std::array<std::byte, 32> pixels{};
+        const auto placement = TestSupport::PlacementFor(cost.Value(), 1);
+        CHECK(backend->CreateTexture(descriptor, std::span{pixels}.first(31), placement).HasError());
+        const auto texture = backend->CreateTexture(descriptor, pixels, placement);
+        REQUIRE(texture.HasValue());
+        CHECK(resourceCommandState.imageInternalFormat == 0x881A);  // GL_RGBA16F
+        CHECK(resourceCommandState.imageFormat == 0x1908U);         // GL_RGBA
+        CHECK(resourceCommandState.imageType == 0x140BU);           // GL_HALF_FLOAT
+        CHECK(resourceCommandState.imageBytes == 32);
+        const auto view = backend->CreateTextureView(TextureViewDescriptor(2, RenderTextureFormat::Rgba16Float, RenderTextureAspect::Color),
+                                                     texture.Value());
+        REQUIRE(view.HasValue());
+        CHECK(
+            backend
+                ->CreateTextureView(TextureViewDescriptor(2, RenderTextureFormat::Rgba16Float, RenderTextureAspect::Depth), texture.Value())
+                .HasError());
+        const auto target = backend->CreateRenderTarget({.colorAttachment = {{1}, 2, 1}, .extent = {2, 2}}, view.Value(), 0);
+        REQUIRE(target.HasValue());
+        auto unsupported = descriptor;
+        unsupported.format = RenderTextureFormat::Rgba32Float;
+        CHECK(backend->QueryTextureMemoryCost(unsupported).HasError());
+        unsupported = descriptor;
+        unsupported.usage = RenderTextureUsage::Storage;
+        CHECK(backend->QueryTextureMemoryCost(unsupported).HasError());
+        backend->DestroyRenderTarget(target.Value());
+        backend->DestroyTextureView(view.Value());
+        backend->DestroyTexture(texture.Value());
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("OpenGL Generic Resources Realize And Roll Back Through Typed Contracts", "[unit][runtime][renderer][resource]") {

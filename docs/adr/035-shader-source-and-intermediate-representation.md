@@ -176,7 +176,14 @@ An unprovable required interface rejects the artifact/target.
 
 Optimization may remove an unused declared binding: record it as inactive for
 that exact variant, without renumbering logical IDs or treating a missing active
-required binding as optional. Undeclared active resources, incompatible stage I/O,
+required binding as optional. Manifest stage visibility is the authored maximum;
+an active reflected binding records the nonempty subset actually observed in the
+final stages. Unknown or undeclared stage bits fail validation. A globally inactive
+record retains its declared visibility with `active=false`; no stage consumes it.
+Removing a resource from one stage must not remove its surviving stages or make a
+missing active native argument optional. Native validation checks the actual
+reflected stage set, while logical interface compatibility remains manifest-owned.
+Undeclared active resources, incompatible stage I/O,
 overlapping native slots, unbounded dimensions or inconsistent parameter types
 fail validation. Generated combined samplers/helper bindings have explicit mappings
 and count toward actual target limits. OpenGL's flat binding and combined-sampler

@@ -179,6 +179,33 @@ namespace Horo::Render::Detail {
         }
     }  // namespace
 
+    TEST_CASE("Metal alternate uniform publication revokes VFX metadata only after upload admission",
+              "[integration][renderer][metal][gpu][ui-paint][vfx]") {
+        PaintSmoke fixture{FixtureRoot()};
+        const auto target = fixture.Texture(RenderTextureFormat::Rgba8Unorm, 5);
+        const std::array draws{fixture.Quad(Full, {1, 0, 0, 1})};
+        const auto pass = fixture.Pass(target, draws);
+        static_cast<void>(pass);
+        auto *uniform = reinterpret_cast<MetalBufferInstance *>(static_cast<std::uintptr_t>(fixture.buffers[2]));
+        // White-box native metadata isolates alias revocation; this is not a prepared VFX draw or shader qualification.
+        uniform->vfxPublished = true;
+        uniform->vfxRevision = 41;
+        uniform->vfxInstances = 7;
+        const auto rejected =
+            fixture.runtime.UpdateUiPaintFrame({fixture.buffers, {0, fixture.vertices, fixture.indices, fixture.parameters, {}}});
+        REQUIRE(rejected.HasError());
+        CHECK(uniform->vfxPublished);
+        REQUIRE(fixture.runtime.UpdateUiPaintFrame({fixture.buffers, {1, fixture.vertices, fixture.indices, fixture.parameters, {}}})
+                    .HasValue());
+        CHECK_FALSE(uniform->vfxPublished);
+        CHECK(uniform->vfxRevision == 41);
+        CHECK(uniform->vfxInstances == 7);
+        CHECK(uniform->uiPaintRevision == 1);
+        const auto *uploaded = static_cast<const UiPaintParameters *>(uniform->buffer.contents);
+        CHECK(uploaded->extent == fixture.parameters[0].extent);
+        CHECK(uploaded->opacity == fixture.parameters[0].opacity);
+    }
+
     TEST_CASE("Cooked native Metal UI rounded masks clip transformed pixels and balanced stencil",
               "[integration][renderer][metal][gpu][ui-paint]") {
         PaintSmoke fixture{FixtureRoot()};

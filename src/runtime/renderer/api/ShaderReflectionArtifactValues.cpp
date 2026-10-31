@@ -99,7 +99,8 @@ namespace Horo::Render::ShaderReflectionCookDetail {
                !artifact.reflectionTool.release.empty() && artifact.reflectionTool.release.size() <= 256 &&
                hasDigest(artifact.compiledArtifactKey) && hasDigest(artifact.payloadDigest) &&
                hasDigest(artifact.reflectionTool.buildDigest) &&
-               (artifact.reflection.backend == ShaderTargetBackend::Vulkan || artifact.reflection.backend == ShaderTargetBackend::Metal) &&
+               (artifact.reflection.backend == ShaderTargetBackend::Vulkan || artifact.reflection.backend == ShaderTargetBackend::Metal ||
+                artifact.reflection.backend == ShaderTargetBackend::OpenGL) &&
                hasDigest(artifact.reflection.interfaceCompatibility.digest) && artifact.reflection.sourceMap.empty() &&
                artifact.reflection.bindings.size() <= limits.maximumBindings &&
                artifact.reflection.parameters.size() <= limits.maximumParameters &&

@@ -1,6 +1,7 @@
 #include "VulkanResourceRuntime.h"
 
 #include "Horo/Runtime/Render/RenderCapabilities.h"
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "VulkanExternalRegistrationStorage.h"
 #include "VulkanRenderBackendErrors.h"
 #include "VulkanResourceConversions.h"
@@ -85,6 +86,9 @@ namespace Horo::Render::Detail {
         struct Buffer final : AllocationResource<VkBuffer, PFN_vkDestroyBuffer> {
             RenderBufferDescriptor descriptor;
             VulkanGraphResourceState graphState;
+            std::uint64_t vfxRevision{};
+            std::uint32_t vfxInstances{};
+            bool vfxPublished{};
         };
 
         struct Texture final : AllocationResource<VkImage, PFN_vkDestroyImage> {
