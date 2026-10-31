@@ -241,36 +241,47 @@ namespace Horo::Prefab {
     /** @copydoc BuildPrefabDependencyGraph */
     Result<PrefabDependencyGraphSnapshot> BuildPrefabDependencyGraph(const Assets::AssetRegistrySnapshot &registry,
                                                                      const std::vector<PrefabDependencySource> &sources,
-                                                                     const PrefabLimitProfile &limits) {
-        PrefabExpansionBudget budget{limits};
-        SourceMap sourceById;
-        NodeMap nodes;
+                                                                     const PrefabLimitProfile &limits, const PrefabMetricHandles &metrics) {
+        PrefabMetricOperation observation{metrics, PrefabMetricPhase::Graph};
+        auto result = [&]() -> Result<PrefabDependencyGraphSnapshot> {
+            PrefabExpansionBudget budget{limits};
+            SourceMap sourceById;
+            NodeMap nodes;
 
-        if (auto validated = ValidateAndCaptureNodes(registry, sources, limits, budget, sourceById, nodes); validated.HasError())
-            return Result<PrefabDependencyGraphSnapshot>::Failure(std::move(validated).ErrorValue());
-        auto processedEdges = ProcessEdges(registry, sources, sourceById, nodes, budget);
-        if (processedEdges.HasError())
-            return Result<PrefabDependencyGraphSnapshot>::Failure(std::move(processedEdges).ErrorValue());
-        std::vector<PrefabDependencyEdge> edges = std::move(processedEdges).Value();
+            if (auto validated = ValidateAndCaptureNodes(registry, sources, limits, budget, sourceById, nodes); validated.HasError())
+                return Result<PrefabDependencyGraphSnapshot>::Failure(std::move(validated).ErrorValue());
+            auto processedEdges = ProcessEdges(registry, sources, sourceById, nodes, budget);
+            if (processedEdges.HasError())
+                return Result<PrefabDependencyGraphSnapshot>::Failure(std::move(processedEdges).ErrorValue());
+            std::vector<PrefabDependencyEdge> edges = std::move(processedEdges).Value();
 
-        std::ranges::sort(edges);
-        edges.erase(std::ranges::unique(edges).begin(), edges.end());
-        std::vector<PrefabDependencyEdge> reverseEdges = edges;
-        std::ranges::sort(reverseEdges, [](const PrefabDependencyEdge &left, const PrefabDependencyEdge &right) {
-            if (left.targetAsset != right.targetAsset)
-                return left.targetAsset < right.targetAsset;
-            if (left.sourcePrefab != right.sourcePrefab)
-                return left.sourcePrefab < right.sourcePrefab;
-            return left.kind < right.kind;
-        });
+            std::ranges::sort(edges);
+            edges.erase(std::ranges::unique(edges).begin(), edges.end());
+            std::vector<PrefabDependencyEdge> reverseEdges = edges;
+            std::ranges::sort(reverseEdges, [](const PrefabDependencyEdge &left, const PrefabDependencyEdge &right) {
+                if (left.targetAsset != right.targetAsset)
+                    return left.targetAsset < right.targetAsset;
+                if (left.sourcePrefab != right.sourcePrefab)
+                    return left.sourcePrefab < right.sourcePrefab;
+                return left.kind < right.kind;
+            });
 
-        std::vector<PrefabDependencyNode> canonicalNodes;
-        canonicalNodes.reserve(nodes.size());
-        for (auto &[id, node] : nodes) {
-            static_cast<void>(id);
-            canonicalNodes.push_back(std::move(node));
+            std::vector<PrefabDependencyNode> canonicalNodes;
+            canonicalNodes.reserve(nodes.size());
+            for (auto &[id, node] : nodes) {
+                static_cast<void>(id);
+                canonicalNodes.push_back(std::move(node));
+            }
+            return Result<PrefabDependencyGraphSnapshot>::Success(
+                PrefabDependencyGraphSnapshot{registry.Revision(), std::move(canonicalNodes), std::move(edges), std::move(reverseEdges)});
+        }();
+        if (result.HasError())
+            observation.Fail(result.ErrorValue());
+        else {
+            observation.Observe(PrefabMetricItem::GraphNodes, result.Value().Nodes().size());
+            observation.Observe(PrefabMetricItem::GraphEdges, result.Value().Edges().size());
+            observation.Complete();
         }
-        return Result<PrefabDependencyGraphSnapshot>::Success(
-            PrefabDependencyGraphSnapshot{registry.Revision(), std::move(canonicalNodes), std::move(edges), std::move(reverseEdges)});
+        return result;
     }
 }  // namespace Horo::Prefab

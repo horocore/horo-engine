@@ -1082,6 +1082,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
+    Horo/Prefab/PrefabMetrics.h
     Horo/Prefab/CookedPrefab.h
     Horo/Prefab/PrefabErrors.h
     Horo/Prefab/PrefabIdentity.h

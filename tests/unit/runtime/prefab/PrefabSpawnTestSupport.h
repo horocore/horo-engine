@@ -104,8 +104,8 @@ namespace Horo::Prefab::SpawnTest {
         Sha256Digest digest;
         std::size_t fieldCount;
 
-        explicit Fixture(const std::size_t fields = 2, const PrefabProjectPolicy policy = {})
-            : templates{registry, loads, scenes, PrefabLimitProfile::Create(policy).Value()}, fieldCount(fields) {
+        explicit Fixture(const std::size_t fields = 2, const PrefabProjectPolicy policy = {}, PrefabMetricHandles metrics = {})
+            : templates{registry, loads, scenes, PrefabLimitProfile::Create(policy).Value(), {}, std::move(metrics)}, fieldCount(fields) {
             const auto assetType = Assets::AssetTypeId::Parse("core.prefab").Value();
             const auto published = registry.Publish({{Test::Asset(), assetType, ProjectPath::Parse("assets/test.prefab").Value(),
                                                       ProjectPath::Parse("assets/test.prefab.horo").Value()}});

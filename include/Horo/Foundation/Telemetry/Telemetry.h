@@ -306,6 +306,11 @@ namespace Horo::Telemetry {
          */
         [[nodiscard]] static bool IsEnabled() noexcept;
 
+        /** @brief Reads the current process registration generation without descriptor traversal.
+         * @return Current numeric generation, or zero when no Telemetry runtime is installed.
+         */
+        [[nodiscard]] static std::uint32_t Generation() noexcept;
+
         /**
          * @brief Checks event severity and subsystem policy before formatting or allocation.
          * @param subsystem Candidate hierarchical subsystem.
@@ -327,6 +332,13 @@ namespace Horo::Telemetry {
          * @return False when disabled, stopping, stale, or rejected by the bounded queue.
          */
         [[nodiscard]] static bool EmitRecord(Record record) noexcept;
+
+        /** @brief Enqueues only into the exact captured process registration generation.
+         * @param record Owned record. @param expectedGeneration Nonzero generation retained at operation admission.
+         * @return False for zero/stale generation, disabled/stopping runtime, filtering or bounded queue loss.
+         * @details Generation validation and publication use one captured canonical runtime state.
+         */
+        [[nodiscard]] static bool EmitRecord(Record record, std::uint32_t expectedGeneration) noexcept;
 
         /**
          * @brief Registers a monotonic counter outside latency-sensitive paths.

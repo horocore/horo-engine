@@ -145,14 +145,27 @@ namespace Horo::Prefab {
             return Result<PrefabExpansionCacheKey>::Failure(digests.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<PrefabExpansionCacheKey>::Failure(MakeError(PrefabErrors::Cancelled));
-        return Result<PrefabExpansionCacheKey>::Success(
-            PrefabExpansionCacheKey{root, instance, std::move(revision).Value(), limits.Policy(), std::move(digests).Value()});
+        return Result<PrefabExpansionCacheKey>::Success(PrefabExpansionCacheKey{root, instance, std::move(revision).Value(),
+                                                                                limits.Policy(), std::move(digests).Value(),
+                                                                                resolver.Metrics()});
     }
 
     /** @copydoc PrefabExpansionCache::Find */
     std::shared_ptr<const EffectivePrefabCandidate> PrefabExpansionCache::Find(const PrefabExpansionCacheKey &key) const {
-        if (!IsOwner())
+        PrefabMetricOperation observation{key.metrics_, PrefabMetricPhase::Cache};
+        if (!IsOwner()) {
+            RecordPrefabCacheEvent(key.metrics_, PrefabMetricCacheEvent::Rejected);
+            observation.Complete(PrefabMetricOutcome::Failed);
             return {};
+        }
+        const auto found = FindUnobserved(key);
+        RecordPrefabCacheEvent(key.metrics_, found ? PrefabMetricCacheEvent::Hit : PrefabMetricCacheEvent::Miss);
+        observation.Complete();
+        return found;
+    }
+
+    /** @copydoc PrefabExpansionCache::FindUnobserved */
+    std::shared_ptr<const EffectivePrefabCandidate> PrefabExpansionCache::FindUnobserved(const PrefabExpansionCacheKey &key) const {
         const auto found = std::ranges::find(entries_, key, &Entry::key);
         return found == entries_.end() ? nullptr : found->candidate;
     }
@@ -160,12 +173,24 @@ namespace Horo::Prefab {
     /** @copydoc PrefabExpansionCache::Store */
     Result<std::shared_ptr<const EffectivePrefabCandidate>> PrefabExpansionCache::Store(PrefabExpansionCacheKey key,
                                                                                         EffectivePrefabCandidate candidate) {
-        try {
-            return StoreImpl(std::move(key), std::move(candidate));
-        } catch (const std::bad_alloc &) {
-            return Result<std::shared_ptr<const EffectivePrefabCandidate>>::Failure(
-                MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+        const auto metrics = key.metrics_;
+        PrefabMetricOperation observation{metrics, PrefabMetricPhase::Cache};
+        auto result = [&]() -> Result<std::shared_ptr<const EffectivePrefabCandidate>> {
+            try {
+                return StoreImpl(std::move(key), std::move(candidate));
+            } catch (const std::bad_alloc &) {
+                return Result<std::shared_ptr<const EffectivePrefabCandidate>>::Failure(
+                    MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+            }
+        }();
+        if (result.HasError()) {
+            RecordPrefabCacheEvent(metrics, PrefabMetricCacheEvent::Rejected);
+            observation.Fail(result.ErrorValue());
+        } else {
+            observation.Observe(PrefabMetricItem::CacheBytes, retainedBytes_);
+            observation.Complete();
         }
+        return result;
     }
 
     Result<std::shared_ptr<const EffectivePrefabCandidate>> PrefabExpansionCache::StoreImpl(PrefabExpansionCacheKey key,
@@ -177,7 +202,7 @@ namespace Horo::Prefab {
             return Result<Lease>::Failure(MakeError(PrefabErrors::ExpansionCacheCapacityExceeded));
         if (!Matches(key, candidate))
             return Result<Lease>::Failure(MakeError(PrefabErrors::ResolutionStale));
-        if (const auto existing = Find(key))
+        if (const auto existing = FindUnobserved(key))
             return Result<Lease>::Success(existing);
         const auto measured = MeasureEntry(key, candidate);
         if (measured.HasError())
@@ -188,6 +213,7 @@ namespace Horo::Prefab {
         auto lease = std::make_shared<const EffectivePrefabCandidate>(std::move(candidate));
         entries_.reserve(limits_.maximumEntries);
         while (entries_.size() >= limits_.maximumEntries || retainedBytes_ > limits_.maximumRetainedBytes - measured.Value()) {
+            RecordPrefabCacheEvent(key.metrics_, PrefabMetricCacheEvent::Evicted);
             retainedBytes_ -= entries_.front().bytes;
             entries_.erase(entries_.begin());
         }

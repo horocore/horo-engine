@@ -14,6 +14,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Prefab/PrefabLimits.h"
+#include "Horo/Prefab/PrefabMetrics.h"
 #include "Horo/Prefab/PrefabSourceRevision.h"
 
 #include <cstddef>
@@ -78,7 +79,12 @@ namespace Horo::Prefab {
         std::size_t maximumJsonDepth{PrefabHardLimits::SourceJsonDepth};       /**< Maximum nested JSON container depth. */
         std::optional<Application::HoroVersion> expectedProjectVersion;        /**< Optional exact unified project version to require. */
 
-        [[nodiscard]] bool operator==(const PrefabSourceParseLimits &) const noexcept = default;
+        const PrefabMetricHandles *metrics{}; /**< Explicit host observer borrowed only during synchronous parsing; never serialized. */
+
+        [[nodiscard]] bool operator==(const PrefabSourceParseLimits &other) const noexcept {
+            return maximumSourceBytes == other.maximumSourceBytes && maximumJsonDepth == other.maximumJsonDepth &&
+                   expectedProjectVersion == other.expectedProjectVersion;
+        }
     };
 
     /** @brief Compatibility of preserved project-owned data with the currently available provider snapshot. */

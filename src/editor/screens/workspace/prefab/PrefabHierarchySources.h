@@ -33,6 +33,7 @@ namespace Horo::Editor {
      * @param roots Requested placement source identities. @param limits Canonical project prefab policy.
      * @param version Exact admitted project version. @param cancellation Cooperative stop checked before every bounded capture and before
      * publication.
+     * @param metrics Explicit host-prebound numeric observation configuration.
      * @return Complete resolver and selected capture, or typed read/identity/parser/capacity/stale/cancel failure.
      * @pre The host retains its project lease through this call and owner publication; queries and Draw never call it.
      * @details At most 256 sources and 64 MiB source/sidecar storage are admitted, retaining the canonical 32 MiB per-source
@@ -41,7 +42,8 @@ namespace Horo::Editor {
      */
     [[nodiscard]] Result<PrefabHierarchySources> CapturePrefabHierarchySources(
         const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry, std::span<const Assets::AssetId> roots,
-        const Prefab::PrefabLimitProfile &limits, const Application::HoroVersion &version, const CancellationToken &cancellation = {});
+        const Prefab::PrefabLimitProfile &limits, const Application::HoroVersion &version, const CancellationToken &cancellation = {},
+        const Prefab::PrefabMetricHandles &metrics = {});
 }  // namespace Horo::Editor
 
 #endif

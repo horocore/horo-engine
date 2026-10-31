@@ -1240,3 +1240,36 @@ Source conversion resolves locals through the canonical occurrence identity map
 before Scene definition admission. Cooked hosts retain local endpoints only until
 exact source-provenance resolution produces typed group body fixups; Runtime Scene
 resolves those fixups against candidate entities before Physics binding.
+
+## Bounded pipeline observations (HORO-1077 / PFB-008.2)
+
+Application composition registers Prefab metric handles once after process Telemetry
+startup. Numeric prebound handles are copied explicitly through source capture,
+immutable resolver/candidate evidence, cache requests, cook requests and runtime
+providers. They own no host/service pointer and are excluded from canonical bytes,
+source revisions, cook settings and cache-key equality. Legacy callers default to
+observation off; source-compatible API additions carry the explicit configuration.
+
+Eight closed phases and four terminal outcomes produce at most 32 operation series.
+Separate fixed count/byte, duration and cache vocabularies prevent identities, paths,
+component types, display names or arbitrary errors from becoming metric dimensions.
+Graph node/edge and bounded item sizes come from actual model outputs. External
+cache hits/misses exclude internal store deduplication; eviction/rejection report
+actual bounded storage behavior. Each canonical measured boundary is an attempt,
+so a cook may include separately measured graph, resolve, expansion and template
+work. Observations are never used to decide an engine result or publication.
+
+Disabled/stale operation construction performs no clock, string, span or MDC work.
+Process policy controls Core counters and Detailed durations/logical span events.
+Spans retain only canonical numeric operation lineage and use the existing Telemetry
+SpanRecord envelope with empty context/fields. Runtime spawn prepares its span at
+admission and completes once from actual Scene receipt/failure/cancellation/shutdown;
+normal empty Advance polls add no instrumentation work. Generation-scoped ingestion
+uses one captured canonical Telemetry state, preventing retired operations from
+publishing into a restarted runtime. Allocation, filtering, queue loss and retired
+handles suppress observations while preserving authoritative behavior.
+
+These are logical operation events, not proof of an implemented CPU/GPU profiler
+capture backend. See [Prefab metrics](../../guides/prefab-metrics.md) for ownership,
+series bounds, integration and focused validation.
+

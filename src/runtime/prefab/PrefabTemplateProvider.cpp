@@ -173,12 +173,18 @@ namespace Horo::Prefab {
     /** @copydoc PrefabTemplateProvider::PrefabTemplateProvider */
     PrefabTemplateProvider::PrefabTemplateProvider(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads,
                                                    Runtime::RuntimeSceneService &scenes, PrefabLimitProfile profile,
-                                                   PrefabTemplateProviderLimits limits)
-        : state_(std::make_unique<Detail::PrefabTemplateProviderState>(registry, loads, scenes, std::move(profile), limits)) {}
+                                                   PrefabTemplateProviderLimits limits, PrefabMetricHandles metrics)
+        : state_(std::make_unique<Detail::PrefabTemplateProviderState>(registry, loads, scenes, std::move(profile), limits,
+                                                                       std::move(metrics))) {}
 
     /** @copydoc PrefabTemplateProvider::LimitProfile */
     const PrefabLimitProfile &PrefabTemplateProvider::LimitProfile() const noexcept {
         return state_->profile;
+    }
+
+    /** @copydoc PrefabTemplateProvider::Metrics */
+    const PrefabMetricHandles &PrefabTemplateProvider::Metrics() const noexcept {
+        return state_->metrics;
     }
 
     /** @copydoc PrefabTemplateProvider::~PrefabTemplateProvider */

@@ -33,8 +33,9 @@ namespace Horo::Application::Internal {
         const HeadlessSceneLoadBoundary &load;
         std::span<const AI::AiControllerDescriptor> aiControllers; /**< Immutable explicit catalog, outliving all returned services. */
         AI::AiSceneRuntimeSettings aiSettings{};
-        Assets::AssetLoadService *prefabLoads{};  /**< Optional exact-envelope loader; outlives all granted prefab services. */
-        Prefab::PrefabProjectPolicy prefabPolicy; /**< Explicit host-admitted policy; declared engine defaults preserve old callers. */
+        Assets::AssetLoadService *prefabLoads{};   /**< Optional exact-envelope loader; outlives all granted prefab services. */
+        Prefab::PrefabMetricHandles prefabMetrics; /**< Explicit process-prebound observation configuration. */
+        Prefab::PrefabProjectPolicy prefabPolicy;  /**< Explicit host-admitted policy; declared engine defaults preserve old callers. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

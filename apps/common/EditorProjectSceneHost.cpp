@@ -83,7 +83,8 @@ namespace Horo::Application::Internal {
                     return added;
                 if (policy.prefabGranted) {
                     prefab_.templates =
-                        std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(*prefabLimits));
+                        std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(*prefabLimits),
+                                                                         Prefab::PrefabTemplateProviderLimits{}, policy.prefabMetrics);
                     return prefab_.templates->Startup({});
                 }
                 return Result<void>::Success();

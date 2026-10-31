@@ -20,9 +20,12 @@
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
         /** @brief Composes the explicit project loader and retains its cooperative lease through cache publication. */
-        PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations) {
-            return [root, mutations](const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
-                                     const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation) {
+        PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations,
+                                                   Prefab::PrefabMetricHandles metrics) {
+            return [root, mutations, metrics = std::move(metrics)](const Assets::AssetRegistrySnapshot &registry,
+                                                                   const std::span<const Assets::AssetId> roots,
+                                                                   const Prefab::PrefabLimitProfile &limits,
+                                                                   const CancellationToken &cancellation) {
                 if (mutations == nullptr)
                     return Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
                 auto lease = mutations->TryAcquire({root, ProjectMutationOwner::Asset, "prefab.hierarchy.capture"});
@@ -31,8 +34,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 auto project = Application::LoadProjectSourceDocument(root);
                 if (project.HasError())
                     return Result<PreparedPrefabHierarchySources>::Failure(project.ErrorValue());
-                auto sources =
-                    CapturePrefabHierarchySources(root, registry, roots, limits, project.Value().metadata.horoVersion.value, cancellation);
+                auto sources = CapturePrefabHierarchySources(root, registry, roots, limits, project.Value().metadata.horoVersion.value,
+                                                             cancellation, metrics);
                 if (sources.HasError())
                     return Result<PreparedPrefabHierarchySources>::Failure(sources.ErrorValue());
                 return Result<PreparedPrefabHierarchySources>::Success({std::move(sources).Value(), std::move(lease).Value()});
@@ -194,7 +197,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
                                            .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                            .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-                                           .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                           .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations,
+                                                                               services_.TryGetConst<Prefab::PrefabMetricHandles>()
+                                                                                   ? *services_.TryGetConst<Prefab::PrefabMetricHandles>()
+                                                                                   : Prefab::PrefabMetricHandles{}),
                                                       .stageFactory = BindPrefabStageFactory(projectRoot)},
                                            .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)}};
     }

@@ -24,6 +24,7 @@ namespace Horo::Prefab::Detail {
     struct PrefabSpawnOperation final {
         explicit PrefabSpawnOperation(const CancellationToken &parent) : cancellation(parent) {}
 
+        PrefabMetricOperation measurement;
         Prefab::PrefabSpawnState status{Prefab::PrefabSpawnState::Pending};
         CancellationSource cancellation;
         CancellationToken scopeCancellation;
@@ -50,6 +51,8 @@ namespace Horo::Prefab::Detail {
                     prepared->entities.push_back(entry.entity);
                 instance.state_ = std::move(prepared);
             }
+            measurement.Observe(PrefabMetricItem::RuntimeEntities, receipt->ResultValue()->created.size());
+            measurement.Complete();
             status = Prefab::PrefabSpawnState::Committed;
             load.reset();
             lease.reset();
@@ -61,6 +64,10 @@ namespace Horo::Prefab::Detail {
             status = cancellation.Token().IsCancellationRequested() || scopeCancellation.IsCancellationRequested()
                          ? Prefab::PrefabSpawnState::Cancelled
                          : Prefab::PrefabSpawnState::Failed;
+            if (status == Prefab::PrefabSpawnState::Cancelled)
+                measurement.Complete(PrefabMetricOutcome::Cancelled);
+            else
+                measurement.Fail(*error);
             load.reset();
             lease.reset();
             prepared.reset();
@@ -80,7 +87,8 @@ namespace Horo::Prefab::Detail {
                          const Gameplay::ComponentRegistry *registry, const PrefabComponentProjector *codec, SpawnDispatcher spawn,
                          DespawnDispatcher despawn)
             : submitSpawn(std::move(spawn)), submitDespawn(std::move(despawn)), provider(&templates), scenes(&sceneService),
-              components(registry), projector(codec), maximumSpawnDepth(templates.LimitProfile().Policy().maximumRuntimeSpawnDepth),
+              components(registry), projector(codec), metrics(templates.Metrics()),
+              maximumSpawnDepth(templates.LimitProfile().Policy().maximumRuntimeSpawnDepth),
               maximumInstanceBindings(templates.LimitProfile().Policy().maximumInstanceBindings) {
             if (const auto active = scenes->ActiveScene())
                 scene = active->RuntimeId();
@@ -100,7 +108,8 @@ namespace Horo::Prefab::Detail {
         }
 
         /** @brief Checks finite request/observation capacities and overflow-safe scheduling before allocation. */
-        [[nodiscard]] Result<void> Admit(const std::uint64_t due, const CancellationToken &scope, const CancellationToken &cancellation) {
+        [[nodiscard]] Result<void> Admit(const std::uint64_t due, const CancellationToken &scope, const CancellationToken &cancellation,
+                                         bool *overflow = nullptr) {
             if (auto valid = Check(); valid.HasError())
                 return valid;
             if (scope.IsCancellationRequested() || cancellation.IsCancellationRequested())
@@ -110,8 +119,11 @@ namespace Horo::Prefab::Detail {
             std::erase_if(retained, [](const auto &entry) {
                 return entry.expired();
             });
-            if (pending.size() >= 32 || retained.size() >= 128)
+            if (pending.size() >= 32 || retained.size() >= 128) {
+                if (overflow)
+                    *overflow = true;
                 return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Prefab operation capacity exhausted."));
+            }
             // Both allocations precede worker admission, so accepted loads cannot be abandoned by queue growth.
             pending.reserve(32);
             retained.reserve(128);
@@ -150,37 +162,52 @@ namespace Horo::Prefab::Detail {
         [[nodiscard]] Result<PrefabOperation> Spawn(const PrefabSpawnRequest &request, const std::uint64_t scopeId,
                                                     const CancellationToken &scope, const CancellationToken &cancellation,
                                                     const std::span<const Assets::AssetId> lineage) {
-            if (auto valid = Admit(request.notBeforeTick, scope, cancellation); valid.HasError())
-                return Result<PrefabOperation>::Failure(valid.ErrorValue());
-            if (lineage.size() >= maximumSpawnDepth)
-                return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::SpawnDepthExceeded));
-            if (std::ranges::find(lineage, request.source.asset) != lineage.end())
-                return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::SpawnRecursionDetected));
-            if (request.placement.TryToMatrix().HasError() || request.initialization.size() > MaximumPrefabInitializationValues ||
-                request.bindings.size() > maximumInstanceBindings)
-                return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::AdmissionRejected));
-            if (auto valid = ValidateInitialization(request); valid.HasError())
-                return Result<PrefabOperation>::Failure(valid.ErrorValue());
-            if (auto valid = ValidateBindings(request); valid.HasError())
-                return Result<PrefabOperation>::Failure(valid.ErrorValue());
-            if (request.parent && scenes->ActiveScene()->Get(*request.parent).HasError())
-                return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::InvalidParent));
-            auto operation = std::make_shared<PrefabSpawnOperation>(cancellation);
-            operation->scope = scopeId;
-            operation->scopeCancellation = scope;
-            operation->due = request.notBeforeTick;
-            operation->request = request;
-            operation->lineage.assign(lineage.begin(), lineage.end());
-            operation->lineage.push_back(operation->request.source.asset);
-            auto load = provider->LoadAsync(operation->request.source, operation->cancellation.Token());
-            if (load.HasError())
-                return Result<PrefabOperation>::Failure(load.ErrorValue());
-            operation->load.emplace(std::move(load).Value());
-            pending.push_back(operation);
-            retained.push_back(operation);
-            PrefabOperation handle;
-            handle.operation_ = std::move(operation);
-            return Result<PrefabOperation>::Success(std::move(handle));
+            PrefabMetricOperation attempt{metrics, PrefabMetricPhase::Spawn};
+            bool overflow{};
+            auto result = [&]() -> Result<PrefabOperation> {
+                if (auto valid = Admit(request.notBeforeTick, scope, cancellation, &overflow); valid.HasError())
+                    return Result<PrefabOperation>::Failure(valid.ErrorValue());
+                if (lineage.size() >= maximumSpawnDepth)
+                    return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::SpawnDepthExceeded));
+                if (std::ranges::find(lineage, request.source.asset) != lineage.end())
+                    return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::SpawnRecursionDetected));
+                if (request.placement.TryToMatrix().HasError() || request.initialization.size() > MaximumPrefabInitializationValues ||
+                    request.bindings.size() > maximumInstanceBindings) {
+                    overflow = request.initialization.size() > MaximumPrefabInitializationValues ||
+                               request.bindings.size() > maximumInstanceBindings;
+                    return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::AdmissionRejected));
+                }
+                if (auto valid = ValidateInitialization(request); valid.HasError())
+                    return Result<PrefabOperation>::Failure(valid.ErrorValue());
+                if (auto valid = ValidateBindings(request); valid.HasError())
+                    return Result<PrefabOperation>::Failure(valid.ErrorValue());
+                if (request.parent && scenes->ActiveScene()->Get(*request.parent).HasError())
+                    return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::InvalidParent));
+                auto operation = std::make_shared<PrefabSpawnOperation>(cancellation);
+                operation->scope = scopeId;
+                operation->scopeCancellation = scope;
+                operation->due = request.notBeforeTick;
+                operation->request = request;
+                operation->lineage.assign(lineage.begin(), lineage.end());
+                operation->lineage.push_back(operation->request.source.asset);
+                auto load = provider->LoadAsync(operation->request.source, operation->cancellation.Token());
+                if (load.HasError())
+                    return Result<PrefabOperation>::Failure(load.ErrorValue());
+                operation->load.emplace(std::move(load).Value());
+                pending.push_back(operation);
+                retained.push_back(operation);
+                operation->measurement = std::move(attempt);
+                PrefabOperation handle;
+                handle.operation_ = std::move(operation);
+                return Result<PrefabOperation>::Success(std::move(handle));
+            }();
+            if (result.HasError()) {
+                if (overflow)
+                    attempt.Complete(PrefabMetricOutcome::Overflow);
+                else
+                    attempt.Fail(result.ErrorValue());
+            }
+            return result;
         }
 
         /** @brief Accepts only exact committed group identities created under this module scope. */
@@ -537,6 +564,7 @@ namespace Horo::Prefab::Detail {
         Runtime::RuntimeSceneService *scenes;
         const Gameplay::ComponentRegistry *components;
         const PrefabComponentProjector *projector;
+        const PrefabMetricHandles metrics;
         const std::size_t maximumSpawnDepth; /**< Immutable provider policy; retained clients never query mutable project state. */
         const std::size_t maximumInstanceBindings;
         const std::thread::id owner{std::this_thread::get_id()};

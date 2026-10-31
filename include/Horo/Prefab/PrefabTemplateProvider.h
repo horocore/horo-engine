@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Prefab/PrefabMetrics.h"
 
 /** @file PrefabTemplateProvider.h
  * @brief Registry-pinned canonical runtime prefab preparation and scene-bound lease admission.
@@ -132,15 +133,18 @@ namespace Horo::Prefab {
          * @param scenes Active-scene authority, outliving this provider.
          * @param profile Captured validated prefab policy.
          * @param limits Bounded provider capacities. Invalid limits fail Startup and LoadAsync.
+         * @param metrics Explicit process-prebound handles copied into the provider, never registered here.
          */
         PrefabTemplateProvider(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads, Runtime::RuntimeSceneService &scenes,
-                               PrefabLimitProfile profile, PrefabTemplateProviderLimits limits = {});
+                               PrefabLimitProfile profile, PrefabTemplateProviderLimits limits = {}, PrefabMetricHandles metrics = {});
         ~PrefabTemplateProvider() override;
         PrefabTemplateProvider(const PrefabTemplateProvider &) = delete;
         PrefabTemplateProvider &operator=(const PrefabTemplateProvider &) = delete;
         /** @brief Read the immutable policy captured at provider construction.
          * @return Borrowed validated profile, valid for this provider's lifetime; never current project state. */
         [[nodiscard]] const PrefabLimitProfile &LimitProfile() const noexcept;
+        /** @brief Returns host-captured numeric observation handles. @return Immutable configuration with no host borrow. */
+        [[nodiscard]] const PrefabMetricHandles &Metrics() const noexcept;
         /** @brief Captures registry and active scene, then admits a bounded canonical load.
          * @param request Exact root identity, generation digest and cook target.
          * @param cancellation Parent cancellation ancestry.

@@ -200,9 +200,10 @@ namespace Horo::Prefab {
 
     /** @copydoc EffectivePrefabCandidate::EffectivePrefabCandidate */
     EffectivePrefabCandidate::EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision,
-                                                       std::vector<ResolvedPrefabObject> objects,
-                                                       const Sha256Digest &valueOverrides) noexcept
-        : rootAsset_(rootAsset), revision_(std::move(revision)), objects_(std::move(objects)), valueOverrides_(valueOverrides) {}
+                                                       std::vector<ResolvedPrefabObject> objects, const Sha256Digest &valueOverrides,
+                                                       const PrefabMetricHandles &metrics) noexcept
+        : rootAsset_(rootAsset), revision_(std::move(revision)), objects_(std::move(objects)), valueOverrides_(valueOverrides),
+          metrics_(metrics) {}
 
     /** @copydoc EffectivePrefabCandidate::RootAsset */
     Assets::AssetId EffectivePrefabCandidate::RootAsset() const noexcept {
@@ -227,8 +228,9 @@ namespace Horo::Prefab {
     /** @copydoc PrefabSourceResolverSnapshot::PrefabSourceResolverSnapshot */
     PrefabSourceResolverSnapshot::PrefabSourceResolverSnapshot(PrefabDependencyGraphSnapshot graph,
                                                                std::vector<PrefabDependencySource> sources,
-                                                               std::vector<PrefabCanonicalSourceCommitment> commitments) noexcept
-        : graph_(std::move(graph)), sources_(std::move(sources)), commitments_(std::move(commitments)) {}
+                                                               std::vector<PrefabCanonicalSourceCommitment> commitments,
+                                                               const PrefabMetricHandles &metrics) noexcept
+        : graph_(std::move(graph)), sources_(std::move(sources)), commitments_(std::move(commitments)), metrics_(metrics) {}
 
     /** @copydoc PrefabSourceResolverSnapshot::RegistryRevision */
     Assets::AssetRegistryRevision PrefabSourceResolverSnapshot::RegistryRevision() const noexcept {
@@ -249,36 +251,48 @@ namespace Horo::Prefab {
     Result<EffectivePrefabCandidate> PrefabSourceResolverSnapshot::Resolve(const Assets::AssetId rootAsset, const PrefabInstanceId instance,
                                                                            const PrefabLimitProfile &limits,
                                                                            const CancellationToken &cancellation) const {
-        if (cancellation.IsCancellationRequested())
-            return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::Cancelled));
-        if (!instance.IsValid())
-            return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::IdentityInvalid));
-        const PrefabDependencySource *root = FindSource(sources_, rootAsset);
-        if (root == nullptr)
-            return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+        PrefabMetricOperation observation{metrics_, PrefabMetricPhase::Resolve};
+        auto result = [&]() -> Result<EffectivePrefabCandidate> {
+            if (cancellation.IsCancellationRequested())
+                return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::Cancelled));
+            if (!instance.IsValid())
+                return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::IdentityInvalid));
+            const PrefabDependencySource *root = FindSource(sources_, rootAsset);
+            if (root == nullptr)
+                return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
 
-        PrefabExpansionBudget budget{limits};
-        std::vector<LocalObjectId> scope;
-        std::vector<Assets::AssetId> active;
-        std::vector<Assets::AssetId> failureChain;
-        std::vector<ResolvedPrefabObject> objects;
-        objects.reserve(std::min<std::size_t>(sources_.size(), limits.Policy().maximumObjectCount));
-        ExpansionState state{sources_, instance, scope, active, objects, failureChain, budget, limits, cancellation};
-        if (auto expanded = ExpandSource(state, *root, 1, 1); expanded.HasError()) {
-            Error error = expanded.ErrorValue();
-            if (failureChain.empty())
-                failureChain.push_back(rootAsset);
-            AddFailureContext(error, instance, failureChain);
-            return Result<EffectivePrefabCandidate>::Failure(std::move(error));
+            PrefabExpansionBudget budget{limits};
+            std::vector<LocalObjectId> scope;
+            std::vector<Assets::AssetId> active;
+            std::vector<Assets::AssetId> failureChain;
+            std::vector<ResolvedPrefabObject> objects;
+            objects.reserve(std::min<std::size_t>(sources_.size(), limits.Policy().maximumObjectCount));
+            ExpansionState state{sources_, instance, scope, active, objects, failureChain, budget, limits, cancellation};
+            if (auto expanded = ExpandSource(state, *root, 1, 1); expanded.HasError()) {
+                Error error = expanded.ErrorValue();
+                if (failureChain.empty())
+                    failureChain.push_back(rootAsset);
+                AddFailureContext(error, instance, failureChain);
+                return Result<EffectivePrefabCandidate>::Failure(std::move(error));
+            }
+
+            auto revision = CaptureRevision(rootAsset, budget);
+            if (revision.HasError())
+                return Result<EffectivePrefabCandidate>::Failure(revision.ErrorValue());
+            if (cancellation.IsCancellationRequested())
+                return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::Cancelled));
+            return Result<EffectivePrefabCandidate>::Success(
+                EffectivePrefabCandidate{rootAsset, std::move(revision).Value(), std::move(objects), {}, metrics_});
+        }();
+        if (result.HasError())
+            observation.Fail(result.ErrorValue());
+        else {
+            observation.Observe(PrefabMetricItem::ExpandedObjects, result.Value().Objects().size());
+            observation.Observe(PrefabMetricItem::GraphNodes, result.Value().Revision().dependencies.size());
+            observation.Observe(PrefabMetricItem::GraphEdges, result.Value().Revision().edges.size());
+            observation.Complete();
         }
-
-        auto revision = CaptureRevision(rootAsset, budget);
-        if (revision.HasError())
-            return Result<EffectivePrefabCandidate>::Failure(revision.ErrorValue());
-        if (cancellation.IsCancellationRequested())
-            return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::Cancelled));
-        return Result<EffectivePrefabCandidate>::Success(
-            EffectivePrefabCandidate{rootAsset, std::move(revision).Value(), std::move(objects)});
+        return result;
     }
 
     /** @copydoc PrefabSourceResolverSnapshot::CaptureResolutionRevision */
@@ -340,19 +354,20 @@ namespace Horo::Prefab {
     /** @copydoc BuildPrefabSourceResolverSnapshot */
     Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &registry,
                                                                            std::vector<PrefabDependencySource> sources,
-                                                                           const PrefabLimitProfile &limits) {
+                                                                           const PrefabLimitProfile &limits,
+                                                                           const PrefabMetricHandles &metrics) {
         try {
             std::ranges::sort(sources, {}, [](const PrefabDependencySource &source) {
                 return source.document.Data().assetId;
             });
-            auto graph = BuildPrefabDependencyGraph(registry, sources, limits);
+            auto graph = BuildPrefabDependencyGraph(registry, sources, limits, metrics);
             if (graph.HasError())
                 return Result<PrefabSourceResolverSnapshot>::Failure(graph.ErrorValue());
             auto commitments = CaptureCanonicalSources(sources);
             if (commitments.HasError())
                 return Result<PrefabSourceResolverSnapshot>::Failure(commitments.ErrorValue());
             return Result<PrefabSourceResolverSnapshot>::Success(
-                PrefabSourceResolverSnapshot{std::move(graph).Value(), std::move(sources), std::move(commitments).Value()});
+                PrefabSourceResolverSnapshot{std::move(graph).Value(), std::move(sources), std::move(commitments).Value(), metrics});
         } catch (const std::bad_alloc &) {
             return Result<PrefabSourceResolverSnapshot>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
         }

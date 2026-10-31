@@ -280,6 +280,7 @@ namespace Horo::Prefab {
                 operation->cancellation.RequestCancellation();
                 operation->load.reset();
                 operation->lease.reset();
+                operation->measurement.Complete(PrefabMetricOutcome::Cancelled);
                 operation->status = PrefabSpawnState::Cancelled;
             }
         }

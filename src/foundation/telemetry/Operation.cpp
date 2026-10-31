@@ -41,6 +41,11 @@ namespace Horo::Telemetry {
         }
     }  // namespace
 
+    /** @copydoc AllocateOperationId */
+    OperationId AllocateOperationId() noexcept {
+        return NextOperationId();
+    }
+
     /** @copydoc CaptureOperationIdentity */
     OperationContext CaptureOperationIdentity() noexcept {
         const auto &operations = ActiveOperations();

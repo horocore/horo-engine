@@ -595,6 +595,7 @@ namespace Horo::Editor {
             Telemetry::Gauge pacingMissedDeadlines;
             Telemetry::Gauge droppedRecords;
             Telemetry::Gauge sinkFailures;
+            Prefab::PrefabMetricHandles prefab;
         };
 
         [[nodiscard]] EditorTelemetry RegisterEditorTelemetry() {
@@ -614,6 +615,7 @@ namespace Horo::Editor {
                     {.name = "horo.observability.records.dropped", .subsystem = "Foundation.Observability", .unit = Count}),
                 .sinkFailures = Telemetry::Runtime::RegisterGauge(
                     {.name = "horo.observability.sink.failures", .subsystem = "Foundation.Observability", .unit = Count}),
+                .prefab = Prefab::RegisterPrefabMetricHandles(Telemetry::MetricCollectionLevel::Detailed, true),
             };
         }
 
@@ -2395,6 +2397,7 @@ namespace Horo::Editor {
             if (capturedPolicy.HasError())
                 return std::nullopt;
             auto scenePolicy = std::move(capturedPolicy).Value();
+            scenePolicy.prefabMetrics = p.telemetry.prefab;
             scenePolicy.uiSources = std::move(projectUi).Value();
             std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
             if (scenePolicy.cooked)
@@ -2542,6 +2545,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             screenHost.Services().Register<EditorProjectPrefabStageFactory>(prefabStageFactory);
+            screenHost.Services().RegisterConst<Prefab::PrefabMetricHandles>(p.telemetry.prefab);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
             screenHost.Services().Register<UiInspectorResourcesFactory>(uiInspectorResourcesFactory);
             screenHost.Services().Register<IAudioComponentPreview>(audioPreview);

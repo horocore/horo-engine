@@ -2415,6 +2415,7 @@ target_include_directories(HoroJsonEncodingInternal INTERFACE
 target_link_libraries(HoroJsonEncodingInternal INTERFACE nlohmann_json::nlohmann_json)
 
 add_library(HoroPrefab STATIC
+        runtime/prefab/PrefabMetrics.cpp
         runtime/prefab/CookedPrefab.cpp
         runtime/prefab/CookedPrefabCodec.cpp
         runtime/prefab/PrefabErrors.cpp

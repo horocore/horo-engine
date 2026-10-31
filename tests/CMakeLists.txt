@@ -1860,6 +1860,16 @@ target_link_libraries(HoroPrefabReferenceCorpusTests PRIVATE
 horo_register_catch_test(HoroPrefabReferenceCorpusTests LABELS "unit;prefab;headless;corpus"
     PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 
+add_executable(HoroPrefabMetricsTests unit/runtime/prefab/PrefabMetricsTests.cpp support/AllocationProbe.cpp)
+target_compile_features(HoroPrefabMetricsTests PRIVATE cxx_std_20)
+target_include_directories(HoroPrefabMetricsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_compile_definitions(HoroPrefabMetricsTests PRIVATE
+    HORO_PREFAB_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/prefab-reference-corpus")
+target_link_libraries(HoroPrefabMetricsTests PRIVATE
+    HoroEngine::PrefabSceneExpansion HoroEngine::PrefabRuntime HoroEngine::GameplayRuntime)
+horo_register_catch_test(HoroPrefabMetricsTests LABELS "unit;prefab;headless;metrics"
+    PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+
 add_executable(HoroPrefabParserFuzzTests unit/runtime/prefab/PrefabParserFuzzTests.cpp)
 target_compile_features(HoroPrefabParserFuzzTests PRIVATE cxx_std_20)
 target_include_directories(HoroPrefabParserFuzzTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -1947,6 +1957,7 @@ add_executable(HoroPrefabSceneCookHostTests
         unit/application/PrefabCookSchemaContextTests.cpp
         unit/application/PrefabSceneCookQualificationTests.cpp
         unit/application/PrefabSceneCookHostFixture.h)
+target_sources(HoroPrefabSceneCookHostTests PRIVATE unit/application/PrefabMetricCookHostTests.cpp)
 target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabProjectSettings)
 target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroNetworkProductHost)
 target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)

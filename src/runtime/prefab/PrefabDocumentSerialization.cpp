@@ -364,7 +364,24 @@ namespace Horo::Prefab {
     /** @copydoc PrefabDocument::Parse */
     Result<PrefabDocument> PrefabDocument::Parse(const std::string_view source, const PrefabLimitProfile &limits,
                                                  const PrefabSourceParseLimits &parseLimits) {
-        return Detail::ParseDocumentImpl(source, limits, parseLimits);
+        PrefabMetricOperation observation;
+        if (parseLimits.metrics)
+            observation = PrefabMetricOperation{*parseLimits.metrics, PrefabMetricPhase::Parse};
+        observation.Observe(PrefabMetricItem::SourceBytes, source.size());
+        auto result = Detail::ParseDocumentImpl(source, limits, parseLimits);
+        if (result.HasError())
+            observation.Fail(result.ErrorValue());
+        else {
+            observation.Observe(PrefabMetricItem::SourceObjects, result.Value().Data().objects.size());
+            if (observation.Enabled()) {
+                std::uint64_t components{};
+                for (const auto &object : result.Value().Data().objects)
+                    components += object.components.size() + object.behaviors.size();
+                observation.Observe(PrefabMetricItem::Components, components);
+            }
+            observation.Complete();
+        }
+        return result;
     }
 
 }  // namespace Horo::Prefab

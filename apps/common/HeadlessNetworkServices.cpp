@@ -286,8 +286,10 @@ namespace Horo::Application::Internal {
                     auto limits = Prefab::PrefabLimitProfile::Create(input.prefabPolicy);
                     if (limits.HasError())
                         return Result<void>::Failure(limits.ErrorValue());
-                    record_->templates = std::make_unique<Prefab::PrefabTemplateProvider>(input.registry, *input.prefabLoads,
-                                                                                          *record_->scenes, std::move(limits).Value());
+                    record_->templates =
+                        std::make_unique<Prefab::PrefabTemplateProvider>(input.registry, *input.prefabLoads, *record_->scenes,
+                                                                         std::move(limits).Value(), Prefab::PrefabTemplateProviderLimits{},
+                                                                         input.prefabMetrics);
                     return record_->templates->Startup(boundary.cancellation);
                 }
                 return Result<void>::Success();

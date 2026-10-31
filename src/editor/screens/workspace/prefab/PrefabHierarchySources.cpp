@@ -24,12 +24,12 @@ namespace Horo::Editor {
         /** @brief Parses a captured canonical source pair and discovers only typed nesting/inheritance edges. */
         Result<Prefab::PrefabDependencySource> ParseSource(const Assets::AssetCookPinnedSource &source,
                                                            const Prefab::PrefabLimitProfile &limits,
-                                                           const Application::HoroVersion &version,
-                                                           std::vector<Assets::AssetId> &selection) {
+                                                           const Application::HoroVersion &version, std::vector<Assets::AssetId> &selection,
+                                                           const Prefab::PrefabMetricHandles &metrics) {
             if (source.record.type.Value() != "core.prefab")
                 return Result<Prefab::PrefabDependencySource>::Failure(MakeError(Prefab::PrefabErrors::DependencyTypeMismatch));
             const std::string_view bytes{reinterpret_cast<const char *>(source.bytes.data()), source.bytes.size()};
-            auto document = Prefab::PrefabDocument::Parse(bytes, limits, {.expectedProjectVersion = version});
+            auto document = Prefab::PrefabDocument::Parse(bytes, limits, {.expectedProjectVersion = version, .metrics = &metrics});
             if (document.HasError())
                 return Result<Prefab::PrefabDependencySource>::Failure(document.ErrorValue());
             if (document.Value().Data().assetId != source.record.id)
@@ -56,7 +56,8 @@ namespace Horo::Editor {
     /** @copydoc CapturePrefabHierarchySources */
     Result<PrefabHierarchySources> CapturePrefabHierarchySources(
         const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
-        const Prefab::PrefabLimitProfile &limits, const Application::HoroVersion &version, const CancellationToken &cancellation) {
+        const Prefab::PrefabLimitProfile &limits, const Application::HoroVersion &version, const CancellationToken &cancellation,
+        const Prefab::PrefabMetricHandles &metrics) {
         try {
             std::vector<Assets::AssetId> selection;
             for (const auto asset : roots) {
@@ -74,14 +75,14 @@ namespace Horo::Editor {
                 sources.reserve(selection.size());
                 const auto capturedCount = selection.size();
                 for (const auto &source : inputs.Value().Sources()) {
-                    auto parsed = ParseSource(source, limits, version, selection);
+                    auto parsed = ParseSource(source, limits, version, selection, metrics);
                     if (parsed.HasError())
                         return Result<PrefabHierarchySources>::Failure(parsed.ErrorValue());
                     sources.push_back(std::move(parsed).Value());
                 }
                 if (selection.size() != capturedCount)
                     continue;
-                auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits);
+                auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits, metrics);
                 if (resolver.HasError())
                     return Result<PrefabHierarchySources>::Failure(resolver.ErrorValue());
                 if (auto current = inputs.Value().VerifyUnchanged(cancellation); current.HasError())
