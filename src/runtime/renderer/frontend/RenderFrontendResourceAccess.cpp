@@ -7,6 +7,15 @@
 #include "RenderResourceUploadQueue.h"
 
 namespace Horo::Render {
+    /** @copydoc Detail::RenderFrontendResourceAccess::RequirePreparationBoundary */
+    Result<RenderResourceOwnerId> Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(const RenderFrontend &frontend) {
+        if (auto owner = frontend.RequireOpenOwner(); owner.HasError())
+            return Result<RenderResourceOwnerId>::Failure(owner.ErrorValue());
+        if (frontend.activeFrameScope_ != nullptr)
+            return Result<RenderResourceOwnerId>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
+        return Result<RenderResourceOwnerId>::Success(frontend.resourceRegistry_->Owner());
+    }
+
     namespace {
         /** @brief A stale generation is forgettable only when its own creation journal proves canonical rollback. */
         bool CreationRolledBack(const RenderFrontend &frontend, const Result<void> &released, const ResourceOperationId operation) {

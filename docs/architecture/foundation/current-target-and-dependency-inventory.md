@@ -44,6 +44,26 @@ include directories do not enforce those ownership boundaries, as documented in
 
 ### Foundation, Platform, Application, And Runtime
 
+Shader reload follow-up (2026-11-01): `HoroShaderHotReload`
+(`HoroEngine::ShaderHotReload`) owns `Application/ShaderHotReloadService.h` and
+the bounded job/mailbox/publication implementation. Its sole direct dependency
+is ShaderBuild, which publicly supplies Foundation and RenderApi. RenderApi owns
+the additive `Runtime/Render/ShaderHotReloadTarget.h` consumer contract; it does
+not acquire an Application dependency. The generated public-header consumers
+and the reload-specific consumer compile these boundaries independently.
+
+The non-installed `HoroShaderHotReloadHostInternal` composes immutable source
+capture, explicit developer configuration and commands above ShaderHotReload
+and Assets; its private recipe dependencies do not select a renderer.
+`HoroEditorViewportShaderRecipeInternal` exports only the narrow editor shader
+directory and depends on RenderApi. OpenGL candidate validation crosses exactly
+`OpenGLProgramValidation.h` through the non-installed
+`HoroRenderOpenGLProgramValidationInternal` interface, which links its existing
+OpenGL owner. Native functions and handles remain outside the installed API.
+Existing applications retain disabled reload until they opt into the trusted
+composition described in [the migration guide](../../guides/shader-hot-reload.md).
+No existing public value or gameplay SDK 25 boundary changes.
+
 `HoroProjectAssetRegistrySource` (`HoroEngine::ProjectAssetRegistrySource`) owns
 `Application/ProjectAssetRegistrySource.h` and the inert retained-root inventory
 adapter. Its public dependencies are Assets and ProjectReadFilesApi. EditorServices

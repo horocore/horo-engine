@@ -52,6 +52,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     if (admitted.HasError())
                         return Result<ShaderCompilerAdapterOutput>::Failure(admitted.ErrorValue());
                     vfxInterface_ = admitted.Value();
+                    registerInterface_ = UsesRegisterRasterReflection(invocation_);
                     payloadStages_.reserve(invocation_.manifest.entryPoints.size());
                     debugStages_.reserve(invocation_.manifest.entryPoints.size());
                 } catch (const std::bad_alloc &) {
@@ -315,8 +316,47 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 const ShaderCompilerToolInstallation *translator = Lookup(ShaderCompilerTool::SpirvCross);
                 if (translator == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                auto arguments = RasterTranslationArguments(entry, spirvPath, nativePath, metal, vfxInterface_);
+                auto arguments = RasterTranslationArguments(entry, spirvPath, nativePath, metal, vfxInterface_, registerInterface_);
+                if (registerInterface_) {
+                    if (auto prepared = PrepareRegisterTranslation(entry, spirvPath, metal, arguments); prepared.HasError())
+                        return prepared;
+                }
                 return Run(*translator, std::move(arguments), ShaderCompilerPhase::Translation, entry);
+            }
+
+            /** @brief Captures same-operation intermediate evidence once before native translation. */
+            Result<void> CaptureIntermediateReflection(const ShaderEntryPoint &entry, const std::filesystem::path &spirvPath) {
+                const auto *cross = Lookup(ShaderCompilerTool::SpirvCross);
+                if (auto valid =
+                        ValidateRasterReflection(invocation_.manifest, invocation_.target.requirement, *invocation_.reflection, cross);
+                    valid.HasError())
+                    return valid;
+                const auto path = spirvPath.string() + ".reflection.json";
+                if (auto reflected =
+                        Run(*cross, {spirvPath.string(), "--reflect", "--output", path}, ShaderCompilerPhase::Translation, entry);
+                    reflected.HasError())
+                    return reflected;
+                auto json = ReadBoundedFile(path, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (json.HasError())
+                    return Result<void>::Failure(json.ErrorValue());
+                reflectionStages_.push_back({entry.stage, entry.name, {json.Value().begin(), json.Value().end()}});
+                return Result<void>::Success();
+            }
+
+            /** @brief Renames only actual intermediate varying locations so GLSL410 stages link by canonical names. */
+            Result<void> PrepareRegisterTranslation(const ShaderEntryPoint &entry, const std::filesystem::path &spirvPath, const bool metal,
+                                                    std::vector<std::string> &arguments) {
+                if (auto captured = CaptureIntermediateReflection(entry, spirvPath); captured.HasError())
+                    return captured;
+                if (metal)
+                    return Result<void>::Success();
+                const auto locations = RegisterRasterVaryingLocations(reflectionStages_.back());
+                if (locations.HasError())
+                    return Result<void>::Failure(locations.ErrorValue());
+                for (const auto location : locations.Value())
+                    arguments.insert(arguments.end(), {"--rename-interface-variable", entry.stage == ShaderStage::Vertex ? "out" : "in",
+                                                       std::to_string(location), "horo_raster_varying_" + std::to_string(location)});
+                return Result<void>::Success();
             }
 
             /** @brief Uses the explicit descriptor for compilation, validation and debug output without changing other routes. */
@@ -347,6 +387,13 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                                const std::filesystem::path &nativePath) {
                 if (!invocation_.reflection)
                     return Result<void>::Success();
+                if (registerInterface_) {
+                    auto native = ReadBoundedFile(nativePath, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                    if (native.HasError())
+                        return Result<void>::Failure(native.ErrorValue());
+                    translations_.emplace_back(native.Value().begin(), native.Value().end());
+                    return Result<void>::Success();
+                }
                 const auto *cross = Lookup(ShaderCompilerTool::SpirvCross);
                 if (const auto valid =
                         ValidateRasterReflection(invocation_.manifest, invocation_.target.requirement, *invocation_.reflection, cross);
@@ -514,6 +561,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             IExternalProcessRunner &processes_;
             const ShaderCompilerInvocation &invocation_;
             bool vfxInterface_{false};
+            bool registerInterface_{};
             const CancellationToken &cancellation_;
             const std::filesystem::path &scratch_;
             const std::filesystem::path &sourcePath_;

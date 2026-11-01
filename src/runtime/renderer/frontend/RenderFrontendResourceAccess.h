@@ -7,6 +7,9 @@ namespace Horo::Render::Detail {
     /** @brief Internal adapter used by matching integrations without publishing native resource identity. */
     class RenderFrontendResourceAccess final {
     public:
+        /** @brief Validates the existing open graphics owner outside any active frame.
+         * @param frontend Selected existing frontend. @return Exact registry incarnation or original lifecycle error. */
+        [[nodiscard]] static Result<RenderResourceOwnerId> RequirePreparationBoundary(const RenderFrontend &frontend);
         /** @brief Cold-admits owned depth backing for an explicitly supported complete multiview workload.
          * @param frontend Selected frontend whose owner thread must be open and outside a frame.
          * @param scope Canonical memory scope charged for this resource.

@@ -1174,6 +1174,7 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/MotionHistory.h
     Horo/Runtime/Render/MotionHistoryErrors.h
     Horo/Runtime/Render/PipelinePreparation.h
+    Horo/Runtime/Render/ShaderHotReloadTarget.h
     Horo/Runtime/Render/PipelinePreparationErrors.h
     Horo/Runtime/Render/PipelineCache.h
     Horo/Runtime/Render/PipelineCacheErrors.h
@@ -1478,6 +1479,10 @@ horo_configure_target_header_boundary(HoroUiStyleWorkspaceApplication PUBLIC_HEA
     Horo/Application/UiStyleWorkspace.h
 )
 horo_configure_target_header_boundary(HoroWorldBakeApplication PUBLIC_HEADERS Horo/Application/WorldBakeApplication.h)
+
+
+horo_configure_target_header_boundary(HoroShaderHotReload PUBLIC_HEADERS
+    Horo/Application/ShaderHotReloadService.h)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

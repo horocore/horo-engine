@@ -1,8 +1,13 @@
 #include "EditorViewportRendererMetal.h"
 
+#include "EditorViewportShaderParameters.h"
+#include "EditorViewportShaderRecipe.h"
+#include "Horo/Runtime/Render/ShaderArtifact.h"
+#include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "MetalViewportResourceBridge.h"
 #include "MetalViewportShaderTypes.h"
 #include "MetalViewportShaders.h"
+#include "RenderFrontendResourceAccess.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/renderer/EditorViewportResources.h"
@@ -14,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,9 +79,37 @@ namespace Horo::Editor {
         EditorViewportGridOptions gridOptions{};
         EditorViewportLightVisualizerOptions lightVisualizerOptions{};
         bool initialized{false};
+        std::uint64_t liveGeneration{};
+        std::array<Render::MaterialBindingLayout, 3> reloadLayouts;
+        std::array<std::uint32_t, 3> reloadBufferSlots{};
+        std::uint32_t reloadTextureSlot{}, reloadSamplerSlot{};
+        bool reflectedProgram{};
 
-        [[nodiscard]] Result<void> CreateMainPipelines();
-        [[nodiscard]] Result<void> CreateShadowPipeline();
+        /** @brief Complete unpublished library and pass pipeline set; ARC owns rollback on the graphics lane. */
+        struct ProgramGeneration final : Render::IShaderHotReloadCandidate {
+            Impl *owner{};
+            Render::ShaderHotReloadTargetState expected;
+            std::array<Render::MaterialBindingLayout, 3> layouts;
+            std::array<std::uint32_t, 3> bufferSlots{};
+            std::uint32_t textureSlot{}, samplerSlot{};
+            bool reflected{};
+            __strong id<MTLLibrary> library{nil};
+            __strong id<MTLRenderPipelineState> pipeline{nil};
+            __strong id<MTLRenderPipelineState> gridPipeline{nil};
+            __strong id<MTLRenderPipelineState> shadowPipeline{nil};
+        };
+
+        [[nodiscard]] Result<void> ConfigureReloadMappings(ProgramGeneration &candidate, std::size_t role);
+        [[nodiscard]] Result<void> ConfigureReloadLayout(ProgramGeneration &candidate, std::size_t role,
+                                                         const Render::NormalizedShaderReflection &reflection);
+        [[nodiscard]] Result<void> CreateReloadPipeline(ProgramGeneration &candidate, std::size_t role,
+                                                        const Render::ShaderHotReloadProgramView &view);
+        [[nodiscard]] Result<void> UploadReload(id<MTLRenderCommandEncoder> encoder, std::size_t role,
+                                                std::span<const std::byte> bytes) const;
+        [[nodiscard]] Result<void> UploadReloadGrid(id<MTLRenderCommandEncoder> encoder, const Math::Mat4 &mvp, Math::Vec3 color) const;
+        [[nodiscard]] Result<void> CreateMainPipelines(ProgramGeneration &candidate);
+        [[nodiscard]] Result<void> CreateShadowPipeline(ProgramGeneration &candidate);
+        void AdoptProgram(ProgramGeneration &candidate) noexcept;
         [[nodiscard]] Result<void> CreateSupportResources();
         [[nodiscard]] Result<void> ValidatePassRequest(const Render::StaticMeshPassDescriptor &descriptor,
                                                        EditorViewportExtent renderExtent) const;
@@ -96,42 +130,57 @@ namespace Horo::Editor {
                             const std::optional<EditorViewportDirectionalShadowView> &shadow) const;
     };
 
-    Result<void> EditorViewportRendererMetal::Impl::CreateMainPipelines() {
+#include "EditorViewportMetalHotReload.inl"
+
+    /** @copydoc EditorViewportRendererMetal::Impl::AdoptProgram */
+    void EditorViewportRendererMetal::Impl::AdoptProgram(ProgramGeneration &candidate) noexcept {
+        std::swap(library, candidate.library);
+        std::swap(pipeline, candidate.pipeline);
+        std::swap(gridPipeline, candidate.gridPipeline);
+        std::swap(shadowPipeline, candidate.shadowPipeline);
+        std::swap(reloadLayouts, candidate.layouts);
+        std::swap(reloadBufferSlots, candidate.bufferSlots);
+        std::swap(reloadTextureSlot, candidate.textureSlot);
+        std::swap(reloadSamplerSlot, candidate.samplerSlot);
+        std::swap(reflectedProgram, candidate.reflected);
+    }
+
+    Result<void> EditorViewportRendererMetal::Impl::CreateMainPipelines(ProgramGeneration &candidate) {
         NSError *error = nil;
         MTLRenderPipelineDescriptor *pipelineDescriptor = [MTLRenderPipelineDescriptor new];
         pipelineDescriptor.label = @"Horo Editor Viewport";
-        pipelineDescriptor.vertexFunction = [library newFunctionWithName:@"viewport_vertex"];
-        pipelineDescriptor.fragmentFunction = [library newFunctionWithName:@"viewport_fragment"];
+        pipelineDescriptor.vertexFunction = [candidate.library newFunctionWithName:@"viewport_vertex"];
+        pipelineDescriptor.fragmentFunction = [candidate.library newFunctionWithName:@"viewport_fragment"];
         pipelineDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
         pipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-        pipeline = [device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
-        if (pipeline == nil) {
+        candidate.pipeline = [device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
+        if (candidate.pipeline == nil) {
             return Result<void>::Failure(MakeViewportError(RendererErrors::ViewportMetalPipelineCreationFailed,
                                                            ErrorMessage(@"Metal viewport pipeline creation failed", error)));
         }
 
         MTLRenderPipelineDescriptor *gridDescriptor = [MTLRenderPipelineDescriptor new];
         gridDescriptor.label = @"Horo Editor Viewport Grid";
-        gridDescriptor.vertexFunction = [library newFunctionWithName:@"viewport_grid_vertex"];
-        gridDescriptor.fragmentFunction = [library newFunctionWithName:@"viewport_grid_fragment"];
+        gridDescriptor.vertexFunction = [candidate.library newFunctionWithName:@"viewport_grid_vertex"];
+        gridDescriptor.fragmentFunction = [candidate.library newFunctionWithName:@"viewport_grid_fragment"];
         gridDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
         gridDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-        gridPipeline = [device newRenderPipelineStateWithDescriptor:gridDescriptor error:&error];
-        if (gridPipeline == nil) {
+        candidate.gridPipeline = [device newRenderPipelineStateWithDescriptor:gridDescriptor error:&error];
+        if (candidate.gridPipeline == nil) {
             return Result<void>::Failure(MakeViewportError(RendererErrors::ViewportMetalPipelineCreationFailed,
                                                            ErrorMessage(@"Metal viewport grid pipeline creation failed", error)));
         }
         return Result<void>::Success();
     }
 
-    Result<void> EditorViewportRendererMetal::Impl::CreateShadowPipeline() {
+    Result<void> EditorViewportRendererMetal::Impl::CreateShadowPipeline(ProgramGeneration &candidate) {
         NSError *error = nil;
         MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
         descriptor.label = @"Horo Editor Directional Shadow";
-        descriptor.vertexFunction = [library newFunctionWithName:@"viewport_shadow_vertex"];
+        descriptor.vertexFunction = [candidate.library newFunctionWithName:@"viewport_shadow_vertex"];
         descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-        shadowPipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
-        if (shadowPipeline == nil) {
+        candidate.shadowPipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+        if (candidate.shadowPipeline == nil) {
             return Result<void>::Failure(MakeViewportError(RendererErrors::ViewportMetalPipelineCreationFailed,
                                                            ErrorMessage(@"Metal viewport shadow pipeline creation failed", error)));
         }
@@ -159,16 +208,14 @@ namespace Horo::Editor {
             return Result<void>::Failure(gridBuffer.ErrorValue());
         gridVertexBufferHandle = gridBuffer.Value().handle;
         const auto processed = frontend->ProcessResourceRequests();
+        if (processed.HasError())
+            return Result<void>::Failure(processed.ErrorValue());
         const auto completed = frontend->ResourceOperationResult(gridBuffer.Value().operation);
+        if (completed.HasError())
+            return Result<void>::Failure(completed.ErrorValue());
         const auto nativeBuffer = MetalViewportResourceBridge::ResolveBuffer(*frontend, gridVertexBufferHandle);
-        if (processed.HasError() || completed.HasError() || nativeBuffer.HasError()) {
-            const Error error = processed.HasError()   ? processed.ErrorValue()
-                                : completed.HasError() ? completed.ErrorValue()
-                                                       : nativeBuffer.ErrorValue();
-            static_cast<void>(frontend->ReleaseBuffer(gridVertexBufferHandle));
-            gridVertexBufferHandle = {};
-            return Result<void>::Failure(error);
-        }
+        if (nativeBuffer.HasError())
+            return Result<void>::Failure(nativeBuffer.ErrorValue());
         gridVertexBuffer = (__bridge id<MTLBuffer>)nativeBuffer.Value();
 
         MTLSamplerDescriptor *samplerDescriptor = [MTLSamplerDescriptor new];
@@ -247,8 +294,22 @@ namespace Horo::Editor {
                 return Result<void>::Failure(binding.ErrorValue());
             }
             const Math::Mat4 shadowMvp = Math::Multiply(shadow.viewProjection, instance.localToWorld);
-            [encoder setVertexBuffer:(__bridge id<MTLBuffer>)binding.Value().vertexBuffer offset:0 atIndex:0];
-            [encoder setVertexBytes:&shadowMvp length:sizeof(shadowMvp) atIndex:1];
+            [encoder setVertexBuffer:(__bridge id<MTLBuffer>)binding.Value().vertexBuffer offset:0 atIndex:reflectedProgram ? 30 : 0];
+            if (reflectedProgram) {
+                std::array<std::byte, 4096> bytes{};
+                const auto packed = PackEditorViewportShadow(reloadLayouts[2], shadowMvp, bytes);
+                if (packed.HasError()) {
+                    [encoder endEncoding];
+                    return Result<void>::Failure(packed.ErrorValue());
+                }
+                const auto uploaded = UploadReload(encoder, 2, std::span{bytes}.first(packed.Value()));
+                if (uploaded.HasError()) {
+                    [encoder endEncoding];
+                    return uploaded;
+                }
+            } else {
+                [encoder setVertexBytes:&shadowMvp length:sizeof(shadowMvp) atIndex:1];
+            }
             [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                 indexCount:mesh->indexCount
                                  indexType:MTLIndexTypeUInt32
@@ -290,9 +351,10 @@ namespace Horo::Editor {
         }
         [encoder setRenderPipelineState:pipeline];
         [encoder setDepthStencilState:depthState];
-        UploadLighting(encoder, descriptor.scene, shadow);
-        [encoder setFragmentTexture:frameResources.shadowTexture atIndex:0];
-        [encoder setFragmentSamplerState:shadowSampler atIndex:0];
+        if (!reflectedProgram)
+            UploadLighting(encoder, descriptor.scene, shadow);
+        [encoder setFragmentTexture:frameResources.shadowTexture atIndex:reflectedProgram ? reloadTextureSlot : 0];
+        [encoder setFragmentSamplerState:shadowSampler atIndex:reflectedProgram ? reloadSamplerSlot : 0];
         if (const Result<void> meshes = DrawMeshes(encoder, descriptor.scene, shadow, aspect); meshes.HasError()) {
             [encoder endEncoding];
             return meshes;
@@ -325,15 +387,23 @@ namespace Horo::Editor {
             return Result<void>::Failure(viewProjection.ErrorValue());
         std::byte *gridBytes = static_cast<std::byte *>(gridVertexBuffer.contents);
         NSUInteger gridOffset = 0;
+        Result<void> gridUpload = Result<void>::Success();
         const auto encodeBatch = [&](const ViewportGridLineBatch batch) {
             if (batch.positions.empty())
                 return;
             const NSUInteger byteCount = static_cast<NSUInteger>(batch.positions.size_bytes());
             std::memcpy(gridBytes + gridOffset, batch.positions.data(), byteCount);
-            [encoder setVertexBuffer:gridVertexBuffer offset:gridOffset atIndex:0];
-            [encoder setVertexBytes:viewProjection.Value().values.data() length:sizeof(viewProjection.Value().values) atIndex:1];
-            const MetalGridStyle style{.color = batch.color};
-            [encoder setFragmentBytes:&style length:sizeof(style) atIndex:0];
+            [encoder setVertexBuffer:gridVertexBuffer offset:gridOffset atIndex:reflectedProgram ? 30 : 0];
+            if (reflectedProgram) {
+                // Packing was admitted during preparation; any runtime invalid value is propagated below.
+                gridUpload = UploadReloadGrid(encoder, viewProjection.Value(), batch.color);
+                if (gridUpload.HasError())
+                    return;
+            } else {
+                [encoder setVertexBytes:viewProjection.Value().values.data() length:sizeof(viewProjection.Value().values) atIndex:1];
+                const MetalGridStyle style{.color = batch.color};
+                [encoder setFragmentBytes:&style length:sizeof(style) atIndex:0];
+            }
             const MTLPrimitiveType primitive =
                 batch.topology == ViewportGridPrimitiveTopology::Triangles ? MTLPrimitiveTypeTriangle : MTLPrimitiveTypeLine;
             [encoder drawPrimitives:primitive vertexStart:0 vertexCount:static_cast<NSUInteger>(batch.positions.size())];
@@ -342,8 +412,9 @@ namespace Horo::Editor {
         [encoder setRenderPipelineState:gridPipeline];
         [encoder setDepthStencilState:gridDepthState];
         encodeBatch(grid.RegularLines());
-        encodeBatch(grid.Axes());
-        return Result<void>::Success();
+        if (gridUpload.HasValue())
+            encodeBatch(grid.Axes());
+        return gridUpload;
     }
 
     Result<void> EditorViewportRendererMetal::Impl::DrawMeshes(id<MTLRenderCommandEncoder> encoder, const Render::RenderSceneView &scene,
@@ -367,9 +438,26 @@ namespace Horo::Editor {
                 .shadowMvp = shadow.has_value() ? Math::Multiply(shadow->viewProjection, instance.localToWorld) : Math::Mat4::Identity(),
             };
             const MetalSelectionStyle selectionStyle{instance.presentation.tint, instance.presentation.tintStrength};
-            [encoder setVertexBuffer:(__bridge id<MTLBuffer>)binding.Value().vertexBuffer offset:0 atIndex:0];
-            [encoder setVertexBytes:&transforms length:sizeof(transforms) atIndex:1];
-            [encoder setFragmentBytes:&selectionStyle length:sizeof(selectionStyle) atIndex:0];
+            [encoder setVertexBuffer:(__bridge id<MTLBuffer>)binding.Value().vertexBuffer offset:0 atIndex:reflectedProgram ? 30 : 0];
+            if (reflectedProgram) {
+                EditorViewportShaderParameters parameters;
+                const auto shadowView = shadow.value_or(EditorViewportDirectionalShadowView{});
+                parameters.SetScene(scene, shadowView.viewProjection, shadowView.lightIndex, shadow.has_value(),
+                                    Render::ShaderTargetBackend::Metal);
+                parameters.mvp = mvp.Value();
+                parameters.model = instance.localToWorld;
+                parameters.selection = {selectionStyle.color.x, selectionStyle.color.y, selectionStyle.color.z, selectionStyle.strength};
+                std::array<std::byte, 4096> bytes{};
+                const auto packed = parameters.PackLit(reloadLayouts[0], bytes);
+                if (packed.HasError())
+                    return Result<void>::Failure(packed.ErrorValue());
+                const auto uploaded = UploadReload(encoder, 0, std::span{bytes}.first(packed.Value()));
+                if (uploaded.HasError())
+                    return uploaded;
+            } else {
+                [encoder setVertexBytes:&transforms length:sizeof(transforms) atIndex:1];
+                [encoder setFragmentBytes:&selectionStyle length:sizeof(selectionStyle) atIndex:0];
+            }
             [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                 indexCount:mesh->indexCount
                                  indexType:MTLIndexTypeUInt32
@@ -394,10 +482,16 @@ namespace Horo::Editor {
         std::memcpy(gridVertexBuffer.contents, geometry.Lines().data(), geometry.Lines().size_bytes());
         [encoder setRenderPipelineState:gridPipeline];
         [encoder setDepthStencilState:gridDepthState];
-        [encoder setVertexBuffer:gridVertexBuffer offset:0 atIndex:0];
-        [encoder setVertexBytes:viewProjection.Value().values.data() length:sizeof(viewProjection.Value().values) atIndex:1];
-        const MetalGridStyle style{.color = geometry.color};
-        [encoder setFragmentBytes:&style length:sizeof(style) atIndex:0];
+        [encoder setVertexBuffer:gridVertexBuffer offset:0 atIndex:reflectedProgram ? 30 : 0];
+        if (reflectedProgram) {
+            const auto uploaded = UploadReloadGrid(encoder, viewProjection.Value(), geometry.color);
+            if (uploaded.HasError())
+                return uploaded;
+        } else {
+            [encoder setVertexBytes:viewProjection.Value().values.data() length:sizeof(viewProjection.Value().values) atIndex:1];
+            const MetalGridStyle style{.color = geometry.color};
+            [encoder setFragmentBytes:&style length:sizeof(style) atIndex:0];
+        }
         [encoder drawPrimitives:MTLPrimitiveTypeLine vertexStart:0 vertexCount:static_cast<NSUInteger>(geometry.vertexCount)];
         return Result<void>::Success();
     }
@@ -445,18 +539,19 @@ namespace Horo::Editor {
 
         NSError *error = nil;
         NSString *shaderSource = [NSString stringWithUTF8String:MetalViewportShaderSource()];
-        impl_->library = [impl_->device newLibraryWithSource:shaderSource options:nil error:&error];
-        if (impl_->library == nil) {
+        Impl::ProgramGeneration candidate;
+        candidate.library = [impl_->device newLibraryWithSource:shaderSource options:nil error:&error];
+        if (candidate.library == nil) {
             Shutdown();
             return Result<void>::Failure(MakeViewportError(RendererErrors::ViewportShaderCompileFailed,
                                                            ErrorMessage(@"Metal viewport shader compilation failed", error)));
         }
 
-        if (const Result<void> pipelines = impl_->CreateMainPipelines(); pipelines.HasError()) {
+        if (const Result<void> pipelines = impl_->CreateMainPipelines(candidate); pipelines.HasError()) {
             Shutdown();
             return pipelines;
         }
-        if (const Result<void> shadowPipeline = impl_->CreateShadowPipeline(); shadowPipeline.HasError()) {
+        if (const Result<void> shadowPipeline = impl_->CreateShadowPipeline(candidate); shadowPipeline.HasError()) {
             Shutdown();
             return shadowPipeline;
         }
@@ -465,6 +560,8 @@ namespace Horo::Editor {
             return resources;
         }
 
+        impl_->AdoptProgram(candidate);
+        ++impl_->liveGeneration;
         impl_->initialized = true;
         return Result<void>::Success();
     }

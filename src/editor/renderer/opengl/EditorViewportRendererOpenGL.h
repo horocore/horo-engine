@@ -1,5 +1,6 @@
 #pragma once
 
+#include "EditorViewportShaderParameters.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/opengl/OpenGLViewportResourceBridge.h"
@@ -8,7 +9,7 @@
 
 namespace Horo::Editor {
     /** @brief OpenGL editor adapter that renders backend-neutral editor scene instances into an offscreen target. */
-    class EditorViewportRendererOpenGL final : public IEditorViewportRenderer {
+    class EditorViewportRendererOpenGL final : public IEditorViewportRenderer, public Render::IShaderHotReloadTarget {
     public:
         /** @brief Borrows the frontend that owns every generic viewport resource. */
         explicit EditorViewportRendererOpenGL(Render::RenderFrontend &frontend) noexcept;
@@ -22,6 +23,12 @@ namespace Horo::Editor {
 
         /** @brief Releases all OpenGL objects; repeated calls are safe. */
         void Shutdown() noexcept;
+        [[nodiscard]] Result<Render::ShaderHotReloadTargetState> CaptureState() const override;
+        [[nodiscard]] Result<std::unique_ptr<Render::IShaderHotReloadCandidate>> Prepare(
+            std::span<const Render::ShaderHotReloadProgramView> programs, Render::ShaderHotReloadTargetState expected,
+            const CancellationToken &cancellation = {}) override;
+        [[nodiscard]] Result<Render::ShaderHotReloadTargetState> Adopt(std::unique_ptr<Render::IShaderHotReloadCandidate> candidate,
+                                                                       Render::ShaderHotReloadTargetState expected) override;
 
         [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
                                                         std::span<const Render::RenderPassDescriptor> passes) override;
@@ -37,8 +44,18 @@ namespace Horo::Editor {
         [[nodiscard]] bool IsReady() const noexcept override;
 
     private:
-        [[nodiscard]] Result<void> CreateProgram();
-        [[nodiscard]] Result<void> CreateShadowProgram();
+        struct ProgramGeneration;
+        [[nodiscard]] Result<void> CreateGridGeometry();
+        [[nodiscard]] Result<void> CreateReloadUniformBuffer(ProgramGeneration &candidate, std::size_t role, std::uint32_t program);
+
+        [[nodiscard]] Result<void> CreateReloadProgram(ProgramGeneration &candidate, std::size_t role,
+                                                       const Render::ShaderHotReloadProgramView &view);
+        [[nodiscard]] Result<void> UploadReload(std::size_t role, std::span<const std::byte> bytes) const;
+        [[nodiscard]] Result<void> UploadReloadGrid(const Math::Mat4 &mvp, Math::Vec3 color) const;
+
+        [[nodiscard]] Result<void> CreateProgram(ProgramGeneration &candidate);
+        [[nodiscard]] Result<void> CreateShadowProgram(ProgramGeneration &candidate);
+        void AdoptProgram(ProgramGeneration &candidate) noexcept;
         [[nodiscard]] Result<void> ValidatePassRequest(const Render::StaticMeshPassDescriptor &descriptor,
                                                        EditorViewportExtent requestedExtent) const;
         [[nodiscard]] Result<void> RenderViewportPass(const Render::StaticMeshPassDescriptor &descriptor,
@@ -68,8 +85,16 @@ namespace Horo::Editor {
             std::int32_t selectionStrength{-1};
         };
 
-        [[nodiscard]] Result<void> LoadUniformLocations();
+        [[nodiscard]] Result<void> LoadUniformLocations(ProgramGeneration &candidate);
 
+        std::uint64_t liveGeneration_{};
+        std::uint32_t gridProgram_{};
+        std::array<std::uint32_t, 3> reloadBuffers_{}, reloadBufferSlots_{};
+        std::uint32_t reloadTextureUnit_{7};
+        std::array<std::size_t, 3> reloadBufferBytes_{};
+        std::array<Render::MaterialBindingLayout, 3> reloadLayouts_;
+        bool reflectedProgram_{};
+        EditorViewportShaderParameters reloadParameters_;
         std::uint32_t program_{0};
         std::uint32_t shadowProgram_{0};
         std::uint32_t gridVertexArray_{0};

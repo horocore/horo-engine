@@ -53,10 +53,17 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         return Result<bool>::Success(vfxInterface);
     }
 
+    /** @copydoc UsesRegisterRasterReflection */
+    bool UsesRegisterRasterReflection(const ShaderCompilerInvocation &invocation) {
+        return invocation.reflection &&
+               ValidateRegisterRasterReflection(invocation.manifest, invocation.target.requirement, invocation.reflection->names)
+                   .HasValue();
+    }
+
     /** @copydoc RasterTranslationArguments */
     std::vector<std::string> RasterTranslationArguments(const ShaderEntryPoint &entry, const std::filesystem::path &spirvPath,
-                                                        const std::filesystem::path &nativePath, const bool metal,
-                                                        const bool vfxInterface) {
+                                                        const std::filesystem::path &nativePath, const bool metal, const bool vfxInterface,
+                                                        const bool registerInterface) {
         std::vector<std::string> arguments{spirvPath.string(),
                                            "--output",
                                            nativePath.string(),
@@ -70,6 +77,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             arguments.insert(arguments.end(), {"--version", "410", "--no-es", "--no-420pack-extension"});
         if (vfxInterface)
             arguments.emplace_back(metal ? "--msl-decoration-binding" : "--no-support-nonzero-baseinstance");
+        if (registerInterface && metal)
+            arguments.emplace_back("--msl-decoration-binding");
         if (vfxInterface && !metal) {
             // Monolithic GLSL410 links stage varyings by name. The native location alone does not
             // reconcile DXC's distinct in_var/out_var prefixes on the supported Mac GL profile.
@@ -86,6 +95,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                                          const std::vector<SpirvReflectionStage> &stages,
                                                                          const std::vector<std::string> &translations) {
         const auto &target = invocation.target.requirement;
+        if (UsesRegisterRasterReflection(invocation))
+            return NormalizeRegisterRasterReflection(invocation.manifest, target, stages, translations, invocation.reflection->names);
         if (target.backend == ShaderTargetBackend::OpenGL)
             return NormalizeVfxOpenGLReflection(invocation.manifest, target, stages, translations);
         const auto expected = ComputeShaderInterfaceCompatibilityId(MakeVfxShaderManifest(target));
@@ -114,6 +125,41 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         return Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Requires the exact installed reflection producer identity. */
+        Result<void> ValidateRasterTool(const ShaderCompilerReflectionRequest &request, const ShaderCompilerToolInstallation *cross) {
+            if (!cross || request.tool.tool != ShaderCompilerTool::SpirvCross || cross->identity.release != request.tool.release ||
+                cross->identity.buildDigest != request.tool.buildDigest)
+                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+            return Result<void>::Success();
+        }
+
+        /** @brief Compares one complete logical binding name without partial-member matching. */
+        bool SameBindingName(const ShaderReflectionBindingName &given, const ShaderReflectionBindingName &wanted) {
+            if (given.id != wanted.id || given.name != wanted.name || given.parameters.size() != wanted.parameters.size())
+                return false;
+            for (std::size_t member = 0; member < wanted.parameters.size(); ++member)
+                if (given.parameters[member].id != wanted.parameters[member].id ||
+                    given.parameters[member].name != wanted.parameters[member].name)
+                    return false;
+            return true;
+        }
+
+        /** @brief Preserves the original exact VFX family instead of broadening its authored names. */
+        Result<void> ValidateVfxRasterNames(const ShaderCompilerReflectionRequest &request, const ShaderCompilerToolInstallation *cross) {
+            const std::array<ShaderReflectionBindingName, 4>
+                names{ShaderReflectionBindingName{{1}, "VfxInstances", {{{1}, "ClipFromLocal"}, {{2}, "InstanceColor"}}},
+                      ShaderReflectionBindingName{{2}, "VfxMaterial", {{{3}, "Tint"}, {{4}, "AlphaCutoff"}}},
+                      ShaderReflectionBindingName{{3}, "BaseColor", {}}, ShaderReflectionBindingName{{4}, "BaseColorSampler", {}}};
+            if (request.names.size() != names.size())
+                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+            for (std::size_t index = 0; index < names.size(); ++index)
+                if (!SameBindingName(request.names[index], names[index]))
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+            return ValidateRasterTool(request, cross);
+        }
+    }  // namespace
+
     /** @copydoc ValidateRasterReflection */
     Result<void> ValidateRasterReflection(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
                                           const ShaderCompilerReflectionRequest &request, const ShaderCompilerToolInstallation *cross) {
@@ -123,30 +169,13 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
         if (target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-        if (expected.Value() != actual.Value()) {
-            if (target.backend == ShaderTargetBackend::OpenGL)
-                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        if (ValidateRegisterRasterReflection(manifest, target, request.names).HasValue())
+            return ValidateRasterTool(request, cross);
+        if (expected.Value() == actual.Value())
+            return ValidateVfxRasterNames(request, cross);
+        if (target.backend == ShaderTargetBackend::Metal)
             return ValidateUiPaintMetalReflection(request, cross);
-        }
-        const std::array<ShaderReflectionBindingName, 4>
-            names{ShaderReflectionBindingName{{1}, "VfxInstances", {{{1}, "ClipFromLocal"}, {{2}, "InstanceColor"}}},
-                  ShaderReflectionBindingName{{2}, "VfxMaterial", {{{3}, "Tint"}, {{4}, "AlphaCutoff"}}},
-                  ShaderReflectionBindingName{{3}, "BaseColor", {}}, ShaderReflectionBindingName{{4}, "BaseColorSampler", {}}};
-        if (request.names.size() != names.size())
-            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-        for (std::size_t index = 0; index < names.size(); ++index) {
-            const auto &given = request.names[index], &wanted = names[index];
-            if (given.id != wanted.id || given.name != wanted.name || given.parameters.size() != wanted.parameters.size())
-                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-            for (std::size_t member = 0; member < wanted.parameters.size(); ++member)
-                if (given.parameters[member].id != wanted.parameters[member].id ||
-                    given.parameters[member].name != wanted.parameters[member].name)
-                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-        }
-        if (!cross || request.tool.tool != ShaderCompilerTool::SpirvCross || cross->identity.release != request.tool.release ||
-            cross->identity.buildDigest != request.tool.buildDigest)
-            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-        return Result<void>::Success();
+        return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
     }
 
     /** @copydoc ReflectVulkanRoute */

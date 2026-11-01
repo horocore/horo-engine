@@ -382,6 +382,17 @@ target_include_directories(HoroEditorTerrainHostInternal PUBLIC "${CMAKE_CURRENT
 target_link_libraries(HoroEditorTerrainHostInternal PUBLIC HoroEngine::TerrainAuthoringApplication
         HoroEngine::PlatformImmutableFileStorage HoroEngine::Platform)
 
+# Explicit development-only shader source capture; no renderer selection authority.
+add_library(HoroShaderHotReloadHostInternal STATIC
+    common/render/ShaderHotReloadSource.cpp
+    common/render/ShaderHotReloadSourceValidation.cpp
+    common/render/ShaderHotReloadHost.cpp
+    common/render/EditorViewportHotReloadConfiguration.cpp)
+target_compile_features(HoroShaderHotReloadHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroShaderHotReloadHostInternal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/common/render")
+target_link_libraries(HoroShaderHotReloadHostInternal PUBLIC HoroEngine::ShaderHotReload HoroEngine::Assets
+    PRIVATE HoroEditorViewportShaderRecipeInternal HoroEditorVulkanShaderInternal)
+
 # The graphical executable is an optional composition root. Foundation and
 # headless hosts must remain buildable when the GUI adapter is intentionally off.
 if(HORO_BUILD_EDITOR_GUI)
@@ -412,7 +423,7 @@ if(HORO_BUILD_EDITOR_GUI)
         target_link_libraries(HoroEditor PRIVATE dwmapi)
     endif()
 
-    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal)
     include(HoroEditorGuiLiveReloadHost)
     if(HORO_EDITOR_LIVE_UI)
         include(HoroEditorLiveUi)

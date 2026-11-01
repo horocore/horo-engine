@@ -5,6 +5,7 @@
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/ShaderHotReloadTarget.h"
 #include "VulkanEditorGraphicsBridge.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/ViewportOverlayTriangles.h"
@@ -13,7 +14,9 @@
 #include <thread>
 
 namespace Horo::Editor {
-    class EditorViewportRendererVulkan final : public IEditorViewportRenderer, public Render::Detail::IVulkanEditorDeviceChild {
+    class EditorViewportRendererVulkan final : public IEditorViewportRenderer,
+                                               public Render::Detail::IVulkanEditorDeviceChild,
+                                               public Render::IShaderHotReloadTarget {
     public:
         EditorViewportRendererVulkan(Render::RenderFrontend &frontend, Render::Detail::VulkanEditorGraphicsBridge &bridge,
                                      EditorVulkanViewportCook cooked) noexcept;
@@ -81,6 +84,12 @@ namespace Horo::Editor {
          * the external acquisition owner's actual scene AND GUI retirement/final-state evidence.
          */
         [[nodiscard]] Result<void> PollXrQueue();
+        [[nodiscard]] Result<Render::ShaderHotReloadTargetState> CaptureState() const override;
+        [[nodiscard]] Result<std::unique_ptr<Render::IShaderHotReloadCandidate>> Prepare(
+            std::span<const Render::ShaderHotReloadProgramView> programs, Render::ShaderHotReloadTargetState expected,
+            const CancellationToken &cancellation = {}) override;
+        [[nodiscard]] Result<Render::ShaderHotReloadTargetState> Adopt(std::unique_ptr<Render::IShaderHotReloadCandidate> candidate,
+                                                                       Render::ShaderHotReloadTargetState expected) override;
         void Shutdown() noexcept;
         void ReleaseNative() noexcept override;
         [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
@@ -182,7 +191,18 @@ namespace Horo::Editor {
                                                         const Render::RenderSceneView &scene);
         };
 
-        [[nodiscard]] Result<void> CreateOverlaySlots();
+        struct ProgramGeneration;
+        [[nodiscard]] Result<void> PrepareProgram(ProgramGeneration &candidate);
+
+        /** @brief Builds overlay geometry and bindings into an unpublished complete program generation. */
+        [[nodiscard]] Result<void> CreateOverlaySlots(ShaderResources &program, std::span<FrameSlot> slots);
+        /** @brief Atomically exchanges the complete desktop program and per-frame consumers on the cold owner lane. */
+        void AdoptProgram(ProgramGeneration &candidate) noexcept;
+        /** @brief Drops only this program's discovery; accepted material/submission leases retain native resources. */
+        void RetireProgram(ShaderResources &program, std::span<FrameSlot> slots) noexcept;
+        void RetireDraw(DrawSlot &draw) noexcept;
+        void ReleaseProgramObjects(ShaderResources &program) noexcept;
+        void RetireXrProgram() noexcept;
         [[nodiscard]] Result<void> CreateOverlayMesh(OverlaySlot &slot);
         void ReleaseOverlaySlots() noexcept;
         [[nodiscard]] Result<bool> PrepareOverlay(Render::FrameToken frame, OverlaySlot &slot,
@@ -211,6 +231,7 @@ namespace Horo::Editor {
         EditorViewportExtent requestedExtent_;
         EditorViewportGridOptions requestedGrid_;
         EditorViewportLightVisualizerOptions requestedLightVisualizer_;
+        std::uint64_t liveGeneration_{};
         bool initialized_{};
         bool childAttached_{};
         bool recordedEver_{};

@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Development snapshot with a project-owned semantic surface catalog, separate from physical materials and presentation assets.
 - Journaled adoption of missing catalogs without inferring surfaces or changing existing project identities.
 - Bounded D3D12 graph-copy command submission, explicit legacy/enhanced barrier admission, queue fences and GPU-safe resource retirement.
+- Opt-in development shader hot reload with bounded asynchronous compilation, complete program-family adoption and last-known-good preservation.
 
 ### Changed
 - Gameplay SDK 25 requires rebuilding native gameplay modules and descriptor bundles for the new surface and Character value contracts.

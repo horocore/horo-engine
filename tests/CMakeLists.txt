@@ -129,6 +129,7 @@ target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PartitionedWo
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
+target_sources(HoroShaderHotReloadPublicHeaderConsumer PRIVATE support/ShaderHotReloadPublicHeaderConsumer.cpp)
 target_sources(HoroVfxApiPublicHeaderConsumer PRIVATE support/VfxWorldPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/VfxDrawPublicHeaderConsumer.cpp)
@@ -4030,12 +4031,16 @@ add_executable(HoroShaderCompilerPipelineTests
         unit/runtime/renderer/ShaderArtifactTests.cpp
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
         unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
+        unit/runtime/renderer/RegisterRasterToolchainTests.cpp
+        unit/runtime/renderer/ViewportShaderCompilerIntegrationTests.cpp
         unit/application/ShaderBuildServiceTests.cpp
 )
 target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
-target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform)
+target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform HoroEditorViewportShaderRecipeInternal)
 add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp
+    unit/runtime/renderer/RegisterRasterReflectionCookTests.cpp
+    unit/runtime/renderer/RegisterRasterNormalizationTests.cpp
     unit/runtime/renderer/UiPaintReflectionCookTests.cpp
     unit/runtime/renderer/VfxReflectionCookTests.cpp
     support/LockedVfxShaderFixture.cpp)
@@ -6279,3 +6284,14 @@ endif ()
 horo_register_catch_test(HoroD3D12CommandTests LABELS "native;renderer;d3d12;commands;qualification")
 
 target_sources(HoroTerrainSculptProducerTests PRIVATE unit/editor/TerrainSurfaceRestorationTests.cpp)
+
+add_executable(HoroShaderHotReloadServiceTests unit/application/ShaderHotReloadServiceTests.cpp)
+target_compile_features(HoroShaderHotReloadServiceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroShaderHotReloadServiceTests PRIVATE HoroEngine::ShaderHotReload)
+horo_register_catch_test(HoroShaderHotReloadServiceTests LABELS "unit;shader;headless")
+
+add_executable(HoroShaderHotReloadHostTests unit/application/ShaderHotReloadHostTests.cpp)
+target_compile_features(HoroShaderHotReloadHostTests PRIVATE cxx_std_20)
+target_link_libraries(HoroShaderHotReloadHostTests PRIVATE HoroShaderHotReloadHostInternal
+    HoroEditorViewportShaderRecipeInternal)
+horo_register_catch_test(HoroShaderHotReloadHostTests LABELS "unit;shader;headless")

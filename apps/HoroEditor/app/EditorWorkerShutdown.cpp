@@ -5,14 +5,16 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "PackageProjectHost.h"
+#include "ShaderHotReloadHost.h"
 
 #include <cstdio>
 
 namespace Horo::Editor {
     /** @copydoc EditorWorkerShutdown::EditorWorkerShutdown */
     EditorWorkerShutdown::EditorWorkerShutdown(JobSystem &jobs, Application::ShaderBuildService &shaderBuild, GuiScreenHost *screens,
-                                               Application::Internal::PackageProjectHost *packages) noexcept
-        : packages_(packages), jobs_(jobs), shaderBuild_(shaderBuild), screens_(screens) {}
+                                               Application::Internal::PackageProjectHost *packages,
+                                               Application::Internal::ShaderHotReloadHost *shaderReload) noexcept
+        : shaderReload_(shaderReload), packages_(packages), jobs_(jobs), shaderBuild_(shaderBuild), screens_(screens) {}
 
     /** @copydoc EditorWorkerShutdown::~EditorWorkerShutdown */
     EditorWorkerShutdown::~EditorWorkerShutdown() {
@@ -24,6 +26,8 @@ namespace Horo::Editor {
             // This fallback still retains the owner until scheduler cancellation joins borrowed callbacks.
             std::fputs("Package close raised before scheduler cancellation; retaining the owner.\n", stderr);
         }
+        if (shaderReload_)
+            static_cast<void>(shaderReload_->Shutdown());
         jobs_.StopAccepting();
         if (screens_ != nullptr)
             screens_->Shutdown();

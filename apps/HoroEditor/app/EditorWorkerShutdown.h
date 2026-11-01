@@ -9,7 +9,8 @@ namespace Horo {
 
     namespace Application::Internal {
         class PackageProjectHost;
-    }
+        class ShaderHotReloadHost;
+    }  // namespace Application::Internal
 
     namespace Application {
         class ShaderBuildService;
@@ -29,7 +30,8 @@ namespace Horo {
              * workers. Two distinct guards cover constructor failure and constructed-host teardown.
              */
             EditorWorkerShutdown(JobSystem &jobs, Application::ShaderBuildService &shaderBuild, GuiScreenHost *screens = nullptr,
-                                 Application::Internal::PackageProjectHost *packages = nullptr) noexcept;
+                                 Application::Internal::PackageProjectHost *packages = nullptr,
+                                 Application::Internal::ShaderHotReloadHost *shaderReload = nullptr) noexcept;
             /** @brief Stops admission, shuts down screens, drains shader compilation, then cancels/joins jobs in that order. */
             ~EditorWorkerShutdown();
             EditorWorkerShutdown(const EditorWorkerShutdown &) = delete;
@@ -38,6 +40,7 @@ namespace Horo {
             EditorWorkerShutdown &operator=(EditorWorkerShutdown &&) = delete;
 
         private:
+            Application::Internal::ShaderHotReloadHost *shaderReload_;
             Application::Internal::PackageProjectHost *packages_;
             JobSystem &jobs_;
             Application::ShaderBuildService &shaderBuild_;

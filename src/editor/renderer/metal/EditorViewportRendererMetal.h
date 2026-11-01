@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Render/ShaderHotReloadTarget.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "runtime/renderer/modules/metal/MetalBackendModule.h"
 
@@ -7,7 +8,7 @@
 
 namespace Horo::Editor {
     /** @brief Metal editor adapter that renders backend-neutral editor scene instances into an offscreen target. */
-    class EditorViewportRendererMetal final : public IEditorViewportRenderer {
+    class EditorViewportRendererMetal final : public IEditorViewportRenderer, public Render::IShaderHotReloadTarget {
     public:
         /** @brief Borrows the frontend resource owner and initialized runtime Metal bridge used by editor composition. */
         EditorViewportRendererMetal(Render::RenderFrontend &frontend, Render::MetalEditorGraphicsBridge &graphicsBridge) noexcept;
@@ -21,6 +22,12 @@ namespace Horo::Editor {
 
         /** @brief Releases all Metal objects; repeated calls are safe. */
         void Shutdown() noexcept;
+        [[nodiscard]] Result<Render::ShaderHotReloadTargetState> CaptureState() const override;
+        [[nodiscard]] Result<std::unique_ptr<Render::IShaderHotReloadCandidate>> Prepare(
+            std::span<const Render::ShaderHotReloadProgramView> programs, Render::ShaderHotReloadTargetState expected,
+            const CancellationToken &cancellation = {}) override;
+        [[nodiscard]] Result<Render::ShaderHotReloadTargetState> Adopt(std::unique_ptr<Render::IShaderHotReloadCandidate> candidate,
+                                                                       Render::ShaderHotReloadTargetState expected) override;
 
         [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
                                                         std::span<const Render::RenderPassDescriptor> passes) override;

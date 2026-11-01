@@ -2683,6 +2683,11 @@ target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation PRIVATE HoroFo
 
 # Portable normalization of actual tool evidence; runtime value/identity consumers remain in RenderApi.
 add_library(HoroShaderReflectionCookInternal STATIC
+    runtime/renderer/shader_cook/RegisterRasterReflectionProfile.cpp
+    runtime/renderer/shader_cook/RegisterRasterReflectionNormalization.cpp
+    runtime/renderer/shader_cook/RegisterRasterNativeEvidence.cpp
+    runtime/renderer/shader_cook/RegisterRasterOpenGLEvidence.cpp
+    runtime/renderer/shader_cook/RegisterRasterMetalEvidence.cpp
     runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp
     runtime/renderer/shader_cook/UiPaintMetalReflectionNormalization.cpp
     runtime/renderer/shader_cook/VfxMetalReflectionNormalization.cpp)
@@ -2720,6 +2725,24 @@ add_library(HoroShaderBuild STATIC application/render/ShaderBuildService.cpp)
 add_library(HoroEngine::ShaderBuild ALIAS HoroShaderBuild)
 target_compile_features(HoroShaderBuild PUBLIC cxx_std_20)
 target_link_libraries(HoroShaderBuild PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
+
+add_library(HoroShaderHotReload STATIC
+    application/render/ShaderHotReloadService.cpp
+    application/render/ShaderHotReloadValidation.cpp
+    application/render/ShaderHotReloadWorker.cpp
+    application/render/ShaderHotReloadPublication.cpp)
+add_library(HoroEngine::ShaderHotReload ALIAS HoroShaderHotReload)
+target_compile_features(HoroShaderHotReload PUBLIC cxx_std_20)
+target_link_libraries(HoroShaderHotReload PUBLIC HoroEngine::ShaderBuild)
+
+add_library(HoroEditorViewportShaderRecipeInternal STATIC
+    editor/renderer/shader/EditorViewportShaderRecipe.cpp
+    editor/renderer/shader/EditorViewportShaderParameters.cpp)
+target_compile_features(HoroEditorViewportShaderRecipeInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorViewportShaderRecipeInternal PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/shader")
+target_link_libraries(HoroEditorViewportShaderRecipeInternal PUBLIC HoroEngine::RenderApi)
+
 
 add_library(HoroRenderBackendRegistry STATIC
         runtime/renderer/backend_registry/RenderBackendRegistry.cpp
@@ -4173,3 +4196,19 @@ target_compile_features(HoroUiStyleWorkspaceApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroUiStyleWorkspaceApplication PUBLIC HoroEngine::RuntimeUi HoroEngine::Assets)
 
 include(HoroPublicHeaderOwnership)
+
+if(TARGET HoroEditorViewportMetal)
+    target_link_libraries(HoroEditorViewportMetal PUBLIC HoroEditorViewportShaderRecipeInternal
+        PRIVATE HoroRenderFrontendResourceAccessInternal)
+endif()
+if(TARGET HoroEditorViewportOpenGL)
+    set(_horo_gl_validation_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/opengl-program-validation")
+    file(MAKE_DIRECTORY "${_horo_gl_validation_headers}")
+    configure_file(runtime/renderer/modules/opengl/OpenGLProgramValidation.h
+        "${_horo_gl_validation_headers}/OpenGLProgramValidation.h" COPYONLY)
+    add_library(HoroRenderOpenGLProgramValidationInternal INTERFACE)
+    target_include_directories(HoroRenderOpenGLProgramValidationInternal INTERFACE "${_horo_gl_validation_headers}")
+    target_link_libraries(HoroRenderOpenGLProgramValidationInternal INTERFACE HoroEngine::RenderOpenGL)
+    target_link_libraries(HoroEditorViewportOpenGL PUBLIC HoroEditorViewportShaderRecipeInternal
+        PRIVATE HoroRenderFrontendResourceAccessInternal HoroRenderOpenGLProgramValidationInternal)
+endif()

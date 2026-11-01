@@ -86,6 +86,7 @@
 #include "RenderGraphInspectionPane.h"
 #include "RuntimeUiPaintHost.h"
 #include "RuntimeUiPaintProjectSources.h"
+#include "ShaderHotReloadHost.h"
 #include "editor/EditorServiceErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
@@ -1239,6 +1240,7 @@ namespace Horo::Editor {
             OperationStore &operationStore;
             Application::ShaderBuildService &shaderBuild;
             std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
+            Application::Internal::ShaderHotReloadHost *shaderReload{};
         };
 
         struct EditorBackgroundServices {
@@ -1388,6 +1390,7 @@ namespace Horo::Editor {
             Result<void> OnPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
                 switch (phase) {
                     case Runtime::RuntimePhase::BeginFrame:
+                        PollShaderReload();
 #if !defined(NDEBUG)
                         themeReload_.Update(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
 #endif
@@ -1445,6 +1448,7 @@ namespace Horo::Editor {
             }
 
             void Shutdown() noexcept override {
+                ShutdownShaderReload();
                 themeReload_.Shutdown();
                 try {
                     static_cast<void>(authorities_.packages->Close());
@@ -1590,6 +1594,7 @@ namespace Horo::Editor {
 
             /** @brief Routes one event while retaining window-specific recovery and close ownership. */
             void DispatchPlatformEvent(const SDL_Event &event) {
+                DispatchShaderReloadCommand(event);
                 ObserveSurfaceRecoveryEvent(event);
                 ImGui_ImplSDL3_ProcessEvent(&event);
                 p_->inputBackend.ProcessEvent(event);
@@ -1606,6 +1611,40 @@ namespace Horo::Editor {
                     static_cast<void>(screenHost_->RequestCloseApplication());
                     authorities_.runtime->RequestShutdown();
                 }
+            }
+
+            /** @brief Pumps completed shader work before native frame admission. */
+            void PollShaderReload() {
+                if (!p_->operationServices.shaderReload)
+                    return;
+                const auto pumped = p_->operationServices.shaderReload->Poll();
+                if (pumped.HasError())
+                    LOG_ERROR("editor.shader_reload", "%s", pumped.ErrorValue().message.c_str());
+            }
+
+            /** @brief Drains the optional development producer while its compiler and graphics owners live. */
+            void ShutdownShaderReload() {
+                if (p_->operationServices.shaderReload)
+                    static_cast<void>(p_->operationServices.shaderReload->Shutdown());
+            }
+
+            /** @brief Admits only the nonrepeating developer chord from this host window. */
+            bool IsShaderReloadKeyChord(const SDL_Event &event) const {
+                return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+                       event.key.windowID == SDL_GetWindowID(p_->presentation.window) && (event.key.mod & SDL_KMOD_CTRL) != 0 &&
+                       (event.key.mod & SDL_KMOD_ALT) != 0;
+            }
+
+            /** @brief Explicit developer commands are available only with an injected qualified compiler/recipe. */
+            void DispatchShaderReloadCommand(const SDL_Event &event) {
+                auto *reload = p_->operationServices.shaderReload;
+                if (!reload || !IsShaderReloadKeyChord(event))
+                    return;
+                if (event.key.key != SDLK_R && event.key.key != SDLK_C)
+                    return;
+                const auto result = event.key.key == SDLK_R ? reload->Reload() : reload->Cancel();
+                if (result.HasError())
+                    LOG_ERROR("editor.shader_reload", "%s", result.ErrorValue().message.c_str());
             }
 
             /** @brief Admits one recovery attempt only after an owner-window presentation observation. */
@@ -2470,7 +2509,8 @@ namespace Horo::Editor {
             Application::NetworkDebuggerService networkDebugger;
 
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
-            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages};
+            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages,
+                                                            p.operationServices.shaderReload};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             auto uiInspectorResourcesFactory =
                 MakeEditorUiInspectorResourcesFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles);
@@ -2539,7 +2579,8 @@ namespace Horo::Editor {
                                                     .terrainCook = terrainCookFactory,
                                                     .terrainAssets = terrainAssetsFactory}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
-            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages};
+            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages,
+                                                   p.operationServices.shaderReload};
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             if (xrComposition.xrPlay)
                 screenHost.Services().Register<IEditorPlayXrHost>(*xrComposition.xrPlay);
@@ -2951,6 +2992,7 @@ namespace Horo::Editor {
         const EditorUpdateHostServices *updateHost;
         std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler;
         std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
+        const Application::Internal::ShaderHotReloadHostConfiguration *shaderReload;
     };
 
     struct EditorSessionResult final {
@@ -2973,7 +3015,24 @@ namespace Horo::Editor {
             selectedJobs = ownedJobs.get();
         }
         JobSystem &jobSystem = *selectedJobs;
+        const bool hasQualifiedCompiler = static_cast<bool>(launch.shaderCompiler);
         Application::ShaderBuildService shaderBuild{std::move(launch.shaderCompiler), launch.buildOutput};
+        std::unique_ptr<Application::Internal::ShaderHotReloadHost> shaderReload;
+        if (launch.shaderReload) {
+            auto *target = dynamic_cast<Render::IShaderHotReloadTarget *>(launch.composition.viewportRenderer.get());
+            if (!hasQualifiedCompiler || !target) {
+                LOG_ERROR("editor.shader_reload", "Development reload requires an explicit compiler and selected reload target.");
+                return {std::nullopt, false};
+            }
+            auto created = Application::Internal::ShaderHotReloadHost::Create(shaderBuild, jobSystem, launch.operations, launch.buildOutput,
+                                                                              *target, *launch.shaderReload);
+            if (created.HasError()) {
+                LOG_ERROR("editor.shader_reload", "%s", created.ErrorValue().message.c_str());
+                return {std::nullopt, false};
+            }
+            shaderReload = std::move(created).Value();
+            LOG_INFO("editor.shader_reload", "Development commands: Ctrl+Alt+R reload; Ctrl+Alt+C cancel.");
+        }
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
         EditorDataBus editorEvents;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", launch.startup.settings.languageTag.c_str());
@@ -3009,7 +3068,7 @@ namespace Horo::Editor {
                                            inputBackend,
                                            inputRouter,
                                            launch.logs,
-                                           {launch.buildOutput, launch.operations, shaderBuild, launch.uiPaintTarget}};
+                                           {launch.buildOutput, launch.operations, shaderBuild, launch.uiPaintTarget, shaderReload.get()}};
         auto rendererRestart = RunEditorMainLoop(loopParams);
         return {std::move(rendererRestart), loopParams.healthy};
     }
@@ -3244,8 +3303,8 @@ namespace Horo::Editor {
     /** @copydoc RunEditorGuiApp */
     int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost,
                         std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler,
-                        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget,
-                        const EditorOpenXRHostServices *xrHost) {
+                        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget, const EditorOpenXRHostServices *xrHost,
+                        const Application::Internal::ShaderHotReloadHostConfiguration *shaderReload) {
         // ── Bootstrap logging before any subsystem ───────────────────────
         auto observabilitySession = InitializeEditorObservability();
         auto saveTelemetryResult = Runtime::SaveTelemetryRegistration::Create();
@@ -3306,7 +3365,7 @@ namespace Horo::Editor {
         EditorSessionResult session =
             RunEditorSession({*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures,
                               presentation->composition, editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost,
-                              std::move(shaderCompiler), std::move(uiPaintTarget)});
+                              std::move(shaderCompiler), std::move(uiPaintTarget), shaderReload});
 
         RetireEditorSessionPresentation(*presentation, session);
         RetireEditorXrStartup(*prepared);

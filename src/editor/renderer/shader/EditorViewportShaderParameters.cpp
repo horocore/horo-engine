@@ -1,0 +1,97 @@
+#include "EditorViewportShaderParameters.h"
+
+#include "../EditorRendererErrors.h"
+#include "EditorViewportShaderRecipe.h"
+#include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
+
+#include <algorithm>
+
+namespace Horo::Editor {
+    namespace {
+        Result<void> ValidateViewportReloadInterface(const Render::ShaderHotReloadProgramView &view,
+                                                     const Render::ReflectedShaderArtifact &reflection, const std::size_t role) {
+            const auto canonical =
+                MakeEditorViewportShaderManifest(static_cast<EditorViewportShaderProgram>(role + 1), view.manifest->targets.front());
+            if (canonical.HasError())
+                return Result<void>::Failure(canonical.ErrorValue());
+            const auto expected = Render::ComputeShaderInterfaceCompatibilityId(canonical.Value());
+            if (expected.HasError())
+                return Result<void>::Failure(expected.ErrorValue());
+            if (expected.Value() != reflection.reflection.interfaceCompatibility)
+                return Result<void>::Failure(MakeError(RendererErrors::ViewportShaderContractInvalid));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @brief Requires exact canonical logical ABI and its same-boundary cooked native bytes. */
+    Result<const Render::CompiledShaderArtifact *> ViewportReloadArtifact(const Render::ShaderHotReloadProgramView &view,
+                                                                          const Render::ShaderTargetBackend backend,
+                                                                          const std::size_t role) {
+        using Outcome = Result<const Render::CompiledShaderArtifact *>;
+        if (!view.manifest || !view.compiled || view.id.value != role + 1)
+            return Outcome::Failure(MakeError(Render::ShaderCompilerPipelineErrors::InvalidRequest));
+        if (view.compiled->artifacts.size() != 1)
+            return Outcome::Failure(MakeError(Render::ShaderCompilerPipelineErrors::InvalidAdapterOutput));
+        const auto &artifact = view.compiled->artifacts.front();
+        if (artifact.backend != backend || !artifact.reflection || view.manifest->targets.size() != 1)
+            return Outcome::Failure(MakeError(Render::ShaderCompilerPipelineErrors::InvalidAdapterOutput));
+        const auto interface = ValidateViewportReloadInterface(view, *artifact.reflection, role);
+        if (interface.HasError())
+            return Outcome::Failure(interface.ErrorValue());
+        const auto valid = Render::ValidateReflectedShaderArtifact(artifact, *artifact.reflection);
+        if (valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        return Outcome::Success(&artifact);
+    }
+
+    void EditorViewportShaderParameters::SetScene(const Render::RenderSceneView &scene, const Math::Mat4 &shadowViewProjection,
+                                                  const std::size_t shadowLightIndex, const bool shadowEnabled,
+                                                  const Render::ShaderTargetBackend backend) noexcept {
+        const auto count = std::min(scene.lights.size(), std::size_t{16});
+        camera = {scene.camera.position.x, scene.camera.position.y, scene.camera.position.z, static_cast<float>(count)};
+        shadow = shadowViewProjection;
+        shadowSettings = {shadowEnabled ? 1.0F : 0.0F, static_cast<float>(shadowLightIndex), 0, 0};
+        shadowCoordinates = backend == Render::ShaderTargetBackend::Metal ? std::array<float, 4>{0.5F, -0.5F, 1.0F, 0.0F}
+                                                                          : std::array<float, 4>{0.5F, 0.5F, 0.5F, 0.5F};
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto &light = scene.lights[index];
+            const std::array<std::array<float, 4>, 4> values{
+                {{light.position.x, light.position.y, light.position.z, static_cast<float>(light.kind)},
+                 {light.direction.x, light.direction.y, light.direction.z, light.range},
+                 {light.color.x, light.color.y, light.color.z, light.intensity},
+                 {light.innerConeCosine, light.outerConeCosine, 0, 0}}};
+            for (std::size_t kind = 0; kind < values.size(); ++kind)
+                std::copy(values[kind].begin(), values[kind].end(), lights[kind].begin() + index * 4);
+        }
+    }
+
+    Result<std::size_t> EditorViewportShaderParameters::PackLit(const Render::MaterialBindingLayout &layout,
+                                                                const std::span<std::byte> destination) const {
+        const std::array<Render::MaterialParameterValue, 11> values{{{{1}, std::span<const float>{mvp.values}},
+                                                                     {{2}, std::span<const float>{model.values}},
+                                                                     {{3}, std::span<const float>{shadow.values}},
+                                                                     {{4}, std::span<const float>{camera}},
+                                                                     {{5}, std::span<const float>{lights[0]}},
+                                                                     {{6}, std::span<const float>{lights[1]}},
+                                                                     {{7}, std::span<const float>{lights[2]}},
+                                                                     {{8}, std::span<const float>{lights[3]}},
+                                                                     {{9}, std::span<const float>{selection}},
+                                                                     {{10}, std::span<const float>{shadowSettings}},
+                                                                     {{11}, std::span<const float>{shadowCoordinates}}}};
+        return Render::PackMaterialParameterBinding(layout, {1}, values, destination);
+    }
+
+    Result<std::size_t> PackEditorViewportGrid(const Render::MaterialBindingLayout &layout, const Math::Mat4 &mvp, const Math::Vec3 color,
+                                               const std::span<std::byte> destination) {
+        const std::array<float, 4> rgba{color.x, color.y, color.z, 1};
+        const std::array<Render::MaterialParameterValue, 2> values{
+            {{{1}, std::span<const float>{mvp.values}}, {{2}, std::span<const float>{rgba}}}};
+        return Render::PackMaterialParameterBinding(layout, {1}, values, destination);
+    }
+
+    Result<std::size_t> PackEditorViewportShadow(const Render::MaterialBindingLayout &layout, const Math::Mat4 &mvp,
+                                                 const std::span<std::byte> destination) {
+        const std::array<Render::MaterialParameterValue, 1> values{{{{1}, std::span<const float>{mvp.values}}}};
+        return Render::PackMaterialParameterBinding(layout, {1}, values, destination);
+    }
+}  // namespace Horo::Editor
