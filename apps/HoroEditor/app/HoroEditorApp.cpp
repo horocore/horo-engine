@@ -15,6 +15,7 @@
 #include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
+#include "EditorTerrainPreparation.h"
 #include "EditorUiStylePreparation.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Extensions/EditorSurfaceContext.h"
@@ -2473,6 +2474,10 @@ namespace Horo::Editor {
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             auto uiInspectorResourcesFactory =
                 MakeEditorUiInspectorResourcesFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles);
+            auto terrainCookFactory =
+                MakeEditorTerrainCookFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles,
+                                             p.operationServices.operationStore, p.operationServices.buildOutputStore);
+            auto terrainAssetsFactory = MakeEditorTerrainAssetFactory(assetRegistry, mutationCoordinator, durableFiles);
             WorldStreamingPreviewHost streamingPreview;
             auto streamingPolicy = MakeWorldStreamingPreviewRuntimePolicy();
             if (streamingPolicy.HasError()) {
@@ -2530,7 +2535,9 @@ namespace Horo::Editor {
                                                                                                         {"editor.gizmo"}},
                                                                                 .availableCapabilities = {{"horo.editor.viewport-overlay"},
                                                                                                           {"horo.editor.gizmo"}}},
-                                                    .gameplayRetirements = gameplayRetirements}};
+                                                    .gameplayRetirements = gameplayRetirements,
+                                                    .terrainCook = terrainCookFactory,
+                                                    .terrainAssets = terrainAssetsFactory}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages};
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)

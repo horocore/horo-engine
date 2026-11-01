@@ -1,6 +1,8 @@
 #pragma once
 #include "EditorWorkspaceHostServices.h"
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Application/TerrainAuthoringAssets.h"
+#include "Horo/Application/TerrainAuthoringCook.h"
 #include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Cinematic/CameraCutRuntime.h"
@@ -31,6 +33,7 @@
 #include "editor/screens/workspace/PCGPreviewWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
+#include "terrain/TerrainAssetCreation.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -53,6 +56,7 @@ namespace Horo::Platform {
 }
 
 namespace Horo::Editor {
+    struct TerrainDocumentView;
     class IEditorPlayXrHost;
     class ILocalizationService;
     struct EditorViewportPickResult;
@@ -121,6 +125,8 @@ namespace Horo::Editor {
         EditorWorkspacePrefabServices prefab;             /**< Explicit authoring composition; never discovered by panels. */
         EditorWorkspaceProceduralServices procedural;
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Immutable project capture; omitted in Null. */
+        const Application::TerrainAuthoringCookFactory *terrainCook{};
+        const Application::TerrainAuthoringAssetFactory *terrainAssets{};
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -227,6 +233,15 @@ namespace Horo::Editor {
         [[nodiscard]] std::vector<std::pair<DocumentInstanceId, std::uint64_t>> TerrainDocumentRevisions() const;
         /** @brief Settle asset-rooted terrain owners after explicit save/discard navigation. */
         [[nodiscard]] Result<void> ShutdownTerrainDocuments(bool discard = false);
+        /** @brief Poll feature-owned cook transfers on the owner lane, without I/O or waiting. */
+        void UpdateTerrainCook();
+        /** @brief Explicit teardown only: close admission and drain accepted cook work before services retire. */
+        void ShutdownTerrainCook() noexcept;
+        /** @brief Capture actual bounded mesh/material registry choices for one transient resource creation modal. */
+        [[nodiscard]] Result<std::vector<TerrainCreationAssetChoice>> CaptureTerrainAssetChoices() const;
+        /** @brief Create one tracked resource through the explicitly composed factory and retain the immutable publication receipt. */
+        [[nodiscard]] Result<std::shared_ptr<const Application::TerrainAuthoringAssetCreated>> CreateTerrainAsset(
+            const TerrainDocumentView &document, const Application::TerrainAuthoringAssetRequest &request);
 
         /** @brief Last typed single-source save/Save As outcome from the actual workspace command route. */
         [[nodiscard]] const std::optional<Result<SourceSaveResult>> &SourceSaveOutcome() const noexcept {
@@ -482,13 +497,54 @@ namespace Horo::Editor {
         bool TryOpenTerrainDocument(const SourceOpenRequest &request);
         bool ProcessTerrainDocumentCommand(const EditorWorkspaceViewCommandData &command);
         void RefreshTerrainDocuments();
+        /** @brief Resolve one owner-thread transient palette/selection state for an existing document. */
+        [[nodiscard]] std::shared_ptr<TerrainToolSelection> TerrainSelection(DocumentInstanceId instance);
+        [[nodiscard]] Result<std::shared_ptr<TerrainToolSelection>> PrepareTerrainSelection(const TerrainDocumentHost &document);
+        /** @brief Validate the exact typed workspace target before dispatching any source or transient command. */
+        [[nodiscard]] Result<TerrainDocumentHost *> TerrainTarget(const TerrainToolCommand &intent);
+        [[nodiscard]] Result<TerrainDocumentHost *> TerrainTarget(const TerrainDocumentView &view, bool requireFocus);
+        /** @brief Dispatch source actions independently from bounded stroke/palette production. */
+        [[nodiscard]] Result<void> ExecuteTerrainTool(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainStroke(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainDocumentAction(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainPublication(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainPalette(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainCook(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> EnsureTerrainCook(const std::filesystem::path &root);
+        [[nodiscard]] Result<void> StartTerrainCook(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        void CancelTerrainCook(DocumentInstanceId instance) noexcept;
+        [[nodiscard]] bool TerrainCookFenceMatches() const;
+        [[nodiscard]] Result<void> RefreshTerrainAssetCreation(const TerrainDocumentView &view,
+                                                               const Application::TerrainAuthoringAssetCreated &created,
+                                                               Application::TerrainAuthoringAssetKind kind);
+        [[nodiscard]] Result<void> ExecuteTerrainFoliageStroke(TerrainDocumentHost &document, const TerrainToolCommand &intent,
+                                                               TerrainEditOperationId operation);
+        [[nodiscard]] Result<void> ExecuteTerrainSelection(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> AdmitTerrainOpen() const;
+        bool FocusTerrainDocument(std::string_view path);
+        [[nodiscard]] Result<void> OpenTerrainDocument(Assets::AssetId asset, const std::filesystem::path &absolute,
+                                                       const std::string &path);
+        void ObserveTerrainDocument(const TerrainDocumentHost &document);
+        void ActivateTerrainCamera(const TerrainDocumentHost &document);
+        void PublishTerrainFocus(std::optional<DocumentInstanceId> terrain, bool wasTerrain);
+        bool TryCloseTerrainCommand(const EditorWorkspaceViewCommandData &command);
+        void ProcessTerrainToolIntent(const TerrainToolCommand &intent);
         void ProcessFocusedTerrainCommand(const EditorWorkspaceViewCommandData &command);
         [[nodiscard]] Result<void> SaveTerrainDocuments();
         [[nodiscard]] Result<void> CloseTerrainDocument(DocumentInstanceId instance, bool discard);
         std::vector<std::shared_ptr<TerrainDocumentHost>> m_terrainDocuments;
+        std::vector<std::pair<DocumentInstanceId, std::shared_ptr<TerrainToolSelection>>> m_terrainToolSelections;
         std::optional<DocumentInstanceId> m_activeTerrainDocument;
         std::optional<EditorViewportCamera> m_terrainPriorCamera;
         std::uint64_t m_nextTerrainOperation{1};
+        const Application::TerrainAuthoringCookFactory *m_terrainCookFactory{};
+        const Application::TerrainAuthoringAssetFactory *m_terrainAssetFactory{};
+        std::optional<Application::TerrainAuthoringCookSession> m_terrainCook;
+        std::shared_ptr<Application::TerrainAuthoringCookCompletion> m_terrainCookReceipt;
+        std::optional<Application::TerrainAuthoringCookFence> m_terrainCookFence;
+        DocumentInstanceId m_terrainCookDocument;
+        bool m_terrainCookAdoption{};
+        Assets::AssetRegistryRevision m_terrainCookRegistry;
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;

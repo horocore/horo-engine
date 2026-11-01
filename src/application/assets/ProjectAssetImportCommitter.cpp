@@ -143,15 +143,15 @@ namespace Horo::Application {
         }
 
         /** @brief Stages every complete pair before making any asset destination visible. */
-        Result<void> Stage(std::vector<Entry> &entries, const Assets::PreparedAssetImportBatch &batch, DurableFileSystem &files,
-                           const CancellationToken &cancellation) {
+        Result<void> Stage(std::vector<Entry> &entries, const std::filesystem::path &root, std::string_view operation,
+                           DurableFileSystem &files, const CancellationToken &cancellation) {
             for (auto &entry : entries) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
-                auto lockPath = Assets::AssetSourcePublicationLockPath(batch.projectRoot, entry.path);
+                auto lockPath = Assets::AssetSourcePublicationLockPath(root, entry.path);
                 if (lockPath.HasError())
                     return Result<void>::Failure(std::move(lockPath).ErrorValue());
-                auto lock = files.TryAcquireExclusive(lockPath.Value(), batch.operationId);
+                auto lock = files.TryAcquireExclusive(lockPath.Value(), operation);
                 if (lock.HasError())
                     return Result<void>::Failure(std::move(lock).ErrorValue());
                 entry.lock.emplace(std::move(lock).Value());
@@ -161,7 +161,7 @@ namespace Horo::Application {
                 auto staged = files.WritePrivateDurable(entry.stage, entry.bytes, entry.staged);
                 if (staged.HasError())
                     return staged;
-                auto verified = Assets::CaptureAssetSource(batch.projectRoot, entry.stage, MaximumBatchBytes, cancellation);
+                auto verified = Assets::CaptureAssetSource(root, entry.stage, MaximumBatchBytes, cancellation);
                 if (verified.HasError())
                     return Result<void>::Failure(std::move(verified).ErrorValue());
                 if (verified.Value().identity != entry.identity)
@@ -176,112 +176,263 @@ namespace Horo::Application {
                                                              Assets::AssetRegistry *registry) noexcept
         : mutations_(mutations), files_(files), registry_(registry) {}
 
+    struct ProjectAssetImportCommitter::PreparedPublication final {
+        const std::filesystem::path &root;
+        const std::string &operation;
+        std::vector<Entry> entries;
+        std::vector<Assets::AssetRecord> expected;
+    };
+
+    namespace {
+        /** @brief Revokes callback reentry through both initial publication entry points. */
+        struct BusyScope final {
+            bool &busy;
+
+            explicit BusyScope(bool &value) noexcept : busy(value) {
+                busy = true;
+            }
+
+            ~BusyScope() {
+                busy = false;
+            }
+        };
+
+        /** @brief Promote complete prevalidated sources while retaining irreversible receipts. */
+        Result<void> Promote(std::vector<Entry> &entries, const std::filesystem::path &root, DurableFileSystem &files,
+                             ProjectAssetImportReceipt &receipt, const CancellationToken &cancellation) {
+            for (auto &entry : entries) {
+                auto result = Assets::PublishAssetSource(root, entry.path, {}, entry.bytes, *entry.lock, files, cancellation);
+                if (result.HasError())
+                    return Result<void>::Failure(std::move(result).ErrorValue());
+                entry.published = true;
+                ++receipt.promotedFiles;
+                if (result.Value().status != Assets::AssetSourcePublicationStatus::Durable) {
+                    receipt.status = ProjectAssetImportStatus::ReconciliationRequired;
+                    return Result<void>::Failure(std::move(*result.Value().durabilityError));
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Remove private copies before publishing registry references to the promoted batch. */
+        Result<void> ClearStages(std::vector<Entry> &entries, DurableFileSystem &files) {
+            for (auto &entry : entries) {
+                auto removed = files.RemoveDurable(entry.stage);
+                if (removed.HasError())
+                    return removed;
+                entry.staged = false;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief A newly authored source is tracked only when its exact planned record is present in the complete candidate. */
+        Result<void> PlannedRecords(const Assets::AssetRegistryCandidate &candidate, std::span<const Assets::AssetRecord> expected) {
+            for (const auto &record : expected) {
+                const auto found = std::ranges::find(candidate.records, record.id, &Assets::AssetRecord::id);
+                if (found == candidate.records.end())
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+                if (found->type != record.type || found->sourcePath.String() != record.sourcePath.String() ||
+                    found->metadataPath.String() != record.metadataPath.String())
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Registry publication commits visibility; a later derived-index failure must not compensate sources. */
+        Result<void> PublishRegistry(const std::filesystem::path &root, Assets::AssetRegistry *registry, ProjectAssetImportReceipt &receipt,
+                                     bool &complete, std::span<const Assets::AssetRecord> expected) {
+            if (!registry && expected.empty())
+                return Result<void>::Success();
+            auto candidate = Assets::PrepareAssetRegistryCandidate(root);
+            if (candidate.HasError())
+                return Result<void>::Failure(std::move(candidate).ErrorValue());
+            if (candidate.Value().status == Assets::AssetRegistryBuildStatus::Failed)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+            if (auto planned = PlannedRecords(candidate.Value(), expected); planned.HasError())
+                return planned;
+            if (!registry)
+                return Result<void>::Success();
+            const auto report = registry->Publish(std::move(candidate).Value());
+            if (report.status == Assets::AssetRegistryBuildStatus::Failed)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+            receipt.registryPublished = true;
+            complete = true;
+            receipt.status = ProjectAssetImportStatus::ReconciliationRequired;
+            auto indexed =
+                Assets::AssetIndexStore::SaveAtomically(root / std::filesystem::path{ProjectLayout::AssetIndexPath}, registry->Snapshot());
+            if (indexed.HasError())
+                return Result<void>::Failure(WrapError(Assets::AssetSourceErrors::DurabilityUnconfirmed, std::move(indexed).ErrorValue()));
+            return Result<void>::Success();
+        }
+
+        /** @brief Bound aggregate authored bytes and reserve only absent destinations before any native write. */
+        class AuthoredPreparation final {
+        public:
+            AuthoredPreparation(const PreparedAuthoredProjectAssetBatch &batch)
+                : batch_(batch), key_(FormatSha256(ComputeSha256(std::as_bytes(std::span(batch.operationId)))).substr(7)) {}
+
+            Result<void> Append(std::filesystem::path path, std::span<const std::byte> bytes) {
+                if (bytes.size() > MaximumBatchBytes - total_ || !paths_.insert(path).second)
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+                auto absent = Assets::CaptureAssetSource(batch_.projectRoot, path, MaximumBatchBytes);
+                if (absent.HasError())
+                    return Result<void>::Failure(std::move(absent).ErrorValue());
+                if (absent.Value().identity.exists)
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+                Entry entry;
+                entry.path = std::move(path);
+                entry.stage = entry.path.parent_path() / (".horo-import-" + key_ + "-" + std::to_string(entries.size()) + ".tmp");
+                entry.bytes.assign(bytes.begin(), bytes.end());
+                entry.identity = {true, bytes.size(), ComputeSha256(bytes)};
+                total_ += bytes.size();
+                entries.push_back(std::move(entry));
+                return Result<void>::Success();
+            }
+
+            Result<void> Item(const PreparedAuthoredProjectAsset &item) {
+                if (!item.asset.IsValid() || !ids_.insert(item.asset).second || item.type.Value().empty())
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
+                const auto path = Foundation::Paths::Resolve(batch_.projectRoot, item.destination);
+                // AssetTypeId is a validated canonical identifier, never arbitrary JSON text.
+                const std::string metadata = "{\"schemaVersion\":1,\"assetId\":\"" + item.asset.ToString() + "\",\"assetType\":\"" +
+                                             std::string(item.type.Value()) + "\"}\n";
+                auto decoded = Assets::DecodeAssetIdentitySidecar(item.destination.String(), metadata);
+                if (decoded.HasError())
+                    return Result<void>::Failure(std::move(decoded).ErrorValue());
+                expected.push_back(std::move(decoded).Value());
+                auto payload = Append(path, item.payload);
+                if (payload.HasError())
+                    return payload;
+                auto sidecar = path;
+                sidecar += ".horo";
+                return Append(std::move(sidecar), std::as_bytes(std::span(metadata)));
+            }
+
+            std::vector<Entry> entries;
+            std::vector<Assets::AssetRecord> expected;
+
+        private:
+            const PreparedAuthoredProjectAssetBatch &batch_;
+            std::string key_;
+            std::set<std::filesystem::path> paths_;
+            std::set<Assets::AssetId> ids_;
+            std::size_t total_{};
+        };
+
+        struct AuthoredSources final {
+            std::vector<Entry> entries;
+            std::vector<Assets::AssetRecord> expected;
+        };
+
+        /** @brief Validate all authored items without synthesizing import provenance. */
+        Result<AuthoredSources> PrepareAuthored(const PreparedAuthoredProjectAssetBatch &batch) {
+            using Return = Result<AuthoredSources>;
+            if (batch.items.empty() || batch.items.size() > MaximumBatchItems || batch.operationId.empty() ||
+                batch.operationId.size() > 256)
+                return Return::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+            AuthoredPreparation preparation(batch);
+            preparation.entries.reserve(batch.items.size() * 2);
+            preparation.expected.reserve(batch.items.size());
+            for (const auto &item : batch.items) {
+                auto result = preparation.Item(item);
+                if (result.HasError())
+                    return Return::Failure(std::move(result).ErrorValue());
+            }
+            return Return::Success({std::move(preparation.entries), std::move(preparation.expected)});
+        }
+    }  // namespace
+
     /** @copydoc ProjectAssetImportCommitter::Commit */
     Result<void> ProjectAssetImportCommitter::Commit(const Assets::PreparedAssetImportBatch &batch, Assets::IAssetIdGenerator &ids,
                                                      const CancellationToken &cancellation) {
         if (busy_)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
-        busy_ = true;
-
-        struct Reset final {
-            bool &busy;
-
-            ~Reset() {
-                busy = false;
-            }
-        } reset{busy_};
-
+        BusyScope busy(busy_);
         receipt_ = {};
-        std::vector<Entry> entries;
-        std::optional<Editor::ProjectMutationLease> lease;
+        try {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
+            auto lease = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
+            if (lease.HasError())
+                return Result<void>::Failure(std::move(lease).ErrorValue());
+            auto prepared = Prepare(batch, ids);
+            if (prepared.HasError())
+                return Result<void>::Failure(std::move(prepared).ErrorValue());
+            PreparedPublication publication{batch.projectRoot, batch.operationId, std::move(prepared).Value(), {}};
+            return PublishPrepared(publication, cancellation);
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        } catch (...) {
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        }
+    }
+
+    /** @copydoc ProjectAssetImportCommitter::CommitAuthored */
+    Result<void> ProjectAssetImportCommitter::CommitAuthored(const PreparedAuthoredProjectAssetBatch &batch,
+                                                             const CancellationToken &cancellation) {
+        if (busy_)
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        BusyScope busy(busy_);
+        receipt_ = {};
+        try {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
+            auto lease = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
+            if (lease.HasError())
+                return Result<void>::Failure(std::move(lease).ErrorValue());
+            auto prepared = PrepareAuthored(batch);
+            if (prepared.HasError())
+                return Result<void>::Failure(std::move(prepared).ErrorValue());
+            auto sources = std::move(prepared).Value();
+            PreparedPublication publication{batch.projectRoot, batch.operationId, std::move(sources.entries), std::move(sources.expected)};
+            return PublishPrepared(publication, cancellation);
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        } catch (...) {
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        }
+    }
+
+    /** @brief Shared irreversible transition for imports and newly authored sources; leases outlive compensation. */
+    Result<void> ProjectAssetImportCommitter::PublishPrepared(PreparedPublication &publication, const CancellationToken &cancellation) {
         bool complete{};
-        std::optional<Error> publishedFailure;
 
         struct Cleanup final {
-            std::vector<Entry> &entries;
-            const std::filesystem::path &root;
+            PreparedPublication &publication;
             DurableFileSystem &files;
             ProjectAssetImportReceipt &receipt;
             bool &complete;
 
             ~Cleanup() {
                 if (!complete)
-                    Rollback(entries, root, files, receipt);
-                else
-                    for (auto &entry : entries) {
-                        try {
-                            if (entry.staged)
-                                static_cast<void>(files.RemoveDurable(entry.stage));
-                        } catch (...) {
-                        }
-                    }
+                    Rollback(publication.entries, publication.root, files, receipt);
             }
-        } cleanup{entries, batch.projectRoot, files_, receipt_, complete};
+        } cleanup{publication, files_, receipt_, complete};
 
+        auto uncertain = MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed);
         try {
-            publishedFailure.emplace(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
-            if (cancellation.IsCancellationRequested())
-                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
-            auto acquired = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
-            if (acquired.HasError())
-                return Result<void>::Failure(std::move(acquired).ErrorValue());
-            lease.emplace(std::move(acquired).Value());
-            auto prepared = Prepare(batch, ids);
-            if (prepared.HasError())
-                return Result<void>::Failure(std::move(prepared).ErrorValue());
-            entries = std::move(prepared).Value();
-            auto staged = Stage(entries, batch, files_, cancellation);
+            auto staged = Stage(publication.entries, publication.root, publication.operation, files_, cancellation);
             if (staged.HasError())
                 return staged;
-            for (auto &entry : entries) {
-                auto published =
-                    Assets::PublishAssetSource(batch.projectRoot, entry.path, {}, entry.bytes, *entry.lock, files_, cancellation);
-                if (published.HasError())
-                    return Result<void>::Failure(std::move(published).ErrorValue());
-                entry.published = true;
-                ++receipt_.promotedFiles;
-                if (published.Value().status != Assets::AssetSourcePublicationStatus::Durable) {
-                    receipt_.status = ProjectAssetImportStatus::ReconciliationRequired;
-                    return Result<void>::Failure(std::move(*published.Value().durabilityError));
-                }
-            }
-            for (auto &entry : entries) {
-                auto removed = files_.RemoveDurable(entry.stage);
-                if (removed.HasError())
-                    return Result<void>::Failure(std::move(removed).ErrorValue());
-                entry.staged = false;
-            }
-            if (registry_) {
-                auto candidate = Assets::PrepareAssetRegistryCandidate(batch.projectRoot);
-                if (candidate.HasError())
-                    return Result<void>::Failure(std::move(candidate).ErrorValue());
-                if (candidate.Value().status == Assets::AssetRegistryBuildStatus::Failed)
-                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
-                const auto report = registry_->Publish(std::move(candidate).Value());
-                if (report.status == Assets::AssetRegistryBuildStatus::Failed)
-                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
-                receipt_.registryPublished = true;
-                // Publish performs every allocation before its atomic state replacement. From here onward the registry
-                // owns visible references to these complete pairs: a later derived-index failure cannot remove them.
-                complete = true;
-                receipt_.status = ProjectAssetImportStatus::ReconciliationRequired;
-                auto indexed =
-                    Assets::AssetIndexStore::SaveAtomically(batch.projectRoot / std::filesystem::path{ProjectLayout::AssetIndexPath},
-                                                            registry_->Snapshot());
-                if (indexed.HasError())
-                    return Result<void>::Failure(
-                        WrapError(Assets::AssetSourceErrors::DurabilityUnconfirmed, std::move(indexed).ErrorValue()));
-            }
+            auto promoted = Promote(publication.entries, publication.root, files_, receipt_, cancellation);
+            if (promoted.HasError())
+                return promoted;
+            auto removed = ClearStages(publication.entries, files_);
+            if (removed.HasError())
+                return removed;
+            auto registry = PublishRegistry(publication.root, registry_, receipt_, complete, publication.expected);
+            if (registry.HasError())
+                return registry;
             receipt_.status = ProjectAssetImportStatus::Published;
             complete = true;
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
-            if (complete && publishedFailure)
-                return Result<void>::Failure(std::move(*publishedFailure));
+            if (complete)
+                return Result<void>::Failure(std::move(uncertain));
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
         } catch (...) {
-            if (complete && publishedFailure)
-                return Result<void>::Failure(std::move(*publishedFailure));
+            if (complete)
+                return Result<void>::Failure(std::move(uncertain));
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
         }
     }

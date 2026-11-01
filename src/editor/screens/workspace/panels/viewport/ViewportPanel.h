@@ -14,6 +14,7 @@
 
 namespace Horo::Editor {
     class TerrainViewportTool;
+    class TerrainDocumentHost;
 
     class ViewportPanel final : public IWorkspacePanel {
     public:
@@ -67,6 +68,10 @@ namespace Horo::Editor {
         /** @brief Present an explicitly selected asset-local terrain source without Scene interaction or runtime fallback. */
         bool DrawTerrainSource(ImDrawList &draw, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &model,
                                EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+        void DrawTerrainTool(ImDrawList &draw, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &model,
+                             EditorWorkspaceViewCommandData &command, const EditorGuiContext &context, const TerrainDocumentHost &document);
+        void DrawTerrainDocumentError(const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &model,
+                                      const EditorGuiContext &context) const;
         void DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,
                                      EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
                                      Math::ClipDepthRange depthRange);

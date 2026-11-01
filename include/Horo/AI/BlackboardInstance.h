@@ -200,6 +200,13 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<std::optional<BlackboardValue>> Read(BlackboardKeyId key) const;
 
+        /** @brief Returns the actual retained immutable schema publication, empty for a moved-from observation.
+         * @return Shared read-only lease; it grants no mutation or execution authority.
+         */
+        [[nodiscard]] std::shared_ptr<const BlackboardSchema> Schema() const noexcept {
+            return schema_;
+        }
+
         /** @brief Returns the exact captured generation fence. @return Immutable binding. */
         [[nodiscard]] const BlackboardInstanceBinding &Binding() const noexcept {
             return binding_;

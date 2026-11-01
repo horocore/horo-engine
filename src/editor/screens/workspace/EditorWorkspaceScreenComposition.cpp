@@ -202,7 +202,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                                                    ? *services_.TryGetConst<Prefab::PrefabMetricHandles>()
                                                                                    : Prefab::PrefabMetricHandles{}),
                                                       .stageFactory = BindPrefabStageFactory(projectRoot)},
-                                           .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)}};
+                                           .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)},
+                                           .terrainCook = services_.TryGetConst<Application::TerrainAuthoringCookFactory>(),
+                                           .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>()};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

@@ -2,6 +2,7 @@
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "terrain/TerrainDocumentHost.h"
+#include "terrain/TerrainToolSelection.h"
 #include "terrain/TerrainWorkspaceTypes.h"
 
 #include <algorithm>
@@ -36,6 +37,83 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @brief Admit the existing real importer and project mutation capability before focusing or opening a source. */
+    Result<void> EditorWorkspaceController::AdmitTerrainOpen() const {
+        if (!m_mutations || !m_importerCatalog || !m_importerCatalog->FindById(TerrainRawImporterId) ||
+            m_viewModel.playState != EditorPlayState::Idle)
+            return Result<void>::Failure(MakeError(TerrainEditErrors::CapabilityUnavailable));
+        return Result<void>::Success();
+    }
+
+    /** @brief Focus an already owned document without issuing another source session. */
+    bool EditorWorkspaceController::FocusTerrainDocument(std::string_view path) {
+        for (const auto &document : m_terrainDocuments)
+            if (document->Identity().key.source.Value() == path) {
+                static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(document->Identity().instance));
+                RefreshTerrainDocuments();
+                return true;
+            }
+        return false;
+    }
+
+    /** @brief Prepare the source owner, transient selection and tab before publishing the accepted document. */
+    Result<void> EditorWorkspaceController::OpenTerrainDocument(Assets::AssetId asset, const std::filesystem::path &absolute,
+                                                                const std::string &path) {
+        m_terrainDocuments.reserve(4);
+        m_terrainToolSelections.reserve(4);
+        m_viewModel.terrainDocuments.reserve(4);
+        auto source = SourceDocumentId::Parse(path);
+        if (source.HasError())
+            return Result<void>::Failure(source.ErrorValue());
+        const DocumentOpenKey key{DocumentKind::Asset, source.Value()};
+        auto identity = m_documentRegistry.Open(key);
+        if (identity.HasError())
+            return Result<void>::Failure(identity.ErrorValue());
+
+        struct OpenIdentity final {
+            DocumentIdentityRegistry &registry;
+            DocumentInstanceId instance;
+            bool owned;
+
+            ~OpenIdentity() {
+                if (owned)
+                    static_cast<void>(registry.Close(instance));
+            }
+        } admission{m_documentRegistry, identity.Value().identity.instance,
+                    identity.Value().disposition == DocumentOpenDisposition::Opened};
+
+        auto opened = TerrainDocumentHost::Open(m_sourceOpenService.ProjectRoot(), absolute, asset, identity.Value().identity,
+                                                m_workspaceSession, *m_mutations, m_assetRegistry);
+        if (opened.HasError())
+            return Result<void>::Failure(opened.ErrorValue());
+
+        struct PreparedOwner final {
+            TerrainDocumentHost &document;
+            bool accepted{};
+
+            ~PreparedOwner() {
+                if (!accepted)
+                    static_cast<void>(document.Close());
+            }
+        } prepared{*opened.Value()};
+
+        auto camera = m_viewport.Current().camera;
+        if (auto framed = FrameSource(camera, *opened.Value()->BorrowSource()); framed.HasError())
+            return Result<void>::Failure(framed.ErrorValue());
+        auto selection = PrepareTerrainSelection(*opened.Value());
+        if (selection.HasError())
+            return Result<void>::Failure(selection.ErrorValue());
+        if (auto tab = m_viewModel.workspacePanelHost.OpenDocument(key); tab.HasError())
+            return Result<void>::Failure(tab.ErrorValue());
+        m_terrainToolSelections.emplace_back(identity.Value().identity.instance, std::move(selection).Value());
+        m_terrainDocuments.push_back(std::move(opened).Value());
+        prepared.accepted = true;
+        admission.owned = false;
+        m_viewModel.terrainDocumentError.reset();
+        RefreshTerrainDocuments();
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorWorkspaceController::TryOpenTerrainDocument */
     bool EditorWorkspaceController::TryOpenTerrainDocument(const SourceOpenRequest &request) {
         const auto root = m_sourceOpenService.ProjectRoot();
@@ -49,76 +127,63 @@ namespace Horo::Editor {
             Failure(m_viewModel, error);
             m_viewModel.contentBrowserOperationError = "terrain.tools.unavailable";
         };
-        if (!m_mutations || !m_importerCatalog || !m_importerCatalog->FindById(TerrainRawImporterId) ||
-            m_viewModel.playState != EditorPlayState::Idle) {
-            fail(MakeError(TerrainEditErrors::CapabilityUnavailable));
+        if (auto admitted = AdmitTerrainOpen(); admitted.HasError()) {
+            fail(admitted.ErrorValue());
             return true;
         }
-        for (const auto &document : m_terrainDocuments)
-            if (document->Identity().key.source.Value() == path) {
-                static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(document->Identity().instance));
-                RefreshTerrainDocuments();
-                return true;
-            }
+        if (FocusTerrainDocument(path))
+            return true;
         if (m_terrainDocuments.size() >= 4) {
             fail(MakeError(TerrainEditErrors::LimitExceeded));
             return true;
         }
         try {
-            m_terrainDocuments.reserve(4);
-            m_viewModel.terrainDocuments.reserve(4);
-            auto source = SourceDocumentId::Parse(path);
-            if (source.HasError()) {
-                fail(source.ErrorValue());
-                return true;
-            }
-            const DocumentOpenKey key{DocumentKind::Asset, source.Value()};
-            auto identity = m_documentRegistry.Open(key);
-            if (identity.HasError()) {
-                fail(identity.ErrorValue());
-                return true;
-            }
-
-            struct OpenIdentity final {
-                DocumentIdentityRegistry &registry;
-                DocumentInstanceId instance;
-                bool owned;
-
-                ~OpenIdentity() {
-                    if (owned)
-                        static_cast<void>(registry.Close(instance));
-                }
-            } admission{m_documentRegistry, identity.Value().identity.instance,
-                        identity.Value().disposition == DocumentOpenDisposition::Opened};
-
-            auto opened =
-                TerrainDocumentHost::Open(root, root / relative, asset->id, identity.Value().identity, m_workspaceSession, *m_mutations);
-            if (opened.HasError()) {
+            if (auto opened = OpenTerrainDocument(asset->id, root / relative, path); opened.HasError())
                 fail(opened.ErrorValue());
-                return true;
-            }
-            auto camera = m_viewport.Current().camera;
-            const auto framed = FrameSource(camera, *opened.Value()->BorrowSource());
-            if (framed.HasError()) {
-                static_cast<void>(opened.Value()->Close());
-                fail(framed.ErrorValue());
-                return true;
-            }
-            auto tab = m_viewModel.workspacePanelHost.OpenDocument(key);
-            if (tab.HasError()) {
-                static_cast<void>(opened.Value()->Close());
-                fail(tab.ErrorValue());
-                return true;
-            }
-            m_terrainDocuments.push_back(std::move(opened).Value());
-            admission.owned = false;
-            m_viewModel.terrainDocumentError.reset();
-            RefreshTerrainDocuments();
-            return true;
         } catch (const std::bad_alloc &) {
             fail(MakeError(TerrainEditErrors::LimitExceeded));
-            return true;
         }
+        return true;
+    }
+
+    /** @brief Refresh non-owning selection and revoke stale cook adoption before source projections are consumed. */
+    void EditorWorkspaceController::ObserveTerrainDocument(const TerrainDocumentHost &document) {
+        const auto view = document.View();
+        if (const auto state = TerrainSelection(view.instance))
+            if (const auto *source = document.BorrowDocument())
+                state->selection.Observe(*source);
+        if (m_terrainCookDocument == view.instance && m_terrainCookAdoption && !TerrainCookFenceMatches())
+            CancelTerrainCook(view.instance);
+        static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(view.instance, view.dirty));
+    }
+
+    /** @brief Enter isolated asset framing while preserving the prior Scene camera for focus restoration. */
+    void EditorWorkspaceController::ActivateTerrainCamera(const TerrainDocumentHost &document) {
+        if (!m_terrainPriorCamera)
+            m_terrainPriorCamera = m_viewport.Current().camera;
+        const auto *source = document.BorrowSource();
+        if (!source)
+            return;
+        auto camera = m_viewport.Current().camera;
+        if (const auto framed = FrameSource(camera, *source); framed.HasValue())
+            static_cast<void>(m_viewport.SetCamera(camera));
+        else
+            Failure(m_viewModel, framed.ErrorValue());
+    }
+
+    /** @brief Publish focus-dependent camera and retained palette projections after observing all open documents. */
+    void EditorWorkspaceController::PublishTerrainFocus(std::optional<DocumentInstanceId> terrain, bool wasTerrain) {
+        if (!terrain && m_activeTerrainDocument && m_terrainPriorCamera) {
+            static_cast<void>(m_viewport.SetCamera(*m_terrainPriorCamera));
+            m_terrainPriorCamera.reset();
+        }
+        m_activeTerrainDocument = terrain;
+        if (m_viewModel.terrainPaletteDocument && m_viewModel.terrainPaletteDocument->View().closed)
+            m_viewModel.terrainPaletteDocument.reset();
+        m_viewModel.terrainToolSelection =
+            m_viewModel.terrainPaletteDocument ? TerrainSelection(m_viewModel.terrainPaletteDocument->Identity().instance) : nullptr;
+        if (terrain || wasTerrain)
+            m_viewModel.viewportCamera = m_viewport.Current().camera;
     }
 
     /** @copydoc EditorWorkspaceController::RefreshTerrainDocuments */
@@ -134,30 +199,15 @@ namespace Horo::Editor {
             if (view.closed)
                 continue;
             model.push_back(document);
-            static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(view.instance, view.dirty));
-            if (active == view.instance) {
-                terrain = view.instance;
-                if (m_activeTerrainDocument != terrain) {
-                    if (!m_terrainPriorCamera)
-                        m_terrainPriorCamera = m_viewport.Current().camera;
-                    if (const auto *source = document->BorrowSource()) {
-                        auto camera = m_viewport.Current().camera;
-                        const auto framed = FrameSource(camera, *source);
-                        if (framed.HasValue())
-                            static_cast<void>(m_viewport.SetCamera(camera));
-                        else
-                            Failure(m_viewModel, framed.ErrorValue());
-                    }
-                }
-            }
+            ObserveTerrainDocument(*document);
+            if (active != view.instance)
+                continue;
+            m_viewModel.terrainPaletteDocument = document;
+            terrain = view.instance;
+            if (m_activeTerrainDocument != terrain)
+                ActivateTerrainCamera(*document);
         }
-        if (!terrain && m_activeTerrainDocument && m_terrainPriorCamera) {
-            static_cast<void>(m_viewport.SetCamera(*m_terrainPriorCamera));
-            m_terrainPriorCamera.reset();
-        }
-        m_activeTerrainDocument = terrain;
-        if (terrain || wasTerrain)
-            m_viewModel.viewportCamera = m_viewport.Current().camera;
+        PublishTerrainFocus(terrain, wasTerrain);
     }
 
     /** @copydoc EditorWorkspaceController::TerrainDocumentRevisions */
@@ -205,8 +255,16 @@ namespace Horo::Editor {
         auto closed = (*found)->Close();
         if (closed.HasError())
             return closed;
+        CancelTerrainCook(instance);
         static_cast<void>(m_viewModel.workspacePanelHost.CloseDocument(instance, WorkspaceDocumentClosePolicy::DiscardChanges));
         static_cast<void>(m_documentRegistry.Close(instance));
+        if (auto state = TerrainSelection(instance)) {
+            state->selection.Clear();
+            state->palette.Close();
+        }
+        std::erase_if(m_terrainToolSelections, [instance](const auto &entry) {
+            return entry.first == instance;
+        });
         m_terrainDocuments.erase(found);
         RefreshTerrainDocuments();
         return Result<void>::Success();
@@ -226,23 +284,44 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @brief Handle generic close routing only for a source owner belonging to this terrain feature. */
+    bool EditorWorkspaceController::TryCloseTerrainCommand(const EditorWorkspaceViewCommandData &command) {
+        if (command.command != EditorWorkspaceViewCommand::CloseWorkspaceDocument || !command.documentInstance)
+            return false;
+        const auto found = std::ranges::find_if(m_terrainDocuments, [&](const auto &document) {
+            return document->Identity().instance == *command.documentInstance;
+        });
+        if (found == m_terrainDocuments.end())
+            return false;
+        if (auto closed = CloseTerrainDocument(*command.documentInstance, false); closed.HasError())
+            Failure(m_viewModel, closed.ErrorValue());
+        return true;
+    }
+
+    /** @brief Execute one exact source intent and publish its original typed feedback. */
+    void EditorWorkspaceController::ProcessTerrainToolIntent(const TerrainToolCommand &intent) {
+        auto target = TerrainTarget(intent);
+        if (target.HasError()) {
+            Failure(m_viewModel, target.ErrorValue());
+            return;
+        }
+        m_viewModel.terrainDocumentError.reset();
+        try {
+            if (auto result = ExecuteTerrainTool(*target.Value(), intent); result.HasError())
+                Failure(m_viewModel, result.ErrorValue());
+        } catch (const std::bad_alloc &) {
+            Failure(m_viewModel, MakeError(TerrainEditErrors::LimitExceeded));
+        }
+        RefreshTerrainDocuments();
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessTerrainDocumentCommand */
     bool EditorWorkspaceController::ProcessTerrainDocumentCommand(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
-        if (command.command == CloseWorkspaceDocument && command.documentInstance) {
-            const auto found = std::ranges::find_if(m_terrainDocuments, [&](const auto &document) {
-                return document->Identity().instance == *command.documentInstance;
-            });
-            if (found != m_terrainDocuments.end()) {
-                auto closed = CloseTerrainDocument(*command.documentInstance, false);
-                if (closed.HasError())
-                    Failure(m_viewModel, closed.ErrorValue());
-                return true;
-            }
-        }
+        if (TryCloseTerrainCommand(command))
+            return true;
         if (command.command == SaveAllSourceDocuments) {
-            const auto saved = SaveSourceDocuments();
-            if (saved.HasError())
+            if (const auto saved = SaveSourceDocuments(); saved.HasError())
                 Failure(m_viewModel, saved.ErrorValue());
             return true;
         }
@@ -252,68 +331,7 @@ namespace Horo::Editor {
             Failure(m_viewModel, MakeError(TerrainEditErrors::Invalid));
             return true;
         }
-        const auto &intent = *command.terrainTool;
-        const auto found = std::ranges::find_if(m_terrainDocuments, [&](const auto &document) {
-            return document->Identity().instance == intent.document.instance;
-        });
-        if (intent.document.workspace != m_workspaceSession || found == m_terrainDocuments.end() ||
-            m_viewModel.workspacePanelHost.ActiveDocument() != intent.document.instance || m_viewModel.playState != EditorPlayState::Idle) {
-            Failure(m_viewModel, MakeError(TerrainEditErrors::WrongDocument));
-            return true;
-        }
-        auto &document = **found;
-        m_viewModel.terrainDocumentError.reset();
-        switch (intent.action) {
-            case TerrainToolAction::Stroke: {
-                if (m_nextTerrainOperation == std::numeric_limits<std::uint64_t>::max() || intent.stampCount > intent.stamps.size()) {
-                    Failure(m_viewModel, MakeError(TerrainEditErrors::LimitExceeded));
-                    break;
-                }
-                const auto operation = TerrainEditOperationId::Create(m_nextTerrainOperation++).Value();
-                const auto result =
-                    document.Sculpt(intent.document.fence, operation, intent.brush, std::span(intent.stamps.data(), intent.stampCount));
-                if (result.HasError())
-                    Failure(m_viewModel, result.ErrorValue());
-                break;
-            }
-            case TerrainToolAction::Undo:
-            case TerrainToolAction::Redo: {
-                const auto result = document.History(intent.document.fence, intent.action == TerrainToolAction::Redo);
-                if (result.HasError())
-                    Failure(m_viewModel, result.ErrorValue());
-                break;
-            }
-            case TerrainToolAction::Save: {
-                if (!m_mutations || !m_durableFiles) {
-                    Failure(m_viewModel, MakeError(TerrainEditErrors::CapabilityUnavailable));
-                    break;
-                }
-                const auto result = document.Save(intent.document.fence, *m_mutations, *m_durableFiles);
-                if (result.HasError())
-                    Failure(m_viewModel, result.ErrorValue());
-                else if (result.Value().durabilityError)
-                    Failure(m_viewModel, *result.Value().durabilityError);
-                break;
-            }
-            case TerrainToolAction::Close:
-            case TerrainToolAction::Discard: {
-                const auto view = document.View();
-                if (view.fence.expectedRevision != intent.document.fence.expectedRevision ||
-                    view.fence.session != intent.document.fence.session) {
-                    Failure(m_viewModel, MakeError(TerrainEditErrors::StaleRevision));
-                    break;
-                }
-                const auto result = CloseTerrainDocument(intent.document.instance, intent.action == TerrainToolAction::Discard);
-                if (result.HasError())
-                    Failure(m_viewModel, result.ErrorValue());
-                break;
-            }
-            case TerrainToolAction::ReportFailure:
-                if (intent.failure)
-                    Failure(m_viewModel, *intent.failure);
-                break;
-        }
-        RefreshTerrainDocuments();
+        ProcessTerrainToolIntent(*command.terrainTool);
         return true;
     }
 

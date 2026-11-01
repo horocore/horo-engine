@@ -39,9 +39,15 @@
 #include <unordered_map>
 #include <vector>
 
+namespace Horo::Application {
+    struct TerrainAuthoringCookCompletion;
+    struct TerrainAuthoringAssetCreated;
+}  // namespace Horo::Application
+
 namespace Horo::Editor {
     class TerrainDocumentHost;
     struct TerrainToolCommand;
+    struct TerrainToolSelection;
     /** @brief Typed presentation kind projected from authored scene components. */
     enum class SceneObjectKind : std::uint8_t {
         Mesh,
@@ -226,6 +232,8 @@ namespace Horo::Editor {
         ResizePanel,
         OpenPlayTopologyProfiles,
         TerrainTool,
+        CreateTerrainLayerSet,
+        CreateTerrainFoliageType,
     };
 
     enum class BottomDockMode {
@@ -570,6 +578,13 @@ namespace Horo::Editor {
         std::vector<SourceDocumentSnapshot> sourceDocuments;
         std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
         std::vector<std::shared_ptr<const TerrainDocumentHost>> terrainDocuments;
+        std::shared_ptr<const TerrainDocumentHost> terrainPaletteDocument;
+        std::shared_ptr<const TerrainToolSelection> terrainToolSelection;
+        bool terrainCookAvailable{}, terrainCookRunning{}, terrainCookCurrent{}, terrainAssetCreationAvailable{};
+        std::uint64_t terrainCookEpoch{};
+        DocumentInstanceId terrainCookDocument;
+        std::shared_ptr<const Application::TerrainAuthoringCookCompletion> terrainCookOutcome;
+        std::shared_ptr<const Application::TerrainAuthoringAssetCreated> terrainAssetCreationOutcome;
         std::optional<Error> terrainDocumentError;
         std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::optional<Error> prefabDocumentError;

@@ -56,6 +56,11 @@ namespace Horo::AI {
         return dependencies_;
     }
 
+    std::uint64_t DecisionAssetPlan::StorageBytes() const noexcept {
+        return sizeof(DecisionAssetPlan) + nodes_.capacity() * sizeof(DecisionPlanNode) +
+               bindings_.capacity() * sizeof(DecisionPlanBlackboardBinding) + dependencies_.capacity() * sizeof(DecisionPlanDependency);
+    }
+
     /** @copydoc DecisionAssetPlan::BindingsForNode */
     std::span<const DecisionPlanBlackboardBinding> DecisionAssetPlan::BindingsForNode(const DecisionNodeId node) const noexcept {
         const auto found = std::ranges::lower_bound(nodes_, node, {}, &DecisionPlanNode::id);

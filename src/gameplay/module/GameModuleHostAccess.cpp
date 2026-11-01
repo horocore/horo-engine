@@ -19,6 +19,8 @@ namespace Horo::Gameplay {
     LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     LoadedGameModule::~LoadedGameModule() {
+        if (impl_)
+            impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
         if (impl_ && impl_->runtimeUi)
             impl_->runtimeUi->Revoke();
         if (impl_ && impl_->ai) {

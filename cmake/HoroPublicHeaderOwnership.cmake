@@ -412,6 +412,10 @@ horo_configure_target_header_boundary(HoroUiTemplateInstances PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDocumentOwner.h
 )
 
+horo_configure_target_header_boundary(HoroDecisionCookHost PUBLIC_HEADERS Horo/Application/DecisionAssetCookHost.h)
+horo_configure_target_header_boundary(HoroTerrainAuthoringApplication PUBLIC_HEADERS
+    Horo/Application/TerrainAuthoringCook.h
+    Horo/Application/TerrainAuthoringAssets.h)
 horo_configure_target_header_boundary(HoroProjectAssetImportApplication PUBLIC_HEADERS Horo/Application/ProjectAssetImportCommitter.h)
 horo_configure_target_header_boundary(HoroProjectMutationGuard PUBLIC_HEADERS
     Horo/Editor/ProjectMutation.h
@@ -727,6 +731,11 @@ horo_configure_target_header_boundary(HoroCharacterInput PUBLIC_HEADERS
     Horo/CharacterInput/DesiredMotionAdapter.h
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
+    Horo/AI/DecisionIdentity.h
+    Horo/AI/DecisionControl.h
+    Horo/AI/DecisionGraphCompiler.h
+    Horo/AI/DecisionGraphInstance.h
+    Horo/AI/DecisionPlanCodec.h
     Horo/AI/DecisionNodeRegistration.h
     Horo/AI/AICapabilityDescriptors.h
     Horo/AI/AICanonicalState.h
@@ -996,6 +1005,8 @@ horo_configure_target_header_boundary(HoroTerrainRender PUBLIC_HEADERS
     Horo/TerrainRender/TerrainMaterialBinding.h
 )
 horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
+    Horo/Terrain/FoliageAuthoringSource.h
+    Horo/Terrain/TerrainAuthoringSourceCodec.h
     Horo/Terrain/TerrainSourceImport.h
 )
 horo_configure_target_header_boundary(HoroTerrainAuthoring PUBLIC_HEADERS

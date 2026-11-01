@@ -2,6 +2,7 @@
 #include "BehaviorTreeInstanceState.h"
 #include "Horo/AI/BehaviorTreeRuntime.h"
 
+#include <algorithm>
 #include <limits>
 #include <new>
 #include <type_traits>
@@ -18,6 +19,25 @@ namespace Horo::AI {
         /** @brief Produces a stable input/lifecycle rejection. */
         template <typename T> Result<T> Failure(const ErrorCodeDescriptor &code) {
             return Result<T>::Failure(MakeError(code));
+        }
+
+        bool ValidInstanceBlackboard(const BehaviorTreeInstanceBinding &binding, const BehaviorTreeExecutionPlan &plan) noexcept {
+            return binding.agent.IsValid() && binding.blackboard.IsValid() && binding.blackboard.agent == binding.agent &&
+                   binding.blackboard.schema == plan.Bindings().BlackboardSchema()->Identity() &&
+                   binding.blackboard.schemaVersion == plan.Bindings().BlackboardSchema()->Version();
+        }
+
+        bool ValidInstanceTasks(const BehaviorTreeInstanceBinding &binding, const BehaviorTreeExecutionPlan &plan) noexcept {
+            return binding.firstTaskGeneration != 0 &&
+                   binding.firstTaskSlot <= std::numeric_limits<std::uint32_t>::max() - plan.TaskSlots();
+        }
+
+        bool SupportsCalls(const BehaviorTreeExecutionPlan &plan, const IBehaviorTreeExecutor &executor) noexcept {
+            if (executor.SupportsSubplans())
+                return true;
+            return std::ranges::none_of(plan.Nodes(), [](const auto &node) {
+                return node.execution.operation == BehaviorTreeOperation::Subplan;
+            });
         }
 
         /** @brief Releases the reentrancy guard on every return path. */
@@ -44,6 +64,21 @@ namespace Horo::AI {
         static_assert(!std::is_move_assignable_v<EvaluationGuard>);
     }  // namespace
 
+    DecisionKernelStorage BehaviorTreeExecutionPlan::Storage() const noexcept {
+        DecisionKernelStorage storage;
+        storage.compiledBytes = sizeof(BehaviorTreeExecutionPlan) + nodes_.capacity() * sizeof(BehaviorTreePlanNode) +
+                                children_.capacity() * sizeof(std::size_t) + services_.capacity() * sizeof(BehaviorTreeExecutionService);
+        for (const auto &node : nodes_)
+            storage.compiledBytes += node.execution.children.capacity() * sizeof(DecisionNodeId);
+        storage.instanceBytes = sizeof(BehaviorTreeInstance) + nodes_.size() * sizeof(BehaviorTreeInstance::NodeState) +
+                                services_.size() * sizeof(BehaviorTreeInstance::ServiceState) +
+                                Detail::AiTaskMailbox::StorageBytes(TaskSlots());
+        storage.scratchBytes = depth_ * sizeof(BehaviorTreeInstance::Frame);
+        storage.taskSlots = TaskSlots();
+        storage.maximumDepth = depth_;
+        return storage;
+    }
+
     /** @copydoc BehaviorTreeInstance::BehaviorTreeInstance */
     BehaviorTreeInstance::BehaviorTreeInstance(ConstructionKey) {}
 
@@ -51,17 +86,16 @@ namespace Horo::AI {
     Result<std::unique_ptr<BehaviorTreeInstance>> BehaviorTreeInstance::Create(std::shared_ptr<const BehaviorTreeExecutionPlan> plan,
                                                                                BehaviorTreeInstanceBinding binding,
                                                                                std::unique_ptr<IBehaviorTreeExecutor> executor) {
-        if (!plan || !executor || !binding.agent.IsValid() || !binding.blackboard.IsValid() || binding.blackboard.agent != binding.agent ||
-            binding.blackboard.schema != plan->Bindings().BlackboardSchema()->Identity() ||
-            binding.blackboard.schemaVersion != plan->Bindings().BlackboardSchema()->Version() || binding.firstTaskGeneration == 0 ||
-            binding.firstTaskSlot > std::numeric_limits<std::uint32_t>::max() - BehaviorTreeExecutionLimits::HardNodes)
+        if (!plan || !executor)
+            return Failure<std::unique_ptr<BehaviorTreeInstance>>(AIErrors::TaskContextInvalid);
+        if (!ValidInstanceBlackboard(binding, *plan) || !ValidInstanceTasks(binding, *plan) || !SupportsCalls(*plan, *executor))
             return Failure<std::unique_ptr<BehaviorTreeInstance>>(AIErrors::TaskContextInvalid);
         try {
             auto instance = std::make_unique<BehaviorTreeInstance>(ConstructionKey{});
             instance->states_ = std::make_unique<NodeState[]>(plan->Nodes().size());
             instance->services_ = std::make_unique<ServiceState[]>(plan->Services().size());
             instance->frames_ = std::make_unique<Frame[]>(plan->Depth());
-            instance->mailbox_ = std::make_shared<Detail::AiTaskMailbox>(BehaviorTreeExecutionLimits::HardNodes);
+            instance->mailbox_ = std::make_shared<Detail::AiTaskMailbox>(plan->TaskSlots());
             instance->binding_ = std::move(binding);
             instance->nextGeneration_ = instance->binding_.firstTaskGeneration;
             instance->executor_ = std::move(executor);
@@ -86,18 +120,11 @@ namespace Horo::AI {
     /** @copydoc BehaviorTreeInstance::Evaluate */
     Result<AiTaskState> BehaviorTreeInstance::Evaluate(const std::uint64_t tick, const BlackboardSnapshot &blackboard,
                                                        const AgentHandle activeAgent, const AiTaskResumeReason reason) {
-        if (shutdown_ || evaluating_ || tick == 0 || tick < tick_ || reason >= AiTaskResumeReason::Count ||
-            evaluation_ == std::numeric_limits<std::uint64_t>::max())
+        if (!ValidEvaluation(tick, reason))
             return Failure<AiTaskState>(AIErrors::TaskTransitionInvalid);
         EvaluationGuard guard(evaluating_);
-        if (activeAgent != binding_.agent || !activeAgent.IsValid() || binding_.cancellation.IsCancellationRequested()) {
-            CancelRange(0, activeAgent != binding_.agent ? AiTaskCancellationReason::AgentGenerationRetired
-                                                         : AiTaskCancellationReason::ContextCancelled);
-            if (states_[0].status == AiTaskState::Idle)
-                states_[0].status = AiTaskState::Cancelled;
-            shutdown_ = true;
-            return Result<AiTaskState>::Success(states_[0].status);
-        }
+        if (EvaluationCancelled(activeAgent))
+            return CancelEvaluation(activeAgent);
         if (blackboard.Binding() != binding_.blackboard)
             return Failure<AiTaskState>(AIErrors::BlackboardInstanceInvalid);
         if (const auto revision = blackboard.Revision(); revision.HasError())
@@ -105,7 +132,32 @@ namespace Horo::AI {
         tick_ = tick;
         reason_ = reason;
         ++evaluation_;
+        return EvaluateBody(blackboard);
+    }
+
+    bool BehaviorTreeInstance::ValidEvaluation(std::uint64_t tick, AiTaskResumeReason reason) const noexcept {
+        return !shutdown_ && !evaluating_ && tick != 0 && tick >= tick_ && reason < AiTaskResumeReason::Count &&
+               evaluation_ != std::numeric_limits<std::uint64_t>::max();
+    }
+
+    bool BehaviorTreeInstance::EvaluationCancelled(AgentHandle activeAgent) const noexcept {
+        return activeAgent != binding_.agent || !activeAgent.IsValid() || binding_.cancellation.IsCancellationRequested() ||
+               binding_.capabilityCancellation.IsCancellationRequested();
+    }
+
+    Result<AiTaskState> BehaviorTreeInstance::CancelEvaluation(AgentHandle activeAgent) {
+        CancelRange(0, activeAgent != binding_.agent ? AiTaskCancellationReason::AgentGenerationRetired
+                                                     : AiTaskCancellationReason::ContextCancelled);
+        if (states_[0].status == AiTaskState::Idle)
+            states_[0].status = AiTaskState::Cancelled;
+        shutdown_ = true;
+        return Result<AiTaskState>::Success(states_[0].status);
+    }
+
+    Result<AiTaskState> BehaviorTreeInstance::EvaluateBody(const BlackboardSnapshot &blackboard) {
         executor_->Pump();
+        if (EvaluationCancelled(binding_.agent))
+            return CancelEvaluation(binding_.agent);
         if (Terminal(states_[0].status))
             return Result<AiTaskState>::Success(states_[0].status);
         if (const auto observed = ObservePriority(blackboard); observed.HasError()) {
@@ -191,29 +243,57 @@ namespace Horo::AI {
             state.status = Running;
             state.startedTick = tick_;
         }
+        ApplyTemporalControl(node, entering);
+        if (auto condition = ApplyConditionControl(node, blackboard, entering); condition.HasError())
+            return condition;
+        if (state.status != Running)
+            return Result<void>::Success();
+        if (auto serviced = RunServices(node, blackboard); serviced.HasError())
+            return serviced;
         const auto op = record.execution.operation;
-        if (op == Cooldown && entering && state.cooldownSet && tick_ - state.completedTick < record.execution.durationTicks)
-            state.status = Failed;
-        if (op == TimeLimit && tick_ - state.startedTick >= record.execution.durationTicks) {
+        if (op == Task)
+            return RunTask(node, blackboard);
+        if (op == Subplan)
+            return RunSubplan(node, blackboard, entering);
+        return Result<void>::Success();
+    }
+
+    void BehaviorTreeInstance::ApplyTemporalControl(std::size_t node, bool entering) noexcept {
+        const auto &execution = plan_->Nodes()[node].execution;
+        auto &state = states_[node];
+        if (execution.operation == BehaviorTreeOperation::Cooldown && entering && state.cooldownSet &&
+            tick_ - state.completedTick < execution.durationTicks)
+            state.status = AiTaskState::Failed;
+        if (execution.operation == BehaviorTreeOperation::TimeLimit && tick_ - state.startedTick >= execution.durationTicks) {
             CancelRange(node, AiTaskCancellationReason::TimedOut);
-            state.status = Failed;
+            state.status = AiTaskState::Failed;
         }
-        if (op == BlackboardCheck &&
-            (entering || record.execution.abort == BehaviorTreeAbortMode::Self || record.execution.abort == BehaviorTreeAbortMode::Both)) {
-            const auto checked = Check(node, blackboard);
-            if (checked.HasError())
-                return Result<void>::Failure(checked.ErrorValue());
-            if (!checked.Value()) {
-                CancelRange(node, AiTaskCancellationReason::Requested);
-                state.status = Failed;
-            }
+    }
+
+    Result<void> BehaviorTreeInstance::ApplyConditionControl(std::size_t node, const BlackboardSnapshot &blackboard, bool entering) {
+        const auto &execution = plan_->Nodes()[node].execution;
+        if (execution.operation != BehaviorTreeOperation::BlackboardCheck)
+            return Result<void>::Success();
+        if (!entering && execution.abort != BehaviorTreeAbortMode::Self && execution.abort != BehaviorTreeAbortMode::Both)
+            return Result<void>::Success();
+        auto checked = Check(node, blackboard);
+        if (checked.HasError())
+            return Result<void>::Failure(checked.ErrorValue());
+        if (!checked.Value()) {
+            CancelRange(node, AiTaskCancellationReason::Requested);
+            states_[node].status = AiTaskState::Failed;
         }
-        if (state.status == Running) {
-            if (const auto serviced = RunServices(node, blackboard); serviced.HasError())
-                return serviced;
-            if (op == Task)
-                return RunTask(node, blackboard);
-        }
+        return Result<void>::Success();
+    }
+
+    Result<void> BehaviorTreeInstance::RunSubplan(std::size_t node, const BlackboardSnapshot &blackboard, bool entering) {
+        auto result = executor_->EvaluateSubplan(Context(plan_->Nodes()[node].execution.id, blackboard), entering);
+        if (result.HasError())
+            return Result<void>::Failure(result.ErrorValue());
+        const auto outcome = result.Value();
+        if (outcome < AiTaskState::Running || outcome > AiTaskState::Cancelled)
+            return Failure<void>(AIErrors::TaskFailureInvalid);
+        states_[node].status = outcome;
         return Result<void>::Success();
     }
 
@@ -272,6 +352,8 @@ namespace Horo::AI {
                 static_cast<void>(state.task->RequestCancellation(reason));
                 FinishTask(index);
             } else {
+                if (plan_->Nodes()[index].execution.operation == BehaviorTreeOperation::Subplan)
+                    executor_->CancelSubplan(plan_->Nodes()[index].execution.id, reason);
                 state.status = AiTaskState::Cancelled;
             }
         }

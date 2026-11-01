@@ -123,7 +123,8 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
 target_sources(HoroWorldBakeApplicationPublicHeaderConsumer PRIVATE support/WorldBakePublicContract.cpp)
-target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp)
+target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp
+        support/AssetReimportDestinationPublicContract.cpp)
 target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PartitionedWorldPublicContract.cpp support/NavigationInspectorPublicContract.cpp support/PhysicsInspectorPublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
@@ -1708,11 +1709,85 @@ target_compile_features(HoroTerrainAuthoringTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainAuthoringTests PRIVATE HoroEngine::TerrainAuthoring)
 horo_register_catch_test(HoroTerrainAuthoringTests LABELS "unit;editor;terrain;headless;lifecycle")
 
+add_executable(HoroProjectAssetAuthoredPublicationTests unit/editor/ProjectAssetAuthoredPublicationTests.cpp)
+target_compile_features(HoroProjectAssetAuthoredPublicationTests PRIVATE cxx_std_20)
+target_include_directories(HoroProjectAssetAuthoredPublicationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroProjectAssetAuthoredPublicationTests PRIVATE HoroEngine::ProjectAssetImportApplication HoroEngine::Platform nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroProjectAssetAuthoredPublicationTests LABELS "unit;assets;terrain;headless")
+
+add_executable(HoroTerrainAuthoringCookHostTests unit/editor/TerrainAuthoringCookHostTests.cpp
+        unit/editor/TerrainAuthoringFoliageCookHostTests.cpp)
+target_compile_features(HoroTerrainAuthoringCookHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroTerrainAuthoringCookHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroTerrainAuthoringCookHostTests PRIVATE HoroEngine::TerrainAuthoringApplication
+        HoroEngine::ProjectAssetImportApplication HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage)
+horo_register_catch_test(HoroTerrainAuthoringCookHostTests LABELS "unit;terrain;assets;headless;lifecycle")
+
+add_executable(HoroTerrainAuthoringApplicationPublicConsumer support/TerrainAuthoringApplicationPublicConsumer.cpp)
+target_compile_features(HoroTerrainAuthoringApplicationPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainAuthoringApplicationPublicConsumer PRIVATE HoroEngine::TerrainAuthoringApplication)
+
+add_executable(HoroTerrainAuthoringSourceCodecTests
+        unit/runtime/terrain/TerrainAuthoringSourceCodecTests.cpp)
+target_compile_features(HoroTerrainAuthoringSourceCodecTests PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainAuthoringSourceCodecTests PRIVATE HoroEngine::TerrainImport)
+horo_register_catch_test(HoroTerrainAuthoringSourceCodecTests LABELS "unit;terrain;headless")
+
+add_executable(HoroTerrainAuthoringSourceCodecPublicConsumer support/TerrainAuthoringSourceCodecPublicConsumer.cpp)
+target_compile_features(HoroTerrainAuthoringSourceCodecPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainAuthoringSourceCodecPublicConsumer PRIVATE HoroEngine::TerrainImport)
+add_test(NAME HoroTerrainAuthoringSourceCodecPublicConsumer COMMAND HoroTerrainAuthoringSourceCodecPublicConsumer)
+set_tests_properties(HoroTerrainAuthoringSourceCodecPublicConsumer PROPERTIES LABELS "unit;terrain;public_headers;headless")
+
+add_executable(HoroTerrainPaintProducerTests unit/editor/TerrainPaintProducerTests.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainPaintProducer.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainBrushGeometry.cpp)
+target_compile_features(HoroTerrainPaintProducerTests PRIVATE cxx_std_20)
+target_include_directories(HoroTerrainPaintProducerTests PRIVATE ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace)
+target_link_libraries(HoroTerrainPaintProducerTests PRIVATE HoroEngine::TerrainAuthoring)
+horo_register_catch_test(HoroTerrainPaintProducerTests LABELS "unit;terrain;editor;headless")
+
+add_executable(HoroFoliageAuthoringTests
+        unit/runtime/terrain/FoliageAuthoringSourceTests.cpp
+        unit/runtime/terrain/FoliageAuthoredPlacementCookTests.cpp
+        unit/editor/FoliageAuthoringToolsTests.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/FoliagePaintProducer.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/FoliagePaletteModel.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/FoliageSelectionModel.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainBrushGeometry.cpp)
+target_compile_features(HoroFoliageAuthoringTests PRIVATE cxx_std_20)
+target_include_directories(HoroFoliageAuthoringTests PRIVATE ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace)
+target_link_libraries(HoroFoliageAuthoringTests PRIVATE HoroEngine::TerrainAuthoring HoroEngine::TerrainCook)
+horo_register_catch_test(HoroFoliageAuthoringTests LABELS "unit;terrain;editor;foliage;headless")
+
 add_executable(HoroLuaDecisionNodeTests unit/runtime/ai/DecisionNodeLuaTests.cpp)
 target_compile_features(HoroLuaDecisionNodeTests PRIVATE cxx_std_20)
 target_include_directories(HoroLuaDecisionNodeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroLuaDecisionNodeTests PRIVATE HoroEngine::GameplayLua HoroEngine::AI)
 horo_register_catch_test(HoroLuaDecisionNodeTests LABELS "unit;ai;headless")
+
+add_executable(HoroDecisionGraphCompilerTests
+        unit/runtime/ai/DecisionGraphCompilerTests.cpp
+        unit/runtime/ai/DecisionGraphRuntimeTests.cpp
+        unit/runtime/ai/DecisionPlanCodecTests.cpp
+        unit/runtime/ai/DecisionGraphProviderTests.cpp
+)
+target_compile_features(HoroDecisionGraphCompilerTests PRIVATE cxx_std_20)
+target_include_directories(HoroDecisionGraphCompilerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroDecisionGraphCompilerTests PRIVATE HoroEngine::AI HoroEngine::GameplayLua HoroEngine::GameplayModuleHost HoroEngine::Platform)
+horo_register_catch_test(HoroDecisionGraphCompilerTests LABELS "unit;ai;headless"
+    PROPERTIES TIMEOUT 90)
+
+add_executable(HoroDecisionAssetCookHostTests
+        unit/application/DecisionAssetCookHostTests.cpp
+)
+target_compile_features(HoroDecisionAssetCookHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroDecisionAssetCookHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support
+    ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
+target_link_libraries(HoroDecisionAssetCookHostTests PRIVATE HoroEngine::DecisionCookHost
+    HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage)
+horo_register_catch_test(HoroDecisionAssetCookHostTests LABELS "unit;ai;assets;headless;native"
+    PROPERTIES TIMEOUT 90)
 
 add_executable(HoroDecisionNodeRegistrationTests unit/runtime/ai/DecisionNodeRegistrationTests.cpp
         unit/runtime/ai/DecisionNodeNativeHostTests.cpp)
@@ -1730,7 +1805,13 @@ target_link_libraries(HoroTerrainSculptProducerTests PRIVATE HoroEngine::Terrain
 horo_register_catch_test(HoroTerrainSculptProducerTests LABELS "unit;editor;terrain;headless")
 
 add_executable(HoroTerrainAssetHostTests unit/editor/TerrainImportPublicationTests.cpp unit/editor/TerrainDocumentHostTests.cpp
+        unit/editor/TerrainLayeredDocumentHostTests.cpp
         ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentHost.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentResources.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentPublication.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainDocumentTools.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainPaintProducer.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainBrushGeometry.cpp
         ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainAssetFormat.cpp
         ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/terrain/TerrainSculptProducer.cpp)
 target_compile_features(HoroTerrainAssetHostTests PRIVATE cxx_std_20)
@@ -2175,6 +2256,10 @@ horo_add_gameplay_module(HoroTestAiGameModule
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/AiGameModule.cpp)
 target_link_libraries(HoroTestAiGameModule PRIVATE HoroEngine::GameplayAiIntegration)
 get_property(HORO_TEST_AI_MODULE_REVISION_FILE TARGET HoroTestAiGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+add_dependencies(HoroDecisionGraphCompilerTests HoroTestAiGameModule)
+target_compile_definitions(HoroDecisionGraphCompilerTests PRIVATE
+    HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
+    HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
 add_dependencies(HoroDecisionNodeRegistrationTests HoroTestAiGameModule)
 target_compile_definitions(HoroDecisionNodeRegistrationTests PRIVATE
     HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
@@ -4867,8 +4952,10 @@ target_link_libraries(HoroAssetImporterCatalogTests PRIVATE HoroEngine::Assets)
 add_executable(HoroAssetImportOperationTests
         unit/runtime/assets/AssetImportOperationTests.cpp
         unit/runtime/assets/AssetReimportTests.cpp
+        unit/runtime/assets/AssetSourceReimportPublicationTests.cpp
 )
 target_compile_features(HoroAssetImportOperationTests PRIVATE cxx_std_20)
+target_include_directories(HoroAssetImportOperationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroAssetImportOperationTests PRIVATE
         HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)
 add_executable(HoroObjMeshImporterTests
@@ -6162,3 +6249,5 @@ if (WIN32)
     target_link_libraries(HoroD3D12ResourceTests PRIVATE d3d12 dxgi)
 endif ()
 horo_register_catch_test(HoroD3D12ResourceTests LABELS "native;renderer;d3d12;resources;qualification")
+
+target_sources(HoroTerrainSculptProducerTests PRIVATE unit/editor/TerrainSurfaceRestorationTests.cpp)

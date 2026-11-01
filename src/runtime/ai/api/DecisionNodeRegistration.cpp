@@ -95,10 +95,37 @@ namespace Horo::AI {
                    descriptor.origin.kind < DecisionDescriptorSourceKind::Count && contract.role < DecisionNodeRole::Count;
         }
 
+        bool ValidContractMemory(const DecisionNodeContract &contract) noexcept {
+            const auto &memory = contract.memory;
+            if (memory.stateBytes > 256ULL * 1024ULL * 1024ULL || memory.scratchBytes > 256ULL * 1024ULL * 1024ULL)
+                return false;
+            switch (memory.kind) {
+                case DecisionProviderMemoryKind::UnknownNative:
+                    return memory.stateBytes == 0 && memory.scratchBytes == 0 && memory.enforcedVmBytes == 0;
+                case DecisionProviderMemoryKind::NativeDeclared:
+                    return memory.enforcedVmBytes == 0;
+                case DecisionProviderMemoryKind::EnforcedVm:
+                    return contract.descriptor.origin.kind == DecisionDescriptorSourceKind::Script && memory.enforcedVmBytes > 0 &&
+                           memory.enforcedVmBytes <= 16ULL * 1024ULL * 1024ULL;
+                default:
+                    return false;
+            }
+        }
+
         bool ValidContractBounds(const DecisionNodeContract &contract) noexcept {
             return contract.capabilities.IsValid() && contract.ports.size() <= 128 && contract.properties.size() <= 64 &&
                    contract.descriptor.requirements.size() <= DecisionAssetValidationHardLimits::RequirementsPerNode &&
                    contract.descriptor.source.source.size() <= 4096;
+        }
+
+        Result<void> ValidateDeclarations(std::span<const DecisionNodeRegistration> registrations, bool vmAuthority) {
+            for (const auto &entry : registrations) {
+                if (!vmAuthority && entry.contract.memory.kind == DecisionProviderMemoryKind::EnforcedVm)
+                    return Invalid<void>();
+                if (auto valid = ValidateDecisionNodeRegistration(entry); valid.HasError())
+                    return valid;
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -135,7 +162,7 @@ namespace Horo::AI {
             const auto &descriptor = contract.descriptor;
             if (!ValidContractIdentity(contract))
                 return Invalid<void>();
-            if (!ValidContractBounds(contract))
+            if (!ValidContractBounds(contract) || !ValidContractMemory(contract))
                 return Invalid<void>();
             if ((registration.factory.create == nullptr) != (registration.factory.destroy == nullptr))
                 return Invalid<void>();
@@ -153,15 +180,26 @@ namespace Horo::AI {
     Result<std::shared_ptr<const DecisionNodeGeneration>> DecisionNodeGeneration::Capture(
         const std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
         std::shared_ptr<const DecisionNodeGeneration> provider) {
+        return CaptureAdmitted(registrations, std::move(admission), std::move(provider), false);
+    }
+
+    Result<std::shared_ptr<const DecisionNodeGeneration>> DecisionNodeGeneration::CaptureVm(
+        std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
+        std::shared_ptr<const DecisionNodeGeneration> provider) {
+        return CaptureAdmitted(registrations, std::move(admission), std::move(provider), true);
+    }
+
+    Result<std::shared_ptr<const DecisionNodeGeneration>> DecisionNodeGeneration::CaptureAdmitted(
+        const std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
+        std::shared_ptr<const DecisionNodeGeneration> provider, const bool vmAuthority) {
         using Output = Result<std::shared_ptr<const DecisionNodeGeneration>>;
         if (!admission || registrations.size() > MaximumNodes)
             return Invalid<std::shared_ptr<const DecisionNodeGeneration>>();
         if (!ValidProvider(provider))
             return Invalid<std::shared_ptr<const DecisionNodeGeneration>>();
         try {
-            for (const auto &entry : registrations)
-                if (auto valid = ValidateDecisionNodeRegistration(entry); valid.HasError())
-                    return Output::Failure(valid.ErrorValue());
+            if (auto declarations = ValidateDeclarations(registrations, vmAuthority); declarations.HasError())
+                return Output::Failure(declarations.ErrorValue());
             auto result = std::make_shared<DecisionNodeGeneration>();
             result->admission_ = std::move(admission);
             result->provider_ = std::move(provider);
@@ -175,14 +213,27 @@ namespace Horo::AI {
     }
 
     bool DecisionNodeGeneration::CanAdmit() const noexcept {
-        if (std::this_thread::get_id() != owner_)
-            return false;
-        if (provider_ && !provider_->CanAdmit())
+        return std::this_thread::get_id() == owner_ && CanUse();
+    }
+
+    bool DecisionNodeGeneration::CanUse() const noexcept {
+        if (provider_ && !provider_->CanUse())
             return false;
         for (const auto &parent : parents_)
-            if (!parent->CanAdmit())
+            if (!parent->CanUse())
                 return false;
         return admission_ ? admission_->load(std::memory_order_acquire) : !parents_.empty();
+    }
+
+    bool DecisionNodeGeneration::HasImplementation(DecisionNodeTypeId type) const noexcept {
+        if (!CanUse())
+            return false;
+        const auto found = std::ranges::lower_bound(contracts_, type, {}, [](const auto &contract) {
+            return contract.descriptor.type;
+        });
+        if (found == contracts_.end() || found->descriptor.type != type)
+            return false;
+        return factories_[static_cast<std::size_t>(found - contracts_.begin())].create != nullptr;
     }
 
     bool DecisionNodeGeneration::ValidProvider(const std::shared_ptr<const DecisionNodeGeneration> &provider) noexcept {

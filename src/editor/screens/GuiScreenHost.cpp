@@ -206,6 +206,12 @@ namespace Horo::Editor {
         services_.Register<ScreenRegistry>(screenRegistry_);
         services_.Register<WorkspacePanelRegistry>(workspacePanelRegistry_);
         services_.Register<EditorStatusItemRegistry>(statusItemRegistry_);
+        terrainCookFactory_ = composition.terrainCook;
+        terrainAssetFactory_ = composition.terrainAssets;
+        if (terrainCookFactory_)
+            services_.RegisterConst<Application::TerrainAuthoringCookFactory>(*terrainCookFactory_);
+        if (terrainAssetFactory_)
+            services_.RegisterConst<Application::TerrainAuthoringAssetFactory>(*terrainAssetFactory_);
         if (extensionInventory_ != nullptr)
             services_.Register<Extensions::ExtensionInventory>(*extensionInventory_);
         if (extensionMarketplace_ != nullptr)

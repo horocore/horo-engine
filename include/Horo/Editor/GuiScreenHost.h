@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Application/TerrainAuthoringAssets.h"
+#include "Horo/Application/TerrainAuthoringCook.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorServiceRegistry.h"
@@ -105,6 +107,8 @@ namespace Horo::Editor {
             extensionInspectorPolicy; /**< Explicit inspector/drawer grants; no configuration write grant. */
         Extensions::ExtensionAdmissionPolicy extensionViewportPolicy; /**< Explicit viewport and transform grants. */
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
+        std::shared_ptr<const Application::TerrainAuthoringCookFactory> terrainCook;
+        std::shared_ptr<const Application::TerrainAuthoringAssetFactory> terrainAssets;
     };
 
     /**
@@ -289,6 +293,8 @@ namespace Horo::Editor {
         GuiRouteRevision activeRevision_{0};
 
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements_;
+        std::shared_ptr<const Application::TerrainAuthoringCookFactory> terrainCookFactory_;
+        std::shared_ptr<const Application::TerrainAuthoringAssetFactory> terrainAssetFactory_;
         std::unique_ptr<GuiScreen> activeScreen_;
         std::optional<GuiRoute> pendingNavigation_;
         std::optional<ProjectCreationOperationId> activeCreationId_;

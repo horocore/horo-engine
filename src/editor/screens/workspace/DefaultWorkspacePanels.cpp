@@ -9,6 +9,7 @@
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
 #include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
+#include "editor/screens/workspace/terrain/FoliagePaletteTab.h"
 
 namespace Horo::Editor {
     /** @copydoc RegisterNavigationWorkspacePanel */
@@ -26,6 +27,7 @@ namespace Horo::Editor {
                                         const std::span<const GlobalDockPaneFactory> globalDockPaneFactories) {
         registry.RegisterPanel(std::make_shared<HierarchyPanel>());
         registry.RegisterPanel(std::make_shared<InspectorPanel>());
+        registry.RegisterPanel(std::make_shared<FoliagePaletteTab>());
         auto globalDock = std::make_shared<GlobalDockPanel>();
         for (const GlobalDockPaneFactory &factory : globalDockPaneFactories) {
             if (factory)

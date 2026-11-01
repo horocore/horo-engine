@@ -44,6 +44,7 @@ namespace Horo::Editor {
 
     EditorWorkspaceController::~EditorWorkspaceController() {
         static_cast<void>(ShutdownTerrainDocuments(true));
+        ShutdownTerrainCook();
         static_cast<void>(ShutdownPrefabSettings(true));
         DetachWorldSourceOwner();
         if (m_worldBake)

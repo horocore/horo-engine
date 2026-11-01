@@ -20,6 +20,21 @@ namespace Horo::Application {
         bool registryPublished{};
     };
 
+    /** @brief One new authored asset; identity is reserved by the host, with no invented upstream importer/file provenance. */
+    struct PreparedAuthoredProjectAsset final {
+        Assets::AssetId asset;
+        Assets::AssetTypeId type;
+        ProjectPath destination;
+        std::vector<std::byte> payload;
+    };
+
+    /** @brief Detached bounded authored source batch; each item publishes its ordinary identity sidecar. */
+    struct PreparedAuthoredProjectAssetBatch final {
+        std::string operationId;
+        std::filesystem::path projectRoot;
+        std::vector<PreparedAuthoredProjectAsset> items;
+    };
+
     /** @brief Single owner-thread initial-import committer using explicit shared project and native filesystem authorities.
      * @details At most 64 items/64 MiB are prepared, then every payload and requested sidecar is staged and validated before promotion.
      * Terrain requires its identity/settings sidecar; other importer metadata-optional flags retain payload-only behavior.
@@ -47,6 +62,15 @@ namespace Horo::Application {
         [[nodiscard]] Result<void> Commit(const Assets::PreparedAssetImportBatch &batch, Assets::IAssetIdGenerator &ids,
                                           const CancellationToken &cancellation) override;
 
+        /** @brief Publish new host-authored sources through the same lease/stage/rollback/registry boundary as imports.
+         * @param batch Actual reserved identities and complete canonical source bytes. @param cancellation Cooperative stop.
+         * @return Durable completion or typed failure with LastReceipt preserving irreversible publication evidence.
+         * @details Sidecars contain canonical schema1 asset identity/type only; no synthetic importer, input path or source hash
+         * is fabricated. Existing destinations and duplicate identities reject. Source semantics remain the producer's authority.
+         */
+        [[nodiscard]] Result<void> CommitAuthored(const PreparedAuthoredProjectAssetBatch &batch,
+                                                  const CancellationToken &cancellation = {});
+
         /** @brief Returns the latest owner-thread scalar publication evidence, including failure compensation uncertainty.
          * @return Borrow valid until the next Commit or destruction.
          */
@@ -55,6 +79,8 @@ namespace Horo::Application {
         }
 
     private:
+        struct PreparedPublication;
+        [[nodiscard]] Result<void> PublishPrepared(PreparedPublication &publication, const CancellationToken &cancellation);
         Editor::ProjectMutationCoordinator &mutations_;
         DurableFileSystem &files_;
         Assets::AssetRegistry *registry_{};

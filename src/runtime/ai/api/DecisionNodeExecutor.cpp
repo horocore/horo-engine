@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <new>
 
 namespace Horo::AI {
@@ -99,8 +100,13 @@ namespace Horo::AI {
             if (auto valid = ValidateConfiguration(plan, configuration); valid.HasError())
                 return valid;
             CallbackScope scope(invoking_);
-            nodes_.reserve(plan.Nodes().size());
+            const auto providerCount = std::ranges::count_if(plan.Nodes(), [](const auto &node) {
+                return node.intrinsic == DecisionControlKind::Unspecified;
+            });
+            nodes_.reserve(static_cast<std::size_t>(providerCount));
             for (const auto &node : plan.Nodes()) {
+                if (node.intrinsic != DecisionControlKind::Unspecified)
+                    continue;
                 if (auto bound = BindNode(plan, node, capabilities, configuration); bound.HasError())
                     return bound;
             }
@@ -213,7 +219,8 @@ namespace Horo::AI {
                 return Failure<void>(AIErrors::DecisionAssetLimitExceeded);
             std::vector<DecisionNodeId> seen;
             for (const auto &entry : configuration) {
-                if (std::ranges::find(plan.Nodes(), entry.node, &DecisionPlanNode::id) == plan.Nodes().end())
+                const auto node = std::ranges::find(plan.Nodes(), entry.node, &DecisionPlanNode::id);
+                if (node == plan.Nodes().end() || node->intrinsic != DecisionControlKind::Unspecified)
                     return Failure<void>(AIErrors::DecisionAssetSchemaInvalid);
                 if (std::ranges::find(seen, entry.node) != seen.end())
                     return Failure<void>(AIErrors::DescriptorConflict);
@@ -301,6 +308,12 @@ namespace Horo::AI {
         std::vector<NodeInstance> nodes_;
         bool invoking_{};
     };
+
+    std::uint64_t DecisionNodeGeneration::ExecutorStorageBytes(std::size_t providers) noexcept {
+        if (providers > DecisionAssetValidationHardLimits::NodesPerAsset)
+            return std::numeric_limits<std::uint64_t>::max();
+        return sizeof(RegisteredDecisionNodeExecutor) + providers * sizeof(NodeInstance);
+    }
 
     Result<std::unique_ptr<IBehaviorTreeExecutor>> DecisionNodeGeneration::CreateExecutor(
         std::shared_ptr<const DecisionNodeGeneration> self, const DecisionAssetPlan &plan, AiCapabilitySet capabilities,

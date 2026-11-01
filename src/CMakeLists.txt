@@ -1232,6 +1232,8 @@ add_library(HoroAssets STATIC
         runtime/assets/importer/AssetImportOperation.cpp
         runtime/assets/importer/AssetImportFileFacts.cpp
         runtime/assets/importer/AssetReimport.cpp
+        runtime/assets/importer/AssetReimportAdmission.cpp
+        runtime/assets/importer/AssetReimportPublication.cpp
         runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.cpp
         runtime/assets/importer/builtin/obj_mesh/ObjMeshPreviewProvider.cpp
         runtime/assets/importer/builtin/fbx_mesh/FbxMeshImporter.cpp
@@ -1644,6 +1646,22 @@ target_compile_features(HoroCharacterInput PUBLIC cxx_std_20)
 target_link_libraries(HoroCharacterInput PUBLIC HoroEngine::Input HoroEngine::Physics)
 
 add_library(HoroAI STATIC
+        runtime/ai/compile/DecisionActionAdapter.cpp
+        runtime/ai/compile/DecisionCallAdapter.cpp
+        runtime/ai/compile/DecisionClosureLayout.cpp
+        runtime/ai/compile/DecisionCompilationBuilder.cpp
+        runtime/ai/compile/DecisionCookedCodec.cpp
+        runtime/ai/compile/DecisionEnvironmentIdentity.cpp
+        runtime/ai/compile/DecisionGraphCompiler.cpp
+        runtime/ai/compile/DecisionGraphInstance.cpp
+        runtime/ai/compile/DecisionGraphLowering.cpp
+        runtime/ai/compile/DecisionMemoryMeasure.cpp
+        runtime/ai/compile/DecisionProviderAdmission.cpp
+        runtime/ai/compile/DecisionSourceCodec.cpp
+        runtime/ai/compile/DecisionSourceMachine.cpp
+        runtime/ai/compile/DecisionSourceReachability.cpp
+        runtime/ai/compile/DecisionSourceTree.cpp
+        runtime/ai/compile/DecisionSourceValues.cpp
         runtime/ai/api/DecisionNodeRegistration.cpp
         runtime/ai/api/DecisionNodeExecutor.cpp
         runtime/ai/api/AICapabilityDescriptors.cpp
@@ -1684,6 +1702,17 @@ target_compile_features(HoroAI PUBLIC cxx_std_20)
 target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
 
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
+
+add_library(HoroDecisionCookHost STATIC
+        application/ai/DecisionAssetCookHost.cpp
+        application/ai/DecisionCookCapture.cpp
+        application/ai/DecisionCookCatalog.cpp
+        application/ai/DecisionCookPrepare.cpp
+        application/ai/DecisionCookState.h
+)
+add_library(HoroEngine::DecisionCookHost ALIAS HoroDecisionCookHost)
+target_compile_features(HoroDecisionCookHost PUBLIC cxx_std_20)
+target_link_libraries(HoroDecisionCookHost PUBLIC HoroEngine::AI HoroEngine::Assets)
 
 add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AIRuntimeCapability.cpp
@@ -2184,6 +2213,9 @@ target_compile_features(HoroTerrainApi PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainApi PUBLIC HoroEngine::Foundation)
 
 add_library(HoroTerrainImport STATIC
+        runtime/terrain/import/FoliageAuthoringSource.cpp
+        runtime/terrain/import/FoliageTypeSource.cpp
+        runtime/terrain/import/TerrainAuthoringSourceCodec.cpp
         runtime/terrain/import/TerrainPngDecoder.cpp
         runtime/terrain/import/TerrainSourceErrors.cpp
         runtime/terrain/import/TerrainSourceImport.cpp
@@ -2217,6 +2249,21 @@ add_library(HoroTerrainCook STATIC
 add_library(HoroEngine::TerrainCook ALIAS HoroTerrainCook)
 target_compile_features(HoroTerrainCook PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainCook PUBLIC HoroEngine::TerrainImport)
+# Explicit application bridge: source capture/native publication stays outside portable Terrain producers.
+add_library(HoroTerrainAuthoringApplication STATIC
+        application/terrain/TerrainAuthoringCook.cpp
+        application/terrain/TerrainAuthoringCookCapture.cpp
+        application/terrain/TerrainAuthoringCookBundle.cpp
+        application/terrain/TerrainAuthoredFoliageGrid.cpp
+        application/terrain/TerrainAuthoredFoliageCook.cpp
+        application/terrain/TerrainAuthoringCookStrategy.cpp
+        application/terrain/TerrainAuthoringCookOperation.cpp
+        application/terrain/TerrainAuthoringAssets.cpp)
+add_library(HoroEngine::TerrainAuthoringApplication ALIAS HoroTerrainAuthoringApplication)
+target_compile_features(HoroTerrainAuthoringApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainAuthoringApplication PUBLIC HoroEngine::Assets HoroEngine::TerrainImport
+        HoroEngine::TerrainCook HoroEngine::TerrainAuthoring HoroEngine::ProjectMutationGuard HoroEngine::ProjectAssetImportApplication)
+
 add_library(HoroTerrainProducerIntegration STATIC
         runtime/terrain/integration/TerrainProducerSnapshot.cpp
         runtime/terrain/integration/TerrainProducerSnapshotValidation.cpp
@@ -3639,6 +3686,23 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/terrain/TerrainViewportPicking.cpp
             editor/screens/workspace/terrain/TerrainAssetFormat.cpp
             editor/screens/workspace/terrain/TerrainDocumentHost.cpp
+            editor/screens/workspace/terrain/TerrainDocumentResources.cpp
+            editor/screens/workspace/terrain/TerrainDocumentPublication.cpp
+            editor/screens/workspace/terrain/TerrainDocumentTools.cpp
+            editor/screens/workspace/terrain/TerrainPaintProducer.cpp
+            editor/screens/workspace/terrain/TerrainBrushGeometry.cpp
+            editor/screens/workspace/terrain/FoliagePaintProducer.cpp
+            editor/screens/workspace/terrain/FoliagePaletteModel.cpp
+            editor/screens/workspace/terrain/FoliageSelectionModel.cpp
+            editor/screens/workspace/terrain/FoliagePaletteTab.cpp
+            editor/screens/workspace/terrain/TerrainViewportProjection.cpp
+            editor/screens/workspace/terrain/TerrainViewportToolGesture.cpp
+            editor/screens/workspace/terrain/TerrainViewportToolControls.cpp
+            editor/screens/workspace/EditorWorkspaceControllerTerrainTools.cpp
+            editor/screens/workspace/EditorWorkspaceControllerTerrainCook.cpp
+            editor/screens/workspace/EditorWorkspaceControllerTerrainAssets.cpp
+            editor/screens/workspace/EditorWorkspaceScreenTerrain.cpp
+            editor/screens/workspace/terrain/TerrainAssetCreationModal.cpp
             editor/screens/workspace/terrain/TerrainViewportTool.cpp
             editor/screens/workspace/panels/viewport/ViewportTerrainSource.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
@@ -3802,6 +3866,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
+    target_link_libraries(HoroGui PUBLIC HoroEngine::TerrainAuthoringApplication)
     target_link_libraries(HoroGui PRIVATE HoroEngine::ProjectAssetImportApplication HoroEngine::TerrainAuthoring HoroEngine::PlayTopologyApplication HoroThirdParty::Zep)
 # Existing workspace view-model consumers require the same unchanged Play-state declaration.
 target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)

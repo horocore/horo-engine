@@ -1,5 +1,7 @@
 #include "TerrainAssetFormat.h"
 
+#include "Horo/Terrain/TerrainAuthoringSourceCodec.h"
+
 #include <bit>
 #include <cmath>
 #include <limits>
@@ -49,6 +51,16 @@ namespace Horo::Editor {
         /** @brief The explicit importer validates source bytes without inventing a target asset or dataset identity. */
         class RawImporter final : public Assets::IAssetImporter {
         public:
+            /** @brief Retire historical RAW importer ownership once the complete authoring source becomes active. */
+            Result<void> ValidateReimportDestination(std::span<const std::byte> bytes,
+                                                     const CancellationToken &cancellation) const override {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(Terrain::TerrainSourceErrors::Cancelled));
+                if (Terrain::IsTerrainAuthoringSource(bytes))
+                    return Result<void>::Failure(MakeError(Terrain::TerrainSourceErrors::UnsupportedFormat));
+                return Result<void>::Success();
+            }
+
             Result<Assets::PreparedAssetImport> Import(const Assets::AssetImportInput &input,
                                                        const CancellationToken &cancellation) const override {
                 using Return = Result<Assets::PreparedAssetImport>;

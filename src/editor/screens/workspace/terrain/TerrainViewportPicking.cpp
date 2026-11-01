@@ -59,97 +59,202 @@ namespace Horo::Editor {
         std::uint32_t Cell(double sample, std::uint32_t samples) noexcept {
             return static_cast<std::uint32_t>(std::clamp(std::floor(sample), 0.0, double(samples - 2)));
         }
+
+        using PickResult = Result<std::optional<TerrainSurfaceHit>>;
+
+        /** @brief Admit source shape without inspecting or allocating channel payloads. */
+        bool ValidGrid(const Terrain::TerrainCanonicalSource &source) {
+            return source.width >= 2 && source.height >= 2 && source.width <= Terrain::TerrainDescriptorHardLimits::SamplesPerAxis &&
+                   source.height <= Terrain::TerrainDescriptorHardLimits::SamplesPerAxis &&
+                   source.heightsMeters.size() == std::uint64_t{source.width} * source.height &&
+                   (source.holes.empty() || source.holes.size() == source.heightsMeters.size());
+        }
+
+        /** @brief Admit the physical grid scale independently of per-cell traversal. */
+        bool ValidSpacing(const Terrain::TerrainSourceCoordinates &coordinates) {
+            return std::isfinite(coordinates.spacingX) && coordinates.spacingX > 0 && std::isfinite(coordinates.spacingZ) &&
+                   coordinates.spacingZ > 0;
+        }
+
+        /** @brief Admit a finite normalized world ray and ordered nonnegative distance interval. */
+        bool ValidRay(const Math::Ray &ray) {
+            return Math::IsFinite(ray.origin) && Math::IsFinite(ray.direction) &&
+                   std::abs(Math::Dot(ray.direction, ray.direction) - 1.0F) <= 1e-3F && std::isfinite(ray.minimumDistance) &&
+                   std::isfinite(ray.maximumDistance) && ray.minimumDistance >= 0 && ray.maximumDistance >= ray.minimumDistance;
+        }
+
+        /** @brief Validated local ray retains the original world-distance parameter under affine transformation. */
+        struct LocalRay final {
+            Point origin, direction;
+        };
+
+        Result<LocalRay> TransformRay(const Math::Transform &transform, const Math::Ray &ray) {
+            auto matrix = transform.TryToMatrix();
+            if (matrix.HasError())
+                return Result<LocalRay>::Failure(matrix.ErrorValue());
+            auto inverse = Math::TryInverseAffine(matrix.Value());
+            if (inverse.HasError())
+                return Result<LocalRay>::Failure(inverse.ErrorValue());
+            auto origin = Math::TryTransformPoint(inverse.Value(), ray.origin);
+            if (origin.HasError())
+                return Result<LocalRay>::Failure(origin.ErrorValue());
+            auto direction = Math::TransformDirection(inverse.Value(), ray.direction);
+            if (!Math::IsFinite(direction))
+                return Result<LocalRay>::Failure(MakeError(TerrainEditErrors::Invalid));
+            return Result<LocalRay>::Success(
+                {{origin.Value().x, origin.Value().y, origin.Value().z}, {direction.x, direction.y, direction.z}});
+        }
+
+        /** @brief One monotonic DDA axis owns its boundary/extent checks. */
+        struct Axis final {
+            std::uint32_t cell{}, samples{};
+            int step{};
+            double next{}, delta{};
+
+            bool Advance() {
+                if ((step < 0 && cell == 0) || (step > 0 && cell + 1 >= samples - 1))
+                    return false;
+                cell = static_cast<std::uint32_t>(static_cast<std::int64_t>(cell) + step);
+                next += delta;
+                return true;
+            }
+        };
+
+        /** @brief Initialize exact source-sample traversal, including stationary axes. */
+        Axis MakeAxis(double origin, double direction, double begin, std::uint32_t samples) {
+            Axis axis;
+            axis.cell = Cell(origin + direction * begin, samples);
+            axis.samples = samples;
+            axis.step = direction > 0 ? 1 : direction < 0 ? -1 : 0;
+            axis.next = std::numeric_limits<double>::infinity();
+            axis.delta = axis.next;
+            if (axis.step != 0) {
+                const double boundary = axis.step > 0 ? double(axis.cell + 1) : double(axis.cell);
+                axis.next = (boundary - origin) / direction;
+                axis.delta = std::abs(1.0 / direction);
+            }
+            return axis;
+        }
+
+        /** @brief Reject noncanonical sample payload while retaining explicit source-hole visibility. */
+        Result<bool> SolidCell(const Terrain::TerrainCanonicalSource &source, const std::array<std::size_t, 4> &indices) {
+            bool solid = true;
+            for (const auto index : indices) {
+                if (!std::isfinite(source.heightsMeters[index]))
+                    return Result<bool>::Failure(MakeError(TerrainEditErrors::Invalid));
+                if (!source.holes.empty()) {
+                    if (source.holes[index] > 1)
+                        return Result<bool>::Failure(MakeError(TerrainEditErrors::Invalid));
+                    solid = solid && source.holes[index] == 0;
+                }
+            }
+            return Result<bool>::Success(solid);
+        }
+
+        /** @brief Choose the nearest hit on the canonical source diagonal. */
+        std::optional<double> Nearest(std::optional<double> first, std::optional<double> second) {
+            if (first && second)
+                return std::min(*first, *second);
+            return first ? first : second;
+        }
+
+        /** @brief Bounded traversal scratch; no live runtime/renderer or mutable document is retained. */
+        struct Walk final {
+            const Terrain::TerrainCanonicalSource &source;
+            const Math::Ray &world;
+            LocalRay local;
+            TerrainSurfacePickMode mode;
+            Axis x, z;
+            double begin{}, end{};
+
+            /** @brief Intersect one validated source cell, with explicit hole restoration policy. */
+            PickResult Hit() const {
+                const auto cx = x.cell, cz = z.cell;
+                const std::array<std::size_t, 4> indices{std::size_t(cz) * source.width + cx, std::size_t(cz) * source.width + cx + 1,
+                                                         std::size_t(cz + 1) * source.width + cx,
+                                                         std::size_t(cz + 1) * source.width + cx + 1};
+                auto solid = SolidCell(source, indices);
+                if (solid.HasError())
+                    return PickResult::Failure(solid.ErrorValue());
+                if (!solid.Value() && mode == TerrainSurfacePickMode::VisibleSurface)
+                    return PickResult::Success({});
+                const double sx = source.coordinates.spacingX, sz = source.coordinates.spacingZ;
+                const Point a{cx * sx, source.heightsMeters[indices[0]], cz * sz};
+                const Point b{(cx + 1) * sx, source.heightsMeters[indices[1]], cz * sz};
+                const Point c{cx * sx, source.heightsMeters[indices[2]], (cz + 1) * sz};
+                const Point d{(cx + 1) * sx, source.heightsMeters[indices[3]], (cz + 1) * sz};
+                const double cellEnd = std::min({x.next, z.next, end});
+                const auto hit = Nearest(Triangle(local.origin, local.direction, a, c, b, begin, cellEnd),
+                                         Triangle(local.origin, local.direction, b, c, d, begin, cellEnd));
+                if (!hit)
+                    return PickResult::Success({});
+                const double px = local.origin.x + local.direction.x * *hit, py = local.origin.y + local.direction.y * *hit,
+                             pz = local.origin.z + local.direction.z * *hit;
+                return PickResult::Success(TerrainSurfaceHit{{px / sx, pz / sz},
+                                                             world.origin + world.direction * static_cast<float>(*hit),
+                                                             static_cast<float>(py),
+                                                             *hit});
+            }
+
+            /** @brief Cross all simultaneous cell boundaries without walking beyond source membership. */
+            bool Advance() {
+                const double cellEnd = std::min({x.next, z.next, end});
+                if (cellEnd >= end)
+                    return false;
+                const bool crossX = x.next <= z.next, crossZ = z.next <= x.next;
+                if (crossX && !x.Advance())
+                    return false;
+                if (crossZ && !z.Advance())
+                    return false;
+                begin = cellEnd;
+                return true;
+            }
+
+            /** @brief Perform only admitted visits and cooperatively reject work before returning a detached hit. */
+            PickResult Run(std::size_t maximum, const CancellationToken &cancellation) {
+                for (std::size_t visited = 0; visited < maximum; ++visited) {
+                    if (cancellation.IsCancellationRequested())
+                        return PickResult::Failure(MakeError(TerrainEditErrors::Cancelled));
+                    auto hit = Hit();
+                    if (hit.HasError())
+                        return hit;
+                    if (hit.Value())
+                        return hit;
+                    if (!Advance())
+                        return PickResult::Success({});
+                }
+                return PickResult::Failure(MakeError(TerrainEditErrors::LimitExceeded));
+            }
+        };
+
+        /** @brief Clip and construct the actual heightfield traversal from an admitted local ray. */
+        PickResult Traverse(const Terrain::TerrainCanonicalSource &source, const Math::Ray &ray, LocalRay local, std::size_t maximum,
+                            const CancellationToken &cancel, TerrainSurfacePickMode mode) {
+            const double ox = local.origin.x / source.coordinates.spacingX, oz = local.origin.z / source.coordinates.spacingZ;
+            const double dx = local.direction.x / source.coordinates.spacingX, dz = local.direction.z / source.coordinates.spacingZ;
+            if (!std::isfinite(ox) || !std::isfinite(oz) || !std::isfinite(dx) || !std::isfinite(dz))
+                return PickResult::Failure(MakeError(TerrainEditErrors::Invalid));
+            double begin = ray.minimumDistance, end = ray.maximumDistance;
+            if (!Clip(ox, dx, source.width - 1, begin, end) || !Clip(oz, dz, source.height - 1, begin, end))
+                return PickResult::Success({});
+            Walk walk{source, ray, local, mode, MakeAxis(ox, dx, begin, source.width), MakeAxis(oz, dz, begin, source.height), begin, end};
+            return walk.Run(maximum, cancel);
+        }
     }  // namespace
 
     /** @copydoc PickTerrainSurface */
     Result<std::optional<TerrainSurfaceHit>> PickTerrainSurface(const Terrain::TerrainCanonicalSource &source,
                                                                 const Math::Transform &datasetToViewport, const Math::Ray &ray,
-                                                                const std::size_t maximumVisitedCells,
-                                                                const CancellationToken &cancellation) {
-        using Return = Result<std::optional<TerrainSurfaceHit>>;
+                                                                std::size_t maximumVisitedCells, const CancellationToken &cancellation,
+                                                                TerrainSurfacePickMode mode) {
         if (cancellation.IsCancellationRequested())
-            return Return::Failure(MakeError(TerrainEditErrors::Cancelled));
-        if (source.width < 2 || source.height < 2 || source.width > Terrain::TerrainDescriptorHardLimits::SamplesPerAxis ||
-            source.height > Terrain::TerrainDescriptorHardLimits::SamplesPerAxis ||
-            source.heightsMeters.size() != std::uint64_t{source.width} * source.height ||
-            (!source.holes.empty() && source.holes.size() != source.heightsMeters.size()) || !std::isfinite(source.coordinates.spacingX) ||
-            source.coordinates.spacingX <= 0 || !std::isfinite(source.coordinates.spacingZ) || source.coordinates.spacingZ <= 0 ||
-            !Math::IsFinite(ray.origin) || !Math::IsFinite(ray.direction) ||
-            std::abs(Math::Dot(ray.direction, ray.direction) - 1.0F) > 1e-3F || !std::isfinite(ray.minimumDistance) ||
-            !std::isfinite(ray.maximumDistance) || ray.minimumDistance < 0 || ray.maximumDistance < ray.minimumDistance ||
-            maximumVisitedCells == 0)
-            return Return::Failure(MakeError(TerrainEditErrors::Invalid));
-        auto matrix = datasetToViewport.TryToMatrix();
-        if (matrix.HasError())
-            return Return::Failure(std::move(matrix).ErrorValue());
-        auto inverse = Math::TryInverseAffine(matrix.Value());
-        if (inverse.HasError())
-            return Return::Failure(std::move(inverse).ErrorValue());
-        auto localOrigin = Math::TryTransformPoint(inverse.Value(), ray.origin);
-        if (localOrigin.HasError())
-            return Return::Failure(std::move(localOrigin).ErrorValue());
-        const auto localDirection = Math::TransformDirection(inverse.Value(), ray.direction);
-        if (!Math::IsFinite(localDirection))
-            return Return::Failure(MakeError(TerrainEditErrors::Invalid));
-        const Point origin{localOrigin.Value().x, localOrigin.Value().y, localOrigin.Value().z};
-        const Point direction{localDirection.x, localDirection.y, localDirection.z};
-        const double ox = origin.x / source.coordinates.spacingX, oz = origin.z / source.coordinates.spacingZ;
-        const double dx = direction.x / source.coordinates.spacingX, dz = direction.z / source.coordinates.spacingZ;
-        double begin = ray.minimumDistance, end = ray.maximumDistance;
-        if (!Clip(ox, dx, source.width - 1, begin, end) || !Clip(oz, dz, source.height - 1, begin, end))
-            return Return::Success({});
-        auto x = Cell(ox + dx * begin, source.width), z = Cell(oz + dz * begin, source.height);
-        const int stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0, stepZ = dz > 0 ? 1 : dz < 0 ? -1 : 0;
-        const double infinity = std::numeric_limits<double>::infinity();
-        double nextX = stepX == 0 ? infinity : ((stepX > 0 ? double(x + 1) : double(x)) - ox) / dx;
-        double nextZ = stepZ == 0 ? infinity : ((stepZ > 0 ? double(z + 1) : double(z)) - oz) / dz;
-        const double deltaX = stepX == 0 ? infinity : std::abs(1.0 / dx), deltaZ = stepZ == 0 ? infinity : std::abs(1.0 / dz);
-        for (std::size_t visited = 0; visited < maximumVisitedCells; ++visited) {
-            if (cancellation.IsCancellationRequested())
-                return Return::Failure(MakeError(TerrainEditErrors::Cancelled));
-            const std::array<std::size_t, 4> indices{std::size_t{z} * source.width + x, std::size_t{z} * source.width + x + 1,
-                                                     std::size_t{z + 1} * source.width + x, std::size_t{z + 1} * source.width + x + 1};
-            bool solid = true;
-            for (const auto index : indices) {
-                if (!std::isfinite(source.heightsMeters[index]) || (!source.holes.empty() && source.holes[index] > 1))
-                    return Return::Failure(MakeError(TerrainEditErrors::Invalid));
-                solid = solid && (source.holes.empty() || source.holes[index] == 0);
-            }
-            const double cellEnd = std::min({nextX, nextZ, end});
-            if (solid) {
-                const double sx = source.coordinates.spacingX, sz = source.coordinates.spacingZ;
-                const Point a{x * sx, source.heightsMeters[indices[0]], z * sz}, b{(x + 1) * sx, source.heightsMeters[indices[1]], z * sz},
-                    c{x * sx, source.heightsMeters[indices[2]], (z + 1) * sz},
-                    d{(x + 1) * sx, source.heightsMeters[indices[3]], (z + 1) * sz};
-                // Match Terrain source cook's canonical diagonal and winding.
-                auto first = Triangle(origin, direction, a, c, b, begin, cellEnd);
-                auto second = Triangle(origin, direction, b, c, d, begin, cellEnd);
-                const auto hit = first && second ? std::optional{std::min(*first, *second)} : first ? first : second;
-                if (hit) {
-                    const double px = origin.x + direction.x * *hit, py = origin.y + direction.y * *hit, pz = origin.z + direction.z * *hit;
-                    return Return::Success(TerrainSurfaceHit{{px / sx, pz / sz},
-                                                             ray.origin + ray.direction * static_cast<float>(*hit),
-                                                             static_cast<float>(py),
-                                                             *hit});
-                }
-            }
-            if (cellEnd >= end || (stepX == 0 && stepZ == 0))
-                return Return::Success({});
-            const bool crossX = nextX <= nextZ, crossZ = nextZ <= nextX;
-            if (crossX) {
-                if ((stepX < 0 && x == 0) || (stepX > 0 && x + 1 >= source.width - 1))
-                    return Return::Success({});
-                x = static_cast<std::uint32_t>(static_cast<std::int64_t>(x) + stepX);
-                nextX += deltaX;
-            }
-            if (crossZ) {
-                if ((stepZ < 0 && z == 0) || (stepZ > 0 && z + 1 >= source.height - 1))
-                    return Return::Success({});
-                z = static_cast<std::uint32_t>(static_cast<std::int64_t>(z) + stepZ);
-                nextZ += deltaZ;
-            }
-            begin = cellEnd;
-        }
-        return Return::Failure(MakeError(TerrainEditErrors::LimitExceeded));
+            return PickResult::Failure(MakeError(TerrainEditErrors::Cancelled));
+        if (!ValidGrid(source) || !ValidSpacing(source.coordinates) || !ValidRay(ray) || !maximumVisitedCells ||
+            mode > TerrainSurfacePickMode::UnderlyingHeightfield)
+            return PickResult::Failure(MakeError(TerrainEditErrors::Invalid));
+        auto local = TransformRay(datasetToViewport, ray);
+        if (local.HasError())
+            return PickResult::Failure(local.ErrorValue());
+        return Traverse(source, ray, local.Value(), maximumVisitedCells, cancellation, mode);
     }
 }  // namespace Horo::Editor

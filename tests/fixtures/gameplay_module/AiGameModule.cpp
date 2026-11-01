@@ -43,6 +43,8 @@ namespace {
 }  // namespace
 
 namespace {
+    std::uint32_t *decisionLifecycleCounters{};
+
     /** @brief Real generated decision-node callbacks live in the unloadable fixture image. */
     class FixtureDecisionNode final : public Horo::AI::IBehaviorTreeExecutor {
     public:
@@ -61,6 +63,8 @@ namespace {
 
         Horo::Result<Horo::AI::AiTaskState> Start(const Horo::AI::BehaviorTreeEvaluationContext &,
                                                   const Horo::AI::AiTaskOperationContext &) noexcept override {
+            if (decisionLifecycleCounters)
+                ++decisionLifecycleCounters[0];
             return Horo::Result<Horo::AI::AiTaskState>::Success(Horo::AI::AiTaskState::Running);
         }
 
@@ -69,9 +73,15 @@ namespace {
             return Horo::Result<Horo::AI::AiTaskState>::Success(Horo::AI::AiTaskState::Succeeded);
         }
 
-        void Abort(const Horo::AI::AiTaskOperationContext &, Horo::AI::AiTaskCancellationReason) noexcept override {}
+        void Abort(const Horo::AI::AiTaskOperationContext &, Horo::AI::AiTaskCancellationReason) noexcept override {
+            if (decisionLifecycleCounters)
+                ++decisionLifecycleCounters[1];
+        }
 
-        void Cleanup(const Horo::AI::AiTaskOperationContext &, const Horo::AI::AiTaskTerminalResult &) noexcept override {}
+        void Cleanup(const Horo::AI::AiTaskOperationContext &, const Horo::AI::AiTaskTerminalResult &) noexcept override {
+            if (decisionLifecycleCounters)
+                ++decisionLifecycleCounters[2];
+        }
 
         Horo::Result<bool> Check(const Horo::AI::BehaviorTreeEvaluationContext &) noexcept override {
             return Horo::Result<bool>::Success(true);
@@ -83,6 +93,10 @@ namespace {
     };
 }  // namespace
 HORO_AI_NODE(FixtureDecisionNode, "101")
+
+extern "C" HORO_GAME_EXPORT void HoroTestObserveDecisionNodeLifecycle(std::uint32_t *counters) noexcept {
+    decisionLifecycleCounters = counters;
+}
 
 extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noexcept {
     return std::make_unique<AiModule>().release();

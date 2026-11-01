@@ -1,41 +1,82 @@
 #include "TerrainDocumentHost.h"
 
 #include "Horo/Editor/SourceDocumentService.h"
+#include "TerrainDocumentHostInternal.h"
 
 #include <new>
 
 namespace Horo::Editor {
     namespace {
-        constexpr std::size_t MaximumHeightBytes = 4 * 1024 * 1024;
+        constexpr std::size_t MaximumHeightBytes = 64 * 1024 * 1024;
         constexpr std::size_t MaximumMetadataBytes = 256 * 1024;
 
-        /** @brief Protect every callback-capable mutation/publication against reentry. */
-        class Busy final {
-        public:
-            explicit Busy(bool &value) : value_(value) {
-                value_ = true;
-            }
-
-            ~Busy() {
-                value_ = false;
-            }
-
-            Busy(const Busy &) = delete;
-            Busy &operator=(const Busy &) = delete;
-
-        private:
-            bool &value_;
+        struct SourceCapture final {
+            Terrain::TerrainAuthoringSource value;
+            Assets::AssetSourceIdentity source, metadata;
+            bool container{};
         };
 
-        /** @brief Explicit per-document authoring reservations keep four workspace owners bounded. */
-        TerrainEditLimits Limits() {
-            TerrainEditLimits value;
-            value.maximumPatches = 1;
-            value.maximumSamples = 16'384;
-            value.maximumTransactionBytes = 512 * 1024;
-            value.maximumHistoryBytes = 8 * 1024 * 1024;
-            value.maximumHistoryItems = 64;
-            return value;
+        /** @brief Container bytes are authoritative after conversion; legacy RAW retains its exact importer settings authority. */
+        Result<Terrain::TerrainAuthoringSource> DecodeCaptured(std::span<const std::byte> bytes, const std::filesystem::path &metadata,
+                                                               Assets::AssetId asset, Terrain::TerrainCapabilityRevision capability,
+                                                               bool container) {
+            using Return = Result<Terrain::TerrainAuthoringSource>;
+            if (container)
+                return Terrain::DecodeTerrainAuthoringSource(bytes, asset, capability);
+            auto imported = Assets::ReadAssetImportMetadata(metadata);
+            if (imported.HasError())
+                return Return::Failure(std::move(imported).ErrorValue());
+            auto decoded = DecodeTerrainAsset(imported.Value(), bytes, Terrain::TerrainSourceRevision::Create(1).Value());
+            if (decoded.HasError())
+                return Return::Failure(std::move(decoded).ErrorValue());
+            auto source = std::move(decoded).Value();
+            source.capability = capability;
+            return Return::Success({std::move(source), {}, {}});
+        }
+
+        /** @brief Check actual source identity/type through the canonical registry sidecar decoder. */
+        Result<void> SourceIdentity(const std::filesystem::path &root, const std::filesystem::path &path, Assets::AssetId asset,
+                                    std::span<const std::byte> bytes) {
+            const auto text = std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+            const auto relative = path.lexically_relative(root).generic_u8string();
+            auto identity = Assets::DecodeAssetIdentitySidecar(std::string(relative.begin(), relative.end()), text);
+            if (identity.HasError())
+                return Result<void>::Failure(std::move(identity).ErrorValue());
+            if (identity.Value().id != asset || identity.Value().type.Value() != "core.terrain")
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            return Result<void>::Success();
+        }
+
+        /** @brief Read source and historical metadata under the caller's project lease; compare the actual metadata generation. */
+        Result<SourceCapture> Capture(const std::filesystem::path &root, const std::filesystem::path &path, Assets::AssetId asset,
+                                      Terrain::TerrainCapabilityRevision capability) {
+            using Return = Result<SourceCapture>;
+            auto sidecar = path;
+            sidecar += ".horo";
+            auto source = Assets::CaptureAssetSource(root, path, MaximumHeightBytes);
+            if (source.HasError())
+                return Return::Failure(std::move(source).ErrorValue());
+            auto metadata = Assets::CaptureAssetSource(root, sidecar, MaximumMetadataBytes);
+            if (metadata.HasError())
+                return Return::Failure(std::move(metadata).ErrorValue());
+            if (!source.Value().identity.exists || !metadata.Value().identity.exists)
+                return Return::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
+            if (auto valid = SourceIdentity(root, path, asset, metadata.Value().bytes); valid.HasError())
+                return Return::Failure(std::move(valid).ErrorValue());
+            SourceCapture capture;
+            capture.source = source.Value().identity;
+            capture.metadata = metadata.Value().identity;
+            capture.container = Terrain::IsTerrainAuthoringSource(source.Value().bytes);
+            auto decoded = DecodeCaptured(source.Value().bytes, sidecar, asset, capability, capture.container);
+            if (decoded.HasError())
+                return Return::Failure(std::move(decoded).ErrorValue());
+            auto current = Assets::CaptureAssetSource(root, sidecar, MaximumMetadataBytes);
+            if (current.HasError())
+                return Return::Failure(std::move(current).ErrorValue());
+            if (current.Value().identity != capture.metadata)
+                return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            capture.value = std::move(decoded).Value();
+            return Return::Success(std::move(capture));
         }
     }  // namespace
 
@@ -52,7 +93,8 @@ namespace Horo::Editor {
     Result<std::shared_ptr<TerrainDocumentHost>> TerrainDocumentHost::Open(const std::filesystem::path &root,
                                                                            const std::filesystem::path &path, Assets::AssetId asset,
                                                                            DocumentIdentity identity, Assets::AssetId workspace,
-                                                                           const ProjectMutationCoordinator &mutations) {
+                                                                           const ProjectMutationCoordinator &mutations,
+                                                                           const Assets::AssetRegistrySnapshot &registry) {
         using Return = Result<std::shared_ptr<TerrainDocumentHost>>;
         if (!identity.IsValid() || identity.key.kind != DocumentKind::Asset || !workspace.IsValid() ||
             path != root / std::filesystem::path(std::u8string(identity.key.source.Value().begin(), identity.key.source.Value().end())))
@@ -61,36 +103,25 @@ namespace Horo::Editor {
             auto lease = mutations.TryAcquire({root, ProjectMutationOwner::Save, "terrain.source.open"});
             if (lease.HasError())
                 return Return::Failure(std::move(lease).ErrorValue());
-            auto sidecar = path;
-            sidecar += ".horo";
-            auto source = Assets::CaptureAssetSource(root, path, MaximumHeightBytes);
-            if (source.HasError())
-                return Return::Failure(std::move(source).ErrorValue());
-            auto metadataCapture = Assets::CaptureAssetSource(root, sidecar, MaximumMetadataBytes);
-            if (metadataCapture.HasError())
-                return Return::Failure(std::move(metadataCapture).ErrorValue());
-            if (!source.Value().identity.exists || !metadataCapture.Value().identity.exists)
-                return Return::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
-            auto metadata = Assets::ReadAssetImportMetadata(sidecar);
-            if (metadata.HasError())
-                return Return::Failure(std::move(metadata).ErrorValue());
-            if (metadata.Value().assetId != asset)
-                return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-            auto currentMetadata = Assets::CaptureAssetSource(root, sidecar, MaximumMetadataBytes);
-            if (currentMetadata.HasError())
-                return Return::Failure(std::move(currentMetadata).ErrorValue());
-            if (currentMetadata.Value().identity != metadataCapture.Value().identity)
-                return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-            auto decoded = DecodeTerrainAsset(metadata.Value(), source.Value().bytes, Terrain::TerrainSourceRevision::Create(1).Value());
-            if (decoded.HasError())
-                return Return::Failure(std::move(decoded).ErrorValue());
+            auto capture = Capture(root, path, asset, Terrain::TerrainCapabilityRevision::Create(identity.instance.Value()).Value());
+            if (capture.HasError())
+                return Return::Failure(std::move(capture).ErrorValue());
+            auto value = std::move(capture).Value();
             auto document = TerrainAuthoringDocument::Open(TerrainDocumentSessionId::Create(identity.instance.Value()).Value(),
-                                                           std::move(decoded).Value(), 128, TerrainAuthoringCapability::Edit, Limits());
+                                                           std::move(value.value.source), TileCellCount, TerrainAuthoringCapability::Edit,
+                                                           TerrainHostEditLimits(), value.value.foliage.placements);
             if (document.HasError())
                 return Return::Failure(std::move(document).ErrorValue());
-            return Return::Success(std::shared_ptr<TerrainDocumentHost>(
-                new TerrainDocumentHost(root, path, std::move(identity), workspace, std::move(document).Value(), source.Value().identity,
-                                        metadataCapture.Value().identity)));
+            auto host =
+                std::shared_ptr<TerrainDocumentHost>(new TerrainDocumentHost(root, path, std::move(identity), workspace,
+                                                                             std::move(document).Value(), value.source, value.metadata));
+            host->containerSource_ = value.container;
+            host->layers_ = std::move(value.value.layers);
+            host->registry_ = registry;
+            auto resources = host->LoadResources(value.value.foliage.definitions);
+            if (resources.HasError())
+                return Return::Failure(std::move(resources).ErrorValue());
+            return Return::Success(std::move(host));
         } catch (const std::bad_alloc &) {
             return Return::Failure(MakeError(TerrainEditErrors::LimitExceeded));
         } catch (...) {
@@ -112,7 +143,9 @@ namespace Horo::Editor {
                 document_.UndoCount() != 0,
                 document_.RedoCount() != 0,
                 conflict_,
-                document_.IsClosed()};
+                document_.IsClosed(),
+                containerSource_,
+                layers_.has_value()};
     }
 
     /** @copydoc TerrainDocumentHost::Admit */
@@ -136,7 +169,7 @@ namespace Horo::Editor {
                                                           const CancellationToken &cancellation) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return Result<TerrainEditChange>::Failure(std::move(admitted).ErrorValue());
-        const Busy guard(busy_);
+        const TerrainHostBusy guard(busy_);
         auto produced = ProduceTerrainSculpt(document_.Source(), fence, operation, brush, stamps, {}, cancellation);
         if (produced.HasError())
             return Result<TerrainEditChange>::Failure(std::move(produced).ErrorValue());
@@ -147,7 +180,7 @@ namespace Horo::Editor {
     Result<TerrainEditChange> TerrainDocumentHost::History(const TerrainEditFence &fence, const bool redo) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return Result<TerrainEditChange>::Failure(std::move(admitted).ErrorValue());
-        const Busy guard(busy_);
+        const TerrainHostBusy guard(busy_);
         return redo ? document_.Redo(fence) : document_.Undo(fence);
     }
 
@@ -158,55 +191,39 @@ namespace Horo::Editor {
         using Return = Result<Assets::AssetSourcePublication>;
         if (auto admitted = Admit(fence); admitted.HasError())
             return Return::Failure(std::move(admitted).ErrorValue());
-        if (conflict_)
-            return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        const Busy guard(busy_);
+        const TerrainHostBusy guard(busy_);
         try {
-            auto encoded = EncodeTerrainHeights(document_.Source());
+            auto encoded = EncodeCurrent();
             if (encoded.HasError())
                 return Return::Failure(std::move(encoded).ErrorValue());
-            const auto state = document_.State();
-            auto project = mutations.TryAcquire({root_, ProjectMutationOwner::Save, "terrain.source.save"});
-            if (project.HasError())
-                return Return::Failure(std::move(project).ErrorValue());
-            auto sourceLock = Assets::AssetSourcePublicationLockPath(root_, path_);
-            if (sourceLock.HasError())
-                return Return::Failure(std::move(sourceLock).ErrorValue());
-            auto sourceLease = files.TryAcquireExclusive(sourceLock.Value(), "terrain.source.save");
-            if (sourceLease.HasError())
-                return Return::Failure(std::move(sourceLease).ErrorValue());
-            auto metadataLock = Assets::AssetSourcePublicationLockPath(root_, metadataPath_);
-            if (metadataLock.HasError())
-                return Return::Failure(std::move(metadataLock).ErrorValue());
-            auto metadataLease = files.TryAcquireExclusive(metadataLock.Value(), "terrain.metadata.fence");
-            if (metadataLease.HasError())
-                return Return::Failure(std::move(metadataLease).ErrorValue());
-            auto metadata = Assets::CaptureAssetSource(root_, metadataPath_, MaximumMetadataBytes);
-            if (metadata.HasError())
-                return Return::Failure(std::move(metadata).ErrorValue());
-            if (metadata.Value().identity != acceptedMetadata_) {
-                conflict_ = true;
-                return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-            }
-            auto publication = Assets::PublishAssetSource(root_, path_, accepted_, encoded.Value(), sourceLease.Value(), files);
-            if (publication.HasError()) {
-                if (publication.ErrorValue().code.Value() == Assets::AssetSourceErrors::Conflict.code.Value())
-                    conflict_ = true;
+            auto publication = Publish(encoded.Value(), layers_, mutations, files);
+            if (publication.HasError())
                 return publication;
-            }
-            accepted_ = publication.Value().identity;
             if (publication.Value().status == Assets::AssetSourcePublicationStatus::Durable) {
-                const auto saved = document_.AcceptSavedState(fence.session, state);
+                auto saved = document_.AcceptSavedState(fence.session, document_.State());
                 if (saved.HasError())
-                    return Return::Failure(saved.ErrorValue());
-                durabilityUnconfirmed_ = false;
-            } else
-                durabilityUnconfirmed_ = true;
+                    return Return::Failure(std::move(saved).ErrorValue());
+            }
             return publication;
         } catch (const std::bad_alloc &) {
             return Return::Failure(MakeError(TerrainEditErrors::LimitExceeded));
         } catch (...) {
             return Return::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        }
+    }
+
+    /** @copydoc TerrainDocumentHost::CaptureSavedSource */
+    Result<TerrainSavedSource> TerrainDocumentHost::CaptureSavedSource(const TerrainEditFence &fence) const {
+        using Return = Result<TerrainSavedSource>;
+        if (auto admitted = Admit(fence); admitted.HasError())
+            return Return::Failure(std::move(admitted).ErrorValue());
+        if (!containerSource_ || document_.IsDirty() || durabilityUnconfirmed_)
+            return Return::Failure(MakeError(TerrainEditErrors::CapabilityUnavailable));
+        try {
+            return Return::Success({root_, path_, document_.Source().sourceAsset, workspace_, fence, accepted_.digest,
+                                    acceptedMetadata_.digest, layers_ ? layers_->digest : Sha256Digest{}});
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(TerrainEditErrors::LimitExceeded));
         }
     }
 

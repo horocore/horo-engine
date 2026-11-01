@@ -116,6 +116,11 @@ namespace Horo::Editor {
         m_viewModel.pcgPalette = dependencies.procedural.catalog.palette;
         m_viewModel.pcgSchemas = dependencies.procedural.catalog.schemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
+        m_terrainCookFactory = dependencies.terrainCook;
+        m_terrainAssetFactory = dependencies.terrainAssets;
+        m_viewModel.terrainCookAvailable = m_terrainCookFactory && static_cast<bool>(*m_terrainCookFactory);
+        m_viewModel.terrainAssetCreationAvailable =
+            m_terrainAssetFactory && static_cast<bool>(*m_terrainAssetFactory) && m_mutableAssetRegistry && m_mutations;
         InitializeWorldBake(dependencies);
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
@@ -157,6 +162,7 @@ namespace Horo::Editor {
                                       {"horo.global_dock", WorkspaceDockArea::Bottom},
                                       {"horo.navigation", WorkspaceDockArea::Bottom},
                                       {"horo.inspector", WorkspaceDockArea::Right}};
+        m_viewModel.panelDockAreas.emplace("horo.foliage_palette", WorkspaceDockArea::Right);
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.hierarchy", ActivityBarSlot{ActivityBarRail::Left, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.viewport", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.game", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 1}));
@@ -165,6 +171,7 @@ namespace Horo::Editor {
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.global_dock", ActivityBarSlot{ActivityBarRail::Left, 2, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.navigation", ActivityBarSlot{ActivityBarRail::Left, 3, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.inspector", ActivityBarSlot{ActivityBarRail::Right, 0, 0}));
+        static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.foliage_palette", ActivityBarSlot{ActivityBarRail::Right, 1, 0}));
     }
 
     void EditorWorkspaceController::InitializeInitialScene(const std::filesystem::path &absoluteProjectRoot) {

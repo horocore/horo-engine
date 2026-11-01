@@ -9,6 +9,10 @@
 #include <atomic>
 #include <thread>
 
+namespace Horo::Gameplay {
+    class LuaDecisionNodeProgram;
+}
+
 namespace Horo::AI {
     enum class DecisionNodeRole : std::uint8_t {
         Task,
@@ -38,6 +42,7 @@ namespace Horo::AI {
         AiCapabilitySet capabilities;
         std::vector<DecisionNodePort> ports;
         std::vector<BehaviorTreeProperty> properties; /**< Typed defaults and stable property identities. */
+        DecisionProviderMemoryContract memory;
     };
 
     /** @brief Exact-generation factory; all callbacks and userData remain protected by the acquired generation lease.
@@ -89,6 +94,13 @@ namespace Horo::AI {
             return contracts_;
         }
 
+        /** @brief Thread-neutral immutable capture fence; never grants permission to invoke callbacks. */
+        [[nodiscard]] bool CanUse() const noexcept;
+        /** @brief Pure implementation availability; never invokes a factory or probes a VM. */
+        [[nodiscard]] bool HasImplementation(DecisionNodeTypeId type) const noexcept;
+        /** @brief Logical core callback-owner storage; provider-private state is declared separately. */
+        [[nodiscard]] static std::uint64_t ExecutorStorageBytes(std::size_t providers) noexcept;
+
         /** @brief True only on the acquiring owner thread while the actual generation admits new calls. */
         [[nodiscard]] bool CanAdmit() const noexcept;
         /** @brief Binds an admitted immutable plan to real factories, rejecting missing/ambiguous/version/capability mismatches. */
@@ -102,6 +114,13 @@ namespace Horo::AI {
 
     private:
         friend class RegisteredDecisionNodeExecutor;
+        friend class ::Horo::Gameplay::LuaDecisionNodeProgram;
+        [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureVm(
+            std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
+            std::shared_ptr<const DecisionNodeGeneration> provider);
+        [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureAdmitted(
+            std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
+            std::shared_ptr<const DecisionNodeGeneration> provider, bool vmAuthority);
         [[nodiscard]] static bool ValidProvider(const std::shared_ptr<const DecisionNodeGeneration> &provider) noexcept;
         [[nodiscard]] Result<void> StoreDeclarations(std::vector<DecisionNodeRegistration> declarations);
         [[nodiscard]] Result<void> AppendGeneration(const std::shared_ptr<const DecisionNodeGeneration> &generation,

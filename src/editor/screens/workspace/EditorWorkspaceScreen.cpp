@@ -132,6 +132,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
             }
             controller_->UpdateWorldBake();
+            controller_->UpdateTerrainCook();
             controller_->UpdateContentBrowser();
             controller_->SynchronizeRuntimeScenePreview();
             controller_->UpdateFps(ImGui::GetIO().Framerate);
@@ -185,43 +186,73 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             host_.DispatchMenuInvocation(*command.menuInvocation);
         }
 
-        if (command.command != None) {
-            if (command.command == OpenCreateWorldLayer && command.worldLayerIntent) {
-                OpenWorldLayerCreation(command.worldLayerIntent->expected);
-            } else if (command.command == OpenPlayTopologyProfiles) {
-                OpenPlayTopologyProfilesModal();
-            } else if (command.command == CompareExternalScene) {
-                OpenSceneComparison();
-            } else if (command.command == CreatePrefabFromSelection && command.objectPayload) {
-                OpenPrefabCreationModal(*command.objectPayload);
-            } else if (command.command == CreateLuaBehavior || command.command == CreateNativeBehavior) {
-                using enum GameplayBehaviorKind;
-                const GameplayBehaviorKind kind = command.command == CreateNativeBehavior ? Native : Lua;
-                const std::string requestedDirectory =
-                    command.stringPayload.value_or(controller_->ViewModel().contentBrowser.absoluteCurrentPath);
-                OpenGameplayBehaviorModal(kind, requestedDirectory);
-            } else if (command.command == CloseWorkspaceDocument &&
-                       sourceCommands_.OpenCloseModal(*controller_, command, modalHost_, context_)) {
-                // The exclusive modal owns only the decision; the controller owns the document transaction.
-            } else {
-                controller_->ProcessCommand(command);
-            }
-            if (command.command == ReturnToWelcome) {
-                static_cast<void>(host_.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
-            }
-        }
+        DispatchWorkspaceCommand(command);
         PublishViewportSceneIfChanged();
-
-        if (snackbarHost_) {
-            const std::optional<SnackbarActionInvokedEvent> action =
-                GuiLive::Invoke<&EditorSnackbarHost::Draw>(context_.theme.liveReload, *snackbarHost_, context_, ImGui::GetIO().DeltaTime);
-            if (action.has_value() && action->actionId == "open_logs") {
-                controller_->ProcessCommand(
-                    EditorWorkspaceViewCommandData{.command = ChangeActivePanel, .stringPayload = "horo.global_dock"});
-            }
-        }
+        DrawWorkspaceSnackbar();
 
         UpdateStatusItems();
+    }
+
+    /** @brief Route captured source creation commands through their exclusive transient workflows. */
+    bool EditorWorkspaceScreen::TryOpenCreationModal(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == CreatePrefabFromSelection && command.objectPayload) {
+            OpenPrefabCreationModal(*command.objectPayload);
+            return true;
+        }
+        if (command.command == CreateTerrainLayerSet || command.command == CreateTerrainFoliageType) {
+            OpenTerrainAssetCreationModal(command);
+            return true;
+        }
+        if (command.command == CreateLuaBehavior || command.command == CreateNativeBehavior) {
+            const auto kind = command.command == CreateNativeBehavior ? GameplayBehaviorKind::Native : GameplayBehaviorKind::Lua;
+            const auto directory = command.stringPayload.value_or(controller_->ViewModel().contentBrowser.absoluteCurrentPath);
+            OpenGameplayBehaviorModal(kind, directory);
+            return true;
+        }
+        return false;
+    }
+
+    /** @brief Resolve document-specific decisions before the controller receives an ordinary source command. */
+    bool EditorWorkspaceScreen::TryOpenDocumentModal(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == OpenCreateWorldLayer && command.worldLayerIntent) {
+            OpenWorldLayerCreation(command.worldLayerIntent->expected);
+            return true;
+        }
+        if (command.command == OpenPlayTopologyProfiles) {
+            OpenPlayTopologyProfilesModal();
+            return true;
+        }
+        if (command.command == CompareExternalScene) {
+            OpenSceneComparison();
+            return true;
+        }
+        if (command.command == CloseWorkspaceDocument)
+            return sourceCommands_.OpenCloseModal(*controller_, command, modalHost_, context_);
+        return false;
+    }
+
+    /** @brief Preserve controller command authority and navigate only after the requested workspace transition. */
+    void EditorWorkspaceScreen::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == None)
+            return;
+        if (!TryOpenDocumentModal(command) && !TryOpenCreationModal(command))
+            controller_->ProcessCommand(command);
+        if (command.command == ReturnToWelcome)
+            static_cast<void>(host_.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
+    }
+
+    /** @brief Consume snackbar actions independently of source command and modal routing. */
+    void EditorWorkspaceScreen::DrawWorkspaceSnackbar() {
+        if (!snackbarHost_)
+            return;
+        const auto action =
+            GuiLive::Invoke<&EditorSnackbarHost::Draw>(context_.theme.liveReload, *snackbarHost_, context_, ImGui::GetIO().DeltaTime);
+        if (action && action->actionId == "open_logs")
+            controller_->ProcessCommand(EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::ChangeActivePanel,
+                                                                       .stringPayload = "horo.global_dock"});
     }
 
     /** @copydoc EditorWorkspaceScreen::CollectActivePanelIds */

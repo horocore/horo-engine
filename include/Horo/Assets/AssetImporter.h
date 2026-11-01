@@ -10,6 +10,7 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Result.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -131,6 +132,21 @@ namespace Horo::Assets {
          */
         [[nodiscard]] virtual Result<PreparedAssetImport> Import(const AssetImportInput &input,
                                                                  const CancellationToken &cancellation) const = 0;
+
+        /** @brief Admits the captured current destination before generic reimport prepares or stages replacement.
+         * @param bytes Existing immutable editor payload, never the external import input.
+         * @param cancellation Host cooperative observer.
+         * @return Success for compatible destinations or an original typed producer diagnostic.
+         * @details The default preserves existing importer behavior. Editable/versioned producers override this
+         * to reject destructive reinterpretation. The borrow expires on return; no I/O or activation is performed.
+         * C++ implementations/consumers must rebuild after this vtable addition; C-ABI transport tables are unchanged.
+         */
+        [[nodiscard]] virtual Result<void> ValidateReimportDestination(std::span<const std::byte> bytes,
+                                                                       const CancellationToken &cancellation) const {
+            (void)bytes;
+            (void)cancellation;
+            return Result<void>::Success();
+        }
     };
 
     /**

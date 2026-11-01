@@ -209,6 +209,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OpenWorldLayerCreation(const WorldDocumentFence &expected);
         /** @brief Opens the transient captured-subtree workflow under the workspace lifetime fence. */
         void OpenPrefabCreationModal(const SceneObjectId root);
+        bool TryOpenCreationModal(const EditorWorkspaceViewCommandData &command);
+        bool TryOpenDocumentModal(const EditorWorkspaceViewCommandData &command);
+        void DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &command);
+        void DrawWorkspaceSnackbar();
+        void OpenTerrainAssetCreationModal(const EditorWorkspaceViewCommandData &command);
         /** @brief Resolves a contained destination before opening behavior creation. */
         void OpenGameplayBehaviorModal(const GameplayBehaviorKind kind, const std::string &requestedDirectory);
         /** @brief Installs the project profile while retaining the host profile for teardown. */

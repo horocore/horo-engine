@@ -31,18 +31,52 @@ namespace Horo::AI {
             }
         }
 
+        std::optional<TaskId> PhaseAction(const StateMachineState &state, StateMachineActionPhase phase) {
+            switch (phase) {
+                case StateMachineActionPhase::Entry:
+                    return state.entry;
+                case StateMachineActionPhase::Update:
+                    return state.update;
+                case StateMachineActionPhase::Exit:
+                    return state.exit;
+            }
+            return {};
+        }
+
+        bool FreshRestart(const AiTaskOperationContext *previous, const AiTaskOperationContext &next) noexcept {
+            return previous && next.taskDefinition == previous->taskDefinition && next.task.incarnation == previous->task.incarnation &&
+                   next.task.slot.index == previous->task.slot.index && next.task.slot.generation > previous->task.slot.generation;
+        }
+
+        Result<bool> GuardHolds(const StateMachineGuard &guard, const BlackboardSnapshot &blackboard) {
+            const auto read = blackboard.Read(guard.key);
+            if (read.HasError())
+                return Result<bool>::Failure(read.ErrorValue());
+            if (guard.operation == StateMachineGuardOperator::Present)
+                return Result<bool>::Success(read.Value().has_value());
+            if (!read.Value())
+                return Result<bool>::Success(false);
+            const auto *scalar = std::get_if<BlackboardScalarValue>(&*read.Value());
+            if (!scalar || scalar->index() != guard.operand.index())
+                return Result<bool>::Failure(MakeError(AIErrors::BlackboardValueTypeMismatch));
+            return Result<bool>::Success(Compare(*scalar, guard));
+        }
+
         /** @brief Releases the reentrant evaluation fence even on typed failure. */
         struct EvaluationFence final {
             bool &active;
+            StateMachineActions *&borrowed;
 
-            explicit EvaluationFence(bool &value) : active(value) {
-                value = true;
+            EvaluationFence(bool &value, StateMachineActions *&slot, StateMachineActions *actions) : active(value), borrowed(slot) {
+                active = true;
+                borrowed = actions;
             }
 
             EvaluationFence(const EvaluationFence &) = delete;
             EvaluationFence &operator=(const EvaluationFence &) = delete;
 
             ~EvaluationFence() {
+                borrowed = nullptr;
                 active = false;
             }
         };
@@ -73,13 +107,55 @@ namespace Horo::AI {
     }
 
     /** @copydoc StateMachineInstance::Cancel */
-    Result<AiTaskTransitionDisposition> StateMachineInstance::Cancel(const AiTaskCancellationReason reason) {
+    Result<AiTaskTransitionDisposition> StateMachineInstance::Cancel(const AiTaskCancellationReason reason, StateMachineActions *actions) {
         if (evaluating_)
             return Result<AiTaskTransitionDisposition>::Failure(MakeError(StateMachineErrors::StepInvalid));
+        if (depth_ != 0 && !HasRequiredActions(actions))
+            return Result<AiTaskTransitionDisposition>::Failure(MakeError(AIErrors::TaskContextInvalid));
         auto result = lifecycle_.RequestCancellation(reason);
-        if (result.HasValue())
+        if (result.HasValue()) {
+            StopCalls(path_, 0, depth_, actions, reason);
             depth_ = 0;
+        }
         return result;
+    }
+
+    Result<void> StateMachineInstance::Restart(AiTaskOperationContext operation) {
+        if (evaluating_ || depth_ != 0 || operation.agent != binding_.agent)
+            return Result<void>::Failure(MakeError(StateMachineErrors::StepInvalid));
+        const auto *previous = lifecycle_.Context();
+        if (!FreshRestart(previous, operation))
+            return Result<void>::Failure(MakeError(AIErrors::GenerationExhausted));
+        auto cancelled = lifecycle_.RequestCancellation(AiTaskCancellationReason::Superseded);
+        if (cancelled.HasError())
+            return Result<void>::Failure(cancelled.ErrorValue());
+        std::destroy_at(&lifecycle_);
+        std::construct_at(&lifecycle_);
+        auto started = lifecycle_.Start(std::move(operation));
+        if (started.HasError())
+            return Result<void>::Failure(started.ErrorValue());
+        childOutcomes_.fill(AiTaskState::Idle);
+        lastTick_.reset();
+        return Result<void>::Success();
+    }
+
+    DecisionKernelStorage CookedStateMachinePlan::Storage() const noexcept {
+        DecisionKernelStorage storage;
+        storage.compiledBytes = sizeof(CookedStateMachinePlan) + source_.states.capacity() * sizeof(StateMachineState) +
+                                source_.transitions.capacity() * sizeof(StateMachineTransition);
+        storage.instanceBytes = sizeof(StateMachineInstance);
+        storage.scratchBytes = 3 * sizeof(StateMachineInstance::Path) + sizeof(std::array<bool, StateMachineLimits::States>);
+        storage.taskSlots = 1;
+        for (const auto &state : source_.states) {
+            std::size_t depth = 1;
+            auto parent = state.parent;
+            while (parent.IsValid()) {
+                ++depth;
+                parent = source_.states[Index(parent)].parent;
+            }
+            storage.maximumDepth = std::max(storage.maximumDepth, depth);
+        }
+        return storage;
     }
 
     /** @brief Builds an ancestor-first path and follows every declared initial child. */
@@ -111,50 +187,94 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
-    /** @brief Executes bounded one-shot actions in the phase's declared hierarchy order. */
-    Result<void> StateMachineInstance::RunActions(const Path &path, const std::size_t begin, const std::size_t end,
-                                                  const StateMachineActionPhase phase, const BlackboardSnapshot &blackboard,
-                                                  const std::uint64_t tick, StateMachineActions *const actions) {
-        using enum StateMachineActionPhase;
-        for (std::size_t offset = begin; offset < end; ++offset) {
-            const auto index = phase == Exit ? end - 1 - (offset - begin) : offset;
-            const auto &state = plan_->source_.states[path[index]];
-            std::optional<TaskId> action = state.update;
-            if (phase == Entry)
-                action = state.entry;
-            else if (phase == Exit)
-                action = state.exit;
-            if (!action)
-                continue;
-            auto ready = CheckBoundary(blackboard);
-            if (ready.HasError())
-                return ready;
-            if (auto invoked = actions->Invoke({state.id, *action, phase, *lifecycle_.Context(), blackboard, tick}); invoked.HasError())
+    void StateMachineInstance::StopCalls(const Path &path, std::size_t begin, std::size_t end, StateMachineActions *actions,
+                                         AiTaskCancellationReason reason) noexcept {
+        if (!actions)
+            return;
+        for (std::size_t offset = end; offset > begin; --offset) {
+            const auto index = path[offset - 1];
+            if (plan_->source_.states[index].call)
+                actions->CancelState(plan_->source_.states[index].id, reason);
+            childOutcomes_[index] = AiTaskState::Idle;
+        }
+    }
+
+    Result<void> StateMachineInstance::RunCall(const StateMachineState &state, std::size_t index, StateMachineActionPhase phase,
+                                               const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions) {
+        if (!state.call)
+            return Result<void>::Success();
+        if (!actions || !actions->SupportsSubplans())
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetSubtreeIncompatible));
+        const StateMachineStateInvocation invocation{state.id, *lifecycle_.Context(), blackboard, tick};
+        if (phase == StateMachineActionPhase::Entry) {
+            childOutcomes_[index] = AiTaskState::Idle;
+            return actions->EnterState(invocation);
+        }
+        if (phase == StateMachineActionPhase::Exit) {
+            childOutcomes_[index] = AiTaskState::Idle;
+            return actions->ExitState(invocation);
+        }
+        auto result = actions->UpdateState(invocation);
+        if (result.HasError())
+            return Result<void>::Failure(result.ErrorValue());
+        if (result.Value() < AiTaskState::Running || result.Value() > AiTaskState::Cancelled)
+            return Result<void>::Failure(MakeError(AIErrors::TaskFailureInvalid));
+        childOutcomes_[index] = result.Value();
+        return Result<void>::Success();
+    }
+
+    Result<void> StateMachineInstance::InvokePhase(const StateMachineState &state, StateMachineActionPhase phase,
+                                                   const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions) {
+        if (auto ready = CheckBoundary(blackboard); ready.HasError())
+            return ready;
+        const auto action = PhaseAction(state, phase);
+        if (action) {
+            if (!actions)
+                return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+            auto invoked = actions->Invoke({state.id, *action, phase, *lifecycle_.Context(), blackboard, tick});
+            if (invoked.HasError())
                 return invoked;
-            ready = CheckBoundary(blackboard);
-            if (ready.HasError())
-                return ready;
+        }
+        return CheckBoundary(blackboard);
+    }
+
+    Result<void> StateMachineInstance::RunState(const StateMachineState &state, std::size_t index, StateMachineActionPhase phase,
+                                                const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions) {
+        if (auto ready = CheckBoundary(blackboard); ready.HasError())
+            return ready;
+        if (phase == StateMachineActionPhase::Exit) {
+            if (auto exited = RunCall(state, index, phase, blackboard, tick, actions); exited.HasError())
+                return exited;
+        }
+        if (auto invoked = InvokePhase(state, phase, blackboard, tick, actions); invoked.HasError())
+            return invoked;
+        if (phase != StateMachineActionPhase::Exit)
+            return RunCall(state, index, phase, blackboard, tick, actions);
+        return Result<void>::Success();
+    }
+
+    Result<void> StateMachineInstance::RunActions(const Path &path, std::size_t begin, std::size_t end, StateMachineActionPhase phase,
+                                                  const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions) {
+        for (std::size_t offset = begin; offset < end; ++offset) {
+            const auto index = phase == StateMachineActionPhase::Exit ? path[end - 1 - (offset - begin)] : path[offset];
+            auto result = RunState(plan_->source_.states[index], index, phase, blackboard, tick, actions);
+            if (result.HasError()) {
+                StopCalls(path, begin, end, actions, AiTaskCancellationReason::Requested);
+                return result;
+            }
         }
         return Result<void>::Success();
     }
 
     /** @brief Reads only shared compiler-admitted keys; absent optional values never satisfy ordinary comparisons. */
     Result<bool> StateMachineInstance::GuardsHold(const StateMachineTransition &transition, const BlackboardSnapshot &blackboard) const {
+        if (transition.childOutcome && childOutcomes_[plan_->Index(transition.source)] != *transition.childOutcome)
+            return Result<bool>::Success(false);
         for (const auto &guard : transition.guards) {
-            const auto read = blackboard.Read(guard.key);
-            if (read.HasError())
-                return Result<bool>::Failure(read.ErrorValue());
-            if (guard.operation == StateMachineGuardOperator::Present) {
-                if (!read.Value())
-                    return Result<bool>::Success(false);
-                continue;
-            }
-            if (!read.Value())
-                return Result<bool>::Success(false);
-            const auto *scalar = std::get_if<BlackboardScalarValue>(&*read.Value());
-            if (scalar == nullptr || scalar->index() != guard.operand.index())
-                return Result<bool>::Failure(MakeError(AIErrors::BlackboardValueTypeMismatch));
-            if (!Compare(*scalar, guard))
+            auto accepted = GuardHolds(guard, blackboard);
+            if (accepted.HasError())
+                return accepted;
+            if (!accepted.Value())
                 return Result<bool>::Success(false);
         }
         return Result<bool>::Success(true);
@@ -205,6 +325,7 @@ namespace Horo::AI {
 
     /** @brief Retains the original typed cause and makes a partial entry/exit unambiguously terminal. */
     Result<StateMachineStepResult> StateMachineInstance::Fail(Error error) {
+        StopCalls(path_, 0, depth_, actions_, AiTaskCancellationReason::Requested);
         const auto completed = lifecycle_.CompleteFailure(binding_.agent, {AiTaskFailureKind::Execution, error});
         depth_ = 0;
         if (completed.HasError())
@@ -226,10 +347,45 @@ namespace Horo::AI {
     }
 
     /** @brief Requires a synchronous adapter before an action-bearing plan can start. */
-    bool StateMachineInstance::HasRequiredActions(const StateMachineActions *const actions) const noexcept {
-        return actions != nullptr || std::ranges::none_of(plan_->source_.states, [](const auto &state) {
+    bool StateMachineInstance::HasRequiredActions(const StateMachineActions *actions) const noexcept {
+        const bool calls = std::ranges::any_of(plan_->source_.states, [](const auto &state) {
+            return state.call.has_value();
+        });
+        if (calls && (!actions || !actions->SupportsSubplans()))
+            return false;
+        return actions || std::ranges::none_of(plan_->source_.states, [](const auto &state) {
             return state.entry || state.update || state.exit;
         });
+    }
+
+    Result<bool> StateMachineInstance::FinishTerminal(StateMachineActions *actions) {
+        const auto terminal = plan_->source_.states[path_[depth_ - 1]].terminal;
+        if (terminal == DecisionStateTerminal::None)
+            return Result<bool>::Success(false);
+        StopCalls(path_, 0, depth_, actions, AiTaskCancellationReason::Requested);
+        auto completed = terminal == DecisionStateTerminal::Succeeded
+                             ? lifecycle_.CompleteSuccess(binding_.agent)
+                             : lifecycle_.CompleteFailure(binding_.agent,
+                                                          {AiTaskFailureKind::Execution, MakeError(StateMachineErrors::AuthoredFailure)});
+        if (completed.HasError())
+            return Result<bool>::Failure(completed.ErrorValue());
+        depth_ = 0;
+        return Result<bool>::Success(true);
+    }
+
+    Result<bool> StateMachineInstance::PreparePath(const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions) {
+        if (depth_ == 0) {
+            if (auto entered = Enter(plan_->source_.initial, blackboard, tick, actions); entered.HasError())
+                return Result<bool>::Failure(entered.ErrorValue());
+        }
+        return FinishTerminal(actions);
+    }
+
+    Result<bool> StateMachineInstance::CommitTransition(const StateMachineTransition &transition, const BlackboardSnapshot &blackboard,
+                                                        std::uint64_t tick, StateMachineActions *actions) {
+        if (auto entered = Enter(transition.target, blackboard, tick, actions, plan_->Index(transition.source)); entered.HasError())
+            return Result<bool>::Failure(entered.ErrorValue());
+        return FinishTerminal(actions);
     }
 
     /** @copydoc StateMachineInstance::Step */
@@ -239,11 +395,12 @@ namespace Horo::AI {
                                                               StateMachineActions *const actions) {
         if (!ValidStep(tick, events))
             return Result<StateMachineStepResult>::Failure(MakeError(StateMachineErrors::StepInvalid));
-        EvaluationFence fence(evaluating_);
+        EvaluationFence fence(evaluating_, actions_, actions);
         const auto resumed = lifecycle_.PrepareResume(AiTaskResumeReason::FixedTick, current.agent);
         if (resumed.HasError())
             return Result<StateMachineStepResult>::Failure(resumed.ErrorValue());
         if (resumed.Value() != AiTaskResumeDisposition::Ready) {
+            StopCalls(path_, 0, depth_, actions, AiTaskCancellationReason::ContextCancelled);
             depth_ = 0;
             return Result<StateMachineStepResult>::Success({StateMachineStepDisposition::Terminal});
         }
@@ -252,10 +409,11 @@ namespace Horo::AI {
         if (!HasRequiredActions(actions))
             return Result<StateMachineStepResult>::Failure(MakeError(AIErrors::TaskContextInvalid));
         lastTick_ = tick;
-        if (depth_ == 0) {
-            if (auto entered = Enter(plan_->source_.initial, blackboard, tick, actions); entered.HasError())
-                return Fail(std::move(entered).ErrorValue());
-        }
+        auto terminal = PreparePath(blackboard, tick, actions);
+        if (terminal.HasError())
+            return Fail(terminal.ErrorValue());
+        if (terminal.Value())
+            return Result<StateMachineStepResult>::Success({StateMachineStepDisposition::Terminal});
         if (auto updated = RunActions(path_, 0, depth_, StateMachineActionPhase::Update, blackboard, tick, actions); updated.HasError())
             return Fail(std::move(updated).ErrorValue());
         return AdvanceTransitions(tick, blackboard, events, actions);
@@ -283,8 +441,11 @@ namespace Horo::AI {
                 result.lastTransition = transition->id;
                 return Result<StateMachineStepResult>::Success(result);
             }
-            if (auto entered = Enter(transition->target, blackboard, tick, actions, plan_->Index(transition->source)); entered.HasError())
-                return Fail(std::move(entered).ErrorValue());
+            auto terminal = CommitTransition(*transition, blackboard, tick, actions);
+            if (terminal.HasError())
+                return Fail(terminal.ErrorValue());
+            if (terminal.Value())
+                return Result<StateMachineStepResult>::Success({StateMachineStepDisposition::Terminal, {}, transition->id, count + 1});
             visited[nextLeaf] = true;
             result = {StateMachineStepDisposition::Transitioned, ActiveState(), transition->id, count + 1};
         }

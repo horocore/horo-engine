@@ -590,6 +590,13 @@ namespace Horo::Gameplay {
             image->provider = std::move(providerGeneration);
             if (auto read = image->ReadDeclarations(type, provider, version); read.HasError())
                 return Output::Failure(read.ErrorValue());
+            image->contract.memory = {AI::DecisionProviderMemoryKind::EnforcedVm,
+                                      sizeof(Instance) +
+                                          2 * AI::DecisionAssetValidationHardLimits::RequirementsPerNode * sizeof(BoundValue) +
+                                          AI::BehaviorTreeAssetHardLimits::PropertiesPerNode *
+                                              (sizeof(AI::BehaviorTreeProperty) + AI::BehaviorTreeAssetHardLimits::PropertyBytes +
+                                               AI::BehaviorTreeAssetHardLimits::DisplayNameBytes),
+                                      0, limits.maximumMemoryBytes};
             if (!image->CanAdmit())
                 return Output::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
             return Output::Success(std::unique_ptr<LuaDecisionNodeProgram>{new LuaDecisionNodeProgram{std::move(image)}});
@@ -613,6 +620,6 @@ namespace Horo::Gameplay {
             return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
         const AI::DecisionNodeRegistration registration{image_->contract, {image_.get(), Image::Create, Image::Destroy}};
         std::shared_ptr<const std::atomic_bool> admission{image_, &image_->admission};
-        return AI::DecisionNodeGeneration::Capture({&registration, 1}, std::move(admission), image_->provider);
+        return AI::DecisionNodeGeneration::CaptureVm({&registration, 1}, std::move(admission), image_->provider);
     }
 }  // namespace Horo::Gameplay

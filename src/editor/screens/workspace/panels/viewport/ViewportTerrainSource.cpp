@@ -37,23 +37,48 @@ namespace Horo::Editor {
             DrawMissingRendererMessage(layout.centerX, layout.origin.y, layout.height, context);
             return true;
         }
+        DrawTerrainTool(draw, layout, model, command, context, **found);
+        DrawTerrainDocumentError(layout, model, context);
+        return true;
+    }
+
+    /** @brief Project one exact owner borrow into the typed tool frame and detach at most one released intent. */
+    void ViewportPanel::DrawTerrainTool(ImDrawList &draw, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &model,
+                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
+                                        const TerrainDocumentHost &document) {
         const bool eligible = ViewportInputEligible() && model.playState == EditorPlayState::Idle;
+        const auto *selection = model.terrainToolSelection.get();
+        if (selection && selection->document != document.Identity().instance)
+            selection = nullptr;
         std::optional<TerrainToolCommand> intent;
-        static_cast<void>(terrainTool_->Draw({draw,
-                                              layout.origin,
-                                              {layout.width, layout.height},
-                                              model.viewportCamera,
-                                              viewportRenderer_->ClipDepthRange(),
-                                              {},
-                                              **found,
-                                              eligible},
-                                             intent, context));
+        static_cast<void>(
+            terrainTool_->Draw({draw,
+                                layout.origin,
+                                {layout.width, layout.height},
+                                model.viewportCamera,
+                                viewportRenderer_->ClipDepthRange(),
+                                {},
+                                document,
+                                eligible,
+                                selection,
+                                model.terrainCookAvailable,
+                                model.terrainCookRunning,
+                                model.terrainCookCurrent && model.terrainCookDocument == document.Identity().instance,
+                                model.terrainAssetCreationAvailable,
+                                model.terrainCookEpoch,
+                                model.terrainCookDocument == document.Identity().instance ? model.terrainCookOutcome.get() : nullptr},
+                               intent, context));
         if (intent) {
             command.command = EditorWorkspaceViewCommand::TerrainTool;
             command.terrainTool = std::make_shared<const TerrainToolCommand>(std::move(*intent));
         }
+    }
+
+    /** @brief Keep original source failure state visible without coupling diagnostic layout to tool interaction. */
+    void ViewportPanel::DrawTerrainDocumentError(const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &model,
+                                                 const EditorGuiContext &context) const {
         if (model.terrainDocumentError) {
-            const auto code = model.terrainDocumentError->code.Value();
+            const auto &code = model.terrainDocumentError->code.Value();
             const char *key = code == WorkspaceDocumentErrors::DirtyDocument.code.Value() ? "terrain.tools.dirty_close"
                               : code == Assets::AssetSourceErrors::Conflict.code.Value()  ? "terrain.tools.conflict"
                                                                                           : "terrain.tools.failed";
@@ -64,6 +89,5 @@ namespace Horo::Editor {
                             context.theme.fonts);
             ImGui::SetCursorScreenPos(cursor);
         }
-        return true;
     }
 }  // namespace Horo::Editor
