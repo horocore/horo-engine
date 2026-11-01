@@ -35,6 +35,15 @@ namespace Horo::Application::Internal {
         const std::filesystem::path &root, const Render::ShaderCompilerTargetDescriptor &target,
         const Render::ShaderCompilerToolIdentity &reflectionTool, ShaderHotReloadFence fence);
 
+    /** @brief Matches the built-in source recipe to the actual admitted viewport family before creating the reload host.
+     * @details Rewrites only the three exact canonical legacy Metal source roles; custom recipes and all compiler approvals,
+     * routes, publication fences and limits remain owned by the caller. No IO or compilation occurs.
+     * @param configuration Explicit developer configuration.
+     * @param nativeClustered True only for the active native clustered consumer, never the requested fallback preference.
+     * @return Owned matching configuration or its original typed validation failure. */
+    [[nodiscard]] Result<ShaderHotReloadHostConfiguration> MatchEditorViewportHotReloadFamily(
+        const ShaderHotReloadHostConfiguration &configuration, bool nativeClustered);
+
     /** @brief Owner-thread host. One IO capture and one bounded result slot; workers own immutable inputs only.
      * @details The mutex protects only the completion slot shared with the IO callback. It never covers IO,
      * compiler calls or joining. Shutdown cancels and joins before compiler, jobs and target destruction.

@@ -1,5 +1,6 @@
 #include "EditorViewportRendererVulkan.h"
 #include "editor/renderer/EditorRendererErrors.h"
+#include "editor/renderer/EditorViewportMeshReadiness.h"
 
 #include <algorithm>
 
@@ -70,7 +71,7 @@ namespace Horo::Editor {
         }
         if (!output)
             return fail(MakeError(RendererErrors::ViewportInvalidScene));
-        if (const auto prepared = bridge_.Port()->PreparePrimaryOutput(frame.Token(), *output); prepared.HasError())
+        if (const auto prepared = PrepareViewportOutput(frame, *output, viewport); prepared.HasError())
             return fail(prepared.ErrorValue());
         if (!viewport)
             return frame.Execute({});
@@ -138,16 +139,13 @@ namespace Horo::Editor {
 
     Result<void> EditorViewportRendererVulkan::PrepareViewportDraws(Render::FrameToken frame, std::uint32_t slot,
                                                                     const Render::StaticMeshPassDescriptor &pass) {
-        const auto *shadow = preparedShadow_ ? &*preparedShadow_ : nullptr;
         for (std::size_t index = 0; index < pass.scene.instances.size(); ++index) {
             const auto &instance = pass.scene.instances[index];
             const auto mesh = resources_.FindMesh(instance.mesh.id.value);
             if (!mesh)
                 return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
             const auto &draw = slots_[slot].draws[index];
-            if (const auto written =
-                    ProgramResources::WriteDraw(bridge_, shader_, resources_.AllocatedExtent(), frame, draw, instance, pass.scene, shadow);
-                written.HasError())
+            if (const auto written = WriteForwardDraw(frame, draw, instance, pass.scene); written.HasError())
                 return written;
             preparedDraws_[index] = {mesh->mesh, draw.material};
         }
@@ -160,6 +158,10 @@ namespace Horo::Editor {
         const auto slot = PrepareViewportSlot(frame.Token(), pass);
         if (slot.HasError())
             return Result<void>::Failure(slot.ErrorValue());
+        if (auto ready = ValidateEditorViewportMeshReadiness(resources_, pass.scene.instances); ready.HasError())
+            return ready;
+        if (auto lighting = forwardLighting_.Prepare(pass.scene); lighting.HasError())
+            return lighting;
         if (auto shadows = PrepareShadowFrame(frame.Token(), slot.Value(), pass); shadows.HasError())
             return shadows;
         const auto count = PrepareViewportOverlay(frame.Token(), slot.Value(), pass);

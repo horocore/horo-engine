@@ -27,10 +27,17 @@ namespace Horo::Editor {
         std::span<const EditorViewportMeshResourceView> meshResources{};
         std::span<const EditorViewportInstance> instances{};
         std::span<const Render::RenderLight> lights{};
+        std::uint64_t lightSceneDomain{};
+        std::uint64_t lightSnapshotRevision{};
 
         /** @brief Reports whether the camera and every instance contain supported finite values. */
         [[nodiscard]] bool IsValid() const noexcept;
     };
+
+    /** @brief Computes a bounded semantic revision from exact immutable light values and producer identities.
+     * @param lights Complete scene table, not a per-draw selected subset.
+     * @return Nonzero content signature, or zero if the complete-table bound is exceeded. No allocation or retained input. */
+    [[nodiscard]] std::uint64_t ComputeEditorViewportLightRevision(std::span<const Render::RenderLight> lights) noexcept;
 
     /** @brief Shared canonical fixed-capacity shadow frame consumed by concrete viewport adapters. */
     using EditorViewportDirectionalShadowView = Render::DirectionalShadowFrame;

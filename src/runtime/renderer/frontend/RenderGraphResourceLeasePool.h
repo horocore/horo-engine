@@ -91,6 +91,8 @@ namespace Horo::Render::Detail {
             void RollbackPins(std::size_t initialPins) noexcept;
             /** @brief Retains exact multiview mesh/material/view generations using this existing completion lease. */
             [[nodiscard]] Result<void> PinMultiview(const RenderGraphMultiview &workload);
+            /** @brief Retains exact graph material views, meshes and immutable bindings through this same completion lease. */
+            [[nodiscard]] Result<void> PinMaterialRaster(const RenderGraphMaterialRaster &workload);
             /** @brief Pins exact VFX mesh/target generations and retains the immutable source/order/slot revision. */
             [[nodiscard]] Result<void> PinVfx(const RenderGraphVfx &workload);
             std::shared_ptr<RenderGraphTemplateBindingState> templateBinding;
@@ -108,7 +110,7 @@ namespace Horo::Render::Detail {
             std::vector<UiCapture> ui; /**< Product-admitted capacity allocated once before frame admission. */
             std::size_t uiCount{};
             RenderGraphTransientResourceSet *transient{nullptr};
-            std::array<std::shared_ptr<const ResidentMaterialBinding>, RenderMaterialPass::MaximumBatchDraws> materials;
+            std::array<std::shared_ptr<const ResidentMaterialBinding>, RenderGraphMaterialRaster::MaximumRetainedDraws> materials;
             std::size_t materialCount{0};
         };
 

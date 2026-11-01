@@ -473,6 +473,23 @@ namespace Horo::Render::Detail {
                 return Result<void>::Success();
             }
 
+            Result<void> ValidateMaterialRaster(const RenderGraphMaterialRaster &workload,
+                                                const RenderGraphExecutionRequest &request) const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (closing_ || commandBuffer_ == nil)
+                    return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+                return resources_.ValidateMaterialRaster(workload, request);
+            }
+
+            Result<void> ExecuteMaterialRaster(const RenderGraphMaterialRaster &workload,
+                                               const RenderGraphExecutionRequest &request) override {
+                if (const auto valid = ValidateMaterialRaster(workload, request); valid.HasError())
+                    return valid;
+                EndPrimaryEncoder();
+                return resources_.ExecuteMaterialRaster((__bridge void *)commandBuffer_, workload, request);
+            }
+
             Result<void> ValidateVfxWorkload(const RenderGraphVfx &workload, const RenderGraphExecutionRequest &request) const override {
                 if (std::this_thread::get_id() != ownerThread_)
                     return WrongThread();

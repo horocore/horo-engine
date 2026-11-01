@@ -72,18 +72,23 @@ namespace Horo::Render {
                     return 1;
                 case ShaderResourceKind::Sampler:
                     return 2;
+                case ShaderResourceKind::StorageBuffer:
+                    return 3;
                 default:
                     return std::nullopt;
             }
         }
 
         bool ResourceEnvelope(const ShaderManifest &manifest) {
-            std::array<std::size_t, 3> counts{};
+            std::array<std::size_t, 4> counts{};
             for (const auto &binding : manifest.bindings) {
                 const auto category = ResourceClass(binding.kind);
                 if (!category || binding.access != ShaderResourceAccess::ReadOnly || binding.arrayCount != 1)
                     return false;
-                if (++counts[*category] != 1)
+                const auto maximum = *category == 3 ? MaximumStorageBuffers : 1;
+                if (++counts[*category] > maximum)
+                    return false;
+                if (*category == 3 && !StorageKind(manifest, binding.id))
                     return false;
             }
             return counts[0] == 1 && counts[1] == counts[2];
@@ -109,8 +114,27 @@ namespace Horo::Render {
         }
 
         bool RegisterParameters(const ShaderManifest &manifest) noexcept {
-            return !manifest.parameters.empty() && manifest.parameters.size() <= MaximumMembers &&
-                   std::ranges::all_of(manifest.parameters, RegisterParameter);
+            if (manifest.parameters.empty() || manifest.parameters.size() > MaximumMembers)
+                return false;
+            bool uniformParameters{};
+            for (const auto &parameter : manifest.parameters) {
+                const auto binding = std::ranges::find(manifest.bindings, parameter.binding, &ShaderResourceBinding::id);
+                if (binding == manifest.bindings.end())
+                    return false;
+                if (binding->kind == ShaderResourceKind::UniformBuffer) {
+                    if (!RegisterParameter(parameter))
+                        return false;
+                    uniformParameters = true;
+                }
+            }
+            return uniformParameters;
+        }
+
+        bool StorageTarget(const ShaderManifest &manifest, const ShaderTargetRequirement &target) noexcept {
+            const bool storage = std::ranges::any_of(manifest.bindings, [](const auto &binding) {
+                return binding.kind == ShaderResourceKind::StorageBuffer;
+            });
+            return !storage || target.backend == ShaderTargetBackend::Metal;
         }
     }  // namespace
 
@@ -124,7 +148,7 @@ namespace Horo::Render {
             return invalid();
         if (!RasterStages(manifest) || !RegisterParameters(manifest))
             return invalid();
-        if (!ResourceEnvelope(manifest) || !NameEnvelope(manifest, names))
+        if (!ResourceEnvelope(manifest) || !NameEnvelope(manifest, names) || !StorageTarget(manifest, target))
             return invalid();
         return Result<void>::Success();
     }

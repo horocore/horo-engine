@@ -206,7 +206,8 @@ namespace Horo::Editor {
 
     std::optional<EditorViewportResources::MeshBinding> EditorViewportResources::FindMesh(const std::uint64_t sourceId) const noexcept {
         if (const auto mesh = meshes_.find(sourceId); mesh != meshes_.end())
-            return MeshBinding{mesh->second.mesh, mesh->second.indexCount, mesh->second.descriptor};
+            return MeshBinding{mesh->second.mesh, mesh->second.indexCount, mesh->second.descriptor, mesh->second.sourceGeneration,
+                               IsResidentMeshReady(mesh->second)};
         return std::nullopt;
     }
 
@@ -221,6 +222,16 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportResources::ColorTexture */
     Render::RenderTextureHandle EditorViewportResources::ColorTexture() const noexcept {
         return viewportTarget_.colorTexture;
+    }
+
+    /** @copydoc EditorViewportResources::DepthTexture */
+    Render::RenderTextureHandle EditorViewportResources::DepthTexture() const noexcept {
+        return viewportTarget_.depthTexture;
+    }
+
+    /** @copydoc EditorViewportResources::DepthTextureView */
+    Render::RenderTextureViewHandle EditorViewportResources::DepthTextureView() const noexcept {
+        return viewportTarget_.depthView;
     }
 
     /** @copydoc EditorViewportResources::ColorTextureView */

@@ -45,7 +45,7 @@ namespace Horo::Render {
         }
 
         void RejectUnsupported(const Json &json) {
-            for (const auto key : {"textures", "images", "ssbos", "push_constants", "subpass_inputs", "counters", "acceleration_structures",
+            for (const auto key : {"textures", "images", "push_constants", "subpass_inputs", "counters", "acceleration_structures",
                                    "tensors", "specialization_constants"})
                 if (!Rows(json, key, 0).empty())
                     throw InvalidEvidence{};
@@ -175,6 +175,7 @@ namespace Horo::Render {
                 Uniform(json, native, visibility);
                 Sample(json, native.texture, ShaderResourceKind::SampledTexture, visibility);
                 Sample(json, native.sampler, ShaderResourceKind::Sampler, visibility);
+                NormalizeRegisterStorage(json, native, manifest_, names_, visibility, candidate_);
                 Interfaces(json, stage.stage, native, candidate_);
             }
 

@@ -48,7 +48,7 @@ namespace Horo::Render {
 
     /** @brief Product/cook bounds fixed before a frame; complete coverage never silently degrades. */
     struct LightCullingBudget final {
-        static constexpr std::uint32_t HardMaximumLights = 4096;
+        static constexpr std::uint32_t HardMaximumLights = MaximumSceneLights;
         static constexpr std::uint32_t HardMaximumClusters = 4096;
         static constexpr std::uint32_t HardMaximumReferences = 1U << 20U;
         std::uint32_t maximumLights{256};

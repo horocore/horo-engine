@@ -406,3 +406,30 @@ namespace {
         }
     }
 }  // namespace
+
+TEST_CASE("Complete viewport light tables preserve lights beyond the per-draw Forward budget", "[editor][lighting][scene]") {
+    std::array<Horo::Render::RenderLight, Horo::Render::MaximumForwardLights + 1> lights{};
+    for (std::size_t index = 0; index < lights.size(); ++index)
+        lights[index].stableIdentity = index + 1;
+    const Horo::Editor::EditorViewportSceneView scene{.lights = lights};
+    CHECK(scene.IsValid());
+    const Horo::Render::RenderSceneView renderScene{.lights = lights};
+    CHECK(renderScene.IsValid());
+    CHECK(scene.lights.size() == 17);
+}
+
+TEST_CASE("Viewport light revisions include stable identities and authored or previewed values", "[editor][lighting][scene]") {
+    std::array lights{Horo::Render::RenderLight{.stableIdentity = 17}};
+    const auto original = Horo::Editor::ComputeEditorViewportLightRevision(lights);
+    REQUIRE(original != 0);
+    CHECK(Horo::Editor::ComputeEditorViewportLightRevision(lights) == original);
+    lights.front().intensity = 2.0F;
+    CHECK(Horo::Editor::ComputeEditorViewportLightRevision(lights) != original);
+    lights.front().intensity = 1.0F;
+    lights.front().position.x = 3.0F;
+    CHECK(Horo::Editor::ComputeEditorViewportLightRevision(lights) != original);
+    lights.front().position.x = 0.0F;
+    lights.front().stableIdentity = 18;
+    CHECK(Horo::Editor::ComputeEditorViewportLightRevision(lights) != original);
+    CHECK(Horo::Editor::ComputeEditorViewportLightRevision({}) != 0);
+}

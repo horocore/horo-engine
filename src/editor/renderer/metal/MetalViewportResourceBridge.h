@@ -17,10 +17,23 @@ namespace Horo::Editor {
         void *depthTexture{nullptr};
     };
 
+    struct MetalViewportBufferUpdate final {
+        Render::RenderBufferHandle buffer;
+        std::span<const std::byte> bytes;
+        std::size_t offset{};
+    };
+
     /** @brief Resolves typed frontend resources into Metal objects at the private editor/backend boundary. */
     class MetalViewportResourceBridge final {
     public:
         [[nodiscard]] static Result<void *> ResolveBuffer(const Render::RenderFrontend &frontend, Render::RenderBufferHandle buffer);
+        /** @brief Validates every actual native completion before changing any mapped per-frame draw buffer. */
+        [[nodiscard]] static Result<void> UpdateBuffers(const Render::RenderFrontend &frontend,
+                                                        const Render::MetalEditorGraphicsBridge &bridge,
+                                                        std::span<const MetalViewportBufferUpdate> updates);
+        /** @brief Borrows mapped bytes only after the exact recorded native command completed successfully. */
+        [[nodiscard]] static Result<std::span<const std::byte>> CompletedBufferBytes(const Render::RenderFrontend &frontend,
+                                                                                     Render::RenderBufferHandle buffer, void *commands);
         [[nodiscard]] static Result<MetalViewportMeshBinding> ResolveMesh(const Render::RenderFrontend &frontend,
                                                                           Render::RenderMeshHandle mesh);
         [[nodiscard]] static Result<MetalViewportTargetBinding> ResolveRenderTarget(const Render::RenderFrontend &frontend,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Render/ClusteredLightGrid.h"
 #include "Horo/Runtime/Render/RenderGraphInspection.h"
 #include "Horo/Runtime/Render/VfxGraphScheduling.h"
 
@@ -69,6 +70,13 @@ namespace Horo::Render {
         class RenderParallelGraphWorkState;
         class RenderSubmissionAllocator;
     }  // namespace Detail
+
+    /** @brief Cold prepared-program facts, revalidated against exact native generations at execution. */
+    struct RenderLightPreparationReadiness {
+        bool cullingKernel{};
+        bool storageRaster{};
+        bool depthPrepass{};
+    };
 
     /** @brief Finite frontend admission and per-drain limits for initial resource uploads. */
     struct RenderResourceUploadLimits {
@@ -482,6 +490,22 @@ namespace Horo::Render {
          * @return Reference valid until frontend destruction; safe to query during an active frame.
          */
         [[nodiscard]] const RenderBackendCapabilities &Capabilities() const noexcept;
+
+        /** @brief Issues one nonzero identity when the host creates an actual viewport on this frontend.
+         * @return A monotonic frontend/device-scoped view identity, or typed owner/stage/exhaustion failure.
+         * @details Cold owner only, before BeginFrame. Retain once for the viewport lifetime; never issue per frame.
+         * Identities are not global and must not cross frontend/device incarnations. No allocation or jobs occur. */
+        [[nodiscard]] Result<RenderViewId> CreateRenderViewIdentity();
+
+        /** @brief Selects an authored lighting recipe from implemented backend and cold program facts.
+         * @param requested Authored recipe. @param fallback Explicit fallback permission.
+         * @param readiness Successfully prepared matching program family.
+         * @return Exact selection and missing predicates, or typed owner/stage/unsupported failure.
+         * @details Cold owner only, before BeginFrame. Native graph admission revalidates actual resources. */
+        [[nodiscard]] Result<LightPreparationSelection> ResolveLightPreparation(LightPreparationMode requested,
+                                                                                LightPreparationFallback fallback,
+                                                                                const RenderLightPreparationReadiness &readiness) const;
+
         /** @brief Observes the actual preallocated per-frame UI capture bound for whole-product source admission.
          * @return Configured capture capacity, or zero after renderer ownership has moved/revoked.
          */
@@ -981,6 +1005,7 @@ namespace Horo::Render {
         /** @brief Checks owner affinity before closing state; no mutable native work is admitted after close. */
         [[nodiscard]] Result<void> RequireOpenOwner() const;
 
+        std::uint64_t nextRenderViewIdentity_{1}; /**< Cold view creation authority; zero permanently marks exhausted issuance. */
         const std::thread::id preparationOwner_{std::this_thread::get_id()};
         bool closing_{false};
         bool drained_{false};

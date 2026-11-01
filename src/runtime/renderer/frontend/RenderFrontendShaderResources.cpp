@@ -102,7 +102,8 @@ namespace Horo::Render {
 
         Result<RenderMemoryCostPlan> QueryPipelineCost(IRenderBackend &backend, const RenderGraphicsPipelineDescriptor &descriptor,
                                                        std::uint64_t vertex, std::uint64_t fragment) {
-            if (descriptor.state.depthOnly && !backend.Capabilities().supportsMaterialPassBatches)
+            if (descriptor.state.depthOnly && !backend.Capabilities().supportsMaterialPassBatches &&
+                !backend.Capabilities().supportsMaterialRasterGraph)
                 return Result<RenderMemoryCostPlan>::Failure(MakeError(MaterialBindingErrors::Unsupported));
             return backend.QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
         }

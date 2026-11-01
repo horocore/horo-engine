@@ -117,6 +117,27 @@ namespace Horo::Render::RegisterRasterCookDetail {
             result.uniform = std::move(uniform);
         }
 
+        void Buffer(const TokenView tokens, const TokenView argument, const std::size_t attribute, NativeStage &result) {
+            if (argument[0] == "constant") {
+                Uniform(tokens, argument, attribute, result);
+                return;
+            }
+            if (result.storage.size() == MaximumStorageBuffers)
+                throw InvalidEvidence{};
+            result.storage.push_back(ReadMetalStorageArgument(tokens, argument, attribute, ResourceIndex(argument, attribute + 3)));
+        }
+
+        void UniqueBuffers(const NativeStage &stage) {
+            for (std::size_t index = 0; index < stage.storage.size(); ++index) {
+                const auto &storage = stage.storage[index];
+                if (stage.uniform && stage.uniform->binding == storage.binding)
+                    throw InvalidEvidence{};
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (stage.storage[previous].binding == storage.binding || stage.storage[previous].name == storage.name)
+                        throw InvalidEvidence{};
+            }
+        }
+
         /** @brief Captures an ordinary sampled 2D float image or independent sampler argument. */
         void SampledResource(const TokenView argument, const std::size_t attribute, const bool texture, NativeStage &result) {
             auto &resource = texture ? result.texture : result.sampler;
@@ -135,6 +156,14 @@ namespace Horo::Render::RegisterRasterCookDetail {
             return argument.size() == 7 && attribute == 2 && argument[5] == "]" && argument[6] == "]";
         }
 
+        /** @brief Proves the sole native fragment-position builtin without inventing a logical interface location. */
+        void FragmentPosition(const TokenView argument, const std::size_t attribute, const ShaderStage stage, NativeStage &result) {
+            if (stage != ShaderStage::Fragment || result.fragmentPosition || !StageInput(argument, attribute) || argument[0] != "float4" ||
+                !Identifier(argument[1]))
+                throw InvalidEvidence{};
+            result.fragmentPosition = true;
+        }
+
         /** @brief Routes one whole actual selected-entry parameter; unknown native roles fail closed. */
         void Parameter(const TokenView tokens, const TokenView argument, const ShaderStage stage, NativeStage &result) {
             const auto bracket = std::ranges::find(argument, "[");
@@ -143,11 +172,13 @@ namespace Horo::Render::RegisterRasterCookDetail {
                 throw InvalidEvidence{};
             const auto kind = argument[at + 2];
             if (kind == "buffer")
-                Uniform(tokens, argument, at, result);
+                Buffer(tokens, argument, at, result);
             else if (kind == "texture" || kind == "sampler")
                 SampledResource(argument, at, kind == "texture", result);
             else if (kind == "stage_in" && StageInput(argument, at))
                 Interfaces(tokens, argument[0], stage, ShaderInterfaceDirection::Input, result);
+            else if (kind == "position")
+                FragmentPosition(argument, at, stage, result);
             else
                 throw InvalidEvidence{};
         }
@@ -176,6 +207,7 @@ namespace Horo::Render::RegisterRasterCookDetail {
         const auto entry = FindEntry(tokens, stage, entryPoint);
         Interfaces(tokens, entry.resultType, stage, ShaderInterfaceDirection::Output, result);
         Parameters(tokens, entry.parameters, stage, result);
+        UniqueBuffers(result);
         return result;
     }
 }  // namespace Horo::Render::RegisterRasterCookDetail

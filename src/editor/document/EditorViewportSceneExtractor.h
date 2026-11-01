@@ -12,11 +12,56 @@
 #include "editor/document/SceneDocument.h"
 #include "editor/renderer/EditorViewportScene.h"
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
 
 namespace Horo::Editor {
+    /** @brief Exact cold-extraction object identity, including non-light transform parents. */
+    struct EditorViewportEntitySource {
+        Runtime::EntityRef entity;
+        SceneObjectId object;
+    };
+
+    /** @brief Exact light provenance; only absent disabled runtime components retain authored values. */
+    struct EditorViewportLightSource {
+        Runtime::EntityRef entity;
+        SceneObjectId object;
+        std::optional<Runtime::LightComponent> disabledAuthoredLight;
+        DocumentRevision authoredRevision;
+        Runtime::SceneDefinitionRevision definitionRevision;
+    };
+
+    /** @brief Derived visual transform override indexed by actual entity slot; never authored state. */
+    struct EditorViewportTransformOverride {
+        Runtime::EntityRef entity;
+        Math::Transform localTransform;
+        bool present{};
+    };
+
+    /** @brief Reusable unpublished light bank. Full cold size preserves capacity when snapshots are copied. */
+    struct EditorViewportLightStaging {
+        std::vector<Render::RenderLight> lights;
+        std::vector<SceneObjectId> objects;
+
+        EditorViewportLightStaging() = default;
+
+        // Scratch contents have no published meaning. Cold snapshot copies restore the full
+        // bank size so copying a previously previewed snapshot preserves allocation-free updates.
+        EditorViewportLightStaging(const EditorViewportLightStaging &)
+            : lights(Render::MaximumSceneLights), objects(Render::MaximumSceneLights) {}
+
+        EditorViewportLightStaging &operator=(const EditorViewportLightStaging &) {
+            lights.resize(Render::MaximumSceneLights);
+            objects.resize(Render::MaximumSceneLights);
+            return *this;
+        }
+
+        EditorViewportLightStaging(EditorViewportLightStaging &&) noexcept = default;
+        EditorViewportLightStaging &operator=(EditorViewportLightStaging &&) noexcept = default;
+    };
+
     /** @brief Owning viewport render data extracted from one activated runtime scene revision. */
     struct EditorViewportSceneSnapshot {
         DocumentRevision documentRevision;
@@ -30,6 +75,16 @@ namespace Horo::Editor {
         std::vector<std::uint8_t> instancePickable; /**< Parallel 0/1 editor-picking policy for render instances. */
         std::vector<Render::RenderLight> lights;
         std::vector<SceneObjectId> lightObjects;
+
+        // Derived preview metadata and scratch are initialized only by cold extraction.
+        std::vector<EditorViewportLightSource> eligibleLights;
+        std::vector<EditorViewportEntitySource> authoredEntities; /**< Cold sorted object-to-entity lookup, including non-light parents. */
+        std::vector<Runtime::EntityRef> instanceEntities;
+        std::vector<EditorViewportTransformOverride> transformOverrides;
+        std::vector<EditorViewportTransformOverride> stagedTransformOverrides;
+        std::vector<Math::Mat4> stagedInstanceWorlds;
+        std::array<EditorViewportLightStaging, 2> stagedLights;
+        std::optional<SceneObjectLightPreview> lightOverride;
 
         [[nodiscard]] EditorViewportSceneView View() const noexcept;
     };
@@ -91,6 +146,9 @@ namespace Horo::Editor {
      * @param assetMeshes Existing imported owner. @param respectEditorVisibility Existing visibility policy.
      * @param policy Explicit bounded strict admission for selected XR; desktop uses defaults.
      * @return Owned geometry and leases, or atomic extraction failure. Camera remains unset.
+     * @details Runtime-only extraction cannot recover disabled components removed by scene conversion.
+     * Disabled-light preview eligibility requires the matching document revision and runtime definition
+     * state; only owned visual metadata is retained, with exact runtime entity identity.
      */
     [[nodiscard]] Result<EditorViewportSceneSnapshot> ExtractEditorViewportGeometry(
         const Runtime::RuntimeSceneView &scene, DocumentRevision documentRevision, Runtime::PrimitiveMeshCache &meshCache,
@@ -107,6 +165,9 @@ namespace Horo::Editor {
      * @param scene Immutable view borrowed only during this synchronous query.
      * @param previews Existing transient overlays. @param snapshot Owning viewport projection updated in place.
      * @return Success or original validation/extraction failure; no Scene borrow is retained.
+     * @details Successful updates retain the component overlay. Failure preserves published instances,
+     * lights and applied overlay metadata; only reusable unpublished scratch may change. Cold-extracted
+     * snapshot storage is reused without heap allocation on successful preview updates.
      */
     [[nodiscard]] Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView &scene,
                                                                    std::span<const SceneObjectTransformPreview> previews,
@@ -118,6 +179,9 @@ namespace Horo::Editor {
      * @param preview Light override, or null to restore authored runtime values.
      * @param snapshot Owning viewport snapshot updated in place.
      * @return Success, or a typed extraction error without a document mutation.
+     * @details Disabled visible sources remain eligible for enable previews. Hidden sources stay excluded.
+     * Clearing this overlay preserves the transform overlay. Failure preserves all published values and
+     * applied overlay metadata; only reusable unpublished scratch may change.
      */
     [[nodiscard]] Result<void> ApplyEditorViewportLightPreview(const Runtime::RuntimeSceneView &scene,
                                                                const SceneObjectLightPreview *preview,

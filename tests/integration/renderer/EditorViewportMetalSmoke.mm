@@ -43,7 +43,8 @@ namespace {
 
     RenderTargetHandle PrepareViewportTarget(EditorViewportRendererMetal &viewport, RenderFrontend &frontend,
                                              const EditorViewportSceneView &scene, const EditorViewportExtent extent) {
-        const RenderSceneView renderScene{ToRenderCamera(scene.camera), scene.meshResources, scene.instances, scene.lights};
+        const RenderSceneView renderScene{ToRenderCamera(scene.camera), scene.meshResources,        scene.instances, scene.lights,
+                                          scene.lightSceneDomain,       scene.lightSnapshotRevision};
         for (std::size_t attempt = 0; attempt < 4; ++attempt) {
             viewport.RequestExtent(extent);
             auto prepared = viewport.PrepareResources(frontend, renderScene);
@@ -72,11 +73,17 @@ namespace {
         replacementMeshes.front().handle.generation = 2;
         std::vector<EditorViewportInstance> replacementInstances{scene.instances.begin(), scene.instances.end()};
         replacementInstances.front().mesh.generation = 2;
-        const EditorViewportSceneView replacementScene{scene.camera, replacementMeshes, replacementInstances, scene.lights};
-        const RenderSceneView renderScene{ToRenderCamera(replacementScene.camera), replacementScene.meshResources,
-                                          replacementScene.instances, replacementScene.lights};
+        const EditorViewportSceneView replacementScene{scene.camera, replacementMeshes,      replacementInstances,
+                                                       scene.lights, scene.lightSceneDomain, scene.lightSnapshotRevision};
+        const RenderSceneView renderScene{ToRenderCamera(replacementScene.camera),
+                                          replacementScene.meshResources,
+                                          replacementScene.instances,
+                                          replacementScene.lights,
+                                          replacementScene.lightSceneDomain,
+                                          replacementScene.lightSnapshotRevision};
 
         RenderTargetHandle resizedTarget;
+        bool deferredGeneration{};
         RenderTargetHandle currentTarget = activeTarget;
         viewport.RequestExtent(resizedExtent);
         for (std::size_t attempt = 0; attempt < 6 && !resizedTarget.IsValid(); ++attempt) {
@@ -91,6 +98,16 @@ namespace {
             const EditorViewportExtent passExtent = viewport.RequestedExtent();
             Check(passExtent.IsValid());
 
+            const StaticMeshPassDescriptor descriptor{.target = currentTarget,
+                                                      .extent = {passExtent.width, passExtent.height},
+                                                      .scene = renderScene};
+            const auto lighting = viewport.PrepareLightingFrame(descriptor, {});
+            if (lighting.HasError()) {
+                Check(lighting.ErrorValue().code.Value() == LightCullingErrors::Pending.code.Value());
+                deferredGeneration = true;
+                continue;
+            }
+
             AwaitPresentation(frontend, {256, 256});
             auto begun = frontend.BeginFrame(FrameDescriptor{.frameNumber = 2 + attempt, .outputExtent = {256, 256}});
             Check(begun.HasValue());
@@ -98,9 +115,7 @@ namespace {
             const std::array passes{RenderPassDescriptor{
                 .id = RenderPassId{1},
                 .kind = RenderPassKind::Graphics,
-                .staticMesh = StaticMeshPassDescriptor{.target = currentTarget,
-                                                       .extent = {passExtent.width, passExtent.height},
-                                                       .scene = renderScene},
+                .staticMesh = descriptor,
             }};
             Check(frame.Execute(passes).HasValue());
             Check(frame.Present().HasValue());
@@ -109,6 +124,7 @@ namespace {
                 resizedTarget = currentTarget;
         }
         Check(resizedTarget.IsValid());
+        Check(deferredGeneration);
         Check(viewport.RequestedExtent() == resizedExtent);
         Check(viewport.TextureView().textureId != activeTexture.textureId);
     }
@@ -143,6 +159,9 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     CHECK_FALSE(frontend->Capabilities().support.Supports(shadowDepth));
 
     EditorViewportRendererMetal viewport{*frontend, graphicsBridge};
+    EditorViewportLightingProfile lighting;
+    lighting.requested = LightPreparationMode::BaselineForwardCpu;
+    Check(viewport.RequestLightingProfile(lighting, {}).HasValue());
     Check(viewport.Initialize().HasValue());
     Runtime::PrimitiveMeshCache meshCache;
     constexpr std::array primitiveTypes{Runtime::PrimitiveMeshType::Box,     Runtime::PrimitiveMeshType::Sphere,
@@ -176,12 +195,15 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
             .direction = Math::Normalize(Math::Vec3{0.5F, -1.0F, -0.5F}),
             .color = {1.0F, 0.95F, 0.88F},
             .intensity = 2.0F,
+            .stableIdentity = 101,
         },
     };
     const EditorViewportSceneView viewportScene{.camera = {},
                                                 .meshResources = meshResources,
                                                 .instances = viewportInstances,
-                                                .lights = lights};
+                                                .lights = lights,
+                                                .lightSceneDomain = 1,
+                                                .lightSnapshotRevision = 1};
     Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
     const RenderTargetHandle viewportTarget = PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128});
     Check(frontend->Resize(FramebufferExtent{256, 256}).HasValue());
@@ -201,7 +223,7 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
                     .target = viewportTarget,
                     .extent = {128, 128},
                     .scene = RenderSceneView{ToRenderCamera(viewportScene.camera), viewportScene.meshResources, viewportScene.instances,
-                                             viewportScene.lights},
+                                             viewportScene.lights, viewportScene.lightSceneDomain, viewportScene.lightSnapshotRevision},
                 },
         },
         RenderPassDescriptor{

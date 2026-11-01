@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "MetalResourceFormats.h"
 #include "MetalResourceRuntimeInternal.h"
+#include "MetalUniformShaderAbi.h"
 #include "MetalVfxShaderAbi.h"
 
 #include <algorithm>
@@ -13,8 +14,6 @@ namespace Horo::Render::Detail {
     namespace {
         /** @brief Keeps depth-only material batch admission exclusive to qualified native consumers. */
         Result<PipelineCacheKey> ValidateMetalMaterialPipelineRequest(const RenderGraphicsPipelineDescriptor &descriptor) {
-            if (descriptor.state.depthOnly)
-                return Result<PipelineCacheKey>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation));
             return ValidateRenderGraphicsPipelineDescriptor(descriptor);
         }
 
@@ -48,7 +47,8 @@ namespace Horo::Render::Detail {
         /** @brief Builds native attachment and fixed MeshVertex state after descriptor admission. */
         void ConfigurePipelineState(MTLRenderPipelineDescriptor *native, const RenderGraphicsPipelineState &state) {
             native.rasterSampleCount = state.sampleCount;
-            native.colorAttachments[0].pixelFormat = static_cast<MTLPixelFormat>(MetalPixelFormatValue(state.colorFormat));
+            if (!state.depthOnly)
+                native.colorAttachments[0].pixelFormat = static_cast<MTLPixelFormat>(MetalPixelFormatValue(state.colorFormat));
             if (state.depthFormat) {
                 native.depthAttachmentPixelFormat = static_cast<MTLPixelFormat>(MetalPixelFormatValue(*state.depthFormat));
                 if (*state.depthFormat == RenderTextureFormat::Depth24Stencil8 ||
@@ -109,32 +109,45 @@ namespace Horo::Render::Detail {
             return Result<void>::Success();
         }
 
-        /** @brief Returns the scalar/vector type for the bounded supported uniform ABI. */
-        MTLDataType ParameterType(const ShaderReflectedParameter &parameter) {
-            MTLDataType base = MTLDataTypeNone;
-            switch (parameter.type) {
-                case ShaderValueType::Float32:
-                    base = MTLDataTypeFloat;
-                    break;
-                case ShaderValueType::Int32:
-                    base = MTLDataTypeInt;
-                    break;
-                case ShaderValueType::Uint32:
-                    base = MTLDataTypeUInt;
-                    break;
-                case ShaderValueType::Bool32:
-                    return MTLDataTypeNone;
+        /** @brief Validates one active member against the actual driver type and exact cooked packing. */
+        Result<void> ValidateUniformParameter(id<MTLBufferBinding> buffer, const ShaderReflectedParameter &parameter,
+                                              const bool vfxInstances) {
+            if (vfxInstances) {
+                if (!HasMetalVfxArray(buffer.bufferStructType, parameter))
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid,
+                                                           "Metal VFX array type, count, offset or stride differs from cooked packing."));
+                return Result<void>::Success();
             }
-            return static_cast<MTLDataType>(base + std::max(parameter.rows, parameter.columns) - 1);
+            const auto details =
+                std::format("Metal uniform parameter {} binding {} offset {} shape {}x{} count {} "
+                            "array stride {} matrix stride {} column-major {}",
+                            parameter.id.value, parameter.binding.value, parameter.byteOffset, parameter.rows, parameter.columns,
+                            parameter.arrayCount, parameter.arrayStride, parameter.matrixStride, parameter.columnMajor);
+            if (!SupportedMetalUniformParameter(parameter))
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::UnsupportedResourceOperation, details + " is outside the implemented native ABI."));
+            if (!MetalUniformParameterFits(parameter, buffer.bufferDataSize) ||
+                !HasMetalUniformParameter(buffer.bufferStructType, parameter))
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::ResourceIdentityInvalid, details + " differs from actual native member packing."));
+            return Result<void>::Success();
         }
 
-        /** @brief Matches one native structure member without trusting names from the source compiler. */
-        bool HasParameter(MTLStructType *structure, const ShaderReflectedParameter &parameter) {
-            const auto type = ParameterType(parameter);
-            for (MTLStructMember *member in structure.members)
-                if (member.offset == parameter.byteOffset && type != MTLDataTypeNone && member.dataType == type)
-                    return true;
-            return false;
+        /** @brief Requires exact native member coverage for one uniform binding in this stage. */
+        Result<void> ValidateUniformMembers(id<MTLBufferBinding> buffer, const ShaderBindingId binding,
+                                            const NormalizedShaderReflection &reflection, const bool vfxInstances) {
+            std::size_t count = 0;
+            for (const auto &parameter : reflection.parameters) {
+                if (!parameter.active || parameter.binding != binding)
+                    continue;
+                ++count;
+                if (const auto valid = ValidateUniformParameter(buffer, parameter, vfxInstances); valid.HasError())
+                    return valid;
+            }
+            if (buffer.bufferStructType.members.count != count)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid,
+                                                       "Metal uniform native member count differs from cooked packing."));
+            return Result<void>::Success();
         }
 
         /** @brief Verifies native uniform packing and publishes only a complete block size. */
@@ -146,28 +159,11 @@ namespace Horo::Render::Detail {
             if (vfxInstances && buffer.bufferDataSize != 10240)
                 return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid,
                                                        "Metal VFX instance block extent differs from its closed schema."));
-            std::size_t count = 0;
-            for (const auto &parameter : reflection.parameters) {
-                if (!parameter.active || parameter.binding != binding)
-                    continue;
-                ++count;
-                if (vfxInstances) {
-                    if (!HasMetalVfxArray(buffer.bufferStructType, parameter))
-                        return Result<void>::Failure(
-                            MakeError(MetalBackendErrors::ResourceIdentityInvalid,
-                                      "Metal VFX array type, count, offset or stride differs from cooked packing."));
-                    continue;
-                }
-                if (parameter.arrayCount != 1 || parameter.type == ShaderValueType::Bool32 ||
-                    (parameter.rows != 1 && parameter.columns != 1))
-                    return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation,
-                                                           "Metal parameter arrays and matrices require explicit native ABI support."));
-                if (!HasParameter(buffer.bufferStructType, parameter))
-                    return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid,
-                                                           "Metal uniform member offset or value shape differs from cooked packing."));
-            }
-            if (buffer.bufferStructType.members.count != count || (size != 0 && size != buffer.bufferDataSize))
-                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+            if (const auto valid = ValidateUniformMembers(buffer, binding, reflection, vfxInstances); valid.HasError())
+                return valid;
+            if (size != 0 && size != buffer.bufferDataSize)
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::ResourceIdentityInvalid, "Metal uniform native block sizes differ between stages."));
             size = buffer.bufferDataSize;
             return Result<void>::Success();
         }
@@ -180,45 +176,69 @@ namespace Horo::Render::Detail {
             return nil;
         }
 
+        /** @brief Admits only an actual read-only structured buffer and retains its observed element extent. */
+        Result<void> ValidateStorageBuffer(id<MTLBufferBinding> buffer, const ShaderReflectedBinding &binding, std::size_t &size) {
+            if (binding.access != ShaderResourceAccess::ReadOnly || buffer.access != MTLBindingAccessReadOnly ||
+                buffer.bufferDataSize == 0 || buffer.bufferDataSize > 65536 || buffer.bufferAlignment == 0 ||
+                (size != 0 && size != buffer.bufferDataSize))
+                return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation,
+                                                       "Metal material storage requires one read-only bounded native element ABI."));
+            size = buffer.bufferDataSize;
+            return Result<void>::Success();
+        }
+
+        std::optional<MTLBindingType> MaterialNativeBindingType(const ShaderResourceKind kind) {
+            switch (kind) {
+                case ShaderResourceKind::UniformBuffer:
+                case ShaderResourceKind::StorageBuffer:
+                    return MTLBindingTypeBuffer;
+                case ShaderResourceKind::SampledTexture:
+                    return MTLBindingTypeTexture;
+                case ShaderResourceKind::Sampler:
+                    return MTLBindingTypeSampler;
+                default:
+                    return std::nullopt;
+            }
+        }
+
+        Error MissingMaterialArgument(NSArray<id<MTLBinding>> *arguments, const ShaderReflectedBinding &binding,
+                                      const ShaderTargetBindingMapEntry &mapping, MTLBindingType type, ShaderStageVisibility stage) {
+            std::string observed;
+            for (id<MTLBinding> argument in arguments)
+                observed += std::format(" [index={}, type={}, access={}, used={}]", argument.index, static_cast<long>(argument.type),
+                                        static_cast<long>(argument.access), argument.used);
+            return MakeError(MetalBackendErrors::ResourceIdentityInvalid,
+                             std::format("Metal stage {} logical binding {} requires active native type {} "
+                                         "at index {} with read-only access; actual bindings:{}.",
+                                         static_cast<unsigned>(stage), binding.id.value, static_cast<long>(type), mapping.nativeBinding,
+                                         observed));
+        }
+
+        Result<void> ValidateMaterialTexture(id<MTLTextureBinding> texture) {
+            if (texture.textureType != MTLTextureType2D || texture.arrayLength != 1 || texture.depthTexture ||
+                texture.textureDataType != MTLDataTypeFloat)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation,
+                                                       "Metal material preparation supports noncomparison float 2D textures."));
+            return Result<void>::Success();
+        }
+
         /** @brief Validates a native resource against the supported direct-binding material envelope. */
         Result<void> ValidateArgument(NSArray<id<MTLBinding>> *arguments, const ShaderReflectedBinding &binding,
                                       const ShaderTargetBindingMapEntry &mapping, const NormalizedShaderReflection &reflection,
                                       std::array<std::size_t, 31> &sizes, const ShaderStageVisibility stage) {
-            MTLBindingType type;
-            switch (binding.kind) {
-                case ShaderResourceKind::UniformBuffer:
-                    type = MTLBindingTypeBuffer;
-                    break;
-                case ShaderResourceKind::SampledTexture:
-                    type = MTLBindingTypeTexture;
-                    break;
-                case ShaderResourceKind::Sampler:
-                    type = MTLBindingTypeSampler;
-                    break;
-                default:
-                    return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation));
-            }
+            const auto nativeType = MaterialNativeBindingType(binding.kind);
+            if (!nativeType)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation));
+            const auto type = *nativeType;
             const id<MTLBinding> actual = FindNativeBinding(arguments, mapping.nativeBinding, type);
-            if (actual == nil || actual.access != MTLBindingAccessReadOnly) {
-                std::string observed;
-                for (id<MTLBinding> argument in arguments)
-                    observed += std::format(" [index={}, type={}, access={}, used={}]", argument.index, static_cast<long>(argument.type),
-                                            static_cast<long>(argument.access), argument.used);
-                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid,
-                                                       std::format("Metal stage {} logical binding {} requires active native type {} "
-                                                                   "at index {} with read-only access; actual bindings:{}.",
-                                                                   static_cast<unsigned>(stage), binding.id.value, static_cast<long>(type),
-                                                                   mapping.nativeBinding, observed)));
-            }
+            if (actual == nil || actual.access != MTLBindingAccessReadOnly)
+                return Result<void>::Failure(MissingMaterialArgument(arguments, binding, mapping, type, stage));
+            if (binding.kind == ShaderResourceKind::StorageBuffer)
+                return ValidateStorageBuffer((id<MTLBufferBinding>)actual, binding, sizes[mapping.nativeBinding]);
             if (type == MTLBindingTypeBuffer)
                 return ValidateUniform((id<MTLBufferBinding>)actual, binding.id, reflection, sizes[mapping.nativeBinding]);
-            if (type == MTLBindingTypeTexture) {
-                const id<MTLTextureBinding> texture = (id<MTLTextureBinding>)actual;
-                if (texture.textureType != MTLTextureType2D || texture.arrayLength != 1 || texture.depthTexture ||
-                    texture.textureDataType != MTLDataTypeFloat)
-                    return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation,
-                                                           "Metal material preparation supports noncomparison float 2D textures."));
-            }
+            if (type == MTLBindingTypeTexture)
+                return ValidateMaterialTexture((id<MTLTextureBinding>)actual);
             return Result<void>::Success();
         }
 
@@ -262,20 +282,28 @@ namespace Horo::Render::Detail {
             return Result<std::size_t>::Success(active);
         }
 
+        bool ActiveMaterialStage(const ShaderReflectedBinding &binding, const ShaderStageVisibility stage) noexcept {
+            return binding.active && (static_cast<unsigned>(binding.stages) & static_cast<unsigned>(stage)) != 0;
+        }
+
+        bool ValidMaterialTargetBinding(const ShaderReflectedBinding &binding, const ShaderTargetBindingMapEntry &mapping) noexcept {
+            const bool buffer = binding.kind == ShaderResourceKind::UniformBuffer || binding.kind == ShaderResourceKind::StorageBuffer;
+            return mapping.nativeSpace == 0 && mapping.nativeBinding < 31 && binding.arrayCount == 1 &&
+                   !(buffer && mapping.nativeBinding == MetalMeshVertexBufferIndex);
+        }
+
         /** @brief Checks each stage's complete native active argument set against the cooked logical map. */
         Result<void> ValidateArguments(NSArray<id<MTLBinding>> *arguments, ShaderStageVisibility stage,
                                        const NormalizedShaderReflection &reflection, std::array<std::size_t, 31> &sizes) {
             std::size_t expected = 0;
             for (const auto &binding : reflection.bindings) {
-                if (!binding.active || (static_cast<unsigned>(binding.stages) & static_cast<unsigned>(stage)) == 0)
+                if (!ActiveMaterialStage(binding, stage))
                     continue;
                 ++expected;
                 const auto mapping = std::ranges::find_if(reflection.targetBindings, [&](const ShaderTargetBindingMapEntry &entry) {
                     return entry.id == binding.id && entry.active && entry.generatedHelperIndex == 0;
                 });
-                if (mapping == reflection.targetBindings.end() || mapping->nativeSpace != 0 || mapping->nativeBinding >= 31 ||
-                    binding.arrayCount != 1 ||
-                    (binding.kind == ShaderResourceKind::UniformBuffer && mapping->nativeBinding == MetalMeshVertexBufferIndex))
+                if (mapping == reflection.targetBindings.end() || !ValidMaterialTargetBinding(binding, *mapping))
                     return Result<void>::Failure(
                         MakeError(MetalBackendErrors::UnsupportedResourceOperation,
                                   "Metal requires direct scalar arguments below slot 31; buffer slot 30 is reserved for MeshVertex."));

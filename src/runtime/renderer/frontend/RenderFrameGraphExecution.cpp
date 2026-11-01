@@ -34,6 +34,11 @@ namespace Horo::Render {
             if (explicitSubmissions && !backend.Capabilities().supportsExplicitGraphSubmissions)
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
                                                        "The selected backend does not implement explicit graph submissions."));
+            if (!backend.Capabilities().supportsMaterialRasterGraph && std::ranges::any_of(workloads, [](const auto &binding) {
+                return std::holds_alternative<RenderGraphMaterialRaster>(binding.workload);
+            }))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
+                                                       "The selected backend does not implement same-graph material raster consumers."));
             if (!backend.Capabilities().support.features.Supports(RenderCapability::VfxForwardInstancing) &&
                 std::ranges::any_of(workloads, [](const auto &workload) {
                 return std::holds_alternative<RenderGraphVfx>(workload.workload);

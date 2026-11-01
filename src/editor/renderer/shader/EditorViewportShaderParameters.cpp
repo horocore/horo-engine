@@ -1,6 +1,7 @@
 #include "EditorViewportShaderParameters.h"
 
 #include "../EditorRendererErrors.h"
+#include "EditorViewportMatrixComponents.h"
 #include "EditorViewportShaderRecipe.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 
@@ -86,9 +87,12 @@ namespace Horo::Editor {
 
     Result<std::size_t> EditorViewportShaderParameters::PackLit(const Render::MaterialBindingLayout &layout,
                                                                 const std::span<std::byte> destination) const {
-        const std::array<Render::MaterialParameterValue, 15> values{{{{1}, std::span<const float>{mvp.values}},
-                                                                     {{2}, std::span<const float>{model.values}},
-                                                                     {{3}, std::span<const float>{shadow}},
+        const auto mvpComponents = Detail::MatrixRowMajorComponents(mvp.values);
+        const auto modelComponents = Detail::MatrixRowMajorComponents(model.values);
+        const auto shadowComponents = Detail::MatrixRowMajorComponents(shadow);
+        const std::array<Render::MaterialParameterValue, 15> values{{{{1}, std::span<const float>{mvpComponents}},
+                                                                     {{2}, std::span<const float>{modelComponents}},
+                                                                     {{3}, std::span<const float>{shadowComponents}},
                                                                      {{4}, std::span<const float>{camera}},
                                                                      {{5}, std::span<const float>{lights[0]}},
                                                                      {{6}, std::span<const float>{lights[1]}},
@@ -115,15 +119,17 @@ namespace Horo::Editor {
 
     Result<std::size_t> PackEditorViewportGrid(const Render::MaterialBindingLayout &layout, const Math::Mat4 &mvp, const Math::Vec3 color,
                                                const std::span<std::byte> destination) {
+        const auto mvpComponents = Detail::MatrixRowMajorComponents(mvp.values);
         const std::array<float, 4> rgba{color.x, color.y, color.z, 1};
         const std::array<Render::MaterialParameterValue, 2> values{
-            {{{1}, std::span<const float>{mvp.values}}, {{2}, std::span<const float>{rgba}}}};
+            {{{1}, std::span<const float>{mvpComponents}}, {{2}, std::span<const float>{rgba}}}};
         return Render::PackMaterialParameterBinding(layout, {1}, values, destination);
     }
 
     Result<std::size_t> PackEditorViewportShadow(const Render::MaterialBindingLayout &layout, const Math::Mat4 &mvp,
                                                  const std::span<std::byte> destination) {
-        const std::array<Render::MaterialParameterValue, 1> values{{{{1}, std::span<const float>{mvp.values}}}};
+        const auto mvpComponents = Detail::MatrixRowMajorComponents(mvp.values);
+        const std::array<Render::MaterialParameterValue, 1> values{{{{1}, std::span<const float>{mvpComponents}}}};
         return Render::PackMaterialParameterBinding(layout, {1}, values, destination);
     }
 }  // namespace Horo::Editor

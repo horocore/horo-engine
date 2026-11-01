@@ -1,5 +1,6 @@
 #pragma once
 /** @file EditorViewportShaderParameters.h @brief Canonical HLSL viewport parameter packing without frame allocation. */
+#include "Horo/Runtime/Render/ClusteredLightGrid.h"
 #include "Horo/Runtime/Render/DirectionalShadow.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderScene.h"
@@ -24,6 +25,18 @@ namespace Horo::Editor {
         void SetScene(const Render::RenderSceneView &scene, const std::optional<Render::DirectionalShadowFrame> &shadowFrame,
                       Render::ShaderTargetBackend backend) noexcept;
         /** @brief Packs complete lit parameters through the exact accepted reflected layout. */
+        [[nodiscard]] Result<std::size_t> PackLit(const Render::MaterialBindingLayout &layout, std::span<std::byte> destination) const;
+    };
+
+    /** @brief Fixed, reflected uniform input for the real storage-backed clustered lit consumer. */
+    struct EditorViewportClusteredShaderParameters final {
+        EditorViewportShaderParameters common;
+        std::array<float, 4> dimensions{}, depth{}, viewport{}, shadowIdentity{};
+        /** @brief Captures exact producer/grid identities after complete-table admission; retains no borrowed data. */
+        [[nodiscard]] Result<void> SetScene(const Render::RenderSceneView &scene, const Render::ClusteredLightGrid &grid,
+                                            const std::optional<Render::DirectionalShadowFrame> &shadowFrame,
+                                            std::uint32_t referencesPerCluster);
+        /** @brief Packs only uniform binding 1 through its exact accepted driver/compiler-reflected layout. */
         [[nodiscard]] Result<std::size_t> PackLit(const Render::MaterialBindingLayout &layout, std::span<std::byte> destination) const;
     };
 

@@ -161,16 +161,27 @@ Result<std::unique_ptr<Render::IShaderHotReloadCandidate>> EditorViewportRendere
     candidate->owner = impl_.get();
     candidate->expected = expected;
     candidate->reflected = true;
-    for (std::size_t role = 0; role < programs.size(); ++role) {
-        if (cancellation.IsCancellationRequested())
-            return Outcome::Failure(MakeError(Render::ShaderCompilerPipelineErrors::CancellationRequested));
-        const auto prepared = impl_->CreateReloadPipeline(*candidate, role, programs[role]);
-        if (prepared.HasError())
-            return Outcome::Failure(prepared.ErrorValue());
-    }
+    if (const auto prepared = impl_->PrepareReloadFamily(*candidate, programs, cancellation); prepared.HasError())
+        return Outcome::Failure(prepared.ErrorValue());
     if (cancellation.IsCancellationRequested())
         return Outcome::Failure(MakeError(Render::ShaderCompilerPipelineErrors::CancellationRequested));
     return Outcome::Success(std::move(candidate));
+}
+
+Result<void> EditorViewportRendererMetal::Impl::PrepareReloadFamily(ProgramGeneration &candidate,
+                                                                    const std::span<const Render::ShaderHotReloadProgramView> programs,
+                                                                    const CancellationToken &cancellation) {
+    if (cancellation.IsCancellationRequested())
+        return Result<void>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::CancellationRequested));
+    if (nativeLightingActive)
+        return PrepareClusteredReload(candidate, programs);
+    for (std::size_t role = 0; role < programs.size(); ++role) {
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::CancellationRequested));
+        if (const auto prepared = CreateReloadPipeline(candidate, role, programs[role]); prepared.HasError())
+            return prepared;
+    }
+    return Result<void>::Success();
 }
 
 Result<Render::ShaderHotReloadTargetState> EditorViewportRendererMetal::Adopt(std::unique_ptr<Render::IShaderHotReloadCandidate> candidate,

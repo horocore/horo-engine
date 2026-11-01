@@ -4011,6 +4011,8 @@ target_link_libraries(HoroStandardPbrMaterialTests PRIVATE HoroEngine::RenderApi
 add_executable(HoroLightCullingTests
         unit/runtime/renderer/LightCullingGraphTests.cpp
         unit/runtime/renderer/LightCullingTests.cpp
+        unit/runtime/renderer/ClusteredLightGridTests.cpp
+        unit/runtime/renderer/ClusteredLightPreparationTests.cpp
         unit/runtime/renderer/LightFrameUploadTests.cpp
         unit/runtime/renderer/LightCullingKernelTests.cpp
         unit/runtime/renderer/LightSceneExtractionTests.cpp
@@ -4039,6 +4041,8 @@ target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::ShaderBuild HoroEngine::Platform HoroEditorViewportShaderRecipeInternal)
 add_executable(HoroShaderReflectionCookTests unit/runtime/renderer/ShaderReflectionCookTests.cpp
+    unit/runtime/renderer/RegisterRasterStorageNormalizationTests.cpp
+    unit/runtime/renderer/LightCullingMetalReflectionTests.cpp
     unit/runtime/renderer/RegisterRasterReflectionCookTests.cpp
     unit/runtime/renderer/RegisterRasterNormalizationTests.cpp
     unit/runtime/renderer/UiPaintReflectionCookTests.cpp
@@ -4060,6 +4064,8 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderGraphTransientResourceTests.cpp
         unit/runtime/renderer/RenderGraphTransientReservationTests.cpp
         unit/runtime/renderer/RenderFrontendTests.cpp
+        unit/runtime/renderer/RenderFrontendLightPreparationTests.cpp
+        unit/runtime/renderer/RenderGraphMaterialRasterTests.cpp
         unit/runtime/renderer/RenderSubmissionAllocatorTests.cpp
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
@@ -5495,7 +5501,7 @@ if (HORO_BUILD_RENDER_OPENGL)
 
         target_compile_features(HoroEditorViewportOpenGLSmoke PRIVATE cxx_std_20)
         target_compile_definitions(HoroEditorViewportOpenGLSmoke PRIVATE GL_SILENCE_DEPRECATION)
-        target_include_directories(HoroEditorViewportOpenGLSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src)
+        target_include_directories(HoroEditorViewportOpenGLSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/support)
         target_link_libraries(HoroEditorViewportOpenGLSmoke
                 PRIVATE
                 Catch2::Catch2WithMain
@@ -6328,3 +6334,50 @@ if(APPLE AND TARGET HoroRenderOpenGLTests AND TARGET HoroEditorViewportOpenGL)
     set_source_files_properties(integration/renderer/OpenGLViewportShadowShaderSmoke.cpp
         PROPERTIES COMPILE_DEFINITIONS GL_SILENCE_DEPRECATION)
 endif()
+
+target_sources(HoroEditorViewportSceneTests PRIVATE unit/editor/EditorViewportForwardLightingTests.cpp)
+target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportLightingInternal)
+include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorClusteredLightingAssets.cmake")
+horo_add_editor_clustered_lighting_assets_target()
+add_executable(HoroEditorClusteredLightingAssetsTests unit/editor/EditorClusteredLightingAssetsTests.cpp)
+target_compile_features(HoroEditorClusteredLightingAssetsTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorClusteredLightingAssetsTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroEditorClusteredLightingAssetsTests PRIVATE HoroEditorClusteredLightingAssetsInternal
+    HoroEditorViewportShaderRecipeInternal)
+horo_register_catch_test(HoroEditorClusteredLightingAssetsTests LABELS "unit;renderer;lighting;headless")
+
+if(TARGET HoroEditorViewportMetalSmoke)
+    target_sources(HoroEditorViewportMetalSmoke PRIVATE integration/renderer/EditorViewportMetalClusteredSmoke.mm)
+    target_link_libraries(HoroEditorViewportMetalSmoke PRIVATE HoroEditorClusteredLightingAssetsInternal)
+endif()
+
+target_sources(HoroEditorClusteredLightingAssetsTests PRIVATE unit/editor/EditorViewportClusteredShaderParametersTests.cpp)
+target_sources(HoroEditorClusteredLightingAssetsTests PRIVATE unit/editor/EditorViewportMatrixPackingTests.cpp)
+target_sources(HoroEditorViewportSceneTests PRIVATE unit/editor/EditorLightingOptionsTests.cpp)
+target_include_directories(HoroEditorViewportSceneTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
+target_link_libraries(HoroEditorViewportResourceTests PRIVATE HoroEngine::EditorViewportLightingInternal)
+
+add_executable(HoroEditorClusteredLightingCookTests unit/editor/ClusteredLightingCookTests.cpp)
+target_compile_features(HoroEditorClusteredLightingCookTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorClusteredLightingCookTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroEditorClusteredLightingCookTests PRIVATE HoroEditorClusteredLightingCookInternal Catch2::Catch2WithMain)
+horo_register_catch_test(HoroEditorClusteredLightingCookTests LABELS "unit;application;shader;headless")
+add_test(NAME HoroEditorClusteredLightingShaderCookContract
+    COMMAND ${CMAKE_COMMAND} "-DCOOK=$<TARGET_FILE:HoroEditorClusteredLightingShaderCook>"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/clustered-lighting-cook-contract"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ClusteredLightingCookContract.cmake")
+set_tests_properties(HoroEditorClusteredLightingShaderCookContract PROPERTIES
+    LABELS "application;shader;headless" RUN_SERIAL TRUE TIMEOUT 15)
+
+if(TARGET HoroMetalGraphExecutionSmoke)
+    target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+    target_sources(HoroMetalGraphExecutionSmoke PRIVATE
+        integration/renderer/MetalClusteredMaterialGraphSmoke.mm
+        integration/renderer/MetalClusteredMaterialGraphFixture.mm)
+    target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE HoroEngine::RenderFrontend
+        HoroEditorClusteredLightingAssetsInternal HoroEditorViewportShaderRecipeInternal
+        HoroRenderFrontendResourceAccessInternal)
+endif()
+
+target_sources(HoroShaderReflectionCookTests PRIVATE unit/runtime/renderer/RegisterRasterCapturedMetalTests.cpp)
+target_link_libraries(HoroShaderReflectionCookTests PRIVATE HoroEditorViewportShaderRecipeInternal)

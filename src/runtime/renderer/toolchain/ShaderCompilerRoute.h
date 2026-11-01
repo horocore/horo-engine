@@ -42,7 +42,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
      */
     [[nodiscard]] Result<NormalizedShaderReflection> NormalizeCapturedRasterReflection(const ShaderCompilerInvocation &invocation,
                                                                                        const std::vector<SpirvReflectionStage> &stages,
-                                                                                       const std::vector<std::string> &translations);
+                                                                                       const std::vector<std::string> &translations,
+                                                                                       std::span<const std::uint8_t> validatedSpirv);
     /** @brief Admits the fixed UI paint reflection names and the exact locked translation tool before any process runs.
      * @param request Explicit same-cook reflection identities supplied by the validated invocation.
      * @param cross Installed Cross tool, or null when that installation is unavailable.

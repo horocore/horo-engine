@@ -3,6 +3,7 @@
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
+#include "LightCullingMetalReflection.h"
 #include "ShaderCompilerToolchainSupport.h"
 
 #include <algorithm>
@@ -30,6 +31,11 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         using ShaderCompilerToolchainDetail::StageName;
         using ShaderCompilerToolchainDetail::StageProfile;
         using ShaderCompilerToolchainDetail::ToolArtifactRecord;
+
+        [[nodiscard]] bool IsMetalLibrary(const std::span<const std::uint8_t> bytes) noexcept {
+            constexpr std::array<std::uint8_t, 4> magic{'M', 'T', 'L', 'B'};
+            return bytes.size() >= magic.size() && std::equal(magic.begin(), magic.end(), bytes.begin());
+        }
 
         class CompilerRouteContext final {
         public:
@@ -289,8 +295,11 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     return StoreVulkan(entry, std::move(spirv));
                 if (invocation_.target.requirement.backend == OpenGL)
                     return CompileOpenGLRoute(entry, stem, spirvPath);
-                if (invocation_.target.requirement.backend == Metal)
+                if (invocation_.target.requirement.backend == Metal) {
+                    if (entry.stage == ShaderStage::Compute)
+                        validatedComputeSpirv_ = std::move(spirv);
                     return CompileMetalRoute(entry, stem, spirvPath);
+                }
                 return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
             }
 
@@ -415,6 +424,25 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 return Result<void>::Success();
             }
 
+            /** @brief Preserves ordinary routes and qualifies only proven canonical compute inputs before actual Apple compilation. */
+            [[nodiscard]] Result<void> PrepareMetalSource(const std::filesystem::path &nativePath) {
+                auto native =
+                    ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (native.HasError())
+                    return Result<void>::Failure(native.ErrorValue());
+                if (!invocation_.reflection)
+                    return Result<void>::Success();
+                if (ValidateLightCullingMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                        .HasError())
+                    return Result<void>::Success();
+                const std::string source(native.Value().begin(), native.Value().end());
+                auto qualified = QualifyLightCullingMetalInputs(source, validatedComputeSpirv_);
+                if (qualified.HasError())
+                    return Result<void>::Failure(qualified.ErrorValue());
+                const auto &text = qualified.Value();
+                return WriteFile(nativePath, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
+            }
+
             [[nodiscard]] Result<void> CompileMetalRoute(const ShaderEntryPoint &entry, const std::string &stem,
                                                          const std::filesystem::path &spirvPath) {
                 const ShaderCompilerToolInstallation *metal = Lookup(ShaderCompilerTool::AppleMetal);
@@ -423,15 +451,14 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 const std::filesystem::path nativePath = scratch_ / (stem + ".native");
                 if (auto translated = TranslateSpirv(entry, spirvPath, nativePath, true); translated.HasError())
                     return translated;
-                if (auto native = ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes,
-                                                  ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                    native.HasError())
-                    return Result<void>::Failure(std::move(native).ErrorValue());
+                if (auto prepared = PrepareMetalSource(nativePath); prepared.HasError())
+                    return prepared;
                 if (auto reflected = CaptureNativeReflection(entry, stem, spirvPath, nativePath); reflected.HasError())
                     return reflected;
                 const std::filesystem::path airPath = scratch_ / (stem + ".air");
                 if (auto compiled = Run(*metal,
-                                        {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0", "-c",
+                                        {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0",
+                                         invocation_.target.enableFastMath ? "-ffast-math" : "-fno-fast-math", "-x", "metal", "-c",
                                          nativePath.string(), "-o", airPath.string()},
                                         ShaderCompilerPhase::NativeCompilation, entry);
                     compiled.HasError())
@@ -441,10 +468,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                       ShaderCompilerPhase::NativeLink, entry);
                     linked.HasError())
                     return linked;
-                auto library = ReadValidatedPayload(libraryPath, invocation_.limits.maximumPayloadBytes,
-                                                    [](const std::span<const std::uint8_t> bytes) {
-                    return bytes.size() >= 4U && bytes[0] == 'M' && bytes[1] == 'T' && bytes[2] == 'L' && bytes[3] == 'B';
-                });
+                auto library = ReadValidatedPayload(libraryPath, invocation_.limits.maximumPayloadBytes, IsMetalLibrary);
                 if (library.HasError())
                     return Result<void>::Failure(std::move(library).ErrorValue());
                 payloadStages_.emplace_back(entry.stage, entry.name, std::move(library).Value());
@@ -539,7 +563,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                    std::move(payload).Value(), std::move(debugPayload), std::move(diagnostics_)};
                 if (invocation_.reflection &&
                     (output.backend == ShaderTargetBackend::Metal || output.backend == ShaderTargetBackend::OpenGL)) {
-                    auto reflected = NormalizeCapturedRasterReflection(invocation_, reflectionStages_, translations_);
+                    auto reflected =
+                        NormalizeCapturedRasterReflection(invocation_, reflectionStages_, translations_, validatedComputeSpirv_);
                     if (reflected.HasError())
                         return Result<ShaderCompilerAdapterOutput>::Failure(reflected.ErrorValue());
                     CompiledShaderArtifact compiled{output.backend,
@@ -570,6 +595,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             std::vector<ShaderCompilerDiagnostic> diagnostics_;
             std::vector<SpirvReflectionStage> reflectionStages_;
             std::vector<std::string> translations_;
+            std::vector<std::uint8_t> validatedComputeSpirv_;
             ShaderCompilerDiagnosticContext diagnosticContext_;
             bool outputTruncated_{};
             std::optional<Error> diagnosticFailure_;

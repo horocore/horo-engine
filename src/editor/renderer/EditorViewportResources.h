@@ -28,6 +28,8 @@ namespace Horo::Editor {
             Render::RenderMeshHandle mesh;
             std::uint32_t indexCount{0};
             Render::RenderMeshDescriptor descriptor; /**< Exact ready frontend recipe, including its actual vertex/index generations. */
+            std::uint32_t sourceGeneration{};        /**< Exact CPU source generation represented by this native mesh record. */
+            bool ready{}; /**< Current readiness from the canonical frontend resource registry, never inferred from handle allocation. */
         };
 
         EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig &config) noexcept;
@@ -65,6 +67,9 @@ namespace Horo::Editor {
         [[nodiscard]] Render::RenderTextureViewHandle ColorTextureView() const noexcept;
         /** @brief Exact existing color storage, borrowed to compile a clear recipe at its resource boundary. */
         [[nodiscard]] Render::RenderTextureHandle ColorTexture() const noexcept;
+        /** @brief Exact current viewport depth storage and its whole attachment view; borrowed under this resource owner. */
+        [[nodiscard]] Render::RenderTextureHandle DepthTexture() const noexcept;
+        [[nodiscard]] Render::RenderTextureViewHandle DepthTextureView() const noexcept;
         [[nodiscard]] EditorViewportExtent AllocatedExtent() const noexcept;
         [[nodiscard]] std::uintptr_t ImageIdentity() const noexcept;
         [[nodiscard]] bool IsReady() const noexcept;

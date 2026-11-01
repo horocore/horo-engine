@@ -18,4 +18,12 @@ namespace Horo::Editor {
                                                                                   const Render::ShaderTargetRequirement &target);
     /** @brief Authored binding/member names consumed with actual captured tool reflection; no offsets or native slots are supplied. */
     [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorViewportShaderReflectionNames(EditorViewportShaderProgram program);
+    /** @brief Returns the source of an actual clustered family role; grid and shadow retain their existing canonical sources. */
+    [[nodiscard]] std::string_view EditorViewportClusteredShaderSource(EditorViewportShaderProgram program) noexcept;
+    /** @brief Builds a Metal clustered lit/storage or existing grid/shadow manifest without selecting native tools. */
+    [[nodiscard]] Result<Render::ShaderManifest> MakeEditorViewportClusteredShaderManifest(EditorViewportShaderProgram program,
+                                                                                           const Render::ShaderTargetRequirement &target);
+    /** @brief Maps authored fields to actual target evidence; native slots/strides must come from the compiler output. */
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorViewportClusteredShaderReflectionNames(
+        EditorViewportShaderProgram program);
 }  // namespace Horo::Editor

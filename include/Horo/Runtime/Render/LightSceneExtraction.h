@@ -14,6 +14,15 @@ namespace Horo::Render {
         std::size_t count{};
     };
 
+    /** @brief Formats one enabled authored light using an already resolved proper world pose.
+     * @param authored Borrowed component; no values or references are retained.
+     * @param worldPosition Finite world position in world units.
+     * @param worldDirection Scale-independent direction from the hierarchy's proper rotations.
+     * @return Owned validated light value or typed component/math validation failure.
+     */
+    [[nodiscard]] Result<RenderLight> BuildRenderLightValue(const Runtime::LightComponent &authored, Math::Vec3 worldPosition,
+                                                            Math::Vec3 worldDirection);
+
     /**
      * @brief Extracts enabled Directional, Point and Spot components into reusable caller scratch.
      * @details Runs synchronously on the scene owner thread; scans at most 65536 slots and

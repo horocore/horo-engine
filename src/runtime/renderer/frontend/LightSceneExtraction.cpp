@@ -22,12 +22,6 @@ namespace Horo::Render {
         Result<RenderLight> Extract(const Runtime::RuntimeSceneView scene, Runtime::RuntimeEntityView entity,
                                     const CancellationToken &cancellation) {
             const auto &authored = *entity.components->light;
-            auto kind = RenderKind(authored.kind);
-            if (kind.HasError())
-                return Result<RenderLight>::Failure(kind.ErrorValue());
-            if (!std::isfinite(authored.innerConeRadians) || !std::isfinite(authored.outerConeRadians) || authored.innerConeRadians < 0 ||
-                authored.outerConeRadians < authored.innerConeRadians || authored.outerConeRadians > Math::Pi)
-                return Result<RenderLight>::Failure(MakeError(LightCullingErrors::InvalidInput));
             Math::Mat4 world = Math::Mat4::Identity();
             Math::Quaternion rotation;
             for (std::size_t depth = 0; depth < 64; ++depth) {
@@ -48,17 +42,7 @@ namespace Horo::Render {
                         return Result<RenderLight>::Failure(position.ErrorValue());
                     if (direction.HasError())
                         return Result<RenderLight>::Failure(direction.ErrorValue());
-                    RenderLight light{.kind = kind.Value(),
-                                      .position = position.Value(),
-                                      .direction = direction.Value(),
-                                      .color = authored.color,
-                                      .intensity = authored.intensity,
-                                      .range = authored.range,
-                                      .innerConeCosine = std::cos(authored.innerConeRadians),
-                                      .outerConeCosine = std::cos(authored.outerConeRadians)};
-                    if (!light.IsValid())
-                        return Result<RenderLight>::Failure(MakeError(LightCullingErrors::InvalidInput));
-                    return Result<RenderLight>::Success(light);
+                    return BuildRenderLightValue(authored, position.Value(), direction.Value());
                 }
                 const auto parent = scene.Get(*entity.parent);
                 if (parent.HasError())
@@ -68,6 +52,27 @@ namespace Horo::Render {
             return Result<RenderLight>::Failure(MakeError(LightCullingErrors::Capacity));
         }
     }  // namespace
+
+    Result<RenderLight> BuildRenderLightValue(const Runtime::LightComponent &authored, const Math::Vec3 worldPosition,
+                                              const Math::Vec3 worldDirection) {
+        const auto kind = RenderKind(authored.kind);
+        if (kind.HasError())
+            return Result<RenderLight>::Failure(kind.ErrorValue());
+        if (!authored.enabled || !std::isfinite(authored.innerConeRadians) || !std::isfinite(authored.outerConeRadians) ||
+            authored.innerConeRadians < 0 || authored.outerConeRadians < authored.innerConeRadians || authored.outerConeRadians > Math::Pi)
+            return Result<RenderLight>::Failure(MakeError(LightCullingErrors::InvalidInput));
+        RenderLight light{.kind = kind.Value(),
+                          .position = worldPosition,
+                          .direction = worldDirection,
+                          .color = authored.color,
+                          .intensity = authored.intensity,
+                          .range = authored.range,
+                          .innerConeCosine = std::cos(authored.innerConeRadians),
+                          .outerConeCosine = std::cos(authored.outerConeRadians)};
+        if (!light.IsValid())
+            return Result<RenderLight>::Failure(MakeError(LightCullingErrors::InvalidInput));
+        return Result<RenderLight>::Success(light);
+    }
 
     /** @copydoc ExtractSceneLights */
     Result<ExtractedLightTable> ExtractSceneLights(const Runtime::RuntimeSceneView scene, const std::uint32_t maximumLights,

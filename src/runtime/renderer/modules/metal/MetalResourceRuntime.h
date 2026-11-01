@@ -85,6 +85,12 @@ namespace Horo::Render::Detail {
         void DestroyTexture(std::uint64_t backendInstance) noexcept;
         void DestroyTextureView(std::uint64_t backendInstance) noexcept;
         void DestroyRenderTarget(std::uint64_t backendInstance) noexcept;
+        /** @brief Validates actual prepared material, mesh, graph inputs and native attachment parents. */
+        [[nodiscard]] Result<void> ValidateMaterialRaster(const RenderGraphMaterialRaster &workload,
+                                                          const RenderGraphExecutionRequest &request) const;
+        /** @brief Encodes only prevalidated material work in the current compute/raster command transaction. */
+        [[nodiscard]] Result<void> ExecuteMaterialRaster(void *commands, const RenderGraphMaterialRaster &workload,
+                                                         const RenderGraphExecutionRequest &request);
         /** @brief Validates exact UI slot publication, kernel epoch, texture policy and primary target before encoding. */
         [[nodiscard]] Result<void> ValidateUiPaint(const RenderGraphUiPaint &paint, std::span<const RenderGraphResourceInstance> resources,
                                                    void *primary) const;

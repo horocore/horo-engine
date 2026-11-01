@@ -341,3 +341,15 @@ namespace Horo::Editor {
         CHECK(native.calls == calls);
     }
 }  // namespace Horo::Editor
+
+TEST_CASE("An occupied native light slot defers the frame without treating ordinary light failures as transient",
+          "[editor][surface][lighting]") {
+    using Horo::Error;
+    using Horo::ErrorCode;
+    using Horo::ErrorDomainId;
+    CHECK(Horo::Editor::IsDeferredFrameAdmission(Error{.code = ErrorCode{"render.light.pending"}, .domain = ErrorDomainId{"horo.render"}}));
+    CHECK_FALSE(
+        Horo::Editor::IsDeferredFrameAdmission(Error{.code = ErrorCode{"render.light.invalid"}, .domain = ErrorDomainId{"horo.render"}}));
+    CHECK_FALSE(
+        Horo::Editor::IsDeferredFrameAdmission(Error{.code = ErrorCode{"render.light.pending"}, .domain = ErrorDomainId{"foreign"}}));
+}

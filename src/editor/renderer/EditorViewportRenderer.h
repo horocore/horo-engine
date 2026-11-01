@@ -6,6 +6,7 @@
  */
 
 #include "EditorRendererErrors.h"
+#include "EditorViewportLighting.h"
 #include "EditorViewportTextureView.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/DirectionalShadow.h"
@@ -66,6 +67,46 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(RendererErrors::ViewportShadowUnsupported));
         }
 
+        /** @brief Requests the exact frontend/host-admitted lighting recipe at an owner safe point.
+         * @param profile Authored budgets and fallback permission.
+         * @param selection Exact selected operation and explicit missing-predicate diagnostics.
+         * @return Admission result; unsupported implementations preserve their previous ready state. */
+        [[nodiscard]] virtual Result<void> RequestLightingProfile(const EditorViewportLightingProfile &profile,
+                                                                  const Render::LightPreparationSelection &selection) {
+            static_cast<void>(profile);
+            static_cast<void>(selection);
+            return Result<void>::Failure(MakeError(Render::LightCullingErrors::Unsupported));
+        }
+
+        /** @brief Observes exact admitted operation and bounded-degradation counts without allocating or mutating renderer state. */
+        [[nodiscard]] virtual EditorViewportLightingDiagnostics LightingDiagnostics() const noexcept {
+            return {};
+        }
+
+        /** @brief Binds the identity issued by the actual frontend once when this viewport owner is created. */
+        [[nodiscard]] Result<void> BindLightingViewIdentity(const Render::RenderViewId view) {
+            if (!view.IsValid() || lightingView_.IsValid())
+                return Result<void>::Failure(MakeError(Render::LightCullingErrors::InvalidInput));
+            lightingView_ = view;
+            return Result<void>::Success();
+        }
+
+        /** @brief Returns the frontend-scoped view identity retained across this viewport's frames. */
+        [[nodiscard]] Render::RenderViewId LightingViewIdentity() const noexcept {
+            return lightingView_;
+        }
+
+        /** @brief Prepares the final frozen scene after GUI extraction and before native BeginFrame.
+         * @param pass Exact immutable descriptor consumed by the subsequent frame.
+         * @param view Identity issued once for the actual viewport owner.
+         * @return Preparation failure before any frame begins; successful implementations retain only owned data and native leases. */
+        [[nodiscard]] virtual Result<void> PrepareLightingFrame(const Render::StaticMeshPassDescriptor &pass,
+                                                                const Render::RenderViewId view) {
+            static_cast<void>(pass);
+            static_cast<void>(view);
+            return Result<void>::Success();
+        }
+
         /** @brief Executes one prepared editor frame through the existing frontend frame/submission owner.
          * @param frame Exact active frontend scope. @param passes Frozen borrowed scene/output descriptors.
          * @return Original execution failure; no second frame, backend selection or submission authority is created.
@@ -110,5 +151,8 @@ namespace Horo::Editor {
 
         /** @brief Reports whether a complete viewport image is available for presentation. */
         [[nodiscard]] virtual bool IsReady() const noexcept = 0;
+
+    private:
+        Render::RenderViewId lightingView_;
     };
 }  // namespace Horo::Editor

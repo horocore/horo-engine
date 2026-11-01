@@ -21,6 +21,16 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
         }
 
+        /** @brief Injected runtimes fail closed unless the complete material graph consumer is implemented. */
+        [[nodiscard]] virtual Result<void> ValidateMaterialRaster(const RenderGraphMaterialRaster &,
+                                                                  const RenderGraphExecutionRequest &) const {
+            return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+        }
+
+        [[nodiscard]] virtual Result<void> ExecuteMaterialRaster(const RenderGraphMaterialRaster &, const RenderGraphExecutionRequest &) {
+            return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
+        }
+
         /** @brief Default injected runtimes explicitly decline native VFX draw admission. */
         [[nodiscard]] virtual Result<void> ValidateVfxWorkload(const RenderGraphVfx &, const RenderGraphExecutionRequest &) const {
             return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));

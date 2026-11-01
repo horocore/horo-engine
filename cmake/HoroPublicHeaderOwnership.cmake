@@ -1160,6 +1160,7 @@ Horo/Runtime/Render/VfxDrawData.h
 Horo/Runtime/Render/VfxGraphWorkload.h
 Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/LightCulling.h
+    Horo/Runtime/Render/ClusteredLightGrid.h
     Horo/Runtime/Render/LightCullingKernel.h
     Horo/Runtime/Render/LightFrameLayout.h
     Horo/Runtime/Render/LightFrameUpload.h

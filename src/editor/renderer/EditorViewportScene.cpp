@@ -45,7 +45,7 @@ namespace Horo::Editor {
             if (std::ranges::find(meshResources, instance.mesh, &EditorViewportMeshResourceView::handle) == meshResources.end())
                 return false;
         }
-        if (lights.size() > Render::MaximumForwardLights)
+        if (lights.size() > Render::MaximumSceneLights)
             return false;
         return std::ranges::all_of(lights, &Render::RenderLight::IsValid);
     }

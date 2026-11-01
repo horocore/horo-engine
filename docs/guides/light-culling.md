@@ -12,7 +12,10 @@ preserves typed scene/math errors, and never silently truncates.
 contracts. `RenderFrontend` owns the finite buffer pool. The public-header
 ownership registry assigns every added header to exactly one target; consumers
 must declare the owning target instead of adding repository-wide include roots.
-The existing `RenderSceneView` forward-light limit remains sixteen.
+`RenderSceneView` now carries up to `MaximumSceneLights` (4096) source lights.
+`MaximumForwardLights` (16) remains the per-draw compatibility limit. See
+[editor clustered lighting](editor-clustered-lighting.md) for selection, migration
+and native qualification limits.
 `LightFrameBufferPool::Create` remains the only construction entry point. Its
 constructor accepts a factory-only private construction key, following the
 existing runtime contract pattern so `std::make_unique` can own the allocation

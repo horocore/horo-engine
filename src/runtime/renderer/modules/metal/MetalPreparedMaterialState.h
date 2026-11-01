@@ -11,6 +11,8 @@
 #include <tuple>
 
 namespace Horo::Render::Detail {
+    struct MetalBufferInstance;
+    struct MetalTextureInstance;
     /** @brief Fixed MeshVertex fetch slot, reserved from material buffers and shared with future draw encoding. */
     inline constexpr std::uint32_t MetalMeshVertexBufferIndex{30};
 
@@ -41,6 +43,8 @@ namespace Horo::Render::Detail {
     struct MetalMaterialSlot {
         MaterialResidentResourceKind kind{MaterialResidentResourceKind::Buffer};
         __strong id<MTLBuffer> buffer{nil};
+        MetalBufferInstance *sourceBuffer{}; /**< Borrowed under the material's existing frontend resource pin. */
+        MetalTextureInstance *sourceTextureInstance{};
         __strong id<MTLTexture> texture{nil};
         __strong id<MTLTexture> sourceTexture{nil};
         __strong id<MTLSamplerState> sampler{nil};

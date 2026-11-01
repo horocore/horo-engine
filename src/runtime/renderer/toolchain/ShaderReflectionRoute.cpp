@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
+#include "LightCullingMetalReflection.h"
 #include "ShaderCompilerRoute.h"
 #include "ShaderCompilerToolchainSupport.h"
 
@@ -93,8 +94,12 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
     /** @copydoc NormalizeCapturedRasterReflection */
     Result<NormalizedShaderReflection> NormalizeCapturedRasterReflection(const ShaderCompilerInvocation &invocation,
                                                                          const std::vector<SpirvReflectionStage> &stages,
-                                                                         const std::vector<std::string> &translations) {
+                                                                         const std::vector<std::string> &translations,
+                                                                         std::span<const std::uint8_t> validatedSpirv) {
         const auto &target = invocation.target.requirement;
+        if (ValidateLightCullingMetalReflection(invocation.manifest, target, invocation.reflection->names).HasValue())
+            return NormalizeLightCullingMetalReflection(invocation.manifest, target, stages, translations, invocation.reflection->names,
+                                                        validatedSpirv);
         if (UsesRegisterRasterReflection(invocation))
             return NormalizeRegisterRasterReflection(invocation.manifest, target, stages, translations, invocation.reflection->names);
         if (target.backend == ShaderTargetBackend::OpenGL)
@@ -169,6 +174,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
         if (target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        if (ValidateLightCullingMetalReflection(manifest, target, request.names).HasValue())
+            return ValidateRasterTool(request, cross);
         if (ValidateRegisterRasterReflection(manifest, target, request.names).HasValue())
             return ValidateRasterTool(request, cross);
         if (expected.Value() == actual.Value())

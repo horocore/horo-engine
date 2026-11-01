@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
+#include "MetalMaterialEncoding.h"
 #include "MetalResourceRuntimeInternal.h"
 
 namespace Horo::Render::Detail {
@@ -10,10 +11,6 @@ namespace Horo::Render::Detail {
                 return 0;
             const auto &resource = request.resources[id.value - 1];
             return resource.resource == id ? resource.instance : 0;
-        }
-
-        bool Visible(const ShaderStageVisibility stages, const ShaderStageVisibility stage) noexcept {
-            return (static_cast<unsigned>(stages) & static_cast<unsigned>(stage)) != 0;
         }
 
         /** @brief Ends the owner encoder and removes staging references without releasing any command-completion ownership. */
@@ -57,34 +54,6 @@ namespace Horo::Render::Detail {
             return false;
         }
 
-        /** @brief Applies the already-prepared canonical material without allocating descriptor or argument storage. */
-        void BindMaterial(id<MTLRenderCommandEncoder> encoder, const MetalMaterialBinding &material) {
-            [encoder setRenderPipelineState:material.pipeline];
-            [encoder setDepthStencilState:material.depth];
-            [encoder setCullMode:material.state.cull == RenderCullMode::None    ? MTLCullModeNone
-                                 : material.state.cull == RenderCullMode::Front ? MTLCullModeFront
-                                                                                : MTLCullModeBack];
-            [encoder setFrontFacingWinding:material.state.frontFace == RenderFrontFace::Clockwise ? MTLWindingClockwise
-                                                                                                  : MTLWindingCounterClockwise];
-            for (const auto &slot : std::span{material.slots}.first(material.count)) {
-                if (slot.kind == MaterialResidentResourceKind::Buffer) {
-                    if (Visible(slot.stages, ShaderStageVisibility::Vertex))
-                        [encoder setVertexBuffer:slot.buffer offset:slot.offset atIndex:slot.binding];
-                    if (Visible(slot.stages, ShaderStageVisibility::Fragment))
-                        [encoder setFragmentBuffer:slot.buffer offset:slot.offset atIndex:slot.binding];
-                } else if (slot.kind == MaterialResidentResourceKind::TextureView) {
-                    if (Visible(slot.stages, ShaderStageVisibility::Vertex))
-                        [encoder setVertexTexture:slot.texture atIndex:slot.binding];
-                    if (Visible(slot.stages, ShaderStageVisibility::Fragment))
-                        [encoder setFragmentTexture:slot.texture atIndex:slot.binding];
-                } else {
-                    if (Visible(slot.stages, ShaderStageVisibility::Vertex))
-                        [encoder setVertexSamplerState:slot.sampler atIndex:slot.binding];
-                    if (Visible(slot.stages, ShaderStageVisibility::Fragment))
-                        [encoder setFragmentSamplerState:slot.sampler atIndex:slot.binding];
-                }
-            }
-        }
     }  // namespace
 
     /** @copydoc MetalResourceRuntime::Impl::VfxTarget */
@@ -204,7 +173,7 @@ namespace Horo::Render::Detail {
             const auto *material = dynamic_cast<const MetalMaterialBinding *>(&draw.slot->Material()->BackendBinding().NativeBinding());
             const auto mapped = std::ranges::find(request.meshes, draw.mesh, &RenderGraphMeshInstance::mesh);
             const auto *mesh = Decode<MetalMeshInstance>(mapped->instance);
-            BindMaterial(encoder, *material);
+            BindMetalMaterial(encoder, *material);
             [encoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:MetalMeshVertexBufferIndex];
             [encoder
                 drawIndexedPrimitives:MTLPrimitiveTypeTriangle

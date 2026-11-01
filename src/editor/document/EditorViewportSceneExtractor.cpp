@@ -1,9 +1,11 @@
 #include "editor/document/EditorViewportSceneExtractor.h"
 
 #include "EditorRenderExtractionErrors.h"
+#include "Horo/Runtime/Render/LightSceneExtraction.h"
 #include "editor/renderer/xr/EditorXrTrackingRoot.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <utility>
@@ -43,58 +45,46 @@ namespace Horo::Editor {
             return Result<Math::Mat4>::Success(Math::Multiply(parent.Value(), localToParent));
         }
 
-        [[nodiscard]] Render::RenderLightKind ToRenderLightKind(const Runtime::LightKind kind) noexcept {
-            switch (kind) {
-                case Runtime::LightKind::Directional:
-                    return Render::RenderLightKind::Directional;
-                case Runtime::LightKind::Point:
-                    return Render::RenderLightKind::Point;
-                case Runtime::LightKind::Spot:
-                    return Render::RenderLightKind::Spot;
-            }
-            return Render::RenderLightKind::Directional;
-        }
-
-        [[nodiscard]] Result<Render::RenderLight> ExtractLight(const Runtime::LightComponent &authored, const Math::Mat4 &localToWorld) {
-            const Result<Math::Vec3> direction = Math::TryNormalize(Math::TransformDirection(localToWorld, {0.0F, 0.0F, -1.0F}));
-            if (direction.HasError()) {
-                return Result<Render::RenderLight>::Failure(
-                    ExtractionError(ViewportSceneErrors::InvalidResult, "Light world direction is degenerate."));
-            }
-            Render::RenderLight light{
-                .kind = ToRenderLightKind(authored.kind),
-                .position = Math::TransformPoint(localToWorld, {}),
-                .direction = direction.Value(),
-                .color = authored.color,
-                .intensity = authored.intensity,
-                .range = authored.range,
-                .innerConeCosine = std::cos(authored.innerConeRadians),
-                .outerConeCosine = std::cos(authored.outerConeRadians),
-            };
-            if (!light.IsValid()) {
-                return Result<Render::RenderLight>::Failure(
-                    ExtractionError(ViewportSceneErrors::InvalidResult, "Extracted viewport light is invalid."));
-            }
-            return Result<Render::RenderLight>::Success(light);
-        }
-
-        [[nodiscard]] Result<void> ExtractEntityLight(const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeEntityView &entity,
+        [[nodiscard]] Result<void> ExtractEntityLight(const Runtime::RuntimeEntityView &entity,
+                                                      const std::span<const Render::IdentifiedRenderLight> lights,
                                                       EditorViewportSceneSnapshot &extracted) {
-            if (!entity.components->light.has_value() || extracted.lights.size() >= Render::MaximumForwardLights)
+            if (!entity.components->light)
                 return Result<void>::Success();
-            if (!entity.authoredObject) {
+            if (!entity.authoredObject)
                 return Result<void>::Failure(
                     ExtractionError(ViewportSceneErrors::InvalidObjectId, "Viewport light has no authored object identity."));
-            }
-            const Result<Math::Mat4> lightWorld = ResolveWorld(scene, entity.entity, {}, scene.SlotCount() + 1);
-            if (lightWorld.HasError())
-                return Result<void>::Failure(lightWorld.ErrorValue());
-            Result<Render::RenderLight> light = ExtractLight(*entity.components->light, lightWorld.Value());
-            if (light.HasError())
-                return Result<void>::Failure(light.ErrorValue());
-            extracted.lights.push_back(light.Value());
+            extracted.eligibleLights.push_back({entity.entity, SceneObjectId{entity.authoredObject->value}});
+            if (!entity.components->light->enabled)
+                return Result<void>::Success();
+            const Render::RenderLightIdentity identity{(std::uint64_t{entity.entity.entity.generation} << 32U) |
+                                                       entity.entity.entity.index};
+            const auto found = std::ranges::lower_bound(lights, identity, {}, &Render::IdentifiedRenderLight::identity);
+            if (found == lights.end() || found->identity != identity)
+                return Result<void>::Failure(
+                    ExtractionError(ViewportSceneErrors::InvalidResult, "Viewport light is missing from the exact canonical scene table."));
+            auto light = found->light;
+            light.stableIdentity = identity.value;
+            extracted.lights.push_back(light);
             extracted.lightObjects.push_back(SceneObjectId{entity.authoredObject->value});
             return Result<void>::Success();
+        }
+
+        /** @brief Sorts light values and their picking identities together at snapshot creation, with finite stack scratch. */
+        void SortExtractedLights(EditorViewportSceneSnapshot &snapshot) {
+            std::array<std::size_t, Render::MaximumSceneLights> order{};
+            std::array<Render::RenderLight, Render::MaximumSceneLights> lights;
+            std::array<SceneObjectId, Render::MaximumSceneLights> objects;
+            for (std::size_t index = 0; index < snapshot.lights.size(); ++index)
+                order[index] = index;
+            std::ranges::sort(std::span{order}.first(snapshot.lights.size()), {}, [&snapshot](const std::size_t index) {
+                return snapshot.lights[index].stableIdentity;
+            });
+            for (std::size_t index = 0; index < snapshot.lights.size(); ++index) {
+                lights[index] = snapshot.lights[order[index]];
+                objects[index] = snapshot.lightObjects[order[index]];
+            }
+            std::ranges::copy(std::span{lights}.first(snapshot.lights.size()), snapshot.lights.begin());
+            std::ranges::copy(std::span{objects}.first(snapshot.lightObjects.size()), snapshot.lightObjects.begin());
         }
 
         [[nodiscard]] Result<void> ExtractPrimitiveMeshInstance(const Runtime::RuntimeSceneView &scene,
@@ -133,6 +123,7 @@ namespace Horo::Editor {
             extracted.instances.push_back(
                 EditorViewportInstance{handle, world.Value(), resource->localBounds, Render::CoreDefaultMaterial, {}});
             extracted.instanceObjects.push_back(SceneObjectId{entity.authoredObject->value});
+            extracted.instanceEntities.push_back(entity.entity);
             extracted.instancePickable.push_back(editorState.has_value() && editorState->effectivelyLocked ? 0U : 1U);
             return Result<void>::Success();
         }
@@ -151,6 +142,36 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        Result<void> AppendDocumentAssetMesh(const Runtime::RuntimeSceneView &scene, const SceneObjectSnapshot &object,
+                                             const EditorAssetMeshCache &assetMeshes,
+                                             const std::optional<ResolvedSceneObjectEditorState> &editorState,
+                                             EditorViewportSceneSnapshot &extracted, const EditorGeometryExtractionPolicy policy) {
+            const auto assetMesh = assetMeshes.Find(*object.meshAsset);
+            if (!assetMesh.has_value() || assetMesh->mesh == nullptr) {
+                if (policy.requireImportedMeshes)
+                    return Result<void>::Failure(
+                        ExtractionError(ViewportSceneErrors::InvalidResult, "Required imported mesh is not loaded."));
+                return Result<void>::Success();
+            }
+            if (extracted.instances.size() >= policy.maximumInstances)
+                return Result<void>::Failure(ExtractionError(ViewportSceneErrors::InvalidResult, "Geometry instance capacity exceeded."));
+            const auto entity = scene.Find(Runtime::SceneObjectId{object.id.value});
+            if (!entity)
+                return Result<void>::Failure(
+                    ExtractionError(ViewportSceneErrors::ObjectNotFound, "Imported mesh scene object does not exist."));
+            if (auto retained = RetainImportedMesh(assetMeshes, *object.meshAsset, *assetMesh, extracted); retained.HasError())
+                return retained;
+            const auto world = ResolveWorld(scene, *entity, {}, scene.SlotCount() + 1);
+            if (world.HasError())
+                return Result<void>::Failure(world.ErrorValue());
+            extracted.instances.push_back(
+                EditorViewportInstance{assetMesh->handle, world.Value(), assetMesh->mesh->localBounds, Render::CoreDefaultMaterial, {}});
+            extracted.instanceObjects.push_back(object.id);
+            extracted.instanceEntities.push_back(*entity);
+            extracted.instancePickable.push_back(editorState.has_value() && editorState->effectivelyLocked ? 0U : 1U);
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ExtractDocumentAssetMeshes(const Runtime::RuntimeSceneView &scene, const SceneDocumentSnapshot &document,
                                                               const EditorAssetMeshCache &assetMeshes, const bool respectEditorVisibility,
                                                               EditorViewportSceneSnapshot &extracted,
@@ -158,108 +179,95 @@ namespace Horo::Editor {
             for (const SceneObjectSnapshot &object : document.objects) {
                 if (!object.meshAsset.has_value())
                     continue;
-                const std::optional<ResolvedSceneObjectEditorState> editorState =
-                    ResolveSceneObjectEditorState(document.objects, object.id);
+                const auto editorState = ResolveSceneObjectEditorState(document.objects, object.id);
                 if (respectEditorVisibility && editorState.has_value() && !editorState->effectivelyVisible)
                     continue;
-                const std::optional<EditorAssetMeshView> assetMesh = assetMeshes.Find(*object.meshAsset);
-                if (!assetMesh.has_value() || assetMesh->mesh == nullptr) {
-                    if (policy.requireImportedMeshes)
-                        return Result<void>::Failure(
-                            ExtractionError(ViewportSceneErrors::InvalidResult, "Required imported mesh is not loaded."));
-                    continue;
-                }
-                if (extracted.instances.size() >= policy.maximumInstances)
-                    return Result<void>::Failure(
-                        ExtractionError(ViewportSceneErrors::InvalidResult, "Geometry instance capacity exceeded."));
-                const std::optional<Runtime::EntityRef> entity = scene.Find(Runtime::SceneObjectId{object.id.value});
-                if (!entity.has_value()) {
-                    return Result<void>::Failure(
-                        ExtractionError(ViewportSceneErrors::ObjectNotFound, "Imported mesh scene object does not exist."));
-                }
-                if (auto retained = RetainImportedMesh(assetMeshes, *object.meshAsset, *assetMesh, extracted); retained.HasError())
-                    return retained;
-                const Result<Math::Mat4> world = ResolveWorld(scene, *entity, {}, scene.SlotCount() + 1);
-                if (world.HasError())
-                    return Result<void>::Failure(world.ErrorValue());
-                extracted.instances.push_back(EditorViewportInstance{assetMesh->handle,
-                                                                     world.Value(),
-                                                                     assetMesh->mesh->localBounds,
-                                                                     Render::CoreDefaultMaterial,
-                                                                     {}});
-                extracted.instanceObjects.push_back(object.id);
-                extracted.instancePickable.push_back(editorState.has_value() && editorState->effectivelyLocked ? 0U : 1U);
+                const auto result = AppendDocumentAssetMesh(scene, object, assetMeshes, editorState, extracted, policy);
+                if (result.HasError())
+                    return result;
             }
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateTransformPreviews(const Runtime::RuntimeSceneView &scene,
-                                                             const std::span<const SceneObjectTransformPreview> previews) {
-            for (std::size_t index = 0; index < previews.size(); ++index) {
-                if (!scene.Find(Runtime::SceneObjectId{previews[index].object.value})) {
-                    return Result<void>::Failure(
-                        ExtractionError(ViewportSceneErrors::ObjectNotFound, "Preview runtime scene object does not exist."));
-                }
-                if (std::ranges::find(previews.subspan(index + 1), previews[index].object, &SceneObjectTransformPreview::object) !=
-                    previews.subspan(index + 1).end()) {
-                    return Result<void>::Failure(
-                        ExtractionError(ViewportSceneErrors::InvalidObjectId, "Preview object identities must be unique."));
-                }
+        Result<void> ExtractVisibleEntity(const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeEntityView &entity,
+                                          const SceneDocumentSnapshot *document, const bool respectEditorVisibility,
+                                          const std::span<const Render::IdentifiedRenderLight> canonicalLights,
+                                          Runtime::PrimitiveMeshCache &meshCache, EditorViewportSceneSnapshot &snapshot,
+                                          const EditorGeometryExtractionPolicy policy) {
+            if (entity.authoredObject)
+                snapshot.authoredEntities.push_back({entity.entity, SceneObjectId{entity.authoredObject->value}});
+            std::optional<ResolvedSceneObjectEditorState> editorState;
+            if (document != nullptr && entity.authoredObject.has_value())
+                editorState = ResolveSceneObjectEditorState(document->objects, SceneObjectId{entity.authoredObject->value});
+            if (respectEditorVisibility && editorState.has_value() && !editorState->effectivelyVisible)
+                return Result<void>::Success();
+            const auto light = ExtractEntityLight(entity, canonicalLights, snapshot);
+            if (light.HasError())
+                return light;
+            return ExtractPrimitiveMeshInstance(scene, entity, editorState, meshCache, snapshot, policy);
+        }
+
+        bool IsVisibleDisabledLight(const SceneObjectSnapshot &object, const SceneDocumentSnapshot &document,
+                                    const bool respectEditorVisibility) {
+            if (!object.components.light || object.components.light->enabled)
+                return false;
+            const auto editorState = ResolveSceneObjectEditorState(document.objects, object.id);
+            return !respectEditorVisibility || !editorState.has_value() || editorState->effectivelyVisible;
+        }
+
+        Result<void> CaptureDisabledLight(const Runtime::RuntimeSceneView &scene, const SceneObjectSnapshot &object,
+                                          const SceneDocumentSnapshot &document, const bool respectEditorVisibility,
+                                          EditorViewportSceneSnapshot &snapshot) {
+            if (!IsVisibleDisabledLight(object, document, respectEditorVisibility))
+                return Result<void>::Success();
+            if (document.revision != snapshot.documentRevision || document.state.value != scene.DefinitionRevision().value)
+                return Result<void>::Failure(MakeError(ViewportSceneErrors::InvalidResult));
+            const auto found = std::ranges::lower_bound(snapshot.authoredEntities, object.id, {}, &EditorViewportEntitySource::object);
+            if (found == snapshot.authoredEntities.end() || found->object != object.id)
+                return Result<void>::Failure(MakeError(ViewportSceneErrors::ObjectNotFound));
+            const auto view = scene.Get(found->entity);
+            if (view.HasError())
+                return Result<void>::Failure(view.ErrorValue());
+            if (!view.Value().components->light)
+                snapshot.eligibleLights.push_back(
+                    {found->entity, object.id, object.components.light, document.revision, scene.DefinitionRevision()});
+            return Result<void>::Success();
+        }
+
+        Result<void> CaptureDisabledLights(const Runtime::RuntimeSceneView &scene, const SceneDocumentSnapshot *document,
+                                           const bool respectEditorVisibility, EditorViewportSceneSnapshot &snapshot) {
+            std::ranges::sort(snapshot.authoredEntities, {}, &EditorViewportEntitySource::object);
+            if (document == nullptr)
+                return Result<void>::Success();
+            if (document->objects.size() > 65536)
+                return Result<void>::Failure(MakeError(ViewportSceneErrors::InvalidResult));
+            for (const auto &object : document->objects) {
+                const auto captured = CaptureDisabledLight(scene, object, *document, respectEditorVisibility, snapshot);
+                if (captured.HasError())
+                    return captured;
             }
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ApplyPreviewToInstances(const Runtime::RuntimeSceneView &scene,
-                                                           const std::span<const SceneObjectTransformPreview> previews,
-                                                           EditorViewportSceneSnapshot &snapshot) {
-            for (std::size_t index = 0; index < snapshot.instanceObjects.size(); ++index) {
-                const std::optional<Runtime::EntityRef> entity = scene.Find(Runtime::SceneObjectId{snapshot.instanceObjects[index].value});
-                if (!entity) {
-                    return Result<void>::Failure(
-                        ExtractionError(ViewportSceneErrors::ObjectNotFound, "Viewport runtime object does not exist."));
-                }
-                const Result<Math::Mat4> world = ResolveWorld(scene, *entity, previews, scene.SlotCount() + 1);
-                if (world.HasError())
-                    return Result<void>::Failure(world.ErrorValue());
-                if (!Math::IsFinite(world.Value())) {
-                    return Result<void>::Failure(ExtractionError(ViewportSceneErrors::InvalidResult, "Preview transform is invalid."));
-                }
-                snapshot.instances[index].localToWorld = world.Value();
+        void InitializePreviewStorage(const Runtime::RuntimeSceneView &scene, EditorViewportSceneSnapshot &snapshot) {
+            SortExtractedLights(snapshot);
+            std::ranges::sort(snapshot.eligibleLights, {}, [](const EditorViewportLightSource &source) {
+                return (std::uint64_t{source.entity.entity.generation} << 32U) | source.entity.entity.index;
+            });
+            snapshot.transformOverrides.resize(scene.SlotCount());
+            snapshot.stagedTransformOverrides.resize(scene.SlotCount());
+            snapshot.stagedInstanceWorlds.resize(snapshot.instances.size());
+            for (auto &bank : snapshot.stagedLights) {
+                bank.lights.resize(Render::MaximumSceneLights);
+                bank.objects.resize(Render::MaximumSceneLights);
             }
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> ApplyPreviewToLights(const Runtime::RuntimeSceneView &scene,
-                                                        const std::span<const SceneObjectTransformPreview> previews,
-                                                        EditorViewportSceneSnapshot &snapshot) {
-            if (snapshot.lights.size() != snapshot.lightObjects.size()) {
-                return Result<void>::Failure(ExtractionError(ViewportSceneErrors::InstanceIdentityMismatch,
-                                                             "Viewport light identities do not match the extracted lights."));
-            }
-            for (std::size_t index = 0; index < snapshot.lightObjects.size(); ++index) {
-                const std::optional<Runtime::EntityRef> entity = scene.Find(Runtime::SceneObjectId{snapshot.lightObjects[index].value});
-                if (!entity) {
-                    return Result<void>::Failure(
-                        ExtractionError(ViewportSceneErrors::ObjectNotFound, "Viewport light object does not exist."));
-                }
-                const Result<Runtime::RuntimeEntityView> value = scene.Get(*entity);
-                if (value.HasError())
-                    return Result<void>::Failure(value.ErrorValue());
-                const Result<Math::Mat4> world = ResolveWorld(scene, *entity, previews, scene.SlotCount() + 1);
-                if (world.HasError())
-                    return Result<void>::Failure(world.ErrorValue());
-                Result<Render::RenderLight> light = ExtractLight(*value.Value().components->light, world.Value());
-                if (light.HasError())
-                    return Result<void>::Failure(light.ErrorValue());
-                snapshot.lights[index] = light.Value();
-            }
-            return Result<void>::Success();
         }
     }  // namespace
 
     /** @copydoc EditorViewportSceneSnapshot::View */
     EditorViewportSceneView EditorViewportSceneSnapshot::View() const noexcept {
-        return EditorViewportSceneView{camera, meshResources, instances, lights};
+        return EditorViewportSceneView{camera, meshResources,        instances,
+                                       lights, runtimeSceneId.value, ComputeEditorViewportLightRevision(lights)};
     }
 
     /** @copydoc EditorViewportSceneState::Replace */
@@ -341,34 +349,27 @@ namespace Horo::Editor {
         const Runtime::RuntimeSceneView &scene, const DocumentRevision documentRevision, Runtime::PrimitiveMeshCache &meshCache,
         const SceneDocumentSnapshot *document, const EditorAssetMeshCache *assetMeshes, const bool respectEditorVisibility,
         const EditorGeometryExtractionPolicy policy) {
-        if (!scene.RuntimeId().IsValid())
-            return Result<EditorViewportSceneSnapshot>::Failure(
-                ExtractionError(ViewportSceneErrors::InvalidResult, "Runtime scene view is invalid."));
         EditorViewportSceneSnapshot extracted{.documentRevision = documentRevision, .runtimeSceneId = scene.RuntimeId()};
+        std::array<Render::IdentifiedRenderLight, Render::MaximumSceneLights> canonicalLights;
+        const auto canonical = Render::ExtractSceneLights(scene, Render::MaximumSceneLights, canonicalLights);
+        if (canonical.HasError())
+            return Result<EditorViewportSceneSnapshot>::Failure(canonical.ErrorValue());
         const std::size_t capacity = std::min(scene.SlotCount(), policy.maximumInstances);
         extracted.instances.reserve(capacity);
         extracted.instanceObjects.reserve(capacity);
         extracted.instancePickable.reserve(capacity);
-        extracted.lights.reserve(std::min(scene.SlotCount(), Render::MaximumForwardLights));
-        extracted.lightObjects.reserve(std::min(scene.SlotCount(), Render::MaximumForwardLights));
+        extracted.lights.reserve(canonical.Value().count);
+        extracted.lightObjects.reserve(canonical.Value().count);
 
         for (std::size_t slot = 0; slot < scene.SlotCount(); ++slot) {
             const std::optional<Runtime::RuntimeEntityView> entity = scene.EntityAt(slot);
             if (!entity)
                 continue;
-            std::optional<ResolvedSceneObjectEditorState> editorState;
-            if (document != nullptr && entity->authoredObject.has_value())
-                editorState = ResolveSceneObjectEditorState(document->objects, SceneObjectId{entity->authoredObject->value});
-            if (respectEditorVisibility && editorState.has_value() && !editorState->effectivelyVisible)
-                continue;
-
-            if (const Result<void> lightResult = ExtractEntityLight(scene, *entity, extracted); lightResult.HasError())
-                return Result<EditorViewportSceneSnapshot>::Failure(lightResult.ErrorValue());
-
-            if (const Result<void> primitiveResult =
-                    ExtractPrimitiveMeshInstance(scene, *entity, editorState, meshCache, extracted, policy);
-                primitiveResult.HasError())
-                return Result<EditorViewportSceneSnapshot>::Failure(primitiveResult.ErrorValue());
+            const auto appended =
+                ExtractVisibleEntity(scene, *entity, document, respectEditorVisibility,
+                                     std::span{canonicalLights}.first(canonical.Value().count), meshCache, extracted, policy);
+            if (appended.HasError())
+                return Result<EditorViewportSceneSnapshot>::Failure(appended.ErrorValue());
         }
 
         if (document != nullptr && assetMeshes != nullptr) {
@@ -378,6 +379,10 @@ namespace Horo::Editor {
                 return Result<EditorViewportSceneSnapshot>::Failure(assetResult.ErrorValue());
         }
 
+        const auto disabled = CaptureDisabledLights(scene, document, respectEditorVisibility, extracted);
+        if (disabled.HasError())
+            return Result<EditorViewportSceneSnapshot>::Failure(disabled.ErrorValue());
+        InitializePreviewStorage(scene, extracted);
         return Result<EditorViewportSceneSnapshot>::Success(std::move(extracted));
     }
 
@@ -400,65 +405,4 @@ namespace Horo::Editor {
         return Result<EditorViewportSceneSnapshot>::Success(std::move(snapshot));
     }
 
-    /** @copydoc ApplyEditorViewportTransformPreview */
-    Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView &scene,
-                                                     const std::span<const SceneObjectTransformPreview> previews,
-                                                     EditorViewportSceneSnapshot &snapshot) {
-        if (snapshot.runtimeSceneId != scene.RuntimeId() || snapshot.instances.size() != snapshot.instanceObjects.size()) {
-            return Result<void>::Failure(ExtractionError(ViewportSceneErrors::InstanceIdentityMismatch,
-                                                         "Viewport snapshot does not match the active runtime scene."));
-        }
-        if (const Result<void> validation = ValidateTransformPreviews(scene, previews); validation.HasError())
-            return validation;
-
-        if (const Result<void> instanceResult = ApplyPreviewToInstances(scene, previews, snapshot); instanceResult.HasError())
-            return instanceResult;
-
-        return ApplyPreviewToLights(scene, previews, snapshot);
-    }
-
-    /** @copydoc ApplyEditorViewportLightPreview */
-    Result<void> ApplyEditorViewportLightPreview(const Runtime::RuntimeSceneView &scene, const SceneObjectLightPreview *preview,
-                                                 EditorViewportSceneSnapshot &snapshot) {
-        if (snapshot.runtimeSceneId != scene.RuntimeId() || snapshot.lights.size() != snapshot.lightObjects.size()) {
-            return Result<void>::Failure(ExtractionError(ViewportSceneErrors::InstanceIdentityMismatch,
-                                                         "Viewport light snapshot does not match the active runtime scene."));
-        }
-        if (preview != nullptr && (!preview->object.IsValid() || !IsValidLightComponent(preview->light))) {
-            return Result<void>::Failure(
-                ExtractionError(ViewportSceneErrors::InvalidResult, "Viewport Light-component preview is invalid."));
-        }
-
-        bool previewApplied = preview == nullptr;
-        for (std::size_t index = 0; index < snapshot.lightObjects.size(); ++index) {
-            const SceneObjectId object = snapshot.lightObjects[index];
-            const std::optional<Runtime::EntityRef> entity = scene.Find(Runtime::SceneObjectId{object.value});
-            if (!entity) {
-                return Result<void>::Failure(ExtractionError(ViewportSceneErrors::ObjectNotFound, "Viewport light object does not exist."));
-            }
-            const Result<Runtime::RuntimeEntityView> value = scene.Get(*entity);
-            if (value.HasError())
-                return Result<void>::Failure(value.ErrorValue());
-            if (!value.Value().components->light.has_value()) {
-                return Result<void>::Failure(
-                    ExtractionError(ViewportSceneErrors::InvalidResult, "Viewport light object has no authored Light component."));
-            }
-            const Result<Math::Mat4> world = ResolveWorld(scene, *entity, {}, scene.SlotCount() + 1);
-            if (world.HasError())
-                return Result<void>::Failure(world.ErrorValue());
-
-            const Runtime::LightComponent &lightComponent =
-                preview != nullptr && preview->object == object ? preview->light : *value.Value().components->light;
-            Result<Render::RenderLight> light = ExtractLight(lightComponent, world.Value());
-            if (light.HasError())
-                return Result<void>::Failure(light.ErrorValue());
-            snapshot.lights[index] = light.Value();
-            previewApplied = previewApplied || (preview != nullptr && preview->object == object);
-        }
-        if (!previewApplied) {
-            return Result<void>::Failure(
-                ExtractionError(ViewportSceneErrors::ObjectNotFound, "Preview Light object is not present in the viewport snapshot."));
-        }
-        return Result<void>::Success();
-    }
 }  // namespace Horo::Editor

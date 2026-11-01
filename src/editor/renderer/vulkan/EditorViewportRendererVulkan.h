@@ -9,6 +9,7 @@
 #include "VulkanEditorGraphicsBridge.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/ViewportOverlayTriangles.h"
+#include "editor/renderer/lighting/EditorViewportForwardLighting.h"
 
 #include <array>
 #include <thread>
@@ -100,6 +101,15 @@ namespace Horo::Editor {
         void RequestExtent(EditorViewportExtent extent) noexcept override;
         void RequestGrid(const EditorViewportGridOptions &options) noexcept override;
         [[nodiscard]] Result<void> RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) override;
+        /** @copydoc IEditorViewportRenderer::PrepareLightingFrame */
+        [[nodiscard]] Result<void> PrepareLightingFrame(const Render::StaticMeshPassDescriptor &pass, Render::RenderViewId view) override;
+        [[nodiscard]] Result<void> RequestLightingProfile(const EditorViewportLightingProfile &profile,
+                                                          const Render::LightPreparationSelection &selection) override;
+
+        [[nodiscard]] EditorViewportLightingDiagnostics LightingDiagnostics() const noexcept override {
+            return forwardLighting_.Diagnostics();
+        }
+
         void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &options) noexcept override;
         [[nodiscard]] EditorViewportExtent RequestedExtent() const noexcept override;
         [[nodiscard]] Math::ClipDepthRange ClipDepthRange() const noexcept override;
@@ -242,6 +252,13 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareViewportDraws(Render::FrameToken frame, std::uint32_t slot,
                                                         const Render::StaticMeshPassDescriptor &pass);
         [[nodiscard]] Result<void> ExecuteViewport(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass);
+        [[nodiscard]] Result<void> PrepareViewportOutput(Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output,
+                                                         const Render::StaticMeshPassDescriptor *viewport);
+
+        [[nodiscard]] Result<void> WriteForwardDraw(Render::FrameToken frame, const DrawSlot &draw,
+                                                    const Render::RenderStaticMeshInstance &instance, const Render::RenderSceneView &scene);
+        std::array<Render::RenderLight, Render::MaximumForwardLights> forwardDrawLights_;
+        EditorViewportForwardLighting forwardLighting_;
         const std::thread::id owner_{std::this_thread::get_id()};
         Render::RenderFrontend &frontend_;
         Render::Detail::VulkanEditorGraphicsBridge &bridge_;

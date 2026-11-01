@@ -41,6 +41,8 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::ProgramResources::WriteLighting(const Render::MaterialBindingLayout &layout,
                                                                                const std::span<std::byte> bytes,
                                                                                const Render::RenderSceneView &scene) {
+        if (scene.lights.size() > Render::MaximumForwardLights)
+            return Result<void>::Failure(MakeError(Render::LightCullingErrors::Capacity));
         std::array<float, Render::MaximumForwardLights * 4> positions{}, directions{}, colors{}, cones{};
         for (std::size_t index = 0; index < scene.lights.size(); ++index) {
             const auto &light = scene.lights[index];

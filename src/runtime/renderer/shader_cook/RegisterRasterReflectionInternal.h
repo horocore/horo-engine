@@ -35,23 +35,57 @@ namespace Horo::Render::RegisterRasterCookDetail {
         std::uint32_t binding{};
     };
 
+    enum class StorageElementKind : std::uint8_t {
+        PackedLight,
+        Membership,
+        Reference
+    };
+
+    struct StorageElementField final {
+        ShaderValueType type;
+        std::uint8_t columns;
+        std::uint32_t byteOffset;
+    };
+
+    struct NativeStorageMember final {
+        std::string name;
+        ShaderValueType type;
+        std::uint8_t columns{};
+        std::uint32_t byteOffset{};
+    };
+
+    /** @brief Actual selected-entry const-device declaration and its proven element layout. */
+    struct NativeStorage final {
+        std::string name;
+        std::uint32_t binding{}, elementStride{};
+        bool scalarUint{};
+        std::string wrapperMember; /**< Empty for a direct pointer; actual single-array member for a wrapper reference. */
+        std::vector<NativeStorageMember> members;
+    };
+
     /** @brief Native declarations, never a map copied from another target's reflection. */
     struct NativeStage final {
         std::optional<NativeUniform> uniform;
         std::optional<NativeResource> texture;
         std::optional<NativeResource> sampler;
         std::vector<ShaderReflectedInterfaceVariable> interfaces;
+        std::vector<NativeStorage> storage;
+        bool fragmentPosition{}; /**< At most one exact selected-fragment float4 [[position]] builtin; not a logical varying. */
     };
 
     constexpr std::size_t MaximumMembers = 128;
     constexpr std::uint32_t MaximumArrayElements = 512;
     constexpr std::size_t MaximumNameBytes = 256;
+    constexpr std::size_t MaximumStorageBuffers = 4;
 
     /** @brief Admits an exact ASCII shader symbol; arbitrary expressions are not names. */
     [[nodiscard]] bool Identifier(std::string_view value) noexcept;
     /** @brief Resolves one admitted authored binding without creating a second logical registry. */
     [[nodiscard]] const ShaderReflectionBindingName *FindName(std::span<const ShaderReflectionBindingName> names,
                                                               ShaderBindingId id) noexcept;
+    [[nodiscard]] std::span<const StorageElementField> StorageFields(StorageElementKind kind) noexcept;
+    [[nodiscard]] std::uint32_t StorageStride(StorageElementKind kind) noexcept;
+    [[nodiscard]] std::optional<StorageElementKind> StorageKind(const ShaderManifest &manifest, ShaderBindingId binding) noexcept;
 
     using TokenView = std::span<const std::string_view>;
     /** @brief Reads one complete bounded unsigned token without narrowing. */
@@ -62,6 +96,11 @@ namespace Horo::Render::RegisterRasterCookDetail {
     [[nodiscard]] TokenView StructureBody(TokenView tokens, std::string_view name);
     /** @brief Computes packing only for the admitted native float-register declarations. */
     [[nodiscard]] NativeUniform ReadUniformMembers(TokenView body, bool metal);
+    [[nodiscard]] NativeStorage ReadMetalStorageArgument(TokenView tokens, TokenView argument, std::size_t attribute,
+                                                         std::uint32_t binding);
+    void NormalizeRegisterStorage(const Foundation::Json &json, const NativeStage &native, const ShaderManifest &manifest,
+                                  std::span<const ShaderReflectionBindingName> names, ShaderStageVisibility visibility,
+                                  ShaderReflectionCandidate &candidate);
     /** @brief Captures actual GLSL410 declarations and explicit finite runtime installation slots. */
     [[nodiscard]] NativeStage ReadOpenGLNativeStage(TokenView tokens, ShaderStage stage);
     /** @brief Captures only resources and interface structs attached to the actual selected Metal entry. */

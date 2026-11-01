@@ -169,6 +169,8 @@ namespace Horo::Render {
         bool supportsRenderTargetResources{false};
         /** @brief Consumes exact frontend-authored graph partitions, GPU waits and timeline signals. */
         bool supportsExplicitGraphSubmissions{false};
+        bool supportsMaterialRasterGraph{
+            false}; /**< Implements native graph material consumers including readonly fragment storage bindings. */
         bool supportsMaterialPassBatches{
             false}; /**< Implements bounded flat depth/color batches, raster regions and depth-only pipeline admission together. */
         bool supportsExplicitMaterialSubmissions{false}; /**< Implements material passes through canonical queue/timeline records. */

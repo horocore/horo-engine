@@ -16,6 +16,9 @@ namespace Horo::Render::Detail {
         template <typename Lease>
         [[nodiscard]] Result<void> PinMultiviewWorkloads(Lease &lease, const std::span<const RenderGraphPassWorkload> workloads) {
             for (const auto &entry : workloads) {
+                if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&entry.workload))
+                    if (auto pinned = lease.PinMaterialRaster(*raster); pinned.HasError())
+                        return pinned;
                 const auto *scene = std::get_if<RenderGraphMultiview>(&entry.workload);
                 if (scene == nullptr)
                     continue;
@@ -219,6 +222,26 @@ namespace Horo::Render::Detail {
             return Result<IRenderGraphResourceLease *>::Success(rollback.release());
         }
         return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+    }
+
+    Result<void> RenderGraphResourceLeasePool::Lease::PinMaterialRaster(const RenderGraphMaterialRaster &raster) {
+        if (raster.draws.size() > materials.size() - materialCount)
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        for (const auto view : {raster.colorView, raster.depthView}) {
+            if (!view.IsValid())
+                continue;
+            if (auto pinned = PinIdentity({RenderResourceClass::TextureView, {view.owner, view.slot, view.generation}}); pinned.HasError())
+                return pinned;
+        }
+        for (const auto &draw : raster.draws) {
+            if (!draw.material || draw.material->Id().owner != pool->registry_->Owner())
+                return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+            if (auto pinned = PinIdentity({RenderResourceClass::Mesh, {draw.mesh.owner, draw.mesh.slot, draw.mesh.generation}});
+                pinned.HasError())
+                return pinned;
+            materials[materialCount++] = draw.material;
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc RenderGraphResourceLeasePool::Lease::PinMultiview */

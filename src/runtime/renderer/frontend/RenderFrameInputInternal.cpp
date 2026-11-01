@@ -190,7 +190,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateScene(const StaticMeshPassDescriptor &pass, const CancellationToken &cancellation) {
             const RenderSceneView &scene = pass.scene;
             if (!pass.target.IsValid() || !pass.extent.IsValid() || !pass.clearColor.IsFinite() || !scene.camera.IsValid() ||
-                scene.lights.size() > MaximumForwardLights)
+                scene.lights.size() > MaximumSceneLights)
                 return Result<void>::Failure(MakeError(ParallelWorkErrors::InvalidGeometry));
             for (const RenderMeshResourceView &mesh : scene.meshResources) {
                 const Result<void> valid = ValidateMesh(mesh, cancellation);

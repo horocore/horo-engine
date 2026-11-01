@@ -19,6 +19,9 @@ namespace Horo::Render {
     /** @brief Maximum punctual and directional lights accepted by the baseline forward viewport path. */
     inline constexpr std::size_t MaximumForwardLights = 16;
 
+    /** @brief Complete immutable light-table envelope; per-draw Forward selection has its own smaller budget. */
+    inline constexpr std::size_t MaximumSceneLights = 4096;
+
     /** @brief Backend-neutral light families supported by the baseline forward lighting path. */
     enum class RenderLightKind : std::uint8_t {
         Directional,
@@ -41,6 +44,9 @@ namespace Horo::Render {
         float range{10.0F};
         float innerConeCosine{0.9396926F};
         float outerConeCosine{0.7071068F};
+        /** @brief Producer-issued entity generation/index within the scene domain; zero denotes an anonymous legacy value.
+         * Clustered/per-draw preparation requires a real nonzero identity before sorting or selection. */
+        std::uint64_t stableIdentity{};
 
         /** @brief Reports whether the light has finite, normalized, and ordered render values. */
         [[nodiscard]] bool IsValid() const noexcept {
@@ -158,9 +164,11 @@ namespace Horo::Render {
         std::span<const RenderMeshResourceView> meshResources;
         std::span<const RenderStaticMeshInstance> instances;
         std::span<const RenderLight> lights;
+        std::uint64_t lightSceneDomain{};      /**< Runtime scene identity of this complete table. */
+        std::uint64_t lightSnapshotRevision{}; /**< Content-derived light revision, including parameter/transform previews. */
 
         [[nodiscard]] bool IsValid() const noexcept {
-            if (!camera.IsValid() || lights.size() > MaximumForwardLights)
+            if (!camera.IsValid() || lights.size() > MaximumSceneLights)
                 return false;
             return std::ranges::all_of(meshResources, &RenderMeshResourceView::IsValid) &&
                    std::ranges::all_of(instances, &RenderStaticMeshInstance::IsValid) && std::ranges::all_of(lights, &RenderLight::IsValid);

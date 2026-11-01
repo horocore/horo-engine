@@ -2646,6 +2646,11 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/UiPaintFrameUpload.cpp
         runtime/renderer/api/RenderDeviceIncarnation.cpp
         runtime/renderer/api/LightCulling.cpp
+        runtime/renderer/api/RenderGraphMaterialRaster.cpp
+        runtime/renderer/api/ClusteredLightGrid.cpp
+        runtime/renderer/api/ClusteredLightGridGeometry.cpp
+        runtime/renderer/api/ClusteredLightGridMapping.cpp
+        runtime/renderer/api/ClusteredLightPreparation.cpp
         runtime/renderer/api/LightCullingKernel.cpp
         runtime/renderer/api/LightFrameLayout.cpp
         runtime/renderer/api/LightFrameUpload.cpp
@@ -2691,6 +2696,14 @@ add_library(HoroShaderReflectionCookInternal STATIC
     runtime/renderer/shader_cook/RegisterRasterNativeEvidence.cpp
     runtime/renderer/shader_cook/RegisterRasterOpenGLEvidence.cpp
     runtime/renderer/shader_cook/RegisterRasterMetalEvidence.cpp
+    runtime/renderer/shader_cook/RegisterRasterStorageProfile.cpp
+    runtime/renderer/shader_cook/RegisterRasterMetalStorageEvidence.cpp
+    runtime/renderer/shader_cook/RegisterRasterStorageNormalization.cpp
+    runtime/renderer/shader_cook/LightCullingMetalReflectionProfile.cpp
+    runtime/renderer/shader_cook/LightCullingMetalReflectionNative.cpp
+    runtime/renderer/shader_cook/LightCullingMetalReflectionSpirv.cpp
+    runtime/renderer/shader_cook/LightCullingMetalReflectionStorage.cpp
+    runtime/renderer/shader_cook/LightCullingMetalReflectionNormalization.cpp
     runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp
     runtime/renderer/shader_cook/UiPaintMetalReflectionNormalization.cpp
     runtime/renderer/shader_cook/VfxMetalReflectionNormalization.cpp)
@@ -2740,6 +2753,8 @@ target_link_libraries(HoroShaderHotReload PUBLIC HoroEngine::ShaderBuild)
 
 add_library(HoroEditorViewportShaderRecipeInternal STATIC
     editor/renderer/shader/EditorViewportShaderRecipe.cpp
+    editor/renderer/shader/EditorViewportClusteredShaderRecipe.cpp
+    editor/renderer/shader/EditorViewportClusteredShaderParameters.cpp
     editor/renderer/shader/EditorViewportShaderParameters.cpp)
 target_compile_features(HoroEditorViewportShaderRecipeInternal PUBLIC cxx_std_20)
 target_include_directories(HoroEditorViewportShaderRecipeInternal PUBLIC
@@ -2977,6 +2992,7 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalResourcePolicy.cpp
             runtime/renderer/modules/metal/MetalResourceRuntime.mm
             runtime/renderer/modules/metal/MetalShaderResources.mm
+        runtime/renderer/modules/metal/MetalMaterialGraph.mm
             runtime/renderer/modules/metal/MetalMaterialResources.mm
             runtime/renderer/modules/metal/MetalParallelRecording.mm
             runtime/renderer/modules/metal/MetalDeviceDiscovery.mm
@@ -3290,8 +3306,26 @@ target_link_libraries(HoroWorldBakeApplication PUBLIC
         HoroEngine::EditorModel HoroEngine::SceneCellPayload HoroEngine::WorldStreaming HoroEngine::NetworkApi
         HoroEngine::SceneRuntimeConversion HoroEngine::Foundation HoroEngine::Assets HoroEngine::ProjectReadFilesApi HoroEngine::ProjectMutationGuard)
 
+# Shared viewport light preparation exposes only its explicit private header seam.
+set(HORO_EDITOR_LIGHTING_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_viewport_lighting_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_LIGHTING_HEADERS}")
+configure_file(editor/renderer/EditorViewportLighting.h
+    "${HORO_EDITOR_LIGHTING_HEADERS}/EditorViewportLighting.h" COPYONLY)
+configure_file(editor/renderer/lighting/EditorViewportForwardLighting.h
+    "${HORO_EDITOR_LIGHTING_HEADERS}/EditorViewportForwardLighting.h" COPYONLY)
+configure_file(editor/renderer/EditorViewportMeshReadiness.h
+    "${HORO_EDITOR_LIGHTING_HEADERS}/EditorViewportMeshReadiness.h" COPYONLY)
+
+add_library(HoroEditorViewportLightingInternal STATIC
+    editor/renderer/lighting/EditorViewportForwardLighting.cpp)
+add_library(HoroEngine::EditorViewportLightingInternal ALIAS HoroEditorViewportLightingInternal)
+target_compile_features(HoroEditorViewportLightingInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorViewportLightingInternal PUBLIC "${HORO_EDITOR_LIGHTING_HEADERS}")
+target_link_libraries(HoroEditorViewportLightingInternal PUBLIC HoroEngine::RenderApi HoroEngine::EditorViewportResources)
+
 add_library(HoroEditorViewportScene STATIC
         editor/renderer/EditorViewportScene.cpp
+        editor/renderer/EditorViewportLightRevision.cpp
         editor/renderer/grid/EditorViewportGridGeometry.cpp
         editor/renderer/grid/ViewportOverlayTriangles.cpp
         editor/screens/workspace/panels/viewport/visualizers/light/LightVisualizerGeometry.cpp
@@ -3326,6 +3360,7 @@ add_library(HoroEditorRenderExtraction STATIC
         editor/document/EditorAssetMeshCache.cpp
         editor/document/EditorRenderExtractionErrors.cpp
         editor/document/EditorViewportSceneExtractor.cpp
+        editor/document/EditorViewportScenePreview.cpp
         editor/document/EditorXrSceneGeometry.cpp
         editor/document/EditorViewportPicking.cpp
         editor/screens/workspace/AssetSceneDrop.cpp
@@ -3340,6 +3375,7 @@ target_include_directories(HoroEditorRenderExtraction
 )
 target_link_libraries(HoroEditorRenderExtraction
         PUBLIC
+        HoroEngine::SceneRenderExtraction
         HoroEngine::EditorModel
         HoroEngine::EditorViewportScene
 )
@@ -3360,6 +3396,11 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
             editor/renderer/metal/EditorViewportRendererMetal.mm
             editor/renderer/metal/MetalViewportResourceBridge.mm
             editor/renderer/metal/MetalViewportShaders.cpp
+            editor/renderer/metal/MetalViewportClusteredLighting.cpp
+            editor/renderer/metal/MetalViewportClusteredFrame.cpp
+            editor/renderer/metal/MetalViewportClusteredGraph.cpp
+            editor/renderer/metal/MetalViewportClusteredExecution.cpp
+            editor/renderer/metal/MetalViewportClusteredOverlay.cpp
             editor/renderer/metal/SdlMetalPresentationPort.mm
     )
     add_library(HoroEngine::EditorViewportMetal ALIAS HoroEditorViewportMetal)
@@ -3619,6 +3660,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
         editor/renderer/vulkan/EditorViewportRendererVulkan.cpp
         editor/renderer/vulkan/EditorViewportVulkanExecution.cpp
         editor/renderer/vulkan/EditorViewportVulkanShadows.cpp
+        editor/renderer/vulkan/EditorViewportVulkanLighting.cpp
         editor/renderer/vulkan/EditorViewportVulkanXr.cpp
         editor/renderer/vulkan/EditorViewportVulkanPipeline.cpp
         editor/renderer/vulkan/EditorViewportVulkanUniforms.cpp
@@ -4220,3 +4262,10 @@ endif()
 if(TARGET HoroEditorVulkanShaderInternal)
     target_link_libraries(HoroEditorVulkanShaderInternal PRIVATE HoroEditorViewportShaderRecipeInternal)
 endif()
+
+foreach(HORO_LIGHTING_CONSUMER IN ITEMS HoroEditorViewportOpenGL HoroEditorViewportMetal HoroEditorVulkanGuiInternal)
+    if(TARGET ${HORO_LIGHTING_CONSUMER})
+        # Viewport renderer declarations expose the narrow lighting types to their consumers.
+        target_link_libraries(${HORO_LIGHTING_CONSUMER} PUBLIC HoroEngine::EditorViewportLightingInternal)
+    endif()
+endforeach()

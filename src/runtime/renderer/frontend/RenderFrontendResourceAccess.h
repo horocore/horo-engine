@@ -10,6 +10,9 @@ namespace Horo::Render::Detail {
         /** @brief Validates the existing open graphics owner outside any active frame.
          * @param frontend Selected existing frontend. @return Exact registry incarnation or original lifecycle error. */
         [[nodiscard]] static Result<RenderResourceOwnerId> RequirePreparationBoundary(const RenderFrontend &frontend);
+        /** @brief Borrows the frontend's actual issued queue topology at a cold preparation boundary.
+         * @return Existing immutable assignments, valid until frontend teardown; never synthesized native queue ordinals. */
+        [[nodiscard]] static Result<std::span<const RenderQueueAssignment>> QueueAssignments(const RenderFrontend &frontend);
         /** @brief Cold-admits owned depth backing for an explicitly supported complete multiview workload.
          * @param frontend Selected frontend whose owner thread must be open and outside a frame.
          * @param scope Canonical memory scope charged for this resource.

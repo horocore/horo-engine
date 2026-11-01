@@ -1,3 +1,4 @@
+#include "EditorViewportMeshReadiness.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraph.h"
@@ -96,6 +97,48 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("Viewport light admission defers newer draw bounds until their exact resident mesh generation is ready",
+          "[unit][headless][renderer][resource][lighting]") {
+    auto frontend = CreateFrontend();
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    MeshSceneFixture fixture;
+    auto scene = fixture.Scene(1);
+    std::array<RenderStaticMeshInstance, 1> instances{{{.mesh = {{41}, 1}}}};
+    REQUIRE(resources.Prepare(scene, {128, 128}).HasValue());
+    REQUIRE(resources.FindMesh(41));
+    CHECK(resources.FindMesh(41)->sourceGeneration == 1);
+    CHECK_FALSE(resources.FindMesh(41)->ready);
+    const auto queued = ValidateEditorViewportMeshReadiness(resources, instances);
+    REQUIRE(queued.HasError());
+    CHECK(queued.ErrorValue().code.Value() == LightCullingErrors::Pending.code.Value());
+    SettleResources(resources, *frontend, scene, {128, 128});
+    REQUIRE(ValidateEditorViewportMeshReadiness(resources, {}).HasValue());
+    REQUIRE(ValidateEditorViewportMeshReadiness(resources, instances).HasValue());
+    CHECK(resources.FindMesh(41)->ready);
+    instances[0].mesh.generation = 2;
+    auto pending = ValidateEditorViewportMeshReadiness(resources, instances);
+    REQUIRE(pending.HasError());
+    CHECK(pending.ErrorValue().code.Value() == LightCullingErrors::Pending.code.Value());
+    CHECK_FALSE(pending.ErrorValue().message.empty());
+    scene = fixture.Scene(2);
+    REQUIRE(resources.Prepare(scene, {128, 128}).HasValue());
+    REQUIRE(resources.FindMesh(41));
+    CHECK(resources.FindMesh(41)->sourceGeneration == 1);
+    CHECK(ValidateEditorViewportMeshReadiness(resources, instances).HasError());
+    for (int step = 0; step < MaxResourcePasses && ValidateEditorViewportMeshReadiness(resources, instances).HasError(); ++step) {
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(resources.Prepare(scene, {128, 128}).HasValue());
+    }
+    REQUIRE(ValidateEditorViewportMeshReadiness(resources, instances).HasValue());
+    CHECK(resources.FindMesh(41)->sourceGeneration == 2);
+    instances[0].mesh.id = {99};
+    pending = ValidateEditorViewportMeshReadiness(resources, instances);
+    REQUIRE(pending.HasError());
+    CHECK(pending.ErrorValue().code.Value() == LightCullingErrors::Pending.code.Value());
+    resources.Shutdown();
+}
 
 TEST_CASE("Cold mesh preparation admits exact ready buffers and mesh before graph imports", "[unit][headless][renderer][resource]") {
     auto frontend = CreateFrontend();

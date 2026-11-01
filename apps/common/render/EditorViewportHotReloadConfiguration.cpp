@@ -65,6 +65,39 @@ namespace Horo::Application::Internal {
                 Render::ShaderCompilerReflectionRequest{reflectionTool, Names(role, target.requirement.backend)};
             return Result<ShaderHotReloadSourceProgram>::Success(std::move(program));
         }
+
+        bool LegacyMetalProgramEnvelope(const ShaderHotReloadSourceProgram &program) {
+            const auto &request = program.blueprint.compilation;
+            return program.id.value >= 1 && program.id.value <= 3 && request.targets.size() == 1 && request.reflection &&
+                   request.targets.front().requirement.backend == Render::ShaderTargetBackend::Metal;
+        }
+
+        bool CanonicalLegacyMetalProgram(const ShaderHotReloadSourceProgram &program) {
+            if (!LegacyMetalProgramEnvelope(program))
+                return false;
+            const auto role = static_cast<Editor::EditorViewportShaderProgram>(program.id.value);
+            if (program.relativeSource != Editor::EditorViewportShaderSource(role))
+                return false;
+            const auto &request = program.blueprint.compilation;
+            const auto expected = Editor::MakeEditorViewportShaderManifest(role, request.targets.front().requirement);
+            if (expected.HasError())
+                return false;
+            const auto expectedInterface = Render::ComputeShaderInterfaceCompatibilityId(expected.Value());
+            const auto actualInterface = Render::ComputeShaderInterfaceCompatibilityId(request.manifest);
+            return expectedInterface.HasValue() && actualInterface.HasValue() && expectedInterface.Value() == actualInterface.Value();
+        }
+
+        Result<void> MatchClusteredProgram(ShaderHotReloadSourceProgram &program) {
+            const auto role = static_cast<Editor::EditorViewportShaderProgram>(program.id.value);
+            const auto manifest =
+                Editor::MakeEditorViewportClusteredShaderManifest(role, program.blueprint.compilation.targets.front().requirement);
+            if (manifest.HasError())
+                return Result<void>::Failure(manifest.ErrorValue());
+            program.relativeSource = Editor::EditorViewportClusteredShaderSource(role);
+            program.blueprint.compilation.manifest = manifest.Value();
+            program.blueprint.compilation.reflection->names = Editor::EditorViewportClusteredShaderReflectionNames(role);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc MakeEditorViewportHotReloadConfiguration */
@@ -91,5 +124,25 @@ namespace Horo::Application::Internal {
         if (auto valid = ValidateShaderHotReloadSourceRecipe(configuration.sources); valid.HasError())
             return Output::Failure(valid.ErrorValue());
         return Output::Success(std::move(configuration));
+    }
+
+    Result<ShaderHotReloadHostConfiguration> MatchEditorViewportHotReloadFamily(const ShaderHotReloadHostConfiguration &configuration,
+                                                                                const bool nativeClustered) {
+        using Outcome = Result<ShaderHotReloadHostConfiguration>;
+        if (const auto valid = ValidateShaderHotReloadSourceRecipe(configuration.sources); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        if (!nativeClustered || configuration.sources.programs.size() != 3)
+            return Outcome::Success(configuration);
+        if (!std::ranges::all_of(configuration.sources.programs, CanonicalLegacyMetalProgram))
+            return Outcome::Success(configuration);
+        auto matched = configuration;
+        for (auto &program : matched.sources.programs) {
+            const auto updated = MatchClusteredProgram(program);
+            if (updated.HasError())
+                return Outcome::Failure(updated.ErrorValue());
+        }
+        if (const auto valid = ValidateShaderHotReloadSourceRecipe(matched.sources); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        return Outcome::Success(std::move(matched));
     }
 }  // namespace Horo::Application::Internal

@@ -13,6 +13,7 @@ namespace Horo::Editor {
      */
     [[nodiscard]] inline bool IsDeferredFrameAdmission(const Error &error) noexcept {
         return (error.domain.Value() == "horo.render.opengl" && error.code.Value() == "render.opengl.frame_backpressure") ||
-               (error.domain.Value() == "horo.render.metal" && error.code.Value() == "render.metal.submission_busy");
+               (error.domain.Value() == "horo.render.metal" && error.code.Value() == "render.metal.submission_busy") ||
+               (error.domain.Value() == "horo.render" && error.code.Value() == "render.light.pending");
     }
 }  // namespace Horo::Editor

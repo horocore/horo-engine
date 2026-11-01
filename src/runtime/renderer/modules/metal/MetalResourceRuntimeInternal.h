@@ -43,6 +43,10 @@ namespace Horo::Render::Detail {
         return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(instance));
     }
 
+    struct MetalRasterAttachments final {
+        MetalTextureViewInstance *color{}, *depth{};
+    };
+
     /** @brief Single render-owner native heap/identity/retirement store shared by materialization and graph operations. */
     struct MetalResourceRuntime::Impl {
         static constexpr std::size_t MaxResidentInstances = 65'535;
@@ -131,8 +135,29 @@ namespace Horo::Render::Detail {
         std::unordered_set<MetalRenderTargetInstance *> renderTargets;
 
         /** @brief Resolves one already-admitted resource without allocating native backing or publishing a partial table. */
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialTexture(const MaterialResidentResource &resident) const;
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialSampler(const MaterialResidentResource &resident) const;
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialSlot(const MetalGraphicsPipeline &pipeline,
+                                                                    const MaterialResourceBinding &logical,
+                                                                    const MaterialResidentResource &resident) const;
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialBuffer(ShaderResourceKind kind, const MaterialResidentResource &resident,
+                                                                      std::size_t requiredBufferBytes) const;
         [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialResource(ShaderResourceKind kind, const MaterialResidentResource &resident,
                                                                         std::size_t requiredBufferBytes) const;
+        [[nodiscard]] Result<MetalTextureViewInstance *> RasterView(RenderGraphResourceId resource, RenderTextureViewHandle view,
+                                                                    const RenderGraphExecutionRequest &request,
+                                                                    FramebufferExtent extent) const;
+        [[nodiscard]] Result<MetalRasterAttachments> RasterAttachments(const RenderGraphMaterialRaster &raster,
+                                                                       const RenderGraphExecutionRequest &request) const;
+        [[nodiscard]] Result<void> RasterDraw(const RenderGraphMaterialRaster &raster, const RenderGraphMaterialDraw &draw,
+                                              const RenderGraphExecutionRequest &request, const MetalRasterAttachments &attachments) const;
+        [[nodiscard]] Result<const MetalMaterialBinding *> RasterMaterial(const RenderGraphMaterialDraw &draw) const;
+        [[nodiscard]] bool RasterSlotRead(const RenderGraphMaterialRaster &raster, const ResidentMaterialBinding &resident,
+                                          const MetalMaterialSlot &slot, const RenderGraphExecutionRequest &request) const;
+        void TrackRasterMaterialUse(const MetalMaterialBinding &material, id<MTLCommandBuffer> commands) noexcept;
+        [[nodiscard]] Result<void> RasterMaterialReads(const RenderGraphMaterialRaster &raster, const ResidentMaterialBinding &resident,
+                                                       const MetalMaterialBinding &material,
+                                                       const RenderGraphExecutionRequest &request) const;
         /** @brief Resolves only a graph-pinned native target whose views match the declared whole attachments. */
         [[nodiscard]] Result<MetalRenderTargetInstance *> VfxTarget(const RenderGraphVfx &workload,
                                                                     const RenderGraphExecutionRequest &request) const;

@@ -5,6 +5,7 @@
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
+#include "RenderSubmissionAllocator.h"
 
 namespace Horo::Render {
     /** @copydoc Detail::RenderFrontendResourceAccess::RequirePreparationBoundary */
@@ -14,6 +15,13 @@ namespace Horo::Render {
         if (frontend.activeFrameScope_ != nullptr)
             return Result<RenderResourceOwnerId>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
         return Result<RenderResourceOwnerId>::Success(frontend.resourceRegistry_->Owner());
+    }
+
+    Result<std::span<const RenderQueueAssignment>> Detail::RenderFrontendResourceAccess::QueueAssignments(const RenderFrontend &frontend) {
+        using Assignments = Result<std::span<const RenderQueueAssignment>>;
+        if (auto boundary = RequirePreparationBoundary(frontend); boundary.HasError())
+            return Assignments::Failure(boundary.ErrorValue());
+        return Assignments::Success(frontend.submissionAllocator_->Assignments());
     }
 
     namespace {

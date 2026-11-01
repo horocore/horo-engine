@@ -109,14 +109,9 @@ namespace Horo::Render {
         std::shared_ptr<const ResidentMaterialBinding> material;
     };
 
-    /** @brief Bounded raster subrectangle within the retained target extent. */
-    struct RenderMaterialRegion {
-        std::uint32_t x{}, y{}, width{}, height{};
-    };
-
     /** @brief Bounded explicit native material consumer; no compilation, resource creation or variant selection occurs in-frame. */
     struct RenderMaterialPass {
-        static constexpr std::size_t MaximumDraws = 128;
+        static constexpr std::size_t MaximumDraws = RenderGraphMaterialRaster::MaximumDraws;
         static constexpr std::size_t MaximumPasses = 5;
         static constexpr std::size_t MaximumBatchDraws = MaximumDraws * MaximumPasses;
         RenderTargetHandle target;

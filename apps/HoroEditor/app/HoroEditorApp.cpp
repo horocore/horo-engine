@@ -1,6 +1,10 @@
 #include "HoroEditorApp.h"
 
 #include "EditorDirectionalShadowOptions.h"
+#include "EditorLightingOptions.h"
+#if defined(HORO_HAS_RENDER_METAL)
+#include "EditorClusteredLightingStartup.h"
+#endif
 #include "Horo/Runtime/Render/DirectionalShadowErrors.h"
 #if defined(HORO_HAS_OPENXR_HOST)
 #include "EditorOpenXRBootstrap.h"
@@ -323,6 +327,7 @@ namespace Horo::Editor {
             std::string cookTarget;
             bool cookOptionsValid{true};
             std::optional<Render::DirectionalShadowProfile> directionalShadows;
+            std::optional<EditorViewportLightingProfile> lighting;
             std::optional<Runtime::SceneObjectId> xrTrackingRoot;
             bool xrTrackingRootValid{true};
             std::optional<bool> prefabGranted{false};
@@ -751,6 +756,7 @@ namespace Horo::Editor {
         using enum PendingEditorOption;
         EditorGuiOptions opts;
         opts.directionalShadows = Detail::ParseDirectionalShadowArguments(args);
+        opts.lighting = Detail::ParseEditorLightingArguments(args);
         PendingEditorOption pending = None;
         for (const char *rawArgument : args.subspan(std::min<std::size_t>(1, args.size()))) {
             const std::string_view argument{rawArgument};
@@ -1020,11 +1026,37 @@ namespace Horo::Editor {
                   inset(width - safe.x - safe.w, pixels.width, width), inset(height - safe.y - safe.h, pixels.height, height)}});
         }
 
+        /** @brief Registers this real viewport once and admits only actual prepared lighting predicates. */
+        [[nodiscard]] Result<void> BindInitialViewportLighting(EditorRenderComposition &composition,
+                                                               const EditorViewportLightingProfile &profile,
+                                                               const Render::RenderLightPreparationReadiness &readiness) {
+            const auto view = composition.frontend->CreateRenderViewIdentity();
+            if (view.HasError())
+                return Result<void>::Failure(view.ErrorValue());
+            const auto bound = composition.viewportRenderer->BindLightingViewIdentity(view.Value());
+            if (bound.HasError())
+                return bound;
+            const auto selected = composition.frontend->ResolveLightPreparation(profile.requested, profile.fallback, readiness);
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            return composition.viewportRenderer->RequestLightingProfile(profile, selected.Value());
+        }
+
+        /** @brief Non-compute peers report no prepared native inputs; the frontend still owns fallback admission. */
+        struct NoClusteredLightingInputs final {
+            Result<Render::RenderLightPreparationReadiness> operator()(IEditorViewportRenderer &, Render::RenderFrontend &,
+                                                                       const EditorViewportLightingProfile &) const {
+                return Result<Render::RenderLightPreparationReadiness>::Success({});
+            }
+        };
+
         /** @brief Retains both native renderer owners before initialization so failures use explicit host retirement. */
-        template <typename GuiRenderer, typename ViewportRenderer>
+        template <typename GuiRenderer, typename ViewportRenderer, typename LightingPreparer = NoClusteredLightingInputs>
         [[nodiscard]] Result<void> InstallEditorRenderers(EditorRenderComposition &composition, std::unique_ptr<GuiRenderer> guiRenderer,
                                                           std::unique_ptr<ViewportRenderer> viewportRenderer,
-                                                          const Render::DirectionalShadowProfile &shadows) {
+                                                          const Render::DirectionalShadowProfile &shadows,
+                                                          const EditorViewportLightingProfile &lighting,
+                                                          LightingPreparer prepareLighting = {}) {
             ViewportRenderer *viewport = viewportRenderer.get();
             // Publish partial owners before initialization: failure may still leave native uploads in flight.
             composition.guiRenderer = std::move(guiRenderer);
@@ -1035,7 +1067,10 @@ namespace Horo::Editor {
                 return initialized;
             if (const Result<void> initialized = viewport->Initialize(); initialized.HasError())
                 return initialized;
-            return Result<void>::Success();
+            const auto readiness = prepareLighting(*viewport, *composition.frontend, lighting);
+            if (readiness.HasError())
+                return Result<void>::Failure(readiness.ErrorValue());
+            return BindInitialViewportLighting(composition, lighting, readiness.Value());
         }
 
         /** @brief Registers only the explicitly selected host backend and retains its native presentation parents. */
@@ -1109,8 +1144,9 @@ namespace Horo::Editor {
                 const auto &port = static_cast<const SdlOpenGLPresentationPort &>(*composition.openGlPresentationPort);
                 auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context(), *composition.frontend);
                 auto viewportRenderer = std::make_unique<EditorViewportRendererOpenGL>(*composition.frontend);
-                if (const Result<void> initialized = InstallEditorRenderers(composition, std::move(guiRenderer),
-                                                                            std::move(viewportRenderer), *options.directionalShadows);
+                if (const Result<void> initialized =
+                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer),
+                                               *options.directionalShadows, *options.lighting);
                     initialized.HasError()) {
                     return Result<void>::Failure(initialized.ErrorValue());
                 }
@@ -1120,8 +1156,13 @@ namespace Horo::Editor {
                 auto &graphicsBridge = *composition.metalGraphicsBridge;
                 auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
                 auto viewportRenderer = std::make_unique<EditorViewportRendererMetal>(*composition.frontend, graphicsBridge);
-                if (const Result<void> initialized = InstallEditorRenderers(composition, std::move(guiRenderer),
-                                                                            std::move(viewportRenderer), *options.directionalShadows);
+                if (const Result<void> initialized =
+                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer),
+                                               *options.directionalShadows, *options.lighting,
+                                               [](EditorViewportRendererMetal &owner, Render::RenderFrontend &frontend,
+                                                  const EditorViewportLightingProfile &profile) {
+                    return PreparePackagedMetalViewportLighting(owner, frontend, profile, EditorAssetRoot());
+                });
                     initialized.HasError()) {
                     return Result<void>::Failure(initialized.ErrorValue());
                 }
@@ -1135,7 +1176,7 @@ namespace Horo::Editor {
                 return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
                                               std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge,
                                                                                              std::move(cooked).Value()),
-                                              *options.directionalShadows);
+                                              *options.directionalShadows, *options.lighting);
 #endif
             }
             return Result<void>::Success();
@@ -1162,7 +1203,7 @@ namespace Horo::Editor {
                 if (const auto installed =
                         InstallEditorRenderers(composition,
                                                std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
-                                               std::move(viewport), *options.directionalShadows);
+                                               std::move(viewport), *options.directionalShadows, *options.lighting);
                     installed.HasError())
                     return installed;
                 return composition.xrViewport->PrepareXrProgram(std::move(multiview).Value());
@@ -1750,7 +1791,7 @@ namespace Horo::Editor {
                 frameState_.preparedPasses.count = 0;
                 const EditorViewportSceneView viewportScene = viewportSceneState_->View();
                 if (const EditorViewportExtent viewportExtent = p_->presentation.viewportRenderer.RequestedExtent();
-                    !UsesXrPresentation() &&
+                    !UsesXrPresentation() && viewportScene.lightSceneDomain != 0 &&
                     frameState_.preparedPasses.viewportMeshResourceGeneration == viewportSceneState_->MeshResourceGeneration() &&
                     CanSubmitViewportPass(viewportExtent)) {
                     if (const Result<void> resized = ResizeLegacyViewportTarget(viewportExtent); resized.HasError())
@@ -1761,16 +1802,18 @@ namespace Horo::Editor {
                                                      .staticMesh = Render::
                                                          StaticMeshPassDescriptor{.target = p_->presentation.viewportTarget,
                                                                                   .extent = {viewportExtent.width, viewportExtent.height},
-                                                                                  .scene =
-                                                                                      Render::RenderSceneView{.camera = ToRenderCamera(
-                                                                                                                  viewportScene.camera),
-                                                                                                              .meshResources =
-                                                                                                                  viewportScene
-                                                                                                                      .meshResources,
-                                                                                                              .instances =
-                                                                                                                  viewportScene.instances,
-                                                                                                              .lights =
-                                                                                                                  viewportScene.lights}}};
+                                                                                  .scene = Render::
+                                                                                      RenderSceneView{.camera = ToRenderCamera(
+                                                                                                          viewportScene.camera),
+                                                                                                      .meshResources =
+                                                                                                          viewportScene.meshResources,
+                                                                                                      .instances = viewportScene.instances,
+                                                                                                      .lights = viewportScene.lights,
+                                                                                                      .lightSceneDomain =
+                                                                                                          viewportScene.lightSceneDomain,
+                                                                                                      .lightSnapshotRevision =
+                                                                                                          viewportScene
+                                                                                                              .lightSnapshotRevision}}};
                 }
                 frameState_.preparedPasses.descriptors[frameState_.preparedPasses.count++] =
                     Render::RenderPassDescriptor{.id = Render::RenderPassId{2},
@@ -1878,8 +1921,21 @@ namespace Horo::Editor {
                 return pacing_.pacer.Configure({p_->options.frameRateLimit}, observed.Value().snapshot);
             }
 
-            Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
-                // The output was frozen before GUI CPU work. Recheck only availability, never resize/reproject after extraction.
+            /** @brief Uses the exact post-GUI descriptors while frontend resources are still outside a native frame. */
+            Result<void> PrepareViewportLightingFrame() {
+                const auto view = p_->presentation.viewportRenderer.LightingViewIdentity();
+                for (const auto &descriptor : std::span{frameState_.preparedPasses.descriptors}.first(frameState_.preparedPasses.count)) {
+                    if (!descriptor.staticMesh)
+                        continue;
+                    const auto prepared = p_->presentation.viewportRenderer.PrepareLightingFrame(*descriptor.staticMesh, view);
+                    if (prepared.HasError())
+                        return prepared;
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Rechecks only frozen-output availability; extraction and projection remain unchanged. */
+            Result<bool> PollFrozenPresentationFrame() {
                 const auto available = p_->presentation.renderFrontend.PollPresentationAvailability(pacing_.committedOutputExtent);
                 if (available.HasError()) {
                     const auto &error = available.ErrorValue();
@@ -1888,8 +1944,19 @@ namespace Horo::Editor {
                         return Result<bool>::Success(false);
                     return Result<bool>::Failure(error);
                 }
+                return available;
+            }
+
+            Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
+                const auto available = PollFrozenPresentationFrame();
+                if (available.HasError())
+                    return Result<bool>::Failure(available.ErrorValue());
                 if (!available.Value())
                     return Result<bool>::Success(false);
+                const auto preparedLighting = PrepareViewportLightingFrame();
+                if (preparedLighting.HasError())
+                    return IsDeferredFrameAdmission(preparedLighting.ErrorValue()) ? Result<bool>::Success(false)
+                                                                                   : Result<bool>::Failure(preparedLighting.ErrorValue());
                 const Render::FramebufferExtent outputExtent = pacing_.committedOutputExtent;
                 pacing_.presentingFrameNumber = context.frameNumber;
 
@@ -1924,12 +1991,14 @@ namespace Horo::Editor {
 #endif
                 const EditorViewportSceneView viewportScene = viewportSceneState_->View();
                 auto prepared =
-                    p_->presentation.viewportRenderer.PrepareResources(p_->presentation.renderFrontend,
-                                                                       Render::RenderSceneView{.camera =
-                                                                                                   ToRenderCamera(viewportScene.camera),
-                                                                                               .meshResources = viewportScene.meshResources,
-                                                                                               .instances = viewportScene.instances,
-                                                                                               .lights = viewportScene.lights});
+                    p_->presentation.viewportRenderer
+                        .PrepareResources(p_->presentation.renderFrontend,
+                                          Render::RenderSceneView{.camera = ToRenderCamera(viewportScene.camera),
+                                                                  .meshResources = viewportScene.meshResources,
+                                                                  .instances = viewportScene.instances,
+                                                                  .lights = viewportScene.lights,
+                                                                  .lightSceneDomain = viewportScene.lightSceneDomain,
+                                                                  .lightSnapshotRevision = viewportScene.lightSnapshotRevision});
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 frameState_.preparedPasses.viewportMeshResourceGeneration = viewportSceneState_->MeshResourceGeneration();
@@ -2746,9 +2815,20 @@ namespace Horo::Editor {
         return false;
     }
 
+    /** @brief Keeps malformed recipe, fallback and coverage arguments from changing product policy implicitly. */
+    [[nodiscard]] static bool ValidateEditorLightingOptions(const EditorGuiOptions &options) {
+        if (options.lighting)
+            return true;
+        const auto error =
+            MakeError(Render::LightCullingErrors::InvalidInput, "Use --lighting forward|clustered, --lighting-fallback forbid|forward, and "
+                                                                "--lighting-coverage complete|allow-omissions with unique values.");
+        LOG_CRITICAL("editor.lighting", "%s", error.message.c_str());
+        return false;
+    }
+
     /** @brief Composes independent startup option validation without merging subsystem policy. */
     [[nodiscard]] static bool ValidateEditorStartupOptions(const EditorGuiOptions &options) {
-        return ValidateEditorPhysicsOptions(options) && ValidateEditorShadowOptions(options);
+        return ValidateEditorPhysicsOptions(options) && ValidateEditorShadowOptions(options) && ValidateEditorLightingOptions(options);
     }
 
     /** @brief Canonical configuration/event lifetime pair transferred intact into one prepared startup. */
@@ -3024,6 +3104,27 @@ namespace Horo::Editor {
         bool healthy;
     };
 
+    /** @brief Creates the explicit developer reload owner using the actual admitted viewport ABI. */
+    [[nodiscard]] static Result<std::unique_ptr<Application::Internal::ShaderHotReloadHost>> CreateEditorShaderReload(
+        const EditorSessionLaunch &launch, Application::ShaderBuildService &shaderBuild, const JobSystem &jobs,
+        const bool hasQualifiedCompiler) {
+        using Host = Application::Internal::ShaderHotReloadHost;
+        using Outcome = Result<std::unique_ptr<Host>>;
+        if (!launch.shaderReload)
+            return Outcome::Success({});
+        auto *target = dynamic_cast<Render::IShaderHotReloadTarget *>(launch.composition.viewportRenderer.get());
+        if (!hasQualifiedCompiler || !target)
+            return Outcome::Failure(MakeError(Application::ShaderHotReloadErrors::InvalidRequest,
+                                              "Development reload requires an explicit compiler and selected reload target."));
+        const auto activeMode = launch.composition.viewportRenderer->LightingDiagnostics().selection.mode;
+        const auto configuration =
+            Application::Internal::MatchEditorViewportHotReloadFamily(*launch.shaderReload,
+                                                                      activeMode == Render::LightPreparationMode::ClusteredForwardNative);
+        if (configuration.HasError())
+            return Outcome::Failure(configuration.ErrorValue());
+        return Host::Create(shaderBuild, jobs, launch.operations, launch.buildOutput, *target, configuration.Value());
+    }
+
     /** @brief Owns runtime services and routes for one graphical editor session. */
     [[nodiscard]] static EditorSessionResult RunEditorSession(EditorSessionLaunch launch) {
         EngineDataBus &engineEvents = *launch.startup.engineEvents;
@@ -3041,22 +3142,14 @@ namespace Horo::Editor {
         JobSystem &jobSystem = *selectedJobs;
         const bool hasQualifiedCompiler = static_cast<bool>(launch.shaderCompiler);
         Application::ShaderBuildService shaderBuild{std::move(launch.shaderCompiler), launch.buildOutput};
-        std::unique_ptr<Application::Internal::ShaderHotReloadHost> shaderReload;
-        if (launch.shaderReload) {
-            auto *target = dynamic_cast<Render::IShaderHotReloadTarget *>(launch.composition.viewportRenderer.get());
-            if (!hasQualifiedCompiler || !target) {
-                LOG_ERROR("editor.shader_reload", "Development reload requires an explicit compiler and selected reload target.");
-                return {std::nullopt, false};
-            }
-            auto created = Application::Internal::ShaderHotReloadHost::Create(shaderBuild, jobSystem, launch.operations, launch.buildOutput,
-                                                                              *target, *launch.shaderReload);
-            if (created.HasError()) {
-                LOG_ERROR("editor.shader_reload", "%s", created.ErrorValue().message.c_str());
-                return {std::nullopt, false};
-            }
-            shaderReload = std::move(created).Value();
-            LOG_INFO("editor.shader_reload", "Development commands: Ctrl+Alt+R reload; Ctrl+Alt+C cancel.");
+        auto createdReload = CreateEditorShaderReload(launch, shaderBuild, jobSystem, hasQualifiedCompiler);
+        if (createdReload.HasError()) {
+            LOG_ERROR("editor.shader_reload", "%s", createdReload.ErrorValue().message.c_str());
+            return {std::nullopt, false};
         }
+        auto shaderReload = std::move(createdReload).Value();
+        if (shaderReload)
+            LOG_INFO("editor.shader_reload", "Development commands: Ctrl+Alt+R reload; Ctrl+Alt+C cancel.");
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
         EditorDataBus editorEvents;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", launch.startup.settings.languageTag.c_str());

@@ -219,3 +219,36 @@ TEST_CASE("Developer host exposes reload and cancellation while preserving the l
     CHECK(target.prepared == 0);
     CHECK(target.CaptureState().Value().liveGeneration == 1);
 }
+
+TEST_CASE("Canonical reload sources follow actual native lighting without changing tool authority or caller limits",
+          "[application][shader][lighting]") {
+    using namespace Horo;
+    using namespace Horo::Application::Internal;
+    const Render::ShaderCompilerToolIdentity reflection{Render::ShaderCompilerTool::SpirvCross, "metadata-fixture", {}};
+    const Render::ShaderCompilerTargetDescriptor target{.requirement = {Render::ShaderTargetBackend::Metal,
+                                                                        Render::ShaderPayloadFormat::MetalLibrary24, 1, 1, 32, 128, true,
+                                                                        true},
+                                                        .platformTriple = "metadata-fixture",
+                                                        .tools = {reflection}};
+    auto source = MakeEditorViewportHotReloadConfiguration(std::filesystem::temp_directory_path(), target, reflection, {1, 1, 1, 1, 0});
+    REQUIRE(source.HasValue());
+    auto configuration = std::move(source).Value();
+    configuration.sources.programs.front().blueprint.limits.maximumPayloadBytes = 4096;
+    const auto native = MatchEditorViewportHotReloadFamily(configuration, true);
+    REQUIRE(native.HasValue());
+    REQUIRE(native.Value().sources.programs.size() == 3);
+    const auto &lit = native.Value().sources.programs.front();
+    CHECK(lit.relativeSource == "shaders/editor/viewport_clustered_lit.hlsl");
+    CHECK(lit.blueprint.compilation.manifest.bindings.size() == 6);
+    CHECK(lit.blueprint.limits.maximumPayloadBytes == 4096);
+    CHECK(lit.blueprint.compilation.targets.front().platformTriple == target.platformTriple);
+    CHECK(lit.blueprint.compilation.reflection->tool.release == reflection.release);
+    CHECK(configuration.sources.programs.front().relativeSource == "shaders/editor/viewport_lit.hlsl");
+    const auto forward = MatchEditorViewportHotReloadFamily(configuration, false);
+    REQUIRE(forward.HasValue());
+    CHECK(forward.Value().sources.programs.front().relativeSource == configuration.sources.programs.front().relativeSource);
+    configuration.sources.programs.front().relativeSource = "custom/owned.hlsl";
+    const auto custom = MatchEditorViewportHotReloadFamily(configuration, true);
+    REQUIRE(custom.HasValue());
+    CHECK(custom.Value().sources.programs.front().relativeSource == "custom/owned.hlsl");
+}

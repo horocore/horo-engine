@@ -1,5 +1,6 @@
 #include "EditorViewportRendererOpenGL.h"
 
+#include "EditorViewportMeshReadiness.h"
 #include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "OpenGLProgramValidation.h"
@@ -78,6 +79,7 @@ namespace Horo::Editor {
     };
 
 #include "EditorViewportOpenGLHotReload.inl"
+#include "OpenGLViewportLighting.inl"
 
     /** @copydoc EditorViewportRendererOpenGL::AdoptProgram */
     void EditorViewportRendererOpenGL::AdoptProgram(ProgramGeneration &candidate) noexcept {
@@ -258,6 +260,8 @@ namespace Horo::Editor {
         const EditorViewportExtent renderExtent = allocatedExtent.IsValid() ? allocatedExtent : extentRequest;
         if (const Result<void> valid = ValidatePassRequest(descriptor, renderExtent); valid.HasError())
             return valid;
+        if (const auto lights = forwardLighting_.Prepare(descriptor.scene); lights.HasError())
+            return lights;
         const float aspect = static_cast<float>(allocatedExtent.width) / static_cast<float>(allocatedExtent.height);
         const auto shadow = Render::BuildDirectionalShadowFrame(descriptor.scene, aspect, Math::ClipDepthRange::NegativeOneToOne,
                                                                 resources_.ActiveDirectionalShadowProfile());
@@ -280,7 +284,7 @@ namespace Horo::Editor {
         if (const EditorViewportExtent allocatedExtent = resources_.AllocatedExtent();
             requestedExtent.width != allocatedExtent.width || requestedExtent.height != allocatedExtent.height)
             return Result<void>::Failure(MakeViewportError(RendererErrors::ViewportStaleTarget, "Viewport target extent is not ready."));
-        return Result<void>::Success();
+        return ValidateEditorViewportMeshReadiness(resources_, descriptor.scene.instances);
     }
 
     Result<void> EditorViewportRendererOpenGL::RenderViewportPass(const Render::StaticMeshPassDescriptor &descriptor,
@@ -309,9 +313,10 @@ namespace Horo::Editor {
                 OpenGLViewportResourceBridge::BindTexture(*frontend_, resources_.ShadowTextureView(), reloadTextureUnit_);
             boundShadow.HasError())
             return boundShadow;
-        reloadParameters_.SetScene(descriptor.scene, shadow, Render::ShaderTargetBackend::OpenGL);
+        frameShadow_ = shadow;
+        // Grid uses the bootstrap material's complete selection color; no global light truncation is uploaded.
         if (!reflectedProgram_)
-            UploadLighting(descriptor.scene, shadow);
+            glUniform1i(uniforms_.lightCount, 0);
         if (const Result<void> grid = DrawGrid(descriptor.scene.camera, aspect, static_cast<float>(allocatedExtent.height));
             grid.HasError()) {
             return grid;
@@ -325,8 +330,10 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    Result<void> EditorViewportRendererOpenGL::DrawSceneMeshes(const Render::RenderSceneView &scene, const float aspect) const {
-        for (const Render::RenderStaticMeshInstance &instance : scene.instances) {
+    Result<void> EditorViewportRendererOpenGL::DrawSceneMeshes(const Render::RenderSceneView &scene, const float aspect) {
+        for (const auto &instance : scene.instances) {
+            if (const auto lights = PrepareDrawLighting(scene, instance); lights.HasError())
+                return lights;
             const auto mesh = resources_.FindMesh(instance.mesh.id.value);
             if (!mesh.has_value()) {
                 return Result<void>::Failure(

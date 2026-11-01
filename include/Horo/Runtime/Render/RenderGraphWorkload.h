@@ -49,10 +49,50 @@ namespace Horo::Render {
         std::shared_ptr<IResidentLightCullingKernel> kernel;
     };
 
+    /** @brief Bounded raster subrectangle within the retained target extent. */
+    struct RenderMaterialRegion {
+        std::uint32_t x{}, y{}, width{}, height{};
+    };
+
+    /** @brief One exact mesh/material generation with declared graph vertex and index fetch inputs. */
+    struct RenderGraphMaterialDraw final {
+        RenderMeshHandle mesh;
+        RenderGraphResourceId vertices, indices;
+        std::shared_ptr<const ResidentMaterialBinding> material;
+    };
+
+    /** @brief One exhaustive graph input mapping; exactly one resident buffer or sampled view is valid. */
+    struct RenderGraphMaterialRead final {
+        RenderGraphResourceId resource;
+        RenderBufferHandle buffer;
+        RenderTextureViewHandle texture;
+    };
+
+    /** @brief Real bounded graphics material consumer inside the same graph as light compute.
+     * @details Spans are synchronous borrows; the frontend completion lease retains all exact meshes, views,
+     * materials and graph buffers through native completion. Reads exhaustively map every material uniform,
+     * readonly storage buffer and sampled view. Packed implicit parameter allocations are not graph inputs.
+     * Native admission verifies exact view parents and mesh buffers against declared graph instances before encoding.
+     */
+    struct RenderGraphMaterialRaster final {
+        static constexpr std::size_t MaximumDraws = 128;
+        static constexpr std::size_t MaximumReads = RenderGraphLimits::HardMaxResources;
+        static constexpr std::size_t MaximumRetainedDraws = MaximumDraws * 7;
+        RenderGraphResourceId color, depth;
+        RenderTextureViewHandle colorView, depthView;
+        FramebufferExtent extent;
+        PrimaryOutputAttachment colorOperations;
+        std::optional<float> depthClear{1.0F};
+        std::optional<RenderMaterialRegion> region;
+        std::span<const RenderGraphMaterialDraw> draws;
+        std::span<const RenderGraphMaterialRead> reads;
+        bool depthOnly{};
+    };
+
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
     using RenderGraphWorkload =
         std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
-                     RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint>;
+                     RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {
@@ -149,6 +189,14 @@ namespace Horo::Render {
         RenderGraphExecutionRole role{RenderGraphExecutionRole::Scene};
         std::span<const RenderGraphTargetInstance> targets; /**< Exact prepared targets used by typed native VFX. */
     };
+
+    /** @brief Validates exact material input/use membership and raster outputs before native resource capture.
+     * @param request Complete borrowed frame graph request. @param pass Exact retained graphics pass.
+     * @param raster Complete bounded material consumer. @return Typed invalid/unsupported failure or complete admission.
+     */
+    [[nodiscard]] Result<void> ValidateMaterialRasterWorkload(const RenderGraphExecutionRequest &request,
+                                                              const RenderGraphExecutionPass &pass,
+                                                              const RenderGraphMaterialRaster &raster);
 
     /**
      * @brief Validates a finite graph request before selected-backend native validation.
