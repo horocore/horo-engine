@@ -18,7 +18,6 @@ namespace Horo::Editor {
         constexpr float MoveArrowHeadHalfWidth = 7.0F;
         constexpr float MovePlaneOffset = 0.14F;
         constexpr float MovePlaneSize = 0.18F;
-        constexpr float MovePlaneBackGapPixels = 8.0F;
         constexpr float MoveEndOnOffset = 22.0F;
         constexpr float MoveEndOnHalfSize = 6.0F;
         constexpr float ScaleHandleHalfSize = 9.0F;
@@ -80,18 +79,24 @@ namespace Horo::Editor {
             const ImU32 face = ShadeAxisColor(color, highlighted ? 1.18F : 1.0F);
             const ImU32 light = ShadeAxisColor(face, 1.1F);
             const ImU32 dark = ShadeAxisColor(face, 0.82F);
-            const float headBase = length - MoveArrowHeadLength;
-            const ImVec2 shaftStart = AlongAxis(center, direction, 2.0F);
+            const float headLength = std::min(MoveArrowHeadLength, length * 0.45F);
+            const float headWidth = std::min(MoveArrowHeadHalfWidth, length * 0.2F);
+            const float headBase = length - headLength;
+            const ImVec2 shaftStart = AlongAxis(center, direction, std::min(2.0F, headBase * 0.5F));
             const ImVec2 shaftEnd = AlongAxis(center, direction, headBase);
             const ImVec2 tip = AlongAxis(center, direction, length);
-            const ImVec2 left = AlongAxis(center, direction, headBase, -MoveArrowHeadHalfWidth);
-            const ImVec2 right = AlongAxis(center, direction, headBase, MoveArrowHeadHalfWidth);
+            const ImVec2 left = AlongAxis(center, direction, headBase, -headWidth);
+            const ImVec2 right = AlongAxis(center, direction, headBase, headWidth);
             const ImVec2 middle = AlongAxis(center, direction, headBase);
 
             drawList.AddLine(shaftStart, shaftEnd, dark, 3.0F);
             drawList.AddLine(shaftStart, shaftEnd, face, 1.5F);
+            // Joined AA fringes on the two acute half-triangles displace the projected tip.
+            const auto flags = drawList.Flags;
+            drawList.Flags &= ~ImDrawListFlags_AntiAliasedFill;
             drawList.AddTriangleFilled(left, tip, middle, light);
             drawList.AddTriangleFilled(middle, tip, right, dark);
+            drawList.Flags = flags;
         }
 
         /** @brief Gives uniform scaling the same solid-handle treatment as the axis tips. */
@@ -394,56 +399,129 @@ namespace Horo::Editor {
             return false;
         }
 
-        /** @brief Draws camera-visible plane translation handles between pairs of move axes. */
-        void DrawMovePlaneHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
-                                  const std::array<ImU32, 3> &axisColors, const float centerPixelsPerWorldUnit) {
+        /** @brief Projects a world-frame offset with the same camera authority as scene geometry and picking rays. */
+        [[nodiscard]] Result<std::optional<ImVec2>> ProjectMoveOffset(const TransformGizmoGeometryRequest &request,
+                                                                      const TransformGizmoFrameGeometry &geometry,
+                                                                      const Math::Vec3 offset) noexcept {
+            return ProjectToViewport(request.camera, geometry.worldPosition + offset, request.origin, request.width, request.height,
+                                     request.depthRange);
+        }
+
+        /** @brief Projects one fixed world-plane quad, without camera-dependent screen-space relocation. */
+        [[nodiscard]] Result<std::optional<std::array<ImVec2, 4>>> ProjectMovePlane(const TransformGizmoGeometryRequest &request,
+                                                                                    const TransformGizmoFrameGeometry &geometry,
+                                                                                    const int normal, const float worldExtent) {
+            const auto first = geometry.worldAxes[(normal + 1) % 3] * worldExtent;
+            const auto second = geometry.worldAxes[(normal + 2) % 3] * worldExtent;
+            const auto base = first * MovePlaneOffset - second * MovePlaneOffset;
+            const std::array offsets{base, base + first * MovePlaneSize, base + (first - second) * MovePlaneSize,
+                                     base - second * MovePlaneSize};
+            std::array<ImVec2, 4> corners;
+            for (std::size_t index = 0; index < corners.size(); ++index) {
+                const auto point = ProjectMoveOffset(request, geometry, offsets[index]);
+                if (point.HasError())
+                    return Result<std::optional<std::array<ImVec2, 4>>>::Failure(point.ErrorValue());
+                if (!point.Value())
+                    return Result<std::optional<std::array<ImVec2, 4>>>::Success(std::nullopt);
+                corners[index] = *point.Value();
+            }
+            const ImVec2 firstEdge{corners[1].x - corners[0].x, corners[1].y - corners[0].y};
+            const ImVec2 secondEdge{corners[3].x - corners[0].x, corners[3].y - corners[0].y};
+            if (std::fabs(firstEdge.x * secondEdge.y - firstEdge.y * secondEdge.x) < 8.0F)
+                return Result<std::optional<std::array<ImVec2, 4>>>::Success(std::nullopt);
+            return Result<std::optional<std::array<ImVec2, 4>>>::Success(corners);
+        }
+
+        /** @brief Uses exactly the same projected polygon for drawing and plane selection. */
+        [[nodiscard]] Result<void> DrawMovePlaneHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                                        TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &axisColors,
+                                                        const float centerPixelsPerWorldUnit) {
             for (int normal = 0; normal < 3; ++normal) {
-                const int firstAxis = (normal + 1) % 3;
-                const int secondAxis = (normal + 2) % 3;
-                if (!geometry.projectedAxisVisible[firstAxis] || !geometry.projectedAxisVisible[secondAxis])
+                const auto projected = ProjectMovePlane(request, geometry, normal, MoveExtentPixels / centerPixelsPerWorldUnit);
+                if (projected.HasError())
+                    return Result<void>::Failure(projected.ErrorValue());
+                if (!projected.Value())
                     continue;
-                const float firstLength =
-                    MoveExtentPixels * std::min(geometry.pixelsPerWorldUnit[firstAxis] / centerPixelsPerWorldUnit, 1.0F);
-                const float secondLength =
-                    MoveExtentPixels * std::min(geometry.pixelsPerWorldUnit[secondAxis] / centerPixelsPerWorldUnit, 1.0F);
-                const ImVec2 first{geometry.screenDirections[firstAxis].x * firstLength,
-                                   geometry.screenDirections[firstAxis].y * firstLength};
-                const ImVec2 second{geometry.screenDirections[secondAxis].x * secondLength,
-                                    geometry.screenDirections[secondAxis].y * secondLength};
-                if (std::fabs(first.x * second.y - first.y * second.x) * MovePlaneSize * MovePlaneSize < 30.0F)
-                    continue;
-                const ImVec2 base{geometry.center->x + first.x * MovePlaneOffset - second.x * MovePlaneOffset,
-                                  geometry.center->y + first.y * MovePlaneOffset - second.y * MovePlaneOffset};
-                std::array corners{
-                    base,
-                    ImVec2{base.x + first.x * MovePlaneSize, base.y + first.y * MovePlaneSize},
-                    ImVec2{base.x + first.x * MovePlaneSize - second.x * MovePlaneSize,
-                           base.y + first.y * MovePlaneSize - second.y * MovePlaneSize},
-                    ImVec2{base.x - second.x * MovePlaneSize, base.y - second.y * MovePlaneSize},
-                };
-                if (geometry.projectedAxisVisible[normal]) {
-                    const ImVec2 normalDirection = geometry.screenDirections[normal];
-                    float forwardMost = -std::numeric_limits<float>::max();
-                    for (const ImVec2 corner : corners) {
-                        const ImVec2 fromCenter{corner.x - geometry.center->x, corner.y - geometry.center->y};
-                        forwardMost = std::max(forwardMost, fromCenter.x * normalDirection.x + fromCenter.y * normalDirection.y);
-                    }
-                    const float backShift = std::max(0.0F, forwardMost + MovePlaneBackGapPixels);
-                    for (ImVec2 &corner : corners) {
-                        corner.x -= normalDirection.x * backShift;
-                        corner.y -= normalDirection.y * backShift;
-                    }
-                }
+                const auto &corners = *projected.Value();
                 geometry.movePlaneCorners[normal] = corners;
                 const bool hit = request.hovered && PointInQuad(request.pointer, corners);
                 const bool highlighted = request.activeAxis == normal + 4 || hit;
                 const ImU32 color = ShadeAxisColor(axisColors[normal], highlighted ? 1.25F : 0.95F);
+                const auto flags = drawList.Flags;
+                drawList.Flags &= ~ImDrawListFlags_AntiAliasedFill;
                 drawList.AddQuadFilled(corners[0], corners[1], corners[2], corners[3], color);
+                drawList.Flags = flags;
                 drawList.AddPolyline(corners.data(), static_cast<int>(corners.size()), ShadeAxisColor(color, 0.72F), ImDrawFlags_Closed,
                                      1.0F);
                 if (hit)
                     geometry.hoveredAxis = normal + 4;
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Keeps a foreshortened arrow until its actual perspective projection is subpixel. */
+        [[nodiscard]] Result<void> DrawMoveAxis(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                                TransformGizmoFrameGeometry &geometry, const LinearAxisHandleContext &context) {
+            const int axis = context.axis;
+            const float worldExtent = MoveExtentPixels / context.centerPixelsPerWorldUnit;
+            const auto projected = ProjectMoveOffset(request, geometry, geometry.worldAxes[axis] * worldExtent);
+            if (projected.HasError())
+                return Result<void>::Failure(projected.ErrorValue());
+            if (!projected.Value())
+                return Result<void>::Success();
+            const ImVec2 end = *projected.Value();
+            const float length = Distance(*geometry.center, end);
+            if (length < 2.0F) {
+                PrepareEndOnAxis(geometry, axis, context.centerPixelsPerWorldUnit, context.hitState.endOnAxis);
+                return Result<void>::Success();
+            }
+            const ImVec2 direction{(end.x - geometry.center->x) / length, (end.y - geometry.center->y) / length};
+            geometry.screenDirections[axis] = direction;
+            geometry.pixelsPerWorldUnit[axis] = length / worldExtent;
+            geometry.projectedAxisVisible[axis] = true;
+            const auto start = AlongAxis(*geometry.center, direction, std::min(10.0F, length * 0.25F));
+            const float distance = DistanceToSegment(request.pointer, start, end);
+            const bool hit = request.hovered && distance <= 8.0F;
+            DrawMoveAxisArrow(drawList, *geometry.center, direction, length, context.axisColor, request.activeAxis == axis || hit);
+            if (hit && distance < context.hitState.closestDistance) {
+                context.hitState.closestDistance = distance;
+                geometry.hoveredAxis = axis;
+            }
+            return Result<void>::Success();
+        }
+
+        void DrawMoveEndOnHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
+                                 const int axis, const ImU32 color) {
+            const bool hit = request.hovered &&
+                             std::fabs(request.pointer.x - geometry.center->x - MoveEndOnOffset) <= MoveEndOnHalfSize + 2.0F &&
+                             std::fabs(request.pointer.y - geometry.center->y + MoveEndOnOffset) <= MoveEndOnHalfSize + 2.0F;
+            DrawMoveEndOnAxisHandle(drawList, *geometry.center, color, request.activeAxis == axis || hit);
+            if (hit)
+                geometry.hoveredAxis = axis;
+        }
+
+        [[nodiscard]] Result<void> DrawMoveHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                                   TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &colors) {
+            const auto scale = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
+            if (scale.HasError())
+                return Result<void>::Failure(scale.ErrorValue());
+            const auto basis = ResolveRotationScreenBasis(request.camera);
+            if (basis.HasError())
+                return Result<void>::Failure(basis.ErrorValue());
+            LinearHandleHitState hitState;
+            for (int axis = 0; axis < 3; ++axis) {
+                const auto drawn = DrawMoveAxis(drawList, request, geometry, {axis, colors[axis], basis.Value(), scale.Value(), hitState});
+                if (drawn.HasError())
+                    return drawn;
+            }
+            const auto planes = DrawMovePlaneHandles(drawList, request, geometry, colors, scale.Value());
+            if (planes.HasError())
+                return planes;
+            if (hitState.endOnAxis)
+                DrawMoveEndOnHandle(drawList, request, geometry, *hitState.endOnAxis, colors[*hitState.endOnAxis]);
+            drawList.AddCircleFilled(*geometry.center, 3.5F, Theme::U32(Theme::Bg0()), 12);
+            drawList.AddCircleFilled(*geometry.center, 2.0F, Theme::U32(Theme::Text()), 12);
+            return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> DrawLinearAxisHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
@@ -496,63 +574,57 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        void DrawScaleEndOnHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
+                                  const int axis, const ImU32 color) {
+            const bool hit = request.hovered && std::fabs(Distance(request.pointer, *geometry.center) - EndOnAxisRadius) <= 4.0F;
+            DrawEndOnAxisHandle(drawList, *geometry.center, color, request.activeAxis == axis || hit);
+            if (hit)
+                geometry.hoveredAxis = axis;
+        }
+
+        void DrawScaleCenterHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                   TransformGizmoFrameGeometry &geometry) {
+            const bool hit = request.hovered && std::fabs(request.pointer.x - geometry.center->x) <= ScaleHubHalfSize &&
+                             std::fabs(request.pointer.y - geometry.center->y) <= ScaleHubHalfSize;
+            DrawScaleHub(drawList, *geometry.center, hit || request.activeAxis == 3);
+            if (hit)
+                geometry.hoveredAxis = 3;
+        }
+
         [[nodiscard]] Result<void> DrawLinearHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
                                                      TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &axisColors) {
-            const Result<RotationScreenBasis> screenBasis = ResolveRotationScreenBasis(request.camera);
+            const auto screenBasis = ResolveRotationScreenBasis(request.camera);
             if (screenBasis.HasError())
                 return Result<void>::Failure(screenBasis.ErrorValue());
-            const Result<float> centerPixelsPerWorldUnit = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
-            if (centerPixelsPerWorldUnit.HasError())
-                return Result<void>::Failure(centerPixelsPerWorldUnit.ErrorValue());
+            const auto scale = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
+            if (scale.HasError())
+                return Result<void>::Failure(scale.ErrorValue());
             LinearHandleHitState hitState;
             std::array axisOrder{0, 1, 2};
-            if (request.tool == EditorTransformTool::Scale)
-                std::sort(axisOrder.begin(), axisOrder.end(), [&](const int left, const int right) {
-                    const float leftDepth = Math::Dot(geometry.worldAxes[left], screenBasis.Value().towardCamera);
-                    const float rightDepth = Math::Dot(geometry.worldAxes[right], screenBasis.Value().towardCamera);
-                    return leftDepth < rightDepth || (leftDepth == rightDepth && left < right);
-                });
+            std::sort(axisOrder.begin(), axisOrder.end(), [&](const int left, const int right) {
+                const float leftDepth = Math::Dot(geometry.worldAxes[left], screenBasis.Value().towardCamera);
+                const float rightDepth = Math::Dot(geometry.worldAxes[right], screenBasis.Value().towardCamera);
+                return leftDepth < rightDepth || (leftDepth == rightDepth && left < right);
+            });
             for (const int axis : axisOrder) {
-                const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry,
-                                                                LinearAxisHandleContext{
-                                                                    .axis = axis,
-                                                                    .axisColor = axisColors[axis],
-                                                                    .screenBasis = screenBasis.Value(),
-                                                                    .centerPixelsPerWorldUnit = centerPixelsPerWorldUnit.Value(),
-                                                                    .hitState = hitState,
-                                                                });
+                const auto drawn = DrawLinearAxisHandle(drawList, request, geometry,
+                                                        {axis, axisColors[axis], screenBasis.Value(), scale.Value(), hitState});
                 if (drawn.HasError())
                     return drawn;
             }
-            if (request.tool == EditorTransformTool::Move)
-                DrawMovePlaneHandles(drawList, request, geometry, axisColors, centerPixelsPerWorldUnit.Value());
-            if (hitState.endOnAxis.has_value()) {
-                const bool move = request.tool == EditorTransformTool::Move;
-                const float ringDistance = Distance(request.pointer, *geometry.center);
-                const bool hit = request.hovered &&
-                                 (move ? std::fabs(request.pointer.x - geometry.center->x - MoveEndOnOffset) <= MoveEndOnHalfSize + 2.0F &&
-                                             std::fabs(request.pointer.y - geometry.center->y + MoveEndOnOffset) <= MoveEndOnHalfSize + 2.0F
-                                       : std::fabs(ringDistance - EndOnAxisRadius) <= 4.0F);
-                if (move)
-                    DrawMoveEndOnAxisHandle(drawList, *geometry.center, axisColors[*hitState.endOnAxis],
-                                            request.activeAxis == hitState.endOnAxis || hit);
-                else
-                    DrawEndOnAxisHandle(drawList, *geometry.center, axisColors[*hitState.endOnAxis],
-                                        request.activeAxis == hitState.endOnAxis || hit);
-                if (hit)
-                    geometry.hoveredAxis = hitState.endOnAxis;
-            }
-            if (request.tool == EditorTransformTool::Scale) {
-                const bool uniformHit = request.hovered && std::fabs(request.pointer.x - geometry.center->x) <= ScaleHubHalfSize &&
-                                        std::fabs(request.pointer.y - geometry.center->y) <= ScaleHubHalfSize;
-                DrawScaleHub(drawList, *geometry.center, uniformHit || request.activeAxis == 3);
-                if (uniformHit)
-                    geometry.hoveredAxis = 3;
-            } else {
-                drawList.AddCircleFilled(*geometry.center, 3.5F, Theme::U32(Theme::Bg0()), 12);
-                drawList.AddCircleFilled(*geometry.center, 2.0F, Theme::U32(Theme::Text()), 12);
-            }
+            if (hitState.endOnAxis)
+                DrawScaleEndOnHandle(drawList, request, geometry, *hitState.endOnAxis, axisColors[*hitState.endOnAxis]);
+            DrawScaleCenterHandle(drawList, request, geometry);
             return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> DrawHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                               TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &colors) {
+            if (request.tool == EditorTransformTool::Move)
+                return DrawMoveHandles(drawList, request, geometry, colors);
+            if (request.tool == EditorTransformTool::Rotate)
+                return DrawRotationHandles(drawList, request, geometry, RotationAxisColors());
+            return DrawLinearHandles(drawList, request, geometry, colors);
         }
     }  // namespace
 
@@ -584,10 +656,7 @@ namespace Horo::Editor {
             ImGui::GetColorU32(ImVec4{0.42F, 0.83F, 0.29F, 1.0F}),
             ImGui::GetColorU32(ImVec4{0.25F, 0.51F, 0.96F, 1.0F}),
         };
-        if (const Result<void> handles = request.tool == EditorTransformTool::Rotate
-                                             ? DrawRotationHandles(drawList, request, geometry, RotationAxisColors())
-                                             : DrawLinearHandles(drawList, request, geometry, linearAxisColors);
-            handles.HasError()) {
+        if (const Result<void> handles = DrawHandles(drawList, request, geometry, linearAxisColors); handles.HasError()) {
             return Result<TransformGizmoFrameGeometry>::Failure(handles.ErrorValue());
         }
         return Result<TransformGizmoFrameGeometry>::Success(std::move(geometry));

@@ -1,3 +1,4 @@
+#include "editor/renderer/EditorViewportScene.h"
 #include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.h"
 
 #include <algorithm>
@@ -48,6 +49,30 @@ namespace {
         Math::Mat4 worldTransform = Math::Mat4::Identity();
         TransformGizmoGeometryRequest request;
     };
+
+    [[nodiscard]] ImVec2 ProjectMoveOracle(const TransformGizmoGeometryRequest &request, const Math::Vec3 point) {
+        const auto projected = ProjectEditorViewportPoint(request.camera, point, request.width / request.height, request.depthRange);
+        REQUIRE(projected.HasValue());
+        REQUIRE(projected.Value());
+        const auto pixels =
+            MapEditorViewportPointToPixels(*projected.Value(), {request.origin.x, request.origin.y}, {request.width, request.height});
+        REQUIRE(pixels.HasValue());
+        return {pixels.Value().x, pixels.Value().y};
+    }
+
+    [[nodiscard]] float MoveOracleWorldExtent(const TransformGizmoGeometryRequest &request, const Math::Vec3 pivot) {
+        const auto forward = Math::TryNormalize(request.camera.target - request.camera.position);
+        REQUIRE(forward.HasValue());
+        const float depth = Math::Dot(pivot - request.camera.position, forward.Value());
+        const float worldHeight = request.camera.projection == Runtime::CameraProjection::Perspective
+                                      ? 2.0F * depth * std::tan(request.camera.verticalFovRadians * 0.5F)
+                                      : request.camera.orthographicHeight;
+        return 140.0F * worldHeight / request.height;
+    }
+
+    void RequireNearbyGizmoPoint(const ImVec2 actual, const ImVec2 expected, const float tolerance = 0.001F) {
+        REQUIRE(std::hypot(actual.x - expected.x, actual.y - expected.y) < tolerance);
+    }
 
     [[nodiscard]] float MeasureTransformGizmoToolExtent(ImDrawList &drawList, const TransformGizmoGeometryRequest &baseRequest,
                                                         const EditorTransformTool tool) {
@@ -252,32 +277,116 @@ TEST_CASE("Move plane pointer projection stays on the selected world plane", "[u
     REQUIRE(point.Value()->y > 0.0F);
 }
 
-TEST_CASE("Move plane handles stay behind their matching arrows across camera angles", "[unit][editor][viewport][gizmo]") {
+TEST_CASE("Move plane handles project fixed world-plane corners across camera angles", "[unit][editor][viewport][gizmo]") {
     ImGuiGizmoGeometryTestContext context;
-    ImDrawList &drawList = context.DrawList();
-    for (const Math::Vec3 cameraPosition : std::array{Math::Vec3{4.0F, 3.0F, 4.0F}, Math::Vec3{-4.0F, 3.0F, 4.0F}}) {
-        context.camera.position = cameraPosition;
-        const Result<TransformGizmoFrameGeometry> geometry = DrawTransformGizmoGeometry(drawList, context.request);
+    for (const Math::Vec3 camera : std::array{Math::Vec3{4, 3, 4}, Math::Vec3{-4, 3, 4}}) {
+        context.camera.position = camera;
+        const auto geometry = DrawTransformGizmoGeometry(context.DrawList(), context.request);
         REQUIRE(geometry.HasValue());
-        REQUIRE(geometry.Value().center.has_value());
-        for (int axis = 0; axis < 3; ++axis) {
-            REQUIRE(geometry.Value().projectedAxisVisible[axis]);
-            REQUIRE(geometry.Value().movePlaneCorners[axis].has_value());
-            const ImVec2 direction = geometry.Value().screenDirections[axis];
-            ImVec2 handleCenter{};
-            for (const ImVec2 corner : *geometry.Value().movePlaneCorners[axis]) {
-                const ImVec2 offset{corner.x - geometry.Value().center->x, corner.y - geometry.Value().center->y};
-                REQUIRE(offset.x * direction.x + offset.y * direction.y <= -7.9F);
-                handleCenter.x += corner.x * 0.25F;
-                handleCenter.y += corner.y * 0.25F;
-            }
-            TransformGizmoGeometryRequest hoverRequest = context.request;
-            hoverRequest.pointer = handleCenter;
-            const Result<TransformGizmoFrameGeometry> hovered = DrawTransformGizmoGeometry(drawList, hoverRequest);
-            REQUIRE(hovered.HasValue());
-            REQUIRE(hovered.Value().hoveredAxis == axis + 4);
+        const auto &frame = geometry.Value();
+        const float extent = MoveOracleWorldExtent(context.request, frame.worldPosition);
+        for (int normal = 0; normal < 3; ++normal) {
+            REQUIRE(frame.movePlaneCorners[normal]);
+            const auto first = frame.worldAxes[(normal + 1) % 3] * extent;
+            const auto second = frame.worldAxes[(normal + 2) % 3] * extent;
+            const auto base = frame.worldPosition + (first - second) * 0.14F;
+            const std::array points{base, base + first * 0.18F, base + (first - second) * 0.18F, base - second * 0.18F};
+            for (std::size_t corner = 0; corner < points.size(); ++corner)
+                RequireNearbyGizmoPoint((*frame.movePlaneCorners[normal])[corner], ProjectMoveOracle(context.request, points[corner]));
         }
     }
+}
+
+TEST_CASE("Move plane polygons share front and back facing picking", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    for (const float cameraZ : {4.0F, -4.0F}) {
+        context.camera.position = {0, 0, cameraZ};
+        const auto geometry = DrawTransformGizmoGeometry(context.DrawList(), context.request);
+        REQUIRE(geometry.HasValue());
+        REQUIRE(geometry.Value().movePlaneCorners[2]);
+        ImVec2 pointer{};
+        for (const auto corner : *geometry.Value().movePlaneCorners[2]) {
+            pointer.x += corner.x * 0.25F;
+            pointer.y += corner.y * 0.25F;
+        }
+        auto request = context.request;
+        request.pointer = pointer;
+        const auto selected = DrawTransformGizmoGeometry(context.DrawList(), request);
+        REQUIRE(selected.HasValue());
+        REQUIRE(selected.Value().hoveredAxis == 6);
+        const auto point = ProjectTransformGizmoPlanePoint(
+            {.camera = context.camera, .center = {}, .normal = {0, 0, 1}, .pointer = pointer, .width = 400, .height = 400});
+        REQUIRE(point.HasValue());
+        REQUIRE(point.Value());
+        REQUIRE(std::fabs(point.Value()->z) < 0.0001F);
+    }
+}
+
+TEST_CASE("Move arrows use the actual off-center perspective projection", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    context.request.activeWorldPosition = Math::Vec3{1.1F, 0.6F, 0};
+    context.request.hovered = false;
+    const auto flags = context.DrawList().Flags;
+    const int firstVertex = context.DrawList().VtxBuffer.Size;
+    const auto geometry = DrawTransformGizmoGeometry(context.DrawList(), context.request);
+    REQUIRE(geometry.HasValue());
+    const auto &frame = geometry.Value();
+    const float extent = MoveOracleWorldExtent(context.request, frame.worldPosition);
+    for (int axis = 0; axis < 3; ++axis) {
+        REQUIRE(frame.projectedAxisVisible[axis]);
+        const auto tip = ProjectMoveOracle(context.request, frame.worldPosition + frame.worldAxes[axis] * extent);
+        const float length = frame.pixelsPerWorldUnit[axis] * extent;
+        RequireNearbyGizmoPoint({frame.center->x + frame.screenDirections[axis].x * length,
+                                 frame.center->y + frame.screenDirections[axis].y * length},
+                                tip);
+        float nearest = std::numeric_limits<float>::max();
+        for (int vertex = firstVertex; vertex < context.DrawList().VtxBuffer.Size; ++vertex) {
+            const auto position = context.DrawList().VtxBuffer[vertex].pos;
+            nearest = std::min(nearest, std::hypot(position.x - tip.x, position.y - tip.y));
+        }
+        REQUIRE(nearest < 0.01F);
+        REQUIRE(context.DrawList().Flags == flags);
+        auto hover = context.request;
+        hover.hovered = true;
+        hover.pointer = ProjectMoveOracle(hover, frame.worldPosition + frame.worldAxes[axis] * (extent * 0.8F));
+        const auto selected = DrawTransformGizmoGeometry(context.DrawList(), hover);
+        REQUIRE(selected.HasValue());
+        REQUIRE(selected.Value().hoveredAxis == axis);
+    }
+}
+
+TEST_CASE("Move arrows and planes stay continuous across the former angle cutoff", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    context.camera.position = {1.3F, 0, 4};
+    const auto before = DrawTransformGizmoGeometry(context.DrawList(), context.request);
+    context.camera.position.x = 1.35F;
+    const auto after = DrawTransformGizmoGeometry(context.DrawList(), context.request);
+    REQUIRE(before.HasValue());
+    REQUIRE(after.HasValue());
+    REQUIRE(before.Value().projectedAxisVisible[2]);
+    REQUIRE(after.Value().projectedAxisVisible[2]);
+    REQUIRE(before.Value().movePlaneCorners[2]);
+    REQUIRE(after.Value().movePlaneCorners[2]);
+    for (std::size_t corner = 0; corner < 4; ++corner)
+        RequireNearbyGizmoPoint((*before.Value().movePlaneCorners[2])[corner], (*after.Value().movePlaneCorners[2])[corner], 3.0F);
+}
+
+TEST_CASE("Move projection omits clipped endpoints and degenerate plane hit regions", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    context.request.activeWorldPosition = Math::Vec3{0, 0, 3.85F};
+    const auto near = DrawTransformGizmoGeometry(context.DrawList(), context.request);
+    REQUIRE(near.HasValue());
+    REQUIRE(near.Value().center);
+    REQUIRE_FALSE(near.Value().projectedAxisVisible[2]);
+    REQUIRE_FALSE(near.Value().movePlaneCorners[0]);
+    REQUIRE_FALSE(near.Value().movePlaneCorners[1]);
+    context.request.activeWorldPosition = Math::Vec3{0, 0, 5};
+    const int firstVertex = context.DrawList().VtxBuffer.Size;
+    const auto behind = DrawTransformGizmoGeometry(context.DrawList(), context.request);
+    REQUIRE(behind.HasValue());
+    REQUIRE_FALSE(behind.Value().center);
+    REQUIRE_FALSE(behind.Value().hoveredAxis);
+    REQUIRE(context.DrawList().VtxBuffer.Size == firstVertex);
 }
 
 TEST_CASE("Move arrows extend beyond rotation and scale handles", "[unit][editor][viewport][gizmo]") {
@@ -321,7 +430,7 @@ TEST_CASE("Transform gizmo scale handles remain stable under camera changes", "[
     const Result<Math::Vec3> strafeDirection = Math::TryNormalize(Math::Cross(scaleViewDirection.Value(), context.camera.up));
     REQUIRE(strafeDirection.HasValue());
     const Math::Vec3 strafeDelta = strafeDirection.Value() * 0.3F;
-    for (const EditorTransformTool tool : {EditorTransformTool::Move, EditorTransformTool::Scale}) {
+    for (const EditorTransformTool tool : {EditorTransformTool::Scale}) {
         TransformGizmoGeometryRequest stableRequest = context.request;
         stableRequest.tool = tool;
         stableRequest.hovered = false;
