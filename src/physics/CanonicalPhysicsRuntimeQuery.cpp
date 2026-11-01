@@ -55,7 +55,8 @@ namespace Horo::Physics::Detail {
                     created = JPH::CapsuleShapeSettings(shape.cylindricalHalfHeightMeters, shape.radiusMeters).Create();
                 else {
                     static_assert(std::is_same_v<ShapeType, PhysicsStaticPlaneShape>);
-                    // Horo stores dot(normal, point) = distance; Jolt stores dot(normal, point) + constant = 0.
+                    // Horo stores dot(normal, point) = distance; Jolt stores dot(normal,
+                    // point) + constant = 0.
                     created = JPH::PlaneShapeSettings(JPH::Plane(ToNative(shape.normal), -shape.signedDistanceMeters)).Create();
                 }
             }, descriptor);
@@ -65,7 +66,8 @@ namespace Horo::Physics::Detail {
             return Result<JPH::Ref<JPH::Shape>>::Success(created.Get());
         }
 
-        /** @brief Constructs owned compound children before publishing one native shape. */
+        /** @brief Constructs owned compound children before publishing one native
+         * shape. */
         [[nodiscard]] Result<JPH::Ref<JPH::Shape>> CreateNativeShape(const PhysicsQueryFixtureShape &descriptor) {
             if (const auto *compound = std::get_if<PhysicsCompoundShapeDescriptor>(&descriptor)) {
                 JPH::StaticCompoundShapeSettings settings;
@@ -116,7 +118,8 @@ namespace Horo::Physics::Detail {
             return &access.fixtures[fixtureIndex];
         }
 
-        /** @brief Uses Project response when installed, retaining explicit legacy fixture policy otherwise. */
+        /** @brief Uses Project response when installed, retaining explicit legacy
+         * fixture policy otherwise. */
         std::optional<PhysicsQueryResponse> FixtureResponse(const CanonicalQueryAccess &access, const CanonicalQueryFixtureRecord &fixture,
                                                             const PhysicsCompoundChild *child) noexcept {
             const auto profile = child ? child->profile : fixture.descriptor.profile;
@@ -159,7 +162,8 @@ namespace Horo::Physics::Detail {
             return Admits(access, fixture, descriptor, nullptr);
         }
 
-        /** @brief Applies the stable Horo query filter before native collectors can short-circuit. */
+        /** @brief Applies the stable Horo query filter before native collectors can
+         * short-circuit. */
         class QueryBodyFilter final : public JPH::BodyFilter {
         public:
             QueryBodyFilter(const CanonicalQueryAccess &access, const PhysicsQueryDescriptor &descriptor, const JPH::BodyID framedBody = {},
@@ -235,7 +239,8 @@ namespace Horo::Physics::Detail {
                                                           bodyFilter);
         }
 
-        /** @brief Uses a stack capsule for one query; native identities and transforms remain private. */
+        /** @brief Uses a stack capsule for one query; native identities and transforms
+         * remain private. */
         template <typename Query>
         void CollectCapsuleQuery(const CanonicalQueryAccess &access, const Query &query, CanonicalQueryCollectors &collectors,
                                  const QueryBodyFilter &bodyFilter) {
@@ -288,21 +293,50 @@ namespace Horo::Physics::Detail {
             return Math::Vec3{-normalized.GetX(), -normalized.GetY(), -normalized.GetZ()};
         }
 
+        /** @brief Append one indexed resident result without exposing private scene
+         * storage. */
+        Result<void> AppendResidentHit(const CanonicalQueryAccess &access, const PhysicsQueryDescriptor &descriptor,
+                                       std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates, std::size_t &candidateCount,
+                                       const CanonicalQueryHitEvidence &evidence) {
+            auto projected = ProjectCanonicalSceneQueryHit(access, descriptor, evidence);
+            if (projected.HasError())
+                return Result<void>::Failure(projected.ErrorValue());
+            if (!projected.Value())
+                return Result<void>::Success();
+            if (candidateCount == candidates.size())
+                return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            candidates[candidateCount++] = *projected.Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Copy one admitted fixture contributor and geometry into a
+         * backend-neutral hit. */
+        PhysicsQueryHit ProjectFixtureHit(const CanonicalQueryAccess &access, const CanonicalQueryFixtureRecord &fixtureValue,
+                                          const PhysicsCompoundChild *child, const CanonicalQueryHitEvidence &evidence) {
+            const auto *fixture = &fixtureValue;
+            return PhysicsQueryHit{.body = fixture->fixture.body,
+                                   .shape = fixture->fixture.shape,
+                                   .subshape = child == nullptr ? fixture->descriptor.subshape
+                                                                : std::optional<PhysicsShapeSubresourceId>{child->subshape},
+                                   .material = child == nullptr ? fixture->descriptor.material : child->material,
+                                   .layer = child == nullptr ? fixture->descriptor.layer : child->layer,
+                                   .profile = child == nullptr ? fixture->descriptor.profile : child->profile,
+                                   .channel = child == nullptr ? fixture->descriptor.channel : child->channel,
+                                   .filterSchemaGeneration = CanonicalQueryFilterGeneration(access),
+                                   .response = *FixtureResponse(access, *fixture, child),
+                                   .position = evidence.position,
+                                   .normal = evidence.normal,
+                                   .distanceMeters = evidence.distance,
+                                   .penetrationDepthMeters = evidence.penetrationDepth,
+                                   .surface = child == nullptr ? fixture->descriptor.surface : child->surface};
+        }
+
         [[nodiscard]] Result<void> AppendCanonicalHit(const CanonicalQueryAccess &access, const PhysicsQueryDescriptor &descriptor,
                                                       std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
                                                       std::size_t &candidateCount, const CanonicalQueryHitEvidence &evidence) {
             const auto *fixture = FindCanonicalFixture(access, evidence.body);
-            if (fixture == nullptr) {
-                auto projected = ProjectCanonicalSceneQueryHit(access, descriptor, evidence);
-                if (projected.HasError())
-                    return Result<void>::Failure(projected.ErrorValue());
-                if (!projected.Value())
-                    return Result<void>::Success();
-                if (candidateCount == candidates.size())
-                    return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-                candidates[candidateCount++] = *projected.Value();
-                return Result<void>::Success();
-            }
+            if (!fixture)
+                return AppendResidentHit(access, descriptor, candidates, candidateCount, evidence);
             const auto *compound = std::get_if<PhysicsCompoundShapeDescriptor>(&fixture->descriptor.shape);
             const PhysicsCompoundChild *child = ResolveCanonicalFixtureChild(*fixture, evidence.subshape);
             if (compound != nullptr && child == nullptr)
@@ -312,20 +346,7 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Success();
             if (candidateCount == candidates.size())
                 return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-            PhysicsQueryHit hit{.body = fixture->fixture.body,
-                                .shape = fixture->fixture.shape,
-                                .subshape = child == nullptr ? fixture->descriptor.subshape
-                                                             : std::optional<PhysicsShapeSubresourceId>{child->subshape},
-                                .material = child == nullptr ? fixture->descriptor.material : child->material,
-                                .layer = child == nullptr ? fixture->descriptor.layer : child->layer,
-                                .profile = child == nullptr ? fixture->descriptor.profile : child->profile,
-                                .channel = child == nullptr ? fixture->descriptor.channel : child->channel,
-                                .filterSchemaGeneration = CanonicalQueryFilterGeneration(access),
-                                .response = *FixtureResponse(access, *fixture, child),
-                                .position = evidence.position,
-                                .normal = evidence.normal,
-                                .distanceMeters = evidence.distance,
-                                .penetrationDepthMeters = evidence.penetrationDepth};
+            auto hit = ProjectFixtureHit(access, *fixture, child, evidence);
             if (const Result<void> valid = ValidatePhysicsQueryHit(hit, descriptor); valid.HasError())
                 return valid;
             candidates[candidateCount++] = std::move(hit);

@@ -1,3 +1,4 @@
+#include "PhysicsWorldBindingValidation.h"
 #include "PhysicsWorldContainmentInternal.h"
 #include "PhysicsWorldInternal.h"
 
@@ -239,12 +240,13 @@ namespace Horo::Physics {
             };
             !std::ranges::all_of(admissionConditions, std::identity{}))
             return Result<std::unique_ptr<PhysicsWorld>>::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (static_cast<bool>(simulation.schema) != (simulation.generation != 0))
-            return Result<std::unique_ptr<PhysicsWorld>>::Failure(
-                MakeError(PhysicsErrors::DescriptorInvalid, "Collision schema owner and generation must be supplied together."));
+        if (auto valid = Detail::ValidateWorldSimulationBinding(simulation); valid.HasError())
+            return Result<std::unique_ptr<PhysicsWorld>>::Failure(std::move(valid).ErrorValue());
         try {
             using enum PhysicsWorldState;
             auto worldImpl = std::make_unique<PhysicsWorld::Impl>(impl_, settings);
+            worldImpl->surfaces = simulation.surfaces;
+            worldImpl->surfaceFingerprint = PhysicsSurfaceWorldFingerprint(simulation.surfaces);
             if (impl_->mode == PhysicsRuntimeMode::Canonical) {
                 const auto created = Detail::CreateCanonicalWorld(impl_->native, settings, Detail::CanonicalFailurePoint::None, simulation);
                 if (created.HasError()) {
@@ -399,6 +401,16 @@ namespace Horo::Physics {
     /** @copydoc PhysicsWorld::Settings */
     const PhysicsWorldSettings &PhysicsWorld::Settings() const noexcept {
         return impl_->settings;
+    }
+
+    /** @copydoc PhysicsWorld::SurfaceBinding */
+    const PhysicsSurfaceWorldBinding &PhysicsWorld::SurfaceBinding() const noexcept {
+        return impl_->surfaces;
+    }
+
+    /** @copydoc PhysicsWorld::SurfaceFingerprint */
+    const Sha256Digest &PhysicsWorld::SurfaceFingerprint() const noexcept {
+        return impl_->surfaceFingerprint;
     }
 
     /** @copydoc PhysicsWorld::LifecycleCause */

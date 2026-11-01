@@ -7,6 +7,7 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Physics/PhysicsCollisionSchema.h"
+#include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -230,12 +231,24 @@ namespace Horo::Physics {
             return std::move(scene).Value();
         }
 
+        /** @brief Supply genuine canonical immutable material payloads rather than opaque lifecycle placeholders. */
+        [[nodiscard]] std::vector<std::uint8_t> CanonicalMaterialBytes(Assets::AssetId id) {
+            auto material = PhysicsMaterialAsset::Create({.id = PhysicsMaterialAssetId::FromAssetId(id), .sourceRevision = 1});
+            REQUIRE(material.HasValue());
+            auto encoded = EncodePhysicsMaterialAsset(material.Value());
+            REQUIRE(encoded.HasValue());
+            std::vector<std::uint8_t> bytes;
+            for (auto byte : encoded.Value())
+                bytes.push_back(static_cast<std::uint8_t>(byte));
+            return bytes;
+        }
+
         class AssetSceneFixture final {
         public:
             explicit AssetSceneFixture(bool start = true, Runtime::SceneRuntimeId initialScene = {1})
                 : material(Asset(91)), materialType(AssetType()), loads(jobs, provider), service(registry, loads, {}, initialScene) {
                 REQUIRE(registry.Publish({Record(material, materialType)}).status == AssetRegistryBuildStatus::Complete);
-                provider.Insert(material, {1, 2, 3});
+                provider.Insert(material, CanonicalMaterialBytes(material));
                 if (start)
                     REQUIRE(service.Startup(cancellation.Token()).HasValue());
             }

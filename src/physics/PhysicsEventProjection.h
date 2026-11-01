@@ -85,6 +85,7 @@ namespace Horo::Physics::Detail {
             PhysicsEventPairKey pair;
             std::optional<PhysicsEventMaterial> firstMaterial;
             std::optional<PhysicsEventMaterial> secondMaterial;
+            std::optional<PhysicsSurfaceEvidence> firstSurface, secondSurface;
             PhysicsContactSummary contact;
             bool sensor{};
         };
@@ -113,6 +114,7 @@ namespace Horo::Physics::Detail {
         std::vector<PhysicsContactObservation> observations_;
         std::vector<PairState> previousPairs_;
         std::vector<PairState> currentPairs_;
+        bool surfaceConflict_{}; /**< Joined contradiction rejects the candidate without changing published evidence. */
         std::array<std::vector<PhysicsEventRecord>, 2> eventBuffers_;
         std::atomic<std::uint32_t> callbackWrite_{};
         std::atomic<std::uint64_t> callbackDropped_{};

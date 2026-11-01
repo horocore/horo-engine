@@ -672,6 +672,7 @@ horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/InputCollection.h
 )
 horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
+    Horo/Physics/SurfaceMaterial.h
     Horo/Physics/CharacterPolicies.h
     Horo/Runtime/Scene/CharacterSceneComponents.h
     Horo/Physics/PhysicsErrors.h
@@ -679,6 +680,7 @@ horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
     Horo/Runtime/Scene/PhysicsSceneComponents.h
 )
 horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
+    Horo/Physics/CharacterEvents.h
     Horo/Physics/CharacterClearanceQuery.h
     Horo/Physics/CharacterCapability.h
     Horo/Physics/CharacterCommandPipeline.h
@@ -1464,6 +1466,7 @@ horo_configure_target_header_boundary(HoroPhysicsTriggerVolumeHost PUBLIC_HEADER
     Horo/Application/PhysicsTriggerVolumeHost.h
 )
 
+horo_configure_target_header_boundary(HoroProjectSurfaceSettings PUBLIC_HEADERS Horo/Application/ProjectSurfaceSettings.h)
 horo_configure_target_header_boundary(HoroProjectCollisionSettings PUBLIC_HEADERS
     Horo/Application/ProjectCollisionSettings.h
 )

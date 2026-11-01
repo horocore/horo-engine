@@ -501,7 +501,7 @@ target_include_directories(HoroProjectMigrations
         PRIVATE ${PROJECT_SOURCE_DIR} ${HORO_GENERATED_DIR}
 )
 target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application
-        PRIVATE HoroEngine::ProjectSettings HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
+        PRIVATE HoroEngine::ProjectSettings HoroEngine::ProjectSurfaceSettings HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
 
 add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp
@@ -1255,6 +1255,7 @@ target_include_directories(HoroPhysicsReferenceValidationInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/scene/physics_validation>)
 
 add_library(HoroPhysicsModel STATIC
+        physics/SurfaceMaterial.cpp
         physics/PhysicsErrors.cpp
         physics/PhysicsFilterIdentity.cpp
         runtime/scene/PhysicsSceneComponents.cpp
@@ -1463,6 +1464,11 @@ target_compile_features(HoroAudioMetrics PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngine::Foundation)
 
 add_library(HoroPhysics STATIC
+        physics/PhysicsWorldBindingValidation.h
+        physics/CharacterEventProjectionInternal.h
+        physics/CharacterEventProjection.cpp
+        physics/CharacterSurfaceInternal.h
+        physics/CharacterWorldEvents.cpp
         physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
         physics/CharacterQueryContext.cpp
@@ -1598,6 +1604,18 @@ else()
     target_sources(HoroPhysics PRIVATE physics/CanonicalPhysicsRuntimeOmitted.cpp physics/CanonicalSolverOmitted.cpp)
 endif()
 
+# Portable Project catalogue authority; solver activation remains outside this target.
+add_library(HoroProjectSurfaceSettings STATIC
+        application/project/ProjectSurfaceSettings.cpp
+        application/project/ProjectSurfaceSettingsCodec.cpp
+        application/project/ProjectSurfaceSettingsLoad.cpp
+)
+add_library(HoroEngine::ProjectSurfaceSettings ALIAS HoroProjectSurfaceSettings)
+target_compile_features(HoroProjectSurfaceSettings PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectSurfaceSettings
+        PUBLIC HoroEngine::Application HoroEngine::PhysicsModel HoroEngine::Assets
+        PRIVATE HoroFoundationJsonInternal nlohmann_json::nlohmann_json)
+
 # Project owns authored collision policy; Physics receives only validated immutable captures.
 add_library(HoroProjectCollisionSettings STATIC
         application/project/ProjectCollisionSettings.cpp
@@ -1624,6 +1642,7 @@ add_library(HoroPhysicsSceneIntegration STATIC
         physics/PhysicsSceneActivation.cpp
         physics/PhysicsSceneStructural.cpp
         physics/PhysicsSceneActivationPlan.cpp
+        physics/PhysicsSceneSurfaceProjection.cpp
         physics/CharacterSceneActivationPlan.cpp
         physics/PhysicsSceneActivationCapabilities.cpp
         physics/PhysicsSceneActivationLifecycle.cpp)
@@ -3483,6 +3502,7 @@ target_link_libraries(HoroEditorServices
         HoroPrefabHierarchyInternal
         HoroPrefabDocumentSessionInternal
         HoroEngine::ProjectCollisionSettings
+        HoroEngine::ProjectSurfaceSettings
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSource
         HoroEngine::ProjectMutationGuard

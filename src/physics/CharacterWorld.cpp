@@ -1,10 +1,14 @@
+#include "CharacterSurfaceInternal.h"
 #include "CharacterWorldPlacementInternal.h"
 
 #include <cmath>
 
 namespace Horo::Character {
     Result<std::unique_ptr<CharacterWorld>> CharacterWorld::Prepare(const CharacterWorldPreparationDescriptor &descriptor,
-                                                                    const CharacterWorldSettings &settings) {
+                                                                    const CharacterWorldSettings &settings,
+                                                                    const Physics::PhysicsSurfaceWorldBinding &surfaces) {
+        if (const auto valid = Physics::ValidatePhysicsSurfaceWorldBinding(surfaces); valid.HasError())
+            return Result<std::unique_ptr<CharacterWorld>>::Failure(valid.ErrorValue());
         const auto completed = Detail::CompleteWorldDescriptor(descriptor);
         if (completed.HasError())
             return Result<std::unique_ptr<CharacterWorld>>::Failure(completed.ErrorValue());
@@ -13,7 +17,7 @@ namespace Horo::Character {
         try {
             Detail::CharacterControllerRegistry<Detail::CharacterControllerRecord>
                 registry{owner.sceneGeneration, owner.identity, {.maximumSlots = settings.Values().capacities.maximumControllers}};
-            auto impl = std::make_unique<Impl>(owner, settings, std::move(registry));
+            auto impl = std::make_unique<Impl>(owner, settings, std::move(registry), surfaces);
             return Result<std::unique_ptr<CharacterWorld>>::Success(std::unique_ptr<CharacterWorld>{
                 new CharacterWorld(std::move(impl))});  // NOSONAR: make_unique cannot access this private constructor.
         } catch (const std::bad_alloc &) {
@@ -60,20 +64,25 @@ namespace Horo::Character {
                 MakeError(CharacterErrors::InvalidState, "Controller creation requires prepared owner-thread mutation."));
         if (impl_->state.load() != CharacterWorldState::Prepared)
             return Result<CharacterControllerHandle>::Failure(MakeError(CharacterErrors::InvalidState));
-        if (const auto valid = ValidateCharacterControllerDescriptor(descriptor); valid.HasError())
+        auto candidate = descriptor;
+        if (!candidate.defaultSurface)
+            candidate.defaultSurface = impl_->surfaces.defaultSurface;
+        if (const auto semantic = Detail::ValidateCharacterSemanticDefault(impl_->surfaces, candidate.defaultSurface); semantic.HasError())
+            return Result<CharacterControllerHandle>::Failure(semantic.ErrorValue());
+        if (const auto valid = ValidateCharacterControllerDescriptor(candidate); valid.HasError())
             return Result<CharacterControllerHandle>::Failure(valid.ErrorValue());
-        if (const std::array ownerMatches{descriptor.sceneGeneration == impl_->descriptor.sceneGeneration,
-                                          descriptor.characterWorld == impl_->descriptor.identity,
-                                          descriptor.physicsWorld == impl_->descriptor.physicsWorld};
+        if (const std::array ownerMatches{candidate.sceneGeneration == impl_->descriptor.sceneGeneration,
+                                          candidate.characterWorld == impl_->descriptor.identity,
+                                          candidate.physicsWorld == impl_->descriptor.physicsWorld};
             !std::ranges::all_of(ownerMatches, std::identity{})) {
             return Result<CharacterControllerHandle>::Failure(MakeError(CharacterErrors::HandleWorldMismatch));
         }
-        if (descriptor.maximumContacts > impl_->settings.Values().work.maximumContactsPerMovement)
+        if (candidate.maximumContacts > impl_->settings.Values().work.maximumContactsPerMovement)
             return Result<CharacterControllerHandle>::Failure(
                 MakeError(CharacterErrors::CapacityExceeded, "Controller contact capacity exceeds the Character world work budget."));
         const auto registryLock = impl_->synchronization.LockRegistry();
         auto acquired =
-            impl_->controllers.Acquire(Detail::CharacterControllerRecord{.descriptor = descriptor, .capsule = descriptor.capsule});
+            impl_->controllers.Acquire(Detail::CharacterControllerRecord{.descriptor = candidate, .capsule = candidate.capsule});
         if (acquired.HasValue()) {
             const CharacterControllerHandle handle = acquired.Value();
             impl_->controllerGenerations[handle.slot.index] = handle.slot.generation;

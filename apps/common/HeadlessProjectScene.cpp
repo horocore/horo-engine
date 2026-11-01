@@ -2,6 +2,7 @@
 
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
@@ -104,6 +105,13 @@ namespace Horo::Application::Internal {
                 if (captured.HasError())
                     return Result<void>::Failure(captured.ErrorValue());
                 simulation = std::move(captured).Value();
+                auto surfaces = LoadProjectSurfaceSettings(launch.projectRoot, projectId);
+                if (surfaces.HasError())
+                    return Result<void>::Failure(std::move(surfaces).ErrorValue());
+                auto semantic = surfaces.Value().settings->Capture(simulation.generation);
+                if (semantic.HasError())
+                    return Result<void>::Failure(std::move(semantic).ErrorValue());
+                simulation.surfaces = std::move(semantic).Value();
             }
             resources.settings.emplace(std::move(physics).Value(), std::move(character).Value(), std::move(simulation));
             return Result<void>::Success();

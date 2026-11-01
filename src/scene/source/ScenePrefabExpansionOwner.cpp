@@ -31,6 +31,8 @@ namespace Horo::SceneSource {
                 !budget.Add(components.physicsConstraints.size(), sizeof(Runtime::PhysicsConstraintComponent)))
                 return false;
             for (const auto &collider : components.colliders) {
+                if (!budget.Add(collider.surfaceBindings.size(), sizeof(Physics::PhysicsSurfaceBinding)))
+                    return false;
                 if (!budget.Add(collider.materials.size(), sizeof(Runtime::PhysicsColliderMaterialBinding)))
                     return false;
             }

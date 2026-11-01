@@ -79,6 +79,7 @@ MyGame/
         packages.lock          # exact resolved package graph
         input.json             # portable project input defaults
         collision.json         # portable Physics layer/profile/query schema
+        surfaces.json          # project semantic surface IDs and explicit optional default
         editor_workspace.json  # last editor layout and UI state
         asset_index.json       # derived asset lookup registry
         local/                 # optional machine-local overrides, ignored
@@ -108,7 +109,7 @@ Durable portable metadata, machine-local state, and derived output remain
 separate:
 
 - `.horo/project.json`, `.horo/packages.json`, `.horo/packages.lock`,
-  `.horo/input.json`, `.horo/collision.json`,
+  `.horo/input.json`, `.horo/collision.json`, `.horo/surfaces.json`,
   `.horo/platform_services.ids.json`, and asset sidecars are portable
   source-controlled inputs
 - `.horo/editor_workspace.json`, `.horo/local/`, and `.horo/asset_index.json`
@@ -545,6 +546,7 @@ All modes require:
 - `.horo/project.json` exists and parses correctly
 - `.horo/collision.json` exists and its typed ID graph, symmetric matrix and
   complete profile/channel tables validate, or a migration planner can produce it
+- `.horo/surfaces.json` binds the exact project ID and a bounded immutable semantic catalog; its explicit optional default must name an entry
 - `horoVersion` and `persistentContract` form a known compatible decision, or a
   migration planner can produce a valid path
 - `projectId` is present
@@ -736,7 +738,7 @@ capabilities, and unsupported routes return distinct typed source-open errors.
 - Workspace state is user-specific and should not be committed to version
   control.
 - `.horo/project.json`, `.horo/packages.json`, `.horo/packages.lock`,
-  `.horo/input.json`, `.horo/collision.json`, and asset metadata sidecars are
+  `.horo/input.json`, `.horo/collision.json`, `.horo/surfaces.json`, and asset metadata sidecars are
   portable and may be committed. `.horo/editor_workspace.json`,
   `.horo/asset_index.json`, `.horo/local/`, and generated build/cache output
   should be ignored.
@@ -801,3 +803,35 @@ Required coverage:
 - [Horo Package System](../packages/package-system.md): project package dependencies and lockfile
 - [Observability Architecture](../observability/observability.md): safe project correlation and
   game-specific log storage.
+
+### Project semantic surface catalog
+
+The Application-owned `ProjectSurfaceSettings` document at `.horo/surfaces.json`
+is the sole portable project catalog for ADR-181 semantic surface identities.
+Its `schemaVersion: 1` wire shape is frozen under the root `horoVersion` and
+`persistentContract`, rather than an independently evolving authoring timeline.
+The closed JSON fields are `schemaVersion`, `projectId`, `revision`,
+`defaultSurfaceId`, and `surfaces`; each surface has only `id` and `displayName`.
+Opaque existing project IDs are retained exactly. Surface IDs are distinct
+nonzero canonical lowercase UUID values, sorted by ID for canonical encoding.
+The admitted bounds are 256 surfaces, 128 UTF-8 bytes per display name, 256 KiB
+per file and eight parser nesting levels. Duplicate fields/IDs, control characters,
+invalid UTF-8, zero revisions, unknown fields and unsupported schema versions fail
+with typed diagnostics. Gameplay tags are absent from this first wire contract.
+
+An empty catalog with `defaultSurfaceId: null` explicitly records no selected
+semantic default. A nonnull default must name an entry in the same captured
+catalog. Migration can adopt empty authoring without inventing surface meaning.
+Missing legacy files require the registered project migration/adoption path;
+ordinary loading never creates or repairs them. New-project staging authors a
+real random surface UUID and explicitly selects that template entry as default.
+Display names do not reserve identities or infer physical/media bindings.
+
+Loading retains immutable catalog values, a canonical document fingerprint that
+includes the default, and the exact physical source-byte identity. Project-open
+validates the catalog after compatibility migration and retains it through the
+session candidate; readiness, reservation and activation commit reject source
+identity drift. The catalog contains no physical coefficients or Audio/VFX asset
+references. Creation is part of whole-project staging; no runtime activation path
+writes surface authoring. Release descriptors and append-only migration definitions
+must describe the same wire contract before its release is qualified.

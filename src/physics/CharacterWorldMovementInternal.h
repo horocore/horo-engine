@@ -100,6 +100,13 @@ namespace Horo::Character::Detail {
         }
     }
 
+    /** @brief Publish the state of the admitted gravity-slide branch after its final support reduction. */
+    void PublishSteepState(CharacterMovementResult &result, const CharacterControllerDescriptor &descriptor, const SweepMotionState &motion,
+                           const std::optional<CharacterSweepHit> &support) {
+        PublishSteepContinuation(result, descriptor, motion, support);
+        result.sliding = !result.grounded && support.has_value() && Math::LengthSquared(motion.gravityVelocity) > 0.F;
+    }
+
     /** @brief Stages gravity continuation on one steep face within the remaining fixed-tick sweep budget. */
     [[nodiscard]] Result<void> ResolveSteepSliding(auto &impl, CharacterMovementResult &result, const CharacterMovementRequest &command,
                                                    const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
@@ -126,7 +133,7 @@ namespace Horo::Character::Detail {
         if (const auto grounded = ResolveGrounding(impl, result, command, input, descriptor, motion.position, steepSupport);
             grounded.HasError())
             return Result<void>::Failure(grounded.ErrorValue());
-        PublishSteepContinuation(result, descriptor, motion, steepSupport);
+        PublishSteepState(result, descriptor, motion, steepSupport);
         return Result<void>::Success();
     }
 

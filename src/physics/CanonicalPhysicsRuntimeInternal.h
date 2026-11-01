@@ -205,6 +205,7 @@ namespace Horo::Physics::Detail {
     struct CanonicalSceneShapeRecord final {
         ShapeHandle handle;
         JPH::Ref<JPH::Shape> shape;
+        std::vector<PhysicsPose> compoundChildPoses; /**< Exact construction inputs, indexed by private child ordinal. */
     };
 
     struct CanonicalSceneBodyRecord final {
@@ -216,6 +217,7 @@ namespace Horo::Physics::Detail {
         bool motionStorageReserved{};
         std::uint64_t sceneEntity{};
         std::optional<PhysicsSceneCollisionBinding> collision;
+        JPH::RefConst<JPH::Shape> shapeEvidence;
         std::optional<float> injectedStateForTesting;
         std::uint8_t injectedComponentForTesting{};
         bool injectPostStepForTesting{true};
@@ -281,6 +283,10 @@ namespace Horo::Physics::Detail {
         std::uint64_t querySchemaGeneration{1};
         CanonicalQueryStorage storage;
     };
+
+    /** @brief Resolve a native compound user-data ordinal against the exact admitted collider vector. */
+    [[nodiscard]] const PhysicsSceneColliderBinding *ResolveCanonicalSceneCollider(const CanonicalSceneBodyRecord &record,
+                                                                                   JPH::SubShapeID subshape) noexcept;
 
     /** @brief Per-world native ownership and bounded scene/query storage. */
     struct CanonicalWorld final {

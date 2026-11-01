@@ -15,7 +15,8 @@ namespace Horo::Physics::Detail {
             return Result<T>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, message));
         }
 
-        /** @brief Resolves only Scene-issued runtime fixups, or genuine authored references in the active Scene. */
+        /** @brief Resolves only Scene-issued runtime fixups, or genuine authored
+         * references in the active Scene. */
         Result<Runtime::EntityRef> ResolveTarget(const Runtime::RuntimeEntityView &entity, const Runtime::GroupPhysicsReferenceKind kind,
                                                  const std::size_t occurrence, const Runtime::PhysicsBodyReference authored,
                                                  const Runtime::RuntimeSceneView &active) {
@@ -24,10 +25,12 @@ namespace Horo::Physics::Detail {
                     return Result<Runtime::EntityRef>::Success(reference.target);
             if (const auto target = active.Find(authored.object))
                 return Result<Runtime::EntityRef>::Success(*target);
-            return Failure<Runtime::EntityRef>("A structural Physics reference has no exact Scene-issued runtime binding.");
+            return Failure<Runtime::EntityRef>("A structural Physics reference has no "
+                                               "exact Scene-issued runtime binding.");
         }
 
-        /** @brief Composes candidate and resident parents without consulting authored IDs or creating a temporary Scene. */
+        /** @brief Composes candidate and resident parents without consulting authored
+         * IDs or creating a temporary Scene. */
         Result<Math::Transform> WorldTransform(Runtime::RuntimeEntityView entity, const Runtime::RuntimeSceneView &active,
                                                const std::span<const Runtime::RuntimeEntityView> created) {
             if (!entity.localTransform)
@@ -58,7 +61,8 @@ namespace Horo::Physics::Detail {
             return Math::TryDecomposeAffineTRS(matrix.Value());
         }
 
-        /** @brief Preserves the closed analytic geometry vocabulary; native types never enter Scene projections. */
+        /** @brief Preserves the closed analytic geometry vocabulary; native types never
+         * enter Scene projections. */
         PhysicsShapeDescriptor AnalyticGeometry(const Runtime::PhysicsAnalyticCollider &geometry) {
             return std::visit([]<typename T>(const T &shape) -> PhysicsShapeDescriptor {
                 if constexpr (std::is_same_v<T, Runtime::PhysicsBoxCollider>)
@@ -77,7 +81,8 @@ namespace Horo::Physics::Detail {
             Material
         };
 
-        /** @brief Validates payload content while its decoded envelope or active Scene storage remains alive. */
+        /** @brief Validates payload content while its decoded envelope or active Scene
+         * storage remains alive. */
         Result<void> ValidateAssetPayload(const Assets::AssetId asset, const Assets::AssetTypeId &type,
                                           const std::span<const std::uint8_t> payload, const StructuralAssetKind kind) {
             const auto &code =
@@ -92,11 +97,13 @@ namespace Horo::Physics::Detail {
             if (material.HasError())
                 return Result<void>::Failure(material.ErrorValue());
             if (material.Value().Id().Asset() != asset)
-                return Result<void>::Failure(MakeError(code, "Structural material content differs from its admitted asset identity."));
+                return Result<void>::Failure(MakeError(code, "Structural material content differs from its admitted "
+                                                             "asset identity."));
             return Result<void>::Success();
         }
 
-        /** @brief Uses only the admitted named closure; decoded payload views never escape their owning envelope. */
+        /** @brief Uses only the admitted named closure; decoded payload views never
+         * escape their owning envelope. */
         Result<void> ValidateAsset(const Runtime::RuntimeEntityView &entity, const Runtime::RuntimeSceneView &active,
                                    const Assets::AssetId asset, const StructuralAssetKind kind) {
             const auto &code =
@@ -117,7 +124,56 @@ namespace Horo::Physics::Detail {
             return ValidateAssetPayload(asset, *resolved->type, resolved->bytes, kind);
         }
 
-        /** @brief Complete native additions and generation-qualified tables, published together without allocation. */
+        /** @brief Keep the decoded immutable artifact alive only until its canonical
+         * physical revision has been copied. */
+        Result<PhysicsQueryMaterial> ResolveMaterial(const Runtime::RuntimeEntityView &entity, const Runtime::RuntimeSceneView &active,
+                                                     const Runtime::PhysicsColliderMaterialBinding &binding) {
+            for (const auto &resource : entity.groupAssets) {
+                if (resource.metadata.id != binding.material)
+                    continue;
+                auto decoded = Assets::DecodeCookedArtifactBytes(resource.artifact.Bytes());
+                if (decoded.HasError())
+                    return Result<PhysicsQueryMaterial>::Failure(std::move(decoded).ErrorValue());
+                if (decoded.Value().id != binding.material || decoded.Value().type != resource.metadata.expectedType)
+                    return Result<PhysicsQueryMaterial>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid));
+                return DecodeScenePhysicalMaterial(binding, decoded.Value().type, decoded.Value().payload);
+            }
+            const auto resolved = active.FindAsset(binding.material);
+            if (!resolved || !resolved->type)
+                return Result<PhysicsQueryMaterial>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid));
+            return DecodeScenePhysicalMaterial(binding, *resolved->type, resolved->bytes);
+        }
+
+        /** @brief Resolve named physical resources independently from shape
+         * preparation. */
+        Result<std::vector<PhysicsQueryMaterial>> ResolveColliderMaterials(const Runtime::RuntimeEntityView &entity,
+                                                                           const Runtime::RuntimeSceneView &active,
+                                                                           const Runtime::ColliderComponent &collider) {
+            std::vector<PhysicsQueryMaterial> materials;
+            for (const auto &binding : collider.materials) {
+                auto material = ResolveMaterial(entity, active, binding);
+                if (material.HasError())
+                    return Result<std::vector<PhysicsQueryMaterial>>::Failure(std::move(material).ErrorValue());
+                materials.push_back(material.Value());
+            }
+            return Result<std::vector<PhysicsQueryMaterial>>::Success(std::move(materials));
+        }
+
+        Result<PhysicsSceneColliderBinding> ProjectCollider(const Runtime::ColliderComponent &collider,
+                                                            const PhysicsSurfaceWorldBinding &surfaces, PhysicsPose pose,
+                                                            std::vector<PhysicsQueryMaterial> materials) {
+            PhysicsSceneColliderBinding projected{.localPose = pose};
+            projected.collider = collider.collider.value;
+            projected.materials = std::move(materials);
+            auto semantic = BindColliderSurface(collider, surfaces);
+            if (semantic.HasError())
+                return Result<PhysicsSceneColliderBinding>::Failure(std::move(semantic).ErrorValue());
+            projected.surface = std::move(semantic).Value();
+            return Result<PhysicsSceneColliderBinding>::Success(std::move(projected));
+        }
+
+        /** @brief Complete native additions and generation-qualified tables, published
+         * together without allocation. */
         class StructuralCandidate final : public Runtime::SceneStructuralCandidate {
         public:
             std::shared_ptr<PhysicsStructuralState> state;
@@ -155,7 +211,8 @@ namespace Horo::Physics::Detail {
             }
         };
 
-        /** @brief Application-composed selected world; this adapter never selects or reloads a backend. */
+        /** @brief Application-composed selected world; this adapter never selects or
+         * reloads a backend. */
         class StructuralParticipant final : public Runtime::SceneStructuralParticipant {
         public:
             explicit StructuralParticipant(std::shared_ptr<PhysicsStructuralRegistration> registration)
@@ -195,7 +252,8 @@ namespace Horo::Physics::Detail {
             }
 
         private:
-            /** @brief Checks every portable producer constraint against its exact immutable baseline resource closure. */
+            /** @brief Checks every portable producer constraint against its exact
+             * immutable baseline resource closure. */
             static Result<void> ValidateBaselineProof(const Runtime::SceneBaselinePreparationView &baseline,
                                                       const PhysicsWorldSimulationBinding &simulation) {
                 for (const auto &evidence : baseline.definition.TriggerVolumeEvidence()) {
@@ -217,7 +275,8 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Success();
             }
 
-            /** @brief Detached descriptor and binding projections shared by the preparation phases. */
+            /** @brief Detached descriptor and binding projections shared by the
+             * preparation phases. */
             struct GroupPlan {
                 struct ColliderBindingInput {
                     Runtime::EntityRef entity;
@@ -237,7 +296,8 @@ namespace Horo::Physics::Detail {
                 std::vector<std::pair<Runtime::EntityRef, Runtime::PhysicsConstraintSlotId>> constraintBindings;
             };
 
-            /** @brief Removes retired bindings from detached copies only; native retirement is prepared later. */
+            /** @brief Removes retired bindings from detached copies only; native
+             * retirement is prepared later. */
             static void ProjectRetirement(StructuralCandidate &candidate, GroupPlan &plan,
                                           const std::span<const Runtime::EntityRef> destroyed) {
                 const auto retiring = [destroyed](const Runtime::EntityRef entity) {
@@ -266,7 +326,8 @@ namespace Horo::Physics::Detail {
                 });
             }
 
-            /** @brief Converts the typed authored body policy and candidate hierarchy into a native-neutral descriptor. */
+            /** @brief Converts the typed authored body policy and candidate hierarchy
+             * into a native-neutral descriptor. */
             static Result<void> PrepareBodyPolicy(PhysicsSceneGroupBody &body, const Runtime::RuntimeEntityView &entity,
                                                   const Runtime::RuntimeSceneView &active,
                                                   const std::span<const Runtime::RuntimeEntityView> created) {
@@ -296,40 +357,52 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Success();
             }
 
-            /** @brief Validates one collider's immutable resource closure before admitting its shape. */
+            /** @brief One native body retains a uniform admitted sensor and
+             * collision-profile policy. */
+            static Result<void> ValidateColliderBodyPolicy(const PhysicsSceneGroupBody &body, const Runtime::ColliderComponent &collider,
+                                                           bool hasChildren) {
+                if (hasChildren && body.descriptor.sensor != collider.sensor)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+                if (body.descriptor.collision && body.descriptor.collision->profile != collider.collisionProfile)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported,
+                                                           "The current native group body realization requires one "
+                                                           "exact profile for all contributors."));
+                return Result<void>::Success();
+            }
+
+            /** @brief Validates one collider's immutable resource closure before
+             * admitting its shape. */
             static Result<void> PrepareCollider(GroupPlan &plan, PhysicsSceneGroupBody &body,
                                                 std::vector<PhysicsSceneGroupShape::Child> &children,
                                                 const Runtime::RuntimeEntityView &contributor, const Runtime::ColliderComponent &collider,
-                                                const Runtime::RuntimeSceneView &active) {
+                                                const Runtime::RuntimeSceneView &active, const PhysicsSurfaceWorldBinding &surfaces) {
                 const bool hasChildren = !children.empty();
                 const auto *analytic = std::get_if<Runtime::PhysicsAnalyticCollider>(&collider.source);
-                for (const auto &material : collider.materials)
-                    if (const auto valid = ValidateAsset(contributor, active, material.material, StructuralAssetKind::Material);
-                        valid.HasError())
-                        return Result<void>::Failure(valid.ErrorValue());
+                auto physical = ResolveColliderMaterials(contributor, active, collider);
+                if (physical.HasError())
+                    return Result<void>::Failure(std::move(physical).ErrorValue());
                 if (!analytic) {
                     const auto asset = std::get<Runtime::PhysicsShapeAssetReference>(collider.source).asset;
                     if (const auto valid = ValidateAsset(contributor, active, asset, StructuralAssetKind::Shape); valid.HasError())
                         return Result<void>::Failure(valid.ErrorValue());
-                    return Result<void>::Failure(
-                        MakeError(PhysicsErrors::OperationUnsupported,
-                                  "The exact cooked shape has no qualified CanonicalV1 realization path; runtime cooking and "
-                                  "fallback are forbidden."));
+                    return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported,
+                                                           "The exact cooked shape has no qualified CanonicalV1 "
+                                                           "realization path; runtime cooking and "
+                                                           "fallback are forbidden."));
                 }
                 auto resolved = ResolvePhysicsPrimitiveShape({.geometry = AnalyticGeometry(*analytic),
                                                               .localPose = {collider.localPose.translation, collider.localPose.rotation},
                                                               .scale = {collider.scale}});
                 if (resolved.HasError())
                     return Result<void>::Failure(resolved.ErrorValue());
-                if (hasChildren && body.descriptor.sensor != collider.sensor)
-                    return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
-                if (body.descriptor.collision && body.descriptor.collision->profile != collider.collisionProfile)
-                    return Result<void>::Failure(
-                        MakeError(PhysicsErrors::OperationUnsupported,
-                                  "The current native group body realization requires one exact profile for all contributors."));
+                if (auto policy = ValidateColliderBodyPolicy(body, collider, hasChildren); policy.HasError())
+                    return policy;
                 if (!body.descriptor.collision)
                     body.descriptor.collision = PhysicsSceneCollisionBinding{.profile = collider.collisionProfile};
-                body.descriptor.collision->colliders.push_back({.localPose = resolved.Value().localPose});
+                auto projected = ProjectCollider(collider, surfaces, resolved.Value().localPose, std::move(physical).Value());
+                if (projected.HasError())
+                    return Result<void>::Failure(std::move(projected).ErrorValue());
+                body.descriptor.collision->colliders.push_back(std::move(projected).Value());
                 body.descriptor.sensor = collider.sensor;
                 plan.colliderBindings.emplace_back(contributor.entity, collider.collider, plan.shapes.size(), plan.bodies.size());
                 children.emplace_back(static_cast<std::uint32_t>(plan.shapes.size()), resolved.Value().localPose);
@@ -337,10 +410,12 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Success();
             }
 
-            /** @brief Collects only exact body-slot contributors and preserves their authored local poses. */
+            /** @brief Collects only exact body-slot contributors and preserves their
+             * authored local poses. */
             static Result<void> PrepareBodyColliders(GroupPlan &plan, PhysicsSceneGroupBody &body, const Runtime::RuntimeEntityView &entity,
                                                      const Runtime::RuntimeSceneView &active,
-                                                     const std::span<const Runtime::RuntimeEntityView> created) {
+                                                     const std::span<const Runtime::RuntimeEntityView> created,
+                                                     const PhysicsSurfaceWorldBinding &surfaces) {
                 std::vector<PhysicsSceneGroupShape::Child> children;
                 for (const auto &contributor : created) {
                     for (std::size_t index = 0; index < contributor.components->colliders.size(); ++index) {
@@ -353,7 +428,8 @@ namespace Horo::Physics::Detail {
                             return Result<void>::Failure(target.ErrorValue());
                         if (target.Value() != entity.entity || collider.body.body != entity.components->rigidBody->body)
                             continue;
-                        if (const auto ready = PrepareCollider(plan, body, children, contributor, collider, active); ready.HasError())
+                        if (const auto ready = PrepareCollider(plan, body, children, contributor, collider, active, surfaces);
+                            ready.HasError())
                             return ready;
                     }
                 }
@@ -367,7 +443,8 @@ namespace Horo::Physics::Detail {
 
             /** @brief Projects enabled bodies before any detached native allocation. */
             static Result<void> PrepareBodies(GroupPlan &plan, const Runtime::RuntimeSceneView &active,
-                                              const std::span<const Runtime::RuntimeEntityView> created) {
+                                              const std::span<const Runtime::RuntimeEntityView> created,
+                                              const PhysicsSurfaceWorldBinding &surfaces) {
                 for (const auto &entity : created) {
                     if (!entity.components)
                         return Failure<void>("Missing structural component projection.");
@@ -378,7 +455,7 @@ namespace Horo::Physics::Detail {
                     PhysicsSceneGroupBody body;
                     if (const auto ready = PrepareBodyPolicy(body, entity, active, created); ready.HasError())
                         return ready;
-                    if (const auto ready = PrepareBodyColliders(plan, body, entity, active, created); ready.HasError())
+                    if (const auto ready = PrepareBodyColliders(plan, body, entity, active, created, surfaces); ready.HasError())
                         return ready;
                     plan.bodies.push_back(std::move(body));
                     plan.owners.push_back(entity.entity);
@@ -386,7 +463,8 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Success();
             }
 
-            /** @brief Resolves the exact runtime entity/body slot from candidate bindings. */
+            /** @brief Resolves the exact runtime entity/body slot from candidate
+             * bindings. */
             static std::optional<BodyHandle> ResolveBody(const StructuralCandidate &candidate, const Runtime::EntityRef entity,
                                                          const Runtime::PhysicsBodySlotId slot) {
                 for (const auto &binding : candidate.bindings)
@@ -395,7 +473,8 @@ namespace Horo::Physics::Detail {
                 return std::nullopt;
             }
 
-            /** @brief Resolves a constraint's second endpoint without synthesizing a resident body. */
+            /** @brief Resolves a constraint's second endpoint without synthesizing a
+             * resident body. */
             static Result<void> ResolveSecondEndpoint(PhysicsConstraintDescriptor &constraint, const Runtime::RuntimeEntityView &entity,
                                                       const Runtime::PhysicsConstraintComponent &component, const std::size_t index,
                                                       const Runtime::RuntimeSceneView &active, const StructuralCandidate &candidate) {
@@ -414,7 +493,8 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Success();
             }
 
-            /** @brief Projects one enabled typed constraint against the prepared body bindings. */
+            /** @brief Projects one enabled typed constraint against the prepared body
+             * bindings. */
             static Result<PhysicsConstraintDescriptor> PrepareConstraint(const Runtime::RuntimeEntityView &entity, const std::size_t index,
                                                                          const Runtime::RuntimeSceneView &active,
                                                                          const StructuralCandidate &candidate) {
@@ -439,7 +519,8 @@ namespace Horo::Physics::Detail {
                 return Result<PhysicsConstraintDescriptor>::Success(std::move(constraint));
             }
 
-            /** @brief Stages constraint descriptors and their publication bindings in occurrence order. */
+            /** @brief Stages constraint descriptors and their publication bindings in
+             * occurrence order. */
             static Result<void> PrepareConstraints(StructuralCandidate &candidate, GroupPlan &plan, const Runtime::RuntimeSceneView &active,
                                                    const std::span<const Runtime::RuntimeEntityView> created) {
                 for (const auto &entity : created) {
@@ -462,7 +543,8 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Success();
             }
 
-            /** @brief Incorporates native retirement closure and additions in detached binding tables. */
+            /** @brief Incorporates native retirement closure and additions in detached
+             * binding tables. */
             static void ProjectNativeBindings(StructuralCandidate &candidate, const GroupPlan &plan,
                                               const std::span<const Runtime::RuntimeEntityView> created) {
                 std::erase_if(candidate.constraints, [&candidate](const auto &binding) {
@@ -483,7 +565,8 @@ namespace Horo::Physics::Detail {
                 }
             }
 
-            /** @brief Prepares the complete detached owner candidate; publication remains a separate no-fail phase. */
+            /** @brief Prepares the complete detached owner candidate; publication remains
+             * a separate no-fail phase. */
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(
                 const Runtime::RuntimeSceneView &active, const std::span<const Runtime::RuntimeEntityView> created,
                 const std::span<const Runtime::EntityRef> destroyed) const {
@@ -502,7 +585,7 @@ namespace Horo::Physics::Detail {
                         MakeError(PhysicsErrors::GenerationExhausted));
                 GroupPlan plan;
                 ProjectRetirement(*candidate, plan, destroyed);
-                if (const auto ready = PrepareBodies(plan, active, created); ready.HasError())
+                if (const auto ready = PrepareBodies(plan, active, created, candidate->state->simulation.surfaces); ready.HasError())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(ready.ErrorValue());
                 if (const bool hasConstraints = std::ranges::any_of(created,
                                                                     [](const auto &entity) {

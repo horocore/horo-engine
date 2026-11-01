@@ -22,6 +22,24 @@ namespace Horo::Physics::Detail {
             return !material.has_value() || (material->asset.IsValid() && material->assetGeneration != 0 && material->slot.IsValid());
         }
 
+        /** @brief Validate copied semantic shape without resolving a catalogue in the callback path. */
+        bool ValidSurface(const std::optional<PhysicsSurfaceEvidence> &surface, const std::optional<PhysicsEventMaterial> &material,
+                          const PhysicsEventEndpoint &endpoint) noexcept {
+            if (!surface)
+                return true;
+            return material.has_value() && surface->surface.IsValid() && surface->catalogRevision != 0 && surface->mappingGeneration != 0 &&
+                   surface->collider == endpoint.collider;
+        }
+
+        bool SameSurfacePolicy(const PhysicsContactObservation &observation) noexcept {
+            if (!observation.firstSurface || !observation.secondSurface)
+                return true;
+            const auto &first = *observation.firstSurface;
+            const auto &second = *observation.secondSurface;
+            return first.mappingGeneration == second.mappingGeneration && first.catalogRevision == second.catalogRevision &&
+                   first.catalogFingerprint == second.catalogFingerprint;
+        }
+
         /** @brief Rejects malformed copied point geometry and nonphysical impulse estimates. */
         [[nodiscard]] bool ValidPoint(const PhysicsContactPoint &point, const bool sensor) noexcept {
             if (!Math::IsFinite(point.positionOnFirst) || !Math::IsFinite(point.positionOnSecond) || !Math::IsFinite(point.normal) ||
@@ -117,11 +135,15 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc PhysicsEventProjection::BuildCurrentPairs */
     void PhysicsEventProjection::BuildCurrentPairs(const std::uint32_t retained) {
+        surfaceConflict_ = false;
         currentPairs_.clear();
         for (std::uint32_t index = 0; index < retained; ++index) {
             const PhysicsContactObservation &observation = observations_[index];
             const PhysicsEventPairKey pair{.first = observation.first, .second = observation.second};
             if (!currentPairs_.empty() && currentPairs_.back().pair == pair) {
+                const auto &previous = currentPairs_.back();
+                if (previous.firstSurface != observation.firstSurface || previous.secondSurface != observation.secondSurface)
+                    surfaceConflict_ = true;
                 auto &summary = currentPairs_.back().contact;
                 summary.omittedPointCount = SaturatingAdd(summary.omittedPointCount, observation.contact.omittedPointCount);
                 for (std::uint32_t point = 0; point < observation.contact.pointCount; ++point)
@@ -131,6 +153,8 @@ namespace Horo::Physics::Detail {
             currentPairs_.push_back({.pair = pair,
                                      .firstMaterial = observation.firstMaterial,
                                      .secondMaterial = observation.secondMaterial,
+                                     .firstSurface = observation.firstSurface,
+                                     .secondSurface = observation.secondSurface,
                                      .contact = observation.contact,
                                      .sensor = observation.sensor});
         }
@@ -198,6 +222,8 @@ namespace Horo::Physics::Detail {
             return left < right;
         });
         BuildCurrentPairs(retained);
+        if (surfaceConflict_)
+            return Result<PhysicsEventProjectionResult>::Failure(MakeError(SurfaceErrors::Invalid));
         ReconcileLifecycle();
 
         if (overflowedDuringTick_ && overflowPolicy_ == PhysicsEventOverflowPolicy::FailTick) {
@@ -290,6 +316,12 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc PhysicsEventProjection::ValidObservation */
     bool PhysicsEventProjection::ValidObservation(const PhysicsContactObservation &observation) noexcept {
+        if (!ValidSurface(observation.firstSurface, observation.firstMaterial, observation.first))
+            return false;
+        if (!ValidSurface(observation.secondSurface, observation.secondMaterial, observation.second))
+            return false;
+        if (!SameSurfacePolicy(observation))
+            return false;
         const std::array valid{observation.simulationTick != 0,
                                ValidEndpoint(observation.first),
                                ValidEndpoint(observation.second),
@@ -312,6 +344,7 @@ namespace Horo::Physics::Detail {
         if (observation.second < observation.first) {
             std::swap(observation.first, observation.second);
             std::swap(observation.firstMaterial, observation.secondMaterial);
+            std::swap(observation.firstSurface, observation.secondSurface);
             for (std::uint32_t index = 0; index < observation.contact.pointCount; ++index) {
                 auto &point = observation.contact.points[index];
                 std::swap(point.positionOnFirst, point.positionOnSecond);
@@ -338,7 +371,9 @@ namespace Horo::Physics::Detail {
                            .pair = state.pair,
                            .firstMaterial = state.firstMaterial,
                            .secondMaterial = state.secondMaterial,
-                           .contact = state.contact});
+                           .contact = state.contact,
+                           .firstSurface = state.firstSurface,
+                           .secondSurface = state.secondSurface});
     }
 
     /** @copydoc PhysicsEventProjection::AppendMatchedTransition */

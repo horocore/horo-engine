@@ -40,7 +40,8 @@ namespace Horo::Physics::Detail {
                 const auto *child = FindSceneShape(world, instance.shape);
                 if (child == nullptr)
                     return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
-                settings.AddShape(ToNative(instance.localPose.translation), ToNative(instance.localPose.rotation), child->shape.GetPtr());
+                settings.AddShape(ToNative(instance.localPose.translation), ToNative(instance.localPose.rotation), child->shape.GetPtr(),
+                                  static_cast<JPH::uint32>(&instance - instances.data() + 1));
             }
             return Result<void>::Success();
         }
@@ -418,7 +419,12 @@ namespace Horo::Physics::Detail {
 
         const std::uint32_t slot = canonical.nextResourceSlot++;
         const ShapeHandle identity{owner, {slot, 1}};
-        canonical.scene.shapes.emplace_back(CanonicalSceneShapeRecord{.handle = identity, .shape = created.Get()});
+        std::vector<PhysicsPose> childPoses;
+        childPoses.reserve(instances.size());
+        for (const auto &instance : instances)
+            childPoses.push_back(instance.localPose);
+        canonical.scene.shapes.emplace_back(
+            CanonicalSceneShapeRecord{.handle = identity, .shape = created.Get(), .compoundChildPoses = std::move(childPoses)});
         return Result<ShapeHandle>::Success(identity);
     }
 

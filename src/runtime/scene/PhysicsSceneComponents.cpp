@@ -122,8 +122,9 @@ namespace Horo::Runtime {
 
         [[nodiscard]] bool HasValidColliderIdentity(const ColliderComponent &component, const BodyReferenceDomain domain) noexcept {
             return component.id.IsValid() && component.collider.IsValid() &&
-                   component.schemaVersion == PhysicsSceneComponentSchemaVersion && component.generation != 0 &&
-                   IsValid(component.body, domain) && component.collisionProfile.IsValid();
+                   (component.schemaVersion == PhysicsColliderComponentSchemaVersion ||
+                    (component.schemaVersion == 1 && component.surfaceBindings.empty())) &&
+                   component.generation != 0 && IsValid(component.body, domain) && component.collisionProfile.IsValid();
         }
 
         [[nodiscard]] bool HasValidColliderTransform(const ColliderComponent &component) noexcept {
@@ -295,6 +296,26 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Surface slots must be unique physical slots; project membership is checked against the captured world later. */
+        Result<void> ValidateSurfaceBindings(const ColliderComponent &component) {
+            if (component.surfaceBindings.size() > MaximumPhysicsColliderSurfaceBindings)
+                return Failure("Too many collider surface bindings.");
+            std::vector<Physics::PhysicsMaterialSlotId> slots;
+            for (const auto &binding : component.surfaceBindings) {
+                if (!binding.slot.IsValid() || !binding.surface.IsValid())
+                    return Failure("Invalid collider surface binding.");
+                const auto physical = std::ranges::find(component.materials, binding.slot, &PhysicsColliderMaterialBinding::slot);
+                if (physical == component.materials.end())
+                    return Failure("Surface binding has no physical material slot.");
+                if (std::ranges::find(slots, binding.slot) != slots.end())
+                    return Failure("Duplicate collider surface slot.");
+                slots.push_back(binding.slot);
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc PhysicsValidationDetail::ValidateCollider */
     Result<void> PhysicsValidationDetail::ValidateCollider(const ColliderComponent &component, const BodyReferenceDomain domain) {
         if (!HasValidColliderIdentity(component, domain) || !HasValidColliderTransform(component))
@@ -302,7 +323,9 @@ namespace Horo::Runtime {
                 "Physics colliders require stable identities, schema, body/profile references, pose, and positive finite scale.");
         if (Result<void> source = ValidateColliderSource(component); source.HasError())
             return source;
-        return ValidateMaterialBindings(component.materials);
+        if (auto physical = ValidateMaterialBindings(component.materials); physical.HasError())
+            return physical;
+        return ValidateSurfaceBindings(component);
     }
 
     /** @copydoc PhysicsValidationDetail::ValidateConstraint */

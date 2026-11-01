@@ -833,6 +833,8 @@ target_link_libraries(HoroCharacterInputTests PRIVATE HoroEngine::CharacterInput
 horo_register_catch_test(HoroCharacterInputTests LABELS "unit;character;input;headless")
 
 add_executable(HoroPhysicsTests
+        unit/runtime/physics/PhysicsSurfaceTests.cpp
+        unit/runtime/physics/CharacterMovementEventTests.cpp
         unit/runtime/physics/PhysicsCellAttachmentsTests.cpp
         support/AllocationProbe.cpp
         unit/runtime/physics/CharacterFoundationQualificationTests.cpp
@@ -1708,6 +1710,17 @@ add_executable(HoroTerrainAuthoringTests unit/editor/TerrainAuthoringDocumentTes
 target_compile_features(HoroTerrainAuthoringTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainAuthoringTests PRIVATE HoroEngine::TerrainAuthoring)
 horo_register_catch_test(HoroTerrainAuthoringTests LABELS "unit;editor;terrain;headless;lifecycle")
+
+add_executable(HoroProjectSurfaceSettingsPublicConsumer public_headers/ProjectSurfaceSettingsConsumer.cpp)
+target_compile_features(HoroProjectSurfaceSettingsPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroProjectSurfaceSettingsPublicConsumer PRIVATE HoroEngine::ProjectSurfaceSettings)
+add_test(NAME HoroProjectSurfaceSettingsPublicConsumer COMMAND HoroProjectSurfaceSettingsPublicConsumer)
+set_tests_properties(HoroProjectSurfaceSettingsPublicConsumer PROPERTIES LABELS "public_headers;project;physics;headless" TIMEOUT 30)
+
+add_executable(HoroProjectSurfaceSettingsTests unit/application/ProjectSurfaceSettingsTests.cpp)
+target_compile_features(HoroProjectSurfaceSettingsTests PRIVATE cxx_std_20)
+target_link_libraries(HoroProjectSurfaceSettingsTests PRIVATE HoroEngine::ProjectSurfaceSettings)
+horo_register_catch_test(HoroProjectSurfaceSettingsTests LABELS "unit;project;physics;headless" PROPERTIES TIMEOUT 90)
 
 add_executable(HoroProjectAssetAuthoredPublicationTests unit/editor/ProjectAssetAuthoredPublicationTests.cpp)
 target_compile_features(HoroProjectAssetAuthoredPublicationTests PRIVATE cxx_std_20)
@@ -3764,6 +3777,7 @@ add_executable(HoroSceneDocumentPersistenceTests
 target_compile_features(HoroSceneDocumentPersistenceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentPersistenceTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroSceneSourceTests
+        unit/scene/PhysicsSurfaceSourceTests.cpp
         unit/scene/SceneSourceTests.cpp
         unit/scene/CharacterSceneSourceTests.cpp
         unit/scene/NavigationSceneSourceTests.cpp

@@ -82,6 +82,8 @@ namespace Horo::Physics::Detail {
         PhysicsPose localPose;
         CollisionProfileId profile;
         bool sensor{};
+        std::vector<PhysicsQueryMaterial> materials;
+        std::optional<PhysicsSurfaceEvidence> surface;
     };
 
     struct PlannedBody final {
@@ -153,9 +155,18 @@ namespace Horo::Physics::Detail {
     [[nodiscard]] Result<void> ValidateCharacterProjectBindings(std::span<const PlannedCharacter> characters,
                                                                 const PhysicsWorldSimulationBinding &simulation);
 
+    /** @brief Decode the exact admitted canonical physical payload, retaining its declared content revision as generation. */
+    [[nodiscard]] Result<PhysicsQueryMaterial> DecodeScenePhysicalMaterial(const Runtime::PhysicsColliderMaterialBinding &binding,
+                                                                           const Assets::AssetTypeId &type,
+                                                                           std::span<const std::uint8_t> payload);
+    /** @brief Validate used analytic slot and catalogue membership before preparing native resources. */
+    [[nodiscard]] Result<std::optional<PhysicsSurfaceEvidence>> BindColliderSurface(const Runtime::ColliderComponent &collider,
+                                                                                    const PhysicsSurfaceWorldBinding &surfaces);
+
     /** @brief Builds a deterministic, fully validated authored Physics scene plan. */
     [[nodiscard]] Result<PhysicsScenePlan> BuildPhysicsScenePlan(const Runtime::RuntimeSceneDefinition &definition,
-                                                                 Runtime::RuntimeSceneView scene);
+                                                                 Runtime::RuntimeSceneView scene,
+                                                                 const PhysicsSurfaceWorldBinding &surfaces);
 
     /** @brief Activates and stages a validated Physics scene plan with rollback ownership. */
     [[nodiscard]] Result<StagedPhysicsScene> StagePhysicsScene(std::unique_ptr<PhysicsWorld> physics,

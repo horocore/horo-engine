@@ -80,6 +80,14 @@ namespace Horo::Editor {
             return input ? contents : std::string{};
         }
 
+        /** @brief Rechecks exact catalog bytes before each project-session publication boundary. */
+        [[nodiscard]] bool SurfaceSourceCurrent(const std::filesystem::path &root, const Application::ProjectSurfaceFileSnapshot &surface) {
+            if (!surface.settings)
+                return false;
+            auto source = Assets::CaptureAssetSource(root, root / ".horo/surfaces.json", Application::MaximumProjectSurfaceBytes);
+            return source.HasValue() && source.Value().identity == surface.identity;
+        }
+
         [[nodiscard]] Result<void> UpdatePatchMarker(DurableFileSystem &files, const ProjectMutationCoordinator &mutations,
                                                      const std::filesystem::path &projectRoot, const ReleaseCompatibilityDecision &target,
                                                      const ProjectOpenOperationId operation) {
@@ -118,6 +126,8 @@ namespace Horo::Editor {
             ProjectMetadata metadata;
             std::vector<PreparedDerivedState> derived;
             bool cancellationDeferred{};
+            Application::ProjectSurfaceFileSnapshot surfaces;
+            std::string metadataFingerprint;
         };
 
         struct BackgroundCompletion {
@@ -248,6 +258,66 @@ namespace Horo::Editor {
                           static_cast<unsigned long long>(id.value), cause->code.Value().c_str(), cause->message.c_str());
         }
 
+        /** @brief Captures a stable root byte identity bound to the compatibility-selected project. */
+        [[nodiscard]] Result<std::string> CaptureOpenMetadata(const std::filesystem::path &root, const std::string_view expectedId) {
+            auto fingerprint = SourceFingerprint(root);
+            auto metadata = Application::LoadProjectMetadata(root);
+            if (fingerprint.empty() || metadata.HasError())
+                return Result<std::string>::Failure(OpenError(ProjectOpenErrors::SessionStale));
+            if (metadata.Value().projectId != expectedId || SourceFingerprint(root) != fingerprint)
+                return Result<std::string>::Failure(OpenError(ProjectOpenErrors::SessionStale));
+            return Result<std::string>::Success(std::move(fingerprint));
+        }
+
+        /** @brief Validates saved default authoring before any derived-state preparation. */
+        [[nodiscard]] Result<void> ValidateDefaultProjectScene(const std::filesystem::path &root) {
+            auto scene = LoadProjectDefaultScene(root);
+            if (scene.HasError())
+                return Result<void>::Failure(OpenError(ProjectOpenErrors::ScenePreflightFailed, scene.ErrorValue().message));
+            if (!scene.Value())
+                return Result<void>::Success();
+            if (!scene.Value()->existed)
+                return Result<void>::Failure(
+                    OpenError(ProjectOpenErrors::ScenePreflightFailed, "The configured project default scene does not exist."));
+            SceneDocument validation;
+            auto valid = validation.LoadSaved(scene.Value()->objects, scene.Value()->prefabInstances);
+            if (valid.HasError())
+                return Result<void>::Failure(OpenError(ProjectOpenErrors::ScenePreflightFailed, valid.ErrorValue().message));
+            return Result<void>::Success();
+        }
+
+        /** @brief Completes pending journal recovery before compatibility/migration inspection. */
+        template <typename StateType>
+        [[nodiscard]] Result<void> RecoverProjectForOpen(StateType &state, const std::shared_ptr<BackgroundCompletion> &completion,
+                                                         const ProjectOpenRequest &request, const CancellationToken &cancellation) {
+            SetPhase(completion, ProjectOpenPhase::CleaningRecovery);
+            static_cast<void>(state.transactions.CleanupCommittedMigrations(request.projectRoot));
+            if (state.transactions.InspectPendingRecovery(request.projectRoot).action != MigrationRecoveryAction::None) {
+                SetPhase(completion, ProjectOpenPhase::Recovering);
+                auto recovered = state.transactions.Recover(request.projectRoot, cancellation);
+                if (recovered.HasError())
+                    return recovered;
+            }
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(OpenError(ProjectOpenErrors::Cancelled));
+            return Result<void>::Success();
+        }
+
+        /** @brief Prepares owned disposable contributions without publishing any installed state. */
+        template <typename StateType>
+        [[nodiscard]] Result<void> PrepareOpenDerived(StateType &state, BackgroundResult &result, const ProjectOpenRequest &request,
+                                                      const CancellationToken &cancellation) {
+            result.derived.reserve(state.derivedContributors.size());
+            for (IProjectOpenDerivedStateContributor *contributor : state.derivedContributors) {
+                auto prepared = contributor->Prepare(request.projectRoot, cancellation);
+                if (prepared.HasError())
+                    return Result<void>::Failure(WrapError(ProjectOpenErrors::DerivedStateFailed, prepared.ErrorValue(),
+                                                           std::string(contributor->Id()) + ": " + prepared.ErrorValue().message));
+                result.derived.emplace_back(std::string(contributor->Id()), std::move(prepared).Value());
+            }
+            return Result<void>::Success();
+        }
+
         template <typename StateType>
         [[nodiscard]] Result<void> RunProjectOpenBackground(StateType &state, const std::shared_ptr<BackgroundCompletion> &completion,
                                                             const ProjectOpenRequest &request, const ProjectOpenOperationId id,
@@ -261,48 +331,34 @@ namespace Horo::Editor {
                 return Result<void>::Failure(std::move(error));
             };
 
-            SetPhase(completion, ProjectOpenPhase::CleaningRecovery);
-            // Cleanup is non-authoritative; a failure remains a warning and must not block open.
-            static_cast<void>(state.transactions.CleanupCommittedMigrations(request.projectRoot));
-            if (state.transactions.InspectPendingRecovery(request.projectRoot).action != MigrationRecoveryAction::None) {
-                SetPhase(completion, ProjectOpenPhase::Recovering);
-                if (auto recovered = state.transactions.Recover(request.projectRoot, cancellation); recovered.HasError())
-                    return fail(recovered.ErrorValue());
-            }
-            if (cancellation.IsCancellationRequested())
-                return fail(OpenError(ProjectOpenErrors::Cancelled));
+            if (auto recovered = RecoverProjectForOpen(state, completion, request, cancellation); recovered.HasError())
+                return fail(recovered.ErrorValue());
 
             auto resolved = ResolveOpenCompatibility(state, completion, request, id, cancellation);
             if (resolved.HasError())
                 return fail(resolved.ErrorValue());
             CompatibilityResolution compatibility = std::move(resolved).Value();
 
+            auto metadata = CaptureOpenMetadata(request.projectRoot, compatibility.snapshot.metadata->projectId);
+            if (metadata.HasError())
+                return fail(metadata.ErrorValue());
+            auto surfaces = Application::LoadProjectSurfaceSettings(request.projectRoot, compatibility.snapshot.metadata->projectId);
+            if (surfaces.HasError())
+                return fail(surfaces.ErrorValue());
+
             SetPhase(completion, ProjectOpenPhase::ValidatingDefaultScene);
-            auto defaultScene = LoadProjectDefaultScene(request.projectRoot);
-            if (defaultScene.HasError())
-                return fail(OpenError(ProjectOpenErrors::ScenePreflightFailed, defaultScene.ErrorValue().message));
-            if (defaultScene.Value().has_value()) {
-                if (!defaultScene.Value()->existed)
-                    return fail(OpenError(ProjectOpenErrors::ScenePreflightFailed, "The configured project default scene does not exist."));
-                SceneDocument sceneValidation;
-                if (auto validated = sceneValidation.LoadSaved(defaultScene.Value()->objects, defaultScene.Value()->prefabInstances);
-                    validated.HasError())
-                    return fail(OpenError(ProjectOpenErrors::ScenePreflightFailed, validated.ErrorValue().message));
-            }
+            if (auto valid = ValidateDefaultProjectScene(request.projectRoot); valid.HasError())
+                return fail(valid.ErrorValue());
             if (cancellation.IsCancellationRequested() && !compatibility.cancellationDeferred)
                 return fail(OpenError(ProjectOpenErrors::Cancelled));
 
             SetPhase(completion, ProjectOpenPhase::RebuildingDerivedState);
             BackgroundResult result{.metadata = *compatibility.snapshot.metadata,
-                                    .cancellationDeferred = compatibility.cancellationDeferred};
-            result.derived.reserve(state.derivedContributors.size());
-            for (IProjectOpenDerivedStateContributor *contributor : state.derivedContributors) {
-                auto prepared = contributor->Prepare(request.projectRoot, cancellation);
-                if (prepared.HasError())
-                    return fail(WrapError(ProjectOpenErrors::DerivedStateFailed, prepared.ErrorValue(),
-                                          std::string(contributor->Id()) + ": " + prepared.ErrorValue().message));
-                result.derived.emplace_back(std::string(contributor->Id()), std::move(prepared).Value());
-            }
+                                    .cancellationDeferred = compatibility.cancellationDeferred,
+                                    .surfaces = std::move(surfaces).Value(),
+                                    .metadataFingerprint = std::move(metadata).Value()};
+            if (auto prepared = PrepareOpenDerived(state, result, request, cancellation); prepared.HasError())
+                return fail(prepared.ErrorValue());
             std::lock_guard lock(completion->mutex);
             completion->result.emplace(std::move(result));
             return Result<void>::Success();
@@ -341,7 +397,9 @@ namespace Horo::Editor {
         if (!state_)
             return Result<void>::Failure(OpenError(ProjectOpenErrors::SessionStale));
         std::lock_guard lock(state_->mutex);
-        if (state_->status != State::Status::Reserved || !state_->candidate.has_value() || state_->candidate->id != id_)
+        if (state_->status != State::Status::Reserved || !state_->candidate.has_value() || state_->candidate->id != id_ ||
+            SourceFingerprint(state_->candidate->projectRoot) != state_->candidate->sourceFingerprint ||
+            !SurfaceSourceCurrent(state_->candidate->projectRoot, state_->candidate->surfaces))
             return Result<void>::Failure(OpenError(ProjectOpenErrors::SessionStale));
         state_->status = State::Status::Consumed;
         committed_ = true;
@@ -482,7 +540,8 @@ namespace Horo::Editor {
         std::lock_guard lock(state_->sessions->mutex);
         if (state_->sessions->shutdown || state_->sessions->status != ProjectSessionActivationLease::State::Status::Ready ||
             !state_->sessions->candidate.has_value() || state_->sessions->candidate->id != session ||
-            SourceFingerprint(state_->sessions->candidate->projectRoot) != state_->sessions->candidate->sourceFingerprint)
+            SourceFingerprint(state_->sessions->candidate->projectRoot) != state_->sessions->candidate->sourceFingerprint ||
+            !SurfaceSourceCurrent(state_->sessions->candidate->projectRoot, state_->sessions->candidate->surfaces))
             return Result<ProjectSessionActivationLease>::Failure(OpenError(ProjectOpenErrors::SessionStale));
         state_->sessions->status = ProjectSessionActivationLease::State::Status::Reserved;
         return Result<ProjectSessionActivationLease>::Success(ProjectSessionActivationLease{state_->sessions, session});
@@ -498,6 +557,125 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Observes only a completed job; queued/running jobs remain untouched. */
+        template <typename StateType, typename OperationType>
+        std::optional<JobSnapshot> CompletedOpenJob(StateType &state, const OperationType &operation) {
+            if (!operation.job)
+                return std::nullopt;
+            auto job = state.jobs.Query(operation.job->Id());
+            if (job.state == JobState::Queued || job.state == JobState::Running)
+                return std::nullopt;
+            return job;
+        }
+
+        /** @brief Projects a failed background result without manufacturing another cause. */
+        void FinishFailedOpen(ProjectOpenProgressSnapshot &snapshot, std::optional<Error> error, const JobSnapshot &job,
+                              const bool cancelled) {
+            snapshot.phase = cancelled ? ProjectOpenPhase::Cancelled : ProjectOpenPhase::Failed;
+            snapshot.outcome = cancelled ? ProjectOpenOutcome::Cancelled : ProjectOpenOutcome::Failed;
+            snapshot.progress = 1.0F;
+            snapshot.diagnostic = error.has_value() ? std::move(error) : job.error;
+            if (cancelled)
+                LOG_WARN("editor.project_open", "Project open cancelled operation=%llu.",
+                         static_cast<unsigned long long>(snapshot.operationId.value));
+        }
+
+        /** @brief Suppresses activation after a requested or deferred cancellation boundary. */
+        bool FinishCancelledOpen(ProjectOpenProgressSnapshot &snapshot, const bool deferred, const bool cancelled) {
+            if (!deferred && !cancelled)
+                return false;
+            snapshot.phase = ProjectOpenPhase::Cancelled;
+            snapshot.outcome = ProjectOpenOutcome::Cancelled;
+            snapshot.progress = 1.0F;
+            LOG_WARN("editor.project_open", "Project open cancelled after safe boundary operation=%llu deferred=%s.",
+                     static_cast<unsigned long long>(snapshot.operationId.value), deferred ? "yes" : "no");
+            return true;
+        }
+
+        /** @brief Installs the existing ordered disposable contributions and records their exact revisions. */
+        std::optional<std::vector<std::string>> InstallOpenDerived(ProjectOpenProgressSnapshot &snapshot, BackgroundResult &result) {
+            snapshot.phase = ProjectOpenPhase::RebuildingDerivedState;
+            std::vector<std::string> revisions;
+            revisions.reserve(result.derived.size());
+            for (auto &prepared : result.derived) {
+                auto installed = prepared.candidate->Install();
+                if (installed.HasError()) {
+                    snapshot.phase = ProjectOpenPhase::Failed;
+                    snapshot.outcome = ProjectOpenOutcome::Failed;
+                    snapshot.progress = 1.0F;
+                    snapshot.diagnostic = WrapError(ProjectOpenErrors::DerivedStateFailed, installed.ErrorValue(),
+                                                    prepared.contributorId + ": " + installed.ErrorValue().message);
+                    LogProjectOpenFailure(snapshot.operationId, *snapshot.diagnostic);
+                    return std::nullopt;
+                }
+                revisions.push_back(prepared.contributorId + "@" + installed.Value());
+            }
+
+            return revisions;
+        }
+
+        /** @brief Projects the existing renderer restart/error policy before workspace preparation. */
+        template <typename StateType, typename OperationType> bool OpenRendererReady(StateType &state, OperationType &operation) {
+            auto &snapshot = operation.snapshot;
+            snapshot.phase = ProjectOpenPhase::RendererPreflight;
+            snapshot.progress = std::max(snapshot.progress, PhaseProgress(snapshot.phase));
+            const ProjectOpenPreflight preflight = PreflightProjectOpen(operation.request.projectRoot, state.rendererAvailability);
+            snapshot.requiredRendererBackend = preflight.requiredBackendId;
+            if (preflight.status == ProjectOpenPreflightStatus::RequiresRendererRestart) {
+                snapshot.phase = ProjectOpenPhase::RequiresRendererRestart;
+                snapshot.outcome = ProjectOpenOutcome::RequiresRendererRestart;
+                snapshot.progress = 1.0F;
+                LOG_WARN("editor.project_open", "Project open requires renderer restart operation=%llu backend=%s.",
+                         static_cast<unsigned long long>(snapshot.operationId.value), snapshot.requiredRendererBackend.c_str());
+                return false;
+            }
+            if (preflight.status != ProjectOpenPreflightStatus::Ready) {
+                snapshot.phase = ProjectOpenPhase::Failed;
+                snapshot.outcome = ProjectOpenOutcome::Failed;
+                snapshot.progress = 1.0F;
+                snapshot.diagnostic = OpenError(ProjectOpenErrors::CompatibilityBlocked, preflight.diagnostic);
+                return false;
+            }
+
+            return true;
+        }
+
+        /** @brief Publishes one session only after exact metadata/catalog source revalidation. */
+        template <typename StateType, typename OperationType>
+        void PublishOpenSession(StateType &state, OperationType &operation, BackgroundResult &result, std::vector<std::string> revisions) {
+            auto &snapshot = operation.snapshot;
+            snapshot.phase = ProjectOpenPhase::PreparingWorkspace;
+            const std::string fingerprint = SourceFingerprint(operation.request.projectRoot);
+            if (fingerprint != result.metadataFingerprint || !SurfaceSourceCurrent(operation.request.projectRoot, result.surfaces)) {
+                snapshot.phase = ProjectOpenPhase::Failed;
+                snapshot.outcome = ProjectOpenOutcome::Failed;
+                snapshot.progress = 1.0F;
+                snapshot.diagnostic = OpenError(ProjectOpenErrors::SessionStale);
+                return;
+            }
+            const ProjectSessionCandidateId sessionId{state.nextSession++};
+            {
+                std::lock_guard lock(state.sessions->mutex);
+                state.sessions->candidate = ProjectSessionCandidate{sessionId,
+                                                                    snapshot.operationId,
+                                                                    operation.request.projectRoot,
+                                                                    snapshot.projectName,
+                                                                    snapshot.requiredRendererBackend,
+                                                                    fingerprint,
+                                                                    std::move(revisions),
+                                                                    std::move(result.surfaces)};
+                state.sessions->status = decltype(state.sessions->status)::Ready;
+            }
+            snapshot.readySession = sessionId;
+            snapshot.phase = ProjectOpenPhase::ReadyToActivate;
+            snapshot.outcome = ProjectOpenOutcome::ReadyToActivate;
+            snapshot.progress = 1.0F;
+            LOG_INFO("editor.project_open", "Project open ready operation=%llu backend=%s.",
+                     static_cast<unsigned long long>(snapshot.operationId.value), snapshot.requiredRendererBackend.c_str());
+        }
+    }  // namespace
+
     void ProjectOpenService::PumpOwnerThread() {
         if (!state_->operation.has_value() || state_->operation->snapshot.outcome != ProjectOpenOutcome::Running)
             return;
@@ -505,12 +683,9 @@ namespace Horo::Editor {
         auto &snapshot = operation.snapshot;
         snapshot.phase = operation.completion->phase.load(std::memory_order::seq_cst);
         snapshot.progress = std::max(snapshot.progress, PhaseProgress(snapshot.phase));
-        if (!operation.job.has_value())
+        const auto job = CompletedOpenJob(*state_, operation);
+        if (!job)
             return;
-        const JobSnapshot job = state_->jobs.Query(operation.job->Id());
-        if (job.state == JobState::Queued || job.state == JobState::Running)
-            return;
-
         std::optional<BackgroundResult> result;
         std::optional<Error> error;
         {
@@ -518,96 +693,19 @@ namespace Horo::Editor {
             result = std::move(operation.completion->result);
             error = operation.completion->error;
         }
-        if (!result.has_value()) {
-            snapshot.phase =
-                operation.cancellation.Token().IsCancellationRequested() ? ProjectOpenPhase::Cancelled : ProjectOpenPhase::Failed;
-            snapshot.outcome =
-                operation.cancellation.Token().IsCancellationRequested() ? ProjectOpenOutcome::Cancelled : ProjectOpenOutcome::Failed;
-            snapshot.progress = 1.0F;
-            if (error.has_value())
-                snapshot.diagnostic = std::move(error);
-            else
-                snapshot.diagnostic = job.error;
-            if (snapshot.outcome == ProjectOpenOutcome::Cancelled)
-                LOG_WARN("editor.project_open", "Project open cancelled operation=%llu.",
-                         static_cast<unsigned long long>(snapshot.operationId.value));
+        if (!result) {
+            FinishFailedOpen(snapshot, std::move(error), *job, operation.cancellation.Token().IsCancellationRequested());
             return;
         }
         snapshot.projectName = result->metadata.name;
         snapshot.cancellationDeferred = result->cancellationDeferred;
-        if (result->cancellationDeferred || operation.cancellation.Token().IsCancellationRequested()) {
-            snapshot.phase = ProjectOpenPhase::Cancelled;
-            snapshot.outcome = ProjectOpenOutcome::Cancelled;
-            snapshot.progress = 1.0F;
-            LOG_WARN("editor.project_open", "Project open cancelled after safe boundary operation=%llu deferred=%s.",
-                     static_cast<unsigned long long>(snapshot.operationId.value), result->cancellationDeferred ? "yes" : "no");
+        if (FinishCancelledOpen(snapshot, result->cancellationDeferred, operation.cancellation.Token().IsCancellationRequested()))
             return;
-        }
-
-        snapshot.phase = ProjectOpenPhase::RebuildingDerivedState;
-        std::vector<std::string> revisions;
-        revisions.reserve(result->derived.size());
-        for (auto &prepared : result->derived) {
-            auto installed = prepared.candidate->Install();
-            if (installed.HasError()) {
-                snapshot.phase = ProjectOpenPhase::Failed;
-                snapshot.outcome = ProjectOpenOutcome::Failed;
-                snapshot.progress = 1.0F;
-                snapshot.diagnostic = WrapError(ProjectOpenErrors::DerivedStateFailed, installed.ErrorValue(),
-                                                prepared.contributorId + ": " + installed.ErrorValue().message);
-                LogProjectOpenFailure(snapshot.operationId, *snapshot.diagnostic);
-                return;
-            }
-            revisions.push_back(prepared.contributorId + "@" + installed.Value());
-        }
-
-        snapshot.phase = ProjectOpenPhase::RendererPreflight;
-        snapshot.progress = std::max(snapshot.progress, PhaseProgress(snapshot.phase));
-        const ProjectOpenPreflight preflight = PreflightProjectOpen(operation.request.projectRoot, state_->rendererAvailability);
-        snapshot.requiredRendererBackend = preflight.requiredBackendId;
-        if (preflight.status == ProjectOpenPreflightStatus::RequiresRendererRestart) {
-            snapshot.phase = ProjectOpenPhase::RequiresRendererRestart;
-            snapshot.outcome = ProjectOpenOutcome::RequiresRendererRestart;
-            snapshot.progress = 1.0F;
-            LOG_WARN("editor.project_open", "Project open requires renderer restart operation=%llu backend=%s.",
-                     static_cast<unsigned long long>(snapshot.operationId.value), snapshot.requiredRendererBackend.c_str());
+        auto revisions = InstallOpenDerived(snapshot, *result);
+        if (!revisions)
             return;
-        }
-        if (preflight.status != ProjectOpenPreflightStatus::Ready) {
-            snapshot.phase = ProjectOpenPhase::Failed;
-            snapshot.outcome = ProjectOpenOutcome::Failed;
-            snapshot.progress = 1.0F;
-            snapshot.diagnostic = OpenError(ProjectOpenErrors::CompatibilityBlocked, preflight.diagnostic);
-            return;
-        }
-
-        snapshot.phase = ProjectOpenPhase::PreparingWorkspace;
-        const std::string fingerprint = SourceFingerprint(operation.request.projectRoot);
-        if (fingerprint.empty()) {
-            snapshot.phase = ProjectOpenPhase::Failed;
-            snapshot.outcome = ProjectOpenOutcome::Failed;
-            snapshot.progress = 1.0F;
-            snapshot.diagnostic = OpenError(ProjectOpenErrors::SessionStale);
-            return;
-        }
-        const ProjectSessionCandidateId sessionId{state_->nextSession++};
-        {
-            std::lock_guard lock(state_->sessions->mutex);
-            state_->sessions->candidate = ProjectSessionCandidate{sessionId,
-                                                                  snapshot.operationId,
-                                                                  operation.request.projectRoot,
-                                                                  snapshot.projectName,
-                                                                  snapshot.requiredRendererBackend,
-                                                                  fingerprint,
-                                                                  std::move(revisions)};
-            state_->sessions->status = ProjectSessionActivationLease::State::Status::Ready;
-        }
-        snapshot.readySession = sessionId;
-        snapshot.phase = ProjectOpenPhase::ReadyToActivate;
-        snapshot.outcome = ProjectOpenOutcome::ReadyToActivate;
-        snapshot.progress = 1.0F;
-        LOG_INFO("editor.project_open", "Project open ready operation=%llu backend=%s.",
-                 static_cast<unsigned long long>(snapshot.operationId.value), snapshot.requiredRendererBackend.c_str());
+        if (OpenRendererReady(*state_, operation))
+            PublishOpenSession(*state_, operation, *result, std::move(*revisions));
     }
 
     void ProjectOpenService::Shutdown() noexcept {

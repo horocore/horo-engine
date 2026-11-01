@@ -214,6 +214,19 @@ and complete consumer/lifecycle revalidation, not the maximum prior number.
 Rollback: restore a coherent previous engine, SDK and rebuilt module set, then
 restart play. Never edit fingerprints or force-load a mismatched binary.
 
+## Gameplay SDK24 → SDK25 (Character surface and event contracts)
+
+Rebuild the engine host, native gameplay modules, generated descriptor bundles and
+SDK consumers with boundary25 / `gameplay-sdk25`. Character movement and committed
+event values now carry explicit slide and semantic surface evidence. Physics
+world bindings retain their captured project surface catalog and mapping identity.
+These C++ value layouts are incompatible with SDK24, even for modules that do not
+consume the new event stream. Never edit a descriptor fingerprint to bypass this
+boundary.
+
+Rollback requires the previous coherent engine, SDK, modules and project backup;
+the 0.3.0 project authoring contract cannot be opened by a 0.2.0 host.
+
 ## Gameplay SDK22 → SDK24 (Decision node and graph contracts)
 
 Rebuild the engine host, native gameplay modules, descriptor bundles and SDK

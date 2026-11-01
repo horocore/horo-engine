@@ -12,6 +12,8 @@ namespace Horo::SceneSource::Detail {
             if (collision.defaultMaterial)
                 value["defaultMaterial"] = {{"asset", collision.defaultMaterial->material.ToString()},
                                             {"slot", collision.defaultMaterial->slot.Value()}};
+            if (collision.defaultSurface)
+                value["defaultSurface"] = collision.defaultSurface->ToString();
             if (collision.requiredLayer)
                 value["requiredLayer"] = collision.requiredLayer->ToString();
             if (collision.requiredProfile)

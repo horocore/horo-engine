@@ -17,6 +17,7 @@
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 #include "Horo/Physics/PhysicsTickPipeline.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
+#include "Horo/Physics/SurfaceMaterial.h"
 
 #include <cstdint>
 #include <memory>
@@ -46,6 +47,7 @@ namespace Horo::Physics {
     struct PhysicsWorldSimulationBinding final {
         std::shared_ptr<const NormalizedCollisionSchema> schema;
         std::uint64_t generation{};
+        PhysicsSurfaceWorldBinding surfaces;
     };
 
     /** @brief Owned authored collider projection; native compound path ordinals are never authored identity. */
@@ -53,6 +55,8 @@ namespace Horo::Physics {
         PhysicsPose localPose;
         std::optional<PhysicsShapeSubresourceId> subshape;
         std::vector<PhysicsQueryMaterial> materials;
+        std::optional<PhysicsSurfaceEvidence> surface;
+        std::uint64_t collider{}; /**< Stable authored slot within the exact owning body, not a native child index. */
     };
 
     /** @brief Explicit scene simulation profile and owned collider metadata resolved against the world's schema.
@@ -329,6 +333,11 @@ namespace Horo::Physics {
         [[nodiscard]] PhysicsWorldId Identity() const noexcept;
         /** @brief Reads immutable world policy. @return Borrowed snapshot valid for this object's lifetime, including after shutdown. */
         [[nodiscard]] const PhysicsWorldSettings &Settings() const noexcept;
+        /** @brief Borrow the exact immutable semantic policy retained by this world, including after shutdown. */
+        [[nodiscard]] const PhysicsSurfaceWorldBinding &SurfaceBinding() const noexcept;
+        /** @brief Return this world's admitted catalogue/default/mapping policy identity without live project lookup. */
+        [[nodiscard]] const Sha256Digest &SurfaceFingerprint() const noexcept;
+
         /** @brief Reads the most recent explicit lifecycle cause. @return None before the first reset, failure or retirement. */
         [[nodiscard]] PhysicsWorldLifecycleCause LifecycleCause() const noexcept;
         /** @brief Reads the first terminal failure through teardown until explicit reset. @return Typed terminal error, if any. */

@@ -3,6 +3,7 @@
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
 #include "RuntimeUiPaintProjectSources.h"
@@ -293,6 +294,13 @@ namespace Horo::Application::Internal {
                     if (captured.HasError())
                         return Result<Physics::PhysicsSceneActivationSettings>::Failure(captured.ErrorValue());
                     simulation = std::move(captured).Value();
+                    auto surfaces = LoadProjectSurfaceSettings(root, metadata.Value().projectId);
+                    if (surfaces.HasError())
+                        return Result<Physics::PhysicsSceneActivationSettings>::Failure(std::move(surfaces).ErrorValue());
+                    auto semantic = surfaces.Value().settings->Capture(simulation.generation);
+                    if (semantic.HasError())
+                        return Result<Physics::PhysicsSceneActivationSettings>::Failure(std::move(semantic).ErrorValue());
+                    simulation.surfaces = std::move(semantic).Value();
                     capturedFilterGeneration_ = simulation.generation;
                 }
                 return Result<Physics::PhysicsSceneActivationSettings>::Success(

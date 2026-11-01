@@ -14,12 +14,24 @@ namespace Horo::Physics::Detail {
                 if (const auto valid = ValidatePhysicsPose(child.localPose); valid.HasError())
                     return Result<JPH::Ref<JPH::Shape>>::Failure(valid.ErrorValue());
                 settings.AddShape(ToNative(child.localPose.translation), ToNative(child.localPose.rotation),
-                                  batch.shapes[child.shape].shape.GetPtr());
+                                  batch.shapes[child.shape].shape.GetPtr(), static_cast<JPH::uint32>(&child - children.data() + 1));
             }
             auto created = settings.Create();
             if (created.HasError())
                 return Result<JPH::Ref<JPH::Shape>>::Failure(MakeError(PhysicsErrors::ShapeArtifactInvalid));
             return Result<JPH::Ref<JPH::Shape>>::Success(created.Get());
+        }
+
+        /** @brief Retains exact source transforms before native compound COM normalization or child reordering. */
+        std::vector<PhysicsPose> CaptureChildPoses(const PhysicsSceneGroupShape &input) {
+            std::vector<PhysicsPose> poses;
+            const auto *children = std::get_if<std::vector<PhysicsSceneGroupShape::Child>>(&input.geometry);
+            if (!children)
+                return poses;
+            poses.reserve(children->size());
+            for (const auto &child : *children)
+                poses.push_back(child.localPose);
+            return poses;
         }
 
         /** @brief Constructs a private shape DAG without inserting any shape into the active world table. */
@@ -43,7 +55,7 @@ namespace Horo::Physics::Detail {
                     native = std::move(created).Value();
                 }
                 const ShapeHandle handle{owner, {batch.world->nextResourceSlot++, 1}};
-                batch.shapes.push_back({.handle = handle, .shape = std::move(native)});
+                batch.shapes.push_back({.handle = handle, .shape = std::move(native), .compoundChildPoses = CaptureChildPoses(input)});
                 batch.shapeHandles.push_back(handle);
             }
             return Result<void>::Success();
@@ -88,9 +100,64 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
 
+        /** @brief Compound metadata must describe the exact admitted native contributors, never a guessed first child. */
+        Result<void> ValidateColliderTopology(const PhysicsSceneCollisionBinding &binding, const JPH::Shape &shape) {
+            if (binding.colliders.empty())
+                return Result<void>::Success();
+            const auto count =
+                shape.GetType() == JPH::EShapeType::Compound ? static_cast<const JPH::CompoundShape &>(shape).GetNumSubShapes() : 1;
+            if (count != binding.colliders.size())
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Explicit authored compound identities require the exact construction pose and unique owner slot. */
+        Result<void> ValidateAuthoredCompoundMapping(const PhysicsSceneCollisionBinding &binding, const CanonicalSceneShapeRecord &shape) {
+            if (shape.compoundChildPoses.empty())
+                return Result<void>::Success();
+            if (shape.compoundChildPoses.size() != binding.colliders.size())
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            for (std::size_t index = 0; index < binding.colliders.size(); ++index) {
+                const auto &collider = binding.colliders[index];
+                if (collider.collider == 0)
+                    continue;
+                if (collider.localPose != shape.compoundChildPoses[index])
+                    return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (binding.colliders[previous].collider == collider.collider)
+                        return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validate copied semantic evidence against the captured world before allocating native bodies. */
+        Result<void> ValidateColliderSurfaces(const PhysicsSceneCollisionBinding &collision, const PhysicsSurfaceWorldBinding &binding) {
+            for (const auto &collider : collision.colliders) {
+                if (!collider.surface)
+                    continue;
+                if (collider.materials.size() != 1 || collider.surface->collider != collider.collider ||
+                    !MatchesPhysicsSurfaceEvidence(binding, *collider.surface))
+                    return Result<void>::Failure(MakeError(SurfaceErrors::Stale));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Complete copied collider admission before any native shape/body publication. */
+        Result<void> ValidateSceneColliderMetadata(const CanonicalWorld &world, const PhysicsSceneCollisionBinding &binding,
+                                                   const CanonicalSceneShapeRecord &shape) {
+            if (auto physical = ValidateColliderEvidence(binding); physical.HasError())
+                return physical;
+            if (auto topology = ValidateColliderTopology(binding, *shape.shape.GetPtr()); topology.HasError())
+                return topology;
+            if (auto authored = ValidateAuthoredCompoundMapping(binding, shape); authored.HasError())
+                return authored;
+            return ValidateColliderSurfaces(binding, world.simulation.binding.surfaces);
+        }
+
         /** @brief Resolves one exact captured profile and its motion eligibility before native allocation. */
         [[nodiscard]] Result<JPH::ObjectLayer> ResolveSceneObjectLayer(const CanonicalWorld &world,
-                                                                       const PhysicsSceneBodyDescriptor &descriptor) {
+                                                                       const PhysicsSceneBodyDescriptor &descriptor,
+                                                                       const CanonicalSceneShapeRecord &shape) {
             if (!descriptor.collision.has_value()) {
                 if (const auto requested = descriptor.body.continuousCollision.mode.value_or(world.continuousCollision.policy.defaultMode);
                     requested == PhysicsDefaultMotionQuality::LinearCast && descriptor.body.motion == PhysicsMotionType::Dynamic &&
@@ -100,8 +167,8 @@ namespace Horo::Physics::Detail {
                                   "LinearCast requires an installed collision schema and an exact body profile."));
                 return Result<JPH::ObjectLayer>::Success(JPH::ObjectLayer{0});
             }
-            if (const auto evidence = ValidateColliderEvidence(*descriptor.collision); evidence.HasError())
-                return Result<JPH::ObjectLayer>::Failure(evidence.ErrorValue());
+            if (auto metadata = ValidateSceneColliderMetadata(world, *descriptor.collision, shape); metadata.HasError())
+                return Result<JPH::ObjectLayer>::Failure(std::move(metadata).ErrorValue());
             if (!world.simulation.binding.schema)
                 return Result<JPH::ObjectLayer>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
             const auto profile = world.simulation.binding.schema->ResolveProfile(descriptor.collision->profile);
@@ -132,7 +199,7 @@ namespace Horo::Physics::Detail {
                 ResolveCanonicalMotionQuality(world.continuousCollision.policy, descriptor.body, *shape.shape, descriptor.sensor);
             if (quality.HasError())
                 return Result<JPH::BodyCreationSettings>::Failure(quality.ErrorValue());
-            const auto layer = ResolveSceneObjectLayer(world, descriptor);
+            const auto layer = ResolveSceneObjectLayer(world, descriptor, shape);
             if (layer.HasError())
                 return Result<JPH::BodyCreationSettings>::Failure(layer.ErrorValue());
             JPH::BodyCreationSettings settings(shape.shape.GetPtr(), ToNativePoint(descriptor.body.pose.translation),
@@ -196,7 +263,8 @@ namespace Horo::Physics::Detail {
                                          .motionStorageReserved = descriptor.body.motion != PhysicsMotionType::Static ||
                                                                   settings.Value().mAllowDynamicOrKinematic,
                                          .sceneEntity = descriptor.sceneEntity,
-                                         .collision = std::move(ownedCollision)});
+                                         .collision = std::move(ownedCollision),
+                                         .shapeEvidence = shape->shape});
                 batch.handles.push_back(identity);
                 batch.nativeBodies.push_back(nativeId);
                 if (descriptor.body.motion != PhysicsMotionType::Static && descriptor.initialActivity == PhysicsInitialBodyActivity::Awake)
@@ -293,7 +361,8 @@ namespace Horo::Physics::Detail {
                                      .motionStorageReserved =
                                          descriptor.body.motion != PhysicsMotionType::Static || settings.mAllowDynamicOrKinematic,
                                      .sceneEntity = descriptor.sceneEntity,
-                                     .collision = std::move(ownedCollision)});
+                                     .collision = std::move(ownedCollision),
+                                     .shapeEvidence = shape->shape});
         canonical.scene.nativeBodyIndices[nativeBody.GetIndex()] = canonical.scene.bodies.size() - 1;
         return Result<BodyHandle>::Success(identity);
     }

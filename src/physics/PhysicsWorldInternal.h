@@ -466,6 +466,8 @@ namespace Horo::Physics {
 
         std::shared_ptr<PhysicsRuntime::Impl> runtime;
         PhysicsWorldSettings settings;
+        PhysicsSurfaceWorldBinding surfaces;
+        Sha256Digest surfaceFingerprint{};
         Detail::PhysicsContainmentState containment;
         Detail::PhysicsDiagnosticState diagnostics;
         PhysicsWorldState state{PhysicsWorldState::Preparing};

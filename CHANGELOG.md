@@ -3,6 +3,14 @@
 All notable changes to Horo Engine are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] — 2026-11-01
+### Added
+- Development snapshot with a project-owned semantic surface catalog, separate from physical materials and presentation assets.
+- Journaled adoption of missing catalogs without inferring surfaces or changing existing project identities.
+
+### Changed
+- Gameplay SDK 25 requires rebuilding native gameplay modules and descriptor bundles for the new surface and Character value contracts.
+
 ## [0.2.0] — 2026-07-10
 ### Added
 - New Project wizard with template selection, dynamic inputs, and project creation pipeline.

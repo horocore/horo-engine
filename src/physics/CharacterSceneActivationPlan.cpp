@@ -1,3 +1,4 @@
+#include "CharacterSurfaceInternal.h"
 #include "Horo/Physics/PhysicsCollisionSchema.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsMaterialAsset.h"
@@ -119,7 +120,8 @@ namespace Horo::Physics::Detail {
                                                             .jumpSpeedMetersPerSecond = movement.jumpSpeedMetersPerSecond,
                                                             .allowDynamicPlatformAttachment = movement.dynamicPlatformSupport,
                                                             .inheritPlatformHeading = movement.inheritPlatformHeading,
-                                                            .platformLeaveVelocity = movement.platformLeaveVelocity};
+                                                            .platformLeaveVelocity = movement.platformLeaveVelocity,
+                                                            .defaultSurface = component.collision.defaultSurface};
             if (geometry.crouchedCapsule)
                 result.crouchedCapsule =
                     PhysicsCapsuleShape{geometry.crouchedCapsule->radiusMeters, geometry.crouchedCapsule->cylindricalHalfHeightMeters};
@@ -127,16 +129,23 @@ namespace Horo::Physics::Detail {
         }
     }  // namespace
 
-    /** @copydoc ValidateCharacterProjectBindings */
-    Result<void> ValidateCharacterProjectBindings(const std::span<const PlannedCharacter> characters,
-                                                  const PhysicsWorldSimulationBinding &simulation) {
-        if (characters.empty())
+    namespace {
+        /** @brief Reject invalid configured semantic defaults before any candidate native world is staged. */
+        Result<void> ValidateCharacterSurfaceBindings(std::span<const PlannedCharacter> characters,
+                                                      const PhysicsSurfaceWorldBinding &binding) {
+            for (const auto &planned : characters) {
+                const auto surface = planned.descriptor.defaultSurface ? planned.descriptor.defaultSurface : binding.defaultSurface;
+                if (const auto valid = Character::Detail::ValidateCharacterSemanticDefault(binding, surface); valid.HasError())
+                    return Result<void>::Failure(AddActivationContext(valid.ErrorValue(), "character semantic binding", planned.object,
+                                                                      planned.component.value, std::nullopt));
+            }
             return Result<void>::Success();
-        if (!simulation.schema || simulation.generation == 0)
-            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable,
-                                                   "Enabled Character requires an explicit captured Project collision schema."));
-        const auto &schema = *simulation.schema;
-        for (const auto &planned : characters) {
+        }
+    }  // namespace
+
+    namespace {
+        /** @brief Validate one controller's query route and optional layer/profile selectors with exact source context. */
+        Result<void> ValidateCharacterCollisionBinding(const PlannedCharacter &planned, const NormalizedCollisionSchema &schema) {
             const auto &descriptor = planned.descriptor;
             const auto contextual = [&](Error error) {
                 return Result<void>::Failure(AddActivationContext(std::move(error), "character project binding", planned.object,
@@ -157,6 +166,24 @@ namespace Horo::Physics::Detail {
                 if (auto profile = schema.ResolveProfile(*descriptor.selectors.requiredProfile); profile.HasError())
                     return contextual(profile.ErrorValue());
             }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @copydoc ValidateCharacterProjectBindings */
+    Result<void> ValidateCharacterProjectBindings(const std::span<const PlannedCharacter> characters,
+                                                  const PhysicsWorldSimulationBinding &simulation) {
+        if (characters.empty())
+            return Result<void>::Success();
+        if (!simulation.schema || simulation.generation == 0)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable,
+                                                   "Enabled Character requires an explicit captured Project collision schema."));
+        if (const auto surfaces = ValidateCharacterSurfaceBindings(characters, simulation.surfaces); surfaces.HasError())
+            return surfaces;
+        const auto &schema = *simulation.schema;
+        for (const auto &planned : characters) {
+            if (const auto valid = ValidateCharacterCollisionBinding(planned, schema); valid.HasError())
+                return valid;
         }
         return Result<void>::Success();
     }

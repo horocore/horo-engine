@@ -33,6 +33,7 @@ namespace Horo::SceneSource {
                 Runtime::PhysicsColliderMaterialBinding{Physics::PhysicsMaterialSlotId::FromValue(3), Binding<Assets::AssetId>(4)};
             value.collision.requiredLayer = Binding<Physics::CollisionLayerId>(5);
             value.collision.requiredProfile = Binding<Physics::CollisionProfileId>(6);
+            value.collision.defaultSurface = Binding<Physics::SurfaceMaterialId>(7);
             return value;
         }
 
@@ -218,5 +219,27 @@ namespace Horo::SceneSource {
                 return "truncated character wire accepted";
             return {};
         });
+    }
+}  // namespace Horo::SceneSource
+
+namespace Horo::SceneSource {
+    TEST_CASE("Character semantic default source preserves explicit absence and rejects null or invalid IDs",
+              "[scene][character][serialization][movement-events]") {
+        auto value = ConfiguredCharacter();
+        const auto encoded = EncodedCharacter(value);
+        auto json = nlohmann::json::parse(encoded);
+        auto &collision = json["objects"][0]["components"]["characterController"]["collision"];
+        // Exercise the actual source codec, retaining component schema 1 and the scene's existing envelope.
+        REQUIRE(encoded.find("defaultSurface") != std::string::npos);
+        for (const auto &invalid : {nlohmann::json(nullptr), nlohmann::json("invalid"), nlohmann::json(7)}) {
+            collision["defaultSurface"] = invalid;
+            CHECK(DecodeSceneSource(json.dump()).HasError());
+        }
+        value.collision.defaultSurface.reset();
+        const auto absent = EncodedCharacter(value);
+        REQUIRE(absent.find("defaultSurface") == std::string::npos);
+        const auto decoded = DecodeSceneSource(absent);
+        REQUIRE(decoded.HasValue());
+        CHECK_FALSE(decoded.Value().objects[0].components.characterController->collision.defaultSurface);
     }
 }  // namespace Horo::SceneSource

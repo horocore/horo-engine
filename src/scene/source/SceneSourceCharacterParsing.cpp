@@ -28,37 +28,56 @@ namespace Horo::SceneSource::Detail {
                 {value["radiusMeters"].get<float>(), value["cylindricalHalfHeightMeters"].get<float>()});
         }
 
-        /** @brief Parses optional material and exact authored body selectors without retaining JSON storage. */
-        [[nodiscard]] Result<void> ParseCollision(const Json &value, Runtime::CharacterSceneCollision &collision) {
-            if (!value.is_object())
+        /** @brief Parse one optional physical default atomically, preserving its slot/asset pair. */
+        [[nodiscard]] Result<void> ParseDefaultMaterial(const Json &value, Runtime::CharacterSceneCollision &collision) {
+            if (!value.contains("defaultMaterial"))
+                return Result<void>::Success();
+            const auto &material = value["defaultMaterial"];
+            if (!HasFields(material, {"asset"}) || !material["asset"].is_string() || !HasUnsignedFields(material, {"slot"}))
                 return InvalidCharacter<void>();
+            auto asset = Assets::AssetId::Parse(material["asset"].get<std::string>());
+            if (asset.HasError())
+                return InvalidCharacter<void>();
+            collision.defaultMaterial =
+                Runtime::PhysicsColliderMaterialBinding{Physics::PhysicsMaterialSlotId::FromValue(material["slot"].get<std::uint64_t>()),
+                                                        asset.Value()};
+            return Result<void>::Success();
+        }
+
+        /** @brief Parse exact authored exclusion without accepting partial object/body pairs. */
+        [[nodiscard]] Result<void> ParseExcludedBody(const Json &value, Runtime::CharacterSceneCollision &collision) {
+            if (!value.contains("excludedBody"))
+                return Result<void>::Success();
+            const auto &body = value["excludedBody"];
+            if (!HasUnsignedFields(body, {"object", "body"}))
+                return InvalidCharacter<void>();
+            collision.excludedBody =
+                Runtime::PhysicsBodyReference{{body["object"].get<std::uint64_t>()}, {body["body"].get<std::uint64_t>()}};
+            return Result<void>::Success();
+        }
+
+        /** @brief Parse the independent project semantic/collision identity fields. */
+        [[nodiscard]] Result<void> ParseCollisionIdentities(const Json &value, Runtime::CharacterSceneCollision &collision) {
             if (auto result = ParseIdentity(value, "profile", collision.profile); result.HasError())
                 return result;
             if (auto result = ParseIdentity(value, "queryChannel", collision.queryChannel); result.HasError())
                 return result;
+            if (auto result = ParseIdentity(value, "defaultSurface", collision.defaultSurface); result.HasError())
+                return result;
             if (auto result = ParseIdentity(value, "requiredLayer", collision.requiredLayer); result.HasError())
                 return result;
-            if (auto result = ParseIdentity(value, "requiredProfile", collision.requiredProfile); result.HasError())
+            return ParseIdentity(value, "requiredProfile", collision.requiredProfile);
+        }
+
+        /** @brief Own no JSON storage and publish the component only after every binding has parsed. */
+        [[nodiscard]] Result<void> ParseCollision(const Json &value, Runtime::CharacterSceneCollision &collision) {
+            if (!value.is_object())
+                return InvalidCharacter<void>();
+            if (auto result = ParseCollisionIdentities(value, collision); result.HasError())
                 return result;
-            if (value.contains("defaultMaterial")) {
-                const auto &material = value["defaultMaterial"];
-                if (!HasFields(material, {"asset"}) || !material["asset"].is_string() || !HasUnsignedFields(material, {"slot"}))
-                    return InvalidCharacter<void>();
-                auto asset = Assets::AssetId::Parse(material["asset"].get<std::string>());
-                if (asset.HasError())
-                    return InvalidCharacter<void>();
-                collision.defaultMaterial = Runtime::PhysicsColliderMaterialBinding{Physics::PhysicsMaterialSlotId::FromValue(
-                                                                                        material["slot"].get<std::uint64_t>()),
-                                                                                    asset.Value()};
-            }
-            if (value.contains("excludedBody")) {
-                const auto &body = value["excludedBody"];
-                if (!HasUnsignedFields(body, {"object", "body"}))
-                    return InvalidCharacter<void>();
-                collision.excludedBody =
-                    Runtime::PhysicsBodyReference{{body["object"].get<std::uint64_t>()}, {body["body"].get<std::uint64_t>()}};
-            }
-            return Result<void>::Success();
+            if (auto result = ParseDefaultMaterial(value, collision); result.HasError())
+                return result;
+            return ParseExcludedBody(value, collision);
         }
 
         /** @brief Reads every movement scalar with explicit wire types and bounded enum values. */

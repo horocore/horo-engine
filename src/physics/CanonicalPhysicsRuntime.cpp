@@ -3,6 +3,7 @@
 #include "CanonicalWorldSettings.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "PhysicsWorldBindingValidation.h"
 
 #include <Jolt/Jolt.h>
 
@@ -49,9 +50,8 @@ namespace Horo::Physics::Detail {
     namespace {
         /** @brief Compiles only validated enabled layers before installing native callback adapters. */
         Result<void> CompileSimulationTable(CanonicalWorld &world, const PhysicsWorldSimulationBinding &simulation) {
-            if (static_cast<bool>(simulation.schema) != (simulation.generation != 0))
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Collision schema owner and generation must be supplied together."));
+            if (auto valid = ValidateWorldSimulationBinding(simulation); valid.HasError())
+                return valid;
             world.simulation.binding = simulation;
             if (!simulation.schema)
                 return Result<void>::Success();
