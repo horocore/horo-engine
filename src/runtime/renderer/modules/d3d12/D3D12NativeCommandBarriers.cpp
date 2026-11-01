@@ -1,5 +1,7 @@
 #include "D3D12NativeCommandBarriers.h"
 
+#include <limits>
+
 #if defined(_WIN32) && defined(_M_X64)
 namespace Horo::Render::D3D12Detail {
     namespace {
@@ -162,7 +164,7 @@ namespace Horo::Render::D3D12Detail {
             barrier.LayoutBefore = EnhancedLayout(before, queue);
             barrier.LayoutAfter = EnhancedLayout(after, queue);
             barrier.pResource = resource.native.Get();
-            barrier.Subresources.IndexOrFirstMipLevel = D3D12_BARRIER_ALL_SUBRESOURCES;
+            barrier.Subresources.IndexOrFirstMipLevel = std::numeric_limits<UINT>::max();
             D3D12_BARRIER_GROUP group{};
             group.Type = D3D12_BARRIER_TYPE_TEXTURE;
             group.NumBarriers = 1;
