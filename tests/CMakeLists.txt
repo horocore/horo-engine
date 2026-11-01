@@ -1093,6 +1093,11 @@ target_compile_features(HoroPCGTerrainAdapterTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGTerrainAdapterTests PRIVATE HoroEngine::PCGTerrainAdapter)
 horo_register_catch_test(HoroPCGTerrainAdapterTests LABELS "unit;pcg;terrain;headless")
 
+add_executable(HoroParticleSimulationDataTests unit/runtime/vfx/ParticleSimulationDataTests.cpp)
+target_compile_features(HoroParticleSimulationDataTests PRIVATE cxx_std_20)
+target_link_libraries(HoroParticleSimulationDataTests PRIVATE HoroEngine::VfxSimulationData)
+horo_register_catch_test(HoroParticleSimulationDataTests LABELS "unit;vfx;headless")
+
 add_executable(HoroVfxApiTests
         support/AllocationProbe.cpp
         unit/runtime/vfx/CpuParticleBufferTests.cpp

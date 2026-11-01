@@ -1862,6 +1862,11 @@ target_link_libraries(HoroPCGSceneAdapter
         PRIVATE nlohmann_json::nlohmann_json
 )
 
+add_library(HoroVfxSimulationData STATIC runtime/vfx/simulation/ParticleSimulationData.cpp)
+add_library(HoroEngine::VfxSimulationData ALIAS HoroVfxSimulationData)
+target_compile_features(HoroVfxSimulationData PUBLIC cxx_std_20)
+target_link_libraries(HoroVfxSimulationData PUBLIC HoroEngine::Foundation)
+
 add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleBuffer.cpp
         runtime/vfx/api/CpuParticleSimulator.cpp
@@ -1878,7 +1883,7 @@ add_library(HoroVfxApi STATIC
 add_library(HoroEngine::VfxApi ALIAS HoroVfxApi)
 target_compile_features(HoroVfxApi PUBLIC cxx_std_20)
 target_link_libraries(HoroVfxApi
-        PUBLIC HoroEngine::Foundation HoroEngine::Assets
+        PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::VfxSimulationData
         PRIVATE nlohmann_json::nlohmann_json
 )
 

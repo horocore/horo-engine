@@ -815,6 +815,9 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPCGTerrainAdapter PUBLIC_HEADERS
     Horo/PCGTerrain/TerrainInputSnapshot.h
 )
+horo_configure_target_header_boundary(HoroVfxSimulationData PUBLIC_HEADERS
+    Horo/Vfx/ParticleSimulationData.h
+)
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h
     Horo/Vfx/CpuParticleSimulator.h
