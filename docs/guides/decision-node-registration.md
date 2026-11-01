@@ -19,7 +19,7 @@ validator. Unknown implementations can retain their inert contract with an empty
 factory, but cannot create an executable adapter. This does not mutate authored
 graph data or turn unknown/opaque properties into executable values.
 
-The exact gameplay SDK boundary and build fingerprint are now **23**. The runtime
+The exact gameplay SDK boundary and build fingerprint are now **24**. The runtime
 bundle has bounded node records alongside behavior records; an old ABI is rejected
 before those records are read. The exported gameplay SDK includes the actual
 Foundation-backed AI library required by its public node contracts. It introduces

@@ -58,4 +58,6 @@ Generation staging, cache admission, the writer lease and pointer replacement re
 
 ## Qualification
 
-Full compiler/runtime/codec/cook qualification is pending. The earlier SDK24 kernel/native/Lua regression phase passed 12 native cases / 312 assertions, 6 Lua cases / 237 assertions, and 50 selected existing kernel/metadata cases / 8,396 assertions, plus the gameplay AI public consumer. Subsequent storage/schema-lease additions require fresh qualification. These results do not qualify the complete new feature, a broad engine suite, hosted CI, Windows or Linux execution.
+The full native macOS Debug batch passed 33 authored test functions and 5,490 assertions with no failures, errors or skips. The compiler/runtime/codec/provider binary executed 41 cases/sections and 4,932 assertions; the real-file cook binary executed 9 cases/sections and 558 assertions. All 20 new production implementation files compiled. The cases exercise actual generated native images, isolated Lua VMs and native source/sidecar/cache/publication files, including accepted-task cleanup after the native owner is destroyed.
+
+This qualification covers the focused feature batch. It does not claim hosted CI, a broad engine suite, Windows/Linux execution, native GPU behavior or visual editor acceptance.
