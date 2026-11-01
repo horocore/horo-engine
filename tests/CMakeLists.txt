@@ -6264,4 +6264,18 @@ if (WIN32)
 endif ()
 horo_register_catch_test(HoroD3D12ResourceTests LABELS "native;renderer;d3d12;resources;qualification")
 
+add_executable(HoroD3D12CommandTests
+        unit/runtime/renderer/D3D12CommandAdmissionTests.cpp
+        unit/runtime/renderer/D3D12CommandTests.cpp
+        unit/runtime/renderer/D3D12CommandSynchronizationTests.cpp
+        unit/runtime/renderer/D3D12CommandTestSupport.h
+)
+target_compile_features(HoroD3D12CommandTests PRIVATE cxx_std_20)
+target_link_libraries(HoroD3D12CommandTests PRIVATE
+        Catch2::Catch2WithMain HoroRenderD3D12TestingInternal)
+if (WIN32)
+    target_link_libraries(HoroD3D12CommandTests PRIVATE d3d12 dxgi)
+endif ()
+horo_register_catch_test(HoroD3D12CommandTests LABELS "native;renderer;d3d12;commands;qualification")
+
 target_sources(HoroTerrainSculptProducerTests PRIVATE unit/editor/TerrainSurfaceRestorationTests.cpp)

@@ -19,6 +19,12 @@ namespace {
         std::function<void()> onVerify;
         int liveObjects{0};
         ID3D12Resources *resourceService{nullptr};
+        ID3D12Commands *commandService{nullptr};
+        bool resourcesPrepared{false};
+        bool commandsPrepared{false};
+        std::uint64_t commandIncarnation{};
+        std::vector<D3D12CommandQueueBinding> commandQueues;
+        D3D12BarrierMode commandMode{D3D12BarrierMode::Legacy};
 
         void AttachResources(ID3D12Resources &service) {
             resourceService = &service;
@@ -152,7 +158,7 @@ namespace {
         }
 
         D3D12ResourceSnapshot Snapshot() const noexcept override {
-            return {.accepting = stops == 0};
+            return {.deviceIncarnation = 42, .accepting = stops == 0};
         }
 
     private:
@@ -162,6 +168,41 @@ namespace {
         template <typename T> static Result<T> NotCalled() {
             FAIL("Portable drain protocol tests must not perform native resource operations");
             return Result<T>::Failure(D3D12InitializationError("test.unexpected_resource_call", "Unexpected native operation."));
+        }
+    };
+
+    // Native-free ownership probe: only the initialization session decides when
+    // its runtime parents may be released; this does not simulate GPU completion.
+    class CommandDrainService final : public ID3D12Commands {
+    public:
+        bool accepting{true};
+        bool complete{false};
+        unsigned drains{};
+
+        Result<void> ExecuteGraph(const RenderGraphExecutionRequest &, const CancellationToken &) override {
+            FAIL("Initialization tests must not submit graph work");
+            return Result<void>::Failure(D3D12InitializationError("test.unexpected_command", "Unexpected graph work."));
+        }
+
+        Result<bool> Observe(const RenderCpuWait &) override {
+            FAIL("Initialization tests must not observe native timelines");
+            return Result<bool>::Success(false);
+        }
+
+        Result<void> Poll() override {
+            FAIL("Initialization tests must use the session drain protocol");
+            return Result<void>::Success();
+        }
+
+        Result<void> BeginShutdown() override {
+            accepting = false;
+            return Result<void>::Success();
+        }
+
+        Result<RenderBackendDrainProgress> PollDrain() override {
+            ++drains;
+            return Result<RenderBackendDrainProgress>::Success(complete ? RenderBackendDrainProgress::Drained
+                                                                        : RenderBackendDrainProgress::Pending);
         }
     };
 
@@ -199,7 +240,25 @@ namespace {
         }
 
         Result<void> InitializeResources(const D3D12ResourceLimits &) override {
-            return Step(state_, "resources");
+            auto result = Step(state_, "resources");
+            state_.resourcesPrepared = result.HasValue();
+            return result;
+        }
+
+        Result<void> InitializeCommands(const D3D12CommandConfiguration &configuration) override {
+            REQUIRE(state_.resourcesPrepared);
+            REQUIRE(state_.resourceService != nullptr);
+            REQUIRE(state_.liveObjects == 3);
+            state_.commandIncarnation = configuration.deviceIncarnation;
+            state_.commandQueues.assign(configuration.queues.begin(), configuration.queues.end());
+            state_.commandMode = configuration.barrierMode;
+            auto result = Step(state_, "commands");
+            state_.commandsPrepared = result.HasValue();
+            return result;
+        }
+
+        ID3D12Commands *Commands() noexcept override {
+            return state_.commandsPrepared ? state_.commandService : nullptr;
         }
 
         ID3D12Resources *Resources() noexcept override {
@@ -209,6 +268,9 @@ namespace {
         void Release() noexcept override {
             state_.calls.emplace_back("release");
             state_.resourceService = nullptr;
+            state_.commandService = nullptr;
+            state_.resourcesPrepared = false;
+            state_.commandsPrepared = false;
             state_.liveObjects = 0;
         }
 
@@ -226,6 +288,8 @@ TEST_CASE("D3D12 startup owns exact device queues and closes admission", "[rende
     REQUIRE(result.HasValue());
     CHECK(result.Value() == state.adapters.front().id);
     CHECK(state.debug);
+    CHECK_FALSE(state.commandsPrepared);
+    CHECK(session.Commands().HasError());
     CHECK(state.calls ==
           std::vector<std::string>{"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy", "resources"});
     CHECK(session.Initialize(host, {}).HasError());
@@ -451,4 +515,84 @@ TEST_CASE("D3D12 session shutdown preserves resource drain failure and permits o
     resources.Complete();
     REQUIRE(session.Shutdown().HasValue());
     REQUIRE(state.liveObjects == 0);
+}
+
+TEST_CASE("D3D12 initialization publishes commands only after canonical resources are prepared", "[renderer][d3d12][commands]") {
+    State state;
+    DrainService resources;
+    CommandDrainService commands;
+    state.AttachResources(resources);
+    state.commandService = &commands;
+    Host host{state};
+    D3D12Initialization session{std::make_unique<Runtime>(state)};
+    REQUIRE(session.Commands().HasError());
+    REQUIRE(session.Initialize(host, {.commandQueues = {{{17}, D3D12QueueKind::Direct}}, .barrierMode = D3D12BarrierMode::Enhanced})
+                .HasValue());
+    REQUIRE(session.Commands().HasValue());
+    CHECK(session.Commands().Value() == &commands);
+    REQUIRE(session.Resources().HasValue());
+    CHECK(session.Resources().Value() == &resources);
+    CHECK(state.commandIncarnation == resources.Snapshot().deviceIncarnation);
+    REQUIRE(state.commandQueues.size() == 1);
+    CHECK(state.commandQueues.front().queue == RenderQueueId{17});
+    CHECK(state.commandQueues.front().kind == D3D12QueueKind::Direct);
+    CHECK(state.commandMode == D3D12BarrierMode::Enhanced);
+    commands.complete = true;
+    resources.Complete();
+    REQUIRE(session.Shutdown().HasValue());
+}
+
+TEST_CASE("D3D12 failed command initialization rolls back without publishing either service", "[renderer][d3d12][commands]") {
+    State state;
+    DrainService resources;
+    CommandDrainService commands;
+    state.AttachResources(resources);
+    state.commandService = &commands;
+    state.failure = "commands";
+    Host host{state};
+    D3D12Initialization session{std::make_unique<Runtime>(state)};
+    const auto failed = session.Initialize(host, {.commandQueues = {{{17}, D3D12QueueKind::Direct}}});
+    REQUIRE(failed.HasError());
+    CHECK(failed.ErrorValue().code.Value() == "test.injected");
+    CHECK(failed.ErrorValue().message.find("-123") != std::string::npos);
+    CHECK(state.commandIncarnation == 42);
+    CHECK(state.liveObjects == 0);
+    CHECK_FALSE(state.resourcesPrepared);
+    CHECK_FALSE(state.commandsPrepared);
+    CHECK(session.Resources().HasError());
+    CHECK(session.Commands().HasError());
+}
+
+TEST_CASE("D3D12 shutdown retains runtime parents through command and then resource drain", "[renderer][d3d12][commands][lifecycle]") {
+    State state;
+    DrainService resources;
+    CommandDrainService commands;
+    state.AttachResources(resources);
+    state.commandService = &commands;
+    Host host{state};
+    D3D12Initialization session{std::make_unique<Runtime>(state)};
+    REQUIRE(session.Initialize(host, {.commandQueues = {{{17}, D3D12QueueKind::Direct}}}).HasValue());
+    const auto commandPending = session.Shutdown();
+    REQUIRE(commandPending.HasError());
+    CHECK(commandPending.ErrorValue().code.Value() == "render.d3d12.drain_pending");
+    CHECK_FALSE(commands.accepting);
+    CHECK_FALSE(resources.Snapshot().accepting);
+    CHECK(resources.drains == 0);
+    CHECK(state.liveObjects == 3);
+    CHECK(state.resourceService == &resources);
+    CHECK(state.commandService == &commands);
+    commands.complete = true;
+    const auto resourcePending = session.Shutdown();
+    REQUIRE(resourcePending.HasError());
+    CHECK(resourcePending.ErrorValue().code.Value() == "render.d3d12.drain_pending");
+    CHECK(resources.drains == 1);
+    CHECK(state.liveObjects == 3);
+    resources.Complete();
+    REQUIRE(session.Shutdown().HasValue());
+    CHECK(state.liveObjects == 0);
+    CHECK(state.resourceService == nullptr);
+    CHECK(state.commandService == nullptr);
+    CHECK(session.Resources().HasError());
+    CHECK(session.Commands().HasError());
+    REQUIRE(session.Shutdown().HasValue());
 }

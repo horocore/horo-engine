@@ -337,7 +337,7 @@ jobs:
       - name: Build D3D12 tests
         run: >-
           cmake --build build/ci-d3d12-resources --parallel 2
-          --target HoroD3D12InitializationTests HoroD3D12ResourceTests
+          --target HoroD3D12InitializationTests HoroD3D12ResourceTests HoroD3D12CommandTests
       - name: Test D3D12 initialization
         run: >-
           ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error
@@ -346,6 +346,11 @@ jobs:
         run: >-
           build/ci-d3d12-resources/tests/HoroD3D12ResourceTests.exe '[warp]'
           --reporter junit --out build/ci-d3d12-resources/warp.xml
+      - name: Test D3D12 commands on WARP
+        run: >-
+          ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error
+          --timeout 90 -R '^HoroD3D12CommandTests::'
+          --output-junit "$GITHUB_WORKSPACE/build/ci-d3d12-resources/commands.xml"
       - name: Upload D3D12 test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

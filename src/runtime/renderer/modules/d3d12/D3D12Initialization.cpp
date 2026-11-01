@@ -62,10 +62,24 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        /** @brief Commands use only frontend-issued logical queues and the canonical initialized resource incarnation. */
+        Result<void> InitializeCommandService(ID3D12InitializationRuntime &runtime, const D3D12InitializationRequest &request) {
+            if (request.commandQueues.empty())
+                return Result<void>::Success();
+            auto *resources = runtime.Resources();
+            if (!resources)
+                return Result<void>::Failure(
+                    D3D12CommandError("render.d3d12.commands_unavailable", "Initialize canonical resources before requesting commands."));
+            return runtime.InitializeCommands(
+                {resources->Snapshot().deviceIncarnation, request.commandQueues, request.barrierMode, request.commandLimits});
+        }
+
         /** @brief Completes resource acquisition under the existing startup rollback transaction. */
         Result<void> InitializeResourceService(ID3D12InitializationRuntime &runtime, const D3D12InitializationRequest &request) {
             if (auto resources = runtime.InitializeResources(request.resourceLimits); resources.HasError())
                 return resources;
+            if (auto commands = InitializeCommandService(runtime, request); commands.HasError())
+                return commands;
             if (request.cancellation.IsCancellationRequested())
                 return Result<void>::Failure(
                     D3D12InitializationError("render.d3d12.cancelled",
@@ -73,10 +87,26 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        /** @brief Retires command ownership before resources, queues or the device can be released. */
+        Result<void> DrainCommandService(ID3D12InitializationRuntime &runtime) {
+            auto *commands = runtime.Commands();
+            if (!commands)
+                return Result<void>::Success();
+            if (auto stopped = commands->BeginShutdown(); stopped.HasError())
+                return stopped;
+            auto drained = commands->PollDrain();
+            if (drained.HasError())
+                return Result<void>::Failure(drained.ErrorValue());
+            if (drained.Value() != RenderBackendDrainProgress::Drained)
+                return Result<void>::Failure(
+                    D3D12CommandError("render.d3d12.drain_pending", "Poll again after submitted command ownership retires."));
+            return Result<void>::Success();
+        }
+
         /** @brief Validates finite startup bounds before host or native calls. */
         bool ValidRequest(const D3D12InitializationRequest &request) {
-            return request.resourceLimits.IsValid() && request.maxAdapters > 0 && request.maxAdapters <= 64 &&
-                   (!request.adapter || request.adapter->IsValid());
+            return request.resourceLimits.IsValid() && request.commandLimits.IsValid() && request.maxAdapters > 0 &&
+                   request.maxAdapters <= 64 && (!request.adapter || request.adapter->IsValid());
         }
 
         /** @brief Acquires bounded adapter/device/queue state under the caller's rollback transaction. */
@@ -212,6 +242,18 @@ namespace Horo::Render {
         return Result<ID3D12Resources *>::Success(runtime_->Resources());
     }
 
+    /** @copydoc D3D12Initialization::Commands */
+    Result<ID3D12Commands *> D3D12Initialization::Commands() {
+        if (owner_ != std::this_thread::get_id())
+            return Result<ID3D12Commands *>::Failure(
+                D3D12CommandError("render.d3d12.command_thread", "Borrow commands on the session owner thread."));
+        if (state_ != State::Ready || !runtime_->Commands())
+            return Result<ID3D12Commands *>::Failure(
+                D3D12CommandError("render.d3d12.commands_unavailable",
+                                  "Explicitly configure command queues during device-session preparation."));
+        return Result<ID3D12Commands *>::Success(runtime_->Commands());
+    }
+
     /** @copydoc D3D12Initialization::Shutdown */
     Result<void> D3D12Initialization::Shutdown() {
         if (owner_ != std::this_thread::get_id()) {
@@ -221,8 +263,11 @@ namespace Horo::Render {
             return Result<void>::Failure(D3D12InitializationError("render.d3d12.initialization_in_progress",
                                                                   "Complete or cancel initialization before shutting down its session."));
         }
-        if (auto *resources = runtime_->Resources()) {
+        if (auto *resources = runtime_->Resources())
             resources->StopAdmission();
+        if (auto commands = DrainCommandService(*runtime_); commands.HasError())
+            return commands;
+        if (auto *resources = runtime_->Resources()) {
             auto drained = resources->PollDrain();
             if (drained.HasError())
                 return Result<void>::Failure(drained.ErrorValue());
