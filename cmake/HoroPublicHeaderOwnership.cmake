@@ -1231,6 +1231,8 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/Texture.h
     Horo/Runtime/Render/RenderResource.h
     Horo/Runtime/Render/RenderScene.h
+    Horo/Runtime/Render/DirectionalShadow.h
+    Horo/Runtime/Render/DirectionalShadowErrors.h
 )
 horo_configure_target_header_boundary(HoroSceneRenderExtraction PUBLIC_HEADERS
     Horo/Runtime/Render/LightSceneExtraction.h

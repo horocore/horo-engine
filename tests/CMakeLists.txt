@@ -6295,3 +6295,36 @@ target_compile_features(HoroShaderHotReloadHostTests PRIVATE cxx_std_20)
 target_link_libraries(HoroShaderHotReloadHostTests PRIVATE HoroShaderHotReloadHostInternal
     HoroEditorViewportShaderRecipeInternal)
 horo_register_catch_test(HoroShaderHotReloadHostTests LABELS "unit;shader;headless")
+
+add_executable(HoroDirectionalShadowTests unit/runtime/renderer/DirectionalShadowTests.cpp)
+target_compile_features(HoroDirectionalShadowTests PRIVATE cxx_std_20)
+target_link_libraries(HoroDirectionalShadowTests PRIVATE HoroEngine::RenderApi)
+horo_register_catch_test(HoroDirectionalShadowTests LABELS "unit;renderer;shadows;headless")
+
+add_executable(HoroVulkanSampledReflectionTests unit/runtime/renderer/VulkanSampledReflectionTests.cpp)
+target_compile_features(HoroVulkanSampledReflectionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroVulkanSampledReflectionTests PRIVATE HoroShaderReflectionCookInternal)
+horo_register_catch_test(HoroVulkanSampledReflectionTests LABELS "unit;renderer;shader;headless")
+
+add_executable(HoroEditorVulkanShaderAssetsTests
+    unit/editor/EditorVulkanShaderAssetsTests.cpp
+    ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorVulkanShaderAssets.cpp)
+target_compile_features(HoroEditorVulkanShaderAssetsTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorVulkanShaderAssetsTests PRIVATE
+    "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroEditorVulkanShaderAssetsTests PRIVATE HoroEditorVulkanShaderInternal)
+horo_register_catch_test(HoroEditorVulkanShaderAssetsTests LABELS "unit;renderer;shader;headless")
+
+if(TARGET HoroMetalGraphExecutionSmoke AND TARGET HoroEditorViewportMetal)
+    target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalViewportShadowShaderSmoke.mm)
+    target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE "${PROJECT_SOURCE_DIR}/src/editor/renderer/metal")
+    target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE HoroEngine::EditorViewportMetal)
+endif()
+
+if(APPLE AND TARGET HoroRenderOpenGLTests AND TARGET HoroEditorViewportOpenGL)
+    target_sources(HoroRenderOpenGLTests PRIVATE integration/renderer/OpenGLViewportShadowShaderSmoke.cpp)
+    target_include_directories(HoroRenderOpenGLTests PRIVATE "${PROJECT_SOURCE_DIR}/src/editor/renderer/opengl")
+    target_link_libraries(HoroRenderOpenGLTests PRIVATE "-framework OpenGL")
+    set_source_files_properties(integration/renderer/OpenGLViewportShadowShaderSmoke.cpp
+        PROPERTIES COMPILE_DEFINITIONS GL_SILENCE_DEPRECATION)
+endif()

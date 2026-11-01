@@ -5,8 +5,10 @@
  * @brief Backend-neutral editor viewport presentation contract.
  */
 
+#include "EditorRendererErrors.h"
 #include "EditorViewportTextureView.h"
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/DirectionalShadow.h"
 #include "Horo/Runtime/Render/RenderBackend.h"
 #include "editor/renderer/EditorViewportScene.h"
 
@@ -53,6 +55,16 @@ namespace Horo::Editor {
     class IEditorViewportRenderer : public Render::IStaticMeshPassExecutor {
     public:
         virtual ~IEditorViewportRenderer() = default;
+
+        /** @brief Requests a validated shadow budget for the next resource boundary.
+         * @param profile Explicit product quality, filtering and atlas budget.
+         * @return Admission result; the previous complete profile remains active on failure.
+         * @details A request cannot mutate an in-flight atlas or silently select another renderer.
+         */
+        [[nodiscard]] virtual Result<void> RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) {
+            static_cast<void>(profile);
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportShadowUnsupported));
+        }
 
         /** @brief Executes one prepared editor frame through the existing frontend frame/submission owner.
          * @param frame Exact active frontend scope. @param passes Frozen borrowed scene/output descriptors.

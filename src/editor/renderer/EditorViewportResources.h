@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Render/DirectionalShadow.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 
@@ -49,6 +50,12 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<void> PrepareMeshesCold(std::span<const EditorViewportMeshResourceView> resources);
         void Shutdown() noexcept;
+        /** @brief Requests one validated quality profile; publication waits for a complete replacement atlas. */
+        [[nodiscard]] Result<void> RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile);
+        [[nodiscard]] const Render::DirectionalShadowProfile &ActiveDirectionalShadowProfile() const noexcept;
+        [[nodiscard]] EditorViewportExtent ShadowExtent() const noexcept;
+        [[nodiscard]] std::uint64_t ShadowGeneration() const noexcept;
+        [[nodiscard]] Render::RenderTextureHandle ShadowDepthTexture() const noexcept;
 
         [[nodiscard]] std::optional<MeshBinding> FindMesh(std::uint64_t sourceId) const noexcept;
         [[nodiscard]] Render::RenderTargetHandle Target() const noexcept;
@@ -105,7 +112,18 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> AdvanceViewportTextures(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceViewportViews(ViewportTargetResources &resources);
         [[nodiscard]] Result<void> SynchronizeShadowResources();
-        [[nodiscard]] Result<bool> AdvanceShadowTarget();
+
+        struct ShadowResources {
+            Render::RenderTextureHandle texture;
+            Render::RenderTextureViewHandle view;
+            Render::RenderTargetHandle target;
+            Render::ResourceOperationId textureOperation, viewOperation, targetOperation;
+            EditorViewportExtent extent;
+            Render::DirectionalShadowProfile profile;
+        };
+
+        [[nodiscard]] Result<bool> AdvanceShadowTarget(ShadowResources &resources);
+        void ReleaseShadowTarget(ShadowResources &resources) noexcept;
         void ReleaseMesh(ResidentMesh &mesh) noexcept;
         void ReleaseShadowResources() noexcept;
         void ReleaseViewportTarget(ViewportTargetResources &resources) noexcept;
@@ -116,12 +134,9 @@ namespace Horo::Editor {
         std::unordered_map<std::uint64_t, ResidentMesh> pendingMeshes_;
         ViewportTargetResources viewportTarget_;
         ViewportTargetResources pendingViewportTarget_;
-        Render::RenderTextureHandle shadowDepthTexture_;
-        Render::RenderTextureViewHandle shadowDepthTextureView_;
-        Render::RenderTargetHandle shadowTarget_;
-        Render::ResourceOperationId shadowDepthTextureOperation_;
-        Render::ResourceOperationId shadowDepthTextureViewOperation_;
-        Render::ResourceOperationId shadowTargetOperation_;
+        ShadowResources shadowResources_, pendingShadowResources_;
+        Render::DirectionalShadowProfile requestedShadowProfile_;
+        std::uint64_t shadowGeneration_{};
         EditorViewportExtent allocatedExtent_;
         bool meshesReady_{false};
     };

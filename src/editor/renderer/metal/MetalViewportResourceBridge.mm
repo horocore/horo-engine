@@ -1,6 +1,7 @@
 #include "MetalViewportResourceBridge.h"
 
 #include "runtime/renderer/frontend/RenderFrontendResourceAccess.h"
+#include "runtime/renderer/modules/metal/MetalBackendModule.h"
 #include "runtime/renderer/modules/metal/MetalRenderBackendErrors.h"
 #include "runtime/renderer/modules/metal/MetalResourceInstances.h"
 
@@ -59,6 +60,15 @@ namespace Horo::Editor {
             .colorTexture = (__bridge void *)instance.Value()->colorTexture,
             .depthTexture = (__bridge void *)instance.Value()->depthTexture,
         });
+    }
+
+    Result<void> MetalViewportResourceBridge::RetainTextureView(const Render::RenderFrontend &frontend,
+                                                                Render::MetalEditorGraphicsBridge &bridge,
+                                                                const Render::RenderTextureViewHandle view) {
+        const auto instance = Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, view);
+        if (instance.HasError())
+            return Result<void>::Failure(instance.ErrorValue());
+        return bridge.RetainEditorTextureView(instance.Value());
     }
 
     Result<void *> MetalViewportResourceBridge::ResolveTexture(const Render::RenderFrontend &frontend,

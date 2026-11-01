@@ -11,6 +11,13 @@
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Keeps depth-only material batch admission exclusive to qualified native consumers. */
+        Result<PipelineCacheKey> ValidateMetalMaterialPipelineRequest(const RenderGraphicsPipelineDescriptor &descriptor) {
+            if (descriptor.state.depthOnly)
+                return Result<PipelineCacheKey>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation));
+            return ValidateRenderGraphicsPipelineDescriptor(descriptor);
+        }
+
         /** @brief Finite conservative driver-object estimate, never advertised as measured allocation. */
         RenderMemoryCostPlan Estimate(std::uint64_t kind, std::size_t payload, std::size_t overhead) {
             return {.memoryClass = RenderMemoryClass::PersistentDevice,
@@ -359,7 +366,7 @@ namespace Horo::Render::Detail {
     /** @copydoc MetalResourceRuntime::QueryGraphicsPipelineMemoryCost */
     Result<RenderMemoryCostPlan> MetalResourceRuntime::QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &descriptor,
                                                                                        std::uint64_t vertex, std::uint64_t fragment) const {
-        if (const auto valid = ValidateRenderGraphicsPipelineDescriptor(descriptor); valid.HasError())
+        if (const auto valid = ValidateMetalMaterialPipelineRequest(descriptor); valid.HasError())
             return Result<RenderMemoryCostPlan>::Failure(valid.ErrorValue());
         auto *v = Decode<MetalShaderModule>(vertex);
         auto *f = Decode<MetalShaderModule>(fragment);

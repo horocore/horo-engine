@@ -44,15 +44,34 @@ namespace Horo::Editor {
         return Outcome::Success(&artifact);
     }
 
-    void EditorViewportShaderParameters::SetScene(const Render::RenderSceneView &scene, const Math::Mat4 &shadowViewProjection,
-                                                  const std::size_t shadowLightIndex, const bool shadowEnabled,
+    void EditorViewportShaderParameters::SetScene(const Render::RenderSceneView &scene,
+                                                  const std::optional<Render::DirectionalShadowFrame> &shadowFrame,
                                                   const Render::ShaderTargetBackend backend) noexcept {
         const auto count = std::min(scene.lights.size(), std::size_t{16});
         camera = {scene.camera.position.x, scene.camera.position.y, scene.camera.position.z, static_cast<float>(count)};
-        shadow = shadowViewProjection;
-        shadowSettings = {shadowEnabled ? 1.0F : 0.0F, static_cast<float>(shadowLightIndex), 0, 0};
+        const auto forward = Math::Normalize(scene.camera.target - scene.camera.position);
+        cameraForward = {forward.x, forward.y, forward.z, 1.0F};
+        shadowSettings = {};
         shadowCoordinates = backend == Render::ShaderTargetBackend::Metal ? std::array<float, 4>{0.5F, -0.5F, 1.0F, 0.0F}
                                                                           : std::array<float, 4>{0.5F, 0.5F, 0.5F, 0.5F};
+        if (shadowFrame) {
+            const auto &frame = *shadowFrame;
+            shadowSettings = {1, static_cast<float>(frame.lightIndex), static_cast<float>(frame.cascadeCount), 1.0F / frame.atlasWidth};
+            cameraForward[3] = 1.0F / frame.atlasHeight;
+            shadowBiasFilter = {frame.profile.depthBias, frame.profile.slopeBias, frame.profile.normalBias,
+                                static_cast<float>(frame.profile.filterRadius)};
+            for (std::size_t index = 0; index < frame.cascadeCount; ++index) {
+                const auto &cascade = frame.cascades[index];
+                std::copy(cascade.cameraRelativeViewProjection.values.begin(), cascade.cameraRelativeViewProjection.values.end(),
+                          shadow.begin() + index * 16);
+                const std::array<float, 4> split{cascade.splitFar, cascade.blendStart, cascade.splitNear, cascade.worldUnitsPerTexel};
+                const auto &rect = cascade.atlasScaleBias;
+                const float y = backend == Render::ShaderTargetBackend::OpenGL ? 1.0F - rect.w - rect.y : rect.w;
+                const std::array<float, 4> atlas{rect.x, rect.y, rect.z, y};
+                std::copy(split.begin(), split.end(), cascadeSplits.begin() + index * 4);
+                std::copy(atlas.begin(), atlas.end(), atlasRects.begin() + index * 4);
+            }
+        }
         for (std::size_t index = 0; index < count; ++index) {
             const auto &light = scene.lights[index];
             const std::array<std::array<float, 4>, 4> values{
@@ -67,9 +86,9 @@ namespace Horo::Editor {
 
     Result<std::size_t> EditorViewportShaderParameters::PackLit(const Render::MaterialBindingLayout &layout,
                                                                 const std::span<std::byte> destination) const {
-        const std::array<Render::MaterialParameterValue, 11> values{{{{1}, std::span<const float>{mvp.values}},
+        const std::array<Render::MaterialParameterValue, 15> values{{{{1}, std::span<const float>{mvp.values}},
                                                                      {{2}, std::span<const float>{model.values}},
-                                                                     {{3}, std::span<const float>{shadow.values}},
+                                                                     {{3}, std::span<const float>{shadow}},
                                                                      {{4}, std::span<const float>{camera}},
                                                                      {{5}, std::span<const float>{lights[0]}},
                                                                      {{6}, std::span<const float>{lights[1]}},
@@ -77,8 +96,21 @@ namespace Horo::Editor {
                                                                      {{8}, std::span<const float>{lights[3]}},
                                                                      {{9}, std::span<const float>{selection}},
                                                                      {{10}, std::span<const float>{shadowSettings}},
-                                                                     {{11}, std::span<const float>{shadowCoordinates}}}};
+                                                                     {{11}, std::span<const float>{shadowCoordinates}},
+                                                                     {{12}, std::span<const float>{cascadeSplits}},
+                                                                     {{13}, std::span<const float>{atlasRects}},
+                                                                     {{14}, std::span<const float>{cameraForward}},
+                                                                     {{15}, std::span<const float>{shadowBiasFilter}}}};
         return Render::PackMaterialParameterBinding(layout, {1}, values, destination);
+    }
+
+    Math::Mat4 EditorViewportShadowMvp(const Render::DirectionalShadowFrame &frame, const std::size_t cascade,
+                                       const Math::Mat4 &model) noexcept {
+        auto localized = model;
+        localized.values[12] -= frame.cameraOrigin.x;
+        localized.values[13] -= frame.cameraOrigin.y;
+        localized.values[14] -= frame.cameraOrigin.z;
+        return Math::Multiply(frame.cascades[cascade].cameraRelativeViewProjection, localized);
     }
 
     Result<std::size_t> PackEditorViewportGrid(const Render::MaterialBindingLayout &layout, const Math::Mat4 &mvp, const Math::Vec3 color,

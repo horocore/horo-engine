@@ -26,18 +26,34 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Builds one metadata-only canonical role; no reflected offsets or native slots are invented. */
+        Result<Render::ShaderManifest> Manifest(Editor::EditorViewportShaderProgram role, const Render::ShaderTargetRequirement &target) {
+            if (target.backend != Render::ShaderTargetBackend::Vulkan)
+                return Editor::MakeEditorViewportShaderManifest(role, target);
+            return Result<Render::ShaderManifest>::Success(role == Editor::EditorViewportShaderProgram::Shadow
+                                                               ? Editor::EditorVulkanShadowShaderManifest()
+                                                               : Editor::EditorVulkanViewportShaderManifest());
+        }
+
+        std::vector<Render::ShaderReflectionBindingName> Names(Editor::EditorViewportShaderProgram role,
+                                                               Render::ShaderTargetBackend backend) {
+            if (backend != Render::ShaderTargetBackend::Vulkan)
+                return Editor::EditorViewportShaderReflectionNames(role);
+            return role == Editor::EditorViewportShaderProgram::Shadow ? Editor::EditorVulkanShadowReflectionNames()
+                                                                       : Editor::EditorVulkanViewportReflectionNames();
+        }
+
         Result<ShaderHotReloadSourceProgram> MakeProgram(const Editor::EditorViewportShaderProgram role,
                                                          const Render::ShaderCompilerTargetDescriptor &target,
                                                          const Render::ShaderCompilerToolIdentity &reflectionTool) {
             const bool vulkan = target.requirement.backend == Render::ShaderTargetBackend::Vulkan;
-            auto manifest = vulkan ? Result<Render::ShaderManifest>::Success(Editor::EditorVulkanViewportShaderManifest())
-                                   : Editor::MakeEditorViewportShaderManifest(role, target.requirement);
+            auto manifest = Manifest(role, target.requirement);
             if (manifest.HasError())
                 return Result<ShaderHotReloadSourceProgram>::Failure(manifest.ErrorValue());
             ShaderHotReloadSourceProgram program;
             program.id = {static_cast<std::uint32_t>(role)};
-            program.relativeSource = vulkan ? std::filesystem::path{"shaders/editor/viewport.hlsl"}
-                                            : std::filesystem::path{Editor::EditorViewportShaderSource(role)};
+            program.relativeSource = vulkan && role == Editor::EditorViewportShaderProgram::Lit
+                                         ? std::filesystem::path{"shaders/editor/viewport.hlsl"}
+                                         : std::filesystem::path{Editor::EditorViewportShaderSource(role)};
             program.blueprint.compilation.manifest = std::move(manifest).Value();
             program.blueprint.compilation.targets = {target};
             program.blueprint.limits.maximumSourceBytes = 1024U * 1024U;
@@ -46,8 +62,7 @@ namespace Horo::Application::Internal {
             program.blueprint.limits.maximumDiagnosticsPerTarget = 64;
             program.blueprint.limits.maximumDiagnosticMessageBytes = 2048;
             program.blueprint.compilation.reflection =
-                Render::ShaderCompilerReflectionRequest{reflectionTool, vulkan ? Editor::EditorVulkanViewportReflectionNames()
-                                                                               : Editor::EditorViewportShaderReflectionNames(role)};
+                Render::ShaderCompilerReflectionRequest{reflectionTool, Names(role, target.requirement.backend)};
             return Result<ShaderHotReloadSourceProgram>::Success(std::move(program));
         }
     }  // namespace
@@ -64,8 +79,10 @@ namespace Horo::Application::Internal {
         ShaderHotReloadHostConfiguration configuration;
         configuration.publication = {.policy = ShaderHotReloadPolicy::Development, .context = fence};
         configuration.sources.root = root;
-        const auto last = target.requirement.backend == Render::ShaderTargetBackend::Vulkan ? 1U : 3U;
-        for (std::uint32_t role = 1; role <= last; ++role) {
+        for (std::uint32_t role = 1; role <= 3; ++role) {
+            if (target.requirement.backend == Render::ShaderTargetBackend::Vulkan &&
+                role == static_cast<std::uint32_t>(Editor::EditorViewportShaderProgram::Grid))
+                continue;
             auto program = MakeProgram(static_cast<Editor::EditorViewportShaderProgram>(role), target, reflectionTool);
             if (program.HasError())
                 return Output::Failure(program.ErrorValue());

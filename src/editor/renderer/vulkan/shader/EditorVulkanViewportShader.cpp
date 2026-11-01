@@ -1,5 +1,6 @@
 #include "EditorVulkanViewportShader.h"
 
+#include "EditorViewportShaderRecipe.h"
 #include "Horo/Runtime/Render/MultiviewShaderParameters.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
@@ -20,13 +21,15 @@ namespace Horo::Editor {
         using namespace Render;
         return {.schemaVersion = 1,
                 .sourceIdentity = "engine/editor/viewport.hlsl",
-                .sourceRevision = 2,
+                .sourceRevision = 3,
                 .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
                 .bindings = {{{1},
                               ShaderResourceKind::UniformBuffer,
                               ShaderResourceAccess::ReadOnly,
                               1,
-                              ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment}},
+                              ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment},
+                             {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
+                             {{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}},
                 .parameters = {{{1}, {1}, ShaderValueType::Float32, 4, 4, 1},
                                {{2}, {1}, ShaderValueType::Float32, 4, 4, 1},
                                {{3}, {1}, ShaderValueType::Float32, 4, 4, 1},
@@ -36,7 +39,13 @@ namespace Horo::Editor {
                                {{7}, {1}, ShaderValueType::Float32, 1, 4, MaximumForwardLights},
                                {{8}, {1}, ShaderValueType::Float32, 1, 4, MaximumForwardLights},
                                {{9}, {1}, ShaderValueType::Float32, 1, 4, MaximumForwardLights},
-                               {{10}, {1}, ShaderValueType::Float32, 1, 4, 3}},
+                               {{10}, {1}, ShaderValueType::Float32, 1, 4, 3},
+                               {{11}, {1}, ShaderValueType::Float32, 4, 4, 4},
+                               {{12}, {1}, ShaderValueType::Float32, 1, 4, 4},
+                               {{13}, {1}, ShaderValueType::Float32, 1, 4, 4},
+                               {{14}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                               {{15}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                               {{16}, {1}, ShaderValueType::Float32, 1, 4, 1}},
                 .targets = {EditorVulkanViewportShaderTarget()}};
     }
 
@@ -53,7 +62,15 @@ namespace Horo::Editor {
                   {{7}, "LightDirectionRange"},
                   {{8}, "LightColorIntensity"},
                   {{9}, "LightCone"},
-                  {{10}, "OverlayColors"}}}};
+                  {{10}, "OverlayColors"},
+                  {{11}, "ShadowViewProjection"},
+                  {{12}, "ShadowSplits"},
+                  {{13}, "ShadowAtlasScaleBias"},
+                  {{14}, "ShadowSettings"},
+                  {{15}, "ShadowBiasAndTexel"},
+                  {{16}, "ShadowCameraForward"}}},
+                {{2}, "DirectionalShadowAtlas", {}},
+                {{3}, "DirectionalShadowSampler", {}}};
     }
 
     /** @copydoc LoadEditorVulkanViewportCook */
@@ -78,6 +95,23 @@ namespace Horo::Editor {
         if (!position || !normal)
             return Result<EditorVulkanViewportCook>::Failure(MakeError(Render::ShaderReflectionErrors::StageInterfaceMismatch));
         return Result<EditorVulkanViewportCook>::Success({{payload.begin(), payload.end()}, reflection.Value()});
+    }
+
+    Render::ShaderManifest EditorVulkanShadowShaderManifest() {
+        return MakeEditorViewportShaderManifest(EditorViewportShaderProgram::Shadow, EditorVulkanViewportShaderTarget()).Value();
+    }
+
+    std::vector<Render::ShaderReflectionBindingName> EditorVulkanShadowReflectionNames() {
+        return EditorViewportShaderReflectionNames(EditorViewportShaderProgram::Shadow);
+    }
+
+    Result<EditorVulkanShadowCook> LoadEditorVulkanShadowCook(std::span<const std::uint8_t> payload,
+                                                              std::span<const std::uint8_t> metadata) {
+        auto reflection = Render::DecodeReflectedShaderArtifact(EditorVulkanShadowShaderManifest(), EditorVulkanViewportShaderTarget(),
+                                                                payload, metadata);
+        if (reflection.HasError())
+            return Result<EditorVulkanShadowCook>::Failure(reflection.ErrorValue());
+        return Result<EditorVulkanShadowCook>::Success({{payload.begin(), payload.end()}, std::move(reflection).Value()});
     }
 
     /** @copydoc EditorVulkanMultiviewShaderManifest */

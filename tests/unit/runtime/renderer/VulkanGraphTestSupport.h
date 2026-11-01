@@ -27,6 +27,16 @@ namespace Horo::Render::VulkanGraphTest {
             std::uint32_t indices{}, instances{}, firstView{};
         };
 
+        struct RenderingCall {
+            std::uint32_t colors{};
+            bool depth{};
+            VkAttachmentLoadOp load{};
+            VkExtent2D extent{};
+        };
+
+        std::vector<RenderingCall> renderingCalls;
+        std::vector<VkViewport> viewports;
+        std::vector<VkRect2D> scissors;
         std::vector<DrawCall> drawCalls;
         std::uint32_t expectedIndexCount{3};
         int renderingBegins{};
@@ -61,6 +71,9 @@ namespace Horo::Render::VulkanGraphTest {
         encodedGraph->operations.emplace_back("begin-rendering");
         encodedGraph->layers = info->layerCount;
         encodedGraph->depthAttachment = info->pDepthAttachment != nullptr;
+        encodedGraph->renderingCalls.push_back({info->colorAttachmentCount, info->pDepthAttachment != nullptr,
+                                                info->pDepthAttachment ? info->pDepthAttachment->loadOp : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                                info->renderArea.extent});
         ++encodedGraph->renderingBegins;
     }
 
@@ -87,9 +100,13 @@ namespace Horo::Render::VulkanGraphTest {
         ++encodedGraph->indexBinds;
     }
 
-    inline VKAPI_ATTR void VKAPI_CALL CaptureViewport(VkCommandBuffer, std::uint32_t, std::uint32_t, const VkViewport *) {}
+    inline VKAPI_ATTR void VKAPI_CALL CaptureViewport(VkCommandBuffer, std::uint32_t, std::uint32_t, const VkViewport *viewport) {
+        encodedGraph->viewports.push_back(*viewport);
+    }
 
-    inline VKAPI_ATTR void VKAPI_CALL CaptureScissor(VkCommandBuffer, std::uint32_t, std::uint32_t, const VkRect2D *) {}
+    inline VKAPI_ATTR void VKAPI_CALL CaptureScissor(VkCommandBuffer, std::uint32_t, std::uint32_t, const VkRect2D *scissor) {
+        encodedGraph->scissors.push_back(*scissor);
+    }
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureDraw(VkCommandBuffer, std::uint32_t count, std::uint32_t instances, std::uint32_t,
                                                   std::int32_t, std::uint32_t firstView) {

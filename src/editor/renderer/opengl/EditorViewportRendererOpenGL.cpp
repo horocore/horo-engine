@@ -182,6 +182,7 @@ namespace Horo::Editor {
         reloadBuffers_ = {};
         reflectedProgram_ = false;
 
+        shadowCache_ = {};
         resources_.Shutdown();
         if (gridVertexBufferHandle_.IsValid())
             static_cast<void>(frontend_->ReleaseBuffer(gridVertexBufferHandle_));
@@ -204,6 +205,10 @@ namespace Horo::Editor {
         gridOptions_ = {};
         lightVisualizerOptions_ = {};
         initialized_ = false;
+    }
+
+    Result<void> EditorViewportRendererOpenGL::RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) {
+        return resources_.RequestDirectionalShadowProfile(profile);
     }
 
     /** @copydoc EditorViewportRendererOpenGL::RequestExtent */
@@ -253,10 +258,11 @@ namespace Horo::Editor {
         const EditorViewportExtent renderExtent = allocatedExtent.IsValid() ? allocatedExtent : extentRequest;
         if (const Result<void> valid = ValidatePassRequest(descriptor, renderExtent); valid.HasError())
             return valid;
-        const auto shadow = BuildEditorViewportDirectionalShadowView(descriptor.scene, Math::ClipDepthRange::NegativeOneToOne);
+        const float aspect = static_cast<float>(allocatedExtent.width) / static_cast<float>(allocatedExtent.height);
+        const auto shadow = Render::BuildDirectionalShadowFrame(descriptor.scene, aspect, Math::ClipDepthRange::NegativeOneToOne,
+                                                                resources_.ActiveDirectionalShadowProfile());
         if (shadow.HasError())
             return Result<void>::Failure(shadow.ErrorValue());
-        const float aspect = static_cast<float>(allocatedExtent.width) / static_cast<float>(allocatedExtent.height);
         const OpenGLStateSnapshot stateSnapshot(reloadTextureUnit_, reloadBufferSlots_);
         return RenderViewportPass(descriptor, shadow.Value(), aspect);
     }
@@ -303,11 +309,8 @@ namespace Horo::Editor {
                 OpenGLViewportResourceBridge::BindTexture(*frontend_, resources_.ShadowTextureView(), reloadTextureUnit_);
             boundShadow.HasError())
             return boundShadow;
-        if (reflectedProgram_) {
-            const auto shadowView = shadow.value_or(EditorViewportDirectionalShadowView{});
-            reloadParameters_.SetScene(descriptor.scene, shadowView.viewProjection, shadowView.lightIndex, shadow.has_value(),
-                                       Render::ShaderTargetBackend::OpenGL);
-        } else
+        reloadParameters_.SetScene(descriptor.scene, shadow, Render::ShaderTargetBackend::OpenGL);
+        if (!reflectedProgram_)
             UploadLighting(descriptor.scene, shadow);
         if (const Result<void> grid = DrawGrid(descriptor.scene.camera, aspect, static_cast<float>(allocatedExtent.height));
             grid.HasError()) {
@@ -514,10 +517,16 @@ namespace Horo::Editor {
         candidate.uniforms.lightDirectionRange = glGetUniformLocation(candidate.program, "uLightDirectionRange[0]");
         candidate.uniforms.lightColorIntensity = glGetUniformLocation(candidate.program, "uLightColorIntensity[0]");
         candidate.uniforms.lightCone = glGetUniformLocation(candidate.program, "uLightCone[0]");
-        candidate.uniforms.shadowViewProjection = glGetUniformLocation(candidate.program, "uShadowViewProjection");
+        candidate.uniforms.shadowViewProjection = glGetUniformLocation(candidate.program, "uShadowViewProjection[0]");
         candidate.uniforms.shadowMap = glGetUniformLocation(candidate.program, "uShadowMap");
         candidate.uniforms.shadowEnabled = glGetUniformLocation(candidate.program, "uShadowEnabled");
         candidate.uniforms.shadowLightIndex = glGetUniformLocation(candidate.program, "uShadowLightIndex");
+        candidate.uniforms.shadowCascadeCount = glGetUniformLocation(candidate.program, "uShadowCascadeCount");
+        candidate.uniforms.cascadeSplits = glGetUniformLocation(candidate.program, "uCascadeSplits[0]");
+        candidate.uniforms.atlasRects = glGetUniformLocation(candidate.program, "uAtlasRects[0]");
+        candidate.uniforms.cameraForward = glGetUniformLocation(candidate.program, "uCameraForward");
+        candidate.uniforms.shadowTexel = glGetUniformLocation(candidate.program, "uShadowTexel");
+        candidate.uniforms.shadowBiasFilter = glGetUniformLocation(candidate.program, "uShadowBiasFilter");
         candidate.uniforms.selectionColor = glGetUniformLocation(candidate.program, "uSelectionColor");
         candidate.uniforms.selectionStrength = glGetUniformLocation(candidate.program, "uSelectionStrength");
         if (const std::array locations{
@@ -533,6 +542,12 @@ namespace Horo::Editor {
                 candidate.uniforms.shadowMap,
                 candidate.uniforms.shadowEnabled,
                 candidate.uniforms.shadowLightIndex,
+                candidate.uniforms.shadowCascadeCount,
+                candidate.uniforms.cascadeSplits,
+                candidate.uniforms.atlasRects,
+                candidate.uniforms.cameraForward,
+                candidate.uniforms.shadowTexel,
+                candidate.uniforms.shadowBiasFilter,
                 candidate.uniforms.selectionColor,
                 candidate.uniforms.selectionStrength,
             };
@@ -582,12 +597,17 @@ namespace Horo::Editor {
     }
 
     Result<void> EditorViewportRendererOpenGL::DrawDirectionalShadowMap(const Render::RenderSceneView &scene,
-                                                                        const EditorViewportDirectionalShadowView &shadow) const {
-        constexpr auto shadowMapResolution = static_cast<GLsizei>(EditorViewportDirectionalShadowMapResolution);
+                                                                        const EditorViewportDirectionalShadowView &shadow) {
+        if (shadowProgramGeneration_ != liveGeneration_)
+            shadowCache_ = {};
+        if (!Render::DirectionalShadowRenderRequired(shadow, resources_.ShadowGeneration(), shadowCache_))
+            return Result<void>::Success();
+        // A failed partial redraw invalidates previous contents even if the next scene returns to an old fingerprint.
+        shadowCache_.valid = false;
         if (const Result<void> bound = OpenGLViewportResourceBridge::BindRenderTarget(*frontend_, resources_.ShadowTarget());
             bound.HasError())
             return bound;
-        glViewport(0, 0, shadowMapResolution, shadowMapResolution);
+        glDisable(GL_SCISSOR_TEST);
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
         glDepthMask(GL_TRUE);
         glEnable(GL_DEPTH_TEST);
@@ -596,13 +616,38 @@ namespace Horo::Editor {
         glCullFace(GL_FRONT);
         glClear(GL_DEPTH_BUFFER_BIT);
         glUseProgram(shadowProgram_);
+        for (std::size_t cascade = 0; cascade < shadow.cascadeCount; ++cascade) {
+            const auto drawn = DrawShadowCascade(scene, shadow, cascade);
+            if (drawn.HasError())
+                return drawn;
+        }
+        glCullFace(GL_BACK);
+        if (glGetError() != GL_NO_ERROR) {
+            shadowCache_ = {};
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        }
+        const auto cache = Render::CommitDirectionalShadowRender(shadow, resources_.ShadowGeneration(), shadowCache_);
+        if (cache.HasError())
+            return Result<void>::Failure(cache.ErrorValue());
+        shadowCache_ = cache.Value();
+        shadowProgramGeneration_ = liveGeneration_;
+        return Result<void>::Success();
+    }
+
+    Result<void> EditorViewportRendererOpenGL::DrawShadowCascade(const Render::RenderSceneView &scene,
+                                                                 const Render::DirectionalShadowFrame &shadow,
+                                                                 const std::size_t cascade) const {
+        const auto &viewport = shadow.cascades[cascade].viewport;
+        // Shared rectangles are top-left; GL's native viewport starts at the bottom-left.
+        glViewport(static_cast<GLint>(viewport.x), static_cast<GLint>(shadow.atlasHeight - viewport.y - viewport.height),
+                   static_cast<GLsizei>(viewport.width), static_cast<GLsizei>(viewport.height));
         for (const Render::RenderStaticMeshInstance &instance : scene.instances) {
             const auto mesh = resources_.FindMesh(instance.mesh.id.value);
             if (!mesh.has_value()) {
                 return Result<void>::Failure(
                     MakeViewportError(RendererErrors::ViewportStaleMeshResource, "Shadow pass instance references a stale mesh resource."));
             }
-            const Math::Mat4 shadowMvp = Math::Multiply(shadow.viewProjection, instance.localToWorld);
+            const Math::Mat4 shadowMvp = EditorViewportShadowMvp(shadow, cascade, instance.localToWorld);
             if (reflectedProgram_) {
                 std::array<std::byte, 4096> bytes{};
                 const auto packed = PackEditorViewportShadow(reloadLayouts_[2], shadowMvp, bytes);
@@ -645,8 +690,13 @@ namespace Horo::Editor {
         }
         glUniform3f(uniforms_.cameraPosition, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z);
         glUniform1i(uniforms_.lightCount, static_cast<GLint>(scene.lights.size()));
-        const Math::Mat4 shadowViewProjection = shadow.has_value() ? shadow->viewProjection : Math::Mat4::Identity();
-        glUniformMatrix4fv(uniforms_.shadowViewProjection, 1, GL_FALSE, shadowViewProjection.values.data());
+        glUniformMatrix4fv(uniforms_.shadowViewProjection, 4, GL_FALSE, reloadParameters_.shadow.data());
+        glUniform4fv(uniforms_.cascadeSplits, 4, reloadParameters_.cascadeSplits.data());
+        glUniform4fv(uniforms_.atlasRects, 4, reloadParameters_.atlasRects.data());
+        glUniform3fv(uniforms_.cameraForward, 1, reloadParameters_.cameraForward.data());
+        glUniform2f(uniforms_.shadowTexel, reloadParameters_.shadowSettings[3], reloadParameters_.cameraForward[3]);
+        glUniform4fv(uniforms_.shadowBiasFilter, 1, reloadParameters_.shadowBiasFilter.data());
+        glUniform1i(uniforms_.shadowCascadeCount, static_cast<GLint>(reloadParameters_.shadowSettings[2]));
         glUniform1i(uniforms_.shadowMap, 7);
         glUniform1i(uniforms_.shadowEnabled, shadow.has_value() ? 1 : 0);
         glUniform1i(uniforms_.shadowLightIndex, shadow.has_value() ? static_cast<GLint>(shadow->lightIndex) : -1);

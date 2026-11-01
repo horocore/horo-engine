@@ -14,14 +14,21 @@ struct SceneLighting {
     uint lightCount;
     uint shadowEnabled;
     uint shadowLightIndex;
-    float2 padding;
+    uint shadowCascadeCount;
+    float padding;
+    float4x4 shadowViewProjection[4];
+    float4 cascadeSplits[4];
+    float4 atlasRects[4];
+    float4 cameraForward;
+    float4 shadowBiasFilter;
+    float2 shadowTexel;
+    float2 shadowPadding;
 };
-struct ObjectTransforms { float4x4 mvp; float4x4 model; float4x4 shadowMvp; };
+struct ObjectTransforms { float4x4 mvp; float4x4 model; };
 struct VertexOut {
     float4 position [[position]];
     float3 worldPosition;
     float3 worldNormal;
-    float4 shadowPosition;
 };
 struct GridVertexOut { float4 position [[position]]; };
 vertex VertexOut viewport_vertex(uint vertexId [[vertex_id]],
@@ -43,7 +50,6 @@ vertex VertexOut viewport_vertex(uint vertexId [[vertex_id]],
     output.position = transforms.mvp * float4(vertices[vertexId].position, 1.0);
     output.worldPosition = worldPosition.xyz;
     output.worldNormal = normalize(normalMatrix * float3(vertices[vertexId].normal));
-    output.shadowPosition = transforms.shadowMvp * float4(vertices[vertexId].position, 1.0);
     return output;
 }
 vertex float4 viewport_shadow_vertex(uint vertexId [[vertex_id]],
@@ -60,6 +66,49 @@ vertex GridVertexOut viewport_grid_vertex(uint vertexId [[vertex_id]],
     output.position = viewProjection * float4(float3(vertices[vertexId]), 1.0);
     return output;
 }
+float SampleCascade(uint cascade, float3 worldPosition, float3 normal, float3 lightDirection, constant SceneLighting& scene, depth2d<float> shadowMap, sampler shadowSampler)
+{
+    float3 localized = worldPosition - float3(scene.cameraPosition) + normal * scene.shadowBiasFilter.z;
+    float4 clip = scene.shadowViewProjection[cascade] * float4(localized, 1.0);
+    float3 coordinate = clip.xyz / clip.w * float4(0.5, -0.5, 1.0, 0.0).xyz + float3(0.5, 0.5, float4(0.5, -0.5, 1.0, 0.0).w);
+    if (any(coordinate <= 0.0) || any(coordinate >= 1.0)) return 1.0;
+    float4 rect = scene.atlasRects[cascade];
+    float2 uv = coordinate.xy * rect.xy + rect.zw;
+    float2 texel = scene.shadowTexel;
+    float2 minimum = rect.zw + texel * 0.5;
+    float2 maximum = rect.zw + rect.xy - texel * 0.5;
+    float bias = scene.shadowBiasFilter.x + scene.shadowBiasFilter.y * (1.0 - saturate(dot(normal, lightDirection)));
+    int radius = (int)scene.shadowBiasFilter.w;
+    float visibility = 0.0;
+    float taps = 0.0;
+    for (int y = -2; y <= 2; ++y)
+        for (int x = -2; x <= 2; ++x)
+            if (abs(x) <= radius && abs(y) <= radius)
+            {
+                float2 sampleUv = clamp(uv + float2(x, y) * texel, minimum, maximum);
+                float closest = shadowMap.sample(shadowSampler, sampleUv);
+                visibility += coordinate.z - bias <= closest ? 1.0 : 0.0;
+                taps += 1.0;
+            }
+    return visibility / max(taps, 1.0);
+}
+float DirectionalShadow(float3 worldPosition, float3 normal, float3 lightDirection, constant SceneLighting& scene, depth2d<float> shadowMap, sampler shadowSampler)
+{
+    if (scene.shadowEnabled == 0.0) return 1.0;
+    float distance = dot(worldPosition - float3(scene.cameraPosition), scene.cameraForward.xyz);
+    uint count = (uint)scene.shadowCascadeCount;
+    uint cascade = count;
+    for (uint index = 0; index < count; ++index)
+        if (distance <= scene.cascadeSplits[index].x) { cascade = index; break; }
+    if (cascade >= count) return 1.0;
+    if (distance < scene.cascadeSplits[0].z) return 1.0;
+    float visibility = SampleCascade(cascade, worldPosition, normal, lightDirection, scene, shadowMap, shadowSampler);
+    float blend = saturate((distance - scene.cascadeSplits[cascade].y) / max(scene.cascadeSplits[cascade].x - scene.cascadeSplits[cascade].y, 0.0001));
+    if (cascade + 1 < count && blend > 0.0)
+        visibility = mix(visibility, SampleCascade(cascade + 1, worldPosition, normal, lightDirection, scene, shadowMap, shadowSampler), blend);
+    return visibility;
+}
+
 fragment float4 viewport_fragment(VertexOut input [[stage_in]],
                                   constant SelectionStyle& selection [[buffer(0)]],
                                   constant SceneLighting& scene [[buffer(1)]],
@@ -99,28 +148,7 @@ fragment float4 viewport_fragment(VertexOut input [[stage_in]],
         float3 halfDirection = normalize(lightDirection + viewDirection);
         float specular = pow(max(dot(normal, halfDirection), 0.0), 48.0) * 0.18;
         float3 radiance = light.colorIntensity.rgb * light.colorIntensity.a * attenuation;
-        float visibility = 1.0;
-        if (scene.shadowEnabled != 0 && index == scene.shadowLightIndex)
-        {
-            float3 projected = input.shadowPosition.xyz / input.shadowPosition.w;
-            float3 shadowCoordinate = float3(projected.x * 0.5 + 0.5, 0.5 - projected.y * 0.5, projected.z);
-            if (shadowCoordinate.x > 0.0 && shadowCoordinate.x < 1.0 &&
-                shadowCoordinate.y > 0.0 && shadowCoordinate.y < 1.0 &&
-                shadowCoordinate.z > 0.0 && shadowCoordinate.z < 1.0)
-            {
-                float2 texel = 1.0 / float2(shadowMap.get_width(), shadowMap.get_height());
-                float bias = max(0.0025 * (1.0 - dot(normal, lightDirection)), 0.00045);
-                visibility = 0.0;
-                for (int y = -1; y <= 1; ++y)
-                    for (int x = -1; x <= 1; ++x)
-                    {
-                        float closestDepth = shadowMap.sample(shadowSampler,
-                            shadowCoordinate.xy + float2(x, y) * texel);
-                        visibility += shadowCoordinate.z - bias <= closestDepth ? 1.0 : 0.0;
-                    }
-                visibility /= 9.0;
-            }
-        }
+        float visibility = index == scene.shadowLightIndex ? DirectionalShadow(input.worldPosition, normal, lightDirection, scene, shadowMap, shadowSampler) : 1.0;
         lighting += radiance * (baseColor * diffuse + specular) * visibility;
     }
     float3 mapped = lighting / (lighting + 1.0);

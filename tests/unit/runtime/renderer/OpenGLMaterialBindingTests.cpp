@@ -1,5 +1,6 @@
 #include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "AllocationProbe.h"
+#include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderShaderResourceErrors.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "Horo/Vfx/VfxWorld.h"
@@ -337,4 +338,33 @@ namespace Horo::Render::OpenGLMaterialTests {
 
 // Draw preparation consumes the material/slot fixture declarations from the preceding chunk.
 #include "OpenGLVfxDrawPreparationTests.inl"
+}  // namespace Horo::Render::OpenGLMaterialTests
+
+namespace Horo::Render::OpenGLMaterialTests {
+    TEST_CASE("Frontend rejects depth-only pipelines on a peer without material batch capability", "[renderer][material][shadow][batch]") {
+        OpenGLResourceTests::ResourcePresentationPort port;
+        auto frontend = Create(port);
+        auto fixture = Prepare(*frontend);
+        auto descriptor = fixture.pipeline.descriptor;
+        descriptor.state.depthOnly = true;
+        descriptor.compatibility.pipelineDescriptorDigest = ComputeRenderGraphicsPipelineStateDigest(descriptor.state).Value();
+        Horo::Tests::RequireError(frontend->CreateGraphicsPipeline(descriptor), MaterialBindingErrors::Unsupported);
+        ReleaseCpu(*frontend, fixture);
+    }
+
+    TEST_CASE("Frontend rejects ordered material batches on peers before native execution", "[renderer][material][shadow][batch]") {
+        OpenGLResourceTests::ResourcePresentationPort port;
+        auto frontend = Create(port);
+        auto fixture = Prepare(*frontend);
+        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 32}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        const std::array draws{RenderMaterialDraw{fixture.mesh, fixture.material}};
+        const std::array preceding{RenderMaterialPass{fixture.target.target, {64, 32}, {}, 1.0F, draws}};
+        const RenderMaterialPass pass{.target = fixture.target.target, .extent = {64, 32}, .draws = draws, .precedingPasses = preceding};
+        Horo::Tests::RequireError(frame.ExecuteMaterialPass(pass), MaterialBindingErrors::Unsupported);
+        CHECK(native.draws == 0);
+        frame.Cancel();
+        ReleaseCpu(*frontend, fixture);
+    }
 }  // namespace Horo::Render::OpenGLMaterialTests

@@ -13,7 +13,7 @@ namespace Horo::Editor {
                 return mesh;
             if (const auto uniform = ProgramResources::CreateUniformSlot(frontend_, program, slot.uniforms,
                                                                          (index + 1) * (Render::RenderMaterialPass::MaximumDraws + 1),
-                                                                         program.overlayPipeline);
+                                                                         program.overlayPipeline, resources_.ShadowTextureView());
                 uniform.HasError())
                 return uniform;
         }

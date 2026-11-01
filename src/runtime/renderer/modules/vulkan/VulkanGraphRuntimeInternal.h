@@ -96,8 +96,19 @@ namespace Horo::Render::Detail {
             std::uint32_t instances{1};
         };
 
-        std::array<MaterialDraw, RenderMaterialPass::MaximumDraws> materialDraws;
+        struct MaterialPass {
+            VulkanMaterialTarget target;
+            RenderMaterialExecutionRequest request;
+            RenderGraphExecutionRange draws, barriers;
+        };
+
+        std::array<MaterialDraw, RenderMaterialPass::MaximumBatchDraws> materialDraws;
+        std::array<MaterialPass, RenderMaterialPass::MaximumPasses> materialPasses;
+        std::size_t materialPassCount{}, materialDrawCount{};
+        std::array<VulkanGraphResourceState *, RenderGraphLimits::HardMaxResources> materialPassStates;
+        std::size_t materialPassStateCount{};
         VulkanMaterialTarget materialTarget;
+        bool materialDepthOnly{};
         std::vector<MaterialDraw> vfxDraws; /**< Cold-reserved against the canonical whole-scene draw ceiling. */
         std::uint64_t deviceIncarnation{};
         VulkanCommandRuntime commands;
@@ -224,6 +235,8 @@ namespace Horo::Render::Detail {
                                                            const RenderGraphExecutionPass &pass);
         /** @brief Validates the whole-array native depth attachment before recording. */
         [[nodiscard]] Result<void> ValidateDepthAttachment(const RenderGraphDepthAttachment &depth, RenderQueueId queue);
+        /** @brief Validates native copy roles, checked ranges and defined contents before recording. */
+        [[nodiscard]] Result<void> ValidateBufferCopy(const RenderGraphBufferCopy &copy);
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphWorkload &workload, RenderQueueId queue);
         [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
         void Encode(VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept;
@@ -238,6 +251,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> PrepareMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
         [[nodiscard]] Result<void> MaterialState(const VulkanGraphResource &resource, RenderGraphLogicalState next,
                                                  const RenderQueueSubmission &submission, bool requireContents);
+        [[nodiscard]] Result<void> PrepareMaterialEntry(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
+        void EncodeMaterialPass(VkCommandBuffer command, const MaterialPass &pass) const noexcept;
         void EncodeMaterial(VkCommandBuffer command, const RenderMaterialExecutionRequest &request) const noexcept;
         /** @brief Captures exact published VFX draws into bounded per-pass native encoding scratch. */
         [[nodiscard]] Result<void> PrepareVfx(const RenderGraphExecutionRequest &request, std::size_t pass, VulkanCommandRetention &pins);

@@ -100,6 +100,13 @@ namespace Horo::Render {
             RenderMemoryScopeId scope;
         };
 
+        Result<RenderMemoryCostPlan> QueryPipelineCost(IRenderBackend &backend, const RenderGraphicsPipelineDescriptor &descriptor,
+                                                       std::uint64_t vertex, std::uint64_t fragment) {
+            if (descriptor.state.depthOnly && !backend.Capabilities().supportsMaterialPassBatches)
+                return Result<RenderMemoryCostPlan>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+            return backend.QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
+        }
+
         /** @brief Executes one synchronous loading transaction with rollback guarding every fallible ownership transition. */
         template <typename Query, typename Create>
         [[nodiscard]] Result<ResourceReservation> PrepareResource(const PreparationContext &context,
@@ -446,7 +453,7 @@ namespace Horo::Render {
         try {
             const auto prepared = PrepareResource({*resourceRegistry_, *memoryBudget_, *backend_, memoryConfig_.defaultResourceScope},
                                                   RenderResourceClass::Pipeline, dependencies, [this, &descriptor, &vertex, &fragment] {
-                return backend_->QueryGraphicsPipelineMemoryCost(descriptor, vertex.Value(), fragment.Value());
+                return QueryPipelineCost(*backend_, descriptor, vertex.Value(), fragment.Value());
             }, [this, &descriptor, &vertex, &fragment](const RenderMemoryPlacement &placement) {
                 return backend_->CreateGraphicsPipeline(descriptor, vertex.Value(), fragment.Value(), placement);
             });

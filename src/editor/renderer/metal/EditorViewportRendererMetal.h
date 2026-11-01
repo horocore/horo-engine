@@ -32,6 +32,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
                                                         std::span<const Render::RenderPassDescriptor> passes) override;
         void RequestExtent(EditorViewportExtent extent) noexcept override;
+        [[nodiscard]] Result<void> RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) override;
+
         void RequestGrid(const EditorViewportGridOptions &options) noexcept override;
         void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &options) noexcept override;
         [[nodiscard]] EditorViewportExtent RequestedExtent() const noexcept override;

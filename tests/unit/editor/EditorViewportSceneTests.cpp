@@ -80,8 +80,8 @@ namespace {
         REQUIRE(metalShadow.Value()->IsValid(scene));
 
         const Math::Vec4 worldCenter{-4.0F, 0.0F, 2.0F, 1.0F};
-        const Math::Vec4 glClip = Math::TransformHomogeneous(openGlShadow.Value()->viewProjection, worldCenter);
-        const Math::Vec4 metalClip = Math::TransformHomogeneous(metalShadow.Value()->viewProjection, worldCenter);
+        const Math::Vec4 glClip = Math::TransformHomogeneous(openGlShadow.Value()->cascades[0].viewProjection, worldCenter);
+        const Math::Vec4 metalClip = Math::TransformHomogeneous(metalShadow.Value()->cascades[0].viewProjection, worldCenter);
         REQUIRE(std::abs(glClip.x / glClip.w) <= 1.0F);
         REQUIRE(std::abs(glClip.y / glClip.w) <= 1.0F);
         REQUIRE(glClip.z / glClip.w >= -1.0F);

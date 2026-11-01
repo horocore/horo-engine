@@ -105,6 +105,10 @@ namespace Horo::Render::Detail {
                                                                            std::span<const RenderGraphResourceInstance> resources,
                                                                            id<MTLCommandBuffer> commands, id<MTLTexture> primary);
 #endif
+        /** @brief Records one selected editor atlas view in the same native command transaction as graph residents.
+         * @param commandBuffer Exact active runtime commands. @param view Actual same-runtime native view identity.
+         * @return Typed stale/foreign failure or owner-lane tracked use; FinishGraphCommands commits or rolls back it. */
+        [[nodiscard]] Result<void> TrackEditorTextureViewUse(void *commandBuffer, std::uint64_t view);
         /** @brief Marks all resolved graph residents against the final owner buffer preceding lease retirement. */
         void TrackParallelGraphUse(void *finalCommands, std::span<const RenderGraphResourceInstance> resources) noexcept;
         /** @brief Non-blockingly drains at most 64 native-complete retired instances. */

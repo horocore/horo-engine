@@ -99,6 +99,7 @@ namespace Horo::Editor {
                                                                                          const Render::RenderSceneView &scene) override;
         void RequestExtent(EditorViewportExtent extent) noexcept override;
         void RequestGrid(const EditorViewportGridOptions &options) noexcept override;
+        [[nodiscard]] Result<void> RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) override;
         void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &options) noexcept override;
         [[nodiscard]] EditorViewportExtent RequestedExtent() const noexcept override;
         [[nodiscard]] Math::ClipDepthRange ClipDepthRange() const noexcept override;
@@ -119,7 +120,7 @@ namespace Horo::Editor {
 
         struct DrawSlot {
             Render::RenderBufferHandle buffer;
-            std::uint64_t instance{};
+            std::uint64_t instance{}, materialIdentity{}, materialRevision{};
             std::shared_ptr<const Render::ResidentMaterialBinding> material;
         };
 
@@ -135,6 +136,7 @@ namespace Horo::Editor {
         struct FrameSlot {
             std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws> draws;
             OverlaySlot overlay;
+            std::array<std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws>, Render::MaximumDirectionalShadowCascades> shadows;
         };
 
         struct EmptyGraph {
@@ -150,6 +152,8 @@ namespace Horo::Editor {
             Render::RenderPipelineHandle pipeline, overlayPipeline;
             Render::MaterialBindingLayout layout;
             std::unique_ptr<Render::MaterialBindingTable> materials;
+            Render::RenderSamplerHandle shadowSampler;
+            bool depthOnly{};
             std::size_t parameterBytes{}; /**< Exact logical packing extent, excluding native block tail padding. */
             std::size_t uniformBytes{};   /**< Selected backend's allocation, binding and full-upload extent. */
         };
@@ -172,11 +176,16 @@ namespace Horo::Editor {
                                                                    std::uint32_t frames);
             /** @brief Creates the bounded desktop draw slots without replacing their owner. */
             [[nodiscard]] static Result<void> CreateDrawSlots(Render::RenderFrontend &frontend, const ShaderResources &program,
-                                                              std::span<FrameSlot> slots, std::uint32_t frames);
+                                                              std::span<FrameSlot> slots, std::uint32_t frames,
+                                                              Render::RenderTextureViewHandle atlas = {});
             /** @brief Creates one exact program buffer and material generation during cold admission. */
             [[nodiscard]] static Result<void> CreateUniformSlot(Render::RenderFrontend &frontend, const ShaderResources &program,
                                                                 DrawSlot &draw, std::uint64_t material,
-                                                                Render::RenderPipelineHandle pipeline);
+                                                                Render::RenderPipelineHandle pipeline,
+                                                                Render::RenderTextureViewHandle atlas = {});
+            [[nodiscard]] static Result<void> BindUniformSlot(const ShaderResources &program, DrawSlot &draw,
+                                                              Render::RenderPipelineHandle pipeline, Render::RenderTextureViewHandle atlas);
+            static void ReleaseMaterials(std::span<FrameSlot> slots) noexcept;
             /** @brief Packs one finite reflected parameter into caller-owned bounded storage. */
             [[nodiscard]] static Result<void> WriteParameter(const Render::MaterialBindingLayout &layout, std::span<std::byte> bytes,
                                                              Render::ShaderParameterId parameter, std::span<const float> values);
@@ -188,11 +197,23 @@ namespace Horo::Editor {
                                                         const ShaderResources &program, EditorViewportExtent extent,
                                                         Render::FrameToken frame, const DrawSlot &slot,
                                                         const Render::RenderStaticMeshInstance &instance,
-                                                        const Render::RenderSceneView &scene);
+                                                        const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame *shadow);
+            [[nodiscard]] static Result<void> WriteShadowParameters(const ShaderResources &program, std::span<std::byte> bytes,
+                                                                    const Render::RenderSceneView &scene,
+                                                                    const Render::DirectionalShadowFrame *shadow);
         };
 
         struct ProgramGeneration;
         [[nodiscard]] Result<void> PrepareProgram(ProgramGeneration &candidate);
+        [[nodiscard]] Result<void> PrepareShadowProgram(ShaderResources &program, std::span<FrameSlot> slots);
+        [[nodiscard]] Result<void> BindShadowAtlas();
+        [[nodiscard]] Result<void> PrepareShadowDraws(Render::FrameToken frame, std::uint32_t slot, const Render::RenderSceneView &scene,
+                                                      const Render::DirectionalShadowFrame &shadow);
+        [[nodiscard]] Result<void> WriteShadowDraw(Render::FrameToken frame, const DrawSlot &draw,
+                                                   const Render::RenderStaticMeshInstance &instance,
+                                                   const Render::DirectionalShadowFrame &shadow, std::uint32_t cascade);
+        [[nodiscard]] Result<void> ExecuteShadowedViewport(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass,
+                                                           std::size_t draws, const Render::DirectionalShadowFrame *shadow);
 
         /** @brief Builds overlay geometry and bindings into an unpublished complete program generation. */
         [[nodiscard]] Result<void> CreateOverlaySlots(ShaderResources &program, std::span<FrameSlot> slots);
@@ -213,11 +234,19 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> CreateEmptyGraph();
         /** @brief Submits the cached empty-scene clear through the exact current frontend frame. */
         [[nodiscard]] Result<void> ExecuteEmptyViewport(Render::RenderFrameScope &frame, Render::ClearColor clearColor);
+        [[nodiscard]] Result<std::uint32_t> PrepareViewportSlot(Render::FrameToken frame, const Render::StaticMeshPassDescriptor &pass);
+        [[nodiscard]] Result<void> PrepareShadowFrame(Render::FrameToken frame, std::uint32_t slot,
+                                                      const Render::StaticMeshPassDescriptor &pass);
+        [[nodiscard]] Result<std::size_t> PrepareViewportOverlay(Render::FrameToken frame, std::uint32_t slot,
+                                                                 const Render::StaticMeshPassDescriptor &pass);
+        [[nodiscard]] Result<void> PrepareViewportDraws(Render::FrameToken frame, std::uint32_t slot,
+                                                        const Render::StaticMeshPassDescriptor &pass);
         [[nodiscard]] Result<void> ExecuteViewport(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass);
         const std::thread::id owner_{std::this_thread::get_id()};
         Render::RenderFrontend &frontend_;
         Render::Detail::VulkanEditorGraphicsBridge &bridge_;
         ShaderResources shader_;
+        ShaderResources shadowShader_;
         ShaderResources xrShader_;
         std::shared_ptr<XrGraph> xrGraph_;
         std::array<std::array<DrawSlot, Render::RenderMaterialPass::MaximumDraws>, 8> xrDrawSlots_;
@@ -225,6 +254,11 @@ namespace Horo::Editor {
         Render::Detail::VulkanEditorDevice device_;
         std::array<FrameSlot, 8> slots_;
         std::array<Render::RenderMaterialDraw, Render::RenderMaterialPass::MaximumDraws> preparedDraws_;
+        std::array<std::array<Render::RenderMaterialDraw, Render::RenderMaterialPass::MaximumDraws>,
+                   Render::MaximumDirectionalShadowCascades>
+            preparedShadowDraws_;
+        Render::RenderTextureViewHandle boundShadowAtlas_;
+        std::optional<Render::DirectionalShadowFrame> preparedShadow_;
         std::array<Render::MeshVertex, MaximumOverlayVertices> overlayVertices_;
         std::optional<EmptyGraph> emptyGraph_;
         Render::RenderTextureHandle emptyGraphTexture_;

@@ -14,15 +14,50 @@ Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialBuffe
                   "Material uniform generation, usage or range is incompatible with the selected Vulkan registry."));
 }
 
-/** @brief Resolves an exact sampled color view in the current single-sample 2D material envelope. */
+namespace {
+    bool VulkanMaterialSampleAspect(RenderTextureAspect aspect, RenderTextureFormat format) noexcept {
+        return (aspect == RenderTextureAspect::Color && !VulkanResourceConversion::IsDepthFormat(format)) ||
+               (aspect == RenderTextureAspect::Depth && format == RenderTextureFormat::Depth32Float);
+    }
+
+    template <typename View> bool VulkanWholeDepthSample(const View &view) noexcept {
+        if (view.aspect != RenderTextureAspect::Depth)
+            return true;
+        const auto &texture = view.texture->descriptor;
+        const auto &range = view.descriptor;
+        const std::array valid{range.format == RenderTextureFormat::Depth32Float,
+                               texture.mipCount == 1,
+                               range.baseMip == 0,
+                               range.mipCount == 1,
+                               range.baseLayer == 0,
+                               range.layerCount == 1};
+        return std::ranges::all_of(valid, [](bool value) {
+            return value;
+        });
+    }
+
+    template <typename View> bool VulkanSampledMaterialView(const View &view) noexcept {
+        const auto &descriptor = view.texture->descriptor;
+        const std::array valid{VulkanMaterialSampleAspect(view.aspect, descriptor.format),
+                               HasTextureUsage(descriptor.usage, RenderTextureUsage::Sampled),
+                               descriptor.sampleCount == 1,
+                               descriptor.dimension == RenderTextureDimension::TwoD,
+                               descriptor.layerCount == 1,
+                               view.descriptor.dimension == RenderTextureViewDimension::TwoD,
+                               VulkanWholeDepthSample(view)};
+        return std::ranges::all_of(valid, [](bool value) {
+            return value;
+        });
+    }
+}  // namespace
+
+/** @brief Resolves exact sampled color or whole Depth32Float views; both use the same image state journal. */
 Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialView(const MaterialResidentResource &resident) const {
     const auto *view = Find(views, resident.instance);
     if (resident.kind != MaterialResidentResourceKind::TextureView || resident.offset || resident.byteCount || !view)
         return Result<VulkanMaterialResource>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
     const auto &descriptor = view->texture->descriptor;
-    if (view->aspect == RenderTextureAspect::Color && HasTextureUsage(descriptor.usage, RenderTextureUsage::Sampled) &&
-        descriptor.sampleCount == 1 && descriptor.dimension == RenderTextureDimension::TwoD && descriptor.layerCount == 1 &&
-        view->descriptor.dimension == RenderTextureViewDimension::TwoD)
+    if (VulkanSampledMaterialView(*view))
         return Result<VulkanMaterialResource>::Success({.view = view->handle,
                                                         .image = view->texture->handle,
                                                         .textureDescriptor = descriptor,
@@ -30,7 +65,7 @@ Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialView(
                                                         .backing = views.at(resident.instance)});
     return Result<VulkanMaterialResource>::Failure(
         MakeError(VulkanBackendErrors::ResourceIdentityInvalid,
-                  "Material texture view is not an exact sampled single-sample 2D color generation."));
+                  "Material texture view must be an admitted sampled 2D color or whole Depth32Float generation."));
 }
 
 /** @copydoc VulkanResourceRuntime::InitializeShaders */

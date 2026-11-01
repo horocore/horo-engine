@@ -2593,6 +2593,9 @@ target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
 target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
 add_library(HoroRenderApi STATIC
+        runtime/renderer/api/DirectionalShadow.cpp
+        runtime/renderer/api/DirectionalShadowFit.cpp
+        runtime/renderer/api/DirectionalShadowFingerprint.cpp
         runtime/renderer/api/VfxDrawData.cpp
         runtime/renderer/api/VfxShaderParameters.cpp
         runtime/renderer/api/VfxFrameUpload.cpp
@@ -3615,6 +3618,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
         editor/renderer/vulkan/SdlVulkanPresentationPort.cpp
         editor/renderer/vulkan/EditorViewportRendererVulkan.cpp
         editor/renderer/vulkan/EditorViewportVulkanExecution.cpp
+        editor/renderer/vulkan/EditorViewportVulkanShadows.cpp
         editor/renderer/vulkan/EditorViewportVulkanXr.cpp
         editor/renderer/vulkan/EditorViewportVulkanPipeline.cpp
         editor/renderer/vulkan/EditorViewportVulkanUniforms.cpp
@@ -4211,4 +4215,8 @@ if(TARGET HoroEditorViewportOpenGL)
     target_link_libraries(HoroRenderOpenGLProgramValidationInternal INTERFACE HoroEngine::RenderOpenGL)
     target_link_libraries(HoroEditorViewportOpenGL PUBLIC HoroEditorViewportShaderRecipeInternal
         PRIVATE HoroRenderFrontendResourceAccessInternal HoroRenderOpenGLProgramValidationInternal)
+endif()
+
+if(TARGET HoroEditorVulkanShaderInternal)
+    target_link_libraries(HoroEditorVulkanShaderInternal PRIVATE HoroEditorViewportShaderRecipeInternal)
 endif()

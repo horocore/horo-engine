@@ -3,7 +3,7 @@ cbuffer ViewportParameters : register(b0, space0)
 {
     row_major float4x4 Mvp;
     row_major float4x4 ModelToWorld;
-    row_major float4x4 ShadowViewProjection;
+    row_major float4x4 ShadowViewProjection[4];
     float4 CameraAndLightCount;
     float4 LightPositionKind[16];
     float4 LightDirectionRange[16];
@@ -14,6 +14,10 @@ cbuffer ViewportParameters : register(b0, space0)
     // XYZ scales projected coordinates; XY biases are 0.5 and W is the depth bias.
     // GL: (0.5,0.5,0.5,0.5). Metal: (0.5,-0.5,1,0).
     float4 ShadowCoordinates;
+    float4 CascadeSplits[4];
+    float4 AtlasRects[4];
+    float4 CameraForward;
+    float4 ShadowBiasFilter;
 };
 Texture2D<float> ShadowMap : register(t1, space0);
 SamplerState ShadowSampler : register(s2, space0);
@@ -29,7 +33,6 @@ struct VertexOutput
     float4 position : SV_Position;
     [[vk::location(0)]] float3 worldPosition : TEXCOORD0;
     [[vk::location(1)]] float3 worldNormal : TEXCOORD1;
-    [[vk::location(2)]] float4 shadowPosition : TEXCOORD2;
 };
 
 float3 WorldNormal(float3 normal)
@@ -51,31 +54,50 @@ VertexOutput VSMain(VertexInput input)
     output.position = mul(float4(input.position, 1.0), Mvp);
     output.worldPosition = world.xyz;
     output.worldNormal = WorldNormal(input.normal);
-    output.shadowPosition = mul(world, ShadowViewProjection);
     return output;
 }
 
-float DirectionalShadow(float3 normal, float3 lightDirection, float4 shadowPosition)
+float SampleCascade(uint cascade, float3 worldPosition, float3 normal, float3 lightDirection)
 {
-    if (ShadowSettings.x == 0.0)
-        return 1.0;
-    float3 projected = shadowPosition.xyz / shadowPosition.w;
-    float3 coordinate = projected * ShadowCoordinates.xyz + float3(0.5, 0.5, ShadowCoordinates.w);
-    if (any(coordinate <= 0.0) || any(coordinate >= 1.0))
-        return 1.0;
-    uint width, height;
-    ShadowMap.GetDimensions(width, height);
-    float2 texel = 1.0 / float2(width, height);
-    float bias = max(0.0025 * (1.0 - dot(normal, lightDirection)), 0.00045);
+    float3 localized = worldPosition - CameraAndLightCount.xyz + normal * ShadowBiasFilter.z;
+    float4 clip = mul(float4(localized, 1.0), ShadowViewProjection[cascade]);
+    float3 coordinate = clip.xyz / clip.w * ShadowCoordinates.xyz + float3(0.5, 0.5, ShadowCoordinates.w);
+    if (any(coordinate <= 0.0) || any(coordinate >= 1.0)) return 1.0;
+    float4 rect = AtlasRects[cascade];
+    float2 uv = coordinate.xy * rect.xy + rect.zw;
+    float2 texel = float2(ShadowSettings.w, CameraForward.w);
+    float2 minimum = rect.zw + texel * 0.5;
+    float2 maximum = rect.zw + rect.xy - texel * 0.5;
+    float bias = ShadowBiasFilter.x + ShadowBiasFilter.y * (1.0 - saturate(dot(normal, lightDirection)));
+    int radius = (int)ShadowBiasFilter.w;
     float visibility = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-        {
-            // Preserve linear depth sampling followed by comparison, rather than hardware comparison filtering.
-            float closest = ShadowMap.SampleLevel(ShadowSampler, coordinate.xy + float2(x, y) * texel, 0.0);
-            visibility += coordinate.z - bias <= closest ? 1.0 : 0.0;
-        }
-    return visibility / 9.0;
+    float taps = 0.0;
+    for (int y = -2; y <= 2; ++y)
+        for (int x = -2; x <= 2; ++x)
+            if (abs(x) <= radius && abs(y) <= radius)
+            {
+                float2 sampleUv = clamp(uv + float2(x, y) * texel, minimum, maximum);
+                float closest = ShadowMap.SampleLevel(ShadowSampler, sampleUv, 0.0);
+                visibility += coordinate.z - bias <= closest ? 1.0 : 0.0;
+                taps += 1.0;
+            }
+    return visibility / max(taps, 1.0);
+}
+float DirectionalShadow(float3 worldPosition, float3 normal, float3 lightDirection)
+{
+    if (ShadowSettings.x == 0.0) return 1.0;
+    float distance = dot(worldPosition - CameraAndLightCount.xyz, CameraForward.xyz);
+    uint count = (uint)ShadowSettings.z;
+    uint cascade = count;
+    for (uint index = 0; index < count; ++index)
+        if (distance <= CascadeSplits[index].x) { cascade = index; break; }
+    if (cascade >= count) return 1.0;
+    if (distance < CascadeSplits[0].z) return 1.0;
+    float visibility = SampleCascade(cascade, worldPosition, normal, lightDirection);
+    float blend = saturate((distance - CascadeSplits[cascade].y) / max(CascadeSplits[cascade].x - CascadeSplits[cascade].y, 0.0001));
+    if (cascade + 1 < count && blend > 0.0)
+        visibility = lerp(visibility, SampleCascade(cascade + 1, worldPosition, normal, lightDirection), blend);
+    return visibility;
 }
 
 float4 LightDirectionAndAttenuation(uint index, float3 worldPosition, float3 normal)
@@ -104,7 +126,7 @@ float3 LightContribution(uint index, VertexOutput input, float3 normal, float3 v
     float3 halfDirection = normalize(light.xyz + viewDirection);
     float specular = pow(max(dot(normal, halfDirection), 0.0), 48.0) * 0.18;
     float3 radiance = LightColorIntensity[index].rgb * LightColorIntensity[index].w * light.w;
-    float visibility = index == (uint)ShadowSettings.y ? DirectionalShadow(normal, light.xyz, input.shadowPosition) : 1.0;
+    float visibility = index == (uint)ShadowSettings.y ? DirectionalShadow(input.worldPosition, normal, light.xyz) : 1.0;
     return radiance * (float3(0.68, 0.70, 0.74) * diffuse + specular) * visibility;
 }
 

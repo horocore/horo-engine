@@ -21,6 +21,14 @@ namespace Horo::Render::Detail {
             return queue;
         }
 
+        struct ReleaseNativeEvent final {
+            __strong id<MTLSharedEvent> event;
+
+            ~ReleaseNativeEvent() {
+                event.signaledValue = 1;
+            }
+        };
+
         /** @brief Requires exact native terminal completion within a finite smoke-test budget. */
         void RequireNativeCompletion(id<MTLCommandBuffer> commands) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -130,4 +138,65 @@ namespace Horo::Render::Detail {
         CHECK(pixel[3] == 255);
         runtime.Shutdown();
     }
+
+    TEST_CASE("Metal editor atlas use shares graph commit abort and placed-memory retirement",
+              "[integration][renderer][metal][gpu][shadow]") {
+        MetalResourceRuntime runtime;
+        id<MTLCommandQueue> queue = InitializeSmokeRuntime(runtime);
+        const RenderTextureDescriptor descriptor{.extent = {16, 16},
+                                                 .format = RenderTextureFormat::Depth32Float,
+                                                 .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+        const auto cost = runtime.QueryTextureMemoryCost(descriptor);
+        REQUIRE(cost.HasValue());
+        const auto texture = runtime.CreateTexture(descriptor, {}, TestSupport::PlacementFor(cost.Value(), 41, 41));
+        REQUIRE(texture.HasValue());
+        const auto view = runtime.CreateTextureView({.texture = {{1}, 41, 1},
+                                                     .format = RenderTextureFormat::Depth32Float,
+                                                     .aspect = RenderTextureAspect::Depth},
+                                                    texture.Value());
+        REQUIRE(view.HasValue());
+        id<MTLCommandBuffer> commands = [queue commandBuffer];
+        REQUIRE(runtime.TrackEditorTextureViewUse(nullptr, view.Value()).HasError());
+        REQUIRE(runtime.TrackEditorTextureViewUse((__bridge void *)commands, 0).HasError());
+        REQUIRE(runtime.TrackEditorTextureViewUse((__bridge void *)commands, view.Value()).HasValue());
+        SECTION("an abandoned encoding releases only its current native use") {
+            runtime.FinishGraphCommands((__bridge void *)commands, false);
+            runtime.DestroyTextureView(view.Value());
+            runtime.DestroyTexture(texture.Value());
+            CHECK(runtime.CreateTexture(descriptor, {}, TestSupport::PlacementFor(cost.Value(), 42, 41)).HasValue());
+            runtime.Shutdown();
+            return;
+        }
+        SECTION("accepted GPU work prevents alias reuse until actual terminal completion") {}
+        id<MTLSharedEvent> event = [queue.device newSharedEvent];
+        REQUIRE(event != nil);
+        const ReleaseNativeEvent releaseEvent{event};
+        [commands encodeWaitForEvent:event value:1];
+        auto *native = reinterpret_cast<MetalTextureViewInstance *>(static_cast<std::uintptr_t>(view.Value()));
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.depthAttachment.texture = native->texture;
+        pass.depthAttachment.loadAction = MTLLoadActionClear;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+        pass.depthAttachment.clearDepth = 1.0;
+        id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
+        REQUIRE(encoder != nil);
+        [encoder endEncoding];
+        [commands commit];
+        runtime.FinishGraphCommands((__bridge void *)commands, true);
+        id<MTLCommandBuffer> abandoned = [queue commandBuffer];
+        const auto trackedAbandoned = runtime.TrackEditorTextureViewUse((__bridge void *)abandoned, view.Value());
+        runtime.FinishGraphCommands((__bridge void *)abandoned, false);
+        runtime.DestroyTextureView(view.Value());
+        runtime.DestroyTexture(texture.Value());
+        const auto blocked = runtime.CreateTexture(descriptor, {}, TestSupport::PlacementFor(cost.Value(), 43, 41));
+        // Always release the actual GPU wait before an assertion could unwind native teardown.
+        event.signaledValue = 1;
+        RequireNativeCompletion(commands);
+        CHECK(trackedAbandoned.HasValue());
+        CHECK(blocked.HasError());
+        runtime.DrainGraphRetirements();
+        CHECK(runtime.CreateTexture(descriptor, {}, TestSupport::PlacementFor(cost.Value(), 44, 41)).HasValue());
+        runtime.Shutdown();
+    }
+
 }  // namespace Horo::Render::Detail

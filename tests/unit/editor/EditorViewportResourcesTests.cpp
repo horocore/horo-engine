@@ -270,3 +270,54 @@ TEST_CASE("Headless viewport resources recover image resolution and shut down re
     REQUIRE(frontend->ResourceState(shadowTarget).HasError());
     REQUIRE_FALSE(resources.IsReady());
 }
+
+TEST_CASE("Directional shadow atlas quality publication retains the complete previous generation until ready",
+          "[unit][headless][renderer][resource][shadow]") {
+    ImageResolverFixture resolver;
+    auto frontend = CreateFrontend();
+    auto resources = CreateResources(*frontend);
+    const RenderSceneView scene;
+    SettleResources(resources, *frontend, scene, {64, 64});
+    const auto previousProfile = resources.ActiveDirectionalShadowProfile();
+    const auto previousTarget = resources.ShadowTarget();
+    const auto previousView = resources.ShadowTextureView();
+    const auto previousGeneration = resources.ShadowGeneration();
+    const auto replacement = MakeDirectionalShadowProfile(DirectionalShadowQuality::Low);
+    REQUIRE(resources.RequestDirectionalShadowProfile(replacement).HasValue());
+    REQUIRE(resources.Prepare(scene, {64, 64}).HasValue());
+    CHECK(resources.ActiveDirectionalShadowProfile() == previousProfile);
+    CHECK(resources.ShadowTarget() == previousTarget);
+    CHECK(resources.ShadowTextureView() == previousView);
+    REQUIRE(frontend->ResourceState(previousTarget).HasValue());
+    for (int step = 0; step < MaxResourcePasses && resources.ActiveDirectionalShadowProfile() != replacement; ++step) {
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(resources.Prepare(scene, {64, 64}).HasValue());
+    }
+    CHECK(resources.ActiveDirectionalShadowProfile() == replacement);
+    CHECK(resources.ShadowTarget() != previousTarget);
+    CHECK(resources.ShadowTextureView() != previousView);
+    CHECK(resources.ShadowGeneration() == previousGeneration + 1);
+    const auto extent = ComputeDirectionalShadowAtlasExtent(replacement);
+    REQUIRE(extent.HasValue());
+    CHECK(resources.ShadowExtent() == EditorViewportExtent{extent.Value().width, extent.Value().height});
+    CHECK(frontend->ResourceState(previousTarget).HasError());
+    resources.Shutdown();
+}
+
+TEST_CASE("Directional shadow atlas rejects malformed quality without replacing its last ready binding",
+          "[unit][headless][renderer][resource][shadow]") {
+    ImageResolverFixture resolver;
+    auto frontend = CreateFrontend();
+    auto resources = CreateResources(*frontend);
+    const RenderSceneView scene;
+    SettleResources(resources, *frontend, scene, {64, 64});
+    const auto target = resources.ShadowTarget();
+    const auto active = resources.ActiveDirectionalShadowProfile();
+    auto invalid = active;
+    invalid.cascadeCount = MaximumDirectionalShadowCascades + 1;
+    CHECK(resources.RequestDirectionalShadowProfile(invalid).HasError());
+    REQUIRE(resources.Prepare(scene, {64, 64}).HasValue());
+    CHECK(resources.ShadowTarget() == target);
+    CHECK(resources.ActiveDirectionalShadowProfile() == active);
+    resources.Shutdown();
+}

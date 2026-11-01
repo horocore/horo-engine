@@ -293,6 +293,7 @@ namespace Horo::Render {
                 initialized_ = true;
                 capabilities_.supportsExplicitGraphSubmissions = commandPort_ != nullptr;
                 capabilities_.supportsExplicitMaterialSubmissions = commandPort_ && commandPort_->SupportsMaterialCommands();
+                capabilities_.supportsMaterialPassBatches = capabilities_.supportsExplicitMaterialSubmissions;
                 capabilities_.supportsSubmissionObservation = commandPort_ != nullptr;
                 capabilities_.support = resourcePort_ != nullptr ? resourcePort_->ResourceCapabilities() : RenderCapabilitySnapshot{};
                 capabilities_.supportsBufferResources = capabilities_.support.features.Supports(BufferResources);

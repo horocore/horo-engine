@@ -11,10 +11,59 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
+
+    enum class CookMode {
+        Viewport,
+        Multiview,
+        Shadow
+    };
+
+    ShaderManifest Manifest(CookMode mode) {
+        switch (mode) {
+            case CookMode::Viewport:
+                return Editor::EditorVulkanViewportShaderManifest();
+            case CookMode::Multiview:
+                return Editor::EditorVulkanMultiviewShaderManifest();
+            case CookMode::Shadow:
+                return Editor::EditorVulkanShadowShaderManifest();
+        }
+        return {};
+    }
+
+    std::vector<ShaderReflectionBindingName> Names(CookMode mode) {
+        switch (mode) {
+            case CookMode::Viewport:
+                return Editor::EditorVulkanViewportReflectionNames();
+            case CookMode::Multiview:
+                return Editor::EditorVulkanMultiviewReflectionNames();
+            case CookMode::Shadow:
+                return Editor::EditorVulkanShadowReflectionNames();
+        }
+        return {};
+    }
+
+    std::string_view ModeName(CookMode mode) {
+        switch (mode) {
+            case CookMode::Viewport:
+                return "viewport";
+            case CookMode::Multiview:
+                return "multiview";
+            case CookMode::Shadow:
+                return "shadow";
+        }
+        return "invalid";
+    }
+
+    template <typename T> Result<void> Admit(Result<T> result) {
+        if (result.HasError())
+            return Result<void>::Failure(result.ErrorValue());
+        return Result<void>::Success();
+    }
 
     Result<std::vector<std::uint8_t>> Read(const std::filesystem::path &path, std::size_t maximum) {
         std::error_code error;
@@ -83,20 +132,35 @@ namespace {
     }
 
     /** @brief Admits the same compiled payload and immutable reflection through its actual selected runtime consumer. */
-    Result<void> ValidateCookedConsumer(const CompiledShaderArtifact &artifact, std::span<const std::uint8_t> metadata, bool multiview) {
-        if (multiview) {
-            const auto consumer = Editor::LoadEditorVulkanMultiviewCook(artifact.payload, metadata);
-            if (consumer.HasError())
-                return Result<void>::Failure(consumer.ErrorValue());
-        } else {
-            const auto consumer = Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata);
-            if (consumer.HasError())
-                return Result<void>::Failure(consumer.ErrorValue());
+    Result<void> ValidateCookedConsumer(const CompiledShaderArtifact &artifact, std::span<const std::uint8_t> metadata, CookMode mode) {
+        switch (mode) {
+            case CookMode::Viewport:
+                return Admit(Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata));
+            case CookMode::Multiview:
+                return Admit(Editor::LoadEditorVulkanMultiviewCook(artifact.payload, metadata));
+            case CookMode::Shadow:
+                return Admit(Editor::LoadEditorVulkanShadowCook(artifact.payload, metadata));
         }
-        return Result<void>::Success();
+        return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
     }
 
-    Result<void> Cook(char **argv, const bool multiview) {
+    ShaderCompilationRequest Request(CookMode mode, std::vector<std::uint8_t> source,
+                                     const std::vector<ShaderCompilerToolInstallation> &tools) {
+        const auto target = Editor::EditorVulkanViewportShaderTarget();
+        ShaderCompilerTargetDescriptor route{.requirement = target,
+                                             .platformTriple = "linux-x86_64",
+                                             .intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16,
+                                             .tools = {tools[0].identity, tools[1].identity}};
+        ShaderCompilationRequest request{.manifest = Manifest(mode),
+                                         .source = std::move(source),
+                                         .targets = {route},
+                                         .reflection = ShaderCompilerReflectionRequest{tools[2].identity, Names(mode)}};
+        if (mode == CookMode::Multiview)
+            request.defines = {{"HORO_MULTIVIEW_LAYER_ROUTING", "0"}};
+        return request;
+    }
+
+    Result<void> Cook(char **argv, CookMode mode) {
         auto configuration = Configuration(argv);
         if (configuration.HasError())
             return Result<void>::Failure(configuration.ErrorValue());
@@ -105,23 +169,10 @@ namespace {
             ExternalShaderCompilerAdapter::Create(std::move(configuration).Value(), std::make_shared<NativeExternalProcessRunner>());
         if (adapter.HasError())
             return Result<void>::Failure(adapter.ErrorValue());
-        const auto source = Read(argv[1], 16U * 1024U * 1024U);
+        auto source = Read(argv[1], 16U * 1024U * 1024U);
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());
-        const auto target = Editor::EditorVulkanViewportShaderTarget();
-        ShaderCompilerTargetDescriptor route{.requirement = target,
-                                             .platformTriple = "linux-x86_64",
-                                             .intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16,
-                                             .tools = {tools[0].identity, tools[1].identity}};
-        const ShaderCompilationRequest
-            request{.manifest = multiview ? Editor::EditorVulkanMultiviewShaderManifest() : Editor::EditorVulkanViewportShaderManifest(),
-                    .source = source.Value(),
-                    .defines = multiview ? std::vector<ShaderCompilerDefine>{{"HORO_MULTIVIEW_LAYER_ROUTING", "0"}}
-                                         : std::vector<ShaderCompilerDefine>{},
-                    .targets = {route},
-                    .reflection =
-                        ShaderCompilerReflectionRequest{tools[2].identity, multiview ? Editor::EditorVulkanMultiviewReflectionNames()
-                                                                                     : Editor::EditorVulkanViewportReflectionNames()}};
+        const auto request = Request(mode, std::move(source).Value(), tools);
         const auto compiled = CompileShaderTargets(request, adapter.Value(), {});
         if (compiled.HasError())
             return Result<void>::Failure(compiled.ErrorValue());
@@ -132,37 +183,58 @@ namespace {
         const auto metadata = EncodeReflectedShaderArtifact(*artifact.reflection);
         if (metadata.HasError())
             return Result<void>::Failure(metadata.ErrorValue());
-        if (auto admitted = ValidateCookedConsumer(artifact, metadata.Value(), multiview); admitted.HasError())
+        if (auto admitted = ValidateCookedConsumer(artifact, metadata.Value(), mode); admitted.HasError())
             return admitted;
         const std::filesystem::path prefix{argv[2]};
         if (const auto payload = Write(prefix.string() + ".horoshdr", compiled.Value().artifacts[0].payload); payload.HasError())
             return payload;
         if (const auto layout = Write(prefix.string() + ".reflection.json", metadata.Value()); layout.HasError())
             return layout;
-        std::cout << "Cooked Vulkan " << (multiview ? "multiview" : "viewport") << " identity "
-                  << FormatSha256(artifact.reflection->cookedArtifactKey) << '\n';
+        std::cout << "Cooked Vulkan " << ModeName(mode) << " identity " << FormatSha256(artifact.reflection->cookedArtifactKey) << '\n';
         return Result<void>::Success();
+    }
+}  // namespace
+
+namespace {
+    bool CookTool(const Horo::Render::ApprovedShaderCompilerTool &tool) {
+        return tool.hostPlatform == "linux-x86_64-ubuntu-26.04" &&
+               (tool.tool == Horo::Render::ShaderCompilerTool::Dxc || tool.tool == Horo::Render::ShaderCompilerTool::SpirvTools ||
+                tool.tool == Horo::Render::ShaderCompilerTool::SpirvCross);
+    }
+
+    void DescribeTools() {
+        for (const auto &tool : Horo::Render::ApprovedShaderCompilerTools())
+            if (CookTool(tool))
+                std::cout << static_cast<unsigned>(tool.tool) << '\t' << tool.source << '\t' << tool.archiveSha256 << '\t'
+                          << tool.executableSha256 << '\t' << tool.executableRelativePath << '\n';
+    }
+
+    std::optional<CookMode> ParseMode(int argc, char **argv) {
+        if (argc == 7)
+            return CookMode::Viewport;
+        if (argc != 8)
+            return std::nullopt;
+        if (std::string_view{argv[7]} == "--multiview")
+            return CookMode::Multiview;
+        if (std::string_view{argv[7]} == "--shadow")
+            return CookMode::Shadow;
+        return std::nullopt;
     }
 }  // namespace
 
 int main(int argc, char **argv) {
     if (argc == 2 && std::string_view{argv[1]} == "--describe-tools") {
-        // Inert catalog export for the qualification host; compilation still validates every executable itself.
-        for (const auto &tool : Horo::Render::ApprovedShaderCompilerTools())
-            if (tool.hostPlatform == "linux-x86_64-ubuntu-26.04" &&
-                (tool.tool == Horo::Render::ShaderCompilerTool::Dxc || tool.tool == Horo::Render::ShaderCompilerTool::SpirvTools ||
-                 tool.tool == Horo::Render::ShaderCompilerTool::SpirvCross))
-                std::cout << static_cast<unsigned>(tool.tool) << '\t' << tool.source << '\t' << tool.archiveSha256 << '\t'
-                          << tool.executableSha256 << '\t' << tool.executableRelativePath << '\n';
+        DescribeTools();
         return 0;
     }
-    const bool multiview = argc == 8 && std::string_view{argv[7]} == "--multiview";
-    if (argc != 7 && !multiview) {
-        std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross [--multiview]\n";
+    const auto mode = ParseMode(argc, argv);
+    if (!mode) {
+        std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
+                     "[--multiview|--shadow]\n";
         return 2;
     }
     try {
-        const auto cooked = Cook(argv, multiview);
+        const auto cooked = Cook(argv, *mode);
         if (cooked.HasError()) {
             std::cerr << cooked.ErrorValue().code.Value() << ": " << cooked.ErrorValue().message << '\n';
             return 1;

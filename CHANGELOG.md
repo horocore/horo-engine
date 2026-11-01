@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Journaled adoption of missing catalogs without inferring surfaces or changing existing project identities.
 - Bounded D3D12 graph-copy command submission, explicit legacy/enhanced barrier admission, queue fences and GPU-safe resource retirement.
 - Opt-in development shader hot reload with bounded asynchronous compilation, complete program-family adoption and last-known-good preservation.
+- Bounded camera-relative cascaded directional shadows, guarded atlas profiles, native depth/material batches and GPU-safe atlas retirement.
 
 ### Changed
 - Gameplay SDK 25 requires rebuilding native gameplay modules and descriptor bundles for the new surface and Character value contracts.

@@ -108,7 +108,7 @@ namespace Horo::Render::Detail {
             std::vector<UiCapture> ui; /**< Product-admitted capacity allocated once before frame admission. */
             std::size_t uiCount{};
             RenderGraphTransientResourceSet *transient{nullptr};
-            std::array<std::shared_ptr<const ResidentMaterialBinding>, RenderMaterialPass::MaximumDraws> materials;
+            std::array<std::shared_ptr<const ResidentMaterialBinding>, RenderMaterialPass::MaximumBatchDraws> materials;
             std::size_t materialCount{0};
         };
 

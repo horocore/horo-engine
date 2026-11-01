@@ -129,6 +129,34 @@ TEST_CASE("Source closure rejects a physical symlink outside its explicit author
     CHECK(CaptureShaderHotReloadSources(fixture.recipe, fixture.fence).HasError());
 }
 
+TEST_CASE("Vulkan viewport developer family retains Lit and canonical shared Shadow roles without Grid",
+          "[application][shader-reload][host]") {
+    using namespace Horo;
+    using namespace Horo::Application::Internal;
+    Render::ShaderCompilerToolIdentity reflection{Render::ShaderCompilerTool::SpirvCross, "qualified-release", {}};
+    Render::ShaderCompilerTargetDescriptor target{.requirement = {Render::ShaderTargetBackend::Vulkan, Render::ShaderPayloadFormat::SpirV16,
+                                                                  1, 1, 16, 128},
+                                                  .platformTriple = "qualified-vulkan-host",
+                                                  .tools = {reflection}};
+    const auto configured =
+        MakeEditorViewportHotReloadConfiguration(std::filesystem::temp_directory_path(), target, reflection, {1, 1, 1, 1, 0});
+    REQUIRE(configured.HasValue());
+    const auto &programs = configured.Value().sources.programs;
+    REQUIRE(programs.size() == 2);
+    CHECK(programs[0].id.value == 1);
+    CHECK(programs[1].id.value == 3);
+    CHECK(programs[0].relativeSource == "shaders/editor/viewport.hlsl");
+    CHECK(programs[1].relativeSource == "shaders/editor/viewport_shadow.hlsl");
+    CHECK(programs[1].blueprint.compilation.manifest.parameters.size() == 1);
+    REQUIRE(programs[1].blueprint.compilation.reflection);
+    CHECK(programs[1].blueprint.compilation.reflection->names[0].name == "type.ShadowParameters");
+    for (const auto &program : programs) {
+        CHECK(program.blueprint.limits.maximumPayloadBytes == 8U * 1024U * 1024U);
+        CHECK(program.blueprint.limits.maximumDebugPayloadBytes == 8U * 1024U * 1024U);
+        CHECK(program.blueprint.compilation.source.empty());
+    }
+}
+
 namespace {
     struct UnchangedTarget final : Horo::Render::IShaderHotReloadTarget {
         std::size_t prepared{};

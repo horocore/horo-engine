@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Math/SceneMath.h"
+#include "Horo/Runtime/Render/DirectionalShadow.h"
 #include "Horo/Runtime/Render/Mesh.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "editor/project_model/EditorViewportCamera.h"
@@ -14,9 +15,6 @@
 #include <span>
 
 namespace Horo::Editor {
-    /** @brief Resolution shared by the baseline editor directional-shadow implementations. */
-    inline constexpr std::uint32_t EditorViewportDirectionalShadowMapResolution = 2048;
-
     /** @brief Non-owning immutable CPU mesh resource pinned by the owning extracted snapshot. */
     using EditorViewportMeshResourceView = Render::RenderMeshResourceView;
 
@@ -34,14 +32,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
-    /** @brief One bounded directional-light shadow view shared by concrete editor viewport adapters. */
-    struct EditorViewportDirectionalShadowView {
-        Math::Mat4 viewProjection{Math::Mat4::Identity()};
-        std::size_t lightIndex{};
-
-        /** @brief Reports whether the selected light index and matrix are valid for the source scene. */
-        [[nodiscard]] bool IsValid(const Render::RenderSceneView &scene) const noexcept;
-    };
+    /** @brief Shared canonical fixed-capacity shadow frame consumed by concrete viewport adapters. */
+    using EditorViewportDirectionalShadowView = Render::DirectionalShadowFrame;
 
     /** @brief One visible world point projected to top-left-origin normalized viewport coordinates. */
     struct EditorViewportPointProjection {
@@ -54,7 +46,7 @@ namespace Horo::Editor {
                                                     Math::ClipDepthRange depthRange) noexcept;
 
     /**
-     * @brief Fits one stable orthographic shadow camera to the submitted static-mesh bounds.
+     * @brief Builds the canonical single-cascade compatibility profile with a square viewport aspect.
      * @param scene Valid immutable render scene.
      * @param depthRange Clip-depth convention required by the consuming backend.
      * @return Empty when no directional light or mesh is present; otherwise a validated shadow view.

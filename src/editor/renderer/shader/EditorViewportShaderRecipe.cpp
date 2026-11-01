@@ -9,15 +9,18 @@ namespace Horo::Editor {
         /** @brief Logical scalar/vector/matrix shapes only; actual offsets and strides come from target reflection. */
         std::vector<ShaderParameter> LitParameters() {
             return {{{1}, {1}, ShaderValueType::Float32, 4, 4, 1},  {{2}, {1}, ShaderValueType::Float32, 4, 4, 1},
-                    {{3}, {1}, ShaderValueType::Float32, 4, 4, 1},  {{4}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                    {{3}, {1}, ShaderValueType::Float32, 4, 4, 4},  {{4}, {1}, ShaderValueType::Float32, 1, 4, 1},
                     {{5}, {1}, ShaderValueType::Float32, 1, 4, 16}, {{6}, {1}, ShaderValueType::Float32, 1, 4, 16},
                     {{7}, {1}, ShaderValueType::Float32, 1, 4, 16}, {{8}, {1}, ShaderValueType::Float32, 1, 4, 16},
                     {{9}, {1}, ShaderValueType::Float32, 1, 4, 1},  {{10}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                    {{11}, {1}, ShaderValueType::Float32, 1, 4, 1}};
+                    {{11}, {1}, ShaderValueType::Float32, 1, 4, 1}, {{12}, {1}, ShaderValueType::Float32, 1, 4, 4},
+                    {{13}, {1}, ShaderValueType::Float32, 1, 4, 4}, {{14}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                    {{15}, {1}, ShaderValueType::Float32, 1, 4, 1}};
         }
 
         void DescribeLit(ShaderManifest &manifest) {
             manifest.sourceIdentity = "engine/editor/viewport_lit.hlsl";
+            manifest.sourceRevision = 2;
             manifest
                 .bindings = {{{1},
                               ShaderResourceKind::UniformBuffer,
@@ -63,7 +66,8 @@ namespace Horo::Editor {
     /** @copydoc MakeEditorViewportShaderManifest */
     Result<Render::ShaderManifest> MakeEditorViewportShaderManifest(const EditorViewportShaderProgram program,
                                                                     const Render::ShaderTargetRequirement &target) {
-        if (target.backend != ShaderTargetBackend::OpenGL && target.backend != ShaderTargetBackend::Metal)
+        if (target.backend != ShaderTargetBackend::OpenGL && target.backend != ShaderTargetBackend::Metal &&
+            !(target.backend == ShaderTargetBackend::Vulkan && program == EditorViewportShaderProgram::Shadow))
             return Result<ShaderManifest>::Failure(MakeError(ShaderManifestErrors::UnsupportedTarget));
         ShaderManifest manifest{.schemaVersion = 1,
                                 .sourceRevision = 1,
@@ -103,7 +107,11 @@ namespace Horo::Editor {
                           {{8}, "LightCone"},
                           {{9}, "SelectionColorAndStrength"},
                           {{10}, "ShadowSettings"},
-                          {{11}, "ShadowCoordinates"}}},
+                          {{11}, "ShadowCoordinates"},
+                          {{12}, "CascadeSplits"},
+                          {{13}, "AtlasRects"},
+                          {{14}, "CameraForward"},
+                          {{15}, "ShadowBiasFilter"}}},
                         {{2}, "ShadowMap", {}},
                         {{3}, "ShadowSampler", {}}};
             case EditorViewportShaderProgram::Grid:

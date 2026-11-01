@@ -104,7 +104,13 @@ namespace Horo::Render::Detail {
                 ownerThread_ = std::this_thread::get_id();
                 submitted_.Initialize(maxFramesInFlight_);
                 MetalEditorGraphicsAccess::PublishPersistent(*editorGraphicsBridge_, (__bridge void *)device_,
-                                                             (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
+                                                             (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk,
+                                                             [](void *context, const std::uint64_t view, void *commands) {
+                    auto &runtime = *static_cast<MetalRuntime *>(context);
+                    if (runtime.ownerThread_ != std::this_thread::get_id() || commands != (__bridge void *)runtime.commandBuffer_)
+                        return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+                    return runtime.resources_.TrackEditorTextureViewUse(commands, view);
+                });
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError()) {
                     CloseUnsubmittedInitialization();

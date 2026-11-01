@@ -1,4 +1,7 @@
 #include "HoroEditorApp.h"
+
+#include "EditorDirectionalShadowOptions.h"
+#include "Horo/Runtime/Render/DirectionalShadowErrors.h"
 #if defined(HORO_HAS_OPENXR_HOST)
 #include "EditorOpenXRBootstrap.h"
 #include "EditorOpenXRHostServices.h"
@@ -319,6 +322,7 @@ namespace Horo::Editor {
             std::string cookedRoot;
             std::string cookTarget;
             bool cookOptionsValid{true};
+            std::optional<Render::DirectionalShadowProfile> directionalShadows;
             std::optional<Runtime::SceneObjectId> xrTrackingRoot;
             bool xrTrackingRootValid{true};
             std::optional<bool> prefabGranted{false};
@@ -746,6 +750,7 @@ namespace Horo::Editor {
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
         using enum PendingEditorOption;
         EditorGuiOptions opts;
+        opts.directionalShadows = Detail::ParseDirectionalShadowArguments(args);
         PendingEditorOption pending = None;
         for (const char *rawArgument : args.subspan(std::min<std::size_t>(1, args.size()))) {
             const std::string_view argument{rawArgument};
@@ -1018,11 +1023,14 @@ namespace Horo::Editor {
         /** @brief Retains both native renderer owners before initialization so failures use explicit host retirement. */
         template <typename GuiRenderer, typename ViewportRenderer>
         [[nodiscard]] Result<void> InstallEditorRenderers(EditorRenderComposition &composition, std::unique_ptr<GuiRenderer> guiRenderer,
-                                                          std::unique_ptr<ViewportRenderer> viewportRenderer) {
+                                                          std::unique_ptr<ViewportRenderer> viewportRenderer,
+                                                          const Render::DirectionalShadowProfile &shadows) {
             ViewportRenderer *viewport = viewportRenderer.get();
             // Publish partial owners before initialization: failure may still leave native uploads in flight.
             composition.guiRenderer = std::move(guiRenderer);
             composition.viewportRenderer = std::move(viewportRenderer);
+            if (auto admitted = viewport->RequestDirectionalShadowProfile(shadows); admitted.HasError())
+                return admitted;
             if (const Result<void> initialized = composition.guiRenderer->Initialize(); initialized.HasError())
                 return initialized;
             if (const Result<void> initialized = viewport->Initialize(); initialized.HasError())
@@ -1101,8 +1109,8 @@ namespace Horo::Editor {
                 const auto &port = static_cast<const SdlOpenGLPresentationPort &>(*composition.openGlPresentationPort);
                 auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context(), *composition.frontend);
                 auto viewportRenderer = std::make_unique<EditorViewportRendererOpenGL>(*composition.frontend);
-                if (const Result<void> initialized =
-                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
+                if (const Result<void> initialized = InstallEditorRenderers(composition, std::move(guiRenderer),
+                                                                            std::move(viewportRenderer), *options.directionalShadows);
                     initialized.HasError()) {
                     return Result<void>::Failure(initialized.ErrorValue());
                 }
@@ -1112,8 +1120,8 @@ namespace Horo::Editor {
                 auto &graphicsBridge = *composition.metalGraphicsBridge;
                 auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
                 auto viewportRenderer = std::make_unique<EditorViewportRendererMetal>(*composition.frontend, graphicsBridge);
-                if (const Result<void> initialized =
-                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
+                if (const Result<void> initialized = InstallEditorRenderers(composition, std::move(guiRenderer),
+                                                                            std::move(viewportRenderer), *options.directionalShadows);
                     initialized.HasError()) {
                     return Result<void>::Failure(initialized.ErrorValue());
                 }
@@ -1126,7 +1134,8 @@ namespace Horo::Editor {
                 auto &bridge = *composition.vulkanGraphicsBridge;
                 return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
                                               std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge,
-                                                                                             std::move(cooked).Value()));
+                                                                                             std::move(cooked).Value()),
+                                              *options.directionalShadows);
 #endif
             }
             return Result<void>::Success();
@@ -1153,7 +1162,7 @@ namespace Horo::Editor {
                 if (const auto installed =
                         InstallEditorRenderers(composition,
                                                std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
-                                               std::move(viewport));
+                                               std::move(viewport), *options.directionalShadows);
                     installed.HasError())
                     return installed;
                 return composition.xrViewport->PrepareXrProgram(std::move(multiview).Value());
@@ -2727,6 +2736,21 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @brief Rejects malformed quality arguments before creating native resources. */
+    [[nodiscard]] static bool ValidateEditorShadowOptions(const EditorGuiOptions &options) {
+        if (options.directionalShadows)
+            return true;
+        const auto error =
+            MakeError(Render::DirectionalShadowErrors::InvalidProfile, "Use one --shadow-quality off|low|medium|high|ultra selection.");
+        LOG_CRITICAL("editor.shadows", "%s", error.message.c_str());
+        return false;
+    }
+
+    /** @brief Composes independent startup option validation without merging subsystem policy. */
+    [[nodiscard]] static bool ValidateEditorStartupOptions(const EditorGuiOptions &options) {
+        return ValidateEditorPhysicsOptions(options) && ValidateEditorShadowOptions(options);
+    }
+
     /** @brief Canonical configuration/event lifetime pair transferred intact into one prepared startup. */
     struct EditorStartupConfiguration final {
         std::unique_ptr<EngineDataBus> events;
@@ -2813,7 +2837,7 @@ namespace Horo::Editor {
     [[nodiscard]] static std::optional<PreparedEditorStartup> PrepareEditorStartup(EditorGuiOptions options,
                                                                                    const EditorOpenXRHostServices *xrHost,
                                                                                    const std::span<char *> arguments) {
-        if (!ValidateEditorPhysicsOptions(options))
+        if (!ValidateEditorStartupOptions(options))
             return std::nullopt;
         std::string projectName;
         if (!ConfigureStartupProject(options, projectName))

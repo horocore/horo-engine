@@ -35,6 +35,15 @@ namespace Horo::Render::Detail {
             return nativeUsage;
         }
 
+        /** @brief Selects only the admitted native dimensional shape, without creating a view or changing its ownership. */
+        [[nodiscard]] MTLTextureType NativeTextureViewType(const RenderTextureViewDescriptor &view,
+                                                           const RenderTextureDescriptor &source) noexcept {
+            const bool array = view.dimension == RenderTextureViewDimension::TwoDArray;
+            if (source.sampleCount > 1)
+                return array ? MTLTextureType2DMultisampleArray : MTLTextureType2DMultisample;
+            return array ? MTLTextureType2DArray : MTLTextureType2D;
+        }
+
         [[nodiscard]] MTLTextureDescriptor *NativeTextureDescriptor(const RenderTextureDescriptor &descriptor) noexcept {
             MTLTextureDescriptor *native = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:PixelFormat(descriptor.format)
                                                                                               width:descriptor.extent.width
@@ -268,10 +277,7 @@ namespace Horo::Render::Detail {
         if (!SupportsTextureView(source->descriptor, descriptor))
             return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::UnsupportedResourceOperation,
                                                                 "Metal texture view binding is incompatible with its source."));
-        MTLTextureType viewType = descriptor.dimension == RenderTextureViewDimension::TwoDArray ? MTLTextureType2DArray : MTLTextureType2D;
-        if (source->descriptor.sampleCount > 1)
-            viewType = descriptor.dimension == RenderTextureViewDimension::TwoDArray ? MTLTextureType2DMultisampleArray
-                                                                                     : MTLTextureType2DMultisample;
+        const auto viewType = NativeTextureViewType(descriptor, source->descriptor);
         id<MTLTexture> view = [source->texture newTextureViewWithPixelFormat:PixelFormat(descriptor.format)
                                                                  textureType:viewType
                                                                       levels:NSMakeRange(descriptor.baseMip, descriptor.mipCount)
@@ -279,7 +285,8 @@ namespace Horo::Render::Detail {
         if (view == nil)
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to create a resident texture view."));
-        auto *instance = new (std::nothrow) MetalTextureViewInstance{.texture = view,
+        auto *instance = new (std::nothrow) MetalTextureViewInstance{.sourceInstance = source,
+                                                                     .texture = view,
                                                                      .sourceTexture = source->texture,
                                                                      .descriptor = descriptor,
                                                                      .format = descriptor.format,

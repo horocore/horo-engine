@@ -765,6 +765,13 @@ namespace Horo::Render {
         return renderEncoder_;
     }
 
+    /** @copydoc MetalEditorGraphicsBridge::RetainEditorTextureView */
+    Result<void> MetalEditorGraphicsBridge::RetainEditorTextureView(const std::uint64_t viewInstance) {
+        if (!retainTexture_ || !waitContext_ || !commandBuffer_)
+            return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+        return retainTexture_(waitContext_, viewInstance, commandBuffer_);
+    }
+
     /** @copydoc MetalEditorGraphicsBridge::WaitUntilIdle */
     void MetalEditorGraphicsBridge::WaitUntilIdle() noexcept {
         if (waitUntilIdle_ != nullptr) {
@@ -783,11 +790,13 @@ namespace Horo::Render {
         void MetalEditorGraphicsAccess::PublishPersistent(
             MetalEditorGraphicsBridge &bridge, void *device, void *commandQueue,  // NOSONAR
             void *waitContext,                                                    // NOSONAR(cpp:S5008)
-            MetalEditorGraphicsBridge::WaitUntilIdleFunction wait) noexcept {     // NOSONAR(cpp:S5205)
+            MetalEditorGraphicsBridge::WaitUntilIdleFunction wait,
+            MetalEditorGraphicsBridge::RetainTextureFunction retainTexture) noexcept {  // NOSONAR(cpp:S5205)
             bridge.device_ = device;
             bridge.commandQueue_ = commandQueue;
             bridge.waitContext_ = waitContext;
             bridge.waitUntilIdle_ = wait;
+            bridge.retainTexture_ = retainTexture;
         }
 
         void MetalEditorGraphicsAccess::PublishFrame(MetalEditorGraphicsBridge &bridge, void *commandBuffer,  // NOSONAR(cpp:S5008)

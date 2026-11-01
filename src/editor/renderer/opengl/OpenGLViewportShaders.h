@@ -7,10 +7,8 @@ in vec3 aNormal;
 in vec2 aUv;
 out vec3 vWorldPosition;
 out vec3 vWorldNormal;
-out vec4 vShadowPosition;
 uniform mat4 uMvp;
 uniform mat4 uModel;
-uniform mat4 uShadowViewProjection;
 void main()
 {
     vec4 worldPosition = uModel * vec4(aPosition, 1.0);
@@ -25,7 +23,6 @@ void main()
                              inverseRow1 * inverseDeterminant,
                              inverseRow2 * inverseDeterminant);
     vWorldNormal = normalize(normalMatrix * aNormal);
-    vShadowPosition = uShadowViewProjection * worldPosition;
     gl_Position = uMvp * vec4(aPosition, 1.0);
 }
 )glsl";
@@ -34,7 +31,6 @@ void main()
 const int MaxLights = 16;
 in vec3 vWorldPosition;
 in vec3 vWorldNormal;
-in vec4 vShadowPosition;
 out vec4 outColor;
 uniform vec3 uCameraPosition;
 uniform int uLightCount;
@@ -45,29 +41,58 @@ uniform vec2 uLightCone[MaxLights];
 uniform sampler2D uShadowMap;
 uniform int uShadowEnabled;
 uniform int uShadowLightIndex;
+uniform int uShadowCascadeCount;
+uniform mat4 uShadowViewProjection[4];
+uniform vec4 uCascadeSplits[4];
+uniform vec4 uAtlasRects[4];
+uniform vec3 uCameraForward;
+uniform vec2 uShadowTexel;
+uniform vec4 uShadowBiasFilter;
 uniform vec3 uSelectionColor;
 uniform float uSelectionStrength;
-float directionalShadow(vec3 normal, vec3 lightDirection)
+float SampleCascade(int cascade, vec3 worldPosition, vec3 normal, vec3 lightDirection)
 {
-    if (uShadowEnabled == 0)
-        return 1.0;
-    vec3 projected = vShadowPosition.xyz / vShadowPosition.w;
-    vec3 shadowCoordinate = projected * 0.5 + 0.5;
-    if (shadowCoordinate.x <= 0.0 || shadowCoordinate.x >= 1.0 ||
-        shadowCoordinate.y <= 0.0 || shadowCoordinate.y >= 1.0 ||
-        shadowCoordinate.z <= 0.0 || shadowCoordinate.z >= 1.0)
-        return 1.0;
-    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
-    float bias = max(0.0025 * (1.0 - dot(normal, lightDirection)), 0.00045);
+    vec3 localized = worldPosition - uCameraPosition + normal * uShadowBiasFilter.z;
+    vec4 clip = uShadowViewProjection[cascade] * vec4(localized, 1.0);
+    vec3 coordinate = clip.xyz / clip.w * vec4(0.5).xyz + vec3(0.5, 0.5, vec4(0.5).w);
+    if (any(lessThanEqual(coordinate, vec3(0.0))) || any(greaterThanEqual(coordinate, vec3(1.0)))) return 1.0;
+    vec4 rect = uAtlasRects[cascade];
+    vec2 uv = coordinate.xy * rect.xy + rect.zw;
+    vec2 texel = vec2(uShadowTexel.x, uShadowTexel.y);
+    vec2 minimum = rect.zw + texel * 0.5;
+    vec2 maximum = rect.zw + rect.xy - texel * 0.5;
+    float bias = uShadowBiasFilter.x + uShadowBiasFilter.y * (1.0 - clamp(dot(normal, lightDirection), 0.0, 1.0));
+    int radius = int(uShadowBiasFilter.w);
     float visibility = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-        {
-            float closestDepth = texture(uShadowMap, shadowCoordinate.xy + vec2(x, y) * texel).r;
-            visibility += shadowCoordinate.z - bias <= closestDepth ? 1.0 : 0.0;
-        }
-    return visibility / 9.0;
+    float taps = 0.0;
+    for (int y = -2; y <= 2; ++y)
+        for (int x = -2; x <= 2; ++x)
+            if (abs(x) <= radius && abs(y) <= radius)
+            {
+                vec2 sampleUv = clamp(uv + vec2(x, y) * texel, minimum, maximum);
+                float closest = texture(uShadowMap, sampleUv).r;
+                visibility += coordinate.z - bias <= closest ? 1.0 : 0.0;
+                taps += 1.0;
+            }
+    return visibility / max(taps, 1.0);
 }
+float DirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirection)
+{
+    if (uShadowEnabled == 0) return 1.0;
+    float distance = dot(worldPosition - uCameraPosition, uCameraForward);
+    int count = uShadowCascadeCount;
+    int cascade = count;
+    for (int index = 0; index < count; ++index)
+        if (distance <= uCascadeSplits[index].x) { cascade = index; break; }
+    if (cascade >= count) return 1.0;
+    if (distance < uCascadeSplits[0].z) return 1.0;
+    float visibility = SampleCascade(cascade, worldPosition, normal, lightDirection);
+    float blend = clamp((distance - uCascadeSplits[cascade].y) / max(uCascadeSplits[cascade].x - uCascadeSplits[cascade].y, 0.0001), 0.0, 1.0);
+    if (cascade + 1 < count && blend > 0.0)
+        visibility = mix(visibility, SampleCascade(cascade + 1, worldPosition, normal, lightDirection), blend);
+    return visibility;
+}
+
 void main()
 {
     vec3 normal = normalize(vWorldNormal);
@@ -102,7 +127,7 @@ void main()
         vec3 halfDirection = normalize(lightDirection + viewDirection);
         float specular = pow(max(dot(normal, halfDirection), 0.0), 48.0) * 0.18;
         vec3 radiance = uLightColorIntensity[index].rgb * uLightColorIntensity[index].a * attenuation;
-        float visibility = index == uShadowLightIndex ? directionalShadow(normal, lightDirection) : 1.0;
+        float visibility = index == uShadowLightIndex ? DirectionalShadow(vWorldPosition, normal, lightDirection) : 1.0;
         lighting += radiance * (baseColor * diffuse + specular) * visibility;
     }
     vec3 mapped = lighting / (lighting + vec3(1.0));

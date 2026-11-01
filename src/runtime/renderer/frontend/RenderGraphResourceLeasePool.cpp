@@ -196,7 +196,8 @@ namespace Horo::Render::Detail {
     /** @copydoc RenderGraphResourceLeasePool::AcquireMaterial */
     Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::AcquireMaterial(
         const std::span<const RenderGraphResidentIdentity> pins, const std::span<const RenderMaterialDraw> draws) {
-        if (draws.empty() || draws.size() > RenderMaterialPass::MaximumDraws || pins.size() > RenderMaterialPass::MaximumDraws + 1)
+        if (draws.empty() || draws.size() > RenderMaterialPass::MaximumBatchDraws ||
+            pins.size() > RenderMaterialPass::MaximumBatchDraws + RenderMaterialPass::MaximumPasses)
             return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
         for (auto &lease : leases_) {
             if (lease.active)

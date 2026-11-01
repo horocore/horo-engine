@@ -29,15 +29,19 @@ namespace Horo::Editor {
         std::uint32_t lightCount{0};
         std::uint32_t shadowEnabled{0};
         std::uint32_t shadowLightIndex{0};
-        Math::Vec2 padding{};
+        std::uint32_t shadowCascadeCount{};
+        float padding{};
+        std::array<Math::Mat4, 4> shadowViewProjection;
+        std::array<Math::Vec4, 4> cascadeSplits{}, atlasRects{};
+        Math::Vec4 cameraForward{}, shadowBiasFilter{};
+        Math::Vec2 shadowTexel{}, shadowPadding{};
     };
 
-    static_assert(sizeof(MetalSceneLighting) == sizeof(MetalLight) * Render::MaximumForwardLights + sizeof(float) * 8);
+    static_assert(sizeof(MetalSceneLighting) % 16 == 0);
 
     struct MetalObjectTransforms {
         Math::Mat4 mvp;
         Math::Mat4 model;
-        Math::Mat4 shadowMvp;
     };
 
     struct MetalGridStyle {

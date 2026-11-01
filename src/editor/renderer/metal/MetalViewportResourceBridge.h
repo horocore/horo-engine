@@ -2,6 +2,10 @@
 
 #include "Horo/Runtime/Render/RenderFrontend.h"
 
+namespace Horo::Render {
+    class MetalEditorGraphicsBridge;
+}
+
 namespace Horo::Editor {
     struct MetalViewportMeshBinding {
         void *vertexBuffer{nullptr};
@@ -21,6 +25,10 @@ namespace Horo::Editor {
                                                                           Render::RenderMeshHandle mesh);
         [[nodiscard]] static Result<MetalViewportTargetBinding> ResolveRenderTarget(const Render::RenderFrontend &frontend,
                                                                                     Render::RenderTargetHandle target);
+        /** @brief Pins the actual atlas source in the selected runtime's current commit/abort use journal. */
+        [[nodiscard]] static Result<void> RetainTextureView(const Render::RenderFrontend &frontend,
+                                                            Render::MetalEditorGraphicsBridge &bridge,
+                                                            Render::RenderTextureViewHandle view);
         [[nodiscard]] static Result<void *> ResolveTexture(const Render::RenderFrontend &frontend, Render::RenderTextureViewHandle view);
         [[nodiscard]] static Result<std::uintptr_t> EditorImageIdentity(const Render::RenderFrontend &frontend,
                                                                         Render::RenderTextureViewHandle view);

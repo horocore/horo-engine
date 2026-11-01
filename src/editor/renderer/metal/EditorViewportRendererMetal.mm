@@ -114,6 +114,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ValidatePassRequest(const Render::StaticMeshPassDescriptor &descriptor,
                                                        EditorViewportExtent renderExtent) const;
         [[nodiscard]] Result<MetalViewportFrameResources> ResolveFrameResources() const;
+        [[nodiscard]] Result<void> EncodeShadowCascade(id<MTLRenderCommandEncoder> encoder, const Render::RenderSceneView &scene,
+                                                       const Render::DirectionalShadowFrame &shadow, std::size_t cascade) const;
         [[nodiscard]] Result<void> EncodeShadowPass(id<MTLCommandBuffer> commandBuffer, const Render::RenderSceneView &scene,
                                                     const EditorViewportDirectionalShadowView &shadow, id<MTLTexture> shadowTexture) const;
         [[nodiscard]] Result<void> EncodeViewportPass(id<MTLCommandBuffer> commandBuffer,
@@ -249,6 +251,9 @@ namespace Horo::Editor {
     }
 
     Result<MetalViewportFrameResources> EditorViewportRendererMetal::Impl::ResolveFrameResources() const {
+        const auto retained = MetalViewportResourceBridge::RetainTextureView(*frontend, *graphicsBridge, resources.ShadowTextureView());
+        if (retained.HasError())
+            return Result<MetalViewportFrameResources>::Failure(retained.ErrorValue());
         const auto viewportTarget = MetalViewportResourceBridge::ResolveRenderTarget(*frontend, resources.Target());
         if (viewportTarget.HasError())
             return Result<MetalViewportFrameResources>::Failure(viewportTarget.ErrorValue());
@@ -280,31 +285,46 @@ namespace Horo::Editor {
         [encoder setRenderPipelineState:shadowPipeline];
         [encoder setDepthStencilState:depthState];
         [encoder setCullMode:MTLCullModeFront];
-        [encoder setDepthBias:0.00045F slopeScale:2.5F clamp:0.01F];
+        for (std::size_t cascade = 0; cascade < shadow.cascadeCount; ++cascade) {
+            const auto drawn = EncodeShadowCascade(encoder, scene, shadow, cascade);
+            if (drawn.HasError()) {
+                [encoder endEncoding];
+                return drawn;
+            }
+        }
+        [encoder popDebugGroup];
+        [encoder endEncoding];
+        return Result<void>::Success();
+    }
+
+    Result<void> EditorViewportRendererMetal::Impl::EncodeShadowCascade(id<MTLRenderCommandEncoder> encoder,
+                                                                        const Render::RenderSceneView &scene,
+                                                                        const Render::DirectionalShadowFrame &shadow,
+                                                                        const std::size_t cascade) const {
+        const auto &viewport = shadow.cascades[cascade].viewport;
+        [encoder setViewport:MTLViewport{static_cast<double>(viewport.x), static_cast<double>(viewport.y),
+                                         static_cast<double>(viewport.width), static_cast<double>(viewport.height), 0.0, 1.0}];
+        [encoder setScissorRect:MTLScissorRect{viewport.x, viewport.y, viewport.width, viewport.height}];
         for (const Render::RenderStaticMeshInstance &instance : scene.instances) {
             const auto mesh = resources.FindMesh(instance.mesh.id.value);
             if (!mesh.has_value()) {
-                [encoder endEncoding];
                 return Result<void>::Failure(
                     MakeViewportError(RendererErrors::ViewportStaleMeshResource, "Shadow pass instance references a stale mesh resource."));
             }
             const auto binding = MetalViewportResourceBridge::ResolveMesh(*frontend, mesh->mesh);
             if (binding.HasError()) {
-                [encoder endEncoding];
                 return Result<void>::Failure(binding.ErrorValue());
             }
-            const Math::Mat4 shadowMvp = Math::Multiply(shadow.viewProjection, instance.localToWorld);
+            const Math::Mat4 shadowMvp = EditorViewportShadowMvp(shadow, cascade, instance.localToWorld);
             [encoder setVertexBuffer:(__bridge id<MTLBuffer>)binding.Value().vertexBuffer offset:0 atIndex:reflectedProgram ? 30 : 0];
             if (reflectedProgram) {
                 std::array<std::byte, 4096> bytes{};
                 const auto packed = PackEditorViewportShadow(reloadLayouts[2], shadowMvp, bytes);
                 if (packed.HasError()) {
-                    [encoder endEncoding];
                     return Result<void>::Failure(packed.ErrorValue());
                 }
                 const auto uploaded = UploadReload(encoder, 2, std::span{bytes}.first(packed.Value()));
                 if (uploaded.HasError()) {
-                    [encoder endEncoding];
                     return uploaded;
                 }
             } else {
@@ -316,8 +336,6 @@ namespace Horo::Editor {
                                indexBuffer:(__bridge id<MTLBuffer>)binding.Value().indexBuffer
                          indexBufferOffset:0];
         }
-        [encoder popDebugGroup];
-        [encoder endEncoding];
         return Result<void>::Success();
     }
 
@@ -435,15 +453,12 @@ namespace Horo::Editor {
             const MetalObjectTransforms transforms{
                 .mvp = mvp.Value(),
                 .model = instance.localToWorld,
-                .shadowMvp = shadow.has_value() ? Math::Multiply(shadow->viewProjection, instance.localToWorld) : Math::Mat4::Identity(),
             };
             const MetalSelectionStyle selectionStyle{instance.presentation.tint, instance.presentation.tintStrength};
             [encoder setVertexBuffer:(__bridge id<MTLBuffer>)binding.Value().vertexBuffer offset:0 atIndex:reflectedProgram ? 30 : 0];
             if (reflectedProgram) {
                 EditorViewportShaderParameters parameters;
-                const auto shadowView = shadow.value_or(EditorViewportDirectionalShadowView{});
-                parameters.SetScene(scene, shadowView.viewProjection, shadowView.lightIndex, shadow.has_value(),
-                                    Render::ShaderTargetBackend::Metal);
+                parameters.SetScene(scene, shadow, Render::ShaderTargetBackend::Metal);
                 parameters.mvp = mvp.Value();
                 parameters.model = instance.localToWorld;
                 parameters.selection = {selectionStyle.color.x, selectionStyle.color.y, selectionStyle.color.z, selectionStyle.strength};
@@ -512,6 +527,21 @@ namespace Horo::Editor {
                 .cone = {light.innerConeCosine, light.outerConeCosine, 0.0F, 0.0F},
             };
         }
+        EditorViewportShaderParameters parameters;
+        parameters.SetScene(scene, shadow, Render::ShaderTargetBackend::Metal);
+        sceneLighting.shadowCascadeCount = static_cast<std::uint32_t>(parameters.shadowSettings[2]);
+        for (std::size_t index = 0; index < 4; ++index) {
+            std::copy_n(parameters.shadow.begin() + index * 16, 16, sceneLighting.shadowViewProjection[index].values.begin());
+            sceneLighting.cascadeSplits[index] = {parameters.cascadeSplits[index * 4], parameters.cascadeSplits[index * 4 + 1],
+                                                  parameters.cascadeSplits[index * 4 + 2], parameters.cascadeSplits[index * 4 + 3]};
+            sceneLighting.atlasRects[index] = {parameters.atlasRects[index * 4], parameters.atlasRects[index * 4 + 1],
+                                               parameters.atlasRects[index * 4 + 2], parameters.atlasRects[index * 4 + 3]};
+        }
+        sceneLighting.cameraForward = {parameters.cameraForward[0], parameters.cameraForward[1], parameters.cameraForward[2],
+                                       parameters.cameraForward[3]};
+        sceneLighting.shadowBiasFilter = {parameters.shadowBiasFilter[0], parameters.shadowBiasFilter[1], parameters.shadowBiasFilter[2],
+                                          parameters.shadowBiasFilter[3]};
+        sceneLighting.shadowTexel = {parameters.shadowSettings[3], parameters.cameraForward[3]};
         [encoder setFragmentBytes:&sceneLighting length:sizeof(sceneLighting) atIndex:1];
     }
 
@@ -588,6 +618,10 @@ namespace Horo::Editor {
         impl_->initialized = false;
     }
 
+    Result<void> EditorViewportRendererMetal::RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) {
+        return impl_->resources.RequestDirectionalShadowProfile(profile);
+    }
+
     /** @copydoc EditorViewportRendererMetal::RequestExtent */
     void EditorViewportRendererMetal::RequestExtent(const EditorViewportExtent extent) noexcept {
         impl_->requestedExtent.width = std::min(extent.width, maxViewportDimension);
@@ -652,14 +686,14 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeViewportError(RendererErrors::ViewportMetalNoActiveFrame,
                                                            "Metal viewport rendering requires an active renderer frame."));
         }
-        const Result<std::optional<EditorViewportDirectionalShadowView>> shadow =
-            BuildEditorViewportDirectionalShadowView(descriptor.scene, Math::ClipDepthRange::ZeroToOne);
+        const float aspect = static_cast<float>(allocatedExtent.width) / static_cast<float>(allocatedExtent.height);
+        const auto shadow = Render::BuildDirectionalShadowFrame(descriptor.scene, aspect, Math::ClipDepthRange::ZeroToOne,
+                                                                impl_->resources.ActiveDirectionalShadowProfile());
         if (shadow.HasError())
             return Result<void>::Failure(shadow.ErrorValue());
         const auto frameResources = impl_->ResolveFrameResources();
         if (frameResources.HasError())
             return Result<void>::Failure(frameResources.ErrorValue());
-        const float aspect = static_cast<float>(allocatedExtent.width) / static_cast<float>(allocatedExtent.height);
         if (shadow.Value().has_value()) {
             const Result<void> encoded =
                 impl_->EncodeShadowPass(commandBuffer, descriptor.scene, *shadow.Value(), frameResources.Value().shadowTexture);

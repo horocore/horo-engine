@@ -215,7 +215,7 @@ namespace Horo::Editor {
     }
 
     Render::RenderTargetHandle EditorViewportResources::ShadowTarget() const noexcept {
-        return shadowTarget_;
+        return shadowResources_.target;
     }
 
     /** @copydoc EditorViewportResources::ColorTexture */
@@ -229,7 +229,7 @@ namespace Horo::Editor {
     }
 
     Render::RenderTextureViewHandle EditorViewportResources::ShadowTextureView() const noexcept {
-        return shadowDepthTextureView_;
+        return shadowResources_.view;
     }
 
     EditorViewportExtent EditorViewportResources::AllocatedExtent() const noexcept {
@@ -448,34 +448,72 @@ namespace Horo::Editor {
         return Result<bool>::Success(color.Value() && depth.Value());
     }
 
-    Result<void> EditorViewportResources::SynchronizeShadowResources() {
-        const auto targetReady = AdvanceShadowTarget();
-        if (targetReady.HasError())
-            return Result<void>::Failure(targetReady.ErrorValue());
-        meshesReady_ = meshesReady_ && targetReady.Value();
+    Result<void> EditorViewportResources::RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) {
+        if (!profile.IsValid())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        requestedShadowProfile_ = profile;
         return Result<void>::Success();
     }
 
-    Result<bool> EditorViewportResources::AdvanceShadowTarget() {
+    const Render::DirectionalShadowProfile &EditorViewportResources::ActiveDirectionalShadowProfile() const noexcept {
+        return shadowResources_.profile;
+    }
+
+    EditorViewportExtent EditorViewportResources::ShadowExtent() const noexcept {
+        return shadowResources_.extent;
+    }
+
+    std::uint64_t EditorViewportResources::ShadowGeneration() const noexcept {
+        return shadowGeneration_;
+    }
+
+    Render::RenderTextureHandle EditorViewportResources::ShadowDepthTexture() const noexcept {
+        return shadowResources_.texture;
+    }
+
+    Result<void> EditorViewportResources::SynchronizeShadowResources() {
+        if (shadowResources_.target.IsValid() && shadowResources_.profile == requestedShadowProfile_)
+            return Result<void>::Success();
+        if (pendingShadowResources_.profile != requestedShadowProfile_) {
+            ReleaseShadowTarget(pendingShadowResources_);
+            pendingShadowResources_.profile = requestedShadowProfile_;
+        }
+        const auto targetReady = AdvanceShadowTarget(pendingShadowResources_);
+        if (targetReady.HasError())
+            return Result<void>::Failure(targetReady.ErrorValue());
+        if (targetReady.Value()) {
+            if (shadowGeneration_ == std::numeric_limits<std::uint64_t>::max())
+                return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+            std::swap(shadowResources_, pendingShadowResources_);
+            ++shadowGeneration_;
+            ReleaseShadowTarget(pendingShadowResources_);
+        }
+        meshesReady_ = meshesReady_ && shadowResources_.target.IsValid();
+        return Result<void>::Success();
+    }
+
+    Result<bool> EditorViewportResources::AdvanceShadowTarget(ShadowResources &resources) {
         using enum Render::RenderTextureUsage;
-        constexpr Render::FramebufferExtent shadowExtent{EditorViewportDirectionalShadowMapResolution,
-                                                         EditorViewportDirectionalShadowMapResolution};
-        if (const auto textureReady = AdvanceTexture(*frontend_, config_.memoryScope,
-                                                     {.extent = shadowExtent,
-                                                      .format = Render::RenderTextureFormat::Depth32Float,
-                                                      .usage = Sampled | RenderAttachment},
-                                                     shadowDepthTexture_, shadowDepthTextureOperation_);
+        const auto size = Render::ComputeDirectionalShadowAtlasExtent(resources.profile);
+        if (size.HasError())
+            return Result<bool>::Failure(size.ErrorValue());
+        const Render::FramebufferExtent extent{std::max(size.Value().width, 1U), std::max(size.Value().height, 1U)};
+        resources.extent = {extent.width, extent.height};
+        if (const auto textureReady =
+                AdvanceTexture(*frontend_, config_.memoryScope,
+                               {.extent = extent, .format = Render::RenderTextureFormat::Depth32Float, .usage = Sampled | RenderAttachment},
+                               resources.texture, resources.textureOperation);
             textureReady.HasError() || !textureReady.Value())
             return textureReady;
         if (const auto viewReady = AdvanceTextureView(*frontend_,
-                                                      {.texture = shadowDepthTexture_,
+                                                      {.texture = resources.texture,
                                                        .format = Render::RenderTextureFormat::Depth32Float,
                                                        .aspect = Render::RenderTextureAspect::Depth},
-                                                      shadowDepthTextureView_, shadowDepthTextureViewOperation_);
+                                                      resources.view, resources.viewOperation);
             viewReady.HasError() || !viewReady.Value())
             return viewReady;
-        return AdvanceRenderTarget(*frontend_, {.depthAttachment = shadowDepthTextureView_, .extent = shadowExtent}, shadowTarget_,
-                                   shadowTargetOperation_);
+        return AdvanceRenderTarget(*frontend_, {.depthAttachment = resources.view, .extent = extent}, resources.target,
+                                   resources.targetOperation);
     }
 
     void EditorViewportResources::ReleaseMesh(ResidentMesh &mesh) noexcept {
@@ -488,19 +526,19 @@ namespace Horo::Editor {
         mesh = {};
     }
 
+    void EditorViewportResources::ReleaseShadowTarget(ShadowResources &resources) noexcept {
+        if (resources.target.IsValid())
+            static_cast<void>(frontend_->ReleaseRenderTarget(resources.target));
+        if (resources.view.IsValid())
+            static_cast<void>(frontend_->ReleaseTextureView(resources.view));
+        if (resources.texture.IsValid())
+            static_cast<void>(frontend_->ReleaseTexture(resources.texture));
+        resources = {};
+    }
+
     void EditorViewportResources::ReleaseShadowResources() noexcept {
-        if (shadowTarget_.IsValid())
-            static_cast<void>(frontend_->ReleaseRenderTarget(shadowTarget_));
-        if (shadowDepthTextureView_.IsValid())
-            static_cast<void>(frontend_->ReleaseTextureView(shadowDepthTextureView_));
-        if (shadowDepthTexture_.IsValid())
-            static_cast<void>(frontend_->ReleaseTexture(shadowDepthTexture_));
-        shadowDepthTexture_ = {};
-        shadowDepthTextureView_ = {};
-        shadowTarget_ = {};
-        shadowDepthTextureOperation_ = {};
-        shadowDepthTextureViewOperation_ = {};
-        shadowTargetOperation_ = {};
+        ReleaseShadowTarget(pendingShadowResources_);
+        ReleaseShadowTarget(shadowResources_);
     }
 
     void EditorViewportResources::ReleaseViewportTarget(ViewportTargetResources &resources) noexcept {

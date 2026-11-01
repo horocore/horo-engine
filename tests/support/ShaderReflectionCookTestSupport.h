@@ -21,8 +21,14 @@ namespace Horo::Tests::ShaderCook {
         {"name":"LightDirectionRange","type":"vec4","offset":480,"array":[16],"array_size_is_literal":[true],"array_stride":16},
         {"name":"LightColorIntensity","type":"vec4","offset":736,"array":[16],"array_size_is_literal":[true],"array_stride":16},
         {"name":"LightCone","type":"vec4","offset":992,"array":[16],"array_size_is_literal":[true],"array_stride":16},
-        {"name":"OverlayColors","type":"vec4","offset":1248,"array":[3],"array_size_is_literal":[true],"array_stride":16}]}},
-        "ubos":[{"type":"_1","name":"type.ViewportParameters","block_size":1296,"set":0,"binding":0}])";
+        {"name":"OverlayColors","type":"vec4","offset":1248,"array":[3],"array_size_is_literal":[true],"array_stride":16},
+        {"name":"ShadowViewProjection","type":"mat4","offset":1296,"array":[4],"array_size_is_literal":[true],"array_stride":64,"matrix_stride":16},
+        {"name":"ShadowSplits","type":"vec4","offset":1552,"array":[4],"array_size_is_literal":[true],"array_stride":16},
+        {"name":"ShadowAtlasScaleBias","type":"vec4","offset":1616,"array":[4],"array_size_is_literal":[true],"array_stride":16},
+        {"name":"ShadowSettings","type":"vec4","offset":1680},
+        {"name":"ShadowBiasAndTexel","type":"vec4","offset":1696},
+        {"name":"ShadowCameraForward","type":"vec4","offset":1712}]}},
+        "ubos":[{"type":"_1","name":"type.ViewportParameters","block_size":1728,"set":0,"binding":0}])";
 
     inline std::array<SpirvReflectionStage, 2> Evidence() {
         return {{{ShaderStage::Vertex, "VSMain",
@@ -32,7 +38,9 @@ namespace Horo::Tests::ShaderCook {
                   "{\"name\":\"uv\",\"type\":\"vec2\",\"location\":2}]," +
                       std::string{Members} + "}"},
                  {ShaderStage::Fragment, "PSMain",
-                  "{\"entryPoints\":[{\"name\":\"PSMain\",\"mode\":\"frag\"}]," + std::string{Members} + "}"}}};
+                  "{\"entryPoints\":[{\"name\":\"PSMain\",\"mode\":\"frag\"}]," + std::string{Members} +
+                      R"(,"separate_images":[{"name":"DirectionalShadowAtlas","type":"texture2D","set":0,"binding":1}],
+                       "separate_samplers":[{"name":"DirectionalShadowSampler","type":"sampler","set":0,"binding":2}]})"}}};
     }
 
     /** @brief Builds scripted final multiview reflection with the exact canonical matrix/layer uniform ABI. */
@@ -54,16 +62,48 @@ namespace Horo::Tests::ShaderCook {
         json.replace(position, before.size(), after);
     }
 
+    enum class CookFixtureRole {
+        Viewport,
+        Multiview,
+        Shadow
+    };
+
+    inline ShaderManifest FixtureManifest(CookFixtureRole role) {
+        switch (role) {
+            case CookFixtureRole::Viewport:
+                return EditorVulkanViewportShaderManifest();
+            case CookFixtureRole::Multiview:
+                return EditorVulkanMultiviewShaderManifest();
+            case CookFixtureRole::Shadow:
+                return EditorVulkanShadowShaderManifest();
+        }
+        return {};
+    }
+
+    inline std::vector<ShaderReflectionBindingName> FixtureNames(CookFixtureRole role) {
+        switch (role) {
+            case CookFixtureRole::Viewport:
+                return EditorVulkanViewportReflectionNames();
+            case CookFixtureRole::Multiview:
+                return EditorVulkanMultiviewReflectionNames();
+            case CookFixtureRole::Shadow:
+                return EditorVulkanShadowReflectionNames();
+        }
+        return {};
+    }
+
     struct CookFixture {
         CompiledShaderArtifact compiled;
         ReflectedShaderArtifact reflected;
 
         explicit CookFixture(const std::array<SpirvReflectionStage, 2> &stages = Evidence(),
-                             const std::span<const ShaderArtifactStage> nativeStages = {}, const bool multiview = false) {
+                             const std::span<const ShaderArtifactStage> nativeStages = {}, const bool multiview = false)
+            : CookFixture(multiview ? CookFixtureRole::Multiview : CookFixtureRole::Viewport, stages, nativeStages) {}
+
+        CookFixture(CookFixtureRole role, const std::array<SpirvReflectionStage, 2> &stages,
+                    const std::span<const ShaderArtifactStage> nativeStages = {}) {
             const auto normalized =
-                NormalizeVulkanReflection(multiview ? EditorVulkanMultiviewShaderManifest() : EditorVulkanViewportShaderManifest(),
-                                          EditorVulkanViewportShaderTarget(), stages,
-                                          multiview ? EditorVulkanMultiviewReflectionNames() : EditorVulkanViewportReflectionNames());
+                NormalizeVulkanReflection(FixtureManifest(role), EditorVulkanViewportShaderTarget(), stages, FixtureNames(role));
             REQUIRE(normalized.HasValue());
             const std::array packageStages{ShaderArtifactStage{ShaderStage::Vertex, "VSMain", {1}},
                                            ShaderArtifactStage{ShaderStage::Fragment, "PSMain", {2}}};

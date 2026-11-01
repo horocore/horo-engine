@@ -10,7 +10,8 @@
 namespace Horo::Editor {
     namespace {
         bool IsViewportReloadFamily(const std::span<const Render::ShaderHotReloadProgramView> programs) {
-            return programs.size() == 1 && programs.front().id.value == 1 && programs.front().manifest && programs.front().compiled;
+            return programs.size() == 2 && programs[0].id.value == 1 && programs[1].id.value == 3 && programs[0].manifest &&
+                   programs[0].compiled && programs[1].manifest && programs[1].compiled;
         }
 
         Result<EditorVulkanViewportCook> ReloadViewportCook(const Render::ShaderCompilationBatch &batch) {
@@ -24,6 +25,18 @@ namespace Horo::Editor {
             if (metadata.HasError())
                 return Result<EditorVulkanViewportCook>::Failure(metadata.ErrorValue());
             return LoadEditorVulkanViewportCook(artifact.payload, metadata.Value());
+        }
+
+        Result<EditorVulkanShadowCook> ReloadShadowCook(const Render::ShaderCompilationBatch &batch) {
+            if (batch.artifacts.size() != 1 || !batch.artifacts.front().reflection)
+                return Result<EditorVulkanShadowCook>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::InvalidAdapterOutput));
+            const auto &artifact = batch.artifacts.front();
+            if (auto valid = Render::ValidateReflectedShaderArtifact(artifact, *artifact.reflection); valid.HasError())
+                return Result<EditorVulkanShadowCook>::Failure(valid.ErrorValue());
+            const auto encoded = Render::EncodeReflectedShaderArtifact(*artifact.reflection);
+            if (encoded.HasError())
+                return Result<EditorVulkanShadowCook>::Failure(encoded.ErrorValue());
+            return LoadEditorVulkanShadowCook(artifact.payload, encoded.Value());
         }
 
         /** @brief Stable private GUI name; exact view generation is always carried separately by the existing viewport owner. */
@@ -41,27 +54,33 @@ namespace Horo::Editor {
 
         ~ProgramGeneration() {
             owner.RetireProgram(program, slots);
+            owner.RetireProgram(shadowProgram, {});
         }
 
         EditorViewportRendererVulkan &owner;
         Render::ShaderHotReloadTargetState expected;
-        ShaderResources program;
+        ShaderResources program, shadowProgram;
         std::array<FrameSlot, 8> slots;
     };
 
     Result<void> EditorViewportRendererVulkan::PrepareProgram(ProgramGeneration &candidate) {
         if (const auto pipeline = ProgramResources::CreatePipeline(frontend_, candidate.program, device_.frames); pipeline.HasError())
             return pipeline;
-        if (const auto slots = ProgramResources::CreateDrawSlots(frontend_, candidate.program, candidate.slots, device_.frames);
+        if (const auto slots = ProgramResources::CreateDrawSlots(frontend_, candidate.program, candidate.slots, device_.frames,
+                                                                 resources_.ShadowTextureView());
             slots.HasError())
             return slots;
-        return CreateOverlaySlots(candidate.program, candidate.slots);
+        if (auto overlay = CreateOverlaySlots(candidate.program, candidate.slots); overlay.HasError())
+            return overlay;
+        return PrepareShadowProgram(candidate.shadowProgram, candidate.slots);
     }
 
     /** @copydoc EditorViewportRendererVulkan::AdoptProgram */
     void EditorViewportRendererVulkan::AdoptProgram(ProgramGeneration &candidate) noexcept {
         std::swap(shader_, candidate.program);
+        std::swap(shadowShader_, candidate.shadowProgram);
         std::swap(slots_, candidate.slots);
+        boundShadowAtlas_ = resources_.ShadowTextureView();
     }
 
     void EditorViewportRendererVulkan::RetireDraw(DrawSlot &draw) noexcept {
@@ -76,6 +95,9 @@ namespace Horo::Editor {
         for (auto &slot : slots) {
             for (auto &draw : slot.draws)
                 RetireDraw(draw);
+            for (auto &cascade : slot.shadows)
+                for (auto &draw : cascade)
+                    RetireDraw(draw);
             auto &overlay = slot.overlay;
             overlay.uniforms.material.reset();
             if (overlay.mesh.IsValid())
@@ -96,6 +118,8 @@ namespace Horo::Editor {
         for (const auto pipeline : {program.pipeline, program.overlayPipeline})
             if (pipeline.IsValid())
                 static_cast<void>(frontend_.ReleaseGraphicsPipeline(pipeline));
+        if (program.shadowSampler.IsValid())
+            static_cast<void>(frontend_.ReleaseSampler(program.shadowSampler));
         for (const auto module : {program.vertex, program.fragment})
             if (module.IsValid())
                 static_cast<void>(frontend_.ReleaseShaderModule(module));
@@ -108,7 +132,12 @@ namespace Horo::Editor {
         : frontend_(frontend), bridge_(bridge), shader_{.payload = std::move(cooked.payload), .metadata = std::move(cooked.metadata)},
           resources_(frontend, {.resolveImage = &ViewportImage,
                                 .meshBufferAccess = Render::RenderBufferAccess::HostVisible,
-                                .prepareDirectionalShadow = false}) {}
+                                .prepareDirectionalShadow = true}) {
+        if (cooked.shadow) {
+            shadowShader_.payload = std::move(cooked.shadow->payload);
+            shadowShader_.metadata = std::move(cooked.shadow->metadata);
+        }
+    }
 
     EditorViewportRendererVulkan::~EditorViewportRendererVulkan() {
         Shutdown();
@@ -131,6 +160,8 @@ namespace Horo::Editor {
         auto candidate = std::make_unique<ProgramGeneration>(*this);
         candidate->program.payload = shader_.payload;
         candidate->program.metadata = shader_.metadata;
+        candidate->shadowProgram.payload = shadowShader_.payload;
+        candidate->shadowProgram.metadata = shadowShader_.metadata;
         if (const auto prepared = PrepareProgram(*candidate); prepared.HasError()) {
             Shutdown();
             return prepared;
@@ -167,7 +198,12 @@ namespace Horo::Editor {
         auto cooked = ReloadViewportCook(*programs.front().compiled);
         if (cooked.HasError())
             return Outcome::Failure(cooked.ErrorValue());
+        auto shadowCook = ReloadShadowCook(*programs[1].compiled);
+        if (shadowCook.HasError())
+            return Outcome::Failure(shadowCook.ErrorValue());
         auto candidate = std::make_unique<ProgramGeneration>(*this);
+        candidate->shadowProgram.payload = std::move(shadowCook.Value().payload);
+        candidate->shadowProgram.metadata = std::move(shadowCook.Value().metadata);
         candidate->expected = expected;
         candidate->program.payload = std::move(cooked.Value().payload);
         candidate->program.metadata = std::move(cooked.Value().metadata);
@@ -194,20 +230,30 @@ namespace Horo::Editor {
         return Outcome::Success({expected.backend, expected.deviceIncarnation, liveGeneration_});
     }
 
+    void EditorViewportRendererVulkan::ProgramResources::ReleaseMaterials(std::span<FrameSlot> slots) noexcept {
+        for (auto &slot : slots) {
+            for (auto &draw : slot.draws)
+                draw.material.reset();
+            slot.overlay.uniforms.material.reset();
+            for (auto &cascade : slot.shadows)
+                for (auto &draw : cascade)
+                    draw.material.reset();
+        }
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ReleaseNative */
     void EditorViewportRendererVulkan::ReleaseNative() noexcept {
         if (owner_ != std::this_thread::get_id())
             std::terminate();
         for (auto &draw : preparedDraws_)
             draw = {};
-        for (auto &slot : slots_) {
-            for (auto &draw : slot.draws)
-                draw.material.reset();
-            slot.overlay.uniforms.material.reset();
-        }
+        ProgramResources::ReleaseMaterials(slots_);
         if (shader_.materials)
             static_cast<void>(shader_.materials->Shutdown());
         shader_.materials.reset();
+        if (shadowShader_.materials)
+            static_cast<void>(shadowShader_.materials->Shutdown());
+        shadowShader_.materials.reset();
         for (auto &slot : xrDrawSlots_)
             for (auto &draw : slot)
                 draw.material.reset();
@@ -233,6 +279,7 @@ namespace Horo::Editor {
         auto source = std::move(shader_.payload);
         auto metadata = std::move(shader_.metadata);
         RetireProgram(shader_, slots_);
+        RetireProgram(shadowShader_, {});
         shader_.payload = std::move(source);
         shader_.metadata = std::move(metadata);
         RetireXrProgram();
@@ -265,6 +312,10 @@ namespace Horo::Editor {
         if (prepared.Value() && resources_.ColorTexture() != emptyGraphTexture_) {
             if (const auto clear = CreateEmptyGraph(); clear.HasError())
                 return Result<std::optional<Render::RenderTargetHandle>>::Failure(clear.ErrorValue());
+        }
+        if (prepared.Value()) {
+            if (auto bound = BindShadowAtlas(); bound.HasError())
+                return Result<std::optional<Render::RenderTargetHandle>>::Failure(bound.ErrorValue());
         }
         return prepared;
     }

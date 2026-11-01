@@ -109,16 +109,26 @@ namespace Horo::Render {
         std::shared_ptr<const ResidentMaterialBinding> material;
     };
 
+    /** @brief Bounded raster subrectangle within the retained target extent. */
+    struct RenderMaterialRegion {
+        std::uint32_t x{}, y{}, width{}, height{};
+    };
+
     /** @brief Bounded explicit native material consumer; no compilation, resource creation or variant selection occurs in-frame. */
     struct RenderMaterialPass {
         static constexpr std::size_t MaximumDraws = 128;
+        static constexpr std::size_t MaximumPasses = 5;
+        static constexpr std::size_t MaximumBatchDraws = MaximumDraws * MaximumPasses;
         RenderTargetHandle target;
         FramebufferExtent extent;
         PrimaryOutputAttachment color;
         std::optional<float> depthClear{1.0F}; /**< Null means preserve depth; a value requests an explicit depth clear. */
         std::span<const RenderMaterialDraw> draws;
         std::optional<RenderQueueSubmission>
-            submission; /**< Explicit frontend order/timeline; required by Vulkan, borrowed waits copied at admission. */
+            submission;   /**< Explicit frontend order/timeline; required by Vulkan, borrowed waits copied at admission. */
+        bool depthOnly{}; /**< Requires a depth attachment and no color pipeline/attachment. */
+        std::optional<RenderMaterialRegion> region; /**< Raster viewport/scissor; attachment clears still cover the complete atlas. */
+        std::span<const RenderMaterialPass> precedingPasses; /**< At most four flat ordered passes sharing this submission and lease. */
     };
 
     /** @brief Synchronously borrowed resolved mesh and native adapter, retained by the submitted-frame lease. */
@@ -138,6 +148,9 @@ namespace Horo::Render {
         IRenderGraphResourceLease *lease{nullptr};
         RenderGraphLeaseTransfer *transfer{nullptr};
         std::optional<RenderQueueSubmission> submission;
+        bool depthOnly{};
+        std::optional<RenderMaterialRegion> region;
+        std::span<const RenderMaterialExecutionRequest> precedingPasses;
     };
 
     /** @brief Visible admission outcome; an authored fallback carries the exact unsupported cause. */

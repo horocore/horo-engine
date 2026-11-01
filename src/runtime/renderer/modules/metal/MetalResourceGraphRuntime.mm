@@ -268,6 +268,19 @@ namespace Horo::Render::Detail {
         return Result<MetalRecordedOperation>::Success(std::move(operation));
     }
 
+    /** @copydoc MetalResourceRuntime::TrackEditorTextureViewUse */
+    Result<void> MetalResourceRuntime::TrackEditorTextureViewUse(void *commandBuffer, const std::uint64_t identity) {
+        auto *view = Decode<MetalTextureViewInstance>(identity);
+        id<MTLCommandBuffer> commands = (__bridge id<MTLCommandBuffer>)commandBuffer;
+        if (!commands || !impl_->textureViews.contains(view))
+            return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+        auto *source = view->sourceInstance;
+        if (!impl_->textures.contains(source) || source->use.retired || view->sourceTexture != source->texture)
+            return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+        Impl::TrackUse(source->use, commands);
+        return Result<void>::Success();
+    }
+
     /** @copydoc MetalResourceRuntime::TrackParallelGraphUse */
     void MetalResourceRuntime::TrackParallelGraphUse(void *finalCommands,
                                                      const std::span<const RenderGraphResourceInstance> resources) noexcept {

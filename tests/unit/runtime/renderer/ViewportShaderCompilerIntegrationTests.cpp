@@ -31,7 +31,7 @@ namespace {
 
     /** @brief Requires complete actual compiler evidence bound to this exact payload and canonical logical interface. */
     void RequireActualReflection(const Result<ShaderCompilationBatch> &compiled, const ShaderManifest &manifest) {
-        INFO(compiled.HasError() ? compiled.ErrorValue().message : "Actual native compilation returned an artifact.");
+        INFO((compiled.HasError() ? compiled.ErrorValue().message : "Actual native compilation returned an artifact."));
         REQUIRE(compiled.HasValue());
         REQUIRE(compiled.Value().artifacts.size() == 1);
         const auto &artifact = compiled.Value().artifacts.front();
