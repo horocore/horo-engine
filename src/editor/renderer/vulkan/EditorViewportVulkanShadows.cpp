@@ -65,7 +65,7 @@ namespace Horo::Editor {
         relativeModel.values[12] -= shadow.cameraOrigin.x;
         relativeModel.values[13] -= shadow.cameraOrigin.y;
         relativeModel.values[14] -= shadow.cameraOrigin.z;
-        auto mvp = shadow.cascades[cascade].cameraRelativeViewProjection * relativeModel;
+        auto mvp = Math::Multiply(shadow.cascades[cascade].cameraRelativeViewProjection, relativeModel);
         for (std::size_t column = 0; column < 4; ++column)
             mvp.values[column * 4 + 1] *= -1;
         std::array<std::byte, MaximumUniformBytes> storage{};
