@@ -200,3 +200,28 @@ namespace Horo::Render::D3D12CommandTests {
     }
 }  // namespace Horo::Render::D3D12CommandTests
 #endif
+
+namespace Horo::Render::D3D12CommandTests {
+    TEST_CASE("D3D12 copy fixture admits an unused transient only with explicit frontend authority",
+              "[renderer][d3d12][commands][portable][boundary]") {
+        Lease lease;
+        auto packet = CopyPacket::Create(1, 2, lease, {1}, 1, 1, RenderGraphResourceClass::Persistent, false, true);
+        auto request = packet.Request();
+        REQUIRE(request.transientResourcesAdmitted);
+        REQUIRE(request.resources.size() == 3);
+        CHECK(request.resources.back().instance == 0);
+        REQUIRE(ValidateRenderGraphExecutionRequest(request).HasValue());
+        request.transientResourcesAdmitted = false;
+        CHECK(ValidateRenderGraphExecutionRequest(request).HasError());
+    }
+
+    TEST_CASE("D3D12 external copy fixture carries an actual external-scope final obligation",
+              "[renderer][d3d12][commands][portable][barrier]") {
+        Lease lease;
+        auto packet = CopyPacket::Create(1, 2, lease, {1}, 1, 1, RenderGraphResourceClass::External, true);
+        REQUIRE(packet.graph.ExternalReleases().size() == 1);
+        REQUIRE(ValidateRenderGraphExecutionRequest(packet.Request()).HasValue());
+        CHECK(lease.releases == 0);
+        CHECK(packet.transfer.authority == RenderGraphLeaseAuthority::Frontend);
+    }
+}  // namespace Horo::Render::D3D12CommandTests

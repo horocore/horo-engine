@@ -7,8 +7,8 @@
 #include <atomic>
 #include <iostream>
 
-#if defined(_WIN32) && defined(_M_X64)
 namespace Horo::Render::D3D12CommandTests {
+#if defined(_WIN32) && defined(_M_X64)
     using Microsoft::WRL::ComPtr;
     inline std::atomic<std::uint32_t> executeCalls{};  // Observation only, never native ownership/completion authority.
 
@@ -20,6 +20,8 @@ namespace Horo::Render::D3D12CommandTests {
         ObserveExecute(device);
         D3D12Tests::RemoveAfterExecute(device);
     }
+
+#endif
 
     struct Lease final : IRenderGraphResourceLease {
         std::uint32_t releases{};
@@ -55,6 +57,7 @@ namespace Horo::Render::D3D12CommandTests {
         std::array<RenderGraphQueueSubmission, 1> submissions;
         RenderGraphLeaseTransfer transfer;
         Lease &lease;
+        bool admitsTransient{};
 
         static CopyPacket Create(std::uint64_t sourceInstance, std::uint64_t destinationInstance, Lease &lease, RenderQueueId queue = {1},
                                  std::uint64_t order = 1, std::uint64_t signal = 1,
@@ -69,7 +72,9 @@ namespace Horo::Render::D3D12CommandTests {
             const std::array queues{RenderQueueAssignment{RenderQueueRole::Transfer, queue}};
             const std::array imports{RenderGraphImportedState{source, CopyState(queue, true)},
                                      RenderGraphImportedState{destination, CopyState(queue, false)}};
-            const std::array final{RenderGraphFinalState{destination, CopyState(queue, true)}};
+            auto externalState = CopyState(queue, true);
+            externalState.scope = RenderGraphPipelineScope::External;
+            const std::array final{RenderGraphFinalState{destination, externalState}};
             std::vector<RenderGraphResourceInstance> instances{{source, sourceInstance}, {destination, destinationInstance}};
             if (unusedTransient) {
                 const auto unused = Test::RequireResource(builder.AddTransientResource(RenderGraphResourceKind::Buffer));
@@ -80,11 +85,11 @@ namespace Horo::Render::D3D12CommandTests {
                         externalFinal ? std::span<const RenderGraphFinalState>{final} : std::span<const RenderGraphFinalState>{});
             const std::array workloads{RenderGraphPassWorkload{pass, RenderGraphBufferCopy{source, destination, 0, 0, 32}}};
             const std::array submissions{RenderGraphQueueSubmission{{queue, {order}, {}, {queue, signal}}, {0, 1}}};
-            return {std::move(execution), workloads, std::move(instances), submissions, {}, lease};
+            return {std::move(execution), workloads, std::move(instances), submissions, {}, lease, unusedTransient};
         }
 
         RenderGraphExecutionRequest Request() {
-            return {{1}, graph, workloads, resources, &lease, false, &transfer, submissions};
+            return {{1}, graph, workloads, resources, &lease, admitsTransient, &transfer, submissions};
         }
     };
 
@@ -128,6 +133,7 @@ namespace Horo::Render::D3D12CommandTests {
         }
     };
 
+#if defined(_WIN32) && defined(_M_X64)
     /** @brief An independent test gate can park real queues; it never signals a backend completion fence. */
     class QueueGate final {
     public:
@@ -280,5 +286,5 @@ namespace Horo::Render::D3D12CommandTests {
         std::array<Lease, 16> leases;
         std::size_t nextLease{};
     };
-}  // namespace Horo::Render::D3D12CommandTests
 #endif
+}  // namespace Horo::Render::D3D12CommandTests
