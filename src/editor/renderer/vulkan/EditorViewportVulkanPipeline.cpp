@@ -165,8 +165,8 @@ namespace Horo::Editor {
     }
 
     Result<void> EditorViewportRendererVulkan::ProgramResources::BindUniformSlot(const ShaderResources &program, DrawSlot &draw,
-                                                                                 RenderPipelineHandle pipeline,
-                                                                                 RenderTextureViewHandle atlas) {
+                                                                                 Render::RenderPipelineHandle pipeline,
+                                                                                 Render::RenderTextureViewHandle atlas) {
         using namespace Render;
         std::vector<MaterialResourceBinding> resources{{{1}, 0, MaterialBufferBinding{draw.buffer, 0, program.uniformBytes}}};
         if (program.shadowSampler.IsValid()) {
