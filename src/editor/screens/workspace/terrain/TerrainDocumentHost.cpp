@@ -16,6 +16,15 @@ namespace Horo::Editor {
             bool container{};
         };
 
+        /** @brief Admit the asset document identity only for its exact workspace source path. */
+        Result<void> ValidateOpening(const std::filesystem::path &root, const std::filesystem::path &path, const DocumentIdentity &identity,
+                                     Assets::AssetId workspace) {
+            if (!identity.IsValid() || identity.key.kind != DocumentKind::Asset || !workspace.IsValid() ||
+                path != root / std::filesystem::path(std::u8string(identity.key.source.Value().begin(), identity.key.source.Value().end())))
+                return Result<void>::Failure(MakeError(TerrainEditErrors::Invalid));
+            return Result<void>::Success();
+        }
+
         /** @brief Container bytes are authoritative after conversion; legacy RAW retains its exact importer settings authority. */
         Result<Terrain::TerrainAuthoringSource> DecodeCaptured(std::span<const std::byte> bytes, const std::filesystem::path &metadata,
                                                                Assets::AssetId asset, Terrain::TerrainCapabilityRevision capability,
@@ -96,9 +105,8 @@ namespace Horo::Editor {
                                                                            const ProjectMutationCoordinator &mutations,
                                                                            const Assets::AssetRegistrySnapshot &registry) {
         using Return = Result<std::shared_ptr<TerrainDocumentHost>>;
-        if (!identity.IsValid() || identity.key.kind != DocumentKind::Asset || !workspace.IsValid() ||
-            path != root / std::filesystem::path(std::u8string(identity.key.source.Value().begin(), identity.key.source.Value().end())))
-            return Return::Failure(MakeError(TerrainEditErrors::Invalid));
+        if (auto admitted = ValidateOpening(root, path, identity, workspace); admitted.HasError())
+            return Return::Failure(std::move(admitted).ErrorValue());
         try {
             auto lease = mutations.TryAcquire({root, ProjectMutationOwner::Save, "terrain.source.open"});
             if (lease.HasError())

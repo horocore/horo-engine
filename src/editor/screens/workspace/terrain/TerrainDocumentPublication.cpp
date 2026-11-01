@@ -70,6 +70,25 @@ namespace Horo::Editor {
                                                   tileCells, TerrainAuthoringCapability::Edit, TerrainHostEditLimits(),
                                                   value.foliage.placements);
         }
+
+        struct PreparedConversion final {
+            TerrainAuthoringDocument document;
+            std::vector<std::byte> bytes;
+        };
+
+        /** @brief Own both the replacement session and its complete encoded payload before native publication. */
+        Result<PreparedConversion> PrepareConversion(Terrain::TerrainAuthoringSource current, const TerrainEditFence &fence,
+                                                     const std::optional<Terrain::TerrainAuthoringLayerBinding> &binding,
+                                                     std::uint32_t tileCells) {
+            using Return = Result<PreparedConversion>;
+            auto document = ConvertedDocument(current, fence, binding, tileCells);
+            if (document.HasError())
+                return Return::Failure(std::move(document).ErrorValue());
+            auto encoded = Terrain::EncodeTerrainAuthoringSource(current);
+            if (encoded.HasError())
+                return Return::Failure(std::move(encoded).ErrorValue());
+            return Return::Success({std::move(document).Value(), std::move(encoded).Value()});
+        }
     }  // namespace
 
     /** @copydoc TerrainDocumentHost::Publish */
@@ -125,17 +144,14 @@ namespace Horo::Editor {
             auto captured = CaptureCurrent();
             if (captured.HasError())
                 return Return::Failure(std::move(captured).ErrorValue());
-            auto current = std::move(captured).Value();
-            auto candidate = ConvertedDocument(current, fence, binding, TileCellCount);
-            if (candidate.HasError())
-                return Return::Failure(std::move(candidate).ErrorValue());
-            auto encoded = Terrain::EncodeTerrainAuthoringSource(current);
-            if (encoded.HasError())
-                return Return::Failure(std::move(encoded).ErrorValue());
-            auto publication = Publish(encoded.Value(), binding, mutations, files);
+            auto prepared = PrepareConversion(std::move(captured).Value(), fence, binding, TileCellCount);
+            if (prepared.HasError())
+                return Return::Failure(std::move(prepared).ErrorValue());
+            auto candidate = std::move(prepared).Value();
+            auto publication = Publish(candidate.bytes, binding, mutations, files);
             if (publication.HasError())
                 return publication;
-            document_ = std::move(candidate).Value();
+            document_ = std::move(candidate.document);
             layers_ = binding;
             containerSource_ = true;
             return publication;
