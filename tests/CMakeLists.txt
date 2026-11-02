@@ -6598,3 +6598,12 @@ set_tests_properties(HoroReferenceExtensionExamplesTest PROPERTIES TIMEOUT 600 R
 # The Windows preset selects explicit CPU contracts by label.
 set_property(TEST HoroExtensionSdkExternalConsumerTest HoroExtensionSdkReconfigureTest
     APPEND PROPERTY LABELS ci-windows)
+
+# Canonical prefab source layers reuse the real authoring/document/cook owners.
+target_sources(HoroPrefabTests PRIVATE unit/runtime/prefab/PrefabLayerOverrideTests.cpp)
+target_link_libraries(HoroPrefabTests PRIVATE nlohmann_json::nlohmann_json)
+target_sources(HoroSceneDocumentTests PRIVATE unit/editor/PrefabDocumentLayerTests.cpp support/AllocationProbe.cpp)
+target_link_libraries(HoroSceneDocumentTests PRIVATE nlohmann_json::nlohmann_json)
+target_sources(HoroPrefabSceneCookHostTests PRIVATE unit/application/PrefabLayerCookHostTests.cpp)
+target_sources(HoroFoundationJsonTests PRIVATE unit/foundation/CanonicalJsonWriterTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroFoundationJsonTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")

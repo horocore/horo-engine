@@ -1,6 +1,7 @@
 #include "PrefabCookSemanticInputs.h"
 
 #include "Horo/Prefab/PrefabErrors.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "Horo/Scene/SceneSource.h"
 
 #include <algorithm>
@@ -135,6 +136,43 @@ namespace Horo::Application::PrefabCookDetail {
                 return Result<void>::Success();
             }
         };
+
+        /** @brief Admits actual used project schemas before committing any descriptor digest into cook identity. */
+        Result<void> AppendUsedSchemas(const Closure &closure, const std::shared_ptr<const PrefabCookSchemaContext> &schemas,
+                                       std::string &identity) {
+            if (closure.components.empty() && closure.behaviors.empty())
+                return Result<void>::Success();
+            if (!schemas)
+                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            const std::vector<Gameplay::ComponentTypeId> components(closure.components.begin(), closure.components.end());
+            const std::vector<Gameplay::BehaviorTypeId> behaviors(closure.behaviors.begin(), closure.behaviors.end());
+            const auto digest = schemas->DigestForTypes(components, behaviors);
+            if (digest.HasError())
+                return Result<void>::Failure(digest.ErrorValue());
+            Append(identity, FormatSha256(digest.Value()));
+            return Result<void>::Success();
+        }
+
+        /** @brief Builds one canonical source/provider/schema key from the already validated dependency closure. */
+        Result<SemanticCookInputs> CaptureIdentity(const Closure &closure, const Prefab::PrefabSourceResolverSnapshot &resolver,
+                                                   const AssetCookTargetId &target,
+                                                   const std::shared_ptr<const PrefabCookSchemaContext> &schemas) {
+            SemanticCookInputs result;
+            for (const auto &[asset, color] : closure.colors)
+                result.sources.push_back(asset);
+            std::string identity{"horo.prefab.cook.root-inputs.v1"};
+            Append(identity, target.Value());
+            Append(identity, FormatSha256(resolver.ValueSchemaRevision()));
+            for (const auto &[asset, provider] : closure.providers) {
+                Append(identity, asset.ToString());
+                Append(identity, provider);
+            }
+            if (auto admitted = AppendUsedSchemas(closure, schemas, identity); admitted.HasError())
+                return Result<SemanticCookInputs>::Failure(admitted.ErrorValue());
+            result.producerSettings = ComputeSha256(std::as_bytes(std::span{identity}));
+            return Result<SemanticCookInputs>::Success(std::move(result));
+        }
+
     }  // namespace
 
     /** @copydoc CaptureSemanticCookInputs */
@@ -152,27 +190,7 @@ namespace Horo::Application::PrefabCookDetail {
             Closure closure{inputs, graph, resolver, catalog, target, maximumInputs, cancellation, root, sceneResources};
             if (auto walked = closure.Walk(); walked.HasError())
                 return Result<SemanticCookInputs>::Failure(walked.ErrorValue());
-            SemanticCookInputs result;
-            for (const auto &[asset, color] : closure.colors)
-                result.sources.push_back(asset);
-            std::string identity{"horo.prefab.cook.root-inputs.v1"};
-            Append(identity, target.Value());
-            for (const auto &[asset, provider] : closure.providers) {
-                Append(identity, asset.ToString());
-                Append(identity, provider);
-            }
-            if (!closure.components.empty() || !closure.behaviors.empty()) {
-                if (!schemas)
-                    return Result<SemanticCookInputs>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-                const std::vector<Gameplay::ComponentTypeId> components(closure.components.begin(), closure.components.end());
-                const std::vector<Gameplay::BehaviorTypeId> behaviors(closure.behaviors.begin(), closure.behaviors.end());
-                const auto digest = schemas->DigestForTypes(components, behaviors);
-                if (digest.HasError())
-                    return Result<SemanticCookInputs>::Failure(digest.ErrorValue());
-                Append(identity, FormatSha256(digest.Value()));
-            }
-            result.producerSettings = ComputeSha256(std::as_bytes(std::span{identity}));
-            return Result<SemanticCookInputs>::Success(std::move(result));
+            return CaptureIdentity(closure, resolver, target, schemas);
         } catch (const std::bad_alloc &) {
             return Result<SemanticCookInputs>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
         } catch (const std::exception &) {

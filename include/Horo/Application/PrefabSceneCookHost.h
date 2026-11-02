@@ -84,6 +84,8 @@ namespace Horo::Application {
                                                         cooking. Source-only nested/variant prefabs are never published as templates. */
         Prefab::PrefabMetricHandles metrics; /**< Explicit process-prebound numeric observations, excluded from cook identity. */
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Explicit project sensor/material capture. */
+        std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot>
+            overrideSchemas; /**< Explicit value/topology permissions; never inferred from opaque component metadata. */
     };
 
     /**

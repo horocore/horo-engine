@@ -57,13 +57,18 @@ namespace Horo::Prefab {
             return true;
         }
 
+        /** @brief Charges every owned revision vector, including explicit authoring-mode skew evidence. */
+        bool ChargeRevision(StorageBudget &budget, const PrefabResolutionRevision &revision) {
+            return budget.Add(revision.dependencies.capacity(), sizeof(PrefabDependencyNode)) &&
+                   budget.Add(revision.edges.capacity(), sizeof(PrefabDependencyEdge)) &&
+                   budget.Add(revision.revisionSkews.capacity(), sizeof(PrefabDependencyRevisionSkew)) &&
+                   budget.Add(revision.canonicalSources.capacity(), sizeof(PrefabCanonicalSourceCommitment));
+        }
+
         /** @brief Measures complete immutable candidate ownership, including all variable payload storage. */
         bool ChargeCandidate(StorageBudget &budget, const EffectivePrefabCandidate &candidate) {
             const auto &revision = candidate.Revision();
-            if (!budget.Add(sizeof(EffectivePrefabCandidate)) ||
-                !budget.Add(revision.dependencies.capacity(), sizeof(PrefabDependencyNode)) ||
-                !budget.Add(revision.edges.capacity(), sizeof(PrefabDependencyEdge)) ||
-                !budget.Add(revision.canonicalSources.capacity(), sizeof(PrefabCanonicalSourceCommitment)) ||
+            if (!budget.Add(sizeof(EffectivePrefabCandidate)) || !ChargeRevision(budget, revision) ||
                 !budget.Add(candidate.Objects().size(), sizeof(ResolvedPrefabObject)))
                 return false;
             for (const auto &node : revision.dependencies) {
@@ -238,9 +243,7 @@ namespace Horo::Prefab {
         StorageBudget budget{limits_.maximumRetainedBytes};
         if (!budget.Add(candidate.objects_.capacity() - candidate.objects_.size(), sizeof(ResolvedPrefabObject)))
             return Result<std::size_t>::Failure(MakeError(PrefabErrors::ExpansionCacheCapacityExceeded));
-        if (!budget.Add(sizeof(Entry)) || !budget.Add(key.revision_.dependencies.capacity(), sizeof(PrefabDependencyNode)) ||
-            !budget.Add(key.revision_.edges.capacity(), sizeof(PrefabDependencyEdge)) ||
-            !budget.Add(key.revision_.canonicalSources.capacity(), sizeof(PrefabCanonicalSourceCommitment)) ||
+        if (!budget.Add(sizeof(Entry)) || !ChargeRevision(budget, key.revision_) ||
             !budget.Add(key.sources_.capacity(), sizeof(Sha256Digest)) || !ChargeCandidate(budget, candidate))
             return Result<std::size_t>::Failure(MakeError(PrefabErrors::ExpansionCacheCapacityExceeded));
         for (const auto &node : key.revision_.dependencies) {

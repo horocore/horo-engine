@@ -1,6 +1,7 @@
 #include "Horo/Prefab/PrefabDocument.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "PrefabDocumentOverrideLayers.h"
 #include "PrefabDocumentSerializationInternal.h"
 
 #include <algorithm>
@@ -382,12 +383,17 @@ namespace Horo::Prefab {
             if (const auto compositionValidation = ValidateComposition(candidate, objectDepths, policy); compositionValidation.HasError())
                 return Result<void>::Failure(compositionValidation.ErrorValue());
 
-            return Result<void>::Success();
+            return Detail::ValidateOverrideLayers(candidate, limits, payloadBytes);
         }
     }  // namespace
 
     /** @copydoc PrefabDocument::Create */
     Result<PrefabDocument> PrefabDocument::Create(PrefabDocumentData candidate, const PrefabLimitProfile &limits) {
+        if (candidate.composition) {
+            if (candidate.composition->nestedPlacements.size() > limits.Policy().maximumDirectNestedPlacements)
+                return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::NestedPlacementCountExceeded));
+            std::ranges::sort(candidate.composition->nestedPlacements, {}, &NestedPrefabPlacement::placementLocalId);
+        }
         if (auto validated = ValidateCandidate(candidate, limits); validated.HasError())
             return Result<PrefabDocument>::Failure(std::move(validated).ErrorValue());
         return Result<PrefabDocument>::Success(PrefabDocument{std::move(candidate)});

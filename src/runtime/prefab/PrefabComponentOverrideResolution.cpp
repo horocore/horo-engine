@@ -21,11 +21,11 @@ namespace Horo::Prefab::ValueDetail {
 
         /** @brief Validate known fields without normalizing or discarding provider-owned opaque bytes. */
         Result<void> ValidatePayload(const RawComponentPayload &payload, const PrefabComponentOverridePolicy &policy) {
-            Detail::JsonParseGuard guard{PrefabHardLimits::SourceJsonDepth};
             const auto &bytes = payload.component.payload;
-            const auto json = Json::parse(bytes.begin(), bytes.end(), std::ref(guard), false);
-            if (json.is_discarded() || !json.is_object() || guard.HasDuplicate() || guard.IsTooDeep())
-                return Invalid<void>("Component topology payload must be a bounded object with unique keys.");
+            auto owned = DecodeComponentPayload(bytes, "Component topology payload must be a bounded object with unique keys.");
+            if (owned.HasError())
+                return Result<void>::Failure(owned.ErrorValue());
+            const auto &json = owned.Value().Get();
             for (const auto &property : policy.component.properties) {
                 const auto found = json.find(property.id.Value());
                 if (found == json.end()) {

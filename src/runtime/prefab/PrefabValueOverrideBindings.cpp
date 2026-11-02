@@ -32,14 +32,13 @@ namespace Horo::Prefab::ValueDetail {
         /** @brief Decode the actual source component once; duplicate keys and excessive nesting never enter resolution. */
         Result<Json *> CapturePayload(ResolutionState &state, const std::size_t object, const std::size_t component) {
             const auto &source = state.objects[object].object.components[component].component.payload;
-            Detail::JsonParseGuard guard{PrefabHardLimits::SourceJsonDepth};
             if (source.empty())
                 return Invalid<Json *>("Registered component source payload is empty.");
-            auto json = Json::parse(source.begin(), source.end(), std::ref(guard), false);
-            if (json.is_discarded() || !json.is_object() || guard.HasDuplicate() || guard.IsTooDeep())
-                return Invalid<Json *>("Registered component source payload is malformed.");
-            const auto [found, inserted] = state.payloads.try_emplace(std::pair{object, component}, std::move(json));
-            return Result<Json *>::Success(&found->second);
+            auto owned = DecodeComponentPayload(source, "Registered component source payload is malformed.");
+            if (owned.HasError())
+                return Result<Json *>::Failure(owned.ErrorValue());
+            const auto [found, inserted] = state.payloads.try_emplace(std::pair{object, component}, std::move(owned).Value());
+            return Result<Json *>::Success(&found->second.Get());
         }
 
         /** @brief Capture one exact registered property after the component payload has been decoded once. */
@@ -167,14 +166,16 @@ namespace Horo::Prefab::ValueDetail {
         if (!binding.component.has_value()) {
             auto &object = state.objects[binding.object];
             const auto &transform = std::get<Math::Transform>(value);
-            auto effective = Math::TryDecomposeAffineTRS(Math::Multiply(object.placementTransform.ToMatrix(), transform.ToMatrix()));
+            auto effective = ComposePrefabPlacement(object.placementTransform, transform);
             if (effective.HasError())
                 return Result<void>::Failure(effective.ErrorValue());
             object.object.localTransform = transform;
             object.effectiveLocalTransform = effective.Value();
         } else {
             state.modifiedPayloads.emplace(binding.object, *binding.component);
-            state.payloads.at({binding.object, *binding.component})[binding.schema->payloadProperty.Value()] = PayloadValue(value);
+            auto replacement = PayloadValue(value);
+            auto &target = state.payloads.at({binding.object, *binding.component}).Get()[binding.schema->payloadProperty.Value()];
+            target.swap(replacement.Get());
         }
         binding.provenance.effectiveValue = value;
         binding.provenance.origin = PrefabValueOrigin::Instance;
@@ -189,7 +190,7 @@ namespace Horo::Prefab::ValueDetail {
                 auto &component = object.object.components[componentIndex];
                 if (const auto payload = state.payloads.find({objectIndex, componentIndex});
                     payload != state.payloads.end() && state.modifiedPayloads.contains({objectIndex, componentIndex})) {
-                    const auto encoded = payload->second.dump();
+                    const auto encoded = payload->second.Get().dump();
                     if (encoded.size() > Gameplay::MaximumSerializedComponentBytes ||
                         encoded.size() > state.limits.Policy().maximumExpandedPayloadBytes - bytes)
                         return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));

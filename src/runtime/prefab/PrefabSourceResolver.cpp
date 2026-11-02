@@ -1,8 +1,11 @@
 #include "Horo/Prefab/PrefabSourceResolver.h"
 
 #include "Horo/Prefab/PrefabErrors.h"
+#include "PrefabSourceExpansionInternal.h"
+#include "PrefabValueOverridesInternal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <memory>
 #include <new>
@@ -54,18 +57,7 @@ namespace Horo::Prefab {
             std::vector<ValueT> &values_;
         };
 
-        struct ExpansionState final {
-            std::span<const PrefabDependencySource> sources;
-            PrefabInstanceId instance;
-            std::vector<LocalObjectId> &scope;
-            std::vector<Assets::AssetId> &active;
-            std::vector<ResolvedPrefabObject> &objects;
-            std::vector<Assets::AssetId> &failureChain;
-            PrefabExpansionBudget &budget;
-            const PrefabLimitProfile &limits;
-            const CancellationToken &cancellation;
-            std::vector<PrefabCompositionOriginStep> originChain;
-        };
+        using ExpansionState = Detail::SourceExpansionState;
 
         /** @brief Records the complete source path that made a required expansion fail. */
         [[nodiscard]] Result<void> Fail(ExpansionState &state, Error error, const std::optional<Assets::AssetId> next = std::nullopt) {
@@ -84,24 +76,24 @@ namespace Horo::Prefab {
         }
 
         [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, std::size_t nestedDepth,
-                                                std::size_t variantDepth,
-                                                const std::optional<ExpandedPrefabObjectKey> &mountParent = std::nullopt,
-                                                const Math::Transform &mountTransform = {});
+                                                std::size_t variantDepth);
 
-        [[nodiscard]] Result<void> MaterializeVariantParent(ExpansionState &state, const PrefabDependencySource &source,
-                                                            const std::size_t nestedDepth, const std::size_t variantDepth,
-                                                            const std::optional<ExpandedPrefabObjectKey> &mountParent,
-                                                            const Math::Transform &mountTransform) {
+        /** @brief Resolves the complete immediate parent before applying this variant layer, with no outer placement mount. */
+        Result<void> MaterializeVariantParent(ExpansionState &state, const PrefabDependencySource &source, std::size_t nestedDepth,
+                                              std::size_t variantDepth) {
             if (variantDepth >= state.limits.Policy().maximumVariantInheritanceDepth)
                 return Fail(state, MakeError(PrefabErrors::HierarchyDepthExceeded));
-            const PrefabDocumentData &document = source.document.Data();
-            const Assets::AssetId parentAsset = document.composition->variantParent->Asset();
-            const PrefabDependencySource *parent = FindSource(state.sources, parentAsset);
-            if (parent == nullptr)
-                return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), parentAsset);
-            state.originChain.push_back({PrefabCompositionOrigin::Variant, document.assetId, parentAsset, {}});
-            const PopBackGuard originGuard{state.originChain};
-            return ExpandSource(state, *parent, nestedDepth, variantDepth + 1, mountParent, mountTransform);
+            const auto &document = source.document.Data();
+            const auto asset = document.composition->variantParent->Asset();
+            const auto *parent = FindSource(state.sources, asset);
+            if (!parent)
+                return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), asset);
+            state.originChain.push_back({PrefabCompositionOrigin::Variant, document.assetId, asset, {}});
+            const PopBackGuard guard{state.originChain};
+            const auto begin = state.objects.size();
+            if (auto expanded = ExpandSource(state, *parent, nestedDepth, variantDepth + 1); expanded.HasError())
+                return expanded;
+            return Detail::ApplySourceOverrideLayer(state, document.composition->variantOverrides, *parent, document.assetId, {}, begin);
         }
 
         /** @brief Admits one object before identity allocation or output mutation. */
@@ -115,75 +107,113 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> MaterializeLocalObjects(ExpansionState &state, const PrefabDocumentData &document,
-                                                           const std::optional<ExpandedPrefabObjectKey> &mountParent,
-                                                           const Math::Transform &mountTransform) {
-            for (const PrefabObjectNode &object : document.objects) {
-                if (const auto admitted = AdmitLocalObject(state); admitted.HasError())
+        /** @brief Copies concrete source locals without importing an outer placement transform before its overrides. */
+        Result<void> MaterializeLocalObjects(ExpansionState &state, const PrefabDocumentData &document) {
+            for (const auto &object : document.objects) {
+                if (auto admitted = AdmitLocalObject(state); admitted.HasError())
                     return admitted;
-                if (const auto charged = state.budget.Consume(state.originChain.size()); charged.HasError())
+                if (auto charged = state.budget.Consume(state.originChain.size()); charged.HasError())
                     return Fail(state, charged.ErrorValue());
                 auto address = PrefabObjectAddress::Create(state.scope, object.localId);
                 if (address.HasError())
                     return Fail(state, address.ErrorValue());
-                const ExpandedPrefabObjectKey key{state.instance, std::move(address).Value()};
-                std::optional<ExpandedPrefabObjectKey> parent = mountParent;
-                Math::Transform localTransform = object.localTransform;
+                const ExpandedPrefabObjectKey key{state.instance, address.Value()};
+                std::optional<ExpandedPrefabObjectKey> parent;
                 if (object.parentLocalId) {
-                    auto parentAddress = PrefabObjectAddress::Create(state.scope, *object.parentLocalId);
-                    if (parentAddress.HasError())
-                        return Fail(state, parentAddress.ErrorValue());
-                    parent = ExpandedPrefabObjectKey{state.instance, std::move(parentAddress).Value()};
+                    auto target = PrefabObjectAddress::Create(state.scope, *object.parentLocalId);
+                    if (target.HasError())
+                        return Fail(state, target.ErrorValue());
+                    parent = ExpandedPrefabObjectKey{state.instance, target.Value()};
                 }
-                if (mountParent && !object.parentLocalId) {
-                    const auto composed =
-                        Math::TryDecomposeAffineTRS(Math::Multiply(mountTransform.ToMatrix(), object.localTransform.ToMatrix()));
-                    if (composed.HasError())
-                        return Fail(state, composed.ErrorValue());
-                    localTransform = composed.Value();
-                }
-                state.objects.emplace_back(document.assetId, key, parent, object, localTransform,
-                                           mountParent && !object.parentLocalId ? mountTransform : Math::Transform{}, state.originChain);
+                state.objects.emplace_back(document.assetId, key, parent, object, object.localTransform, Math::Transform{},
+                                           state.originChain);
             }
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> MaterializeNestedPlacements(ExpansionState &state, const PrefabDocumentData &document,
-                                                               const std::size_t nestedDepth, const std::size_t variantDepth,
-                                                               const std::optional<ExpandedPrefabObjectKey> &sourceRoot) {
+        /** @brief Allows only finite engine-precision roundoff, never the shear discarded by Gram–Schmidt decomposition. */
+        bool SameAffineComponent(float expected, float actual) noexcept {
+            if (!std::isfinite(expected) || !std::isfinite(actual))
+                return false;
+            const double scale = std::max(std::fabs(static_cast<double>(expected)), std::fabs(static_cast<double>(actual)));
+            const double tolerance = static_cast<double>(Math::DefaultEpsilon) * (1.0 + scale);
+            return std::fabs(static_cast<double>(expected) - static_cast<double>(actual)) <= tolerance;
+        }
+
+        /** @brief Checks all sixteen original affine coefficients against the reconstructed, representable TRS. */
+        bool SameAffineMatrix(const Math::Mat4 &expected, const Math::Mat4 &actual) noexcept {
+            for (std::size_t i = 0; i < expected.values.size(); ++i)
+                if (!SameAffineComponent(expected.values[i], actual.values[i]))
+                    return false;
+            return true;
+        }
+
+        /** @brief Composes only the complete post-override root with its one actual containing placement. */
+        Result<void> MountNested(ExpansionState &state, std::size_t begin, const std::optional<ExpandedPrefabObjectKey> &parent,
+                                 const Math::Transform &transform) {
+            if (state.unresolved)
+                return Result<void>::Success();
+            auto &root = state.objects[begin];
+            const auto composed = ValueDetail::ComposePrefabPlacement(transform, root.object.localTransform);
+            if (composed.HasError())
+                return Fail(state, composed.ErrorValue());
+            root.parent = parent;
+            root.placementTransform = transform;
+            root.effectiveLocalTransform = composed.Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Fully resolves and applies one stable nested occurrence before its scope and mount guards retire. */
+        Result<void> MaterializeNestedPlacement(ExpansionState &state, const PrefabDocumentData &document,
+                                                const NestedPrefabPlacement &placement, std::size_t nestedDepth, std::size_t variantDepth,
+                                                const std::optional<ExpandedPrefabObjectKey> &sourceRoot) {
+            if (state.cancellation.IsCancellationRequested())
+                return Fail(state, MakeError(PrefabErrors::Cancelled));
+            if (nestedDepth >= state.limits.Policy().maximumNestedPrefabDepth)
+                return Fail(state, MakeError(PrefabErrors::HierarchyDepthExceeded));
+            const auto asset = placement.sourcePrefab.Asset();
+            const auto *nested = FindSource(state.sources, asset);
+            if (!nested)
+                return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), asset);
+            auto mountParent = sourceRoot;
+            if (placement.parentLocalId) {
+                auto parent = PrefabObjectAddress::Create(state.scope, *placement.parentLocalId);
+                if (parent.HasError())
+                    return Fail(state, parent.ErrorValue());
+                mountParent = ExpandedPrefabObjectKey{state.instance, parent.Value()};
+            }
+            state.scope.push_back(placement.placementLocalId);
+            const PopBackGuard scopeGuard{state.scope};
+            state.originChain.push_back({PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId});
+            const PopBackGuard originGuard{state.originChain};
+            const auto begin = state.objects.size();
+            if (auto expanded = ExpandSource(state, *nested, nestedDepth + 1, variantDepth); expanded.HasError())
+                return expanded;
+            if (auto applied = Detail::ApplySourceOverrideLayer(state, placement.valueOverrides, *nested, document.assetId,
+                                                                placement.placementLocalId, begin);
+                applied.HasError())
+                return applied;
+            return MountNested(state, begin, mountParent, placement.localRootTransform);
+        }
+
+        /** @brief Processes complete nested occurrences in canonical placement order without continuing past unresolved input. */
+        Result<void> MaterializeNestedPlacements(ExpansionState &state, const PrefabDocumentData &document, std::size_t nestedDepth,
+                                                 std::size_t variantDepth, const std::optional<ExpandedPrefabObjectKey> &sourceRoot) {
             if (!document.composition)
                 return Result<void>::Success();
-            for (const NestedPrefabPlacement &placement : document.composition->nestedPlacements) {
-                if (state.cancellation.IsCancellationRequested())
-                    return Fail(state, MakeError(PrefabErrors::Cancelled));
-                if (nestedDepth >= state.limits.Policy().maximumNestedPrefabDepth)
-                    return Fail(state, MakeError(PrefabErrors::HierarchyDepthExceeded));
-                const Assets::AssetId nestedAsset = placement.sourcePrefab.Asset();
-                const PrefabDependencySource *nested = FindSource(state.sources, nestedAsset);
-                if (nested == nullptr)
-                    return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), nestedAsset);
-                std::optional<ExpandedPrefabObjectKey> mountParent = sourceRoot;
-                if (placement.parentLocalId) {
-                    auto parentAddress = PrefabObjectAddress::Create(state.scope, *placement.parentLocalId);
-                    if (parentAddress.HasError())
-                        return Fail(state, parentAddress.ErrorValue());
-                    mountParent = ExpandedPrefabObjectKey{state.instance, std::move(parentAddress).Value()};
-                }
-                state.scope.push_back(placement.placementLocalId);
-                const PopBackGuard scopeGuard{state.scope};
-                state.originChain.push_back({PrefabCompositionOrigin::Nested, document.assetId, nestedAsset, placement.placementLocalId});
-                const PopBackGuard originGuard{state.originChain};
-                if (auto expanded = ExpandSource(state, *nested, nestedDepth + 1, variantDepth, mountParent, placement.localRootTransform);
-                    expanded.HasError())
-                    return expanded;
+            for (const auto &placement : document.composition->nestedPlacements) {
+                if (auto result = MaterializeNestedPlacement(state, document, placement, nestedDepth, variantDepth, sourceRoot);
+                    result.HasError())
+                    return result;
+                if (state.unresolved)
+                    break;
             }
             return Result<void>::Success();
         }
 
         /** @brief Recursively materializes one source using only immutable resolver-owned documents. */
         [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, const std::size_t nestedDepth,
-                                                const std::size_t variantDepth, const std::optional<ExpandedPrefabObjectKey> &mountParent,
-                                                const Math::Transform &mountTransform) {
+                                                const std::size_t variantDepth) {
             if (state.cancellation.IsCancellationRequested())
                 return Fail(state, MakeError(PrefabErrors::Cancelled));
             if (const Assets::AssetId sourceAsset = source.document.Data().assetId;
@@ -194,8 +224,8 @@ namespace Horo::Prefab {
 
             const PrefabDocumentData &document = source.document.Data();
             if (document.composition && document.composition->variantParent)
-                return MaterializeVariantParent(state, source, nestedDepth, variantDepth, mountParent, mountTransform);
-            if (auto local = MaterializeLocalObjects(state, document, mountParent, mountTransform); local.HasError())
+                return MaterializeVariantParent(state, source, nestedDepth, variantDepth);
+            if (auto local = MaterializeLocalObjects(state, document); local.HasError())
                 return local;
             const auto rootAddress = PrefabObjectAddress::Create(state.scope, LocalObjectId{});
             if (rootAddress.HasError())
@@ -203,7 +233,60 @@ namespace Horo::Prefab {
             return MaterializeNestedPlacements(state, document, nestedDepth, variantDepth,
                                                ExpandedPrefabObjectKey{state.instance, rootAddress.Value()});
         }
+
+        /** @brief Adds exact stable source context to validation failure without exposing partial hierarchy. */
+        Result<void> ExpandAdmittedSource(ExpansionState &state, const PrefabDependencySource &root) {
+            auto result = Detail::PreflightSourceExpansion(state, root);
+            if (result.HasValue())
+                result = ExpandSource(state, root, 0, 0);
+            if (result.HasValue())
+                return result;
+            auto error = result.ErrorValue();
+            if (state.failureChain.empty())
+                state.failureChain.push_back(root.document.Data().assetId);
+            AddFailureContext(error, state.instance, state.failureChain);
+            return Result<void>::Failure(std::move(error));
+        }
+
+        /** @brief Registry advancement alone is harmless; all reachable semantic authorities must still match exactly. */
+        bool SameContents(const PrefabResolutionRevision &a, const PrefabResolutionRevision &b) noexcept {
+            return a.rootSource == b.rootSource && a.dependencies == b.dependencies && a.edges == b.edges &&
+                   a.canonicalSources == b.canonicalSources && a.valueSchemaRevision == b.valueSchemaRevision &&
+                   a.sourceRevisionPolicy == b.sourceRevisionPolicy && a.revisionSkews == b.revisionSkews;
+        }
+
+        /** @brief Retains only revision skew evidence reachable from this root, together with exact schema policy. */
+        void CaptureLayerEvidence(PrefabResolutionRevision &revision, const PrefabDependencyGraphSnapshot &graph,
+                                  const std::span<const Assets::AssetId> assets, const PrefabValueSchemaSnapshot *schemas) {
+            revision.sourceRevisionPolicy = graph.RevisionPolicy();
+            for (const auto &skew : graph.RevisionSkews())
+                if (std::ranges::binary_search(assets, skew.owner))
+                    revision.revisionSkews.push_back(skew);
+            revision.valueSchemaRevision = schemas ? schemas->Revision() : Sha256Digest{};
+        }
+
     }  // namespace
+
+    /** @copydoc ValueDetail::ComposePrefabPlacement */
+    Result<Math::Transform> ValueDetail::ComposePrefabPlacement(const Math::Transform &placement, const Math::Transform &local) {
+        const auto parent = placement.TryToMatrix();
+        if (parent.HasError())
+            return Result<Math::Transform>::Failure(parent.ErrorValue());
+        const auto child = local.TryToMatrix();
+        if (child.HasError())
+            return Result<Math::Transform>::Failure(child.ErrorValue());
+        const auto matrix = Math::Multiply(parent.Value(), child.Value());
+        const auto composed = Math::TryDecomposeAffineTRS(matrix);
+        if (composed.HasError())
+            return composed;
+        const auto reconstructed = composed.Value().TryToMatrix();
+        if (reconstructed.HasError())
+            return Result<Math::Transform>::Failure(reconstructed.ErrorValue());
+        if (!SameAffineMatrix(matrix, reconstructed.Value()))
+            return Result<Math::Transform>::Failure(
+                MakeError(PrefabErrors::InvalidPlacement, "Nested placement cannot represent the final affine transform without shear."));
+        return composed;
+    }
 
     /** @copydoc EffectivePrefabCandidate::EffectivePrefabCandidate */
     EffectivePrefabCandidate::EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision,
@@ -236,12 +319,19 @@ namespace Horo::Prefab {
     PrefabSourceResolverSnapshot::PrefabSourceResolverSnapshot(PrefabDependencyGraphSnapshot graph,
                                                                std::vector<PrefabDependencySource> sources,
                                                                std::vector<PrefabCanonicalSourceCommitment> commitments,
-                                                               const PrefabMetricHandles &metrics) noexcept
-        : graph_(std::move(graph)), sources_(std::move(sources)), commitments_(std::move(commitments)), metrics_(metrics) {}
+                                                               const PrefabMetricHandles &metrics,
+                                                               std::shared_ptr<const PrefabValueSchemaSnapshot> schemas) noexcept
+        : graph_(std::move(graph)), sources_(std::move(sources)), commitments_(std::move(commitments)), metrics_(metrics),
+          schemas_(std::move(schemas)) {}
 
     /** @copydoc PrefabSourceResolverSnapshot::RegistryRevision */
     Assets::AssetRegistryRevision PrefabSourceResolverSnapshot::RegistryRevision() const noexcept {
         return graph_.RegistryRevision();
+    }
+
+    /** @copydoc PrefabSourceResolverSnapshot::DependencyGraph */
+    const PrefabDependencyGraphSnapshot &PrefabSourceResolverSnapshot::DependencyGraph() const noexcept {
+        return graph_;
     }
 
     /** @copydoc PrefabSourceResolverSnapshot::Sources */
@@ -258,48 +348,90 @@ namespace Horo::Prefab {
     Result<EffectivePrefabCandidate> PrefabSourceResolverSnapshot::Resolve(const Assets::AssetId rootAsset, const PrefabInstanceId instance,
                                                                            const PrefabLimitProfile &limits,
                                                                            const CancellationToken &cancellation) const {
+        if (!graph_.RevisionSkews().empty())
+            return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::DependencyRevisionMismatch));
+        auto resolved = ResolveOverrides(rootAsset, instance, limits, cancellation);
+        if (resolved.HasError())
+            return Result<EffectivePrefabCandidate>::Failure(resolved.ErrorValue());
+        auto value = std::move(resolved).Value();
+        if (value.effective)
+            return Result<EffectivePrefabCandidate>::Success(std::move(*value.effective));
+        const auto &first = value.layers.back().rebased;
+        const bool conflict = !first.conflicts.empty() || !first.componentConflicts.empty();
+        return Result<EffectivePrefabCandidate>::Failure(
+            MakeError(conflict ? PrefabErrors::OverrideConflict : PrefabErrors::OverrideOrphan));
+    }
+
+    /** @copydoc PrefabSourceResolverSnapshot::ValueSchemaRevision */
+    Sha256Digest PrefabSourceResolverSnapshot::ValueSchemaRevision() const noexcept {
+        return schemas_ ? schemas_->Revision() : Sha256Digest{};
+    }
+
+    /** @copydoc PrefabSourceResolverSnapshot::ValueSchemas */
+    const PrefabValueSchemaSnapshot *PrefabSourceResolverSnapshot::ValueSchemas() const noexcept {
+        return schemas_.get();
+    }
+
+    /** @copydoc PrefabSourceResolverSnapshot::ResolveOverrides */
+    Result<PrefabSourceOverrideResolution> PrefabSourceResolverSnapshot::ResolveOverrides(const Assets::AssetId rootAsset,
+                                                                                          const PrefabInstanceId instance,
+                                                                                          const PrefabLimitProfile &limits,
+                                                                                          const CancellationToken &cancellation) const {
         PrefabMetricOperation observation{metrics_, PrefabMetricPhase::Resolve};
-        auto result = [&]() -> Result<EffectivePrefabCandidate> {
-            if (cancellation.IsCancellationRequested())
-                return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::Cancelled));
-            if (!instance.IsValid())
-                return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::IdentityInvalid));
-            const PrefabDependencySource *root = FindSource(sources_, rootAsset);
-            if (root == nullptr)
-                return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-
-            PrefabExpansionBudget budget{limits};
-            std::vector<LocalObjectId> scope;
-            std::vector<Assets::AssetId> active;
-            std::vector<Assets::AssetId> failureChain;
-            std::vector<ResolvedPrefabObject> objects;
-            objects.reserve(std::min<std::size_t>(sources_.size(), limits.Policy().maximumObjectCount));
-            ExpansionState state{sources_, instance, scope, active, objects, failureChain, budget, limits, cancellation};
-            if (auto expanded = ExpandSource(state, *root, 1, 1); expanded.HasError()) {
-                Error error = expanded.ErrorValue();
-                if (failureChain.empty())
-                    failureChain.push_back(rootAsset);
-                AddFailureContext(error, instance, failureChain);
-                return Result<EffectivePrefabCandidate>::Failure(std::move(error));
+        auto result = [&]() -> Result<PrefabSourceOverrideResolution> {
+            try {
+                return ResolveOverridesImpl(rootAsset, instance, limits, cancellation);
+            } catch (const std::bad_alloc &) {
+                return Result<PrefabSourceOverrideResolution>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
             }
-
-            auto revision = CaptureRevision(rootAsset, budget);
-            if (revision.HasError())
-                return Result<EffectivePrefabCandidate>::Failure(revision.ErrorValue());
-            if (cancellation.IsCancellationRequested())
-                return Result<EffectivePrefabCandidate>::Failure(MakeError(PrefabErrors::Cancelled));
-            return Result<EffectivePrefabCandidate>::Success(
-                EffectivePrefabCandidate{rootAsset, std::move(revision).Value(), std::move(objects), {}, metrics_});
         }();
         if (result.HasError())
             observation.Fail(result.ErrorValue());
-        else {
-            observation.Observe(PrefabMetricItem::ExpandedObjects, result.Value().Objects().size());
-            observation.Observe(PrefabMetricItem::GraphNodes, result.Value().Revision().dependencies.size());
-            observation.Observe(PrefabMetricItem::GraphEdges, result.Value().Revision().edges.size());
+        else if (result.Value().effective) {
+            observation.Observe(PrefabMetricItem::ExpandedObjects, result.Value().effective->Objects().size());
+            observation.Observe(PrefabMetricItem::GraphNodes, result.Value().effective->Revision().dependencies.size());
+            observation.Observe(PrefabMetricItem::GraphEdges, result.Value().effective->Revision().edges.size());
             observation.Complete();
-        }
+        } else
+            observation.Complete();
         return result;
+    }
+
+    /** @brief Performs operation-owned materialization only after complete graph/expansion preflight. */
+    Result<PrefabSourceOverrideResolution> PrefabSourceResolverSnapshot::ResolveOverridesImpl(const Assets::AssetId rootAsset,
+                                                                                              const PrefabInstanceId instance,
+                                                                                              const PrefabLimitProfile &limits,
+                                                                                              const CancellationToken &cancellation) const {
+        if (cancellation.IsCancellationRequested())
+            return Result<PrefabSourceOverrideResolution>::Failure(MakeError(PrefabErrors::Cancelled));
+        if (!instance.IsValid())
+            return Result<PrefabSourceOverrideResolution>::Failure(MakeError(PrefabErrors::IdentityInvalid));
+        const PrefabDependencySource *root = FindSource(sources_, rootAsset);
+        if (root == nullptr)
+            return Result<PrefabSourceOverrideResolution>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+
+        PrefabExpansionBudget budget{limits};
+        std::vector<LocalObjectId> scope;
+        std::vector<Assets::AssetId> active;
+        std::vector<Assets::AssetId> failureChain;
+        std::vector<ResolvedPrefabObject> objects;
+        std::vector<PrefabLayerOverrideEvidence> layers;
+        objects.reserve(std::min<std::size_t>(sources_.size(), limits.Policy().maximumObjectCount));
+        ExpansionState state{sources_, instance, scope,        active, objects,        failureChain,
+                             budget,   limits,   cancellation, {},     schemas_.get(), layers};
+        if (auto expanded = ExpandAdmittedSource(state, *root); expanded.HasError())
+            return Result<PrefabSourceOverrideResolution>::Failure(expanded.ErrorValue());
+
+        auto revision = CaptureRevision(rootAsset, budget);
+        if (revision.HasError())
+            return Result<PrefabSourceOverrideResolution>::Failure(revision.ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Result<PrefabSourceOverrideResolution>::Failure(MakeError(PrefabErrors::Cancelled));
+        auto captured = std::move(revision).Value();
+        if (state.unresolved || !captured.revisionSkews.empty())
+            return Result<PrefabSourceOverrideResolution>::Success({{}, std::move(layers), std::move(captured)});
+        EffectivePrefabCandidate effective{rootAsset, captured, std::move(objects), {}, metrics_};
+        return Result<PrefabSourceOverrideResolution>::Success({std::move(effective), std::move(layers), std::move(captured)});
     }
 
     /** @copydoc PrefabSourceResolverSnapshot::CaptureResolutionRevision */
@@ -333,6 +465,7 @@ namespace Horo::Prefab {
             if (commitment != commitments_.end() && commitment->asset == asset)
                 revision.canonicalSources.push_back(*commitment);
         }
+        CaptureLayerEvidence(revision, graph_, assets, schemas_.get());
         return Result<PrefabResolutionRevision>::Success(std::move(revision));
     }
 
@@ -349,9 +482,7 @@ namespace Horo::Prefab {
         auto current = CaptureRevision(rootAsset, budget);
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
-        if (const auto &captured = current.Value(); revision.rootSource != captured.rootSource ||
-                                                    revision.dependencies != captured.dependencies || revision.edges != captured.edges ||
-                                                    revision.canonicalSources != captured.canonicalSources)
+        if (!SameContents(revision, current.Value()))
             return Result<void>::Failure(MakeError(PrefabErrors::ResolutionStale));
         for (const auto asset : changedAssets) {
             if (!asset.IsValid())
@@ -366,19 +497,22 @@ namespace Horo::Prefab {
     Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &registry,
                                                                            std::vector<PrefabDependencySource> sources,
                                                                            const PrefabLimitProfile &limits,
-                                                                           const PrefabMetricHandles &metrics) {
+                                                                           const PrefabMetricHandles &metrics,
+                                                                           std::shared_ptr<const PrefabValueSchemaSnapshot> schemas,
+                                                                           PrefabSourceRevisionPolicy revisionPolicy) {
         try {
             std::ranges::sort(sources, {}, [](const PrefabDependencySource &source) {
                 return source.document.Data().assetId;
             });
-            auto graph = BuildPrefabDependencyGraph(registry, sources, limits, metrics);
+            auto graph = BuildPrefabDependencyGraph(registry, sources, limits, metrics, revisionPolicy);
             if (graph.HasError())
                 return Result<PrefabSourceResolverSnapshot>::Failure(graph.ErrorValue());
             auto commitments = CaptureCanonicalSources(sources);
             if (commitments.HasError())
                 return Result<PrefabSourceResolverSnapshot>::Failure(commitments.ErrorValue());
-            return Result<PrefabSourceResolverSnapshot>::Success(
-                PrefabSourceResolverSnapshot{std::move(graph).Value(), std::move(sources), std::move(commitments).Value(), metrics});
+            return Result<PrefabSourceResolverSnapshot>::Success(PrefabSourceResolverSnapshot{std::move(graph).Value(), std::move(sources),
+                                                                                              std::move(commitments).Value(), metrics,
+                                                                                              std::move(schemas)});
         } catch (const std::bad_alloc &) {
             return Result<PrefabSourceResolverSnapshot>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
         }

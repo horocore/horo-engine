@@ -2,6 +2,7 @@
 
 /** @file PrefabSceneCookState.h @brief Target-private immutable host capture and cooker candidate handoff. */
 #include "Horo/Application/PrefabSceneCookHost.h"
+#include "Horo/Assets/AssetCookInputSnapshot.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 
@@ -29,6 +30,7 @@ namespace Horo::Application::PrefabCookDetail {
         Sha256Digest settings;
         std::shared_ptr<const PrefabCookSchemaContext> schemas;
         std::uint64_t maximumOutputBytes;
+        Assets::AssetCookInputSnapshot inputs; /**< Same sealed raw source/sidecar capture used by AssetCook; required, never recaptured. */
     };
 
     /** @brief Host-owned catalog and optional template phase share one final publication authority. */

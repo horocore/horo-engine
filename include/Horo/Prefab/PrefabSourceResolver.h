@@ -9,10 +9,14 @@
 #include "Horo/Prefab/PrefabCompositionOrigin.h"
 #include "Horo/Prefab/PrefabDependencyGraph.h"
 
+#include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
 namespace Horo::Prefab {
+    class PrefabValueSchemaSnapshot;
+
     /** @brief Resolver-admitted evidence computed from the actual canonical bytes of one owned validated source. */
     struct PrefabCanonicalSourceCommitment final {
         Assets::AssetId asset;      /**< Exact source identity, never an input-vector position. */
@@ -29,6 +33,10 @@ namespace Horo::Prefab {
         std::vector<PrefabDependencyEdge> edges;                       /**< Canonical reachable semantic edges used by expansion. */
         std::vector<PrefabCanonicalSourceCommitment> canonicalSources; /**< Actual canonical bytes, independent of claimed revisions. */
 
+        PrefabSourceRevisionPolicy sourceRevisionPolicy{PrefabSourceRevisionPolicy::RequireExact};
+        std::vector<PrefabDependencyRevisionSkew>
+            revisionSkews;                  /**< Actual target and original authoring evidence; never runtime permission. */
+        Sha256Digest valueSchemaRevision{}; /**< Exact immutable validating schema captured with this source resolver. */
         [[nodiscard]] bool operator==(const PrefabResolutionRevision &) const noexcept = default;
     };
 
@@ -65,6 +73,7 @@ namespace Horo::Prefab {
 
     private:
         friend class PrefabValueOverrideResolver;
+        friend class PrefabSourceLayerResolver;
         friend class PrefabSourceResolverSnapshot;
         friend class PrefabExpansionCache;
 
@@ -78,6 +87,22 @@ namespace Horo::Prefab {
         PrefabMetricHandles metrics_;
     };
 
+    /** @brief Owned result for one actual source-document layer; no partial effective hierarchy is exposed. */
+    struct PrefabLayerOverrideEvidence final {
+        Assets::AssetId owner;
+        std::optional<LocalObjectId> placement;              /**< Absent identifies the owner's variant layer. */
+        std::vector<PrefabCompositionOriginStep> occurrence; /**< Exact semantic import path, never serialized array positions. */
+        PrefabValueOverrideSet rebased;
+    };
+
+    /** @brief Authoring result from the same strict resolver; unresolved intent prevents effective publication. */
+    struct PrefabSourceOverrideResolution final {
+        std::optional<EffectivePrefabCandidate> effective;
+        std::vector<PrefabLayerOverrideEvidence>
+            layers; /**< Canonical inspected prefix; downstream layers remain intact in Sources() when their input is unresolved. */
+        PrefabResolutionRevision revision; /**< Complete policy/schema/actual+authored source capture for the document acceptance fence. */
+    };
+
     /** @brief Self-contained immutable prefab documents and dependency graph from one registry revision. */
     class PrefabSourceResolverSnapshot final {
     public:
@@ -88,6 +113,9 @@ namespace Horo::Prefab {
         [[nodiscard]] const PrefabMetricHandles &Metrics() const noexcept {
             return metrics_;
         }
+
+        /** @brief Borrows the exact graph already validated by this resolver; consumers never rebuild a competing capture. */
+        [[nodiscard]] const PrefabDependencyGraphSnapshot &DependencyGraph() const noexcept;
 
         /** @brief Returns all owned source documents. @return Borrowed immutable sources. */
         [[nodiscard]] std::span<const PrefabDependencySource> Sources() const noexcept;
@@ -120,6 +148,18 @@ namespace Horo::Prefab {
                                                                const PrefabLimitProfile &limits,
                                                                const CancellationToken &cancellation = {}) const;
 
+        /** @brief Resolves exactly once while retaining canonical source-layer conflicts/orphans for document transactions.
+         * @param rootAsset Exact source asset. @param instance Exact containing occurrence.
+         * @param limits Captured shared work policy. @param cancellation Cooperative operation cancellation.
+         * @return Complete candidate or bounded owned unresolved layer evidence; never a partial effective hierarchy. */
+        [[nodiscard]] Result<PrefabSourceOverrideResolution> ResolveOverrides(Assets::AssetId rootAsset, PrefabInstanceId instance,
+                                                                              const PrefabLimitProfile &limits,
+                                                                              const CancellationToken &cancellation = {}) const;
+        /** @brief Returns the exact copied schema authority digest, or zero when no schema policy was supplied. */
+        [[nodiscard]] Sha256Digest ValueSchemaRevision() const noexcept;
+        /** @brief Borrows immutable validation metadata owned by this exact resolver publication. */
+        [[nodiscard]] const PrefabValueSchemaSnapshot *ValueSchemas() const noexcept;
+
         /**
          * @brief Fences captured preview/cache evidence against this publication without invalidating unrelated roots.
          * @param rootAsset Captured root identity.
@@ -136,20 +176,25 @@ namespace Horo::Prefab {
                                                                const PrefabLimitProfile &limits) const;
 
     private:
+        /** @brief Validates and constructs only operation-owned complete layer evidence inside the allocation boundary. */
+        [[nodiscard]] Result<PrefabSourceOverrideResolution> ResolveOverridesImpl(Assets::AssetId root, PrefabInstanceId instance,
+                                                                                  const PrefabLimitProfile &limits,
+                                                                                  const CancellationToken &cancellation) const;
         /** @brief Captures the canonical reachable graph, charging caller-owned bounded work before allocation. */
         [[nodiscard]] Result<PrefabResolutionRevision> CaptureRevision(Assets::AssetId rootAsset, PrefabExpansionBudget &budget) const;
-        friend Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &,
-                                                                                      std::vector<PrefabDependencySource>,
-                                                                                      const PrefabLimitProfile &,
-                                                                                      const PrefabMetricHandles &);
+        friend Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(
+            const Assets::AssetRegistrySnapshot &, std::vector<PrefabDependencySource>, const PrefabLimitProfile &,
+            const PrefabMetricHandles &, std::shared_ptr<const PrefabValueSchemaSnapshot>, PrefabSourceRevisionPolicy);
 
         PrefabSourceResolverSnapshot(PrefabDependencyGraphSnapshot graph, std::vector<PrefabDependencySource> sources,
-                                     std::vector<PrefabCanonicalSourceCommitment> commitments, const PrefabMetricHandles &metrics) noexcept;
+                                     std::vector<PrefabCanonicalSourceCommitment> commitments, const PrefabMetricHandles &metrics,
+                                     std::shared_ptr<const PrefabValueSchemaSnapshot> schemas) noexcept;
 
         PrefabDependencyGraphSnapshot graph_;
         std::vector<PrefabDependencySource> sources_;
         std::vector<PrefabCanonicalSourceCommitment> commitments_;
         PrefabMetricHandles metrics_;
+        std::shared_ptr<const PrefabValueSchemaSnapshot> schemas_;
     };
 
     /**
@@ -162,10 +207,10 @@ namespace Horo::Prefab {
      * @details Admission computes exact canonical digest/length evidence from each owned validated document;
      * claimed source revisions remain separate graph evidence and do not supply those commitments.
      */
-    [[nodiscard]] Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(const Assets::AssetRegistrySnapshot &registry,
-                                                                                         std::vector<PrefabDependencySource> sources,
-                                                                                         const PrefabLimitProfile &limits,
-                                                                                         const PrefabMetricHandles &metrics = {});
+    [[nodiscard]] Result<PrefabSourceResolverSnapshot> BuildPrefabSourceResolverSnapshot(
+        const Assets::AssetRegistrySnapshot &registry, std::vector<PrefabDependencySource> sources, const PrefabLimitProfile &limits,
+        const PrefabMetricHandles &metrics = {}, std::shared_ptr<const PrefabValueSchemaSnapshot> schemas = {},
+        PrefabSourceRevisionPolicy revisionPolicy = PrefabSourceRevisionPolicy::RequireExact);
 
     /**
      * @brief Fences a completed worker candidate against the current publication context.

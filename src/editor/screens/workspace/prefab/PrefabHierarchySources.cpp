@@ -51,19 +51,28 @@ namespace Horo::Editor {
             const auto sourceVersion = document.Value().Data().projectVersion;
             return Result<Prefab::PrefabDependencySource>::Success({std::move(document).Value(), {sourceVersion, digest}});
         }
+
+        /** @brief Admits the explicit selected root list before entering iterative bounded dependency capture. */
+        Result<std::vector<Assets::AssetId>> InitialSelection(std::span<const Assets::AssetId> roots) {
+            std::vector<Assets::AssetId> selection;
+            for (const auto asset : roots)
+                if (auto added = Include(selection, asset); added.HasError())
+                    return Result<std::vector<Assets::AssetId>>::Failure(added.ErrorValue());
+            return Result<std::vector<Assets::AssetId>>::Success(std::move(selection));
+        }
+
     }  // namespace
 
     /** @copydoc CapturePrefabHierarchySources */
     Result<PrefabHierarchySources> CapturePrefabHierarchySources(
         const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
         const Prefab::PrefabLimitProfile &limits, const Application::HoroVersion &version, const CancellationToken &cancellation,
-        const Prefab::PrefabMetricHandles &metrics) {
+        const Prefab::PrefabMetricHandles &metrics, std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas) {
         try {
-            std::vector<Assets::AssetId> selection;
-            for (const auto asset : roots) {
-                if (auto added = Include(selection, asset); added.HasError())
-                    return Result<PrefabHierarchySources>::Failure(added.ErrorValue());
-            }
+            auto selected = InitialSelection(roots);
+            if (selected.HasError())
+                return Result<PrefabHierarchySources>::Failure(selected.ErrorValue());
+            auto selection = std::move(selected).Value();
             const Assets::AssetCookLimits captureLimits{.maximumSourceBytes = Prefab::PrefabHardLimits::SourceDocumentBytes,
                                                         .maximumAssets = MaximumSources};
             for (;;) {
@@ -82,7 +91,7 @@ namespace Horo::Editor {
                 }
                 if (selection.size() != capturedCount)
                     continue;
-                auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits, metrics);
+                auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits, metrics, schemas);
                 if (resolver.HasError())
                     return Result<PrefabHierarchySources>::Failure(resolver.ErrorValue());
                 if (auto current = inputs.Value().VerifyUnchanged(cancellation); current.HasError())

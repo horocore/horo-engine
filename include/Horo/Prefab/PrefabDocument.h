@@ -16,6 +16,7 @@
 #include "Horo/Prefab/PrefabLimits.h"
 #include "Horo/Prefab/PrefabMetrics.h"
 #include "Horo/Prefab/PrefabSourceRevision.h"
+#include "Horo/Prefab/PrefabValueOverrideTypes.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -49,6 +50,8 @@ namespace Horo::Prefab {
         PrefabAssetReference sourcePrefab;          /**< Path-independent nested source identity. */
         PrefabSourceRevision authoredAgainst;       /**< Exact project-versioned source revision. */
         Math::Transform localRootTransform;         /**< Backend-neutral transform applied at the mount. */
+        std::optional<PrefabValueOverrideSet>
+            valueOverrides; /**< Typed deltas over the fully resolved referenced source, before mounting. */
 
         [[nodiscard]] bool operator==(const NestedPrefabPlacement &) const noexcept = default;
     };
@@ -58,6 +61,7 @@ namespace Horo::Prefab {
         std::vector<NestedPrefabPlacement> nestedPlacements;        /**< Concrete-only direct nested occurrences. */
         std::optional<PrefabAssetReference> variantParent;          /**< Variant-only immediate parent asset. */
         std::optional<PrefabSourceRevision> variantAuthoredAgainst; /**< Required with @ref variantParent. */
+        std::optional<PrefabValueOverrideSet> variantOverrides;     /**< Typed deltas over the complete effective immediate parent. */
 
         [[nodiscard]] bool operator==(const PrefabComposition &) const noexcept = default;
     };
@@ -163,6 +167,12 @@ namespace Horo::Prefab {
 
         /** @brief Returns the immutable validated source data. @return Borrowed document data. */
         [[nodiscard]] const PrefabDocumentData &Data() const noexcept;
+
+        /** @brief Checks exact canonical source spelling while allowing only layer record-array permutations.
+         * @param source Original encoded bytes. @return True only for this document's exact canonical representation modulo
+         * ordering of records/conflicts/orphans within an existing override layer; all scalar lexemes and other fields stay exact.
+         * @details Validation-only scratch never becomes output or replaces the canonical serializer. */
+        [[nodiscard]] Result<bool> MatchesCanonicalInput(std::string_view source) const;
 
         /**
          * @brief Serializes the complete document into deterministic canonical UTF-8 JSON.

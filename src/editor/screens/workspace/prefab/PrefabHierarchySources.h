@@ -43,7 +43,7 @@ namespace Horo::Editor {
     [[nodiscard]] Result<PrefabHierarchySources> CapturePrefabHierarchySources(
         const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry, std::span<const Assets::AssetId> roots,
         const Prefab::PrefabLimitProfile &limits, const Application::HoroVersion &version, const CancellationToken &cancellation = {},
-        const Prefab::PrefabMetricHandles &metrics = {});
+        const Prefab::PrefabMetricHandles &metrics = {}, std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas = {});
 }  // namespace Horo::Editor
 
 #endif

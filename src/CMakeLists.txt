@@ -2583,10 +2583,14 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabDebugSnapshot.cpp
         runtime/prefab/PrefabDocumentBehaviorComposition.cpp
         runtime/prefab/PrefabDocumentCanonical.cpp
+        runtime/prefab/PrefabDocumentCanonicalInput.cpp
+        runtime/prefab/PrefabDocumentOverrideLayers.cpp
         runtime/prefab/PrefabDocument.cpp
         runtime/prefab/PrefabDocumentSerialization.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
+        runtime/prefab/PrefabSourceOverrideLayers.cpp
+        runtime/prefab/PrefabSourcePreflight.cpp
         runtime/prefab/PrefabValueOverrideAddresses.cpp
         runtime/prefab/PrefabValueOverrideBindings.cpp
         runtime/prefab/PrefabValueOverrideResolution.cpp
@@ -3645,6 +3649,7 @@ add_library(HoroEngine::PCGSceneBake ALIAS HoroPCGSceneBake)
 target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
+target_sources(HoroEditorServices PRIVATE editor/screens/workspace/prefab/PrefabDocumentLayers.cpp)
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings)

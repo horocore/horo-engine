@@ -1,8 +1,11 @@
+#include "PrefabDocumentOverrideLayers.h"
 #include "PrefabDocumentSerializationInternal.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -98,8 +101,9 @@ namespace Horo::Prefab::Detail {
         }
 
         /** @brief Parses one concrete nested placement record. */
-        [[nodiscard]] Result<NestedPrefabPlacement> ParseNestedPlacement(const Json &value) {
-            if (!HasAllowedFields(value, {"placementLocalId", "parentLocalId", "sourceAsset", "authoredAgainst", "localRootTransform"}))
+        [[nodiscard]] Result<NestedPrefabPlacement> ParseNestedPlacement(const Json &value, const PrefabProjectPolicy &policy) {
+            if (!HasAllowedFields(value, {"placementLocalId", "parentLocalId", "sourceAsset", "authoredAgainst", "localRootTransform"},
+                                  {"valueOverrides"}))
                 return Failed<NestedPrefabPlacement>(PrefabErrors::InvalidPlacement, "Prefab nested placement fields are not canonical.");
             auto placementId = ReadUnsigned<std::uint32_t>(value.at("placementLocalId"));
             if (placementId.HasError())
@@ -119,16 +123,21 @@ namespace Horo::Prefab::Detail {
             auto reference = PrefabAssetReference::Create(source.Value());
             if (reference.HasError())
                 return Result<NestedPrefabPlacement>::Failure(reference.ErrorValue());
+            auto overrides = ParseOverrideLayer(value, "valueOverrides", policy);
+            if (overrides.HasError())
+                return Result<NestedPrefabPlacement>::Failure(overrides.ErrorValue());
             return Result<NestedPrefabPlacement>::Success({.placementLocalId = {placementId.Value()},
                                                            .parentLocalId = parentId.Value(),
                                                            .sourcePrefab = reference.Value(),
                                                            .authoredAgainst = revision.Value(),
-                                                           .localRootTransform = transform.Value()});
+                                                           .localRootTransform = transform.Value(),
+                                                           .valueOverrides = std::move(overrides).Value()});
         }
 
         /** @brief Parses the exclusive variant composition envelope. */
-        [[nodiscard]] Result<std::optional<PrefabComposition>> ParseVariantComposition(const Json &value) {
-            if (!HasAllowedFields(value, {"variantParent", "variantAuthoredAgainst"}))
+        [[nodiscard]] Result<std::optional<PrefabComposition>> ParseVariantComposition(const Json &value,
+                                                                                       const PrefabProjectPolicy &policy) {
+            if (!HasAllowedFields(value, {"variantParent", "variantAuthoredAgainst"}, {"variantOverrides"}))
                 return Failed<std::optional<PrefabComposition>>(PrefabErrors::CompositionInvalid,
                                                                 "Prefab variant composition fields are not canonical.");
             auto parent = ParseAssetId(value.at("variantParent"));
@@ -140,8 +149,36 @@ namespace Horo::Prefab::Detail {
             auto reference = PrefabAssetReference::Create(parent.Value());
             if (reference.HasError())
                 return Result<std::optional<PrefabComposition>>::Failure(reference.ErrorValue());
-            return Result<std::optional<PrefabComposition>>::Success(
-                PrefabComposition{.variantParent = reference.Value(), .variantAuthoredAgainst = revision.Value()});
+            auto overrides = ParseOverrideLayer(value, "variantOverrides", policy);
+            if (overrides.HasError())
+                return Result<std::optional<PrefabComposition>>::Failure(overrides.ErrorValue());
+            return Result<std::optional<PrefabComposition>>::Success(PrefabComposition{.variantParent = reference.Value(),
+                                                                                       .variantAuthoredAgainst = revision.Value(),
+                                                                                       .variantOverrides = std::move(overrides).Value()});
+        }
+
+        /** @brief Rejects duplicate placement identity before any layer payload, then admits payloads in numeric stable-ID order. */
+        Result<std::vector<const Json *>> OrderedPlacements(const Json &rows) {
+            std::vector<std::pair<std::uint32_t, const Json *>> ordered;
+            ordered.reserve(rows.size());
+            std::set<std::uint32_t> identities;
+            for (const auto &row : rows) {
+                if (!row.is_object() || !row.contains("placementLocalId"))
+                    return Failed<std::vector<const Json *>>(PrefabErrors::InvalidPlacement);
+                auto id = ReadUnsigned<std::uint32_t>(row.at("placementLocalId"));
+                if (id.HasError())
+                    return Result<std::vector<const Json *>>::Failure(id.ErrorValue());
+                if (!identities.insert(id.Value()).second)
+                    return Failed<std::vector<const Json *>>(PrefabErrors::InvalidPlacement,
+                                                             "Duplicate nested placement identities are not last-write-wins.");
+                ordered.emplace_back(id.Value(), &row);
+            }
+            std::ranges::sort(ordered, {}, &std::pair<std::uint32_t, const Json *>::first);
+            std::vector<const Json *> result;
+            result.reserve(ordered.size());
+            for (const auto &entry : ordered)
+                result.push_back(entry.second);
+            return Result<std::vector<const Json *>>::Success(std::move(result));
         }
 
         /** @brief Parses the bounded concrete nested-placement envelope. */
@@ -154,10 +191,13 @@ namespace Horo::Prefab::Detail {
             if (!encodedPlacements.is_array() || encodedPlacements.size() > policy.maximumDirectNestedPlacements)
                 return Failed<std::optional<PrefabComposition>>(PrefabErrors::NestedPlacementCountExceeded,
                                                                 "Prefab nested placement count exceeds its bound.");
+            auto ordered = OrderedPlacements(encodedPlacements);
+            if (ordered.HasError())
+                return Result<std::optional<PrefabComposition>>::Failure(ordered.ErrorValue());
             std::vector<NestedPrefabPlacement> placements;
             placements.reserve(encodedPlacements.size());
-            for (const Json &encodedPlacement : encodedPlacements) {
-                auto placement = ParseNestedPlacement(encodedPlacement);
+            for (const auto *encodedPlacement : ordered.Value()) {
+                auto placement = ParseNestedPlacement(*encodedPlacement, policy);
                 if (placement.HasError())
                     return Result<std::optional<PrefabComposition>>::Failure(placement.ErrorValue());
                 placements.push_back(std::move(placement).Value());
@@ -210,6 +250,6 @@ namespace Horo::Prefab::Detail {
         if (value.is_null() || !value.is_object())
             return Failed<std::optional<PrefabComposition>>(PrefabErrors::CompositionInvalid,
                                                             "Prefab composition must be an object when present.");
-        return value.contains("variantParent") ? ParseVariantComposition(value) : ParseNestedComposition(value, policy);
+        return value.contains("variantParent") ? ParseVariantComposition(value, policy) : ParseNestedComposition(value, policy);
     }
 }  // namespace Horo::Prefab::Detail

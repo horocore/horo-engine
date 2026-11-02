@@ -22,7 +22,7 @@ namespace Horo::Prefab::ValueDetail {
         PrefabExpansionBudget budget;
         std::vector<ResolvedPrefabObject> objects;
         std::vector<ValueBinding> bindings;
-        std::map<std::pair<std::size_t, std::size_t>, Json> payloads;
+        std::map<std::pair<std::size_t, std::size_t>, OwnedJson> payloads;
         std::set<std::pair<std::size_t, std::size_t>> modifiedPayloads;
         std::size_t provenanceBytes{};
     };

@@ -64,10 +64,32 @@ namespace Horo::Application::PrefabCookDetail {
             return Result<std::vector<Prefab::PrefabTemplateCookResource>>::Success(std::move(resources));
         }
 
+        /** @brief Projects raw identity only after the same sealed source bytes match the resolver's exact canonical document. */
+        Result<Sha256Digest> CapturedTemplateDigest(const TemplateCookState &state, Assets::AssetId root) {
+            const auto *captured = state.inputs.Find(root);
+            if (!captured || captured->record.type.Value() != "core.prefab")
+                return Result<Sha256Digest>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            const auto document = std::ranges::find_if(state.resolver.Sources(), [root](const auto &source) {
+                return source.document.Data().assetId == root;
+            });
+            if (document == state.resolver.Sources().end())
+                return Result<Sha256Digest>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            const std::string_view bytes{reinterpret_cast<const char *>(captured->bytes.data()), captured->bytes.size()};
+            const auto same = document->document.MatchesCanonicalInput(bytes);
+            if (same.HasError())
+                return Result<Sha256Digest>::Failure(same.ErrorValue());
+            if (!same.Value())
+                return Result<Sha256Digest>::Failure(MakeError(PrefabSceneCookErrors::Stale));
+            return Result<Sha256Digest>::Success(captured->sourceDigest);
+        }
+
         /** @brief Transforms one explicit root and retains only owned validated bytes after resource views expire. */
         Result<PreparedTemplate> PrepareTemplate(const TemplateCookState &state, const Assets::AssetId root,
                                                  const std::span<const Assets::AssetCookCandidateArtifactView> artifacts,
                                                  const CancellationToken &cancellation) {
+            const auto source = CapturedTemplateDigest(state, root);
+            if (source.HasError())
+                return Result<PreparedTemplate>::Failure(source.ErrorValue());
             auto resources = RootResources(state, root, artifacts);
             if (resources.HasError())
                 return Result<PreparedTemplate>::Failure(resources.ErrorValue());
@@ -77,12 +99,7 @@ namespace Horo::Application::PrefabCookDetail {
                 return Result<PreparedTemplate>::Failure(cooked.ErrorValue());
             if (auto admitted = ValidateSchemas(cooked.Value().Data(), state, cancellation); admitted.HasError())
                 return Result<PreparedTemplate>::Failure(admitted.ErrorValue());
-            const auto source = std::ranges::find_if(state.resolver.Sources(), [root](const auto &entry) {
-                return entry.document.Data().assetId == root;
-            });
-            if (source == state.resolver.Sources().end())
-                return Result<PreparedTemplate>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-            PreparedTemplate prepared{root, source->sourceRevision.contentDigest, {}, {}};
+            PreparedTemplate prepared{root, source.Value(), {}, {}};
             prepared.payload.reserve(cooked.Value().Bytes().size());
             for (const auto byte : cooked.Value().Bytes())
                 prepared.payload.push_back(std::to_integer<std::uint8_t>(byte));
@@ -163,9 +180,16 @@ namespace Horo::Application::PrefabCookDetail {
         }
     }  // namespace
 
+    /** @brief Binds semantic graph and raw producer identities to the same actual sealed capture before admitting a template phase. */
+    static bool SameTemplateCapture(const TemplateCookState &state) noexcept {
+        return state.inputs.Registry().Revision() == state.registry.Revision() &&
+               state.resolver.RegistryRevision() == state.registry.Revision() &&
+               state.graph.RegistryRevision() == state.registry.Revision();
+    }
+
     /** @copydoc PrepareTemplatePhase */
     Result<std::shared_ptr<const Assets::AssetCookDependentPhase>> PrepareTemplatePhase(TemplateCookState state) {
-        if (state.roots.empty() || state.roots.size() > state.assetLimits.maximumAssets)
+        if (!SameTemplateCapture(state) || state.roots.empty() || state.roots.size() > state.assetLimits.maximumAssets)
             return Result<std::shared_ptr<const Assets::AssetCookDependentPhase>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
         std::ranges::sort(state.roots);
         if (std::ranges::adjacent_find(state.roots) != state.roots.end())

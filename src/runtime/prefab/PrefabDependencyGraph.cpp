@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace Horo::Prefab {
@@ -37,27 +38,6 @@ namespace Horo::Prefab {
             return PrefabDependencyKind::Resource;
         }
 
-        /** @brief Checks every occurrence of one semantic edge against its captured target revision. */
-        [[nodiscard]] bool AuthoredRevisionsMatch(const PrefabDocumentData &document, const Assets::AssetId &target,
-                                                  const PrefabDependencyKind kind, const PrefabSourceRevision &targetRevision) noexcept {
-            if (!document.composition)
-                return false;
-            const PrefabComposition &composition = *document.composition;
-            if (kind == PrefabDependencyKind::VariantParent)
-                return composition.variantAuthoredAgainst && *composition.variantAuthoredAgainst == targetRevision;
-            if (kind == PrefabDependencyKind::NestedPrefab) {
-                const auto first = std::ranges::find_if(composition.nestedPlacements, [&target](const NestedPrefabPlacement &placement) {
-                    return placement.sourcePrefab.Asset() == target;
-                });
-                return first != composition.nestedPlacements.end() &&
-                       std::ranges::all_of(first, composition.nestedPlacements.end(),
-                                           [&target, &targetRevision](const NestedPrefabPlacement &placement) {
-                    return placement.sourcePrefab.Asset() != target || placement.authoredAgainst == targetRevision;
-                });
-            }
-            return false;
-        }
-
         /** @brief Charges work before inserting a graph-owned item. */
         [[nodiscard]] Result<void> Charge(PrefabExpansionBudget &budget) {
             return budget.Consume(1);
@@ -85,11 +65,25 @@ namespace Horo::Prefab {
             return true;
         }
 
+        /** @brief Canonicalizes borrowed source identity order before node validation can select a failure. */
+        std::vector<const PrefabDependencySource *> OrderedSources(const std::vector<PrefabDependencySource> &sources) {
+            std::vector<const PrefabDependencySource *> ordered;
+            ordered.reserve(sources.size());
+            for (const auto &source : sources)
+                ordered.push_back(&source);
+            std::ranges::sort(ordered, {}, [](const auto *source) {
+                return source->document.Data().assetId;
+            });
+            return ordered;
+        }
+
+        /** @brief Admits source identities in stable order before collecting any semantic edge. */
         [[nodiscard]] Result<void> ValidateAndCaptureNodes(const Assets::AssetRegistrySnapshot &registry,
                                                            const std::vector<PrefabDependencySource> &sources,
                                                            const PrefabLimitProfile &limits, PrefabExpansionBudget &budget,
                                                            SourceMap &sourceById, NodeMap &nodes) {
-            for (const PrefabDependencySource &source : sources) {
+            for (const auto *entry : OrderedSources(sources)) {
+                const auto &source = *entry;
                 const PrefabDocumentData &document = source.document.Data();
                 if (document.referencedAssets.size() > limits.Policy().maximumReferencedAssets)
                     return Result<void>::Failure(MakeError(PrefabErrors::ReferenceCountExceeded));
@@ -109,45 +103,115 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<std::vector<PrefabDependencyEdge>> ProcessEdges(const Assets::AssetRegistrySnapshot &registry,
-                                                                             const std::vector<PrefabDependencySource> &sources,
-                                                                             const SourceMap &sourceById, NodeMap &nodes,
-                                                                             PrefabExpansionBudget &budget) {
-            std::vector<PrefabDependencyEdge> edges;
-            for (const PrefabDependencySource &source : sources) {
-                const PrefabDocumentData &document = source.document.Data();
-                for (const Assets::AssetId target : document.referencedAssets) {
-                    const Assets::AssetRecord *record = registry.Find(target);
-                    if (record == nullptr)
-                        return Result<std::vector<PrefabDependencyEdge>>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+        /** @brief One bounded graph capture; policy never changes which registry/source generation supplies a target. */
+        struct EdgeCapture final {
+            const Assets::AssetRegistrySnapshot &registry;
+            const SourceMap &sources;
+            NodeMap &nodes;
+            PrefabExpansionBudget &budget;
+            PrefabSourceRevisionPolicy policy;
+            std::vector<PrefabDependencyRevisionSkew> &skews;
+        };
 
-                    const PrefabDependencyKind kind = DependencyKind(document, target);
-                    const bool semanticPrefab = kind != PrefabDependencyKind::Resource;
-                    if (semanticPrefab && record->type.Value() != PrefabAssetType)
-                        return Result<std::vector<PrefabDependencyEdge>>::Failure(MakeError(PrefabErrors::DependencyTypeMismatch));
+        /** @brief Retains both revisions only for explicitly admitted authoring rebases. */
+        Result<void> AppendRevisionSkew(EdgeCapture &capture, const PrefabDocumentData &owner, Assets::AssetId target,
+                                        PrefabDependencyKind kind, std::optional<LocalObjectId> placement,
+                                        const PrefabSourceRevision &authored, const PrefabSourceRevision &actual) {
+            if (authored == actual)
+                return Result<void>::Success();
+            if (capture.policy == PrefabSourceRevisionPolicy::RequireExact)
+                return Result<void>::Failure(MakeError(PrefabErrors::DependencyRevisionMismatch));
+            if (auto charged = Charge(capture.budget); charged.HasError())
+                return charged;
+            capture.skews.push_back({owner.assetId, target, kind, placement, authored, actual});
+            return Result<void>::Success();
+        }
 
-                    const auto targetSource = sourceById.find(target);
-                    if (record->type.Value() == PrefabAssetType && targetSource == sourceById.end())
-                        return Result<std::vector<PrefabDependencyEdge>>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-                    if (semanticPrefab && !AuthoredRevisionsMatch(document, target, kind, targetSource->second->sourceRevision))
-                        return Result<std::vector<PrefabDependencyEdge>>::Failure(MakeError(PrefabErrors::DependencyRevisionMismatch));
+        /** @brief Checks each stable occurrence independently; repeated asset references cannot hide an older placement revision. */
+        Result<void> CaptureEdgeRevisions(EdgeCapture &capture, const PrefabDocumentData &document, Assets::AssetId target,
+                                          PrefabDependencyKind kind, const PrefabSourceRevision &actual) {
+            const auto &composition = *document.composition;
+            if (kind == PrefabDependencyKind::VariantParent)
+                return AppendRevisionSkew(capture, document, target, kind, {}, *composition.variantAuthoredAgainst, actual);
+            for (const auto &placement : composition.nestedPlacements)
+                if (placement.sourcePrefab.Asset() == target)
+                    if (auto accepted = AppendRevisionSkew(capture, document, target, kind, placement.placementLocalId,
+                                                           placement.authoredAgainst, actual);
+                        accepted.HasError())
+                        return accepted;
+            return Result<void>::Success();
+        }
 
-                    if (const auto captured = CaptureNode(nodes, *record, std::nullopt, budget); captured.HasError())
-                        return Result<std::vector<PrefabDependencyEdge>>::Failure(captured.ErrorValue());
-                    if (const auto charged = Charge(budget); charged.HasError())
-                        return Result<std::vector<PrefabDependencyEdge>>::Failure(charged.ErrorValue());
-                    edges.emplace_back(document.assetId, target, kind);
-                }
+        /** @brief Admits availability, role and revisions before capturing any edge or bounded node reference. */
+        Result<PrefabDependencyEdge> CaptureEdge(EdgeCapture &capture, const PrefabDocumentData &document, Assets::AssetId target) {
+            const auto *record = capture.registry.Find(target);
+            if (!record)
+                return Result<PrefabDependencyEdge>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+            const auto kind = DependencyKind(document, target);
+            if (kind != PrefabDependencyKind::Resource && record->type.Value() != PrefabAssetType)
+                return Result<PrefabDependencyEdge>::Failure(MakeError(PrefabErrors::DependencyTypeMismatch));
+            const auto source = capture.sources.find(target);
+            if (record->type.Value() == PrefabAssetType && source == capture.sources.end())
+                return Result<PrefabDependencyEdge>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+            if (kind != PrefabDependencyKind::Resource)
+                if (auto revisions = CaptureEdgeRevisions(capture, document, target, kind, source->second->sourceRevision);
+                    revisions.HasError())
+                    return Result<PrefabDependencyEdge>::Failure(revisions.ErrorValue());
+            if (auto node = CaptureNode(capture.nodes, *record, std::nullopt, capture.budget); node.HasError())
+                return Result<PrefabDependencyEdge>::Failure(node.ErrorValue());
+            if (auto charged = Charge(capture.budget); charged.HasError())
+                return Result<PrefabDependencyEdge>::Failure(charged.ErrorValue());
+            return Result<PrefabDependencyEdge>::Success({document.assetId, target, kind});
+        }
+
+        /** @brief Canonicalizes only the bounded source view so serialized dependency order cannot choose an error. */
+        Result<void> CaptureSourceEdges(EdgeCapture &capture, const PrefabDocumentData &document,
+                                        std::vector<PrefabDependencyEdge> &edges) {
+            auto references = document.referencedAssets;
+            std::ranges::sort(references);
+            for (const auto target : references) {
+                auto edge = CaptureEdge(capture, document, target);
+                if (edge.HasError())
+                    return Result<void>::Failure(edge.ErrorValue());
+                edges.push_back(std::move(edge).Value());
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Uses canonical owner/target identity order for output and diagnostics under both explicit capture modes. */
+        [[nodiscard]] Result<std::vector<PrefabDependencyEdge>> ProcessEdges(EdgeCapture &capture) {
+            std::vector<PrefabDependencyEdge> edges;
+            for (const auto &[asset, source] : capture.sources) {
+                static_cast<void>(asset);
+                if (auto captured = CaptureSourceEdges(capture, source->document.Data(), edges); captured.HasError())
+                    return Result<std::vector<PrefabDependencyEdge>>::Failure(captured.ErrorValue());
+            }
+            std::ranges::sort(capture.skews, [](const auto &a, const auto &b) {
+                return std::tie(a.owner, a.target, a.kind, a.placement) < std::tie(b.owner, b.target, b.kind, b.placement);
+            });
             return Result<std::vector<PrefabDependencyEdge>>::Success(std::move(edges));
         }
     }  // namespace
 
+    /** @brief Publishes only fully admitted canonical graph storage and its explicit authoring-capture evidence. */
     PrefabDependencyGraphSnapshot::PrefabDependencyGraphSnapshot(const Assets::AssetRegistryRevision registryRevision,
                                                                  std::vector<PrefabDependencyNode> nodes,
                                                                  std::vector<PrefabDependencyEdge> edges,
-                                                                 std::vector<PrefabDependencyEdge> reverseEdges) noexcept
-        : registryRevision_(registryRevision), nodes_(std::move(nodes)), edges_(std::move(edges)), reverseEdges_(std::move(reverseEdges)) {}
+                                                                 std::vector<PrefabDependencyEdge> reverseEdges,
+                                                                 PrefabSourceRevisionPolicy policy,
+                                                                 std::vector<PrefabDependencyRevisionSkew> skews) noexcept
+        : registryRevision_(registryRevision), nodes_(std::move(nodes)), edges_(std::move(edges)), reverseEdges_(std::move(reverseEdges)),
+          revisionPolicy_(policy), revisionSkews_(std::move(skews)) {}
+
+    /** @copydoc PrefabDependencyGraphSnapshot::RevisionPolicy */
+    PrefabSourceRevisionPolicy PrefabDependencyGraphSnapshot::RevisionPolicy() const noexcept {
+        return revisionPolicy_;
+    }
+
+    /** @copydoc PrefabDependencyGraphSnapshot::RevisionSkews */
+    std::span<const PrefabDependencyRevisionSkew> PrefabDependencyGraphSnapshot::RevisionSkews() const noexcept {
+        return revisionSkews_;
+    }
 
     /** @copydoc PrefabDependencyGraphSnapshot::RegistryRevision */
     Assets::AssetRegistryRevision PrefabDependencyGraphSnapshot::RegistryRevision() const noexcept {
@@ -241,16 +305,21 @@ namespace Horo::Prefab {
     /** @copydoc BuildPrefabDependencyGraph */
     Result<PrefabDependencyGraphSnapshot> BuildPrefabDependencyGraph(const Assets::AssetRegistrySnapshot &registry,
                                                                      const std::vector<PrefabDependencySource> &sources,
-                                                                     const PrefabLimitProfile &limits, const PrefabMetricHandles &metrics) {
+                                                                     const PrefabLimitProfile &limits, const PrefabMetricHandles &metrics,
+                                                                     PrefabSourceRevisionPolicy revisionPolicy) {
         PrefabMetricOperation observation{metrics, PrefabMetricPhase::Graph};
         auto result = [&]() -> Result<PrefabDependencyGraphSnapshot> {
+            if (revisionPolicy > PrefabSourceRevisionPolicy::PreserveLayerRebase)
+                return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
             PrefabExpansionBudget budget{limits};
             SourceMap sourceById;
             NodeMap nodes;
 
             if (auto validated = ValidateAndCaptureNodes(registry, sources, limits, budget, sourceById, nodes); validated.HasError())
                 return Result<PrefabDependencyGraphSnapshot>::Failure(std::move(validated).ErrorValue());
-            auto processedEdges = ProcessEdges(registry, sources, sourceById, nodes, budget);
+            std::vector<PrefabDependencyRevisionSkew> skews;
+            EdgeCapture capture{registry, sourceById, nodes, budget, revisionPolicy, skews};
+            auto processedEdges = ProcessEdges(capture);
             if (processedEdges.HasError())
                 return Result<PrefabDependencyGraphSnapshot>::Failure(std::move(processedEdges).ErrorValue());
             std::vector<PrefabDependencyEdge> edges = std::move(processedEdges).Value();
@@ -273,7 +342,8 @@ namespace Horo::Prefab {
                 canonicalNodes.push_back(std::move(node));
             }
             return Result<PrefabDependencyGraphSnapshot>::Success(
-                PrefabDependencyGraphSnapshot{registry.Revision(), std::move(canonicalNodes), std::move(edges), std::move(reverseEdges)});
+                PrefabDependencyGraphSnapshot{registry.Revision(), std::move(canonicalNodes), std::move(edges), std::move(reverseEdges),
+                                              revisionPolicy, std::move(skews)});
         }();
         if (result.HasError())
             observation.Fail(result.ErrorValue());

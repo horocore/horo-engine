@@ -11,6 +11,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Prefab/PrefabErrors.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "PCGPreviewWorkspace.h"
 
 #include <array>
@@ -21,11 +22,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
         /** @brief Composes the explicit project loader and retains its cooperative lease through cache publication. */
         PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations,
-                                                   Prefab::PrefabMetricHandles metrics) {
-            return [root, mutations, metrics = std::move(metrics)](const Assets::AssetRegistrySnapshot &registry,
-                                                                   const std::span<const Assets::AssetId> roots,
-                                                                   const Prefab::PrefabLimitProfile &limits,
-                                                                   const CancellationToken &cancellation) {
+                                                   Prefab::PrefabMetricHandles metrics,
+                                                   std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas) {
+            return
+                [root, mutations, metrics = std::move(metrics),
+                 schemas = std::move(schemas)](const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
+                                               const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation) {
                 if (mutations == nullptr)
                     return Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
                 auto lease = mutations->TryAcquire({root, ProjectMutationOwner::Asset, "prefab.hierarchy.capture"});
@@ -35,11 +37,17 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 if (project.HasError())
                     return Result<PreparedPrefabHierarchySources>::Failure(project.ErrorValue());
                 auto sources = CapturePrefabHierarchySources(root, registry, roots, limits, project.Value().metadata.horoVersion.value,
-                                                             cancellation, metrics);
+                                                             cancellation, metrics, schemas);
                 if (sources.HasError())
                     return Result<PreparedPrefabHierarchySources>::Failure(sources.ErrorValue());
                 return Result<PreparedPrefabHierarchySources>::Success({std::move(sources).Value(), std::move(lease).Value()});
             };
+        }
+
+        /** @brief Copies only explicitly registered override policy into the asynchronous source capture lease. */
+        std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> OverrideSchemas(const EditorServiceRegistry &services) {
+            const auto *schemas = services.TryGetConst<Prefab::PrefabValueSchemaSnapshot>();
+            return schemas ? std::make_shared<const Prefab::PrefabValueSchemaSnapshot>(*schemas) : nullptr;
         }
 
         /** @brief Owns the capability catalog and disposable preview inputs admitted together by the workspace host. */
@@ -202,7 +210,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations,
                                                                                services_.TryGetConst<Prefab::PrefabMetricHandles>()
                                                                                    ? *services_.TryGetConst<Prefab::PrefabMetricHandles>()
-                                                                                   : Prefab::PrefabMetricHandles{}),
+                                                                                   : Prefab::PrefabMetricHandles{},
+                                                                               OverrideSchemas(services_)),
                                                       .stageFactory = BindPrefabStageFactory(projectRoot)},
                                            .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)},
                                            .terrainCook = services_.TryGetConst<Application::TerrainAuthoringCookFactory>(),

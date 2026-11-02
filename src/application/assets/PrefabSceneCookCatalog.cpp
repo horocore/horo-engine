@@ -26,6 +26,46 @@ namespace Horo::Application::PrefabCookDetail {
         }
 
         /** @brief Parses every captured prefab and commits its canonical revision before any resolver is built. */
+        /** @brief Validates actual registered component/behavior payloads independently of override permission metadata. */
+        Result<void> AdmitPrefabObjects(const Prefab::PrefabDocument &document,
+                                        const std::shared_ptr<const PrefabCookSchemaContext> &schemas) {
+            for (const auto &object : document.Data().objects) {
+                std::vector<Gameplay::SerializedComponent> components;
+                for (const auto &component : object.components)
+                    components.push_back(component.component);
+                if ((!schemas && (!components.empty() || !object.behaviors.empty())) ||
+                    (schemas && schemas->Validate(components, object.behaviors).HasError()))
+                    return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Captures canonical semantic source identity while preserving raw input digests separately in cook provenance. */
+        Result<Prefab::PrefabDependencySource> CapturePrefabSource(const Assets::AssetCookPinnedSource &input, const HostCapture &host,
+                                                                   const Prefab::PrefabLimitProfile &limits,
+                                                                   const std::shared_ptr<const PrefabCookSchemaContext> &schemas,
+                                                                   const Prefab::PrefabMetricHandles &metrics) {
+            using Outcome = Result<Prefab::PrefabDependencySource>;
+            const std::string_view bytes{reinterpret_cast<const char *>(input.bytes.data()), input.bytes.size()};
+            auto document = Prefab::PrefabDocument::Parse(bytes, limits,
+                                                          {.expectedProjectVersion = host.metadata.horoVersion.value, .metrics = &metrics});
+            if (document.HasError())
+                return Outcome::Failure(document.ErrorValue());
+            auto canonical = document.Value().MatchesCanonicalInput(bytes);
+            if (canonical.HasError())
+                return Outcome::Failure(canonical.ErrorValue());
+            if (document.Value().Data().assetId != input.record.id || !canonical.Value())
+                return Outcome::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            if (auto admitted = AdmitPrefabObjects(document.Value(), schemas); admitted.HasError())
+                return Outcome::Failure(admitted.ErrorValue());
+            auto encoded = document.Value().SerializeCanonical();
+            if (encoded.HasError())
+                return Outcome::Failure(encoded.ErrorValue());
+            const auto semantic = ComputeSha256(std::as_bytes(std::span{encoded.Value()}));
+            return Outcome::Success({std::move(document).Value(), {host.metadata.horoVersion.value, semantic}});
+        }
+
+        /** @brief Admits the actual captured prefab inventory without executing providers or expanding incomplete sources. */
         Result<std::vector<Prefab::PrefabDependencySource>> PrefabSources(const Assets::AssetCookInputSnapshot &inputs,
                                                                           const HostCapture &host, const Prefab::PrefabLimitProfile &limits,
                                                                           const CancellationToken &cancellation,
@@ -37,26 +77,10 @@ namespace Horo::Application::PrefabCookDetail {
                     return Result<std::vector<Prefab::PrefabDependencySource>>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
                 if (input.record.type.Value() != "core.prefab")
                     continue;
-                const std::string_view bytes{reinterpret_cast<const char *>(input.bytes.data()), input.bytes.size()};
-                auto document =
-                    Prefab::PrefabDocument::Parse(bytes, limits,
-                                                  {.expectedProjectVersion = host.metadata.horoVersion.value, .metrics = &metrics});
-                if (document.HasError())
-                    return Result<std::vector<Prefab::PrefabDependencySource>>::Failure(document.ErrorValue());
-                auto canonical = document.Value().SerializeCanonical();
-                if (canonical.HasError())
-                    return Result<std::vector<Prefab::PrefabDependencySource>>::Failure(canonical.ErrorValue());
-                if (document.Value().Data().assetId != input.record.id || canonical.Value() != bytes)
-                    return Result<std::vector<Prefab::PrefabDependencySource>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-                for (const auto &object : document.Value().Data().objects) {
-                    std::vector<Gameplay::SerializedComponent> components;
-                    for (const auto &component : object.components)
-                        components.push_back(component.component);
-                    if ((!schemas && (!components.empty() || !object.behaviors.empty())) ||
-                        (schemas && schemas->Validate(components, object.behaviors).HasError()))
-                        return Result<std::vector<Prefab::PrefabDependencySource>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-                }
-                sources.push_back({std::move(document).Value(), {host.metadata.horoVersion.value, input.sourceDigest}});
+                auto source = CapturePrefabSource(input, host, limits, schemas, metrics);
+                if (source.HasError())
+                    return Result<std::vector<Prefab::PrefabDependencySource>>::Failure(source.ErrorValue());
+                sources.push_back(std::move(source).Value());
             }
             return Result<std::vector<Prefab::PrefabDependencySource>>::Success(std::move(sources));
         }
@@ -221,6 +245,9 @@ namespace Horo::Application::PrefabCookDetail {
                                                                  .document = source,
                                                                  .resolver = resolver,
                                                                  .limits = limits,
+                                                                 .valueSchemas = context.request.overrideSchemas
+                                                                                     ? std::optional{*context.request.overrideSchemas}
+                                                                                     : std::nullopt,
                                                                  .triggerBinding = context.request.triggerBinding};
                 if (const auto admitted = context.expansion.Submit(request, context.cancellation); admitted.HasError())
                     return Result<Runtime::RuntimeSceneDefinition>::Failure(admitted.ErrorValue());
@@ -439,6 +466,45 @@ namespace Horo::Application::PrefabCookDetail {
             prepared.templates = std::move(phase).Value();
             return Result<PreparedCatalog>::Success(std::move(prepared));
         }
+
+        /** @brief Excludes source-only prefabs and Scene roots already captured by their actual converted-resource closure. */
+        bool SelectedResource(const Assets::AssetCookPinnedSource &input, const PrefabSceneCookRequest &request) {
+            if (input.record.type.Value() == "core.scene")
+                return false;
+            return input.record.type.Value() != "core.prefab" ||
+                   std::ranges::find(request.runtimePrefabRoots, input.record.id) != request.runtimePrefabRoots.end();
+        }
+
+        /** @brief Builds complete immutable cook keys from the resolver's one validated graph and actual converted Scene dependencies. */
+        Result<std::shared_ptr<const Assets::AssetCookKeyProjection>> CaptureSelections(
+            const PrefabSceneCookRequest &request, const Assets::AssetCookInputSnapshot &inputs,
+            const Prefab::PrefabSourceResolverSnapshot &resolver, std::span<const PreparedScene> scenes,
+            const Assets::CookerCatalogSnapshot &catalog, const CancellationToken &cancellation) {
+            using Outcome = Result<std::shared_ptr<const Assets::AssetCookKeyProjection>>;
+            std::vector<Assets::AssetCookKeySelection> selections;
+            std::size_t total{};
+            for (const auto &scene : scenes) {
+                if (scene.key.inputs.size() > 1'048'576U - total)
+                    return Outcome::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
+                total += scene.key.inputs.size();
+                selections.push_back(scene.key);
+            }
+            for (const auto &input : inputs.Sources()) {
+                if (!SelectedResource(input, request))
+                    continue;
+                auto semantic =
+                    CaptureSemanticCookInputs(inputs, resolver.DependencyGraph(), resolver, input.record.id, request.schemas, catalog,
+                                              request.assets.target, request.assets.limits.maximumAssets, cancellation);
+                if (semantic.HasError())
+                    return Outcome::Failure(semantic.ErrorValue());
+                if (semantic.Value().sources.size() > 1'048'576U - total)
+                    return Outcome::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
+                total += semantic.Value().sources.size();
+                selections.push_back({input.record.id, std::move(semantic.Value().sources), semantic.Value().producerSettings});
+            }
+            return Assets::AssetCookKeyProjection::Create(inputs, std::move(selections), request.assets.limits.maximumAssets);
+        }
+
     }  // namespace
 
     /** @copydoc PrepareCatalog */
@@ -449,44 +515,22 @@ namespace Horo::Application::PrefabCookDetail {
         auto sources = PrefabSources(inputs, host, limits, cancellation, request.schemas, request.metrics);
         if (sources.HasError())
             return Result<PreparedCatalog>::Failure(sources.ErrorValue());
-        auto graph = Prefab::BuildPrefabDependencyGraph(inputs.Registry(), sources.Value(), limits, request.metrics);
-        if (graph.HasError())
-            return Result<PreparedCatalog>::Failure(graph.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<PreparedCatalog>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
-        auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(inputs.Registry(), std::move(sources).Value(), limits, request.metrics);
+        auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(inputs.Registry(), std::move(sources).Value(), limits, request.metrics,
+                                                                  request.overrideSchemas);
         if (resolver.HasError())
             return Result<PreparedCatalog>::Failure(resolver.ErrorValue());
         auto resources = PrepareResourceCatalogInputs(request, host, inputs, catalog, cancellation);
         if (resources.HasError())
             return Result<PreparedCatalog>::Failure(resources.ErrorValue());
         const auto settings = resources.Value().settings;
-        auto scenes = PrepareScenes(request, inputs, resolver.Value(), graph.Value(), limits,
-                                    {request, settings, inputs, catalog, cancellation, expansion});
+        const auto &graph = resolver.Value().DependencyGraph();
+        auto scenes =
+            PrepareScenes(request, inputs, resolver.Value(), graph, limits, {request, settings, inputs, catalog, cancellation, expansion});
         if (scenes.HasError())
             return Result<PreparedCatalog>::Failure(scenes.ErrorValue());
-        std::vector<Assets::AssetCookKeySelection> selections;
-        std::size_t totalInputReferences{};
-        for (const auto &scene : scenes.Value()) {
-            totalInputReferences += scene.key.inputs.size();
-            selections.push_back(scene.key);
-        }
-        for (const auto &input : inputs.Sources()) {
-            if (input.record.type.Value() == "core.scene")
-                continue;
-            if (input.record.type.Value() == "core.prefab" &&
-                std::ranges::find(request.runtimePrefabRoots, input.record.id) == request.runtimePrefabRoots.end())
-                continue;
-            auto semantic = CaptureSemanticCookInputs(inputs, graph.Value(), resolver.Value(), input.record.id, request.schemas, catalog,
-                                                      request.assets.target, request.assets.limits.maximumAssets, cancellation);
-            if (semantic.HasError())
-                return Result<PreparedCatalog>::Failure(semantic.ErrorValue());
-            if (semantic.Value().sources.size() > 1'048'576U - totalInputReferences)
-                return Result<PreparedCatalog>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
-            totalInputReferences += semantic.Value().sources.size();
-            selections.push_back({input.record.id, std::move(semantic.Value().sources), semantic.Value().producerSettings});
-        }
-        auto projection = Assets::AssetCookKeyProjection::Create(inputs, std::move(selections), request.assets.limits.maximumAssets);
+        auto projection = CaptureSelections(request, inputs, resolver.Value(), scenes.Value(), catalog, cancellation);
         if (projection.HasError())
             return Result<PreparedCatalog>::Failure(projection.ErrorValue());
         auto published = PublishContributions(std::move(resources).Value(), std::move(scenes).Value(), request);
@@ -495,8 +539,9 @@ namespace Horo::Application::PrefabCookDetail {
         PreparedCatalog prepared{published.Value(), {}, std::move(projection).Value()};
         if (request.runtimePrefabRoots.empty())
             return Result<PreparedCatalog>::Success(std::move(prepared));
-        return AttachTemplatePhase(std::move(prepared), {std::move(resolver).Value(), std::move(graph).Value(), inputs.Registry(),
+        auto templateGraph = graph;
+        return AttachTemplatePhase(std::move(prepared), {std::move(resolver).Value(), std::move(templateGraph), inputs.Registry(),
                                                          request.runtimePrefabRoots, request.assets.target, limits, request.assets.limits,
-                                                         settings, request.schemas, request.maximumCapturedBytes});
+                                                         settings, request.schemas, request.maximumCapturedBytes, inputs});
     }
 }  // namespace Horo::Application::PrefabCookDetail
