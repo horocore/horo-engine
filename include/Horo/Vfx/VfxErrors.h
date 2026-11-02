@@ -104,6 +104,14 @@ namespace Horo::Vfx::VfxErrors {
     extern const ErrorCodeDescriptor ParticleCollisionQueryFailed;
     /** @brief CPU simulation preparation inputs are malformed or exceed fixed limits. */
     extern const ErrorCodeDescriptor ParticleSimulationDescriptorInvalid;
+    /** @brief The authored particle unit requires stages outside the admitted GPU implementation. */
+    extern const ErrorCodeDescriptor GpuSimulationUnsupported;
+    /** @brief GPU unit identities, seeds, resolution or finite reservations are invalid. */
+    extern const ErrorCodeDescriptor GpuSimulationInvalid;
+    /** @brief Explicit GPU logical/source preparation storage could not be allocated. */
+    extern const ErrorCodeDescriptor GpuSimulationAllocationFailed;
+    /** @brief A renderer preparation receipt is missing, revoked or incompatible with this exact unit. */
+    extern const ErrorCodeDescriptor GpuSimulationReceiptInvalid;
     /** @brief Effect-pool descriptor, budget slice, or overload policy is invalid. */
     extern const ErrorCodeDescriptor EffectPoolInvalid;
     /** @brief Explicit effect-pool preparation could not allocate its fixed storage. */

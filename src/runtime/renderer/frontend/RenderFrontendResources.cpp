@@ -25,10 +25,21 @@ namespace Horo::Render {
             Unsupported,
         };
 
+        /** @brief Limits particle storage to declared storage/copy roles; the selected adapter validates memory access. */
+        [[nodiscard]] constexpr bool IsGpuParticleStorage(const RenderBufferDescriptor &descriptor) noexcept {
+            constexpr auto allowed =
+                static_cast<std::uint8_t>(RenderBufferUsage::Storage | RenderBufferUsage::CopySource | RenderBufferUsage::CopyDestination);
+            const auto usage = static_cast<std::uint8_t>(descriptor.usage);
+            return HasBufferUsage(descriptor.usage, RenderBufferUsage::Storage) && (usage & static_cast<std::uint8_t>(~allowed)) == 0;
+        }
+
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentBufferDescriptor(const RenderBufferDescriptor &descriptor,
-                                                                                         const bool lightStorageAvailable) noexcept {
+                                                                                         const bool lightStorageAvailable,
+                                                                                         const bool gpuParticleStorageAvailable) noexcept {
             using enum RenderBufferUsage;
             using enum ResourceDescriptorAdmission;
+            if (gpuParticleStorageAvailable && IsGpuParticleStorage(descriptor))
+                return Supported;
             if (lightStorageAvailable && descriptor.access == RenderBufferAccess::HostVisible && descriptor.usage == (Storage | CopySource))
                 return Supported;
             constexpr std::byte supportedUsageBits =
@@ -244,8 +255,9 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
                                   "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
-        if (AdmitCurrentBufferDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::LightCulling)) ==
-            ResourceDescriptorAdmission::Unsupported)
+        const auto &features = backend_->Capabilities().support.features;
+        if (AdmitCurrentBufferDescriptor(descriptor, features.Supports(RenderCapability::LightCulling),
+                                         features.Supports(RenderCapability::VfxGpuSimulation)) == ResourceDescriptorAdmission::Unsupported)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this buffer usage combination: " +

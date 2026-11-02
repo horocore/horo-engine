@@ -5,6 +5,7 @@
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "LightCullingMetalReflection.h"
 #include "ShaderCompilerToolchainSupport.h"
+#include "VfxGpuReflection.h"
 
 #include <algorithm>
 #include <array>
@@ -288,6 +289,16 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 return CompileDxcDebug(dxc, entry, scratch_ / (stem + ".debug"), true, {"-Zi", "-Qembed_debug"});
             }
 
+            /** @brief Retains exactly the binary fed to Cross for selected readonly input proof; fragment never overwrites vertex evidence.
+             */
+            bool RetainsVfxSpirv(const ShaderEntryPoint &entry) const {
+                if (entry.stage == ShaderStage::Compute)
+                    return true;
+                return entry.stage == ShaderStage::Vertex && invocation_.reflection &&
+                       ValidateVfxGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                           .HasValue();
+            }
+
             [[nodiscard]] Result<void> RouteSpirv(const ShaderEntryPoint &entry, const std::string &stem,
                                                   const std::filesystem::path &spirvPath, std::vector<std::uint8_t> spirv) {
                 using enum ShaderTargetBackend;
@@ -296,8 +307,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 if (invocation_.target.requirement.backend == OpenGL)
                     return CompileOpenGLRoute(entry, stem, spirvPath);
                 if (invocation_.target.requirement.backend == Metal) {
-                    if (entry.stage == ShaderStage::Compute)
-                        validatedComputeSpirv_ = std::move(spirv);
+                    if (RetainsVfxSpirv(entry))
+                        validatedReadonlySpirv_ = std::move(spirv);
                     return CompileMetalRoute(entry, stem, spirvPath);
                 }
                 return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
@@ -425,18 +436,27 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             }
 
             /** @brief Preserves ordinary routes and qualifies only proven canonical compute inputs before actual Apple compilation. */
-            [[nodiscard]] Result<void> PrepareMetalSource(const std::filesystem::path &nativePath) {
+            [[nodiscard]] Result<void> PrepareMetalSource(const ShaderEntryPoint &entry, const std::filesystem::path &nativePath) {
                 auto native =
                     ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
                 if (native.HasError())
                     return Result<void>::Failure(native.ErrorValue());
                 if (!invocation_.reflection)
                     return Result<void>::Success();
+                if (ValidateVfxGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                        .HasValue()) {
+                    const std::string source(native.Value().begin(), native.Value().end());
+                    auto qualified = QualifyVfxGpuMetalInputs(invocation_.manifest, entry, source, validatedReadonlySpirv_);
+                    if (qualified.HasError())
+                        return Result<void>::Failure(qualified.ErrorValue());
+                    const auto &text = qualified.Value();
+                    return WriteFile(nativePath, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
+                }
                 if (ValidateLightCullingMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
                         .HasError())
                     return Result<void>::Success();
                 const std::string source(native.Value().begin(), native.Value().end());
-                auto qualified = QualifyLightCullingMetalInputs(source, validatedComputeSpirv_);
+                auto qualified = QualifyLightCullingMetalInputs(source, validatedReadonlySpirv_);
                 if (qualified.HasError())
                     return Result<void>::Failure(qualified.ErrorValue());
                 const auto &text = qualified.Value();
@@ -451,7 +471,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 const std::filesystem::path nativePath = scratch_ / (stem + ".native");
                 if (auto translated = TranslateSpirv(entry, spirvPath, nativePath, true); translated.HasError())
                     return translated;
-                if (auto prepared = PrepareMetalSource(nativePath); prepared.HasError())
+                if (auto prepared = PrepareMetalSource(entry, nativePath); prepared.HasError())
                     return prepared;
                 if (auto reflected = CaptureNativeReflection(entry, stem, spirvPath, nativePath); reflected.HasError())
                     return reflected;
@@ -564,7 +584,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 if (invocation_.reflection &&
                     (output.backend == ShaderTargetBackend::Metal || output.backend == ShaderTargetBackend::OpenGL)) {
                     auto reflected =
-                        NormalizeCapturedRasterReflection(invocation_, reflectionStages_, translations_, validatedComputeSpirv_);
+                        NormalizeCapturedRasterReflection(invocation_, reflectionStages_, translations_, validatedReadonlySpirv_);
                     if (reflected.HasError())
                         return Result<ShaderCompilerAdapterOutput>::Failure(reflected.ErrorValue());
                     CompiledShaderArtifact compiled{output.backend,
@@ -595,7 +615,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             std::vector<ShaderCompilerDiagnostic> diagnostics_;
             std::vector<SpirvReflectionStage> reflectionStages_;
             std::vector<std::string> translations_;
-            std::vector<std::uint8_t> validatedComputeSpirv_;
+            std::vector<std::uint8_t> validatedReadonlySpirv_;
             ShaderCompilerDiagnosticContext diagnosticContext_;
             bool outputTruncated_{};
             std::optional<Error> diagnosticFailure_;

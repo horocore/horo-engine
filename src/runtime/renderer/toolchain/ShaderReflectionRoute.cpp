@@ -3,6 +3,7 @@
 #include "LightCullingMetalReflection.h"
 #include "ShaderCompilerRoute.h"
 #include "ShaderCompilerToolchainSupport.h"
+#include "VfxGpuReflection.h"
 
 #include <algorithm>
 #include <array>
@@ -97,6 +98,9 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                                          const std::vector<std::string> &translations,
                                                                          std::span<const std::uint8_t> validatedSpirv) {
         const auto &target = invocation.target.requirement;
+        if (ValidateVfxGpuMetalReflection(invocation.manifest, target, invocation.reflection->names).HasValue())
+            return NormalizeVfxGpuMetalReflection(invocation.manifest, target, stages, translations, invocation.reflection->names,
+                                                  validatedSpirv);
         if (ValidateLightCullingMetalReflection(invocation.manifest, target, invocation.reflection->names).HasValue())
             return NormalizeLightCullingMetalReflection(invocation.manifest, target, stages, translations, invocation.reflection->names,
                                                         validatedSpirv);
@@ -174,6 +178,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
         if (target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+        if (ValidateVfxGpuMetalReflection(manifest, target, request.names).HasValue())
+            return ValidateRasterTool(request, cross);
         if (ValidateLightCullingMetalReflection(manifest, target, request.names).HasValue())
             return ValidateRasterTool(request, cross);
         if (ValidateRegisterRasterReflection(manifest, target, request.names).HasValue())

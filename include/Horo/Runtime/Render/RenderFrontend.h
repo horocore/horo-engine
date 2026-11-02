@@ -2,6 +2,8 @@
 
 #include "Horo/Runtime/Render/ClusteredLightGrid.h"
 #include "Horo/Runtime/Render/RenderGraphInspection.h"
+#include "Horo/Runtime/Render/RenderReadback.h"
+#include "Horo/Runtime/Render/VfxGpuGraphScheduling.h"
 #include "Horo/Runtime/Render/VfxGraphScheduling.h"
 
 /**
@@ -57,6 +59,9 @@ namespace Horo::Render {
         struct UiPaintOwnerRetirement;
         struct RenderResourceIdentity;
         struct VfxSchedulingStorage;
+        struct VfxGpuStorage;
+        struct VfxGpuRecord;
+        struct VfxGpuAppendPlan;
         struct RenderGraphTransientResourceSet;
         struct VfxFrontendState;
         class RenderResourceRegistry;
@@ -201,6 +206,15 @@ namespace Horo::Render {
          */
         [[nodiscard]] Result<RenderQueueSubmission> ReserveSubmission(RenderQueueRole role,
                                                                       std::span<const RenderTimelinePoint> waits = {});
+
+        /** @brief Appends this immutable emitter's GPU compute/direct-draw contribution transactionally.
+         * @param builder Existing scene graph on this active frame owner.
+         * @param request Captured preparation, optional next logical step, view/attachments/anchors and remaining global budgets.
+         * @return Complete fixed records or nonallocating expected failure; no partial graph remains on failure.
+         * @details The host merges returned records/states/waits into the ordinary scene graph submission.
+         * Duplicate views share one same-builder compute producer. Encoding is never a successful step acknowledgement.
+         */
+        [[nodiscard]] VfxGpuGraphSchedulingOutcome ScheduleVfxGpu(RenderGraphBuilder &builder, const VfxGpuGraphRequest &request);
 
         /**
          * @brief Composes GUI output once after successful execution and before presentation.
@@ -364,6 +378,8 @@ namespace Horo::Render {
                                                         RenderGraphTransientResourcesHandle transientResources = {},
                                                         std::span<const RenderGraphQueueSubmission> submissions = {});
         /** @brief Guards one acquired graph lease and commits queue history only after backend acceptance. */
+        [[nodiscard]] Result<void> AdmitGpuGraphDispatch(const RenderGraphExecutionRequest &request,
+                                                         const Detail::RenderSubmissionAllocator &history);
         [[nodiscard]] Result<void> ExecuteLeasedGraph(RenderGraphExecutionRequest request,
                                                       const Detail::RenderSubmissionAllocator &submissionHistory);
         /** @brief Encodes a graph only after its named scene or UI stage has independently admitted it. */
@@ -573,6 +589,64 @@ namespace Horo::Render {
         [[nodiscard]] Result<RenderResourceState> ResourceState(RenderPipelineHandle handle) const;
         /** @brief Queries one exact sampler generation. @param handle Exact identity. @return State or typed identity failure. */
         [[nodiscard]] Result<RenderResourceState> ResourceState(RenderSamplerHandle handle) const;
+
+        /** @brief Cold-configures one existing readback queue and fixed CPU result pool before opt-in activation.
+         * @param limits Authored queue request/retained byte bounds. @param storage Fixed aligned physical slot envelope.
+         * @param maximumCpuPayloadBytes Host allowance for the actual global pool/metadata allocation, charged exactly once.
+         * @param observationTimeout Positive authored deadline for each observation; no implicit timeout or CPU wait exists.
+         * @return Exact known retained global CPU payload bytes; allocator/control-block/driver/RSS are excluded.
+         * @details Per-simulation slot shares are logical admission views. Full fixed-slot payload size is reserved even
+         * when a result is smaller; global alignment/metadata remainder stays in this host allowance. No lazy growth occurs.
+         */
+        [[nodiscard]] Result<std::size_t> PrepareVfxGpuReadbackStorage(const RenderReadbackLimits &limits,
+                                                                       RenderReadbackPreparedStorage storage,
+                                                                       std::size_t maximumCpuPayloadBytes,
+                                                                       std::chrono::nanoseconds observationTimeout);
+        /** @brief Processes only opt-in completion-qualified observations on the render owner outside an active frame.
+         * @return Count of completed/cancelled/retired request transitions or an original typed failure; never waits or allocates on
+         * success.
+         */
+        [[nodiscard]] Result<std::size_t> ProcessVfxGpuReadbacks();
+        /** @brief Queries actual observation-only calls and existing queue/pool counters on the render owner.
+         * @return Detached counters; zero pool/copy bytes for default-disabled use, or typed foreign-thread failure.
+         */
+        [[nodiscard]] Result<VfxGpuReadbackDiagnostics> GpuReadbackDiagnostics() const;
+        /** @brief Transfers an immutable lease over a requested logical step's normalized result without allocation.
+         * @param preparation Exact frontend-issued emitter preparation. @param step Exact logical observed step.
+         * @param result Existing destination, unchanged on failure.
+         * @return Existing queue static status; no map, copy, wait or request is implied by acquisition.
+         */
+        [[nodiscard]] RenderReadbackPreparedStatus AcquireVfxGpuObservation(const VfxGpuPreparationReceipt &preparation,
+                                                                            const VfxGpuStepIdentity &step,
+                                                                            RenderReadbackResult &result) noexcept;
+        /** @brief Suppresses result publication while retaining every possibly submitted native observation until completion.
+         * @return Static status; cancellation never releases uncertain/pending native ownership by shape alone.
+         */
+        [[nodiscard]] RenderReadbackPreparedStatus CancelVfxGpuObservation(const VfxGpuPreparationReceipt &preparation,
+                                                                           const VfxGpuStepIdentity &step) noexcept;
+
+        /** @brief Cold transactional realization of one complete authentic GPU simulation/draw family and exact buffer inventory.
+         * @param preparation Immutable canonical source words and span-free descriptor; spans expire at return.
+         * @param programs Genuine selected-backend cooked compute/draw artifacts and exact final reflection.
+         * @param lifetime Revokes new scheduling without releasing already accepted native use.
+         * @return Nonforgeable receipt only after all actual generations are Ready and native preparation succeeds.
+         * @details A typed Pending result retains the exact cold upload transaction; retry identical identity/digest/program keys.
+         * No frame-hot allocation, source compilation, pending buffer recreation or completion wait is permitted.
+         */
+        [[nodiscard]] Result<VfxGpuPreparationReceipt> PrepareVfxGpuSimulation(const VfxGpuSimulationPreparation &preparation,
+                                                                               const CookedVfxGpuPrograms &programs,
+                                                                               const CancellationToken &lifetime = {});
+        /** @brief Revokes an exact preparation and releases logical handles through existing retirement.
+         * @param preparation Exact live frontend-issued receipt. @return Owner/identity error or successful retirement admission.
+         * @details Accepted native inventory remains pinned until actual completion; no GPU wait is introduced.
+         */
+        [[nodiscard]] Result<void> ReleaseVfxGpuSimulation(const VfxGpuPreparationReceipt &preparation);
+        /** @brief Drains bounded native facts into nonforgeable acknowledgements at an owner safe phase.
+         * @param destination Caller-owned fixed result storage; no callbacks into a live world are invoked.
+         * @return Number of actual acknowledgements copied or original typed error.
+         * @details Each receipt must match a registered exact step and actual admitted timeline point. Graph success is insufficient.
+         */
+        [[nodiscard]] Result<std::size_t> DrainVfxGpuAcknowledgements(std::span<GpuVfxStepAcknowledgement> destination);
 
         /**
          * @brief Realizes one cooked light-culling kernel before frame admission on the render owner thread.
@@ -886,6 +960,57 @@ namespace Horo::Render {
                        ConstructionKey);
 
     private:
+        [[nodiscard]] Result<void> AdmitVfxGpuPreparation(const VfxGpuSimulationPreparation &preparation,
+                                                          const CancellationToken &lifetime);
+        [[nodiscard]] Result<Detail::VfxGpuRecord *> FindOrCreateVfxGpuRecord(const VfxGpuSimulationPreparation &preparation,
+                                                                              const CookedVfxGpuPrograms &programs,
+                                                                              const CancellationToken &lifetime);
+        [[nodiscard]] VfxGpuPreparationReceipt IssueVfxGpuReceipt(const Detail::VfxGpuRecord &record) const;
+        [[nodiscard]] Result<VfxGpuPreparationReceipt> ResumeVfxGpuPreparation(Detail::VfxGpuRecord &record,
+                                                                               const VfxGpuSimulationPreparation &preparation);
+        void RollbackVfxGpuRecord(VfxGpuSimulationId id) noexcept;
+        void DrainVfxGpuRetirements() noexcept;
+        [[nodiscard]] Result<void> RealizeVfxGpuInventory(Detail::VfxGpuRecord &record, const VfxGpuSimulationPreparation &preparation);
+        [[nodiscard]] Result<bool> AdmitVfxGpuDrain(std::span<GpuVfxStepAcknowledgement> destination);
+        [[nodiscard]] Result<std::size_t> DrainVfxGpuStorage(std::span<GpuVfxStepAcknowledgement> destination);
+        /** @brief Completes or resumes a single cold transaction using the existing registry/upload authorities. */
+        [[nodiscard]] Result<VfxGpuPreparationReceipt> CompleteVfxGpuPreparation(Detail::VfxGpuRecord &record,
+                                                                                 const VfxGpuSimulationPreparation &preparation);
+        /** @brief Queues all admitted simulation buffers once; no pending retry recreates them. */
+        [[nodiscard]] Result<void> CreateVfxGpuBuffers(Detail::VfxGpuRecord &record, const VfxGpuSimulationPreparation &preparation);
+        /** @brief Releases this record's logical handles through ordinary pending/retirement semantics. */
+        void RetireVfxGpuRecord(Detail::VfxGpuRecord &record) noexcept;
+        [[nodiscard]] VfxGpuGraphSchedulingOutcome AdmitVfxGpuGraph(const RenderGraphBuilder &builder, const VfxGpuGraphRequest &request,
+                                                                    Detail::VfxGpuRecord *&record) const;
+        [[nodiscard]] VfxGpuGraphSchedulingOutcome AppendVfxGpuPlan(RenderGraphBuilder &builder, Detail::VfxGpuAppendPlan &plan,
+                                                                    std::uint64_t frame);
+        [[nodiscard]] VfxGpuGraphSchedulingOutcome ValidateVfxGpuGraphRequest(const RenderGraphBuilder &builder,
+                                                                              const VfxGpuGraphRequest &request,
+                                                                              const Detail::VfxGpuRecord &record) const;
+        [[nodiscard]] Result<void> ImportVfxGpuPlan(RenderGraphBuilder &builder, Detail::VfxGpuAppendPlan &plan);
+        /** @brief Registers exact fixed records and graph imports with ordinary builder append rollback. */
+        [[nodiscard]] VfxGpuGraphSchedulingOutcome AppendVfxGpu(RenderGraphBuilder &builder, const VfxGpuGraphRequest &request,
+                                                                std::uint64_t frame);
+        /** @brief Validates registered exact GPU payloads and binds their actual admitted covering signal before dispatch. */
+        [[nodiscard]] Result<void> RegisterVfxGpuDispatch(const RenderGraphExecutionRequest &request,
+                                                          const Detail::RenderSubmissionAllocator &history);
+        /** @brief Clears only candidates proven never dispatched during this frame; creates no native acknowledgement. */
+        void AbandonUndispatchedVfxGpu(std::uint64_t frame) noexcept;
+        [[nodiscard]] Result<std::size_t> DrainVfxGpuRecordReceipts(Detail::VfxGpuRecord &record,
+                                                                    std::span<GpuVfxStepAcknowledgement> destination);
+        [[nodiscard]] Result<std::size_t> ReportVfxGpuDrainFailure(Error error, std::size_t prefix);
+        /** @brief Validates one actual native fact before privately issuing its acknowledgement. */
+        [[nodiscard]] Result<GpuVfxStepAcknowledgement> ValidateVfxGpuReceipt(Detail::VfxGpuRecord &record,
+                                                                              const NativeGpuVfxStepReceipt &receipt);
+        [[nodiscard]] Result<bool> CopyVfxGpuObservation(Detail::VfxGpuRecord &record, std::size_t index);
+        [[nodiscard]] Result<bool> CancelVfxGpuReadbackRequest(Detail::VfxGpuRecord &record, std::size_t index);
+        [[nodiscard]] Result<bool> RetireVfxGpuReadbackResult(Detail::VfxGpuRecord &record, std::size_t index);
+        [[nodiscard]] Result<void> ObserveVfxGpuReadbackFact(Detail::VfxGpuRecord &record, const NativeGpuVfxStepReceipt &receipt);
+        [[nodiscard]] Result<bool> ProcessVfxGpuObservation(Detail::VfxGpuRecord &record, std::size_t index);
+        void FinishVfxGpuStorageAfterNativeDrain() noexcept;
+        /** @brief Revokes inventory at shutdown after closing new graph admission. */
+        void CloseVfxGpuStorage() noexcept;
+
         /** @brief Plain exact resident facts that may safely cross an injected/native callback. */
         struct VfxResidentProof {
             RenderBufferHandle buffer;
@@ -1011,6 +1136,8 @@ namespace Horo::Render {
         bool drained_{false};
         std::unique_ptr<RenderMemoryBudget> memoryBudget_;
         std::shared_ptr<Detail::VfxSchedulingStorage> vfxScheduling_;
+        std::unique_ptr<Detail::VfxGpuStorage> vfxGpuStorage_;
+        std::uint32_t vfxGpuRetirementBudget_;
         std::shared_ptr<const Detail::VfxFrontendState> vfxFrontendState_;
         std::thread::id vfxSchedulingOwner_{std::this_thread::get_id()};
         RenderFrontendMemoryConfig memoryConfig_;

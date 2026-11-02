@@ -5,9 +5,6 @@
 namespace Horo::Render::Detail {
     namespace {
         Result<void> ValidateGraphEnvelope(const RenderGraphExecutionRequest &request) {
-            if (!request.submissions.empty())
-                return Result<void>::Failure(
-                    MakeError(MetalBackendErrors::UnsupportedGraphExecution, "Metal explicit graph submissions are not implemented."));
             const auto &graph = request.graph;
             if (!graph.Owner().IsValid() || request.workloads.size() != graph.Passes().size() ||
                 request.resources.size() != graph.Resources().size()) {
@@ -31,7 +28,8 @@ namespace Horo::Render::Detail {
             for (std::size_t index = 0; index < request.graph.Passes().size(); ++index) {
                 const auto &pass = request.graph.Passes()[index];
                 if (pass.kind == RenderPassKind::Compute &&
-                    !std::holds_alternative<RenderGraphLightCulling>(request.workloads[index].workload))
+                    !std::holds_alternative<RenderGraphLightCulling>(request.workloads[index].workload) &&
+                    !std::holds_alternative<RenderGraphVfxGpuCompute>(request.workloads[index].workload))
                     return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedPassKind));
                 if (pass.queue != request.graph.Passes().front().queue)
                     return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution,
@@ -42,6 +40,10 @@ namespace Horo::Render::Detail {
 
         Result<void> ValidateNativeWorkload(const IMetalRuntime &runtime, const RenderGraphWorkload &workload,
                                             const RenderGraphExecutionRequest &request) {
+            if (const auto *compute = std::get_if<RenderGraphVfxGpuCompute>(&workload))
+                return runtime.ValidateVfxGpuCompute(*compute, request);
+            if (const auto *draw = std::get_if<RenderGraphVfxGpuDraw>(&workload))
+                return runtime.ValidateVfxGpuDraw(*draw, request);
             if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&workload))
                 return runtime.ValidateMaterialRaster(*raster, request);
             if (const auto *vfx = std::get_if<RenderGraphVfx>(&workload))
@@ -53,6 +55,10 @@ namespace Horo::Render::Detail {
 
         Result<void> ExecuteNativeWorkload(IMetalRuntime &runtime, const RenderGraphWorkload &workload,
                                            const RenderGraphExecutionRequest &request) {
+            if (const auto *compute = std::get_if<RenderGraphVfxGpuCompute>(&workload))
+                return runtime.ExecuteVfxGpuCompute(*compute, request);
+            if (const auto *draw = std::get_if<RenderGraphVfxGpuDraw>(&workload))
+                return runtime.ExecuteVfxGpuDraw(*draw, request);
             if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&workload))
                 return runtime.ExecuteMaterialRaster(*raster, request);
             if (const auto *vfx = std::get_if<RenderGraphVfx>(&workload))

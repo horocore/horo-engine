@@ -115,6 +115,10 @@ namespace Horo::Render {
             const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
             if (const auto *paint = std::get_if<RenderGraphUiPaint>(&workload))
                 return ValidateUiPaintWorkload(request, pass, *paint).HasValue();
+            if (const auto *particles = std::get_if<RenderGraphVfxGpuCompute>(&workload))
+                return ValidateVfxGpuComputeGraphWorkload(request, pass, *particles).HasValue();
+            if (const auto *particles = std::get_if<RenderGraphVfxGpuDraw>(&workload))
+                return ValidateVfxGpuDrawGraphWorkload(request, pass, *particles).HasValue();
             if (ExternallyValidated(workload))
                 return true;
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))

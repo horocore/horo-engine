@@ -32,6 +32,39 @@ namespace Horo::Render::Detail {
         /** @brief Loads an exact cooked Metal library and validates the fixed culling compute ABI before native publication. */
         [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
+        /** @brief Admits the complete authentic GPU simulation/direct-draw family against actual Metal reflection. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs);
+        /** @brief Copies and validates exact frontend-issued simulation inventory at the cold preparation boundary. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+            const NativeVfxGpuSimulationPreparation &preparation);
+        /** @brief Owner-only bounded native receipt drain; never waits or allocates. */
+        [[nodiscard]] Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                   std::span<NativeGpuVfxStepReceipt> destination);
+        [[nodiscard]] Result<void> ValidateVfxGpuCompute(const RenderGraphVfxGpuCompute &workload,
+                                                         const RenderGraphExecutionRequest &request) const;
+        [[nodiscard]] Result<void> ExecuteVfxGpuCompute(void *commands, const RenderGraphVfxGpuCompute &workload,
+                                                        const RenderGraphExecutionRequest &request);
+        [[nodiscard]] Result<void> ValidateVfxGpuDraw(const RenderGraphVfxGpuDraw &workload,
+                                                      const RenderGraphExecutionRequest &request) const;
+        [[nodiscard]] Result<void> ExecuteVfxGpuDraw(void *commands, const RenderGraphVfxGpuDraw &workload,
+                                                     const RenderGraphExecutionRequest &request);
+        /** @brief Copies an exact completed normalized observation into a cold caller byte arena; consumes only on success. */
+        [[nodiscard]] Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                         const VfxGpuStepIdentity &step, std::span<std::byte> destination);
+        /** @brief Releases a completed observation without mapping/copying, preserving pending native holds. */
+        [[nodiscard]] Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                     const VfxGpuStepIdentity &step);
+        /** @brief Emits only exact same-runtime current-step rejection facts at a proven pre-encoding failure boundary. */
+        void RejectUnsubmittedVfxGpuGraph(const RenderGraphExecutionRequest &request) noexcept;
+        /** @brief Holds native resources after a commit whose acceptance could not be established. */
+        void PreserveUncertainVfxGpuCommands(void *commands) noexcept;
+        void PreserveUncertainGraphCommands(void *commands) noexcept;
+        /** @brief Resolves unsent or actually accepted command journals; acceptance follows native commit return. */
+        void FinishVfxGpuCommands(void *commands, bool committed) noexcept;
+        /** @brief Observes all native simulations without releasing pending inventory; false means actual use is outstanding. */
+        [[nodiscard]] bool VfxGpuSimulationsDrained() noexcept;
+        /** @brief Owner-only bounded retirement of externally released, native-terminal simulations. */
+        void DrainVfxGpuRetirements(std::size_t budget) noexcept;
         /** @brief Realizes exact cooked raster/stencil states at a preparation safe point; no runtime source compilation. */
         [[nodiscard]] Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel);
         /** @brief Atomically updates an admitted mapped UI slot after complete native-use validation. */

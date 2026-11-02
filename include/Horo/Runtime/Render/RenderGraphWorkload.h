@@ -3,10 +3,13 @@
 /** @file RenderGraphWorkload.h
  * @brief Typed workloads bound to one immutable compiled render graph.
  */
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/MultiviewGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 #include "Horo/Runtime/Render/UiPaintWorkload.h"
+#include "Horo/Runtime/Render/VfxGpuKernel.h"
+#include "Horo/Runtime/Render/VfxGpuSimulation.h"
 #include "Horo/Runtime/Render/VfxGraphWorkload.h"
 
 #include <cstdint>
@@ -47,6 +50,40 @@ namespace Horo::Render {
         LightCullingDispatch dispatch;
         std::uint64_t tableRevision{}; /**< Exact uploaded slot revision; stale graph reuse fails before encoding. */
         std::shared_ptr<IResidentLightCullingKernel> kernel;
+    };
+
+    /** @brief One immutable GPU particle candidate over four distinct whole storage buffers.
+     * @details Source and forces are read-only; destination and observations are write-only graph uses.
+     * Disabled observation still binds a real, distinct four-byte dummy, with no observation copy or map.
+     * Graph leases pin buffers and the kernel lease pins the complete compute/draw family. Validation
+     * admits metadata and declared dependencies only; it does not acknowledge native submission or
+     * establish buffer byte capacities, current registry residency or GPU execution.
+     */
+    struct RenderGraphVfxGpuCompute final {
+        RenderGraphResourceId source, destination, forces, observations;
+        VfxGpuSimulationDescriptor descriptor;
+        GpuVfxSimulationWork work;
+        std::shared_ptr<IResidentVfxGpuKernel> kernel;
+        std::shared_ptr<IResidentVfxGpuSimulation> simulationLease;
+    };
+
+    /** @brief Direct additive billboard consumer of one renderer-owned GPU particle generation.
+     * @details The vertex shader reads the same storage buffer produced by simulation. Fixed-capacity
+     * instancing clips inactive lanes; no CPU particle upload, count readback or indirect draw is implied.
+     * Color is retained; optional depth is read-only. The frontend and selected native adapter must
+     * validate the exact issued simulation/device/generation and retain its resource use through completion.
+     */
+    struct RenderGraphVfxGpuDraw final {
+        RenderGraphResourceId particles, color, depth;
+        VfxGpuSimulationId simulation;
+        std::uint64_t deviceIncarnation{};
+        std::uint64_t generation{};
+        VfxGpuSimulationDescriptor descriptor;
+        VfxGpuDrawView view;
+        PrimaryOutputAttachment colorOperations;
+        std::shared_ptr<IResidentVfxGpuKernel> kernel;
+        CancellationToken lifetimeCancellation; /**< Revokes new publication without releasing accepted native uses. */
+        std::shared_ptr<IResidentVfxGpuSimulation> simulationLease;
     };
 
     /** @brief Bounded raster subrectangle within the retained target extent. */
@@ -92,7 +129,8 @@ namespace Horo::Render {
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
     using RenderGraphWorkload =
         std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
-                     RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster>;
+                     RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster,
+                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {
@@ -189,6 +227,26 @@ namespace Horo::Render {
         RenderGraphExecutionRole role{RenderGraphExecutionRole::Scene};
         std::span<const RenderGraphTargetInstance> targets; /**< Exact prepared targets used by typed native VFX. */
     };
+
+    /** @brief Checks exact GPU particle step metadata, storage uses and non-aliased resolved buffers.
+     * @param request Complete borrowed graph and resolved instance table.
+     * @param pass Exact retained compute pass in the request.
+     * @param workload Immutable source/candidate operation and complete-family preparation lease.
+     * @return Success or malformed graph failure, before any native encoding or submission.
+     * @details Selected-backend admission must additionally prove native ownership, byte capacities,
+     * cooked ABI, current simulation generation and the real submission boundary.
+     */
+    [[nodiscard]] Result<void> ValidateVfxGpuComputeGraphWorkload(const RenderGraphExecutionRequest &request,
+                                                                  const RenderGraphExecutionPass &pass,
+                                                                  const RenderGraphVfxGpuCompute &workload);
+
+    /** @brief Checks exact direct GPU particle draw uses, bounded view ABI and generation representation.
+     * @param request Complete graph and resolved instance table. @param pass Exact retained graphics pass.
+     * @param workload Closed additive billboard operation over one particle buffer and retained attachments.
+     * @return Success or malformed graph failure; current residency and native capacities remain native admission obligations.
+     */
+    [[nodiscard]] Result<void> ValidateVfxGpuDrawGraphWorkload(const RenderGraphExecutionRequest &request,
+                                                               const RenderGraphExecutionPass &pass, const RenderGraphVfxGpuDraw &workload);
 
     /** @brief Validates exact material input/use membership and raster outputs before native resource capture.
      * @param request Complete borrowed frame graph request. @param pass Exact retained graphics pass.

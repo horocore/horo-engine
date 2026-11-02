@@ -13,6 +13,21 @@ namespace Horo::Render::Detail {
         /** @brief Borrows the frontend's actual issued queue topology at a cold preparation boundary.
          * @return Existing immutable assignments, valid until frontend teardown; never synthesized native queue ordinals. */
         [[nodiscard]] static Result<std::span<const RenderQueueAssignment>> QueueAssignments(const RenderFrontend &frontend);
+        /** @brief Copies one exact completed native observation directly into the existing queue's writable byte arena.
+         * @param frontend Same live render owner outside an active frame. @param preparation Exact prepared simulation.
+         * @param step Actual completed observe=true step. @param destination Queue-owned writable result storage.
+         * @return Actual copied bytes or original native error; consumes native hold only on complete successful copy.
+         */
+        [[nodiscard]] static Result<std::size_t> CopyCompletedVfxGpuObservation(RenderFrontend &frontend,
+                                                                                const VfxGpuPreparationReceipt &preparation,
+                                                                                const VfxGpuStepIdentity &step,
+                                                                                std::span<std::byte> destination);
+        /** @brief Releases a completed native observation without a CPU copy; pending/uncertain work remains retained.
+         * @return Successful exact discard or original typed native pending/error.
+         */
+        [[nodiscard]] static Result<void> DiscardCompletedVfxGpuObservation(RenderFrontend &frontend,
+                                                                            const VfxGpuPreparationReceipt &preparation,
+                                                                            const VfxGpuStepIdentity &step);
         /** @brief Cold-admits owned depth backing for an explicitly supported complete multiview workload.
          * @param frontend Selected frontend whose owner thread must be open and outside a frame.
          * @param scope Canonical memory scope charged for this resource.

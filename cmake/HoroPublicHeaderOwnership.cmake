@@ -819,6 +819,7 @@ horo_configure_target_header_boundary(HoroVfxSimulationData PUBLIC_HEADERS
     Horo/Vfx/ParticleSimulationData.h
 )
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
+    Horo/Vfx/GpuParticleSimulator.h
     Horo/Vfx/CpuParticleBuffer.h
     Horo/Vfx/CpuParticleSimulator.h
     Horo/Vfx/CpuParticleSpawnPipeline.h
@@ -1152,6 +1153,9 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+    Horo/Runtime/Render/GpuParticleLayout.h
+    Horo/Runtime/Render/VfxGpuSimulation.h
+    Horo/Runtime/Render/VfxGpuKernel.h
     Horo/Runtime/Render/MultiviewSceneExtraction.h
     Horo/Runtime/Render/MultiviewGraphWorkload.h
     Horo/Runtime/Render/MultiviewShaderParameters.h
@@ -1249,6 +1253,7 @@ horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/UiPaintFrameBufferPool.h
     Horo/Runtime/Render/UiPaintProgram.h
     Horo/Runtime/Render/RenderFrontend.h
+    Horo/Runtime/Render/VfxGpuGraphScheduling.h
     Horo/Runtime/Render/RenderGraphTransientResources.h
     Horo/Runtime/Render/RenderMemoryBudget.h
     Horo/Runtime/Render/RenderMemoryBudgetErrors.h

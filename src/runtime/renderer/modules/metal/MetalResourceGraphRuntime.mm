@@ -304,11 +304,23 @@ namespace Horo::Render::Detail {
         for (auto *texture : impl_->textures) {
             Impl::FinishUse(texture->use, commands, committed);
         }
+        FinishVfxGpuCommands(commandBuffer, committed);
         impl_->DrainRetired(64);
+    }
+
+    /** @copydoc MetalResourceRuntime::PreserveUncertainGraphCommands */
+    void MetalResourceRuntime::PreserveUncertainGraphCommands(void *commandBuffer) noexcept {
+        id<MTLCommandBuffer> commands = (__bridge id<MTLCommandBuffer>)commandBuffer;
+        for (auto *buffer : impl_->buffers)
+            Impl::FinishUse(buffer->use, commands, true);
+        for (auto *texture : impl_->textures)
+            Impl::FinishUse(texture->use, commands, true);
+        PreserveUncertainVfxGpuCommands(commandBuffer);
     }
 
     /** @copydoc MetalResourceRuntime::DrainGraphRetirements */
     void MetalResourceRuntime::DrainGraphRetirements() noexcept {
+        DrainVfxGpuRetirements(64);
         impl_->DrainRetired(64);
     }
 

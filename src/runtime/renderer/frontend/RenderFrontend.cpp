@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
 #include "RenderGraphTransientResourcePool.h"
@@ -12,6 +13,7 @@
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
 #include "RenderSubmissionAllocator.h"
+#include "VfxGpuStorage.h"
 
 #include <algorithm>
 #include <array>
@@ -259,6 +261,8 @@ namespace Horo::Render {
     }
 
     void RenderFrameScope::Release() noexcept {
+        if (owner_ != nullptr)
+            owner_->AbandonUndispatchedVfxGpu(hostFrame_);
         if (owner_ != nullptr && owner_->activeFrameScope_ == this) {
             owner_->activeFrameScope_ = nullptr;
         }
@@ -320,7 +324,8 @@ namespace Horo::Render {
                                    const RenderFrontendMemoryConfig &memoryConfig, const RenderResourceRetirementLimits &retirementLimits,
                                    ConstructionKey)
         : backend_(std::move(backend)), submissionAllocator_(std::make_unique<Detail::RenderSubmissionAllocator>()),
-          memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
+          memoryBudget_(std::move(memoryBudget)), vfxGpuRetirementBudget_(retirementLimits.maximumRetirementsPerDrain),
+          memoryConfig_(memoryConfig),
           resourceRegistry_(
               std::make_unique<
                   Detail::RenderResourceRegistry>(resourceOwner,
@@ -392,7 +397,10 @@ namespace Horo::Render {
             return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (drained_)
             return Result<void>::Success();
+        if (vfxGpuStorage_ && vfxGpuStorage_->busy)
+            return Result<void>::Failure(MakeError(VfxFrameErrors::Pending));
         closing_ = true;
+        CloseVfxGpuStorage();
         vfxFrontendState_.reset();
         static_cast<void>(inspectionFeed_.Shutdown());
         if (activeFrameScope_ != nullptr) {
@@ -419,6 +427,7 @@ namespace Horo::Render {
             return DrainResult::Failure(MakeError(FrontendErrors::Closing, "BeginShutdown must close admission before drain polling."));
         if (const auto progress = backend_->PollDrain(); progress.HasError() || progress.Value() == Pending)
             return progress;
+        FinishVfxGpuStorageAfterNativeDrain();
         resourceRegistry_->Shutdown(Detail::BackendResourceReleaseMode::NativeAlreadyReleased);
         if (resourceRegistry_->HasPendingNativeRetirements())
             return DrainResult::Success(Pending);
@@ -520,6 +529,10 @@ namespace Horo::Render {
             return Result<RenderFrameScope>::Failure(
                 MakeFrontendError(FrontendErrors::FrameAlreadyActive, "Renderer frontend already owns an active frame scope."));
         }
+
+        if (vfxGpuStorage_ && vfxGpuStorage_->busy)
+            return Result<RenderFrameScope>::Failure(MakeError(VfxFrameErrors::Pending));
+        DrainVfxGpuRetirements();
 
         if (const Result<std::size_t> processed = ProcessResourceRequests(); processed.HasError()) {
             return Result<RenderFrameScope>::Failure(processed.ErrorValue());

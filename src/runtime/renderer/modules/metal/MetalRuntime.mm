@@ -9,6 +9,7 @@
 #include "MetalPresentationOutput.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceRuntime.h"
+#include "MetalSingleQueueSubmissions.h"
 #include "MetalSubmittedGraphQueue.h"
 
 #import <Metal/Metal.h>
@@ -130,6 +131,100 @@ namespace Horo::Render::Detail {
                 }
                 acquisition_ = std::move(acquisition).Value();
                 return Result<MetalDeviceCapabilities>::Success(std::move(capabilities));
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &family) override {
+                using Outcome = Result<std::shared_ptr<IResidentVfxGpuKernel>>;
+                if (const auto valid = ValidateVfxGpuColdAccess(); valid.HasError())
+                    return Outcome::Failure(valid.ErrorValue());
+                return resources_.RealizeVfxGpuPrograms(family);
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+                const NativeVfxGpuSimulationPreparation &preparation) override {
+                using Outcome = Result<std::shared_ptr<IResidentVfxGpuSimulation>>;
+                if (const auto valid = ValidateVfxGpuColdAccess(); valid.HasError())
+                    return Outcome::Failure(valid.ErrorValue());
+                return resources_.PrepareNativeVfxGpuSimulation(preparation);
+            }
+
+            Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                               const VfxGpuStepIdentity &step, std::span<std::byte> destination) override {
+                using Outcome = Result<std::size_t>;
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Outcome::Failure(MakeError(MetalBackendErrors::WrongThread));
+                return resources_.CopyCompletedVfxGpuObservation(simulation, step, destination);
+            }
+
+            Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                           const VfxGpuStepIdentity &step) override {
+                using Outcome = Result<void>;
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Outcome::Failure(MakeError(MetalBackendErrors::WrongThread));
+                return resources_.DiscardCompletedVfxGpuObservation(simulation, step);
+            }
+
+            Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                         std::span<NativeGpuVfxStepReceipt> receipts) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                return resources_.PollNativeVfxGpuReceipts(simulation, receipts);
+            }
+
+            Result<void> ConfigureGraphSubmissions(std::span<const RenderQueueAssignment> queues, std::uint64_t incarnation) override {
+                if (const auto valid = ValidateVfxGpuColdAccess(); valid.HasError())
+                    return valid;
+                if (incarnation != deviceIncarnation_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+                return graphSubmissions_.Initialize(queues, incarnation);
+            }
+
+            bool HasConfiguredGraphSubmissionJournal() const noexcept override {
+                return device_ != nil && commandQueue_ != nil && graphSubmissions_.IsConfigured();
+            }
+
+            Result<void> CaptureGraphSubmissions(const RenderGraphExecutionRequest &request) override {
+                if (const auto valid = ValidateVfxGpuEncodingAccess(); valid.HasError())
+                    return valid;
+                return graphSubmissions_.Capture(request, commandBuffer_);
+            }
+
+            Result<bool> ObserveGraphSubmission(const RenderCpuWait &wait) const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<bool>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                return graphSubmissions_.Observe(wait);
+            }
+
+            void RejectUnsubmittedVfxGpuGraph(const RenderGraphExecutionRequest &request) noexcept override {
+                if (std::this_thread::get_id() == ownerThread_ && commandBuffer_ != nil)
+                    resources_.RejectUnsubmittedVfxGpuGraph(request);
+            }
+
+            Result<void> ValidateVfxGpuCompute(const RenderGraphVfxGpuCompute &work,
+                                               const RenderGraphExecutionRequest &request) const override {
+                if (const auto valid = ValidateVfxGpuEncodingAccess(); valid.HasError())
+                    return valid;
+                return resources_.ValidateVfxGpuCompute(work, request);
+            }
+
+            Result<void> ExecuteVfxGpuCompute(const RenderGraphVfxGpuCompute &work, const RenderGraphExecutionRequest &request) override {
+                if (const auto valid = ValidateVfxGpuEncodingAccess(); valid.HasError())
+                    return valid;
+                EndPrimaryEncoder();
+                return resources_.ExecuteVfxGpuCompute((__bridge void *)commandBuffer_, work, request);
+            }
+
+            Result<void> ValidateVfxGpuDraw(const RenderGraphVfxGpuDraw &work, const RenderGraphExecutionRequest &request) const override {
+                if (const auto valid = ValidateVfxGpuEncodingAccess(); valid.HasError())
+                    return valid;
+                return resources_.ValidateVfxGpuDraw(work, request);
+            }
+
+            Result<void> ExecuteVfxGpuDraw(const RenderGraphVfxGpuDraw &work, const RenderGraphExecutionRequest &request) override {
+                if (const auto valid = ValidateVfxGpuEncodingAccess(); valid.HasError())
+                    return valid;
+                EndPrimaryEncoder();
+                return resources_.ExecuteVfxGpuDraw((__bridge void *)commandBuffer_, work, request);
             }
 
             Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
@@ -651,16 +746,14 @@ namespace Horo::Render::Detail {
                     activeRecording_->Commit();
                 lastSubmittedCommandBuffer_ = commandBuffer_;
                 submitted_.Remember(commandBuffer_, activeGraphLease_, activeRecording_);
-                resources_.FinishGraphCommands((__bridge void *)commandBuffer_, true);
-                [commandBuffer_ commit];
-                ClearActiveFrame();
-                return Result<void>::Success();
+                return CommitOwnerCommands();
             }
 
             void AbortFrame() noexcept override {
                 EndPrimaryEncoder();
                 if (activeRecording_)
                     activeRecording_->Cancel();
+                graphSubmissions_.Abort(commandBuffer_);
                 resources_.FinishGraphCommands((__bridge void *)commandBuffer_, false);
                 if (activeRecording_ && !activeRecording_->Idle()) {
                     for (auto &retired : cancelledRecordings_) {
@@ -746,21 +839,8 @@ namespace Horo::Render::Detail {
                         MakeError(MetalBackendErrors::InvalidConfig, "Begin Metal shutdown before polling retirement."));
                 if (drained_)
                     return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
-                DrainCancelledRecordings();
-                if (const auto submitted = submitted_.DrainTerminals(); submitted.HasError() && !drainError_)
-                    drainError_ = submitted.ErrorValue();
-                const auto uploads = resources_.PollUploadDrain();
-                if (uploads.HasError() && !drainError_)
-                    drainError_ = uploads.ErrorValue();
-                const bool pendingUploads = uploads.HasValue() && !uploads.Value();
-                const bool pendingAcquisition = acquisition_ && (!acquisition_->Close() || !acquisition_->IsDrained());
-                if (acquisition_ && !pendingAcquisition) {
-                    const auto result = acquisition_->Poll(drawableGeneration_);
-                    if ((result.progress == MetalDrawablePoll::Failed || result.progress == MetalDrawablePoll::WrongThread) && !drainError_)
-                        drainError_ = DrawableFailure(result);
-                }
-                if (submitted_.Count() == 0 && recordingBudget_->live.load(std::memory_order_acquire) == 0 && !pendingUploads &&
-                    !pendingAcquisition) {
+                PollNativeDrainInventories();
+                if (NativeDrainReady()) {
                     ReleaseDrainedResources();
                     drained_ = true;
                 }
@@ -773,6 +853,69 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            /** @brief Retention precedes commit; only actual commit return permits accepted receipts and generation advance. */
+            Result<void> CommitOwnerCommands() {
+                @try {
+                    [commandBuffer_ commit];
+                } @catch (NSException *exception) {
+                    static_cast<void>(exception);
+                    resources_.PreserveUncertainGraphCommands((__bridge void *)commandBuffer_);
+                    ClearActiveFrame();
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::CommandSubmissionFailed,
+                                  "Metal commit acceptance is uncertain; native ownership remains retained until terminal status."));
+                }
+                graphSubmissions_.Commit(commandBuffer_);
+                resources_.FinishGraphCommands((__bridge void *)commandBuffer_, true);
+                ClearActiveFrame();
+                return Result<void>::Success();
+            }
+
+            /** @brief Polls native owners once; terminal failure is retained separately from quiescence. */
+            void PollNativeDrainInventories() {
+                DrainCancelledRecordings();
+                if (const auto submitted = submitted_.DrainTerminals(); submitted.HasError() && !drainError_)
+                    drainError_ = submitted.ErrorValue();
+                const auto uploads = resources_.PollUploadDrain();
+                if (uploads.HasError() && !drainError_)
+                    drainError_ = uploads.ErrorValue();
+                pendingDrainUploads_ = uploads.HasValue() && !uploads.Value();
+                pendingDrainSimulations_ = !resources_.VfxGpuSimulationsDrained();
+                PollAcquisitionDrain();
+            }
+
+            void PollAcquisitionDrain() {
+                pendingDrainAcquisition_ = acquisition_ && (!acquisition_->Close() || !acquisition_->IsDrained());
+                if (!acquisition_ || pendingDrainAcquisition_)
+                    return;
+                const auto result = acquisition_->Poll(drawableGeneration_);
+                const bool failed = result.progress == MetalDrawablePoll::Failed || result.progress == MetalDrawablePoll::WrongThread;
+                if (failed && !drainError_)
+                    drainError_ = DrawableFailure(result);
+            }
+
+            bool NativeDrainReady() const noexcept {
+                return submitted_.Count() == 0 && recordingBudget_->live.load(std::memory_order_acquire) == 0 && !pendingDrainUploads_ &&
+                       !pendingDrainSimulations_ && !pendingDrainAcquisition_;
+            }
+
+            /** @brief Native preparation is owner-only and cannot race the active command transaction. */
+            Result<void> ValidateVfxGpuColdAccess() const {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (closing_ || device_ == nil || commandBuffer_ != nil)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                return Result<void>::Success();
+            }
+
+            Result<void> ValidateVfxGpuEncodingAccess() const {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (closing_ || commandBuffer_ == nil)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                return Result<void>::Success();
+            }
+
             /** @brief Acquires only the admitted native device/queue; the initializer owns every failure cleanup. */
             [[nodiscard]] Result<MetalDeviceCapabilities> AcquireAdmittedDevice(const MetalDeviceAdmissionRequest &request) {
                 std::uint64_t discoveryRevision = 0;
@@ -872,6 +1015,7 @@ namespace Horo::Render::Detail {
 
                 resources_.Shutdown();
                 submitted_.Clear();
+                graphSubmissions_.Clear();
                 MetalEditorGraphicsAccess::Clear(*editorGraphicsBridge_);
                 if (layer_ != nil) {
                     layer_.device = nil;
@@ -1083,6 +1227,7 @@ namespace Horo::Render::Detail {
             __strong MTLRenderPassDescriptor *renderPassDescriptor_{nil};
             __strong id<MTLCommandBuffer> lastSubmittedCommandBuffer_{nil};
             MetalSubmittedGraphQueue submitted_;
+            MetalSingleQueueSubmissions graphSubmissions_;
             std::shared_ptr<MetalPresentationFeedback> feedback_{std::make_shared<MetalPresentationFeedback>()};
             IRenderGraphResourceLease *activeGraphLease_{nullptr};
 
@@ -1097,6 +1242,7 @@ namespace Horo::Render::Detail {
             std::optional<PrimaryOutputAttachment> activeParallelPrimary_;
             std::shared_ptr<MetalRecordingBudget> recordingBudget_{std::make_shared<MetalRecordingBudget>()};
             bool recordingAccepted_{false};
+            bool pendingDrainUploads_{}, pendingDrainSimulations_{}, pendingDrainAcquisition_{};
             std::optional<Error> submissionError_;
             std::thread::id ownerThread_;
             std::uint32_t maxFramesInFlight_{0};

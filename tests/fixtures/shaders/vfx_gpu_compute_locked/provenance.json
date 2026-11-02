@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "kind": "actual reviewed-tool capture; parser regression evidence only",
+  "sourceIdentity": "horo/runtime/vfx_simulation.hlsl",
+  "sourceRevision": 1,
+  "sourceSha256": "8e57a76ccfdfd633ff7157e8bc86d8f7168f4573b39dd9019e1e9c27bb98b7ba",
+  "captureId": "1731-real-vfx-compute-capture-v1",
+  "files": [
+    {
+      "file": "compute.spv",
+      "bytes": 52324,
+      "sha256": "4dce7b44c885daa016ea8f9a6d0f6d47a65e52640e85419eba4ebccb43e9fc09",
+      "origin": "process-1-output-0.spv"
+    },
+    {
+      "file": "compute.metal",
+      "bytes": 42962,
+      "sha256": "4e3906e38cfca7968cab72585aa0938ff83ac3e8945cb8d1e3943256d3ce9d0c",
+      "origin": "process-3-output-0.native"
+    },
+    {
+      "file": "compute.json",
+      "bytes": 3379,
+      "sha256": "1894785cb9e885011db938750a726cf042a03053d0cc2492fa804f5db3d5e8e2",
+      "origin": "diagnostic-cross-reflection.json"
+    }
+  ],
+  "actualProcessEvidence": [
+    {
+      "process": 1,
+      "role": "DXC",
+      "exitCode": 0,
+      "outputSpirvSha256": "4dce7b44c885daa016ea8f9a6d0f6d47a65e52640e85419eba4ebccb43e9fc09"
+    },
+    {
+      "process": 2,
+      "role": "SPIR-V validator",
+      "exitCode": 0,
+      "inputSpirvSha256": "4dce7b44c885daa016ea8f9a6d0f6d47a65e52640e85419eba4ebccb43e9fc09"
+    },
+    {
+      "process": 3,
+      "role": "SPIRV-Cross MSL translation",
+      "exitCode": 0,
+      "inputSpirvSha256": "4dce7b44c885daa016ea8f9a6d0f6d47a65e52640e85419eba4ebccb43e9fc09",
+      "outputMslSha256": "4e3906e38cfca7968cab72585aa0938ff83ac3e8945cb8d1e3943256d3ce9d0c"
+    },
+    {
+      "role": "SPIRV-Cross independent diagnostic reflect",
+      "exitCode": 0,
+      "inputSpirvSha256": "4dce7b44c885daa016ea8f9a6d0f6d47a65e52640e85419eba4ebccb43e9fc09",
+      "outputJsonSha256": "1894785cb9e885011db938750a726cf042a03053d0cc2492fa804f5db3d5e8e2",
+      "operation": "explicitly authorized independent reflect of the identical already validated captured bytes"
+    }
+  ],
+  "existingIndependentlyApprovedToolTuples": [
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:b0bf9b20b9425d8e80c39bd4e3c5ce5dbdf26be7973f2122d2ea50de8a8d8a4e",
+      "release": "lunarg-1.4.363.0.dxc-1.9.0.5512",
+      "role": "dxc"
+    },
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:42938d66ae3703537376116c11abed84639a9bc2c02c1f360058287320603ad6",
+      "release": "lunarg-1.4.363.0.spirv-tools-2026.4",
+      "role": "spirv-val"
+    },
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:2adca603ef473f3b292784c1020c61b597a1545c981b2ed128e3de04feb46ad2",
+      "release": "lunarg-1.4.363.0.spirv-cross-f11ba9f0",
+      "role": "spirv-cross"
+    }
+  ],
+  "targetSnapshot": {
+    "backend": "Metal",
+    "payloadFormat": "MetalLibrary24",
+    "descriptorVersion": 1,
+    "interfaceSchemaVersion": 1,
+    "maximumBindings": 32,
+    "maximumInlineConstantBytes": 128,
+    "supportsCompute": true,
+    "supportsStorageResources": true
+  },
+  "extendedInstructions": [
+    {
+      "opcode": 31,
+      "name": "GLSL.std.450 Sqrt",
+      "result": "float32 scalar",
+      "operands": [
+        "float32 scalar"
+      ]
+    },
+    {
+      "opcode": 79,
+      "name": "GLSL.std.450 NMin",
+      "result": "float32 scalar",
+      "operands": [
+        "float32 scalar",
+        "float32 scalar"
+      ]
+    }
+  ],
+  "qualificationLimits": [
+    "No Apple compile/link occurred in this capture; qualification failed before that phase",
+    "No native artifact binary fixture, dispatch, pixel, readback, parity or performance result is represented",
+    "Captured JSON was produced by an independently authorized diagnostic reflection operation over identical validated SPIR-V; no reflection or layout was handcrafted",
+    "Mutations are performed only in test memory and are negative parser/access-proof cases, not claims of validator acceptance",
+    "No signing key, trust policy or local executable path is distributed in these fixtures"
+  ]
+}

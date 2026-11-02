@@ -16,6 +16,70 @@ namespace Horo::Render::Detail {
     public:
         ~IMetalRuntime() override = default;
 
+        /** @brief Cold native GPU programs and inventory are unavailable in injected legacy runtimes. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &) {
+            return Result<std::shared_ptr<IResidentVfxGpuKernel>>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+            const NativeVfxGpuSimulationPreparation &) {
+            return Result<std::shared_ptr<IResidentVfxGpuSimulation>>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        [[nodiscard]] virtual Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &,
+                                                                           std::span<NativeGpuVfxStepReceipt>) {
+            return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        [[nodiscard]] virtual Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &,
+                                                                                 const VfxGpuStepIdentity &, std::span<std::byte>) {
+            return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        [[nodiscard]] virtual Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &,
+                                                                             const VfxGpuStepIdentity &) {
+            return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        /** @brief Default initialization preserves legacy injected runtimes without enabling submission capability. */
+        [[nodiscard]] virtual Result<void> ConfigureGraphSubmissions(std::span<const RenderQueueAssignment>, std::uint64_t) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Only an actual configured native journal may publish explicit submission and GPU VFX support. */
+        [[nodiscard]] virtual bool HasConfiguredGraphSubmissionJournal() const noexcept {
+            return false;
+        }
+
+        [[nodiscard]] virtual Result<void> CaptureGraphSubmissions(const RenderGraphExecutionRequest &request) {
+            return request.submissions.empty() ? Result<void>::Success()
+                                               : Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        [[nodiscard]] virtual Result<bool> ObserveGraphSubmission(const RenderCpuWait &) const {
+            return Result<bool>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        /** @brief Legacy runtimes have no registered native GPU steps to reject. */
+        virtual void RejectUnsubmittedVfxGpuGraph(const RenderGraphExecutionRequest &) noexcept {}
+
+        [[nodiscard]] virtual Result<void> ValidateVfxGpuCompute(const RenderGraphVfxGpuCompute &,
+                                                                 const RenderGraphExecutionRequest &) const {
+            return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        [[nodiscard]] virtual Result<void> ExecuteVfxGpuCompute(const RenderGraphVfxGpuCompute &, const RenderGraphExecutionRequest &) {
+            return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        [[nodiscard]] virtual Result<void> ValidateVfxGpuDraw(const RenderGraphVfxGpuDraw &, const RenderGraphExecutionRequest &) const {
+            return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
+        [[nodiscard]] virtual Result<void> ExecuteVfxGpuDraw(const RenderGraphVfxGpuDraw &, const RenderGraphExecutionRequest &) {
+            return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
+        }
+
         /** @brief Unsupported runtimes cannot publish an issued native VFX slot. */
         [[nodiscard]] virtual Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &) {
             return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));

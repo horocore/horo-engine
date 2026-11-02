@@ -116,13 +116,25 @@ file(MAKE_DIRECTORY "${HORO_EDITOR_SHADER_COOK_HOST_HEADERS}")
 configure_file(common/shader_cook/VerifiedShaderHostCatalog.h "${HORO_EDITOR_SHADER_COOK_HOST_HEADERS}/VerifiedShaderHostCatalog.h" COPYONLY)
 configure_file(common/shader_cook/AuthenticatedMetalCookConfiguration.h
     "${HORO_EDITOR_SHADER_COOK_HOST_HEADERS}/AuthenticatedMetalCookConfiguration.h" COPYONLY)
+configure_file(common/shader_cook/AuthenticatedShaderCookConfiguration.h
+    "${HORO_EDITOR_SHADER_COOK_HOST_HEADERS}/AuthenticatedShaderCookConfiguration.h" COPYONLY)
 add_library(HoroEditorShaderCookHostInternal STATIC
     common/shader_cook/VerifiedShaderHostCatalog.cpp
+    common/shader_cook/AuthenticatedShaderCookConfiguration.cpp
     common/shader_cook/AuthenticatedMetalCookConfiguration.cpp)
 target_compile_features(HoroEditorShaderCookHostInternal PUBLIC cxx_std_20)
 target_include_directories(HoroEditorShaderCookHostInternal PUBLIC "${HORO_EDITOR_SHADER_COOK_HOST_HEADERS}")
 target_link_libraries(HoroEditorShaderCookHostInternal PUBLIC HoroEngine::ShaderCompilerToolchain HoroEngine::Security
     PRIVATE HoroFoundationJsonInternal HoroHostSignatureDocuments)
+
+set(HORO_ATOMIC_SHADER_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/atomic_shader_cook_headers")
+file(MAKE_DIRECTORY "${HORO_ATOMIC_SHADER_COOK_HEADERS}")
+configure_file(common/shader_cook/AtomicShaderCookPackage.h
+    "${HORO_ATOMIC_SHADER_COOK_HEADERS}/AtomicShaderCookPackage.h" COPYONLY)
+add_library(HoroAtomicShaderCookPackageInternal STATIC common/shader_cook/AtomicShaderCookPackage.cpp)
+target_compile_features(HoroAtomicShaderCookPackageInternal PUBLIC cxx_std_20)
+target_include_directories(HoroAtomicShaderCookPackageInternal PUBLIC "${HORO_ATOMIC_SHADER_COOK_HEADERS}")
+target_link_libraries(HoroAtomicShaderCookPackageInternal PUBLIC HoroEditorShaderCookHostInternal PRIVATE HoroFoundationJsonInternal)
 add_executable(HoroEditorUiPaintShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/UiPaintCook.cpp)
 target_compile_features(HoroEditorUiPaintShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorUiPaintShaderCook PRIVATE HoroEditorShaderCookHostInternal HoroHostSignatureDocuments
@@ -658,7 +670,32 @@ target_compile_features(HoroEditorClusteredLightingCookInternal PUBLIC cxx_std_2
 target_include_directories(HoroEditorClusteredLightingCookInternal PUBLIC "${HORO_CLUSTERED_COOK_HEADERS}")
 target_link_libraries(HoroEditorClusteredLightingCookInternal PUBLIC HoroEditorShaderCookHostInternal
     PRIVATE HoroEditorClusteredLightingAssetsInternal HoroEditorViewportShaderRecipeInternal
-    HoroShaderReflectionCookInternal HoroEngine::Platform HoroFoundationJsonInternal)
+    HoroShaderReflectionCookInternal HoroEngine::Platform HoroFoundationJsonInternal HoroAtomicShaderCookPackageInternal)
 add_executable(HoroEditorClusteredLightingShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/ClusteredLightingCookMain.cpp)
 target_compile_features(HoroEditorClusteredLightingShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorClusteredLightingShaderCook PRIVATE HoroEditorClusteredLightingCookInternal)
+
+set(HORO_VFX_GPU_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/vfx_gpu_cook_headers")
+file(MAKE_DIRECTORY "${HORO_VFX_GPU_COOK_HEADERS}")
+configure_file(HoroEditor/tools/VfxGpuCook.h "${HORO_VFX_GPU_COOK_HEADERS}/VfxGpuCook.h" COPYONLY)
+add_library(HoroVfxGpuCookInternal STATIC HoroEditor/tools/VfxGpuCook.cpp)
+target_compile_features(HoroVfxGpuCookInternal PUBLIC cxx_std_20)
+target_include_directories(HoroVfxGpuCookInternal PUBLIC "${HORO_VFX_GPU_COOK_HEADERS}")
+target_link_libraries(HoroVfxGpuCookInternal PUBLIC HoroEngine::RenderApi HoroEditorShaderCookHostInternal
+    PRIVATE HoroAtomicShaderCookPackageInternal HoroEngine::Platform)
+add_executable(HoroVfxGpuShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VfxGpuCookMain.cpp)
+target_compile_features(HoroVfxGpuShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroVfxGpuShaderCook PRIVATE HoroVfxGpuCookInternal)
+
+set(HORO_VFX_GPU_VULKAN_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/vfx_gpu_vulkan_cook_headers")
+file(MAKE_DIRECTORY "${HORO_VFX_GPU_VULKAN_COOK_HEADERS}")
+configure_file(HoroEditor/tools/VfxGpuVulkanCook.h
+    "${HORO_VFX_GPU_VULKAN_COOK_HEADERS}/VfxGpuVulkanCook.h" COPYONLY)
+add_library(HoroVfxGpuVulkanCookInternal STATIC HoroEditor/tools/VfxGpuVulkanCook.cpp)
+target_compile_features(HoroVfxGpuVulkanCookInternal PUBLIC cxx_std_20)
+target_include_directories(HoroVfxGpuVulkanCookInternal PUBLIC "${HORO_VFX_GPU_VULKAN_COOK_HEADERS}")
+target_link_libraries(HoroVfxGpuVulkanCookInternal PUBLIC HoroEngine::RenderApi HoroEditorShaderCookHostInternal
+    PRIVATE HoroAtomicShaderCookPackageInternal HoroEngine::Platform)
+add_executable(HoroVfxGpuVulkanShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VfxGpuVulkanCookMain.cpp)
+target_compile_features(HoroVfxGpuVulkanShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroVfxGpuVulkanShaderCook PRIVATE HoroVfxGpuVulkanCookInternal)

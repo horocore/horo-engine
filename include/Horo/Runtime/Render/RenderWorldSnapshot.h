@@ -4,9 +4,11 @@
  * @brief Immutable frame-owned CPU VFX output shared with renderer graph scheduling.
  */
 #include "Horo/Runtime/Render/StandardPbrMaterial.h"
+#include "Horo/Runtime/Render/VfxGpuSimulation.h"
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -63,6 +65,19 @@ namespace Horo::Render {
         std::uint32_t instanceCount{};
     };
 
+    /** @brief Immutable GPU publication values; renderer resolves the issued receipt through its own resource registry.
+     * @details No CPU particle instances, live simulator pointer or native resource lease is retained here.
+     * Pending work may target a newer generation only when admitted in the same graph as its draw.
+     */
+    struct GpuVfxRenderBatch final {
+        VfxBatchId id;
+        VfxGpuPreparationReceipt preparation;
+        std::uint64_t generation{};
+        std::optional<GpuVfxSimulationWork> pending;
+        CancellationToken lifetimeCancellation;
+        Math::Vec3 originDelta;
+    };
+
     /** @brief Preallocated storage; only extraction may populate an unleased slot. */
     class RenderWorldFrameData final {
     private:
@@ -73,6 +88,7 @@ namespace Horo::Render {
         std::uint64_t originRevision_{};
         std::vector<VfxRenderBatch> batches_;
         std::vector<VfxRenderInstance> instances_;
+        std::vector<GpuVfxRenderBatch> gpuBatches_;
     };
 
     /** @brief Copyable immutable lease that survives simulation, scene and extractor destruction.
@@ -104,6 +120,11 @@ namespace Horo::Render {
         /** @brief Returns retained packed particle data. @return Immutable frame-owned slice. */
         [[nodiscard]] std::span<const VfxRenderInstance> Instances() const noexcept {
             return data_ ? std::span{data_->instances_} : std::span<const VfxRenderInstance>{};
+        }
+
+        /** @brief Returns complete GPU batches without materializing fake CPU instances. */
+        [[nodiscard]] std::span<const GpuVfxRenderBatch> GpuBatches() const noexcept {
+            return data_ ? std::span{data_->gpuBatches_} : std::span<const GpuVfxRenderBatch>{};
         }
 
     private:

@@ -1098,9 +1098,22 @@ target_compile_features(HoroParticleSimulationDataTests PRIVATE cxx_std_20)
 target_link_libraries(HoroParticleSimulationDataTests PRIVATE HoroEngine::VfxSimulationData)
 horo_register_catch_test(HoroParticleSimulationDataTests LABELS "unit;vfx;headless")
 
+add_executable(HoroGpuParticleSimulatorTests unit/runtime/vfx/GpuParticleSimulatorTests.cpp)
+target_compile_features(HoroGpuParticleSimulatorTests PRIVATE cxx_std_20)
+target_include_directories(HoroGpuParticleSimulatorTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroGpuParticleSimulatorTests PRIVATE HoroEngine::VfxApi)
+horo_register_catch_test(HoroGpuParticleSimulatorTests LABELS "unit;vfx;headless")
+
+add_executable(HoroVfxGpuSimulationTests unit/runtime/renderer/VfxGpuSimulationTests.cpp)
+target_compile_features(HoroVfxGpuSimulationTests PRIVATE cxx_std_20)
+target_include_directories(HoroVfxGpuSimulationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroVfxGpuSimulationTests PRIVATE HoroEngine::VfxApi)
+horo_register_catch_test(HoroVfxGpuSimulationTests LABELS "unit;renderer;vfx;headless")
+
 add_executable(HoroVfxApiTests
         support/AllocationProbe.cpp
         unit/runtime/vfx/CpuParticleBufferTests.cpp
+        unit/runtime/vfx/VfxWorldGpuTests.cpp
         unit/runtime/vfx/CpuParticleCollisionTests.cpp
         unit/runtime/vfx/CpuParticleSimulatorTests.cpp
         unit/runtime/vfx/CpuSimulationQualificationTests.cpp
@@ -1114,6 +1127,14 @@ add_executable(HoroVfxApiTests
         unit/runtime/vfx/VfxQualityPolicyTests.cpp
 )
 target_compile_features(HoroVfxApiTests PRIVATE cxx_std_20)
+set(HORO_VFX_WORLD_TEST_INTERNALS "${CMAKE_CURRENT_BINARY_DIR}/vfx_world_test_internals")
+file(MAKE_DIRECTORY "${HORO_VFX_WORLD_TEST_INTERNALS}")
+configure_file(
+        "${PROJECT_SOURCE_DIR}/src/runtime/vfx/api/VfxWorldCoordinates.h"
+        "${HORO_VFX_WORLD_TEST_INTERNALS}/VfxWorldCoordinates.h"
+        COPYONLY
+)
+target_include_directories(HoroVfxApiTests PRIVATE "${HORO_VFX_WORLD_TEST_INTERNALS}")
 target_include_directories(HoroVfxApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(HoroVfxApiTests PRIVATE HORO_VFX_CPU_BASELINE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/vfx/cpu_simulation_baseline.json")
 target_link_libraries(HoroVfxApiTests PRIVATE HoroEngine::VfxApi nlohmann_json::nlohmann_json)
@@ -4013,6 +4034,16 @@ set_tests_properties(HoroMultiviewSceneExtractionPublicHeaderConsumer PROPERTIES
 target_compile_features(HoroStandardPbrMaterialTests PRIVATE cxx_std_20)
 target_include_directories(HoroStandardPbrMaterialTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroStandardPbrMaterialTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroGpuParticleLayoutTests unit/runtime/renderer/GpuParticleLayoutTests.cpp)
+target_compile_features(HoroGpuParticleLayoutTests PRIVATE cxx_std_20)
+target_link_libraries(HoroGpuParticleLayoutTests PRIVATE HoroEngine::RenderApi)
+horo_register_catch_test(HoroGpuParticleLayoutTests LABELS "unit;renderer;vfx;headless")
+
+add_executable(HoroVfxGpuGraphTests unit/runtime/renderer/VfxGpuGraphWorkloadTests.cpp)
+target_compile_features(HoroVfxGpuGraphTests PRIVATE cxx_std_20)
+target_link_libraries(HoroVfxGpuGraphTests PRIVATE HoroEngine::RenderApi)
+horo_register_catch_test(HoroVfxGpuGraphTests LABELS "unit;renderer;vfx;headless")
+
 add_executable(HoroLightCullingTests
         unit/runtime/renderer/LightCullingGraphTests.cpp
         unit/runtime/renderer/LightCullingTests.cpp
@@ -4086,6 +4117,9 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderReadbackTests.cpp
         unit/runtime/renderer/RenderTransferTests.cpp
         unit/runtime/renderer/RenderResourceRegistryTests.cpp
+        unit/runtime/renderer/VfxGpuInventoryLeaseTests.cpp
+        unit/runtime/renderer/VfxGpuFrontendTests.cpp
+        unit/runtime/renderer/VfxGpuProtocolProvider.h
         unit/runtime/renderer/RenderResourceRegistryRollbackTests.cpp
         unit/runtime/renderer/RenderNativeRetirementTests.cpp
         unit/runtime/renderer/RenderFrontendClosingTests.cpp
@@ -4111,6 +4145,7 @@ target_link_libraries(HoroRenderFrontendTests
         HoroRenderExternalImagesInterface
         HoroEngine::RenderFrontend
         HoroEngine::RenderNull
+        HoroEngine::VfxApi
 )
 add_executable(HoroRenderMemoryBudgetTests
         support/AllocationProbe.cpp
@@ -5599,6 +5634,7 @@ if (HORO_BUILD_RENDER_METAL)
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalParallelRecordingSmoke.mm)
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalLightFrameUploadSmoke.mm)
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalLightCullingSmoke.mm)
+    target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalVfxGpuSubmissionSmoke.mm)
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalUiPaintSmoke.mm
         integration/renderer/MetalUiPaintFixture.cpp)
     target_compile_features(HoroMetalGraphExecutionSmoke PRIVATE cxx_std_20)
@@ -6317,6 +6353,13 @@ target_compile_features(HoroVulkanSampledReflectionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroVulkanSampledReflectionTests PRIVATE HoroShaderReflectionCookInternal)
 horo_register_catch_test(HoroVulkanSampledReflectionTests LABELS "unit;renderer;shader;headless")
 
+add_executable(HoroVfxGpuReflectionTests unit/runtime/renderer/VfxGpuReflectionTests.cpp)
+target_compile_features(HoroVfxGpuReflectionTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroVfxGpuReflectionTests PRIVATE
+        HORO_VFX_GPU_REFLECTION_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/vfx_gpu_compute_locked")
+target_link_libraries(HoroVfxGpuReflectionTests PRIVATE HoroShaderReflectionCookInternal)
+horo_register_catch_test(HoroVfxGpuReflectionTests LABELS "unit;renderer;vfx;shader;headless")
+
 add_executable(HoroEditorVulkanShaderAssetsTests
     unit/editor/EditorVulkanShaderAssetsTests.cpp
     ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorVulkanShaderAssets.cpp)
@@ -6367,6 +6410,12 @@ target_compile_features(HoroEditorClusteredLightingCookTests PRIVATE cxx_std_20)
 target_include_directories(HoroEditorClusteredLightingCookTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(HoroEditorClusteredLightingCookTests PRIVATE HoroEditorClusteredLightingCookInternal Catch2::Catch2WithMain)
 horo_register_catch_test(HoroEditorClusteredLightingCookTests LABELS "unit;application;shader;headless")
+
+add_executable(HoroVfxGpuCookTests unit/editor/VfxGpuCookTests.cpp)
+target_compile_features(HoroVfxGpuCookTests PRIVATE cxx_std_20)
+target_include_directories(HoroVfxGpuCookTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroVfxGpuCookTests PRIVATE HoroVfxGpuCookInternal Catch2::Catch2WithMain)
+horo_register_catch_test(HoroVfxGpuCookTests LABELS "unit;application;shader;vfx;headless")
 add_test(NAME HoroEditorClusteredLightingShaderCookContract
     COMMAND ${CMAKE_COMMAND} "-DCOOK=$<TARGET_FILE:HoroEditorClusteredLightingShaderCook>"
         "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/clustered-lighting-cook-contract"
@@ -6378,11 +6427,37 @@ if(TARGET HoroMetalGraphExecutionSmoke)
     target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE
         integration/renderer/MetalClusteredMaterialGraphSmoke.mm
-        integration/renderer/MetalClusteredMaterialGraphFixture.mm)
+        integration/renderer/MetalClusteredMaterialGraphFixture.mm
+        integration/renderer/MetalVfxGpuEndToEndSmoke.mm
+        integration/renderer/MetalVfxGpuEndToEndFixture.mm
+        integration/renderer/MetalVfxGpuEndToEndFixture.h
+        integration/renderer/MetalVfxGpuProgramsSmoke.mm)
     target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE HoroEngine::RenderFrontend
         HoroEditorClusteredLightingAssetsInternal HoroEditorViewportShaderRecipeInternal
-        HoroRenderFrontendResourceAccessInternal)
+        HoroRenderFrontendResourceAccessInternal HoroEngine::VfxApi HoroVfxGpuCookInternal)
+    target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE "${PROJECT_SOURCE_DIR}/tests")
 endif()
 
 target_sources(HoroShaderReflectionCookTests PRIVATE unit/runtime/renderer/RegisterRasterCapturedMetalTests.cpp)
 target_link_libraries(HoroShaderReflectionCookTests PRIVATE HoroEditorViewportShaderRecipeInternal)
+
+add_executable(HoroVfxGpuVulkanCookTests unit/editor/VfxGpuVulkanCookTests.cpp)
+target_compile_features(HoroVfxGpuVulkanCookTests PRIVATE cxx_std_20)
+target_link_libraries(HoroVfxGpuVulkanCookTests PRIVATE HoroVfxGpuVulkanCookInternal
+    HoroAtomicShaderCookPackageInternal HoroHostSignatureDocuments MbedTLS::mbedcrypto)
+horo_register_catch_test(HoroVfxGpuVulkanCookTests LABELS "unit;application;shader;vfx;headless")
+
+add_executable(HoroVfxGpuVulkanReflectionTests unit/runtime/renderer/VfxGpuVulkanReflectionTests.cpp)
+target_compile_features(HoroVfxGpuVulkanReflectionTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroVfxGpuVulkanReflectionTests PRIVATE
+    HORO_VFX_GPU_REFLECTION_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/vfx_gpu_compute_locked")
+target_link_libraries(HoroVfxGpuVulkanReflectionTests PRIVATE HoroShaderReflectionCookInternal)
+horo_register_catch_test(HoroVfxGpuVulkanReflectionTests LABELS "unit;renderer;shader;vfx;headless")
+
+add_executable(HoroVfxGpuVulkanToolchainTests unit/runtime/renderer/VfxGpuVulkanToolchainTests.cpp)
+target_compile_features(HoroVfxGpuVulkanToolchainTests PRIVATE cxx_std_20)
+target_include_directories(HoroVfxGpuVulkanToolchainTests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+target_compile_definitions(HoroVfxGpuVulkanToolchainTests PRIVATE
+    HORO_VFX_GPU_REFLECTION_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/vfx_gpu_compute_locked")
+target_link_libraries(HoroVfxGpuVulkanToolchainTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
+horo_register_catch_test(HoroVfxGpuVulkanToolchainTests LABELS "unit;renderer;shader;vfx;headless")

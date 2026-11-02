@@ -1,6 +1,6 @@
 #pragma once
 /** @file AuthenticatedMetalCookConfiguration.h @brief Explicit authenticated offline Metal toolchain host configuration. */
-#include "VerifiedShaderHostCatalog.h"
+#include "AuthenticatedShaderCookConfiguration.h"
 
 #include <array>
 #include <filesystem>
@@ -13,10 +13,7 @@ namespace Horo::Application::Internal {
     };
 
     /** @brief Tool configuration and immutable authenticated documents; independent trust roots are deliberately excluded. */
-    struct AuthenticatedMetalCookConfiguration final {
-        Render::ShaderCompilerToolchainConfiguration configuration;
-        std::shared_ptr<const std::vector<std::uint8_t>> catalogBytes, signatureBytes;
-    };
+    using AuthenticatedMetalCookConfiguration = AuthenticatedShaderCookConfiguration;
 
     [[nodiscard]] std::string_view ActualMetalCookHost() noexcept;
     /** @brief Reads one explicitly named absolute regular input with a finite bound and exact final length. */

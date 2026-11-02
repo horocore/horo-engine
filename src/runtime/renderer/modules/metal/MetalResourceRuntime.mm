@@ -363,6 +363,8 @@ namespace Horo::Render::Detail {
     }
 
     void MetalResourceRuntime::Shutdown() noexcept {
+        if (!VfxGpuSimulationsDrained())
+            std::terminate();
         // Timeout closes this native ownership domain; it does not establish reusable completion evidence.
         static_cast<void>(ObserveMetalCommandForTeardown(impl_->lastSubmittedUpload));
         DestroyAll(impl_->graphicsPipelines);

@@ -5,6 +5,7 @@
 #include "Horo/Math/WorldCoordinate64.h"
 #include "Horo/Runtime/Render/RenderWorldSnapshot.h"
 #include "Horo/Vfx/CpuParticleBuffer.h"
+#include "Horo/Vfx/GpuParticleSimulator.h"
 
 #include <thread>
 #include <vector>
@@ -23,6 +24,22 @@ namespace Horo::Vfx {
         Render::VfxPrimitiveTopology topology{Render::VfxPrimitiveTopology::CameraFacingBillboard};
         bool deferredCompatible{};
         bool shadowCaster{};
+    };
+
+    /** @brief Cold ownership binding. Prepare moves the simulator only after all world admission and allocation succeeds.
+     * @details Only the actual supported additive, unsorted billboard direct-draw recipe is admitted.
+     */
+    struct VfxGpuEmitterPreparation final {
+        EffectSystemId effect;
+        EmitterId emitter;
+        std::unique_ptr<GpuParticleSimulator> simulator;
+        Render::VfxParticlePass blend{Render::VfxParticlePass::Additive};
+    };
+
+    /** @brief Allocation-free owner-safe-phase processing evidence. */
+    struct VfxGpuUpdateReport final {
+        GpuParticleStepStatus status{GpuParticleStepStatus::Complete};
+        std::uint32_t processed{}, pending{}, rejected{};
     };
 
     /** @brief Aggregate host-ledger reservation, shared across all effects in one scene.
@@ -81,7 +98,7 @@ namespace Horo::Vfx {
         /** @brief Materializes the host-reserved immutable frame ring.
          * @param budget Finite scene-wide payload/draw bounds. @return Prepared ring or typed admission failure.
          */
-        [[nodiscard]] static Result<VfxRenderExtractor> Prepare(VfxExtractionBudget budget);
+        [[nodiscard]] static Result<VfxRenderExtractor> Prepare(VfxExtractionBudget budget, std::uint32_t gpuBatchCapacity = 0);
         /** @brief Packs the current live prefix on the scene owner without allocation.
          * @param world Scene owner; borrowed only during copying. @param frame Increasing one-based frame ordinal.
          * @param origin Captured render origin, borrowed only for this synchronous copy. @param originRevision Non-zero captured revision.
@@ -89,6 +106,12 @@ namespace Horo::Vfx {
          */
         [[nodiscard]] VfxExtractionOutcome Extract(const VfxWorld &world, std::uint64_t frame, const Math::WorldCoordinate64 &origin,
                                                    std::uint64_t originRevision) noexcept;
+
+        [[nodiscard]] bool AppendGpuEmitter(EffectSystemId, EmitterId, const GpuParticleSimulator &, std::uint32_t,
+                                            Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
+                                            VfxExtractionReport &) const noexcept;
+        [[nodiscard]] bool AppendGpuEmitters(const VfxWorld &, Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
+                                             VfxExtractionReport &) const noexcept;
 
         /** @brief Copies validated particle values into admitted frame storage; never publishes a partial frame.
          * @param binding Prepared emitter coordinates. @param particles Exact live identity source.
@@ -116,13 +139,14 @@ namespace Horo::Vfx {
         std::uint64_t lastFrame_{};
     };
 
-    /** @brief Scene-owner-thread live effect storage prepared by the host and attached to RuntimeScene.
+    /** @brief Scene-owner-thread mixed CPU/GPU logical effect storage prepared by the host and attached to RuntimeScene.
      * @details Prepared bindings own CPU buffers. Play activates a complete prepared effect; Stop clears
      * its simulation and advances generation before reuse. Immutable snapshots own copies, so stopped effects
-     * and destroyed scenes cannot invalidate readers. GPU simulation and native resources are not owned here.
+     * and destroyed scenes cannot invalidate readers. GPU logical owners share this world; all native resources remain renderer-owned.
      */
     class VfxWorld final {
     public:
+        static constexpr std::size_t MaximumGpuAcknowledgements = 64;
         VfxWorld(const VfxWorld &) = delete;
         VfxWorld &operator=(const VfxWorld &) = delete;
         VfxWorld(VfxWorld &&) noexcept = default;
@@ -134,6 +158,20 @@ namespace Horo::Vfx {
         [[nodiscard]] static Result<std::unique_ptr<VfxWorld>> Prepare(VfxIdentityScope scene,
                                                                        std::span<const VfxEmitterPreparation> emitters,
                                                                        VfxExtractionBudget budget);
+        /** @brief Cold mixed preparation; failure leaves every caller-owned GPU simulator intact.
+         * @param scene Scene incarnation. @param cpu Existing CPU bindings. @param gpu Mutable ownership bindings, moved only on success.
+         * @param budget One aggregate CPU/GPU extraction slice. @return Prepared canonical scene owner or typed failure.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<VfxWorld>> Prepare(VfxIdentityScope scene, std::span<const VfxEmitterPreparation> cpu,
+                                                                       std::span<VfxGpuEmitterPreparation> gpu, VfxExtractionBudget budget);
+        /** @brief Applies only frontend-issued acknowledgements at the owner safe phase, before preparing/extracting new work. */
+        [[nodiscard]] VfxGpuUpdateReport ApplyGpuAcknowledgements(std::span<const Render::GpuVfxStepAcknowledgement>) noexcept;
+        /** @brief Prepares each live GPU unit's exact next tick; retained unacknowledged candidates are copied unchanged. */
+        [[nodiscard]] VfxGpuUpdateReport PrepareGpuSteps(float deltaSeconds, const CancellationToken &cancellation = {}) noexcept;
+        /** @brief Replaces every stopped GPU unit of one effect with freshly admitted matching-generation owners atomically.
+         * @details Capacities must match the original reservation; failure preserves all replacement owners.
+         */
+        [[nodiscard]] Result<void> ReprepareGpuEffect(EffectSystemId effect, std::span<VfxGpuEmitterPreparation> replacements);
         /** @brief Activates one entire prepared effect without allocation.
          * @param effect Exact current generation. @return Success or typed stale/thread/state failure.
          */
@@ -173,11 +211,34 @@ namespace Horo::Vfx {
             bool retired{};
         };
 
+        struct GpuEmitter final {
+            EffectSystemId effect;
+            EmitterId emitter;
+            std::unique_ptr<GpuParticleSimulator> simulator;
+            std::uint32_t capacity{};
+            bool live{}, retired{};
+        };
+
+        [[nodiscard]] static Result<void> ValidateCpuBindings(VfxIdentityScope, std::span<const VfxEmitterPreparation>);
+        [[nodiscard]] Result<void> PrepareCpuEmitters(std::span<const VfxEmitterPreparation>);
+        [[nodiscard]] Result<void> CheckCpuPlay(EffectSystemId, bool &) const;
+        [[nodiscard]] bool HasLiveEffect(EffectSystemId) const noexcept;
+        [[nodiscard]] bool CompatibleGpuReplacements(EffectSystemId, std::span<VfxGpuEmitterPreparation>) const noexcept;
+        [[nodiscard]] Result<void> ValidateGpuReplacements(EffectSystemId, std::span<VfxGpuEmitterPreparation>) const;
+        [[nodiscard]] bool CanPlayGpu(EffectSystemId, bool &) const noexcept;
+        void SetGpuLive(EffectSystemId) noexcept;
+        [[nodiscard]] bool HasLiveGpu(EffectSystemId) const noexcept;
+        void StopGpu(EffectSystemId, EffectSystemId, bool) noexcept;
+        void ShutdownGpu() noexcept;
+        [[nodiscard]] bool AppendCpuEmitters(Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
+                                             VfxExtractionReport &) const noexcept;
+
         /** @brief Takes already materialized scene/frame storage. */
         explicit VfxWorld(VfxIdentityScope scene, VfxRenderExtractor extractor);
         VfxIdentityScope scene_;
         VfxRenderExtractor extractor_;
         std::vector<Emitter> emitters_;
+        std::vector<GpuEmitter> gpuEmitters_;
         std::thread::id owner_{};
         bool shutDown_{};
     };

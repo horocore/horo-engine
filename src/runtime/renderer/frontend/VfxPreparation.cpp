@@ -3,16 +3,12 @@
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "RenderFrontendErrors.h"
 #include "RenderResourceRegistry.h"
+#include "VfxFrontendState.h"
 
 #include <algorithm>
 #include <new>
 
 namespace Horo::Render {
-    namespace Detail {
-        /** @brief Inert owner-incarnation marker; no frontend pointer or native authority survives revocation. */
-        struct VfxFrontendState final {};
-    }  // namespace Detail
-
     namespace {
         /** @brief Selects one dedicated instance binding without borrowing mutable frontend metadata. */
         Result<MaterialBufferBinding> VfxInstanceBinding(const MaterialBindingDescriptor &descriptor) {

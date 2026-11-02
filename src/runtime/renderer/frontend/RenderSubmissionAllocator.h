@@ -40,6 +40,12 @@ namespace Horo::Render::Detail {
         /** @brief Transactionally imports a complete ordered batch or consumes matching reservations. */
         [[nodiscard]] Result<void> Admit(std::span<const RenderQueueSubmission> submissions);
 
+        /** @brief Reads actual existing admission history without issuing or accepting native work.
+         * @param point Exact queue point supplied by native receipt validation.
+         * @return True only if this same allocator admitted it; admission alone is never GPU acceptance/completion proof.
+         */
+        [[nodiscard]] bool WasAdmittedPoint(RenderTimelinePoint point) const noexcept;
+
     private:
         struct Queue {
             RenderQueueId id;

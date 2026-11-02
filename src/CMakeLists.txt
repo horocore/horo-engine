@@ -1872,6 +1872,10 @@ add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleSimulator.cpp
         runtime/vfx/api/CpuParticleSimulatorPreparation.cpp
         runtime/vfx/api/CpuParticleSimulatorStages.cpp
+        runtime/vfx/api/GpuParticleSimulator.cpp
+        runtime/vfx/api/GpuParticleSimulatorPreparation.cpp
+        runtime/vfx/api/VfxWorldGpu.cpp
+        runtime/vfx/api/GpuParticleSimulatorInternal.h
         runtime/vfx/api/CpuParticleSpawnPipeline.cpp
         runtime/vfx/api/EffectInstancePool.cpp
         runtime/vfx/api/ParticleSystemDescriptor.cpp
@@ -2659,6 +2663,14 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/LightCullingKernel.cpp
         runtime/renderer/api/LightFrameLayout.cpp
         runtime/renderer/api/LightFrameUpload.cpp
+        runtime/renderer/api/GpuParticleLayout.cpp
+        runtime/renderer/api/VfxGpuGraphWorkload.cpp
+        runtime/renderer/api/VfxGpuBackend.cpp
+        runtime/renderer/api/VfxGpuSimulation.cpp
+        runtime/renderer/api/VfxGpuArithmetic.cpp
+        runtime/renderer/api/VfxGpuParameters.cpp
+        runtime/renderer/api/VfxGpuKernel.cpp
+        runtime/renderer/api/VfxGpuSimulationInternal.h
         runtime/renderer/api/RenderGraphLifetimeErrors.cpp
         runtime/renderer/api/RenderGraphValidation.cpp
         runtime/renderer/api/RenderResourceDescriptorErrors.cpp
@@ -2692,7 +2704,7 @@ target_include_directories(HoroRenderApi
         PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation PRIVATE HoroFoundationJsonInternal)
+target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation HoroEngine::VfxSimulationData PRIVATE HoroFoundationJsonInternal)
 
 # Portable normalization of actual tool evidence; runtime value/identity consumers remain in RenderApi.
 add_library(HoroShaderReflectionCookInternal STATIC
@@ -2709,6 +2721,12 @@ add_library(HoroShaderReflectionCookInternal STATIC
     runtime/renderer/shader_cook/LightCullingMetalReflectionSpirv.cpp
     runtime/renderer/shader_cook/LightCullingMetalReflectionStorage.cpp
     runtime/renderer/shader_cook/LightCullingMetalReflectionNormalization.cpp
+    runtime/renderer/shader_cook/VfxGpuReflectionProfile.cpp
+    runtime/renderer/shader_cook/VfxGpuReflectionSpirv.cpp
+    runtime/renderer/shader_cook/VfxGpuReflectionNative.cpp
+    runtime/renderer/shader_cook/VfxGpuReflectionNormalization.cpp
+    runtime/renderer/shader_cook/VfxGpuVulkanReflectionProfile.cpp
+    runtime/renderer/shader_cook/VfxGpuVulkanReflectionNormalization.cpp
     runtime/renderer/shader_cook/VulkanReflectionNormalization.cpp
     runtime/renderer/shader_cook/UiPaintMetalReflectionNormalization.cpp
     runtime/renderer/shader_cook/VfxMetalReflectionNormalization.cpp)
@@ -2817,6 +2835,16 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontendVfxResources.cpp
         runtime/renderer/frontend/LightCullingPreparation.cpp
         runtime/renderer/frontend/VfxPreparation.cpp
+        runtime/renderer/frontend/VfxGpuInventoryLease.cpp
+        runtime/renderer/frontend/VfxGpuPreparation.cpp
+        runtime/renderer/frontend/VfxGpuStorage.cpp
+        runtime/renderer/frontend/VfxGpuScheduling.cpp
+        runtime/renderer/frontend/VfxGpuReceipts.cpp
+        runtime/renderer/frontend/VfxGpuReadback.cpp
+        runtime/renderer/frontend/VfxGpuStorage.h
+        runtime/renderer/frontend/VfxGpuScheduling.h
+        runtime/renderer/frontend/VfxGpuReadback.h
+        runtime/renderer/frontend/VfxFrontendState.h
         runtime/renderer/frontend/LightFrameBufferPool.cpp
         runtime/renderer/frontend/UiPaintFrameBufferPool.cpp
         runtime/renderer/frontend/UiPaintProgram.cpp
@@ -3006,6 +3034,13 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
             runtime/renderer/modules/metal/MetalResourceGraphRuntime.mm
             runtime/renderer/modules/metal/MetalLightCullingKernel.mm
+            runtime/renderer/modules/metal/MetalVfxGpuKernel.mm
+            runtime/renderer/modules/metal/MetalVfxGpuPreparation.mm
+            runtime/renderer/modules/metal/MetalVfxGpuJournal.mm
+            runtime/renderer/modules/metal/MetalVfxGpuCompute.mm
+            runtime/renderer/modules/metal/MetalVfxGpuDraw.mm
+            runtime/renderer/modules/metal/MetalVfxGpuReadback.mm
+            runtime/renderer/modules/metal/MetalSingleQueueSubmissions.mm
             runtime/renderer/modules/metal/MetalUiPaintKernel.mm
             runtime/renderer/modules/metal/MetalUiPaintUpload.mm
             runtime/renderer/modules/metal/MetalVfxFrameUpload.mm
