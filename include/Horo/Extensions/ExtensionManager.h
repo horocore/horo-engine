@@ -27,6 +27,7 @@ namespace Horo::Extensions {
     class EditorPageHost;
     class EditorInspectorHost;
     class EditorViewportHost;
+    class NativeExtensionServiceHost;
 
     /** @brief Explicit editor publication authorities supplied by application composition. */
     struct ExtensionEditorHosts final {
@@ -72,7 +73,7 @@ namespace Horo::Extensions {
                                   std::vector<std::string> hostCapabilities = {},
                                   std::shared_ptr<const Security::NativeArtifactGate> artifactGate = {},
                                   NativeLibraryLoader libraryLoader = {}, ExtensionPlatformProviderCommit platformProviderCommit = {},
-                                  ExtensionEditorHosts editorHosts = {});
+                                  ExtensionEditorHosts editorHosts = {}, std::shared_ptr<NativeExtensionServiceHost> services = {});
         /** @brief Withdraws publications on the owner lane; busy native closures require process restart. */
         ~ExtensionManager();
         ExtensionManager(const ExtensionManager &) = delete;
@@ -152,6 +153,7 @@ namespace Horo::Extensions {
         NativeLibraryLoader m_libraryLoader;
         ExtensionPlatformProviderCommit m_platformProviderCommit;
         ExtensionEditorHosts m_editorHosts;
+        std::shared_ptr<NativeExtensionServiceHost> m_services;
         TransparentStringMap<std::unique_ptr<LoadedExtension>> m_loadedExtensions;
         std::vector<std::string> m_activationOrder;
         std::vector<std::shared_ptr<ExtensionRetirement>> m_failedActivations;

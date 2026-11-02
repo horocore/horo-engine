@@ -1040,6 +1040,62 @@ jobs:
     outputs: *macos_bundle_outputs
     steps: *native_steps
 
+  reference-sdk-macos-x64:
+    name: Reference SDK · macOS x64
+    needs: [tooling]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: clang
+      CXX: clang++
+      HORO_COMPILER_LAUNCHER: ccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CTEST_PARALLEL_LEVEL: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Setup build tools
+        uses: ./.github/actions/setup-build-tools
+      - name: Restore compatible main caches
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-tests-v1
+          compiler-storage: registry
+          mode: Debug
+          max-size: 2G
+      - name: Configure reference SDK host
+        run: >-
+          cmake --preset ci-macos-debug
+          -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk"
+          -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON
+      - name: Build actual SDK consumers and native host
+        run: >-
+          cmake --build --preset ci-macos-debug --parallel 2 --target
+          HoroReferenceExtensionQualification HoroExtensionAbiCConsumer
+          HoroExtensionsPublicHeaderConsumer HoroExtensionLuaBindingsPublicHeaderConsumer
+      - name: Validate reference packages and native lifecycle
+        run: >-
+          ctest --test-dir build/ci -C Debug --parallel 1 --output-on-failure --no-tests=error
+          -R '^(HoroReferenceExtensionExamplesTest|HoroNativeExtensionServiceTests|HoroNativeExtensionServiceOffLaneRetentionTests|HoroExtensionAbiCConsumer|HoroExtensionSdkExternalConsumerTest|HoroExtensionSdkReconfigureTest)$'
+          --output-junit reference-sdk-ctest.xml
+      - name: Preserve SDK qualification results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reference-sdk-macos-x64-${{ github.sha }}
+          path: build/ci/reference-sdk-ctest.xml
+          if-no-files-found: warn
+          retention-days: 7
+
   macos-metal:
     name: Test · macOS / Clang${{ github.ref == 'refs/heads/main' && ' (main)' || '' }}
     needs: [macos-build, macos-build-main]

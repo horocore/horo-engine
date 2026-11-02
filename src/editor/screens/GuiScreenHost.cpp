@@ -26,6 +26,7 @@
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionManager.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
+#include "Horo/Extensions/NativeExtensionServiceHost.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/OperationStore.h"
@@ -172,6 +173,10 @@ namespace Horo::Editor {
             return themes;
         }
 
+        void ShutdownNativeServices(const std::shared_ptr<Extensions::NativeExtensionServiceHost> &host) noexcept {
+            if (host)
+                host->BeginShutdown();
+        }
     }  // namespace
 
     /** @copydoc GuiScreenHost::GuiScreenHost */
@@ -219,6 +224,20 @@ namespace Horo::Editor {
             services_.Register<Extensions::ExtensionMarketplaceService>(*extensionMarketplace_);
     }
 
+    /** @copydoc GuiScreenHost::InitializeExtensionServices */
+    void GuiScreenHost::InitializeExtensionServices(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities) {
+        if (composition.extensionServicePolicy.revision == 0)
+            return;
+        extensionCapabilities_ = std::make_shared<Extensions::ApplicationCapabilityRegistry>();
+        extensionBackendServices_ = std::make_shared<Extensions::BackendServiceRegistry>();
+        extensionScriptInvocations_ = std::make_shared<Extensions::ScriptInvocationRegistry>();
+        extensionServices_ =
+            std::make_shared<Extensions::NativeExtensionServiceHost>(extensionCapabilities_, extensionBackendServices_,
+                                                                     extensionScriptInvocations_, composition.extensionServicePolicy);
+        services_.Register<Extensions::NativeExtensionServiceHost>(*extensionServices_);
+        capabilities.emplace_back("extension.services");
+    }
+
     /** @copydoc GuiScreenHost::InitializeExtensions */
     void GuiScreenHost::InitializeExtensions(const GuiScreenHostComposition &composition) {
         auto &jobs = composition.jobs;
@@ -237,6 +256,7 @@ namespace Horo::Editor {
             services_.Register<Extensions::EditorViewportHost>(*editorViewportHost_);
             capabilities.emplace_back(HORO_EDITOR_VIEWPORT_HOST_CAPABILITY);
         }
+        InitializeExtensionServices(composition, capabilities);
         extensionManager_ =
             std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get(), Extensions::ExtensionHostProfile::Interactive,
                                                            std::move(capabilities), composition.extensionArtifactGate,
@@ -245,7 +265,8 @@ namespace Horo::Editor {
                                                            Extensions::ExtensionEditorHosts{.activities = editorActivityHost_,
                                                                                             .pages = editorPageHost_,
                                                                                             .inspectors = editorInspectorHost_,
-                                                                                            .viewports = editorViewportHost_});
+                                                                                            .viewports = editorViewportHost_},
+                                                           extensionServices_);
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
         if (extensionInventory_ != nullptr) {
             extensionThemeIds_ = ActivateUserExtensions(*extensionManager_, *extensionInventory_);
@@ -414,6 +435,7 @@ namespace Horo::Editor {
             editorPageHost_->BeginShutdown();
         if (editorActivityHost_)
             editorActivityHost_->BeginShutdown();
+        ShutdownNativeServices(extensionServices_);
         if (extensionManager_)
             extensionManager_->UnloadAll();
         for (const auto &id : extensionThemeIds_)

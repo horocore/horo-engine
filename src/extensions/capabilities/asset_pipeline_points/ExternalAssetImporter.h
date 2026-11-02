@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace Horo::Extensions {
+    struct NativeServiceModule;
     struct ExtensionModuleLifetime;
     struct EditorActivitySession;
     class EditorActivityHost;
@@ -54,6 +55,7 @@ namespace Horo::Extensions {
         bool teardownFailed{};
         std::thread::id ownerThread{std::this_thread::get_id()};
         std::weak_ptr<ExtensionRetirement> retirement;
+        std::shared_ptr<NativeServiceModule> nativeServices;
         std::vector<std::shared_ptr<EditorActivitySession>> editorActivities;
         std::vector<std::shared_ptr<EditorPageNativeSession>> editorPages;
         std::vector<std::shared_ptr<EditorInspectorNativeSession>> editorInspectors;
@@ -81,6 +83,8 @@ namespace Horo::Extensions {
         std::shared_ptr<EditorViewportHost> viewportHost;
         std::uint64_t viewportGeneration{};
         bool viewportTransportNegotiated{};
+        bool serviceTransportNegotiated{};
+        std::shared_ptr<NativeServiceModule> nativeServices;
     };
 
     /**

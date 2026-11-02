@@ -4178,6 +4178,19 @@ add_library(HoroExtensions STATIC
         extensions/capabilities/toolchain_provider/ToolchainProviderRegistry.cpp
 )
 
+target_sources(HoroExtensions PRIVATE
+        extensions/host/NativeExtensionServiceShape.cpp
+        extensions/host/NativeExtensionServiceCalls.cpp
+        extensions/host/NativeExtensionServicePublication.cpp
+        extensions/host/NativeExtensionServiceAbi.cpp
+        extensions/host/NativeExtensionScriptSession.cpp
+        extensions/host/ExtensionReferenceConformance.cpp)
+
+add_library(HoroExtensionLuaBindings STATIC extensions/script/LuaExtensionServiceBinding.cpp)
+add_library(HoroEngine::ExtensionLuaBindings ALIAS HoroExtensionLuaBindings)
+target_compile_features(HoroExtensionLuaBindings PUBLIC cxx_std_20)
+target_link_libraries(HoroExtensionLuaBindings PUBLIC HoroExtensions PRIVATE HoroThirdParty::Lua)
+
 add_library(HoroEngine::Extensions ALIAS HoroExtensions)
 
 target_compile_features(HoroExtensions PUBLIC cxx_std_20)

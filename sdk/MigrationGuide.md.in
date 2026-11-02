@@ -409,3 +409,32 @@ Viewport providers use `EditorViewportAbi.h`, negotiate the complete appended
 and require interactive `editor.viewport` support. Existing field offsets remain
 unchanged. See the repository guide `docs/guides/extension-viewport-migration.md`
 for permissions, copied geometry budgets, canonical transform binding and teardown.
+
+## External C ABI 1.7 → 1.8 reference services
+
+`ExtensionServiceAbi.h` adds the negotiated `services` host-table tail. Old
+1.0–1.7 offsets and explicit prefixes remain unchanged. New service modules must
+request minor8, `HORO_EXTENSION_REQUIRES_SERVICES`, the complete new prefix and
+`extension.services`; load must repeat the table/size/schema/null checks.
+The SDK package version remains the engine version; 1.8 is the host ABI minor.
+
+The closed schema accepts synchronous signed64 scalar methods with at most8
+arguments and32 methods. It copies registration identities and method shapes.
+Actual host permission `extension.services.invoke` and transport capability
+`horo.extension.services` are explicit composition policy. A manifest dependency,
+static import or script API claim alone never grants invocation authority.
+Services use the existing BackendServiceRegistry; script bindings use the existing
+ScriptCapabilityContext/ScriptInvocationRegistry. The one supported Lua adapter
+is bounded and does not implement the full two-adapter or hot-rebind feature.
+
+Callbacks are synchronous and may run on workers; providers must be thread-safe.
+Shutdown also may run on a worker after admitted calls drain. Clients and request
+views are borrowed until their importing module unloads and for the call,
+respectively. Providers own allocations and destruction; no STL/exception/allocator
+crosses this C boundary. Cancellation is cooperative and never proof of drain.
+
+The engine's ExtensionManager, HeadlessExtensionHost and GuiScreenHost C++
+composition contracts grow. Rebuild their consumers from the same snapshot.
+This change does not alter Gameplay SDK25 layouts. To roll back, restore matching
+old SDK/binaries and remove minor8 requirements/service-dependent contributions;
+never disguise new modules as a prior prefix.

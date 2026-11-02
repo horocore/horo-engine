@@ -72,7 +72,10 @@ namespace Horo::Extensions {
         std::unique_ptr<Assets::AssetImporterCatalog> importers{std::make_unique<Assets::AssetImporterCatalog>()};
         std::unique_ptr<ExtensionManager> manager;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerSnapshot;
-        ApplicationCapabilityRegistry capabilities;
+        std::shared_ptr<ApplicationCapabilityRegistry> capabilities{std::make_shared<ApplicationCapabilityRegistry>()};
+        std::shared_ptr<BackendServiceRegistry> backendServices{std::make_shared<BackendServiceRegistry>()};
+        std::shared_ptr<ScriptInvocationRegistry> scriptInvocations{std::make_shared<ScriptInvocationRegistry>()};
+        std::shared_ptr<NativeExtensionServiceHost> nativeServices;
         AssetCookerRegistry cookers;
         ProjectValidatorRegistry validators;
         PipelineStepRegistry pipeline;
@@ -87,10 +90,17 @@ namespace Horo::Extensions {
     public:
         Impl(HeadlessExtensionHostConfiguration hostConfiguration, ProjectValidatorRegistry validatorRegistry,
              const IToolchainInvocationPolicy &toolchainPolicy, IExternalProcessRunner &processes)
-            : configuration(std::move(hostConfiguration)),
-              manager(std::make_unique<ExtensionManager>(importers.get(), ExtensionHostProfile::Headless, configuration.capabilities,
-                                                         configuration.artifactGate, configuration.libraryLoader)),
-              validators(std::move(validatorRegistry)), toolchains(toolchainPolicy, processes) {}
+            : configuration(std::move(hostConfiguration)), validators(std::move(validatorRegistry)),
+              toolchains(toolchainPolicy, processes) {
+            if (configuration.servicePolicy.revision != 0) {
+                nativeServices = std::make_shared<NativeExtensionServiceHost>(capabilities, backendServices, scriptInvocations,
+                                                                              configuration.servicePolicy);
+                configuration.capabilities.emplace_back("extension.services");
+            }
+            manager = std::make_unique<ExtensionManager>(importers.get(), ExtensionHostProfile::Headless, configuration.capabilities,
+                                                         configuration.artifactGate, configuration.libraryLoader,
+                                                         ExtensionPlatformProviderCommit{}, ExtensionEditorHosts{}, nativeServices);
+        }
 
         void Record(const HeadlessExtensionHostStage stage, std::string subject, const Error &error) const {
             std::scoped_lock lock{diagnosticMutex};
@@ -255,11 +265,22 @@ namespace Horo::Extensions {
         Shutdown();
     }
 
+    Result<std::shared_ptr<NativeExtensionScriptSession>> HeadlessExtensionHost::BindScript(const std::string_view extension,
+                                                                                            const std::string_view module,
+                                                                                            const std::string_view importId,
+                                                                                            ScriptCapabilityContextDescriptor policy,
+                                                                                            const CancellationToken &cancellation) {
+        std::shared_lock lock{impl_->synchronization.Lifecycle()};
+        if (impl_->state.load() != HeadlessExtensionHostState::Ready || !impl_->nativeServices)
+            return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
+        return impl_->nativeServices->BindScript(extension, module, importId, std::move(policy), cancellation);
+    }
+
     /** @copydoc HeadlessExtensionHost::RegisterCapability */
     Result<void> HeadlessExtensionHost::RegisterCapability(ApplicationCapabilityProviderDescriptor descriptor) {
         const std::string subject = descriptor.capability.value;
         return impl_->Configure(subject, [this, &descriptor] {
-            return impl_->Retain(impl_->capabilities.Register(std::move(descriptor)), impl_->capabilityRegistrations);
+            return impl_->Retain(impl_->capabilities->Register(std::move(descriptor)), impl_->capabilityRegistrations);
         });
     }
 
@@ -406,7 +427,7 @@ namespace Horo::Extensions {
                                                                                         const std::uint64_t activationGeneration) const {
         return impl_->ExecuteReady(HeadlessExtensionHostStage::CapabilityResolution, authority.Capability().value,
                                    [this, &authority, &versions, extensionId, moduleId, activationGeneration] {
-            return impl_->capabilities.Resolve(authority, versions, extensionId, moduleId, activationGeneration);
+            return impl_->capabilities->Resolve(authority, versions, extensionId, moduleId, activationGeneration);
         });
     }
 
@@ -455,7 +476,7 @@ namespace Horo::Extensions {
         impl_->pipeline.BeginShutdown();
         impl_->validators.BeginShutdown();
         impl_->cookers.BeginShutdown();
-        impl_->capabilities.BeginShutdown();
+        impl_->capabilities->BeginShutdown();
 
         std::unique_lock lock{impl_->synchronization.Lifecycle()};
         impl_->toolchainRegistrations.clear();

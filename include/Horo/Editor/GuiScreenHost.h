@@ -45,6 +45,10 @@ namespace Horo::Extensions {
     class ExtensionInventory;
     class ExtensionMarketplaceService;
     class ExtensionManager;
+    class NativeExtensionServiceHost;
+    class ApplicationCapabilityRegistry;
+    class BackendServiceRegistry;
+    class ScriptInvocationRegistry;
     class EditorActivityHost;
     class EditorPageHost;
     class EditorInspectorHost;
@@ -104,7 +108,8 @@ namespace Horo::Editor {
             extensionUiPolicy; /**< Explicit advanced presentation grant; no document/resource authority. */
         Extensions::ExtensionAdmissionPolicy extensionPagePolicy; /**< Application-sealed permission evidence. */
         Extensions::ExtensionAdmissionPolicy
-            extensionInspectorPolicy; /**< Explicit inspector/drawer grants; no configuration write grant. */
+            extensionInspectorPolicy;                                /**< Explicit inspector/drawer grants; no configuration write grant. */
+        Extensions::ExtensionAdmissionPolicy extensionServicePolicy; /**< Explicit native scalar-service permission approval. */
         Extensions::ExtensionAdmissionPolicy extensionViewportPolicy; /**< Explicit viewport and transform grants. */
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
         std::shared_ptr<const Application::TerrainAuthoringCookFactory> terrainCook;
@@ -241,6 +246,7 @@ namespace Horo::Editor {
         void RegisterApplicationServices(const GuiScreenHostComposition &composition);
         /** @brief Creates and activates extension/importer owners in their existing rollback and destruction order. */
         void InitializeExtensions(const GuiScreenHostComposition &composition);
+        void InitializeExtensionServices(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities);
         /** @brief Composes the explicit scoped page store and actual current-theme projection before advertising native page capability. */
         void InitializeExtensionPages(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities);
         /** @brief Composes copied declarative inspector authority and actual owner theme before extension activation. */
@@ -286,6 +292,10 @@ namespace Horo::Editor {
         std::shared_ptr<Extensions::EditorPageHost> editorPageHost_;
         std::shared_ptr<Extensions::EditorInspectorHost> editorInspectorHost_;
         std::shared_ptr<Extensions::EditorViewportHost> editorViewportHost_;
+        std::shared_ptr<Extensions::ApplicationCapabilityRegistry> extensionCapabilities_;
+        std::shared_ptr<Extensions::BackendServiceRegistry> extensionBackendServices_;
+        std::shared_ptr<Extensions::ScriptInvocationRegistry> extensionScriptInvocations_;
+        std::shared_ptr<Extensions::NativeExtensionServiceHost> extensionServices_;
         std::unique_ptr<Extensions::ExtensionManager> extensionManager_;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 

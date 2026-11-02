@@ -299,7 +299,10 @@ namespace Horo::Extensions::Tests {
         REQUIRE(builtIn.packageId == "horo.builtin.assets");
         REQUIRE(builtIn.origin == ExtensionOrigin::BuiltIn);
         REQUIRE(builtIn.enabled);
-        REQUIRE(builtIn.modules.size() == 2);
+        REQUIRE(builtIn.modules.size() == 3);
+        CHECK(builtIn.modules[0].id == "horo.builtin.assets.importer.obj");
+        CHECK(builtIn.modules[1].id == "horo.builtin.assets.importer.fbx");
+        CHECK(builtIn.modules[2].id == "horo.builtin.assets.importer.terrain");
 
         REQUIRE(inventory.MarkRuntimeActive(builtIn.packageId).HasValue());
         REQUIRE_FALSE(inventory.Entries().front().RestartRequired());

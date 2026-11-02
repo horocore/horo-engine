@@ -10,6 +10,7 @@
 #include "Horo/Extensions/AssetCookerRegistry.h"
 #include "Horo/Extensions/ExtensionDiscovery.h"
 #include "Horo/Extensions/ExtensionManager.h"
+#include "Horo/Extensions/NativeExtensionServiceHost.h"
 #include "Horo/Extensions/PipelineStepRegistry.h"
 #include "Horo/Extensions/ProjectValidatorRegistry.h"
 #include "Horo/Extensions/ToolchainProviderRegistry.h"
@@ -77,7 +78,8 @@ namespace Horo::Extensions {
         ValidationResultLimits validationLimits;                          /**< Host bounds for each validator result. */
         std::shared_ptr<const Security::NativeArtifactGate> artifactGate; /**< Mandatory gate when native packages are activated. */
         ExtensionManager::NativeLibraryLoader libraryLoader;              /**< Optional explicit native loader boundary. */
-        std::size_t maximumDiagnostics{1024U};                            /**< Retained failure bound. */
+        ExtensionAdmissionPolicy servicePolicy; /**< Explicit native-service permission policy; revision0 leaves transport absent. */
+        std::size_t maximumDiagnostics{1024U};  /**< Retained failure bound. */
     };
 
     /**
@@ -114,6 +116,15 @@ namespace Horo::Extensions {
          * @param descriptor Exact capability, provider, version, and generation identity.
          * @return Success, or a typed registration or lifecycle failure.
          */
+        /** @brief Binds an actual declared script import through this host's shared native service composition.
+         * @param extension Exact active package. @param module Exact importing module. @param importId Manifest-local import.
+         * @param policy Actual trusted runtime/scopes/permission policy. @return Revocable binding or typed denial.
+         */
+        [[nodiscard]] Result<std::shared_ptr<NativeExtensionScriptSession>> BindScript(std::string_view extension, std::string_view module,
+                                                                                       std::string_view importId,
+                                                                                       ScriptCapabilityContextDescriptor policy,
+                                                                                       const CancellationToken &cancellation = {});
+
         [[nodiscard]] Result<void> RegisterCapability(ApplicationCapabilityProviderDescriptor descriptor);
         /**
          * @brief Registers one built-in importer in the unpublished host catalog.

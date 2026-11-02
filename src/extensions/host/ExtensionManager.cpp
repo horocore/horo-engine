@@ -16,6 +16,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Security/SecurityErrors.h"
+#include "NativeExtensionServiceInternal.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -316,7 +317,8 @@ namespace Horo::Extensions {
                     .registerEditorActivity = registration.editorHost ? &RegisterExternalEditorActivity : nullptr,
                     .registerEditorPage = registration.pageHost ? &RegisterExternalEditorPage : nullptr,
                     .registerEditorInspector = registration.inspectorHost ? &RegisterExternalEditorInspector : nullptr,
-                    .registerEditorViewport = registration.viewportHost ? &RegisterExternalEditorViewport : nullptr};
+                    .registerEditorViewport = registration.viewportHost ? &RegisterExternalEditorViewport : nullptr,
+                    .services = &NativeServiceHostAbi()};
         }
 
         /** @brief Validates the returned module table and exact activity/drawer declarations before activation publication. */
@@ -341,7 +343,48 @@ namespace Horo::Extensions {
                 return inspectors;
             if (auto viewports = ValidateEditorViewportClaims(registration); viewports.HasError())
                 return viewports;
+            if (auto claims = ValidateNativeServiceClaims(registration); claims.HasError())
+                return claims;
             return ValidateEditorPageClaims(registration);
+        }
+
+        /** @brief Narrows the exact negotiated page tail without altering older host prefixes. */
+        void NegotiatePageTail(HoroExtensionHostApi &hostApi, AssetImporterRegistrationSession &registration,
+                               const HoroExtensionRequirements &negotiated) {
+            registration.pageTransportNegotiated =
+                negotiated.minimumHostMinor >= 5 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_PAGE) != 0;
+            if (!registration.pageTransportNegotiated) {
+                hostApi.registerEditorPage = nullptr;
+                if (negotiated.minimumHostMinor == 4 &&
+                    negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorPage))
+                    hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorPage);
+            }
+        }
+
+        /** @brief Narrows the exact negotiated viewport tail without altering older host prefixes. */
+        void NegotiateViewportTail(HoroExtensionHostApi &hostApi, AssetImporterRegistrationSession &registration,
+                                   const HoroExtensionRequirements &negotiated) {
+            registration.viewportTransportNegotiated =
+                negotiated.minimumHostMinor >= 7 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT) != 0;
+            if (!registration.viewportTransportNegotiated) {
+                hostApi.registerEditorViewport = nullptr;
+                if (negotiated.minimumHostMinor == 6 &&
+                    negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorViewport))
+                    hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorViewport);
+            }
+        }
+
+        /** @brief Narrows the exact negotiated inspector tail without altering older host prefixes. */
+        void NegotiateInspectorTail(HoroExtensionHostApi &hostApi, AssetImporterRegistrationSession &registration,
+                                    const HoroExtensionRequirements &negotiated) {
+            registration.inspectorTransportNegotiated =
+                negotiated.minimumHostMinor >= 6 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR) != 0;
+            if (!registration.inspectorTransportNegotiated) {
+                hostApi.registerEditorInspector = nullptr;
+                if (negotiated.minimumHostMinor == 5 &&
+                    negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorInspector))
+                    hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorInspector);
+            }
         }
 
         /** @brief Grants the page tail only from validated inert negotiation; old1.4 prefix clients cannot access page transport. */
@@ -353,41 +396,39 @@ namespace Horo::Extensions {
                 NegotiateModuleAbi(query, hostApi, &negotiated) != HORO_EXTENSION_SUCCESS)
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::LoadFailed, "Native module ABI requirements are incompatible with the host."));
-            registration.pageTransportNegotiated =
-                negotiated.minimumHostMinor >= 5 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_PAGE) != 0;
-            if (!registration.pageTransportNegotiated) {
-                hostApi.registerEditorPage = nullptr;
-                if (negotiated.minimumHostMinor == 4 &&
-                    negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorPage))
-                    hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorPage);
-            }
-            registration.viewportTransportNegotiated =
-                negotiated.minimumHostMinor >= 7 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT) != 0;
-            if (!registration.viewportTransportNegotiated) {
-                hostApi.registerEditorViewport = nullptr;
-                if (negotiated.minimumHostMinor == 6 &&
-                    negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorViewport))
-                    hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorViewport);
-            }
-            registration.inspectorTransportNegotiated =
-                negotiated.minimumHostMinor >= 6 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR) != 0;
-            if (!registration.inspectorTransportNegotiated) {
-                hostApi.registerEditorInspector = nullptr;
-                if (negotiated.minimumHostMinor == 5 &&
-                    negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorInspector))
-                    hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorInspector);
-            }
+            registration.serviceTransportNegotiated =
+                negotiated.minimumHostMinor >= 8 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_SERVICES) != 0;
+            if (!registration.serviceTransportNegotiated)
+                hostApi.services = nullptr;
+            NegotiatePageTail(hostApi, registration, negotiated);
+            NegotiateViewportTail(hostApi, registration, negotiated);
+            NegotiateInspectorTail(hostApi, registration, negotiated);
+            return Result<void>::Success();
+        }
+
+        /** @brief Stages only the negotiated native transport under the real module plan and retirement owner. */
+        Result<void> StageNativeServiceModule(AssetImporterRegistrationSession &registration,
+                                              const std::shared_ptr<NativeExtensionServiceHost> &services,
+                                              const ExtensionModulePlan &plan) {
+            if (!registration.serviceTransportNegotiated)
+                return Result<void>::Success();
+            if (!services)
+                return Result<void>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
+            auto staged = NativeExtensionServiceHostAccess::Stage(*services, registration, plan.serviceImports);
+            if (staged.HasError())
+                return Result<void>::Failure(staged.ErrorValue());
+            registration.nativeServices = std::move(staged).Value();
+            registration.lifetime->nativeServices = registration.nativeServices;
             return Result<void>::Success();
         }
 
         /** @brief Loads and validates one native module while retaining rollback ownership. */
-        [[nodiscard]] Result<ActivatedModule> ActivateModule(const std::shared_ptr<Platform::DynamicLibrary> &library,
-                                                             const ExtensionManifest &manifest,
-                                                             const ExtensionModuleManifest &manifestModule,
-                                                             const bool allowPlatformProvider,
-                                                             const std::shared_ptr<ExtensionRetirement> &retirement,
-                                                             const std::vector<std::shared_ptr<ExtensionModuleLifetime>> &dependencies,
-                                                             const ExtensionEditorHosts &editorHosts) {
+        [[nodiscard]] Result<ActivatedModule> ActivateModule(
+            const std::shared_ptr<Platform::DynamicLibrary> &library, const ExtensionManifest &manifest,
+            const ExtensionModuleManifest &manifestModule, const bool allowPlatformProvider,
+            const std::shared_ptr<ExtensionRetirement> &retirement,
+            const std::vector<std::shared_ptr<ExtensionModuleLifetime>> &dependencies, const ExtensionEditorHosts &editorHosts,
+            const std::shared_ptr<NativeExtensionServiceHost> &services, const ExtensionModulePlan &plan) {
             const auto loadFunc = reinterpret_cast<HoroExtensionLoadFunc>(library->GetSymbol("horo_extension_load"));  // NOSONAR(cpp:S3630)
             if (loadFunc == nullptr)
                 return Result<ActivatedModule>::Failure(
@@ -416,6 +457,8 @@ namespace Horo::Extensions {
             HoroExtensionHostApi hostApi = MakeHostApi(registration, allowPlatformProvider);
             if (auto negotiated = NegotiateActivation(*library, hostApi, registration); negotiated.HasError())
                 return Result<ActivatedModule>::Failure(negotiated.ErrorValue());
+            if (auto staged = StageNativeServiceModule(registration, services, plan); staged.HasError())
+                return Result<ActivatedModule>::Failure(staged.ErrorValue());
             HoroExtensionModuleApi moduleApi{.structSize = sizeof(HoroExtensionModuleApi)};
             if (const HoroExtensionStatus status = InvokeExtensionLoad(loadFunc, hostApi, moduleApi, manifest.id);
                 status != HORO_EXTENSION_SUCCESS || registration.failed) {
@@ -487,6 +530,7 @@ namespace Horo::Extensions {
             const std::shared_ptr<const Security::NativeArtifactGate> &artifactGate;
             std::size_t platformDeclarations;
             const ExtensionEditorHosts &editorHosts;
+            const std::shared_ptr<NativeExtensionServiceHost> &services;
         };
 
         /** @brief Stages the exact declared native contributions without publishing or relinquishing rollback ownership. */
@@ -510,8 +554,8 @@ namespace Horo::Extensions {
                     return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(loaded.ErrorValue());
                 std::shared_ptr<Platform::DynamicLibrary> library{std::move(loaded).Value()};
                 const bool provider = inputs.platformDeclarations != 0 && inputs.manifest.contributions.front().owningModule == moduleId;
-                auto activated =
-                    ActivateModule(library, inputs.manifest, *foundModule, provider, inputs.retirement, dependencies, inputs.editorHosts);
+                auto activated = ActivateModule(library, inputs.manifest, *foundModule, provider, inputs.retirement, dependencies,
+                                                inputs.editorHosts, inputs.services, inputs.plan);
                 if (activated.HasError())
                     return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(activated.ErrorValue());
                 ActivatedModule native = std::move(activated).Value();
@@ -617,6 +661,8 @@ namespace Horo::Extensions {
                 return inspectors;
             if (auto pages = CommitEditorPages(transaction.Lifetimes()); pages.HasError())
                 return pages;
+            if (auto services = CommitNativeServices(transaction.Lifetimes()); services.HasError())
+                return services;
             return CommitContributions(transaction.Contributions(), catalog);
         }
 
@@ -633,37 +679,35 @@ namespace Horo::Extensions {
             return Result<ExtensionModulePlan>::Success(std::move(plan));
         }
 
+        /** @brief Keeps feature availability tied to the actual composed editor authority. */
+        template <typename Host>
+        void AdmitEditorTransport(const ExtensionHostProfile profile, std::vector<std::string> &capabilities,
+                                  const std::string_view capability, std::shared_ptr<Host> &host) {
+            if (profile != ExtensionHostProfile::Interactive || !std::ranges::binary_search(capabilities, capability))
+                host.reset();
+            if (!host)
+                std::erase(capabilities, std::string{capability});
+        }
+
     }  // namespace
 
     /** @copydoc ExtensionManager::ExtensionManager */
     ExtensionManager::ExtensionManager(Assets::AssetImporterCatalog *importerCatalog, const ExtensionHostProfile hostProfile,
                                        std::vector<std::string> hostCapabilities,
                                        std::shared_ptr<const Security::NativeArtifactGate> artifactGate, NativeLibraryLoader libraryLoader,
-                                       ExtensionPlatformProviderCommit platformProviderCommit, ExtensionEditorHosts editorHosts)
+                                       ExtensionPlatformProviderCommit platformProviderCommit, ExtensionEditorHosts editorHosts,
+                                       std::shared_ptr<NativeExtensionServiceHost> services)
         : m_importerCatalog(importerCatalog), m_hostProfile(hostProfile), m_hostCapabilities(std::move(hostCapabilities)),
           m_artifactGate(std::move(artifactGate)), m_libraryLoader(std::move(libraryLoader)),
-          m_platformProviderCommit(std::move(platformProviderCommit)), m_editorHosts(std::move(editorHosts)) {
+          m_platformProviderCommit(std::move(platformProviderCommit)), m_editorHosts(std::move(editorHosts)),
+          m_services(std::move(services)) {
         CanonicalizeHostCapabilities(m_hostCapabilities);
-        if (m_hostProfile != ExtensionHostProfile::Interactive ||
-            !std::ranges::binary_search(m_hostCapabilities, std::string{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY}))
-            m_editorHosts.activities.reset();
-        if (!m_editorHosts.activities)
-            std::erase(m_hostCapabilities, std::string{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY});
-        if (m_hostProfile != ExtensionHostProfile::Interactive ||
-            !std::ranges::binary_search(m_hostCapabilities, std::string{HORO_EDITOR_PAGE_HOST_CAPABILITY}))
-            m_editorHosts.pages.reset();
-        if (!m_editorHosts.pages)
-            std::erase(m_hostCapabilities, std::string{HORO_EDITOR_PAGE_HOST_CAPABILITY});
-        if (m_hostProfile != ExtensionHostProfile::Interactive ||
-            !std::ranges::binary_search(m_hostCapabilities, std::string{HORO_EDITOR_INSPECTOR_HOST_CAPABILITY}))
-            m_editorHosts.inspectors.reset();
-        if (m_hostProfile != ExtensionHostProfile::Interactive ||
-            !std::ranges::binary_search(m_hostCapabilities, std::string{HORO_EDITOR_VIEWPORT_HOST_CAPABILITY}))
-            m_editorHosts.viewports.reset();
-        if (!m_editorHosts.viewports)
-            std::erase(m_hostCapabilities, std::string{HORO_EDITOR_VIEWPORT_HOST_CAPABILITY});
-        if (!m_editorHosts.inspectors)
-            std::erase(m_hostCapabilities, std::string{HORO_EDITOR_INSPECTOR_HOST_CAPABILITY});
+        AdmitEditorTransport(m_hostProfile, m_hostCapabilities, HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, m_editorHosts.activities);
+        AdmitEditorTransport(m_hostProfile, m_hostCapabilities, HORO_EDITOR_PAGE_HOST_CAPABILITY, m_editorHosts.pages);
+        AdmitEditorTransport(m_hostProfile, m_hostCapabilities, HORO_EDITOR_INSPECTOR_HOST_CAPABILITY, m_editorHosts.inspectors);
+        AdmitEditorTransport(m_hostProfile, m_hostCapabilities, HORO_EDITOR_VIEWPORT_HOST_CAPABILITY, m_editorHosts.viewports);
+        if (!m_services)
+            std::erase(m_hostCapabilities, std::string{HORO_EXTENSION_SERVICE_HOST_CAPABILITY});
         if (!m_libraryLoader)
             m_libraryLoader = [](const std::string &path) {
                 return Platform::LoadDynamicLibrary(path);
@@ -778,7 +822,7 @@ namespace Horo::Extensions {
         std::string extensionId = manifest.id;
         ExtensionActivationTransaction transaction;
         auto staged = StageDeclaredNativeModules({manifest, plan.Value(), retirement, m_libraryLoader, m_artifactGate, platformDeclarations,
-                                                  m_editorHosts},
+                                                  m_editorHosts, m_services},
                                                  dependencies, transaction);
         if (staged.HasError())
             return Result<std::string>::Failure(transaction.Rollback(staged.ErrorValue()));

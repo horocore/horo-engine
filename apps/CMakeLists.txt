@@ -256,6 +256,13 @@ add_executable(horo-engine
     horo-engine/NetworkProductLaunch.cpp
     horo-engine/NetworkProductLaunchOptions.cpp
 )
+target_sources(horo-engine PRIVATE
+    horo-engine/cli_host/ExtensionScriptCliAuthentication.cpp
+    horo-engine/cli_host/ExtensionScriptCliSnapshot.cpp
+    horo-engine/cli_host/ExtensionScriptCliOptions.cpp
+    horo-engine/cli_host/ExtensionScriptCliHost.cpp
+    horo-engine/cli_host/ExtensionScriptCliCommand.cpp)
+target_link_libraries(horo-engine PRIVATE HoroEngine::ExtensionLuaBindings HoroHostSignatureDocuments)
 target_compile_features(horo-engine PRIVATE cxx_std_20)
 # Only identity consumers depend on the changing Git revision. Keep unrelated
 # application units reusable by compiler and analysis caches across commits.

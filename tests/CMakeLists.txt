@@ -6525,3 +6525,76 @@ target_compile_definitions(HoroVfxGpuVulkanToolchainTests PRIVATE
     HORO_VFX_GPU_REFLECTION_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/vfx_gpu_compute_locked")
 target_link_libraries(HoroVfxGpuVulkanToolchainTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
 horo_register_catch_test(HoroVfxGpuVulkanToolchainTests LABELS "unit;renderer;shader;vfx;headless")
+
+# Reference SDK packages exercise real native activation and signed product CLI execution.
+add_library(HoroNativeServiceFailureFixture MODULE fixtures/extensions/NativeServiceFailureModule.c)
+set_target_properties(HoroNativeServiceFailureFixture PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+target_link_libraries(HoroNativeServiceFailureFixture PRIVATE HoroEngine::Extensions)
+foreach(role IN ITEMS Provider Client)
+    add_library(HoroNativeService${role}Fixture MODULE fixtures/extensions/NativeServiceConcurrentModule.c)
+    set_target_properties(HoroNativeService${role}Fixture PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+    target_link_libraries(HoroNativeService${role}Fixture PRIVATE HoroEngine::Extensions)
+endforeach()
+target_compile_definitions(HoroNativeServiceProviderFixture PRIVATE HORO_REFERENCE_CLIENT=0)
+target_compile_definitions(HoroNativeServiceClientFixture PRIVATE HORO_REFERENCE_CLIENT=1)
+
+add_executable(HoroNativeExtensionServiceTests
+    unit/extensions/ExtensionServiceAbiTests.cpp
+    unit/extensions/NativeExtensionServiceShapeTests.cpp
+    unit/extensions/NativeExtensionServiceLifetimeTests.cpp
+    unit/extensions/NativeExtensionServiceShutdownTests.cpp)
+target_compile_features(HoroNativeExtensionServiceTests PRIVATE cxx_std_20)
+# A single private forwarder exposes the shape contract without granting the whole source tree.
+set(native_service_test_include "${CMAKE_CURRENT_BINARY_DIR}/native-service-private")
+file(MAKE_DIRECTORY "${native_service_test_include}/extensions/host")
+file(WRITE "${native_service_test_include}/extensions/host/NativeExtensionServiceInternal.h"
+    "#include \"${PROJECT_SOURCE_DIR}/src/extensions/host/NativeExtensionServiceInternal.h\"\n")
+file(WRITE "${native_service_test_include}/extensions/host/ExtensionAbiValidation.h"
+    "#include \"${PROJECT_SOURCE_DIR}/src/extensions/host/ExtensionAbiValidation.h\"\n")
+target_include_directories(HoroNativeExtensionServiceTests PRIVATE "${native_service_test_include}" "${PROJECT_SOURCE_DIR}/tests/support")
+target_link_libraries(HoroNativeExtensionServiceTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+target_compile_definitions(HoroNativeExtensionServiceTests PRIVATE
+    HORO_NATIVE_SERVICE_FAILURE_FIXTURE="$<TARGET_FILE:HoroNativeServiceFailureFixture>"
+    HORO_NATIVE_SERVICE_PROVIDER_FIXTURE="$<TARGET_FILE:HoroNativeServiceProviderFixture>"
+    HORO_NATIVE_SERVICE_CLIENT_FIXTURE="$<TARGET_FILE:HoroNativeServiceClientFixture>")
+add_dependencies(HoroNativeExtensionServiceTests HoroNativeServiceFailureFixture HoroNativeServiceProviderFixture HoroNativeServiceClientFixture)
+set(native_service_retention_case "Loaded service headless destruction on worker retains owner-only native finalization for restart")
+add_test(NAME HoroNativeExtensionServiceTests COMMAND HoroNativeExtensionServiceTests "~${native_service_retention_case}")
+add_test(NAME HoroNativeExtensionServiceOffLaneRetentionTests COMMAND HoroNativeExtensionServiceTests "${native_service_retention_case}")
+set_tests_properties(HoroNativeExtensionServiceTests HoroNativeExtensionServiceOffLaneRetentionTests
+    PROPERTIES TIMEOUT 60 LABELS "extensions;sdk;native;ci-windows")
+
+add_executable(HoroReferenceExtensionActivation helpers/extensions/ReferenceExtensionActivation.cpp)
+target_compile_features(HoroReferenceExtensionActivation PRIVATE cxx_std_20)
+target_include_directories(HoroReferenceExtensionActivation PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+target_link_libraries(HoroReferenceExtensionActivation PRIVATE HoroEngine::Extensions HoroEngine::ExtensionLuaBindings)
+add_executable(HoroReferenceExtensionCliTests unit/extensions/ReferenceExtensionCliTests.cpp
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/ExtensionScriptCliAuthentication.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/ExtensionScriptCliSnapshot.cpp")
+target_compile_features(HoroReferenceExtensionCliTests PRIVATE cxx_std_20)
+target_include_directories(HoroReferenceExtensionCliTests PRIVATE
+    "${PROJECT_SOURCE_DIR}/tests/support" "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
+target_link_libraries(HoroReferenceExtensionCliTests PRIVATE HoroEngine::CliHost HoroEngine::Extensions HoroEngine::Foundation
+    HoroEngine::Platform HoroEngine::Security HoroHostSignatureDocuments MbedTLS::mbedcrypto Catch2::Catch2WithMain)
+add_dependencies(HoroReferenceExtensionCliTests horo-engine)
+add_custom_target(HoroReferenceExtensionQualification DEPENDS HoroReferenceExtensionActivation
+    HoroReferenceExtensionCliTests HoroNativeExtensionServiceTests HoroExtensionAuthorCiStage)
+add_test(NAME HoroReferenceExtensionExamplesTest COMMAND "${CMAKE_COMMAND}"
+    "-DHORO_REFERENCE_EXAMPLE_SOURCE=${PROJECT_SOURCE_DIR}/examples/modules"
+    "-DHORO_EXTENSION_SDK_PACKAGE_DIR=${HORO_EXTENSION_SDK_PACKAGE_DIR}"
+    "-DHORO_EXTENSION_VALIDATOR=$<TARGET_FILE:horo-extension-validate>"
+    "-DHORO_EXTENSION_CONFORMANCE=$<TARGET_FILE:horo-extension-conformance>"
+    "-DHORO_REFERENCE_ACTIVATION_TEST=$<TARGET_FILE:HoroReferenceExtensionActivation>"
+    "-DHORO_REFERENCE_CLI_TEST=$<TARGET_FILE:HoroReferenceExtensionCliTests>"
+    "-DHORO_REFERENCE_CLI=$<TARGET_FILE:horo-engine>"
+    "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/reference-extension-examples"
+    "-DCMAKE_GENERATOR=${CMAKE_GENERATOR}"
+    "-DCMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+    "-DCMAKE_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DCMAKE_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunReferenceExtensionExamplesTest.cmake")
+set_tests_properties(HoroReferenceExtensionExamplesTest PROPERTIES TIMEOUT 600 RUN_SERIAL TRUE LABELS "extensions;sdk;native;ci-windows")
+
+# The Windows preset selects explicit CPU contracts by label.
+set_property(TEST HoroExtensionSdkExternalConsumerTest HoroExtensionSdkReconfigureTest
+    APPEND PROPERTY LABELS ci-windows)

@@ -1398,7 +1398,13 @@ horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
     Horo/Editor/WorkspacePanelRegistry.h
 )
 
+horo_configure_target_header_boundary(HoroExtensionLuaBindings PUBLIC_HEADERS
+    Horo/Extensions/LuaExtensionServiceBinding.h
+)
+
 horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
+    Horo/Extensions/ExtensionServiceAbi.h
+    Horo/Extensions/NativeExtensionServiceHost.h
     Horo/Extensions/ApplicationCapabilityRegistry.h
     Horo/Extensions/AssetCookerRegistry.h
     Horo/Extensions/BackendOperationRegistry.h
