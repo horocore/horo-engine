@@ -87,6 +87,26 @@ namespace Horo::Animation {
         bool operator==(const GraphStateEvent &) const = default;
     };
 
+    /** @brief Publication-scoped synchronization result for one exact compiler-owned tree member.
+     * @details Event eligibility is a filter for the eventual clip-notify producer; it emits no notify itself.
+     * Inactive members have zero weight and never advance. Marker fallback is explicit on active followers.
+     */
+    struct GraphBlendMemberObservation final {
+        std::uint32_t occurrence{};
+        GraphBlendSampleId sample{};
+        GraphSyncGroupId group{};
+        float weight{};
+        AnimationTime sampleTime{};
+        AnimationTimeDelta advance{};
+        AnimationTimeDelta alignment{}; /**< Included in advance, but excluded from event emission when joining/re-aligning a group. */
+        std::uint32_t boundaryCrossings{};
+        AnimationTraversalDirection direction{AnimationTraversalDirection::Held};
+        bool leader{};
+        bool eventsEligible{};
+        bool markerFallback{};
+        bool operator==(const GraphBlendMemberObservation &) const = default;
+    };
+
     /** @brief Allocation-free graph runtime failure vocabulary, independent of diagnostic string ownership. */
     enum class GraphInstanceFailure : std::uint8_t {
         None,
@@ -200,6 +220,17 @@ namespace Horo::Animation {
          */
         [[nodiscard]] GraphInstanceOutcome CopyStateEvents(const PoseHandle &publication, std::span<GraphStateEvent> output,
                                                            std::uint32_t &written) const;
+
+        /** @brief Copies exact member weights/cursors/event eligibility from a current or previous pose publication.
+         * @param publication Exact resident pose publication handle.
+         * @param output Caller-owned storage of at least program.Memory().blendMembers entries.
+         * @param written Receives complete member count; zero on failure.
+         * @return Stable owner/handle/capacity failure or a complete immutable snapshot.
+         * @pre Called on the instance owner thread; performs no allocation.
+         */
+        [[nodiscard]] GraphInstanceOutcome CopyBlendMembers(const PoseHandle &publication, std::span<GraphBlendMemberObservation> output,
+                                                            std::uint32_t &written) const;
+
         /** @brief Copies an exact resident immutable committed local pose.
          * @param pose Exact instance, recyclable slot and semantic generation.
          * @param output Caller-owned complete skeleton pose storage.

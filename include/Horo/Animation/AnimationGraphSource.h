@@ -27,7 +27,7 @@ namespace Horo::Animation {
         MigrateVersion1,
         /** @brief Preserves the schema-3 API policy: only schemas 1 and 2 may migrate. */
         MigrateLegacySchemas,
-        /** @brief Explicitly admits schemas 1, 2 and 3 with their exact historical semantic contracts. */
+        /** @brief Explicitly admits schemas 1, 2, 3 and 4 with their exact historical semantic contracts. */
         MigrateSupported
     };
     /** @brief Serializes a valid current-schema candidate as canonical UTF-8 JSON with one trailing newline.
@@ -45,7 +45,7 @@ namespace Horo::Animation {
      * @param identity Exact sidecar-owned graph identity injected into the detached candidate.
      * @param context Captured authoring validation, cancellation and replacement identity.
      * @param limits Byte, nesting and parser-value limits applied before/between parsing work.
-     * @param migration Explicit version-1-only or all-supported 1/2/3 migration policy; current is required by default.
+     * @param migration Explicit version-1-only or all-supported 1/2/3/4 migration policy; current is required by default.
      * @return Fully validated canonical current-schema candidate or stable failure; no partial result or publication.
      * @throws std::bad_alloc When bounded load/tool-boundary storage cannot be allocated.
      */

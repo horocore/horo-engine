@@ -1763,6 +1763,8 @@ target_compile_features(HoroGameplayPerceptionIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime)
 
 add_library(HoroAnimationApi STATIC
+        runtime/animation/api/AnimationBlendTreeValidation.cpp
+        runtime/animation/api/AnimationBlendTreeBinding.cpp
         runtime/animation/api/AnimationGraphStateValidation.cpp
         runtime/animation/api/AnimationGraphStateBinding.cpp
         runtime/animation/api/AnimationGraph.cpp
@@ -1792,7 +1794,21 @@ add_library(HoroAnimationStateMachineInternal INTERFACE)
 target_include_directories(HoroAnimationStateMachineInternal INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/animation/state_machine)
 
+set(_horo_animation_blend_tree_headers "${CMAKE_CURRENT_BINARY_DIR}/animation_blend_tree_headers")
+file(MAKE_DIRECTORY "${_horo_animation_blend_tree_headers}")
+file(GENERATE OUTPUT "${_horo_animation_blend_tree_headers}/AnimationBlendTreeGeometry.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/runtime/animation/api/AnimationBlendTreeGeometry.h\"\n")
+add_library(HoroAnimationBlendTreeMathInternal INTERFACE)
+target_include_directories(HoroAnimationBlendTreeMathInternal INTERFACE
+    "$<BUILD_INTERFACE:${_horo_animation_blend_tree_headers}>")
+target_link_libraries(HoroAnimationBlendTreeMathInternal INTERFACE HoroEngine::AnimationApi)
+
 add_library(HoroAnimationRuntime STATIC
+        runtime/animation/runtime/AnimationBlendTreePreparation.cpp
+        runtime/animation/runtime/AnimationBlendTreeWeights.cpp
+        runtime/animation/runtime/AnimationBlendTreeExecution.cpp
+        runtime/animation/runtime/AnimationGraphSync.cpp
+        runtime/animation/runtime/AnimationGraphSyncMapping.cpp
         runtime/animation/runtime/AnimationGraphStateExecution.cpp
         runtime/animation/runtime/AnimationGraphStateBranches.cpp
         runtime/animation/state_machine/AnimationStateMachineValidation.cpp
@@ -1805,7 +1821,8 @@ add_library(HoroAnimationRuntime STATIC
 add_library(HoroEngine::AnimationRuntime ALIAS HoroAnimationRuntime)
 target_compile_features(HoroAnimationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationRuntime PUBLIC HoroEngine::AnimationApi)
-target_link_libraries(HoroAnimationRuntime PRIVATE HoroAnimationStateMachineInternal)
+target_link_libraries(HoroAnimationRuntime PRIVATE HoroAnimationStateMachineInternal
+    HoroAnimationBlendTreeMathInternal)
 
 add_library(HoroAnimationGraphSourceCodec STATIC
         runtime/animation/source/AnimationGraphSourceRead.cpp

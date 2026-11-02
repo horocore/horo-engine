@@ -80,6 +80,8 @@ namespace Horo::Animation::Detail {
             for (const auto &occurrence : GraphStateBranchOccurrences(state, branch, lane)) {
                 if (occurrence.clipPlayer.has_value())
                     state.candidate.players[*occurrence.clipPlayer] = {};
+                for (const auto &sample : occurrence.blendSamples)
+                    state.candidate.players[sample.player] = {};
                 if (occurrence.phase == GraphOccurrencePhase::StateBegin) {
                     ResetGraphStateControl(state, *occurrence.stateMachine);
                 }

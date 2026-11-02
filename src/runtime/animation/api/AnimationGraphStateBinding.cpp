@@ -208,6 +208,7 @@ namespace Horo::Animation::GraphCompileDetail {
                     occurrence.definitionIndex = definitionIndex;
                     occurrence.instructionIndex = instructionIndex;
                     occurrence.parameterRead = instruction.parameterIndex;
+                    occurrence.blendParameters = instruction.blendParameters;
                     for (const auto &input : instruction.inputs)
                         occurrence.inputs.emplace_back(input.destination, outputs[input.instruction].slot,
                                                        outputs[input.instruction].producer);

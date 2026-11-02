@@ -84,9 +84,11 @@ namespace Horo::Animation::GraphCompileDetail {
         Result<void> BindComposition(const GraphNodePayload &payload, GraphInstructionOccurrence &occurrence,
                                      GraphMemoryRequirements &memory, const AnimationGraphCompileContext &context) {
             if (const auto bound = std::visit(
-                    [&occurrence, &context]<typename Payload>(const Payload &payload) {
+                    [&occurrence, &memory, &context]<typename Payload>(const Payload &payload) {
                 if constexpr (std::is_same_v<Payload, GraphBlendNode>)
                     return BindMask(payload, occurrence, context);
+                else if constexpr (std::is_same_v<Payload, GraphBlendTreeNode>)
+                    return BindBlendTree(payload, occurrence, memory, context);
                 else if constexpr (std::is_same_v<Payload, GraphClipNode>)
                     return BindClipCoverage(payload, occurrence, context);
                 else
@@ -150,6 +152,7 @@ namespace Horo::Animation::GraphCompileDetail {
             occurrence.definitionIndex = frame.definition;
             occurrence.instructionIndex = index;
             occurrence.parameterRead = instruction.parameterIndex;
+            occurrence.blendParameters = instruction.blendParameters;
             occurrence.output.type = GraphValueType::Unspecified;
             for (const auto &input : instruction.inputs)
                 occurrence.inputs.emplace_back(input.destination, frame.slots[input.instruction], frame.producers[input.instruction]);

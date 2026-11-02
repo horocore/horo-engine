@@ -31,6 +31,12 @@ namespace Horo::Animation::GraphCompileDetail {
         return found != values.end() && found->id == id ? &*found : nullptr;
     }
 
+    /** @brief Checks finite blend-space geometry, exact float parameter declarations and instance-wide group policy agreement. */
+    Result<void> ValidateBlendTree(const GraphBlendTreeNode &tree, const AnimationGraphData &data, GraphSourceLocation location);
+    /** @brief Binds tree sample players/coverage and one admitted scratch pose in either graph expansion path. */
+    Result<void> BindBlendTree(const GraphBlendTreeNode &tree, GraphInstructionOccurrence &occurrence, GraphMemoryRequirements &memory,
+                               const AnimationGraphCompileContext &context);
+
     /** @brief Complete detached immutable dependency/access plan before program publication. */
     struct BoundPlan final {
         GraphSkeletonBinding skeleton{};

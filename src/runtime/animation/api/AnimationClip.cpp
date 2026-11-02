@@ -161,6 +161,20 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
+        /** @brief Validates immutable marker provenance before publishing the exact clip generation. */
+        Result<void> ValidateSyncMarkers(const AnimationClipData &data) {
+            if (data.syncMarkers.size() > AnimationClipHardLimits::SyncMarkers)
+                return Reject<void>(AnimationErrors::ClipLimitExceeded, "The clip marker table exceeds its finite limit.");
+            std::int64_t previous = -1;
+            for (const auto &marker : data.syncMarkers) {
+                if (!marker.id.IsValid() || marker.time.ticks <= previous || marker.time.ticks >= data.descriptor.duration.ticks)
+                    return Reject<void>(AnimationErrors::ClipMalformed,
+                                        "Clip markers require identities and strictly ordered in-range times.");
+                previous = marker.time.ticks;
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] bool AddWouldOverflow(const std::int64_t left, const std::int64_t right) noexcept {
             return (right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) ||
                    (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right);
@@ -484,6 +498,8 @@ namespace Horo::Animation {
         if (context.replacing && (!context.replacing->IsValid() || *context.replacing != candidate.descriptor.id))
             return Reject<AnimationClipAsset>(AnimationErrors::ClipReloadMismatch,
                                               "The candidate does not replace the requested stable clip identity.");
+        if (const auto markers = ValidateSyncMarkers(candidate); markers.HasError())
+            return Result<AnimationClipAsset>::Failure(markers.ErrorValue());
         if (const auto tracks = CanonicalizeTracks(candidate, context.limits); tracks.HasError())
             return Result<AnimationClipAsset>::Failure(tracks.ErrorValue());
         auto jointIndices = ResolveJointIndices(candidate, skeleton);
@@ -507,7 +523,10 @@ namespace Horo::Animation {
             return AnimationClipOutcome<AnimationClipTraversal>::Failure(valid.ErrorValue());
         if (cursor.terminal || delta.ticks == 0) {
             using enum AnimationTraversalDirection;
-            return AnimationClipOutcome<AnimationClipTraversal>::Success({.cursor = cursor, .sampleTime = cursor.phase, .direction = Held});
+            const auto sampleTime = data_.descriptor.wrapMode == AnimationWrapMode::PingPong
+                                        ? PingPongSampleTime(cursor.phase.ticks, data_.descriptor.duration.ticks)
+                                        : cursor.phase;
+            return AnimationClipOutcome<AnimationClipTraversal>::Success({.cursor = cursor, .sampleTime = sampleTime, .direction = Held});
         }
 
         const std::int64_t duration = data_.descriptor.duration.ticks;

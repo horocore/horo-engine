@@ -42,10 +42,18 @@ namespace Horo::Animation::GraphSourceDetail {
                                                            "interface", "result",    "referencePose"};
     inline constexpr std::array<std::string_view, 3> BlendModes{"normalized", "additiveLocal", "additiveParent"};
     inline constexpr std::array<std::string_view, 2> MissingJoints{"skeletonReference", "preserveBase"};
-    inline constexpr std::array<std::string_view, 7> Kinds{"clip", "blend", "parameter", "output", "input", "call", "stateMachine"};
+    inline constexpr std::array<std::string_view, 8> Kinds{"clip",  "blend", "parameter",    "output",
+                                                           "input", "call",  "stateMachine", "blendTree"};
     inline constexpr std::array<std::string_view, 5> Predicates{"above", "below", "equal", "notEqual", "trigger"};
     inline constexpr std::array<std::string_view, 4> Interruptions{"none", "source", "destination", "either"};
     inline constexpr std::array<std::string_view, 4> BlendCurves{"linear", "smoothStep", "easeIn", "easeOut"};
+
+    inline constexpr std::array<std::string_view, 2> Dimensions{"one", "two"};
+    inline constexpr std::array<std::string_view, 2> Outside{"clampToDomain", "reject"};
+    inline constexpr std::array<std::string_view, 3> SyncModes{"independent", "normalizedPhase", "markers"};
+    inline constexpr std::array<std::string_view, 3> SyncEvents{"leaderOnly", "allActive", "suppress"};
+
+    inline constexpr std::array<std::string_view, 1> SyncLeaders{"localSampleWeightWithStateContribution"};
 
     /** @brief Owns source-envelope clip dependencies while visiting opcodes and state references by their exact types. */
     struct DependencyProjection final {
@@ -59,6 +67,12 @@ namespace Horo::Animation::GraphSourceDetail {
         /** @brief Project an ordinary clip opcode through the same stable dependency set. */
         void operator()(const GraphClipNode &clip) {
             (*this)(clip.clip);
+        }
+
+        /** @brief Retains every immutable blend-space dependency, including zero-weight samples. */
+        void operator()(const GraphBlendTreeNode &tree) {
+            for (const auto &sample : tree.samples)
+                (*this)(sample.clip);
         }
 
         /** @brief Include inactive state clips; definition references are traversed by the outer complete definition walk. */
@@ -79,6 +93,8 @@ namespace Horo::Animation::GraphSourceDetail {
             return {1, 0, 0};
         if (schema == 3)
             return {1, 1, 0};
+        if (schema == 4)
+            return {1, 2, 0};
         return CurrentAnimationGraphContractVersion;
     }
 

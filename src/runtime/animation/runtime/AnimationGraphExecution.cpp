@@ -170,6 +170,8 @@ namespace Horo::Animation::Detail {
                         .values[state.scalars.offsets[static_cast<std::size_t>(occurrence.output.type)] + occurrence.output.index] =
                         state.candidate.parameters[*occurrence.parameterRead];
                     return {};
+                } else if constexpr (std::is_same_v<Payload, GraphBlendTreeNode>) {
+                    return ExecuteGraphBlendTree(state, occurrence);
                 } else if constexpr (std::is_same_v<Payload, GraphBlendNode>) {
                     return BlendPose(state, occurrence, instruction);
                 } else {
@@ -200,12 +202,30 @@ namespace Horo::Animation::Detail {
             if (!StateBranchInput(state, occurrence, branchInput))
                 return {};
             if (occurrence.phase == GraphOccurrencePhase::StateBegin)
-                return BeginGraphStateMachine(state, occurrence, branchInput);
+                return state.blends.trees.empty() ? BeginGraphStateMachine(state, occurrence, branchInput) : GraphInstanceOutcome{};
             if (occurrence.phase == GraphOccurrencePhase::StateEnd)
                 return EndGraphStateMachine(state, occurrence);
             if (occurrence.clipBindingIndex.has_value())
                 return SampleClip(state, occurrence, instruction, branchInput);
             return ExecuteOccurrence(state, occurrence, instruction, branchInput);
+        }
+
+        /** @brief Stages parent-before-child state control once before choosing leaders across all active tree occurrences. */
+        GraphInstanceOutcome PrepareTreeControl(GraphInstanceState &state, const GraphEvaluationInput &input) {
+            if (state.blends.trees.empty())
+                return {};
+            for (const auto &occurrence : state.program->Occurrences()) {
+                if (occurrence.phase != GraphOccurrencePhase::StateBegin)
+                    continue;
+                auto local = input;
+                if (!StateBranchInput(state, occurrence, local))
+                    continue;
+                if (input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested())
+                    return {GraphInstanceFailure::Cancelled};
+                if (const auto result = BeginGraphStateMachine(state, occurrence, local); result.HasError())
+                    return result;
+            }
+            return PrepareGraphSync(state, input);
         }
 
         /** @brief Either invocation or owner cancellation aborts the candidate before publication. */
@@ -228,6 +248,8 @@ namespace Horo::Animation::Detail {
         if (const auto captured = CaptureParameters(state, input); captured.HasError())
             return captured;
         PrepareCandidate(state);
+        if (const auto prepared = PrepareTreeControl(state, input); prepared.HasError())
+            return prepared;
         for (const auto &occurrence : state.program->Occurrences()) {
             if (Cancelled(state, input))
                 return {GraphInstanceFailure::Cancelled};

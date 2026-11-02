@@ -16,7 +16,7 @@
 
 namespace Horo::Animation {
     /** @brief Current authoring schema; earlier versions require explicit migration. */
-    inline constexpr std::uint32_t CurrentAnimationGraphSchemaVersion = 4;
+    inline constexpr std::uint32_t CurrentAnimationGraphSchemaVersion = 5;
 
     /** @brief Exact graph semantic contract, independent of source-envelope migration. */
     struct AnimationGraphContractVersion final {
@@ -27,7 +27,7 @@ namespace Horo::Animation {
     };
 
     /** @brief Graph semantic contract implemented by this compiler. */
-    inline constexpr AnimationGraphContractVersion CurrentAnimationGraphContractVersion{1, 2, 0};
+    inline constexpr AnimationGraphContractVersion CurrentAnimationGraphContractVersion{1, 3, 0};
 
     struct GraphDefinitionTag;
     struct GraphNodeTag;
@@ -148,6 +148,90 @@ namespace Horo::Animation {
         bool operator==(const GraphBlendNode &) const = default;
     };
 
+    struct GraphBlendSampleTag;
+    struct GraphSyncGroupTag;
+    /** @brief Stable tree-local member identity; never a player index. */
+    using GraphBlendSampleId = Foundation::Detail::NonZeroId64<GraphBlendSampleTag, AnimationErrors::IdentityInvalid>;
+    /** @brief Explicit instance-wide sync namespace, shared by calls; absent identity creates an occurrence-local group. */
+    using GraphSyncGroupId = Foundation::Detail::NonZeroId64<GraphSyncGroupTag, AnimationErrors::IdentityInvalid>;
+
+    /** @brief Blend-space coordinate dimensionality. */
+    enum class GraphBlendDimension : std::uint8_t {
+        One,
+        Two,
+        Count
+    };
+    /** @brief Explicit outside-domain behavior; nearest projects to an authored triangle edge in 2D. */
+    enum class GraphBlendOutside : std::uint8_t {
+        ClampToDomain,
+        Reject,
+        Count
+    };
+    /** @brief Group synchronization uses exact clip phases; marker mode falls back to normalized phase when sequences differ. */
+    enum class GraphSyncMode : std::uint8_t {
+        Independent,
+        NormalizedPhase,
+        Markers,
+        Count
+    };
+    /** @brief Eligibility exported for the clip-event producer; this policy does not manufacture clip notifies. */
+    enum class GraphSyncEventPolicy : std::uint8_t {
+        LeaderOnly,
+        AllActive,
+        Suppress,
+        Count
+    };
+
+    /** @brief Explicit local-space leader scoring; generic outer pose-layer weights and masks are not inferred. */
+    enum class GraphSyncLeaderPolicy : std::uint8_t {
+        LocalSampleWeightWithStateContribution,
+        Count
+    };
+
+    /** @brief Group policy must agree across all nodes carrying the same explicit group identity. */
+    struct GraphSyncPolicy final {
+        GraphSyncMode mode{GraphSyncMode::NormalizedPhase};
+        GraphSyncEventPolicy events{GraphSyncEventPolicy::LeaderOnly};
+        GraphSyncLeaderPolicy leader{GraphSyncLeaderPolicy::LocalSampleWeightWithStateContribution};
+        bool operator==(const GraphSyncPolicy &) const = default;
+    };
+
+    /** @brief One immutable clip member at a finite authored coordinate; clips must be absolute. */
+    struct GraphBlendSample final {
+        GraphBlendSampleId id{};
+        AnimationClipId clip{};
+        float x{};
+        float y{};
+        bool canLead{true}; /**< Followers are eligible only when no active leading member exists. */
+        bool operator==(const GraphBlendSample &) const = default;
+    };
+
+    /** @brief Authored nondegenerate triangle in stable sample identities; authoring order breaks equal-distance hull ties. */
+    struct GraphBlendTriangle final {
+        std::array<GraphBlendSampleId, 3> samples{};
+        bool operator==(const GraphBlendTriangle &) const = default;
+    };
+
+    /** @brief Direct multi-clip pose writer with bounded cold triangulation and instance-scoped synchronization.
+     * @details Samples are canonicalized by identity. 1D x coordinates must be distinct;
+     * 2D triangles must form a nonoverlapping simplicial complex. Coordinate parameters
+     * are exact Float declarations. Zero-weight members do not advance or emit events.
+     * The highest-weight eligible member leads (including active state-transition contributions),
+     * with canonical occurrence/sample ties. Generic outer layers do not add implicit group weights.
+     * Explicit group identities join across reusable definitions in this instance only.
+     */
+    struct GraphBlendTreeNode final {
+        GraphBlendDimension dimension{GraphBlendDimension::One};
+        GraphParameterId x{};
+        GraphParameterId y{}; /**< Absent for 1D. */
+        GraphBlendOutside outside{GraphBlendOutside::ClampToDomain};
+        std::vector<GraphBlendSample> samples{};
+        std::vector<GraphBlendTriangle> triangles{};
+        GraphSyncGroupId group{};
+        GraphSyncPolicy sync{};
+        bool operator==(const GraphBlendTreeNode &) const = default;
+    };
+
     /** @brief Typed parameter read by stable identity. */
     struct GraphParameterNode final {
         GraphParameterId parameter{};
@@ -236,7 +320,7 @@ namespace Horo::Animation {
 
     /** @brief Supported node semantics; future nodes require a versioned compiler contract. */
     using GraphNodePayload = std::variant<GraphClipNode, GraphBlendNode, GraphParameterNode, GraphOutputNode, GraphInputNode, GraphCallNode,
-                                          GraphStateMachineNode>;
+                                          GraphStateMachineNode, GraphBlendTreeNode>;
 
     /** @brief Authoring node with stable pins and typed semantics. */
     struct GraphNode final {
@@ -270,7 +354,7 @@ namespace Horo::Animation {
         bool operator==(const GraphDefinition &) const = default;
     };
 
-    /** @brief Complete detached schema-4 candidate retaining pose-layer policies and adding typed state payloads. */
+    /** @brief Complete detached schema-5 candidate retaining pose/state policies and adding typed blend spaces and sync groups. */
     struct AnimationGraphData final {
         std::uint32_t schemaVersion{CurrentAnimationGraphSchemaVersion};
         AnimationGraphContractVersion contractVersion{CurrentAnimationGraphContractVersion};
@@ -302,6 +386,9 @@ namespace Horo::Animation {
         static constexpr std::uint32_t Transitions = 2048;
         static constexpr std::uint32_t Conditions = 4096;
         static constexpr std::uint32_t StateEvents = 262144;
+        static constexpr std::uint32_t BlendSamplesPerTree = 32;
+        static constexpr std::uint32_t BlendTrianglesPerTree = 64;
+        static constexpr std::uint32_t BlendMembers = 4096;
     };
 
     /** @brief Finite compile policy; all counts apply across the whole asset. */
@@ -360,6 +447,7 @@ namespace Horo::Animation {
         std::vector<GraphPin> pins{};
         std::vector<GraphCompiledInput> inputs{};
         std::optional<std::uint32_t> parameterIndex{};
+        std::array<std::uint32_t, 2> blendParameters{};
         std::optional<std::uint32_t> definitionIndex{};
         std::vector<std::uint32_t> stateDefinitions{}; /**< Definition indexes for state call edges; clips are excluded. */
         bool operator==(const GraphInstruction &) const = default;
@@ -408,6 +496,15 @@ namespace Horo::Animation {
         StateEnd
     };
 
+    /** @brief One exact immutable clip/player member admitted by the compiler. */
+    struct GraphBlendSampleBinding final {
+        std::uint32_t player{};
+        std::uint32_t clip{};
+        std::uint32_t member{};
+        std::vector<std::uint8_t> coverage{};
+        bool operator==(const GraphBlendSampleBinding &) const = default;
+    };
+
     /** @brief Exact compiler-owned access plan; state control precedes guarded children, pose completion follows them.
      * Input, Output and Call alias their real writer; inline state clips use their exact clip binding/player access.
      */
@@ -427,6 +524,10 @@ namespace Horo::Animation {
         std::vector<GraphStateGuard> guards{};
         std::vector<float> jointMask{};           /**< Complete dense blend mask, bound to exact skeleton order. */
         std::vector<std::uint8_t> clipCoverage{}; /**< Complete dense authored-track coverage for a clip writer. */
+        std::vector<GraphBlendSampleBinding> blendSamples{};
+        std::optional<GraphWorkingSlot> blendScratch{};
+        std::optional<std::uint32_t> blendTree{};
+        std::array<std::uint32_t, 2> blendParameters{};
         bool operator==(const GraphInstructionOccurrence &) const = default;
     };
 
@@ -464,6 +565,8 @@ namespace Horo::Animation {
         std::array<std::uint32_t, 5> workingSlots{}; /**< Indexed by known GraphValueType; every type has separate storage. */
         std::uint64_t poseTransforms{};
         std::uint32_t clipPlayers{};
+        std::uint32_t blendTrees{};
+        std::uint32_t blendMembers{};
         std::uint32_t parameters{};
         std::uint32_t callDepth{};
         std::uint32_t stateMachines{};
@@ -477,7 +580,7 @@ namespace Horo::Animation {
     class AnimationGraphProgram final {
     public:
         /** @brief Compiles a detached candidate without publication or I/O.
-         * @param data Current schema-4 candidate; migrate supported earlier source contracts explicitly first.
+         * @param data Current schema-5 candidate; migrate supported earlier source contracts explicitly first.
          * @param context Captured limits, cancellation, optional replacement identity and exact pinned dependencies.
          * @return Complete immutable program or stable graph failure; never partial publication.
          * @pre The caller pins the supplied skeleton/clip snapshots and generation for this synchronous call.

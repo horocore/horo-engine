@@ -9,12 +9,12 @@ using namespace Horo::Animation;
 using namespace Horo::Animation::Test;
 using namespace Horo::Animation::Test::Graph;
 
-TEST_CASE("Graph canonical source preserves the existing byte format", "[animation][graph][codec]") {
+TEST_CASE("Graph canonical source versions blend-tree support and preserves the canonical payload", "[animation][graph][codec]") {
     auto data = Simple();
     data.parameters.push_back({Id<GraphParameterId>(1), "weight", GraphValueType::Float, 0.5F});
-    // Captured from the prior canonical writer before its allocation-safety correction.
+    // Schema 5 changes only the explicit envelope for this pre-tree payload.
     constexpr std::string_view expected =
-        R"gold({"schemaVersion":4,"assetType":"core.animation.graph","contractVersion":{"major":1,"minor":2,"patch":0},")gold"
+        R"gold({"schemaVersion":5,"assetType":"core.animation.graph","contractVersion":{"major":1,"minor":3,"patch":0},")gold"
         R"gold(dependencies":[{"assetType":"core.animation.clip","assetId":"00000000-0000-0000-0000-000000000003"},{"ass)gold"
         R"gold(etType":"core.animation.skeleton","assetId":"00000000-0000-0000-0000-000000000002"}],"payload":{"skeleton)gold"
         R"gold(":"00000000-0000-0000-0000-000000000002","entry":1,"parameters":[{"id":1,"name":"weight","type":"float",")gold"

@@ -76,6 +76,18 @@ namespace Horo::Animation {
             return None;
         }
 
+        /** @brief Charges the actual pinned clip's pose and key-search work for ordinary and tree players. */
+        std::uint64_t ClipJointCost(const GraphInstanceAssets &assets, const std::uint32_t binding) noexcept {
+            const auto &descriptor = assets.program->ClipBindings()[binding];
+            const auto clip = std::ranges::find_if(assets.clips, [&](const auto &value) {
+                return value->Data().descriptor == descriptor;
+            });
+            auto cost = (descriptor.kind == AnimationClipKind::Additive ? 6ULL : 3ULL) * assets.program->SkeletonBinding().joints;
+            for (const auto &track : (*clip)->Data().tracks)
+                cost += 1 + std::bit_width(track.keys.size());
+            return cost;
+        }
+
         /** @brief Charges one prepared writer's complete pose and binary-search work, including state control phases. */
         std::uint64_t OccurrenceJointCost(const GraphInstanceAssets &assets, const GraphInstructionOccurrence &occurrence) noexcept {
             const auto &instruction = assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
@@ -86,15 +98,10 @@ namespace Horo::Animation {
                 cost = 4ULL * assets.program->SkeletonBinding().joints;
             if (occurrence.phase == GraphOccurrencePhase::StateEnd)
                 cost = 8ULL * assets.program->SkeletonBinding().joints;
-            if (occurrence.clipBindingIndex.has_value()) {
-                const auto &descriptor = assets.program->ClipBindings()[*occurrence.clipBindingIndex];
-                const auto clip = std::ranges::find_if(assets.clips, [&descriptor](const auto &value) {
-                    return value->Data().descriptor == descriptor;
-                });
-                cost = (descriptor.kind == AnimationClipKind::Additive ? 6ULL : 3ULL) * assets.program->SkeletonBinding().joints;
-                for (const auto &track : (*clip)->Data().tracks)
-                    cost += 1 + std::bit_width(track.keys.size());
-            }
+            if (occurrence.clipBindingIndex.has_value())
+                cost = ClipJointCost(assets, *occurrence.clipBindingIndex);
+            for (const auto &sample : occurrence.blendSamples)
+                cost += ClipJointCost(assets, sample.clip) + 3ULL * assets.program->SkeletonBinding().joints;
             return cost;
         }
 
@@ -163,6 +170,13 @@ namespace Horo::Animation {
             }
         };
 
+        /** @brief Charges fixed tree/group scratch and complete double-buffered member observations before allocation. */
+        bool AdmitBlendStorage(const GraphMemoryRequirements &memory, StorageBudget &charge) noexcept {
+            return charge(memory.blendTrees, sizeof(Detail::GraphBlendTreeWork) + sizeof(Detail::GraphSyncGroupWork)) &&
+                   charge(memory.blendMembers,
+                          sizeof(Detail::GraphBlendMemberWork) + 2ULL * sizeof(GraphBlendMemberObservation) + 2ULL * sizeof(std::uint32_t));
+        }
+
         /** @brief Charges the existing pose/player/parameter and immutable-publication categories in their original order. */
         bool AdmitBaseStorage(const GraphInstanceAssets &assets, StorageBudget &charge) noexcept {
             if (const auto &memory = assets.program->Memory();
@@ -173,7 +187,7 @@ namespace Horo::Animation {
                 !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
                 !charge(assets.curves.size(), sizeof(std::shared_ptr<const AnimationParameterCurve>) + sizeof(std::size_t)))
                 return false;
-            return true;
+            return AdmitBlendStorage(assets.program->Memory(), charge);
         }
 
         /** @brief Resolves one immutable state declaration for both storage and control-work admission. */
@@ -245,6 +259,13 @@ namespace Horo::Animation {
             if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
                 return LimitExceeded;
             std::uint64_t control = assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
+            control += 2048ULL * assets.program->Memory().blendMembers;
+            for (const auto &occurrence : assets.program->Occurrences())
+                if (occurrence.blendTree) {
+                    const auto &tree = std::get<GraphBlendTreeNode>(
+                        assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
+                    control += 128ULL * tree.samples.size() * (tree.triangles.size() + 1);
+                }
             control += 3ULL * assets.program->Memory().conditionLatches + 3ULL * assets.program->Memory().stateEvents;
             for (const auto &binding : assets.program->StateMachines()) {
                 const auto &machine = MachineDefinition(*assets.program, binding);
@@ -286,6 +307,8 @@ namespace Horo::Animation {
             state.scalars.values.resize(scalars);
             state.players.resize(memory.clipPlayers);
             state.candidate.players.resize(memory.clipPlayers);
+            if (const auto failure = Detail::PrepareGraphBlendTrees(state); failure != GraphInstanceFailure::None)
+                return failure;
             if (const auto failure = Detail::PrepareGraphStateMachines(state); failure != GraphInstanceFailure::None)
                 return failure;
             state.parameters.resize(memory.parameters);
@@ -303,6 +326,12 @@ namespace Horo::Animation {
             for (auto &pose : state.published.poses)
                 pose.resize(state.program->SkeletonBinding().joints);
             return GraphInstanceFailure::None;
+        }
+
+        /** @brief Publishes exactly the candidate member observations in the same prepared pose slot. */
+        void PublishBlendMembers(Detail::GraphInstanceState &state, const std::uint32_t slot) noexcept {
+            for (std::size_t index = 0; index < state.blends.members.size(); ++index)
+                state.blends.published[slot][index] = state.blends.members[index].observation;
         }
 
         /** @brief Owner-thread gate does not inspect mutable runtime state from another thread. */
@@ -431,6 +460,7 @@ namespace Horo::Animation {
         std::ranges::copy(state_->Pose(state_->program->OutputSlot()), state_->published.poses[slot].begin());
         std::ranges::copy(state_->candidate.parameters, state_->published.parameters[slot].begin());
         std::ranges::fill(state_->queuedTriggers, 0);
+        PublishBlendMembers(*state_, slot);
         state_->published.handles[slot] = handle;
         state_->players.swap(state_->candidate.players);
         state_->machines.swap(state_->candidate.machines);
@@ -507,6 +537,21 @@ namespace Horo::Animation {
             return {GraphInstanceFailure::LimitExceeded};
         std::copy_n(state_->published.events[publication.slot.index].begin(), count, output.begin());
         written = count;
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::CopyBlendMembers */
+    GraphInstanceOutcome AnimationGraphInstance::CopyBlendMembers(const PoseHandle &publication,
+                                                                  std::span<GraphBlendMemberObservation> output,
+                                                                  std::uint32_t &written) const {
+        written = 0;
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
+        const auto &members = state_->blends.published[publication.slot.index];
+        if (output.size() < members.size())
+            return {GraphInstanceFailure::LimitExceeded};
+        std::ranges::copy(members, output.begin());
+        written = static_cast<std::uint32_t>(members.size());
         return {};
     }
 

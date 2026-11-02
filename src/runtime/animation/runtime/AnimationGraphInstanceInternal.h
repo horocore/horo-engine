@@ -86,6 +86,41 @@ namespace Horo::Animation::Detail {
         std::uint64_t nextGeneration{1};
     };
 
+    /** @brief Prepared tree member and invocation-local traversal; its sole cursor remains GraphPlayerState. */
+    struct GraphBlendMemberWork final {
+        std::uint32_t tree{};
+        std::uint32_t sample{};
+        double leaderWeight{};
+        GraphBlendMemberObservation observation{};
+        AnimationClipTraversal traversal{};
+        AnimationTimeDelta delta{};
+    };
+
+    /** @brief One occurrence membership and branch-local input; no independent playback clock. */
+    struct GraphBlendTreeWork final {
+        std::uint32_t occurrence{};
+        std::uint32_t group{};
+        AnimationTimeDelta delta{};
+        GraphPlaybackRate rate{};
+        bool active{};
+        bool frozenSource{};
+    };
+
+    /** @brief Bounded immutable membership with one selected leader per candidate evaluation. */
+    struct GraphSyncGroupWork final {
+        GraphSyncGroupId id{};
+        GraphSyncPolicy policy{};
+        std::vector<std::uint32_t> members;
+    };
+
+    /** @brief All sync scratch and double-buffered observations are allocated at instance admission. */
+    struct GraphBlendWorkspace final {
+        std::vector<GraphBlendTreeWork> trees;
+        std::vector<GraphBlendMemberWork> members;
+        std::vector<GraphSyncGroupWork> groups;
+        std::array<std::vector<GraphBlendMemberObservation>, 2> published;
+    };
+
     /** @brief Owner-thread runtime storage; all arrays are fixed during preparation. */
     struct GraphInstanceState final {
         std::thread::id ownerThread{std::this_thread::get_id()};
@@ -94,6 +129,7 @@ namespace Horo::Animation::Detail {
         std::shared_ptr<const SkeletonAsset> skeleton;
         std::vector<std::shared_ptr<const AnimationClipAsset>> clips;
         GraphCurveBindings curves;
+        GraphBlendWorkspace blends;
         AnimationClipLimits clipLimits{};
         GraphPoseWorkspace poses;
         GraphScalarWorkspace scalars;
@@ -120,6 +156,16 @@ namespace Horo::Animation::Detail {
             return std::span{poses.coverage}.subspan(static_cast<std::size_t>(slot.index) * joints, joints);
         }
     };
+
+    /** @brief Cold membership preparation and exact group work/storage admission. */
+    [[nodiscard]] GraphInstanceFailure PrepareGraphBlendTrees(GraphInstanceState &state);
+    /** @brief Computes admitted geometry weights without allocation or cursor mutation. */
+    [[nodiscard]] GraphInstanceOutcome ComputeGraphBlendWeights(const GraphBlendTreeNode &tree, float x, float y,
+                                                                std::span<float> weights) noexcept;
+    /** @brief Plans active groups after state controls have staged their guards, before any pose is sampled. */
+    [[nodiscard]] GraphInstanceOutcome PrepareGraphSync(GraphInstanceState &state, const GraphEvaluationInput &input);
+    /** @brief Samples the already planned original players and composes normalized member poses. */
+    [[nodiscard]] GraphInstanceOutcome ExecuteGraphBlendTree(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence);
 
     /** @brief Performs only bounded execution in previously admitted storage; failure never publishes state. */
     [[nodiscard]] GraphInstanceOutcome ExecuteGraph(GraphInstanceState &state, const GraphEvaluationInput &input);

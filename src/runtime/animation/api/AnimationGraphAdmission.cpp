@@ -37,6 +37,7 @@ namespace Horo::Animation::GraphCompileDetail {
             std::uint64_t states{};
             std::uint64_t transitions{};
             std::uint64_t conditions{};
+            std::uint64_t blendMembers{};
         };
 
         /** @brief Charges the complete inert state table independently of node pins and pose masks. */
@@ -52,6 +53,16 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Bounds the entire detached blend payload before canonical copying or dependency binding. */
+        Result<void> CountTree(const GraphBlendTreeNode &tree, CandidateCounts &counts, const AnimationGraphLimits &limits) {
+            counts.blendMembers += tree.samples.size();
+            if (tree.samples.size() > AnimationGraphHardLimits::BlendSamplesPerTree ||
+                tree.triangles.size() > AnimationGraphHardLimits::BlendTrianglesPerTree ||
+                counts.blendMembers > std::min(limits.clipPlayers, AnimationGraphHardLimits::BlendMembers))
+                return Result<void>::Failure(Failure(GraphLimitExceeded));
+            return Result<void>::Success();
+        }
+
         /** @brief Charges one node's bounded pins and sparse mask storage. */
         Result<void> CountNode(const GraphNode &node, CandidateCounts &counts, const AnimationGraphLimits &limits) {
             counts.pins += node.pins.size();
@@ -62,6 +73,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 if (blend->mask.joints.size() > SkeletonAssetHardLimits::Joints || counts.maskEntries > limits.poseTransforms)
                     return Result<void>::Failure(Failure(GraphLimitExceeded));
             }
+            if (const auto *tree = std::get_if<GraphBlendTreeNode>(&node.payload))
+                return CountTree(*tree, counts, limits);
             if (const auto *machine = std::get_if<GraphStateMachineNode>(&node.payload))
                 return CountState(*machine, counts, limits);
             return Result<void>::Success();

@@ -66,6 +66,13 @@ namespace Horo::Animation::GraphCompileDetail {
             return Shape::Success(std::move(pins));
         }
 
+        /** @brief Admits a multi-clip tree through the same authoritative node shape and parameter namespace. */
+        Shape NodePins(const GraphBlendTreeNode &tree, const ShapeContext &context) {
+            if (auto validated = ValidateBlendTree(tree, context.data, context.location); validated.HasError())
+                return Shape::Failure(validated.ErrorValue());
+            return Shape::Success({Pin(Result, GraphValueType::Pose, true)});
+        }
+
         /** @brief Requires an exact declared parameter and its transport type. */
         Shape NodePins(const GraphParameterNode &parameter, const ShapeContext &context) {
             const auto *value = Find(context.data.parameters, parameter.parameter);

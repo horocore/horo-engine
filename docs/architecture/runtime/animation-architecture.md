@@ -718,6 +718,9 @@ Run
 
 A blend tree blends multiple clips based on up to two float parameters.
 
+The implemented typed authoring, group namespace, marker fallback, transaction,
+and migration contract is [Blend spaces and instance-scoped synchronization](animation-blend-tree-sync.md).
+
 Common patterns:
 
 - 1D blend by speed

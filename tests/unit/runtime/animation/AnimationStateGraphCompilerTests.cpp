@@ -14,8 +14,8 @@ namespace Horo::Animation::Test {
         REQUIRE(encoded.HasValue());
         const auto decoded = DeserializeAnimationGraphSource(encoded.Value(), graph.id);
         REQUIRE(decoded.HasValue());
-        CHECK(decoded.Value().schemaVersion == 4);
-        CHECK(decoded.Value().contractVersion == (AnimationGraphContractVersion{1, 2, 0}));
+        CHECK(decoded.Value().schemaVersion == CurrentAnimationGraphSchemaVersion);
+        CHECK(decoded.Value().contractVersion == CurrentAnimationGraphContractVersion);
         const auto reencoded = SerializeAnimationGraphSource(decoded.Value());
         REQUIRE(reencoded.HasValue());
         CHECK(reencoded.Value() == encoded.Value());

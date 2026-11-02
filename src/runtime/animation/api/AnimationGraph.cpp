@@ -56,6 +56,8 @@ namespace Horo::Animation {
                         std::ranges::sort(machine->states, byId);
                         std::ranges::sort(machine->transitions, byId);
                     }
+                    if (auto *tree = std::get_if<GraphBlendTreeNode>(&node.payload))
+                        std::ranges::sort(tree->samples, byId);
                     if (auto *blend = std::get_if<GraphBlendNode>(&node.payload))
                         std::ranges::sort(blend->mask.joints, {}, &GraphBoneWeight::joint);
                 }
@@ -69,6 +71,8 @@ namespace Horo::Animation {
                     return !payload.referencePose;
                 else if constexpr (std::is_same_v<Payload, GraphBlendNode>)
                     return payload == GraphBlendNode{};
+                else if constexpr (std::is_same_v<Payload, GraphBlendTreeNode>)
+                    return false;
                 else
                     return true;
             }, node.payload);
@@ -238,6 +242,11 @@ namespace Horo::Animation {
             if (const auto *parameter = std::get_if<GraphParameterNode>(&node.payload))
                 instruction.parameterIndex =
                     static_cast<std::uint32_t>(Find(data.parameters, parameter->parameter) - data.parameters.data());
+            if (const auto *tree = std::get_if<GraphBlendTreeNode>(&node.payload)) {
+                instruction.blendParameters[0] = static_cast<std::uint32_t>(Find(data.parameters, tree->x) - data.parameters.data());
+                if (tree->dimension == GraphBlendDimension::Two)
+                    instruction.blendParameters[1] = static_cast<std::uint32_t>(Find(data.parameters, tree->y) - data.parameters.data());
+            }
             if (const auto *call = std::get_if<GraphCallNode>(&node.payload))
                 instruction.definitionIndex =
                     static_cast<std::uint32_t>(Find(data.definitions, call->definition) - data.definitions.data());
@@ -416,6 +425,9 @@ namespace Horo::Animation {
             std::visit([&clips]<typename Payload>(const Payload &payload) {
                 if constexpr (std::is_same_v<Payload, GraphClipNode>)
                     clips.insert(payload.clip);
+                else if constexpr (std::is_same_v<Payload, GraphBlendTreeNode>)
+                    for (const auto &sample : payload.samples)
+                        clips.insert(sample.clip);
                 else if constexpr (std::is_same_v<Payload, GraphStateMachineNode>)
                     for (const auto &state : payload.states)
                         if (const auto *clip = std::get_if<AnimationClipId>(&state.source))
@@ -459,6 +471,8 @@ namespace Horo::Animation {
                 return {1, 0, 0};
             if (schema == 3)
                 return {1, 1, 0};
+            if (schema == 4)
+                return {1, 2, 0};
             return CurrentAnimationGraphContractVersion;
         }
 
@@ -468,6 +482,11 @@ namespace Horo::Animation {
                 return false;
             if (const auto expected = SourceContract(data.schemaVersion); data.contractVersion != expected)
                 return false;
+            if (data.schemaVersion < 5)
+                for (const auto &definition : data.definitions)
+                    for (const auto &node : definition.nodes)
+                        if (std::holds_alternative<GraphBlendTreeNode>(node.payload))
+                            return false;
             return data.schemaVersion >= 4 || !HasStatePayload(data);
         }
 

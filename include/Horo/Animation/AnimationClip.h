@@ -121,6 +121,17 @@ namespace Horo::Animation {
         [[nodiscard]] bool operator==(const AnimationJointTrack &) const noexcept = default;
     };
 
+    struct AnimationSyncMarkerTag;
+    /** @brief Semantic marker name shared by compatible clip publications. */
+    using AnimationSyncMarkerId = Foundation::Detail::NonZeroId64<AnimationSyncMarkerTag, AnimationErrors::IdentityInvalid>;
+
+    /** @brief Immutable clip-local marker; exact times increase strictly in [0,duration). */
+    struct AnimationSyncMarker final {
+        AnimationSyncMarkerId id{};
+        AnimationTime time{};
+        bool operator==(const AnimationSyncMarker &) const = default;
+    };
+
     /** @brief Immutable identity, binding, time, playback, and storage metadata for one clip publication. */
     struct AnimationClipDescriptor final {
         AnimationClipContractVersion contractVersion{CurrentAnimationClipContractVersion};
@@ -142,11 +153,13 @@ namespace Horo::Animation {
     struct AnimationClipData final {
         AnimationClipDescriptor descriptor{};
         std::vector<AnimationJointTrack> tracks{};
+        std::vector<AnimationSyncMarker> syncMarkers{}; /**< Pinned with this exact clip generation; never a runtime side table. */
         [[nodiscard]] bool operator==(const AnimationClipData &) const noexcept = default;
     };
 
     /** @brief Compile-time safety ceilings for one portable clip and one traversal. */
     struct AnimationClipHardLimits final {
+        static constexpr std::uint32_t SyncMarkers = 256;
         static constexpr std::uint32_t Tracks = SkeletonAssetHardLimits::Joints;
         static constexpr std::uint32_t KeysPerTrack = 65'536;
         static constexpr std::uint32_t TotalKeys = 1'048'576;

@@ -409,4 +409,17 @@ namespace Horo::Animation {
             CHECK(outputs[index][1].translation.x == 5.0F);
         }
     }
+
+    TEST_CASE("Animation held ping-pong traversal samples the actual reverse-half phase", "[animation][clip][traversal]") {
+        const auto skeleton = ClipSkeleton();
+        const auto clip = Clip(skeleton, AnimationWrapMode::PingPong);
+        const auto held = clip.TraversePrepared({{150}, false}, {0});
+        REQUIRE(held.HasValue());
+        CHECK(held.Value().cursor.phase.ticks == 150);
+        CHECK_FALSE(held.Value().cursor.terminal);
+        CHECK(held.Value().sampleTime.ticks == 50);
+        CHECK(held.Value().direction == AnimationTraversalDirection::Held);
+        CHECK(held.Value().boundaryCrossings == 0);
+    }
+
 }  // namespace Horo::Animation

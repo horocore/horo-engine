@@ -70,6 +70,8 @@ namespace Horo::Animation {
             std::size_t transitions{};
             std::size_t conditions{};
             std::size_t maskEntries{};
+            std::size_t blendSamples{};
+            std::size_t blendTriangles{};
         };
 
         /** @brief Decodes one exact finite scalar using the same parameter transport rules. */
@@ -145,6 +147,65 @@ namespace Horo::Animation {
             return machine;
         }
 
+        /** @brief Reads a finite coordinate without integer/float narrowing beyond binary32. */
+        float Coordinate(const Json &value) {
+            if (!value.is_number())
+                Reject(AnimationErrors::GraphMalformed);
+            const auto number = value.get<double>();
+            if (!std::isfinite(number) || std::abs(number) > std::numeric_limits<float>::max())
+                Reject(AnimationErrors::GraphMalformed);
+            return static_cast<float>(number);
+        }
+
+        /** @brief Reads bounded sample records before authoritative compiler geometry/parameter validation. */
+        void BlendSamples(GraphBlendTreeNode &tree, const Json &values, Budget &budget, const AnimationGraphCompileContext &context) {
+            const auto count = Spend(values, budget.blendSamples, context.limits.clipPlayers, AnimationGraphHardLimits::BlendMembers);
+            if (count > AnimationGraphHardLimits::BlendSamplesPerTree)
+                Reject(AnimationErrors::GraphLimitExceeded);
+            tree.samples.reserve(count);
+            for (const auto &sample : values) {
+                CheckAdmission(context);
+                Keys(sample, {"id", "clip", "x", "y", "canLead"});
+                if (!sample["canLead"].is_boolean())
+                    Reject(AnimationErrors::GraphMalformed);
+                tree.samples.push_back({Id<GraphBlendSampleId>(sample["id"]), AssetIdentity<AnimationClipId>(sample["clip"]),
+                                        Coordinate(sample["x"]), Coordinate(sample["y"]), sample["canLead"].get<bool>()});
+            }
+        }
+
+        /** @brief Reads authored triangle identities; aggregate source JSON limits bound the inert source representation. */
+        void BlendTriangles(GraphBlendTreeNode &tree, const Json &values, Budget &budget, const AnimationGraphCompileContext &context) {
+            const auto count = Spend(values, budget.blendTriangles, context.limits.connections, AnimationGraphHardLimits::Connections);
+            if (count > AnimationGraphHardLimits::BlendTrianglesPerTree)
+                Reject(AnimationErrors::GraphLimitExceeded);
+            tree.triangles.reserve(count);
+            for (const auto &triangle : values) {
+                CheckAdmission(context);
+                if (!triangle.is_array() || triangle.size() != 3)
+                    Reject(AnimationErrors::GraphMalformed);
+                tree.triangles.push_back(
+                    {{Id<GraphBlendSampleId>(triangle[0]), Id<GraphBlendSampleId>(triangle[1]), Id<GraphBlendSampleId>(triangle[2])}});
+            }
+        }
+
+        /** @brief Decodes complete owned tree metadata, never runtime phases or group state. */
+        GraphBlendTreeNode BlendTree(const Json &value, Budget &budget, const AnimationGraphCompileContext &context) {
+            Keys(value, {"dimension", "x", "y", "outside", "group", "sync", "events", "leader", "samples", "triangles"});
+            GraphBlendTreeNode tree;
+            tree.dimension = EnumValue<GraphBlendDimension>(value["dimension"], Dimensions);
+            tree.x = Id<GraphParameterId>(value["x"]);
+            if (!value["y"].is_null())
+                tree.y = Id<GraphParameterId>(value["y"]);
+            tree.outside = EnumValue<GraphBlendOutside>(value["outside"], Outside);
+            if (!value["group"].is_null())
+                tree.group = Id<GraphSyncGroupId>(value["group"]);
+            tree.sync = {EnumValue<GraphSyncMode>(value["sync"], SyncModes), EnumValue<GraphSyncEventPolicy>(value["events"], SyncEvents),
+                         EnumValue<GraphSyncLeaderPolicy>(value["leader"], SyncLeaders)};
+            BlendSamples(tree, value["samples"], budget, context);
+            BlendTriangles(tree, value["triangles"], budget, context);
+            return tree;
+        }
+
         /** @brief Decodes a finite binary32 mask weight before compiler range validation. */
         float MaskWeight(const Json &value) {
             if (!value.is_number())
@@ -204,6 +265,12 @@ namespace Horo::Animation {
                     value["interface"].is_null() ? GraphInterfaceId{} : Id<GraphInterfaceId>(value["interface"])};
         }
 
+        /** @brief Requires the schema introducing an opcode before decoding its typed payload. */
+        void RequireVersion(const std::uint32_t actual, const std::uint32_t minimum) {
+            if (actual < minimum)
+                Reject(AnimationErrors::GraphVersionUnsupported);
+        }
+
         /** @brief Decodes typed semantics without preserving unknown opaque node payloads. */
         GraphNodePayload Payload(const Json &kind, const Json &reference, Budget &budget, const AnimationGraphCompileContext &context,
                                  const std::span<const GraphParameter> parameters, const std::uint32_t version) {
@@ -217,9 +284,11 @@ namespace Horo::Animation {
                     return GraphInputNode{Id<GraphInterfaceId>(reference)};
                 case 5:
                     return GraphCallNode{Id<GraphDefinitionId>(reference)};
+                case 7:
+                    RequireVersion(version, 5);
+                    return BlendTree(reference, budget, context);
                 case 6:
-                    if (version < 4)
-                        Reject(AnimationErrors::GraphVersionUnsupported);
+                    RequireVersion(version, 4);
                     return StateMachine(reference, budget, context, parameters);
                 default:
                     if (!reference.is_null())
@@ -341,7 +410,7 @@ namespace Horo::Animation {
                 case MigrateLegacySchemas:
                     return schema >= 1 && schema <= 2;
                 case MigrateSupported:
-                    return schema >= 1 && schema <= 3;
+                    return schema >= 1 && schema <= 4;
             }
             return false;
         }

@@ -84,6 +84,42 @@ namespace Horo::Animation {
             });
         }
 
+        /** @brief Writes immutable typed tree geometry and instance-local synchronization names. */
+        void BlendTreeReference(SourceWriter &out, const GraphBlendTreeNode &tree) {
+            out.Object([&] {
+                out.Field("dimension", Dimensions.at(static_cast<std::size_t>(tree.dimension)));
+                out.Field("x", tree.x.Value());
+                out.Field("y", [&] {
+                    tree.y.IsValid() ? out.Value(tree.y.Value()) : out.Value(nullptr);
+                });
+                out.Field("outside", Outside.at(static_cast<std::size_t>(tree.outside)));
+                out.Field("group", [&] {
+                    tree.group.IsValid() ? out.Value(tree.group.Value()) : out.Value(nullptr);
+                });
+                out.Field("sync", SyncModes.at(static_cast<std::size_t>(tree.sync.mode)));
+                out.Field("events", SyncEvents.at(static_cast<std::size_t>(tree.sync.events)));
+                out.Field("leader", SyncLeaders.at(static_cast<std::size_t>(tree.sync.leader)));
+                out.Field("samples", [&] {
+                    out.Array(tree.samples, [&](const GraphBlendSample &sample) {
+                        out.Object([&] {
+                            out.Field("id", sample.id.Value());
+                            out.Field("clip", sample.clip.Asset().ToString());
+                            out.Field("x", sample.x);
+                            out.Field("y", sample.y);
+                            out.Field("canLead", sample.canLead);
+                        });
+                    });
+                });
+                out.Field("triangles", [&] {
+                    out.Array(tree.triangles, [&](const GraphBlendTriangle &triangle) {
+                        out.Array(triangle.samples, [&](const auto id) {
+                            out.Value(id.Value());
+                        });
+                    });
+                });
+            });
+        }
+
         /** @brief Writes the one reference allowed by each typed opcode. */
         void Reference(SourceWriter &out, const GraphNodePayload &payload) {
             std::visit([&]<typename T>(const T &value) {
@@ -97,6 +133,8 @@ namespace Horo::Animation {
                     out.Value(value.definition.Value());
                 else if constexpr (std::is_same_v<T, GraphStateMachineNode>)
                     StateMachineReference(out, value);
+                else if constexpr (std::is_same_v<T, GraphBlendTreeNode>)
+                    BlendTreeReference(out, value);
                 else
                     out.Value(nullptr);
             }, payload);

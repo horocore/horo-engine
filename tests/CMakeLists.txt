@@ -1038,6 +1038,8 @@ target_link_libraries(HoroAnimationDocumentTests PRIVATE HoroEngine::EditorServi
 horo_register_catch_test(HoroAnimationDocumentTests LABELS "unit;animation;editor;headless")
 
 add_executable(HoroAnimationApiTests
+        unit/runtime/animation/AnimationBlendTreeTests.cpp
+        unit/runtime/animation/AnimationSyncGroupTests.cpp
         unit/runtime/animation/AnimationStateMachineTests.cpp
         unit/runtime/animation/AnimationStateGraphInstanceTests.cpp
         unit/runtime/animation/AnimationStateGraphCompilerTests.cpp

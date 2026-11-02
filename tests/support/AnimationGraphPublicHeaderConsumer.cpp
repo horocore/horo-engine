@@ -7,7 +7,8 @@
 static_assert(!std::is_convertible_v<Horo::Animation::GraphNodeId, Horo::Animation::GraphPinId>);
 static_assert(!std::is_convertible_v<Horo::Animation::GraphStateId, Horo::Animation::GraphTransitionId>);
 static_assert(std::is_trivially_copyable_v<Horo::Animation::GraphStateEvent>);
-static_assert(Horo::Animation::CurrentAnimationGraphSchemaVersion == 4);
+static_assert(Horo::Animation::CurrentAnimationGraphSchemaVersion == 5);
+static_assert(Horo::Animation::CurrentAnimationGraphContractVersion == Horo::Animation::AnimationGraphContractVersion{1, 3, 0});
 static_assert(Horo::Animation::GraphBlendNode{}.mode == Horo::Animation::GraphBlendMode::Normalized);
 static_assert(Horo::Animation::GraphBlendNode{}.missingJoint == Horo::Animation::GraphMissingJointPolicy::SkeletonReference);
 
