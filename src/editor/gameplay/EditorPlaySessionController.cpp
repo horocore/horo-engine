@@ -1,10 +1,11 @@
 #include "editor/gameplay/EditorPlaySessionController.h"
 
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "ProjectGameplayRegistry.h"
 
 #include <algorithm>
 #include <format>
-#include <functional>
+#include <new>
 #include <ranges>
 #include <string_view>
 #include <utility>
@@ -35,7 +36,7 @@ namespace Horo::Editor {
         /** @brief Resolves the actual Play runner only during one synchronous Scene structural transaction. */
         class PlayGameplayParticipant final : public Runtime::SceneStructuralParticipant {
         public:
-            explicit PlayGameplayParticipant(std::function<Gameplay::BehaviorRuntime *()> runtime) : runtime_(std::move(runtime)) {}
+            explicit PlayGameplayParticipant(std::shared_ptr<EditorPlayRuntimeBinding> binding) : binding_(std::move(binding)) {}
 
             Runtime::SceneStructuralOwner Owner() const noexcept override {
                 return Runtime::SceneStructuralOwner::Gameplay;
@@ -44,7 +45,8 @@ namespace Horo::Editor {
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &scene,
                                                                                std::span<const Runtime::RuntimeEntityView> created,
                                                                                std::span<const Runtime::EntityRef> destroyed) override {
-                auto *runtime = runtime_();
+                const auto owner = binding_->owner.lock();
+                auto *runtime = binding_->revoked || !owner ? nullptr : owner->Active();
                 if (!runtime)
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
                         MakeError(Gameplay::GameplayErrors::InvalidBehaviorComponent, "Play has no active Gameplay structural owner."));
@@ -52,10 +54,19 @@ namespace Horo::Editor {
             }
 
         private:
-            // The Scene host is retired by the controller before its captured owner dies.
-            // Resolve only during synchronous structural preparation so reload replacement stays visible.
-            std::function<Gameplay::BehaviorRuntime *()> runtime_;
+            // The moved Scene pins this owner-lane lookup, never the controller or
+            // workspace address.
+            std::shared_ptr<EditorPlayRuntimeBinding> binding_;
         };
+
+        /** @brief Contains allocation failure while the original runtime and all live gameplay scopes remain intact. */
+        Result<Gameplay::BehaviorRuntimeReloadSnapshot> CaptureReloadSafely(Gameplay::BehaviorRuntime &runtime) {
+            try {
+                return runtime.CaptureReloadSnapshot();
+            } catch (const std::bad_alloc &) {
+                return Result<Gameplay::BehaviorRuntimeReloadSnapshot>::Failure(MakeError(Runtime::SaveErrors::RestoreAllocationFailed));
+            }
+        }
 
         [[nodiscard]] Error InvalidTransition(const char *message) {
             return MakeError(Gameplay::GameplayErrors::InvalidBehaviorComponent, message);
@@ -90,9 +101,9 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] Error GameplayComponentPlayError(const SceneGameplayInspection &inspection) {
-            Error error = MakeError(Gameplay::GameplayErrors::GameplayPlayBlocked,
-                                    std::format("Play Mode is blocked by {} unavailable or incompatible gameplay component(s).",
-                                                inspection.issues.size()));
+            Error error = MakeError(Gameplay::GameplayErrors::GameplayPlayBlocked, std::format("Play Mode is blocked by {} unavailable "
+                                                                                               "or incompatible gameplay component(s).",
+                                                                                               inspection.issues.size()));
             error.diagnostics.reserve(inspection.issues.size());
             for (const SceneGameplayComponentIssue &issue : inspection.issues) {
                 const ErrorCodeDescriptor &issueCode = ComponentIssueCode(issue.status);
@@ -123,6 +134,13 @@ namespace Horo::Editor {
             return std::nullopt;
         }
     }  // namespace
+
+    /** @brief Requires the containing workspace to transfer genuine pending ownership before destroying borrowed registry state. */
+    EditorPlaySessionController::~EditorPlaySessionController() {
+        Stop();
+        if (sceneHost_)
+            std::terminate();
+    }
 
     /** @copydoc EditorPlaySessionController::Start */
     Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
@@ -188,10 +206,29 @@ namespace Horo::Editor {
         return AdvancePreparation();
     }
 
+    /** @copydoc EditorPlaySessionController::ReservePlayOwnership */
+    Result<void> EditorPlaySessionController::ReservePlayOwnership() {
+        if (saveRetirement_) {
+            auto reserved = saveRetirement_->Reserve();
+            if (reserved.HasError())
+                return Result<void>::Failure(reserved.ErrorValue());
+            retirementReservation_ = std::move(reserved).Value();
+        }
+        try {
+            runtimeBinding_ = std::make_shared<EditorPlayRuntimeBinding>();
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            retirementReservation_ = {};
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::StorageAllocationFailed));
+        }
+    }
+
     /** @copydoc EditorPlaySessionController::BeginPreparation */
     Result<void> EditorPlaySessionController::BeginPreparation(Runtime::RuntimeSceneDefinition definition,
                                                                const Gameplay::BehaviorRegistry &registry,
                                                                const EditorPlaySceneFactory &factory) {
+        if (const auto reserved = ReservePlayOwnership(); reserved.HasError())
+            return reserved;
         const Runtime::SceneRuntimeId identity{nextRuntimeId_};
         auto prepared = factory ? factory(identity, definition)
                                 : Result<std::unique_ptr<EditorPlaySceneHost>>::Success(std::make_unique<AssetlessPlaySceneHost>(identity));
@@ -205,17 +242,51 @@ namespace Horo::Editor {
         ++nextRuntimeId_;
         preparationCancellation_ = CancellationSource{};
         preparationFrame_ = 1;
-        if (const auto registered = sceneHost_->Scenes().AddStructuralParticipant(std::make_unique<PlayGameplayParticipant>([this] {
-            return behaviors_.get();
-        }));
+        if (const auto prepared = PrepareBehaviorOwner(registry); prepared.HasError())
+            return prepared;
+        if (const auto registered =
+                sceneHost_->Scenes().AddStructuralParticipant(std::make_unique<PlayGameplayParticipant>(runtimeBinding_));
             registered.HasError())
             return registered;
+        return StartPreparedScene(std::move(definition), registry);
+    }
+
+    /** @copydoc EditorPlaySessionController::StartPreparedScene */
+    Result<void> EditorPlaySessionController::StartPreparedScene(Runtime::RuntimeSceneDefinition definition,
+                                                                 const Gameplay::BehaviorRegistry &registry) {
         if (const auto started = sceneHost_->Scenes().Startup(preparationCancellation_.Token()); started.HasError())
             return started;
         if (const auto queued = sceneHost_->Scenes().QueuePreparation(std::move(definition)); queued.HasError())
             return queued;
         pendingRegistry_ = &registry;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorPlaySessionController::PrepareBehaviorOwner */
+    Result<void> EditorPlaySessionController::PrepareBehaviorOwner(const Gameplay::BehaviorRegistry &registry) {
+        auto created = Gameplay::BehaviorRuntimeSceneOwner::Create(sceneHost_->Scenes(), registry);
+        if (created.HasError())
+            return Result<void>::Failure(created.ErrorValue());
+        behaviorOwner_ = std::move(created).Value();
+        runtimeBinding_->owner = behaviorOwner_;
+        return sceneHost_->Scenes().AddActivationParticipant(behaviorOwner_->MakeActivationParticipant());
+    }
+
+    /** @copydoc EditorPlaySessionController::RefreshBehaviorBinding */
+    void EditorPlaySessionController::RefreshBehaviorBinding() {
+        auto *current = behaviorOwner_ ? behaviorOwner_->Active() : nullptr;
+        if (current == behaviors_)
+            return;
+        behaviors_ = current;
+        if (runtimeBinding_)
+            runtimeBinding_->runtime = current;
+        if (debugger_) {
+            debugger_->Producer().Detach();
+            if (current) {
+                (void)debugger_->Begin(sceneHost_->Scenes().ActiveScene()->RuntimeId().value, ++diagnosticGeneration_, false);
+                (void)debugger_->Publish(debugger_->Producer().Source());
+            }
+        }
     }
 
     /** @copydoc EditorPlaySessionController::AdvancePreparation */
@@ -245,19 +316,15 @@ namespace Horo::Editor {
             Fail(prefabs.ErrorValue());
             return Result<void>::Failure(prefabs.ErrorValue());
         }
-        auto runtime =
-            Gameplay::BehaviorRuntime::Create(scenes, *pendingRegistry_, {}, std::move(services).Value(), std::move(prefabs).Value());
+        const auto activated = behaviorOwner_->ActivatePublished(std::move(services).Value(), std::move(prefabs).Value());
         pendingRegistry_ = nullptr;
-        if (runtime.HasError()) {
-            Fail(runtime.ErrorValue());
-            return Result<void>::Failure(runtime.ErrorValue());
+        if (activated.HasError()) {
+            Fail(activated.ErrorValue());
+            return activated;
         }
-        behaviors_ = std::move(runtime).Value();
+        RefreshBehaviorBinding();
+        ConfigureReadySave();
         state_ = EditorPlaySessionState::Playing;
-        if (debugger_) {
-            (void)debugger_->Begin(scenes.ActiveScene()->RuntimeId().value, ++diagnosticGeneration_, false);
-            (void)debugger_->Publish(debugger_->Producer().Source());
-        }
         return Result<void>::Success();
     }
 
@@ -270,6 +337,7 @@ namespace Horo::Editor {
             return committed;
         if (auto failure = scenes.TakeOperationError())
             return Result<void>::Failure(std::move(*failure));
+        RefreshBehaviorBinding();
         return Result<void>::Success();
     }
 
@@ -298,26 +366,150 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorPlaySessionController::ConfigureSaveRetirement */
+    void EditorPlaySessionController::ConfigureSaveRetirement(std::shared_ptr<EditorPlaySaveRetirement> owner) noexcept {
+        if (!sceneHost_)
+            saveRetirement_ = std::move(owner);
+    }
+
+    /** @copydoc EditorPlaySessionController::SaveSession */
+    EditorPlaySaveSession *EditorPlaySessionController::SaveSession() noexcept {
+        return sceneHost_ ? sceneHost_->SaveSession() : nullptr;
+    }
+
+    /** @copydoc EditorPlaySessionController::SaveBinding */
+    std::weak_ptr<EditorPlayRuntimeBinding> EditorPlaySessionController::SaveBinding() noexcept {
+        return runtimeBinding_;
+    }
+
+    /** @copydoc EditorPlaySessionController::ConfigureSaveBindings */
+    void EditorPlaySessionController::ConfigureSaveBindings(std::vector<PlaySaveGameplayBinding> bindings) {
+        saveSetupError_.reset();
+        saveBindings_ = std::move(bindings);
+        if (behaviors_)
+            ConfigureReadySave();
+    }
+
+    /** @copydoc EditorPlaySessionController::PrepareSaveRetirement */
+    bool EditorPlaySessionController::PrepareSaveRetirement() noexcept {
+        if (!sceneHost_)
+            return true;
+        if (runtimeBinding_)
+            runtimeBinding_->save = nullptr;
+        return sceneHost_->RetireSaveSession();
+    }
+
+    /** @copydoc EditorPlaySessionController::ConfigureSaveError */
+    void EditorPlaySessionController::ConfigureSaveError(Error error) {
+        saveBindings_.clear();
+        saveSetupError_ = std::move(error);
+        if (runtimeBinding_)
+            runtimeBinding_->saveError = saveSetupError_;
+    }
+
+    /** @copydoc EditorPlaySessionController::ConfigureReadySave */
+    void EditorPlaySessionController::ConfigureReadySave() {
+        runtimeBinding_->save = sceneHost_->SaveSession();
+        if (saveSetupError_) {
+            runtimeBinding_->saveError = saveSetupError_;
+            return;
+        }
+        const auto configured = sceneHost_->ConfigureSaveSession(std::move(saveBindings_), behaviorOwner_);
+        runtimeBinding_->saveError = configured.HasError() ? std::optional<Error>{configured.ErrorValue()} : std::nullopt;
+        runtimeBinding_->save = sceneHost_->SaveSession();
+    }
+
+    /** @copydoc EditorPlaySessionController::DispatchSaveCommand */
+    void EditorPlaySessionController::DispatchSaveCommand() {
+        if (!runtimeBinding_ || runtimeBinding_->revoked || !runtimeBinding_->saveCommand)
+            return;
+        auto command = std::move(*runtimeBinding_->saveCommand);
+        runtimeBinding_->saveCommand.reset();
+        if (!runtimeBinding_->save)
+            return;
+        if (command.kind == PlaySaveCommandKind::Load && state_ == EditorPlaySessionState::Playing)
+            static_cast<void>(Pause());
+        const auto admitted = runtimeBinding_->save->Request(command);
+        runtimeBinding_->saveError = admitted.HasError() ? std::optional<Error>{admitted.ErrorValue()} : std::nullopt;
+    }
+
     /** @copydoc EditorPlaySessionController::Stop */
     void EditorPlaySessionController::Stop() noexcept {
-        using enum Horo::Editor::EditorPlaySessionState;
-        if (state_ != EditorPlaySessionState::Idle)
-            state_ = EditorPlaySessionState::Stopping;
         if (debugger_)
             debugger_->Producer().Detach();
+        if (runtimeBinding_) {
+            runtimeBinding_->revoked = true;
+            runtimeBinding_->save = nullptr;
+            runtimeBinding_->saveCommand.reset();
+        }
+        pendingRegistry_ = nullptr;
+        stepPending_ = false;
+        preparationCancellation_.RequestCancellation();
+        if (auto *save = SaveSession())
+            save->BeginRetirement();
         if (sceneHost_)
             sceneHost_->QuiesceGameplay();
-        if (behaviors_)
-            behaviors_->Shutdown();
-        behaviors_.reset();
-        pendingRegistry_ = nullptr;
-        preparationCancellation_.RequestCancellation();
-        if (sceneHost_)
+        state_ = EditorPlaySessionState::Stopping;
+        PollStopping();
+    }
+
+    /** @copydoc EditorPlaySessionController::PollStopping */
+    void EditorPlaySessionController::PollStopping() noexcept {
+        if (state_ != EditorPlaySessionState::Stopping)
+            return;
+        try {
+            if (auto *save = SaveSession(); save && !save->IsSettled()) {
+                const Runtime::FrameContext frame{.frameNumber = preparationFrame_++, .cancellation = preparationCancellation_.Token()};
+                const auto advanced = sceneHost_->CommitSceneChanges(frame);
+                const auto pumped = save->CommitAtSafePoint(frame);
+                if (advanced.HasError())
+                    lastError_ = advanced.ErrorValue();
+                if (pumped.HasError())
+                    lastError_ = pumped.ErrorValue();
+                if (!save->IsSettled())
+                    return;
+            }
+            FinishStop();
+        } catch (...) {
+            // Preserve all owners; the reserved application slot is the leave/shutdown
+            // fallback.
+        }
+    }
+
+    /** @copydoc EditorPlaySessionController::FinishStop */
+    void EditorPlaySessionController::FinishStop() noexcept {
+        if (runtimeBinding_)
+            runtimeBinding_->runtime = nullptr;
+        behaviors_ = nullptr;
+        if (sceneHost_) {
+            nextRuntimeId_ = sceneHost_->Scenes().NextRuntimeId().value;
             sceneHost_->Shutdown();
+        }
+        behaviorOwner_.reset();
         sceneHost_.reset();
+        runtimeBinding_.reset();
+        retirementReservation_ = {};
         prefabComponents_ = Gameplay::ComponentRegistry{};
-        stepPending_ = false;
         authoringRevision_ = {};
+        state_ = EditorPlaySessionState::Idle;
+    }
+
+    /** @copydoc EditorPlaySessionController::RetireOnLeave */
+    void EditorPlaySessionController::RetireOnLeave(std::unique_ptr<ProjectGameplayRegistry> &registry) noexcept {
+        Stop();
+        if (!sceneHost_)
+            return;
+        if (!retirementReservation_.IsValid())
+            std::terminate();
+        EditorPlayRetiredUnit unit;
+        unit.registry = std::move(registry);
+        unit.scene = std::move(sceneHost_);
+        unit.behaviorOwner = std::move(behaviorOwner_);
+        behaviors_ = nullptr;
+        unit.binding = std::move(runtimeBinding_);
+        unit.cancellation = preparationCancellation_.Token();
+        unit.frame = preparationFrame_;
+        retirementReservation_.Retain(std::move(unit));
         state_ = EditorPlaySessionState::Idle;
     }
 
@@ -352,13 +544,27 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPlaySessionController::PresentationUpdate */
     void EditorPlaySessionController::PresentationUpdate(const Gameplay::FrameDeltaTime delta) {
+        PollStopping();
+        DispatchSaveCommand();
         if (const auto prepared = AdvancePreparation(); prepared.HasError())
             return;
         if (behaviors_ && (state_ == EditorPlaySessionState::Playing || state_ == EditorPlaySessionState::Paused)) {
-            behaviors_->PresentationUpdate(delta);
+            if (const auto begun = sceneHost_->BeginPresentationUpdate(); begun.HasError()) {
+                Fail(begun.ErrorValue());
+                return;
+            }
+            if (!SaveLoading())
+                behaviors_->PresentationUpdate(delta);
             if (const auto committed = CommitSceneChanges(); committed.HasError())
                 Fail(committed.ErrorValue());
         }
+    }
+
+    /** @brief Reads immutable actual load state; pending restore advances only the existing Scene lifecycle, not project callbacks. */
+    bool EditorPlaySessionController::SaveLoading() noexcept {
+        auto *save = SaveSession();
+        const auto snapshot = save ? save->Snapshot() : nullptr;
+        return snapshot && snapshot->loading;
     }
 
     /** @copydoc EditorPlaySessionController::ReloadBehaviors */
@@ -381,16 +587,22 @@ namespace Horo::Editor {
         using enum EditorPlaySessionState;
         if (!sceneHost_ || !behaviors_ || (state_ != Playing && state_ != Paused))
             return Result<EditorPlayReloadSnapshot>::Failure(InvalidTransition("Native reload requires an active play session."));
-        auto captured = behaviors_->CaptureReloadSnapshot();
+        if (!PrepareSaveRetirement())
+            return Result<EditorPlayReloadSnapshot>::Failure(MakeError(Runtime::SaveErrors::OperationInProgress));
+        auto captured = CaptureReloadSafely(*behaviors_);
         if (captured.HasError())
             return Result<EditorPlayReloadSnapshot>::Failure(captured.ErrorValue());
         EditorPlayReloadSnapshot snapshot{std::move(captured).Value(), state_};
+        const auto quiesced = behaviorOwner_->QuiesceForReload();
+        if (quiesced.HasError())
+            return Result<EditorPlayReloadSnapshot>::Failure(quiesced.ErrorValue());
+        // The owner completed fallible preparation and revoked its real child scopes before destroying callbacks.
         state_ = Reloading;
         sceneHost_->QuiesceGameplay();
         if (debugger_)
             debugger_->Producer().Detach();
-        behaviors_->Shutdown();
-        behaviors_.reset();
+        runtimeBinding_->runtime = nullptr;
+        behaviors_ = nullptr;
         return Result<EditorPlayReloadSnapshot>::Success(std::move(snapshot));
     }
 
@@ -409,27 +621,15 @@ namespace Horo::Editor {
             lastError_ = prefabs.ErrorValue();
             return Result<void>::Failure(prefabs.ErrorValue());
         }
-        auto replacement =
-            Gameplay::BehaviorRuntime::Create(sceneHost_->Scenes(), registry, {}, std::move(services).Value(), std::move(prefabs).Value());
-        if (replacement.HasError()) {
-            lastError_ = replacement.ErrorValue();
-            return Result<void>::Failure(replacement.ErrorValue());
+        const auto restored =
+            behaviorOwner_->ResumeAfterReload(registry, snapshot.behaviors, std::move(services).Value(), std::move(prefabs).Value());
+        if (restored.HasError()) {
+            lastError_ = restored.ErrorValue();
+            return restored;
         }
-        behaviors_ = std::move(replacement).Value();
-        if (Result<void> restored = behaviors_->RestoreReloadSnapshot(snapshot.behaviors); restored.HasError()) {
-            Error error = restored.ErrorValue();
-            sceneHost_->QuiesceGameplay();
-            behaviors_->Shutdown();
-            behaviors_.reset();
-            lastError_ = error;
-            return Result<void>::Failure(std::move(error));
-        }
+        RefreshBehaviorBinding();
         lastError_.reset();
         state_ = snapshot.priorState;
-        if (debugger_) {
-            (void)debugger_->Begin(sceneHost_->Scenes().ActiveScene()->RuntimeId().value, ++diagnosticGeneration_, false);
-            (void)debugger_->Publish(debugger_->Producer().Source());
-        }
         return Result<void>::Success();
     }
 
@@ -463,22 +663,11 @@ namespace Horo::Editor {
         return authoringRevision_;
     }
 
+    /** @brief Preserves actual pending save ownership when a Play callback fails. */
     void EditorPlaySessionController::Fail(Error error) noexcept {
-        if (debugger_)
-            debugger_->Producer().Detach();
-        if (sceneHost_)
-            sceneHost_->QuiesceGameplay();
-        if (behaviors_)
-            behaviors_->Shutdown();
-        behaviors_.reset();
-        pendingRegistry_ = nullptr;
-        preparationCancellation_.RequestCancellation();
-        if (sceneHost_)
-            sceneHost_->Shutdown();
-        sceneHost_.reset();
-        prefabComponents_ = Gameplay::ComponentRegistry{};
-        stepPending_ = false;
+        Stop();
         lastError_ = std::move(error);
-        state_ = EditorPlaySessionState::Failed;
+        if (!sceneHost_)
+            state_ = EditorPlaySessionState::Failed;
     }
 }  // namespace Horo::Editor

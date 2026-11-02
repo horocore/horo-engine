@@ -51,6 +51,37 @@ namespace Horo::Runtime {
                                                                       const CancellationToken &cancellation) = 0;
     };
 
+    /** @brief One original operation producer and detached restore ownership delivered on the session owner thread.
+     * @details Accept may move these fields into its actual inactive Scene owner. No reference to this borrowed packet may escape.
+     * Source and registry leases must accompany receipts until candidate retirement, including failure after transfer.
+     */
+    struct RuntimeSavePreparedRestore final {
+        StagedRestoreContext context;
+        SaveParticipantRegistrySnapshot participants;
+        SaveOperationController operation;
+        RuntimeSaveRestoreStaging staging;
+        std::shared_ptr<IRuntimeSaveRestoreSource> sourceLease;
+    };
+
+    /** @brief Owner-safe alternate publication owner for the same load operation, never a second transaction or producer.
+     * @details Accept runs once after detached worker settlement at CommitDeferredLifecycleChanges, without a staging lock.
+     * Success requires moving the sole producer into actual candidate ownership. Failure before that move leaves ownership
+     * with the session; failure or exception afterwards must retain the candidate and its original operation until actual
+     * cancellation/retirement. Cancel and IsSettled run only on the session owner thread, are bounded and never wait.
+     * Destruction may occur on any thread: retain safe owned leases and never borrow a thread-affine owner's teardown.
+     */
+    class IRuntimeSaveRestoreHandoff {
+    public:
+        virtual ~IRuntimeSaveRestoreHandoff() = default;
+        /** @brief Takes the original producer, receipts and leases exactly once. @param prepared Owner-call-only borrowed packet.
+         * @return Accepted ownership or original failure; a failure must not discard a previously taken candidate silently. */
+        [[nodiscard]] virtual Result<void> Accept(RuntimeSavePreparedRestore &prepared) = 0;
+        /** @brief Idempotently requests cancellation/retirement without waiting or inventing completion. */
+        virtual void Cancel() noexcept = 0;
+        /** @brief Reports actual delegate/candidate lease quiescence. @return True only when retirement is genuinely settled. */
+        [[nodiscard]] virtual bool IsSettled() const noexcept = 0;
+    };
+
     namespace RuntimeSaveSessionDetail {
         struct Work;
     }
@@ -103,6 +134,15 @@ namespace Horo::Runtime {
          * @param operation Fresh host-issued descriptor of kind Load. @param source Owned detached staging adapter.
          * @return Thread-safe request or typed scheduler/admission failure. */
         [[nodiscard]] Result<RuntimeSaveRequest> Load(SaveOperationDescriptor operation, std::shared_ptr<IRuntimeSaveRestoreSource> source);
+        /** @brief Admits the same detached load but delegates publication to one explicit owner-safe aggregate owner.
+         * @param operation Fresh host-issued Load descriptor. @param source Owned authentic detached staging adapter.
+         * @param handoff Owned Scene/aggregate bridge retaining all candidate/module lifetimes through cancellation and settlement.
+         * @return Original request handle; handoff success alone never means that restore has committed.
+         * @details The two-argument Load retains its existing direct transaction behavior. Acknowledge requires the original
+         * operation to be terminal and both the worker and handoff to be settled. No Scene/backend type leaks into this seam.
+         */
+        [[nodiscard]] Result<RuntimeSaveRequest> Load(SaveOperationDescriptor operation, std::shared_ptr<IRuntimeSaveRestoreSource> source,
+                                                      std::shared_ptr<IRuntimeSaveRestoreHandoff> handoff);
         /** @brief Pump capture and restore only under the host's exclusive lifecycle boundary.
          * @param phase Must be CommitDeferredLifecycleChanges. @param current Actual current runtime/Scene/registry generations.
          * @param provenance Genuine current capture epoch/source evidence, required for pending Save, ignored for Load.
@@ -113,7 +153,7 @@ namespace Horo::Runtime {
                                                      const RuntimeSaveCaptureProvenance &provenance = {});
         /** @brief Close admission and cancel precommit work without joining. @return Owner/reentrancy failure or success. */
         [[nodiscard]] Result<void> Retire();
-        /** @brief Check whether detached work released its execution lane. @return Owner-thread settlement fact. */
+        /** @brief Check detached work and any transferred aggregate owner's actual quiescence. @return Owner-thread settlement fact. */
         [[nodiscard]] bool IsSettled() const;
         /** @brief Release the one terminal settled record. @return Success or typed busy/lifecycle error. */
         [[nodiscard]] Result<void> Acknowledge();
@@ -141,7 +181,7 @@ namespace Horo::Runtime {
         std::shared_ptr<RuntimeSaveSessionDetail::Work> work_;
         std::thread::id owner_;
         bool closed_{};
-        bool mutating_{};
+        mutable bool mutating_{};
         bool barrierPending_{};
     };
 }  // namespace Horo::Runtime

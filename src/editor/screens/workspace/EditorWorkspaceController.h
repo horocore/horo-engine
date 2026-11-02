@@ -77,6 +77,7 @@ namespace Horo::Editor {
         Application::GameplayBuildService *builds{};
         Application::GameplayBuildEnvironment environment{};
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
+        std::shared_ptr<EditorPlaySaveRetirement> saveRetirement;
         EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
     };
 
@@ -302,7 +303,13 @@ namespace Horo::Editor {
         /** @brief Drains graph ownership after explicit save/discard/recovery policy.
          * @param discardDirty Explicit leave decision. @return Success or retryable incomplete ownership result. */
         [[nodiscard]] Result<void> ShutdownPCGDocuments(bool discardDirty = false);
+
         /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
+        /** @brief Returns only revocable owner-lane UI binding; the modal never retains this controller. */
+        [[nodiscard]] std::weak_ptr<EditorPlayRuntimeBinding> PlaySaveBinding() noexcept {
+            return m_playSession.SaveBinding();
+        }
+
         [[nodiscard]] Result<void> ShutdownGameplayModules();
 
         /** @brief Queues actual bake/validation from the canonical world owner, never a filtered browser subset.
@@ -708,6 +715,7 @@ namespace Horo::Editor {
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> m_gameplayRetirements{std::make_shared<Gameplay::GameModuleRetirementQueue>()};
         std::unique_ptr<ProjectGameplayRegistry> m_gameplayRegistry;
         std::unique_ptr<ProjectGameplayRegistry> m_pendingGameplayRegistry;
+        std::shared_ptr<EditorPlaySaveRetirement> m_playSaveRetirement;
         EditorPlaySessionController m_playSession;
         std::string m_prePlayDocumentPanelId{"horo.viewport"};
         std::vector<std::filesystem::path> m_contentBrowserBackHistory;
@@ -906,8 +914,35 @@ namespace Horo::Editor {
         void InspectInitialSceneRecovery(const std::filesystem::path &absoluteProjectRoot);
         [[nodiscard]] bool CommitSceneSave(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
                                            const std::optional<std::filesystem::path> &newActivePath = std::nullopt);
+        /** @brief Closed owner intents; every deferred replacement retains its original authoring consent. */
+        enum class PlaySceneReplacementKind {
+            External,
+            Recovery
+        };
+
+        /** @brief Captures authoring identity without retaining a controller callback or a mutable document borrow. */
+        struct PlaySceneReplacementIntent final {
+            PlaySceneReplacementKind kind;
+            DocumentRevision revision;
+            std::uint64_t replacementEpoch{};
+            std::optional<std::filesystem::path> scenePath;
+        };
+
+        std::optional<PlaySceneReplacementIntent> m_playSceneReplacement;
+        /** @brief Stops and drains actual Play ownership before a replacement can enter existing publication. */
+        [[nodiscard]] bool DeferPlaySceneReplacement(PlaySceneReplacementKind kind);
+        /** @brief Drops stale authoring consent and executes a still-current intent only after real Play settlement. */
+        void ResumePlaySceneReplacement();
+        /** @brief Compares exact revision/load epoch/path; edits while waiting require new explicit consent. */
+        [[nodiscard]] bool PlaySceneReplacementMatches() const noexcept;
+        /** @brief Releases a superseded registry only after the old Play runtime no longer borrows it. */
+        void FinishStoppedGameplayRegistry();
         /** @brief Replaces the active session from the validated external canonical scene. */
         void ReloadExternalScene();
+        /** @brief Reads and validates detached external values before any canonical document mutation. */
+        [[nodiscard]] Result<LoadedProjectScene> ReadExternalSceneForReplacement() const;
+        /** @brief Commits already validated values through existing collision/document owners. */
+        [[nodiscard]] bool InstallExternalScene(LoadedProjectScene scene);
         /** @brief Restores validated recovery content into a new dirty document session. */
         void RestoreSceneRecovery();
         /** @brief Explicitly discards recovery state and suppresses leave-checkpoint autosave. */
@@ -917,6 +952,8 @@ namespace Horo::Editor {
         void QueueRuntimeScene(SceneDocumentSnapshot snapshot);
         void StartPlaySession();
         void BeginPlaySession();
+        /** @brief Captures the complete current native save inventory cold; errors disable save without silently dropping owners. */
+        void BindPlaySaveSources();
         void StartGameplayBuild(bool playWhenReady);
         void UpdateGameplayBuild(float elapsedSeconds);
         [[nodiscard]] Application::GameplayBuildRequest MakeGameplayBuildRequest() const;
@@ -987,6 +1024,11 @@ namespace Horo::Editor {
         void RefreshAvailableBehaviorProjection();
         void ApplyPendingGameplayRegistry();
         void ApplyNativeGameplayReload();
+        /** @brief Defers actual module replacement while the old Play save owner still pins accepted worker/delegate sources. */
+        [[nodiscard]] bool CanApplyNativeGameplayReload();
+        /** @brief Reacquires only still-admitted old-generation save sources after a failure before runtime quiescence.
+         * @return True when the original runner remains active; this does not claim Save readiness if actual rebind fails. */
+        [[nodiscard]] bool RebindSaveAfterUnchangedNativeFailure();
         [[nodiscard]] Result<NativeGameplayReloadTransaction> BeginNativeGameplayReload(const std::filesystem::path &projectRoot) const;
         [[nodiscard]] Result<void> RetireNativeGameplayGeneration(NativeGameplayReloadTransaction &transaction);
         [[nodiscard]] Result<std::unique_ptr<ProjectGameplayRegistry>> TryActivateNativeGameplayGeneration(

@@ -32,6 +32,7 @@
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
 #include "EditorSurfaceLifecycleQualification.h"
 #endif
+#include "EditorPlaySaveRetirement.h"
 #include "EditorUserStateMigration.h"
 #include "EditorWindowChrome.h"
 #include "EditorWorkerShutdown.h"
@@ -1539,9 +1540,11 @@ namespace Horo::Editor {
                 *rendererRestart_ = screenHost_->RendererRestartRequest();
                 p_->inputRouter.CancelCapture(Input::CaptureCancellationReason::OwnerDestroyed);
                 p_->modalHost.ForceDetachAllForShutdown();
+                auto *playRetirement = screenHost_->Services().TryGet<EditorPlaySaveRetirement>();
                 screenHost_->Shutdown();
                 p_->operationServices.shaderBuild.Shutdown();
                 p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
+                ClosePlaySaveRetirementAfterJobs(playRetirement);
                 (void)screenHost_->GameplayRetirements()->Close();
                 try {
                     if (authorities_.packages->Close().HasError())
@@ -2536,6 +2539,8 @@ namespace Horo::Editor {
             auto runtimeScene = std::move(preview.scenes);
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playPolicy = scenePolicy;
+            Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
+                                                                 wallClock);
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             playPolicy.xrHost = xrComposition.xrPlay.get();
 #endif
@@ -2586,9 +2591,10 @@ namespace Horo::Editor {
             PfdNativeDialogs nativeDialogs;
             Application::NetworkDebuggerService networkDebugger;
 
+            auto playSaveRetirement = std::make_shared<EditorPlaySaveRetirement>();
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
-            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages,
-                                                            p.operationServices.shaderReload};
+            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild,  nullptr,
+                                                            packages,          p.operationServices.shaderReload, playSaveRetirement};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             auto uiInspectorResourcesFactory =
                 MakeEditorUiInspectorResourcesFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles);
@@ -2657,8 +2663,9 @@ namespace Horo::Editor {
                                                     .terrainCook = terrainCookFactory,
                                                     .terrainAssets = terrainAssetsFactory}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
-            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages,
-                                                   p.operationServices.shaderReload};
+            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild,  &screenHost,
+                                                   packages,          p.operationServices.shaderReload, playSaveRetirement};
+            screenHost.Services().Register<EditorPlaySaveRetirement>(*playSaveRetirement);
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             if (xrComposition.xrPlay)
                 screenHost.Services().Register<IEditorPlayXrHost>(*xrComposition.xrPlay);

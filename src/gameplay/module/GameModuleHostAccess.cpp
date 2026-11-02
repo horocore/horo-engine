@@ -6,6 +6,7 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
+#include <new>
 #include <utility>
 
 namespace Horo::Gameplay {
@@ -103,18 +104,68 @@ namespace Horo::Gameplay {
         return *impl_->registries.events;
     }
 
+    /** @copydoc LoadedGameModule::PersistenceDeclarations */
+    Result<std::vector<GameplayPersistenceDeclaration>> LoadedGameModule::PersistenceDeclarations() const {
+        using Outcome = Result<std::vector<GameplayPersistenceDeclaration>>;
+        if (std::this_thread::get_id() != impl_->ownerThread)
+            return Outcome::Failure(MakeError(Runtime::SaveErrors::ThreadAffinityViolation));
+        if (!impl_->runtimeLeaseAdmission.load(std::memory_order_acquire) || !impl_->registries.persistence)
+            return Outcome::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
+        try {
+            std::vector<GameplayPersistenceDeclaration> declarations;
+            declarations.reserve(impl_->registries.persistence->registrations_.size());
+            for (const auto &registration : impl_->registries.persistence->registrations_)
+                declarations.push_back({registration.descriptor, registration.ownerIdentity});
+            return Outcome::Success(std::move(declarations));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(Runtime::SaveErrors::ParticipantRegistryAllocationFailed));
+        }
+    }
+
+    std::shared_ptr<Detail::GameplayPersistenceSourceSlot> LoadedGameModule::Impl::PersistenceSourceSlot(std::size_t index) const {
+        const auto &registrations = registries.persistence->registrations_;
+        if (persistenceSourceSlots.empty())
+            persistenceSourceSlots.resize(registrations.size());
+        if (!persistenceSourceSlots[index])
+            persistenceSourceSlots[index] =
+                std::make_shared<Detail::GameplayPersistenceSourceSlot>(registrations[index].source, runtimeLeaseAdmission);
+        return persistenceSourceSlots[index];
+    }
+
     /** @copydoc LoadedGameModule::AcquirePersistence */
     Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>> LoadedGameModule::AcquirePersistence(
         const Runtime::SaveParticipantId &participant) const {
+        if (std::this_thread::get_id() != impl_->ownerThread)
+            return Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>>::Failure(
+                MakeError(Runtime::SaveErrors::ThreadAffinityViolation));
         if (!impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
             return Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>>::Failure(
                 MakeError(GameplayErrors::GameplayReloadRestartRequired));
         for (const auto &registration : impl_->registries.persistence->registrations_) {
-            if (registration.descriptor.participant.participant == participant)
-                return Runtime::GameplayPersistenceAdapter::Create(registration.descriptor, registration.source, impl_);
+            if (registration.descriptor.participant.participant == participant) {
+                const auto index = static_cast<std::size_t>(&registration - impl_->registries.persistence->registrations_.data());
+                std::shared_ptr<IPersistenceSource> source = registration.source;
+                if (registration.descriptor.owner == Runtime::GameplayPersistenceOwner::BehaviorInstance)
+                    source = impl_->PersistenceSourceSlot(index);
+                auto adapter = Runtime::GameplayPersistenceAdapter::Create(registration.descriptor, std::move(source), impl_);
+                if (adapter.HasError())
+                    return adapter;
+                AttachPersistenceBinder(impl_, participant, *adapter.Value());
+                return adapter;
+            }
         }
         return Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>>::Failure(
             MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
+    }
+
+    void LoadedGameModule::AttachPersistenceBinder(const std::shared_ptr<Impl> &owner, const Runtime::SaveParticipantId &participant,
+                                                   Runtime::GameplayPersistenceAdapter &adapter) {
+        adapter.candidateBinder_ = [weak = std::weak_ptr<Impl>{owner}, participant](BehaviorPersistenceTarget target) {
+            auto pinned = weak.lock();
+            if (!pinned)
+                return Result<Runtime::GameplayPersistenceInstallation>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
+            return BindPersistenceCandidate(std::move(pinned), participant, std::move(target));
+        };
     }
 
     /** @copydoc LoadedGameModule::AcquireInstalledPersistence */
@@ -131,6 +182,87 @@ namespace Horo::Gameplay {
         if (!receipt.CanUse())
             return Result<Runtime::GameplayPersistenceInstallation>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
         return Result<Runtime::GameplayPersistenceInstallation>::Success(std::move(receipt));
+    }
+
+    Result<Runtime::GameplayPersistenceInstallation> LoadedGameModule::AcquireInstalledPersistence(
+        const Runtime::SaveParticipantId &participant, BehaviorPersistenceTarget target) const {
+        return BindPersistenceCandidate(impl_, participant, std::move(target));
+    }
+
+    Result<Runtime::GameplayPersistenceInstallation> LoadedGameModule::BindPersistenceCandidate(
+        std::shared_ptr<Impl> impl_, const Runtime::SaveParticipantId &participant, BehaviorPersistenceTarget target) {
+        using Outcome = Result<Runtime::GameplayPersistenceInstallation>;
+        if (std::this_thread::get_id() != impl_->ownerThread)
+            return Outcome::Failure(MakeError(Runtime::SaveErrors::ThreadAffinityViolation));
+        if (!impl_->runtimeLeaseAdmission.load(std::memory_order_acquire) || !target.CanUse() ||
+            target.generation_.lock().get() != impl_.get())
+            return Outcome::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
+        const auto &registrations = impl_->registries.persistence->registrations_;
+        const auto found = std::ranges::find_if(registrations, [&](const auto &entry) {
+            return entry.descriptor.participant.participant == participant;
+        });
+        if (found == registrations.end())
+            return Outcome::Failure(MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
+        const auto *type = std::get_if<BehaviorTypeId>(&found->ownerIdentity);
+        if (!type || *type != target.Type() || found->descriptor.owner != Runtime::GameplayPersistenceOwner::BehaviorInstance)
+            return Outcome::Failure(MakeError(Runtime::SaveErrors::RestoreParticipantInvalid));
+        const auto index = static_cast<std::size_t>(found - registrations.begin());
+        std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};
+        target.admission_ = admission;
+        target.moduleBound_ = true;
+        target.cancellation_ = impl_->runtimeContext.cancellation;
+        return BuildPersistenceInstallation(std::move(impl_), index, std::move(target));
+    }
+
+    namespace {
+        Result<std::shared_ptr<IPersistenceSource>> InvokeCandidateBinder(IBehaviorCandidatePersistenceSource &binder,
+                                                                          BehaviorPersistenceTarget target) {
+            auto allocation = Result<std::shared_ptr<IPersistenceSource>>::Failure(MakeError(Runtime::SaveErrors::RestoreAllocationFailed));
+            auto callback = Result<std::shared_ptr<IPersistenceSource>>::Failure(MakeError(Runtime::SaveErrors::LifecycleCallbackFailed));
+            try {
+                return binder.BindRestoreCandidate(std::move(target));
+            } catch (const std::bad_alloc &) {
+                return allocation;
+            } catch (...) {
+                return callback;
+            }
+        }
+    }  // namespace
+
+    Result<Runtime::GameplayPersistenceInstallation> LoadedGameModule::BuildPersistenceInstallation(std::shared_ptr<Impl> impl_,
+                                                                                                    std::size_t index,
+                                                                                                    BehaviorPersistenceTarget target) {
+        using Outcome = Result<Runtime::GameplayPersistenceInstallation>;
+        const auto &registration = impl_->registries.persistence->registrations_[index];
+        const auto slot = impl_->PersistenceSourceSlot(index);
+        auto *binder = dynamic_cast<IBehaviorCandidatePersistenceSource *>(slot->Factory().get());
+        if (!binder)
+            return Outcome::Failure(MakeError(Runtime::SaveErrors::RestoreAdapterContractInvalid));
+        std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};
+        const auto cancellation = impl_->runtimeContext.cancellation;
+        std::shared_ptr<IPersistenceSource> source;
+        if (!slot->SameBinding(target)) {
+            auto bound = InvokeCandidateBinder(*binder, target);
+            if (bound.HasError())
+                return Outcome::Failure(bound.ErrorValue());
+            source = std::move(bound).Value();
+            if (!source)
+                return Outcome::Failure(MakeError(Runtime::SaveErrors::RestoreAdapterContractInvalid));
+        }
+        const bool inactive = target.InactiveRestore();
+        auto publication = inactive ? std::make_shared<Detail::PreparedGameplaySourceBinding>(slot, source, target) : nullptr;
+        auto adapter = inactive ? Runtime::GameplayPersistenceAdapter::CreateBound(registration.descriptor, std::move(source), impl_,
+                                                                                   std::move(target), std::move(publication))
+                                : Runtime::GameplayPersistenceAdapter::Create(registration.descriptor, slot, impl_);
+        if (adapter.HasError())
+            return Outcome::Failure(adapter.ErrorValue());
+        if (!inactive && source)
+            slot->BindOrdinary(std::move(source), target);
+        auto owned = std::move(adapter).Value();
+        AttachPersistenceBinder(impl_, registration.descriptor.participant.participant, *owned);
+        std::shared_ptr<const Runtime::GameplayPersistenceDescriptor> descriptor{owned, &owned->Descriptor()};
+        Runtime::GameplayPersistenceInstallation installation{std::move(descriptor), std::move(owned), std::move(admission), cancellation};
+        return Outcome::Success(std::move(installation));
     }
 
     /** @copydoc LoadedGameModule::ActiveServices */

@@ -78,6 +78,13 @@ namespace {
         REQUIRE((!reimport->enabledByDefault));
     }
 
+    TEST_CASE("Play Save Load Manager has a real workspace action", "[unit][editor][play][save]") {
+        const auto *manager = FindAction(GetEditorMenuModel().menus[5], EditorMenuAction::OpenSaveLoadManager);
+        REQUIRE(manager);
+        CHECK(manager->labelKey == "web_workspace.menu.save_load_manager");
+        CHECK(manager->enabledByDefault);
+    }
+
     TEST_CASE("Build menu opens native workflows and keeps unsupported execution commands disabled", "[unit][editor][build_release]") {
         const EditorMenuItem &build = GetEditorMenuModel().menus[6];
         REQUIRE((build.children.size() == 4));

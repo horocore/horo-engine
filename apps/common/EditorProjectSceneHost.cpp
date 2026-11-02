@@ -15,15 +15,15 @@
 
 namespace Horo::Application::Internal {
     namespace {
-        const ErrorCodeDescriptor
-            InvalidProjectScene{ErrorDomainId{"application.scene"},
-                                ErrorCode{"application.scene.project.invalid"},
-                                ErrorSeverity::Error,
-                                "The selected project cannot prepare this Scene",
-                                "Provide complete project identity/collision settings and select committed cooked assets when required.",
-                                false,
-                                false,
-                                {}};
+        const ErrorCodeDescriptor InvalidProjectScene{ErrorDomainId{"application.scene"},
+                                                      ErrorCode{"application.scene.project.invalid"},
+                                                      ErrorSeverity::Error,
+                                                      "The selected project cannot prepare this Scene",
+                                                      "Provide complete project identity/collision settings and select committed "
+                                                      "cooked assets when required.",
+                                                      false,
+                                                      false,
+                                                      {}};
 
         /** @brief Application-owned inert adapter over the one canonical typed component projection. */
         class EditorPrefabProjector final : public Prefab::PrefabComponentProjector {
@@ -60,8 +60,23 @@ namespace Horo::Application::Internal {
                         return Result<void>::Failure(captured.ErrorValue());
                     prefabLimits = captured.Value().settings->Limits();
                 }
+                if (const auto saved = CaptureSaveConfiguration(root, policy, definition); saved.HasError())
+                    return saved;
                 if (auto captured = CaptureAssets(root, jobs, policy, definition); captured.HasError())
                     return captured;
+                if (const auto prepared = PrepareNativeOwners(root, policy); prepared.HasError())
+                    return prepared;
+                if (policy.prefabGranted) {
+                    prefab_.templates =
+                        std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(*prefabLimits),
+                                                                         Prefab::PrefabTemplateProviderLimits{}, policy.prefabMetrics);
+                    return prefab_.templates->Startup({});
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Creates the real native peer/settings before constructing any Scene activation owners. */
+            Result<void> PrepareNativeOwners(const std::filesystem::path &root, const EditorProjectScenePolicy &policy) {
                 auto runtime = Physics::PhysicsRuntime::Create(policy.physicsMode);
                 if (runtime.HasError())
                     return Result<void>::Failure(runtime.ErrorValue());
@@ -69,8 +84,13 @@ namespace Horo::Application::Internal {
                 auto settings = CaptureSettings(root, policy.physicsMode);
                 if (settings.HasError())
                     return Result<void>::Failure(settings.ErrorValue());
+                return PrepareSceneOwners(std::move(settings).Value(), policy);
+            }
+
+            /** @brief Registers actual native, structural and presentation owners before the sole Scene service starts. */
+            Result<void> PrepareSceneOwners(Physics::PhysicsSceneActivationSettings settings, const EditorProjectScenePolicy &policy) {
                 scenes_ = std::make_unique<Runtime::RuntimeSceneService>(registry_, *loads_, Runtime::RuntimeSceneAssetLimits{}, identity_);
-                auto participant = native_.MakeParticipant(*physics_, authority_, std::move(settings).Value());
+                auto participant = native_.MakeParticipant(*physics_, authority_, std::move(settings));
                 if (participant.HasError())
                     return Result<void>::Failure(participant.ErrorValue());
                 if (auto added = scenes_->AddActivationParticipant(std::move(participant).Value()); added.HasError())
@@ -82,13 +102,53 @@ namespace Horo::Application::Internal {
                     return added;
                 if (auto added = RegisterPresentationParticipants(policy); added.HasError())
                     return added;
-                if (policy.prefabGranted) {
-                    prefab_.templates =
-                        std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(*prefabLimits),
-                                                                         Prefab::PrefabTemplateProviderLimits{}, policy.prefabMetrics);
-                    return prefab_.templates->Startup({});
-                }
                 return Result<void>::Success();
+            }
+
+            /** @brief Captures only actual project identity/baseline cold; workers and UI receive no project path authority. */
+            Result<void> CaptureSaveConfiguration(const std::filesystem::path &root, const EditorProjectScenePolicy &policy,
+                                                  const Runtime::RuntimeSceneDefinition *definition) {
+                saveError_ = policy.saveError;
+                if (!definition || !policy.saveFactory)
+                    return Result<void>::Success();
+                const auto metadata = LoadProjectMetadata(root);
+                if (metadata.HasError())
+                    return Result<void>::Failure(metadata.ErrorValue());
+                const auto project = Runtime::SaveProjectId::Parse(metadata.Value().projectId);
+                if (project.HasError())
+                    return Result<void>::Failure(project.ErrorValue());
+                saveProject_ = project.Value();
+                saveBaseline_ = *definition;
+                saveFactory_ = policy.saveFactory;
+                return Result<void>::Success();
+            }
+
+            /** @copydoc Editor::EditorPlaySceneHost::ConfigureSaveSession */
+            Result<void> ConfigureSaveSession(std::vector<Editor::PlaySaveGameplayBinding> bindings,
+                                              std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner) override {
+                if (saveError_)
+                    return Result<void>::Failure(*saveError_);
+                if (save_)
+                    return save_->RebindGameplay(std::move(bindings));
+                if (!saveFactory_ || !saveBaseline_)
+                    return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
+                auto composed = saveFactory_(saveProject_, *scenes_, *saveBaseline_, std::move(bindings), std::move(behaviorOwner));
+                if (composed.HasError())
+                    return Result<void>::Failure(composed.ErrorValue());
+                save_ = std::move(composed).Value();
+                return Result<void>::Success();
+            }
+
+            /** @copydoc Editor::EditorPlaySceneHost::RetireSaveSession */
+            bool RetireSaveSession() noexcept override {
+                if (!save_)
+                    return true;
+                return save_->SuspendForModuleReload();
+            }
+
+            /** @copydoc Editor::EditorPlaySceneHost::SaveSession */
+            Editor::EditorPlaySaveSession *SaveSession() noexcept override {
+                return save_.get();
             }
 
             /** @brief Registers the same canonical AI, selected XR and final UI participants in publication order. */
@@ -108,7 +168,8 @@ namespace Horo::Application::Internal {
                     if (auto added = scenes_->AddActivationParticipant(policy.xrHost->MakeSceneParticipant()); added.HasError())
                         return added;
                 }
-                // Last participant: sealing the UI generation must be followed only by the Scene publication claim.
+                // Last participant: sealing the UI generation must be followed only by the
+                // Scene publication claim.
                 if (policy.uiSources) {
                     auto ui = policy.uiSources->MakeParticipant(*scenes_, registry_, *uiLoads_,
                                                                 policy.cooked ? std::optional{policy.cooked->target} : std::nullopt);
@@ -171,10 +232,43 @@ namespace Horo::Application::Internal {
                         return prepared;
                 if (auto committed = scenes_->OnPhase(phase, frame); committed.HasError())
                     return committed;
-                return prefab_.spawns ? prefab_.spawns->Advance(tick_) : Result<void>::Success();
+                if (prefab_.spawns)
+                    if (const auto advanced = prefab_.spawns->Advance(tick_); advanced.HasError())
+                        return advanced;
+                return FinishSavePhase(frame);
+            }
+
+            /** @brief Closes real synchronous writes before invoking the actual shared runtime capture/restore boundary. */
+            Result<void> FinishSavePhase(const Runtime::FrameContext &frame) {
+                if (!save_)
+                    return Result<void>::Success();
+                if (saveMutation_ && !save_->IsRetiring()) {
+                    if (const auto ended = save_->EndMutation(); ended.HasError())
+                        return ended;
+                    saveMutation_ = false;
+                }
+                return save_->CommitAtSafePoint(frame);
+            }
+
+            /** @copydoc Editor::EditorPlaySceneHost::BeginPresentationUpdate */
+            Result<void> BeginPresentationUpdate() override {
+                if (!save_)
+                    return Result<void>::Success();
+                if (!save_->HasRuntimeBinding())
+                    return Result<void>::Success();
+                const auto begun = save_->BeginMutation();
+                saveMutation_ = begun.HasValue();
+                return begun;
             }
 
             Result<void> BeginFixedUpdate(const Gameplay::FixedDeltaTime delta) override {
+                if (const auto begun = BeginPresentationUpdate(); begun.HasError())
+                    return begun;
+                return AdvancePrefabTick(delta);
+            }
+
+            /** @brief Advances only the actually admitted prefab tick; ordinary Play without that grant remains unchanged. */
+            Result<void> AdvancePrefabTick(const Gameplay::FixedDeltaTime delta) {
                 if (!prefab_.spawns)
                     return Result<void>::Success();
                 if (tick_ == std::numeric_limits<std::uint64_t>::max() || !std::isfinite(delta.seconds) || delta.seconds <= 0 ||
@@ -206,16 +300,18 @@ namespace Horo::Application::Internal {
             }
 
             Result<void> FixedUpdate(const Gameplay::FixedDeltaTime delta) override {
-                // The existing Editor screen contract supplies seconds. Convert that one host
-                // quantum once to the nearest representable nanosecond, never from frame time.
+                // The existing Editor screen contract supplies seconds. Convert that one
+                // host quantum once to the nearest representable nanosecond, never from
+                // frame time.
                 if (!std::isfinite(delta.seconds) || delta.seconds <= 0 ||
                     delta.seconds >= static_cast<double>(std::numeric_limits<std::int64_t>::max()) / 1'000'000'000.0)
-                    return Result<void>::Failure(
-                        MakeError(InvalidProjectScene, "Play requires a finite positive fixed quantum representable in nanoseconds."));
+                    return Result<void>::Failure(MakeError(InvalidProjectScene, "Play requires a finite positive fixed quantum "
+                                                                                "representable in nanoseconds."));
                 return native_.AdvanceFixedTick(Duration::FromNanoseconds(std::llround(delta.seconds * 1'000'000'000.0)));
             }
 
             void Shutdown() noexcept override {
+                ShutdownSave();
                 QuiesceGameplay();
                 if (prefab_.templates)
                     prefab_.templates->Shutdown();
@@ -236,6 +332,16 @@ namespace Horo::Application::Internal {
             }
 
         private:
+            /** @brief Refuses to unload Scene/module providers while an accepted save/delegate still owns callbacks. */
+            void ShutdownSave() noexcept {
+                if (!save_)
+                    return;
+                save_->BeginRetirement();
+                if (!save_->IsSettled())
+                    std::terminate();
+                save_.reset();
+            }
+
             Editor::IEditorPlayXrHost *selectedXrHost_{};
 
             /** @brief Captures immutable registry/cook payloads before constructing any Scene/native owner. */
@@ -251,9 +357,8 @@ namespace Horo::Application::Internal {
                                                                                 : report.diagnostics.front().error);
                 }
                 if ((policy.prefabGranted || (definition && !definition->AssetDependencies().empty())) && !policy.cooked)
-                    return Result<void>::Failure(
-                        MakeError(InvalidProjectScene,
-                                  "This Play Scene requires committed assets: supply --cooked-root and --cook-target."));
+                    return Result<void>::Failure(MakeError(InvalidProjectScene, "This Play Scene requires committed assets: "
+                                                                                "supply --cooked-root and --cook-target."));
                 if (policy.cooked) {
                     const NativeDurableFileSystem cookFiles;
                     auto captured = CommittedSceneAssets::Capture(cookFiles, *policy.cooked, registry_.Snapshot());
@@ -333,6 +438,12 @@ namespace Horo::Application::Internal {
             };
 
             PrefabState prefab_;
+            std::optional<Error> saveError_;
+            EditorPlaySaveFactory saveFactory_;
+            Runtime::SaveProjectId saveProject_;
+            std::optional<Runtime::RuntimeSceneDefinition> saveBaseline_;
+            std::unique_ptr<EditorPlaySaveHost> save_;
+            bool saveMutation_{};
             std::uint64_t tick_{};
             Runtime::SceneRuntimeId identity_;
         };
@@ -384,5 +495,16 @@ namespace Horo::Application::Internal {
     /** @copydoc MakeEditorProjectPrefabStageFactory */
     Editor::EditorProjectPrefabStageFactory MakeEditorProjectPrefabStageFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
         return {ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPrefabStage, Editor::EditorLastPrefabStage})};
+    }
+
+    /** @copydoc ConfigureEditorPlaySavePolicy */
+    void ConfigureEditorPlaySavePolicy(EditorProjectScenePolicy &policy, JobSystem &jobs, OperationStore &operations, Clock &clock,
+                                       WallClock &wallClock) {
+        auto factory = MakeNativeEditorPlaySaveFactory(jobs, operations, clock, wallClock);
+        if (factory.HasError()) {
+            policy.saveError = factory.ErrorValue();
+            return;
+        }
+        policy.saveFactory = std::move(factory).Value();
     }
 }  // namespace Horo::Application::Internal

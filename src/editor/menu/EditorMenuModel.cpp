@@ -182,7 +182,7 @@ namespace Horo::Editor {
                                     Command("web_workspace.menu.primitives_panel"),
                                     Command("web_workspace.menu.decal_placement"),
                                     Command("web_workspace.menu.destruction_setup"),
-                                    Command("web_workspace.menu.save_load_manager"),
+                                    Command("web_workspace.menu.save_load_manager", EditorMenuAction::OpenSaveLoadManager, true),
                                     Command("web_workspace.menu.post_processing_stack"),
                                     Command("web_workspace.menu.xr_setup"),
                                 }),

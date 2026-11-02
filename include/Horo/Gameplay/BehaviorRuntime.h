@@ -13,12 +13,16 @@
 #include <vector>
 
 namespace Horo::Gameplay {
+    enum class BehaviorRestoreServices : std::uint32_t;
+
     /** @brief Runtime-only state captured for one stable behavior attachment. */
     struct BehaviorInstanceReloadState {
         BehaviorInstanceId instanceId;
         BehaviorTypeId typeId;
         std::vector<std::byte> payload;
         bool started{};
+        Runtime::EntityRef
+            entity; /**< Exact same-Scene in-memory attachment owner; never persisted or passed through native SDK exports. */
     };
 
     /** @brief Complete bounded behavior snapshot used by one native reload transaction. */
@@ -125,6 +129,18 @@ namespace Horo::Gameplay {
 
     private:
         struct Impl;
+        friend class BehaviorRuntimeRestoreAccess;
+        [[nodiscard]] static bool RestoreBindingAdmitted(const Impl &) noexcept;
+        [[nodiscard]] static Result<std::shared_ptr<void>> AcquireRestoreGeneration(const BehaviorRegistry &);
+        [[nodiscard]] static Result<void> BindRestorePhysics(Impl &, BehaviorRuntimeServiceBindings &);
+        [[nodiscard]] static Result<void> BindRestoreNavigationUi(Impl &, BehaviorRuntimeServiceBindings &);
+        [[nodiscard]] static Result<void> BindRestoreServices(Impl &, BehaviorRuntimeServiceBindings,
+                                                              std::shared_ptr<const GameplayPrefabContext>);
+        [[nodiscard]] static Result<void> CheckRestorePhysicsServices(const Impl &, std::uint32_t);
+        [[nodiscard]] static Result<void> CheckRestoreServices(const Impl &, BehaviorRestoreServices);
+        [[nodiscard]] Result<void> RestoreReloadInstance(std::size_t, const BehaviorInstanceReloadState &) const;
+        [[nodiscard]] Result<void> RunFixedInstance(std::size_t, std::span<const GameplayInputAction>, FixedDeltaTime,
+                                                    Runtime::SceneCommandBuffer &) const;
         /** @brief Activates instances and rolls back failed factory/lifecycle construction.
          * @param impl Complete host-routed state with admitted scopes.
          * @return Active runner or original typed activation/rollback failure.

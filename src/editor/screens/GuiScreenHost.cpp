@@ -33,6 +33,7 @@
 #include "Horo/Runtime/Input.h"
 #include "LeaveConfirmationView.h"
 #include "NavigationErrors.h"
+#include "editor/gameplay/EditorPlaySaveRetirement.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/build_release/BuildActivity.h"
 #include "editor/modals/build_release/BuildModal.h"
@@ -378,6 +379,23 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Defers module admission shutdown while the explicit Play queue still owns accepted callbacks. */
+        void CloseUnborrowedGameplayModules(const EditorServiceRegistry &services, Gameplay::GameModuleRetirementQueue &modules) {
+            const auto *retirement = services.TryGet<EditorPlaySaveRetirement>();
+            if (!retirement || !retirement->HasPending())
+                (void)modules.Close();
+        }
+
+        /** @brief Pumps real deferred Play settlement once without waiting or borrowing an old screen/controller. */
+        void PollPlaySaveRetirement(const EditorServiceRegistry &services) {
+            if (auto *retirement = services.TryGet<EditorPlaySaveRetirement>()) {
+                if (const auto result = retirement->Poll(); result.HasError())
+                    LOG_ERROR("editor.play.save", "Deferred Play retirement: %s", result.ErrorValue().message.c_str());
+            }
+        }
+    }  // namespace
+
     /** @copydoc GuiScreenHost::Shutdown */
     void GuiScreenHost::Shutdown() noexcept {
         if (shutdown_) {
@@ -403,7 +421,7 @@ namespace Horo::Editor {
         extensionThemeIds_.clear();
         if (settingsService_)
             settingsService_->SetContributedInputActions({});
-        (void)gameplayRetirements_->Close();
+        CloseUnborrowedGameplayModules(services_, *gameplayRetirements_);
         services_.Clear();
     }
 
@@ -649,6 +667,7 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::OnUpdate(float dt) {
+        PollPlaySaveRetirement(services_);
         if (!shutdown_ && localization_ && std::isfinite(dt) && dt > 0) {
             buildStatusElapsed_ += dt;
             if (buildStatusElapsed_ >= 0.25F) {
@@ -804,33 +823,95 @@ namespace Horo::Editor {
             static_cast<void>(modalHost_->OpenRoot(CreateSettingsModal()));
     }
 
+    namespace {
+        /** @brief Routes workspace-owned actions to the current screen without giving a modal storage or project authority. */
+        bool IsWorkspaceMenuAction(EditorMenuAction action) noexcept {
+            using enum EditorMenuAction;
+            switch (action) {
+                case SaveScene:
+                case SaveSceneAs:
+                case SaveSceneCopyAs:
+                case Undo:
+                case Redo:
+                case CreatePrimitive:
+                case ManagePackages:
+                case OpenSaveLoadManager:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }  // namespace
+
+    namespace {
+        /** @brief Creates the real project mutation committer only when both existing authorities are present. */
+        std::shared_ptr<Assets::IAssetImportCommitter> ImportCommitter(const EditorServiceRegistry &services) {
+            auto *mutations = services.TryGet<ProjectMutationCoordinator>();
+            auto *files = services.TryGet<DurableFileSystem>();
+            if (!mutations || !files)
+                return {};
+            return std::make_shared<Application::ProjectAssetImportCommitter>(*mutations, *files, services.TryGet<Assets::AssetRegistry>());
+        }
+
+        /** @brief Inert borrowed import composition; no committer is allocated until actual modal admission. */
+        struct ImportWorkflowServices final {
+            const EditorServiceRegistry &registry;
+            AssetImportModalServices modal;
+        };
+
+        /** @brief Opens the existing import workflow with its exact captured provider/source bindings. */
+        void OpenImportWorkflow(EditorModalHost *host, const Theme::Fonts &fonts, JobSystem &jobs,
+                                std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog, ImportWorkflowServices services,
+                                const std::filesystem::path &project, const std::optional<std::filesystem::path> &destination) {
+            if (!host || host->HasOpenModal())
+                return;
+            services.modal.committer = ImportCommitter(services.registry);
+            auto modal = std::make_unique<AssetImportModal>(fonts, jobs, std::move(catalog), std::move(services.modal));
+            modal->SetProjectRoot(project);
+            if (destination)
+                modal->SetDefaultDestination(*destination);
+            static_cast<void>(host->OpenRoot(std::move(modal)));
+        }
+
+        /** @brief Routes the existing build/release action family without changing native job or modal ownership. */
+        bool OpenBuildWorkflow(const EditorMenuInvocation &invocation, EditorModalHost *host, const EditorGuiContext &context,
+                               const EditorServiceRegistry &services, const GuiRoute &route, const std::filesystem::path &project,
+                               std::optional<std::uint64_t> &retainedBuild) {
+            using enum EditorMenuAction;
+            if (invocation.action != OpenBuild && invocation.action != OpenRelease)
+                return false;
+            if (!host || host->HasOpenModal())
+                return true;
+            const auto *environment = services.TryGetConst<Application::GameplayBuildEnvironment>();
+            Application::GameplayBuildRequest request{.projectRoot =
+                                                          route.kind == GuiRouteKind::EditorWorkspace ? project : std::filesystem::path{},
+                                                      .environment = environment ? *environment : Application::GameplayBuildEnvironment{}};
+            std::unique_ptr<EditorModal> modal;
+            if (invocation.action == OpenBuild)
+                modal = std::make_unique<BuildModal>(context, std::move(request), services.TryGet<Application::GameplayBuildService>(),
+                                                     retainedBuild, services.TryGetConst<IBuildOutputQuery>());
+            else
+                modal = std::make_unique<BuildReleaseModal>(context, BuildReleasePage::Release, std::move(request),
+                                                            services.TryGet<Application::GameplayBuildService>(), retainedBuild,
+                                                            services.TryGet<IBuildReleaseJobs>());
+            const auto opened = host->OpenRoot(std::move(modal));
+            if (opened.HasError())
+                LOG_WARN("editor.build", "Build/release modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
+            return true;
+        }
+    }  // namespace
+
     /** @copydoc GuiScreenHost::DispatchMenuInvocation */
     void GuiScreenHost::DispatchMenuInvocation(const EditorMenuInvocation &invocation) {
+        if (IsWorkspaceMenuAction(invocation.action)) {
+            if (activeScreen_)
+                static_cast<void>(activeScreen_->HandleMenuInvocation(invocation));
+            return;
+        }
+        if (OpenBuildWorkflow(invocation, modalHost_, context_, services_, activeRoute_, currentProjectRoot_, nativeBuildSession_))
+            return;
         using enum EditorMenuAction;
         switch (invocation.action) {
-            case OpenBuild:
-            case OpenRelease:
-                if (modalHost_ && !modalHost_->HasOpenModal()) {
-                    const auto *environment = services_.TryGetConst<Application::GameplayBuildEnvironment>();
-                    Application::GameplayBuildRequest request{.projectRoot = activeRoute_.kind == GuiRouteKind::EditorWorkspace
-                                                                                 ? currentProjectRoot_
-                                                                                 : std::filesystem::path{},
-                                                              .environment =
-                                                                  environment ? *environment : Application::GameplayBuildEnvironment{}};
-                    std::unique_ptr<EditorModal> modal;
-                    if (invocation.action == OpenBuild)
-                        modal = std::make_unique<BuildModal>(context_, std::move(request),
-                                                             services_.TryGet<Application::GameplayBuildService>(), nativeBuildSession_,
-                                                             services_.TryGetConst<IBuildOutputQuery>());
-                    else
-                        modal = std::make_unique<BuildReleaseModal>(context_, BuildReleasePage::Release, std::move(request),
-                                                                    services_.TryGet<Application::GameplayBuildService>(),
-                                                                    nativeBuildSession_, services_.TryGet<IBuildReleaseJobs>());
-                    const auto opened = modalHost_->OpenRoot(std::move(modal));
-                    if (opened.HasError())
-                        LOG_WARN("editor.build", "Build/release modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
-                }
-                return;
             case NewProject:
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::ProjectCreation, ProjectCreationRouteParameters{}}));
                 return;
@@ -838,28 +919,14 @@ namespace Horo::Editor {
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
                 return;
             case ImportAssets:
-                if (modalHost_ && !modalHost_->HasOpenModal()) {
-                    std::shared_ptr<Assets::IAssetImportCommitter> committer;
-                    if (auto *mutations = services_.TryGet<ProjectMutationCoordinator>()) {
-                        if (auto *files = services_.TryGet<DurableFileSystem>())
-                            committer =
-                                std::make_shared<Application::ProjectAssetImportCommitter>(*mutations, *files,
-                                                                                           services_.TryGet<Assets::AssetRegistry>());
-                    }
-                    auto modal =
-                        std::make_unique<AssetImportModal>(context_.theme.fonts, m_importJobs, importerCatalog_,
-                                                           AssetImportModalServices{.assetRegistry =
-                                                                                        services_.TryGet<Assets::AssetRegistry>(),
-                                                                                    .operationStore = services_.TryGet<OperationStore>(),
-                                                                                    .localization = localization_,
-                                                                                    .nativeDialogs = nativeDialogs_,
-                                                                                    .inputRouter = inputRouter_,
-                                                                                    .committer = std::move(committer)});
-                    modal->SetProjectRoot(currentProjectRoot_);
-                    if (invocation.assetDestination.has_value())
-                        modal->SetDefaultDestination(*invocation.assetDestination);
-                    static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
-                }
+                OpenImportWorkflow(modalHost_, context_.theme.fonts, m_importJobs, importerCatalog_,
+                                   {services_,
+                                    {.assetRegistry = services_.TryGet<Assets::AssetRegistry>(),
+                                     .operationStore = services_.TryGet<OperationStore>(),
+                                     .localization = localization_,
+                                     .nativeDialogs = nativeDialogs_,
+                                     .inputRouter = inputRouter_}},
+                                   currentProjectRoot_, invocation.assetDestination);
                 return;
             case OpenEditorSettings:
                 OpenEditorSettingsModal();
@@ -867,18 +934,8 @@ namespace Horo::Editor {
             case ExitApplication:
                 static_cast<void>(RequestCloseApplication());
                 return;
-            case SaveScene:
-            case SaveSceneAs:
-            case SaveSceneCopyAs:
-            case Undo:
-            case Redo:
-            case CreatePrimitive:
-            case ManagePackages:
-                if (activeScreen_) {
-                    static_cast<void>(activeScreen_->HandleMenuInvocation(invocation));
-                }
-                return;
             case None:
+            default:
                 return;
         }
     }

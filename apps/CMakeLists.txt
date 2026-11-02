@@ -176,10 +176,42 @@ target_include_directories(HoroScenePhysicsHost PUBLIC "${HORO_SCENE_PHYSICS_HOS
 target_link_libraries(HoroScenePhysicsHost PUBLIC HoroPhysicsSceneHostInternal HoroEngine::SceneCook HoroEngine::Assets
         HoroEngine::ProjectPhysicsCapture)
 
+# Non-installed Play save composition. Forward to one canonical header identity
+# so app and editor consumers cannot duplicate pragma-once declarations.
+set(HORO_EDITOR_PLAY_SAVE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_play_save_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_PLAY_SAVE_HEADERS}")
+foreach(header EditorPlaySaveHostCapture.h EditorPlaySaveHostArchive.h
+        EditorPlaySaveHostStorage.h EditorPlaySaveHostRestore.h EditorPlaySaveHost.h)
+    file(GENERATE OUTPUT "${HORO_EDITOR_PLAY_SAVE_HEADERS}/${header}"
+        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/common/${header}\"\n")
+endforeach()
+add_library(HoroEditorPlaySaveHostInternal STATIC
+    common/EditorPlaySaveHostCapture.cpp
+    common/EditorPlaySaveHostCodec.cpp
+    common/EditorPlaySaveHostArchive.cpp
+    common/EditorPlaySaveHostStorage.cpp
+    common/EditorPlaySaveHostRestore.cpp
+    common/EditorPlaySaveHostHandoff.cpp
+    common/EditorPlaySaveHost.cpp
+    common/EditorPlaySaveHostRuntime.cpp
+    common/EditorPlaySaveHostBackground.cpp
+    common/EditorPlaySaveHostBindings.cpp
+    common/EditorPlaySaveHostProjection.cpp
+    common/EditorPlaySaveHostEnvironment.cpp
+    common/EditorPlaySaveHostPlatform.cpp
+    common/EditorPlaySaveHostInternal.h)
+target_compile_features(HoroEditorPlaySaveHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorPlaySaveHostInternal PUBLIC "${HORO_EDITOR_PLAY_SAVE_HEADERS}")
+target_link_libraries(HoroEditorPlaySaveHostInternal PUBLIC
+    HoroEditorPlaySceneHostInternal HoroEngine::Runtime HoroEngine::RuntimeScene
+    HoroEngine::SceneCook HoroEngine::GameplayRuntime HoroEngine::GameplayModuleHost HoroEngine::Security)
+target_link_libraries(HoroEditorPlaySaveHostInternal PRIVATE HoroEngine::Application HoroEngine::Platform)
+
 set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_project_scene_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(common/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC common/EditorProjectSceneHost.cpp)
+target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal)
 target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")

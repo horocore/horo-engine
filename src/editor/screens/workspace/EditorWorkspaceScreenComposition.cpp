@@ -76,9 +76,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, const GuiScreenHost &host,
                                                              EditorPlaySceneFactory sceneFactory) {
             const auto *environment = services.TryGet<Application::GameplayBuildEnvironment>();
+            auto *saveRetirement = services.TryGet<EditorPlaySaveRetirement>();
             return {.builds = services.TryGet<Application::GameplayBuildService>(),
                     .environment = environment ? *environment : Application::GameplayBuildEnvironment{},
                     .retirements = host.GameplayRetirements(),
+                    .saveRetirement = saveRetirement ? saveRetirement->shared_from_this() : nullptr,
                     .sceneFactory = std::move(sceneFactory)};
         }
 

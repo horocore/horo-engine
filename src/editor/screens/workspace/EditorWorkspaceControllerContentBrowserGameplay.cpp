@@ -124,6 +124,7 @@ namespace Horo::Editor {
             return;
         }
         m_gameplayRegistry = std::move(candidate);
+        BindPlaySaveSources();
         RefreshAvailableBehaviorProjection();
     }
 
@@ -139,7 +140,10 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ApplyPendingGameplayRegistry() {
-        if (!m_pendingGameplayRegistry || m_playSession.State() == EditorPlaySessionState::Starting)
+        if (!m_pendingGameplayRegistry || m_playSession.State() == EditorPlaySessionState::Starting ||
+            m_playSession.State() == EditorPlaySessionState::Stopping)
+            return;
+        if (m_playSession.IsActive() && !m_playSession.PrepareSaveRetirement())
             return;
         if (m_pendingGameplayRegistry->HasBlockingDiagnostics()) {
             for (const ProjectGameplayDiagnostic &diagnostic : m_pendingGameplayRegistry->Diagnostics())
@@ -157,13 +161,21 @@ namespace Horo::Editor {
             return;
         }
         m_gameplayRegistry = std::move(m_pendingGameplayRegistry);
+        BindPlaySaveSources();
         RefreshAvailableBehaviorProjection();
         LOG_INFO("editor.gameplay", "Gameplay module reloaded at a fixed-tick safe point.");
     }
 
-    void EditorWorkspaceController::ApplyNativeGameplayReload() {
+    /** @copydoc EditorWorkspaceController::CanApplyNativeGameplayReload */
+    bool EditorWorkspaceController::CanApplyNativeGameplayReload() {
         if (m_nativeGameplayReloadQuarantined || !m_nativeGameplayReloadPending ||
-            m_playSession.State() == EditorPlaySessionState::Starting)
+            m_playSession.State() == EditorPlaySessionState::Starting || m_playSession.State() == EditorPlaySessionState::Stopping)
+            return false;
+        return m_playSession.PrepareSaveRetirement();
+    }
+
+    void EditorWorkspaceController::ApplyNativeGameplayReload() {
+        if (!CanApplyNativeGameplayReload())
             return;
         m_nativeGameplayReloadPending = false;
         m_pendingGameplayRegistry.reset();
@@ -173,12 +185,17 @@ namespace Horo::Editor {
         const std::filesystem::path projectRoot{m_viewModel.projectRoot};
         auto begun = BeginNativeGameplayReload(projectRoot);
         if (begun.HasError()) {
+            (void)RebindSaveAfterUnchangedNativeFailure();
             LogNativeReloadFailure("could not begin safely", begun.ErrorValue());
             return;
         }
         NativeGameplayReloadTransaction transaction = std::move(begun).Value();
         if (Result<void> retired = RetireNativeGameplayGeneration(transaction); retired.HasError()) {
             Error error = retired.ErrorValue();
+            if (RebindSaveAfterUnchangedNativeFailure()) {
+                LogNativeReloadFailure("preparation failed; the original generation remains active", error);
+                return;
+            }
             DegradeNativeGameplayReload(transaction, error);
             LogNativeReloadFailure("could not retire safely", error);
             return;
@@ -190,6 +207,20 @@ namespace Horo::Editor {
             return;
         }
         RollbackNativeGameplayReload(projectRoot, std::move(transaction), candidate.ErrorValue());
+    }
+
+    /** @copydoc EditorWorkspaceController::RebindSaveAfterUnchangedNativeFailure */
+    bool EditorWorkspaceController::RebindSaveAfterUnchangedNativeFailure() {
+        const auto state = m_playSession.State();
+        if (state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused)
+            return false;
+        if (!m_gameplayRegistry || !m_playSession.SceneView())
+            return false;
+        BindPlaySaveSources();
+        const auto binding = m_playSession.SaveBinding().lock();
+        if (binding && binding->saveError)
+            LogNativeReloadFailure("kept the live generation but could not rebind Play save sources", *binding->saveError);
+        return true;
     }
 
     Result<EditorWorkspaceController::NativeGameplayReloadTransaction> EditorWorkspaceController::BeginNativeGameplayReload(
@@ -242,6 +273,10 @@ namespace Horo::Editor {
                                                                NativeGameplayReloadTransaction &transaction) {
         m_gameplayRegistry = std::move(generation);
         transaction.phase = NativeGameplayReloadTransaction::Phase::Committed;
+        BindPlaySaveSources();
+        const auto binding = m_playSession.SaveBinding().lock();
+        if (binding && binding->saveError)
+            LogNativeReloadFailure("committed the native generation but could not rebind Play save sources", *binding->saveError);
         RefreshAvailableBehaviorProjection();
         LOG_INFO("editor.gameplay", "Native gameplay generation reloaded transactionally at a fixed-tick safe point.");
     }
@@ -259,6 +294,7 @@ namespace Horo::Editor {
             activated = m_playSession.RestoreAfterReload(rollback->Registry(), transaction.playSnapshot);
         if (activated.HasValue()) {
             m_gameplayRegistry = std::move(rollback);
+            BindPlaySaveSources();
             transaction.phase = NativeGameplayReloadTransaction::Phase::RolledBack;
             RefreshAvailableBehaviorProjection();
             LogNativeReloadFailure("rejected the candidate and restored the previous generation", candidateError);

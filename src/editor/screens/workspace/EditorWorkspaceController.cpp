@@ -124,6 +124,8 @@ namespace Horo::Editor {
         InitializeWorldBake(dependencies);
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
+        m_playSaveRetirement = dependencies.gameplay.saveRetirement;
+        m_playSession.ConfigureSaveRetirement(m_playSaveRetirement);
         m_inspectorDocumentOwner = dependencies.world.documentSessionOwner;
         m_inspectorHost = dependencies.inspectorHost;
         m_physicsDocumentOwner = dependencies.world.documentSessionOwner;

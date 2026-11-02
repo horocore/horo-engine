@@ -8,6 +8,7 @@
 #include "editor/modals/packages/PackageModal.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
 #include "editor/modals/prefab_creation/PrefabCreationModal.h"
+#include "editor/modals/save_load/SaveLoadManagerModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/modals/source_document/SourceDocumentCloseModal.h"
 #include "editor/modals/world_layer/CreateWorldLayerModal.h"
@@ -130,43 +131,75 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::HandleMenuInvocation */
     bool EditorWorkspaceScreen::HandleMenuInvocation(const EditorMenuInvocation &invocation) {
         EditorMenuAction action = invocation.action;
+        if (OpenWorkspaceManager(action))
+            return true;
+        if (sourceCommands_.HandleMenuAction(controller_.get(), action))
+            return true;
+        action = NormalizeSceneSaveAction(action);
+        if (HandlePrimitiveMenu(invocation))
+            return true;
+        if (const auto persisted = HandleScenePersistenceMenu(action); persisted.has_value())
+            return *persisted;
+        return HandleDocumentHistoryMenu(action);
+    }
+
+    /** @brief Promotes an untitled document's Save to the existing Save As route without creating any source write authority. */
+    EditorMenuAction EditorWorkspaceScreen::NormalizeSceneSaveAction(EditorMenuAction action) const {
+        if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
+            !controller_->CurrentScenePath())
+            return EditorMenuAction::SaveSceneAs;
+        return action;
+    }
+
+    /** @brief Preserves exact primitive payload and document selection through the ordinary controller command. */
+    bool EditorWorkspaceScreen::HandlePrimitiveMenu(const EditorMenuInvocation &invocation) {
+        if (!controller_ || invocation.action != EditorMenuAction::CreatePrimitive || !invocation.primitive)
+            return false;
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CreatePrimitive;
+        command.primitivePayload = invocation.primitive;
+        command.objectPayload = controller_->ViewModel().primarySelection;
+        controller_->ProcessCommand(command);
+        PublishViewportSceneIfChanged();
+        return true;
+    }
+
+    /** @brief Distinguishes an unrelated action from the real Save As dialog's accepted/cancelled result. */
+    std::optional<bool> EditorWorkspaceScreen::HandleScenePersistenceMenu(EditorMenuAction action) {
+        if (!controller_ || (action != EditorMenuAction::SaveSceneAs && action != EditorMenuAction::SaveSceneCopyAs))
+            return {};
+        return SaveSceneAs(action == EditorMenuAction::SaveSceneCopyAs);
+    }
+
+    /** @brief Routes ordinary Save/Undo/Redo through existing canonical document history. */
+    bool EditorWorkspaceScreen::HandleDocumentHistoryMenu(EditorMenuAction action) {
+        using enum EditorMenuAction;
+        if (!controller_ || (action != SaveScene && action != Undo && action != Redo))
+            return false;
+        EditorWorkspaceViewCommandData command;
+        if (action == SaveScene)
+            command.command = EditorWorkspaceViewCommand::SaveScene;
+        else if (action == Undo)
+            command.command = EditorWorkspaceViewCommand::UndoScene;
+        else
+            command.command = EditorWorkspaceViewCommand::RedoScene;
+        controller_->ProcessCommand(command);
+        PublishViewportSceneIfChanged();
+        return true;
+    }
+
+    /** @brief Opens the actual workspace manager surface while keeping each feature's authority private to its existing owner. */
+    bool EditorWorkspaceScreen::OpenWorkspaceManager(EditorMenuAction action) {
         if (action == EditorMenuAction::ManagePackages) {
             OpenPackagesModal();
             return true;
         }
-        if (sourceCommands_.HandleMenuAction(controller_.get(), action))
-            return true;
-        if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
-            !controller_->CurrentScenePath().has_value())
-            action = EditorMenuAction::SaveSceneAs;
-        if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
-            EditorWorkspaceViewCommandData command;
-            command.command = EditorWorkspaceViewCommand::CreatePrimitive;
-            command.primitivePayload = invocation.primitive;
-            command.objectPayload = controller_->ViewModel().primarySelection;
-            controller_->ProcessCommand(command);
-            PublishViewportSceneIfChanged();
-            return true;
-        }
-        if (controller_ && (action == EditorMenuAction::SaveSceneAs || action == EditorMenuAction::SaveSceneCopyAs)) {
-            return SaveSceneAs(action == EditorMenuAction::SaveSceneCopyAs);
-        }
-        if (!controller_ ||
-            (action != EditorMenuAction::SaveScene && action != EditorMenuAction::Undo && action != EditorMenuAction::Redo)) {
+        if (action != EditorMenuAction::OpenSaveLoadManager)
             return false;
-        }
-
-        using enum EditorMenuAction;
-        EditorWorkspaceViewCommandData command;
-        if (action == SaveScene) {
-            command.command = EditorWorkspaceViewCommand::SaveScene;
-        } else if (action == Undo) {
-            command.command = EditorWorkspaceViewCommand::UndoScene;
-        } else {
-            command.command = EditorWorkspaceViewCommand::RedoScene;
-        }
-        controller_->ProcessCommand(command);
-        PublishViewportSceneIfChanged();
+        const auto binding = controller_ ? controller_->PlaySaveBinding() : std::weak_ptr<EditorPlayRuntimeBinding>{};
+        const auto opened = modalHost_.OpenRoot(std::make_unique<SaveLoadManagerModal>(context_, binding));
+        if (opened.HasError())
+            LOG_WARN("editor.play.save", "Manager admission failed: %s", opened.ErrorValue().message.c_str());
         return true;
     }
 

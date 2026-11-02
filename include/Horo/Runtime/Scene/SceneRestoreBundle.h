@@ -79,7 +79,7 @@ namespace Horo::Runtime {
     };
 
     /** @brief Actual unpublished Scene composition whose owner roots share the staged save transaction gate. */
-    class SceneRestoreBundle final : public SceneAggregateRestore {
+    class SceneRestoreBundle final : public SceneAggregateRestore, public ISceneRestoreTransientRetirement {
         struct State;
 
         /** @brief Nonaggregate admission key constructible only by the validated factory. */
@@ -115,6 +115,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ValidatePublication(const RuntimeSceneView *active) const override;
         /** @copydoc SceneAggregateRestore::Commit */
         [[nodiscard]] Result<void> Commit(IStagedRestoreAggregatePublication &sceneTransfer) override;
+        /** @copydoc ISceneRestoreTransientRetirement::RetirePublishedTransient */
+        [[nodiscard]] Result<bool> RetirePublishedTransient() override;
         /** @copydoc SceneAggregateRestore::Rollback */
         void Rollback() noexcept override;
         /** @brief Returns committed or prepared exact identity bindings while this bundle is retained.

@@ -2095,6 +2095,7 @@ add_executable(HoroCharacterSceneProductTests integration/gameplay/CharacterScen
         integration/gameplay/HeadlessCharacterSceneTests.cpp
         integration/gameplay/CharacterSceneProductFixture.h)
 target_compile_features(HoroCharacterSceneProductTests PRIVATE cxx_std_20)
+target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroEngine::ProjectSurfaceSettings)
 target_compile_definitions(HoroCharacterSceneProductTests PRIVATE
         HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
         HORO_TEST_CHARACTER_CLI_PATH="$<TARGET_FILE:horo-engine>"
@@ -2229,6 +2230,8 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyPhysicsNotices.cmake)
 endif()
 add_executable(HoroGameplayRuntimeTests
+        support/AllocationProbe.cpp
+        unit/gameplay/BehaviorRuntimeRestoreTests.cpp
         unit/gameplay/BehaviorRuntimeTests.cpp
         unit/gameplay/ComponentRegistryTests.cpp
         unit/gameplay/GameAssetTypeRegistryTests.cpp
@@ -2237,18 +2240,26 @@ add_executable(HoroGameplayRuntimeTests
 )
 target_compile_features(HoroGameplayRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayRuntimeTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
+target_include_directories(HoroGameplayRuntimeTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
 target_link_libraries(HoroGameplayRuntimeTests PRIVATE HoroEngine::GameplayRuntime)
+target_link_libraries(HoroGameplayRuntimeTests PRIVATE HoroEngine::GameplayModuleHost HoroEngine::Platform)
 horo_add_gameplay_module(HoroTestGameModule
         MODULE_ID game.tests
         INPUT_MANIFEST_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroTestGameModule/input-manifest.txt"
         NO_MANIFEST
         SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/TestGameModule.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/BehaviorRestoreFixture.h
+                ${CMAKE_CURRENT_SOURCE_DIR}/helpers/GameplayRetirementFixture.h
                 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/CharacterClientBehavior.cpp
 )
 target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1 HORO_TEST_GAMEPLAY_NAVIGATION=1 HORO_TEST_GAMEPLAY_UI=1)
 target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 get_property(HORO_TEST_GAME_MODULE_REVISION_FILE TARGET HoroTestGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+target_compile_definitions(HoroGameplayRuntimeTests PRIVATE
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
+add_dependencies(HoroGameplayRuntimeTests HoroTestGameModule)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
         HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
@@ -2467,6 +2478,7 @@ target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEditorPla
         HoroEngine::PhysicsTriggerVolumeHost nlohmann_json::nlohmann_json miniz)
 target_compile_features(HoroEditorPlaySessionControllerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices)
+target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::ProjectSurfaceSettings)
 add_executable(HoroUpdateExperienceSessionTests
         unit/editor/UpdateExperienceSessionTests.cpp
 )
@@ -3157,6 +3169,8 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceWorldResidencyTests.cpp
             unit/editor/WorldLayerWorkspaceControllerTests.cpp
             unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
+            unit/editor/EditorWorkspacePlaySaveRecoveryTests.cpp
+            unit/editor/EditorPlaySaveNativeTests.cpp
             unit/editor/EditorWorkspaceControllerCollisionTests.cpp
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
             unit/editor/EditorWorkspaceControllerDockingTests.cpp
@@ -3207,6 +3221,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json
         HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull HoroEngine::PlatformProjectReadFiles)
+    target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEditorPlaySaveHostInternal HoroEngine::Platform)
     add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule)
     add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)
     target_compile_features(HoroCameraCutEditorIntegrationTests PRIVATE cxx_std_20)
@@ -4753,7 +4768,42 @@ add_executable(HoroRuntimeRestoreReferenceTests
 target_compile_features(HoroRuntimeRestoreReferenceTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeRestoreReferenceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeRestoreReferenceTests PRIVATE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
+add_executable(HoroSceneRuntimeSaveHandoffTests
+        unit/runtime/scene/SceneRuntimeSaveHandoffTests.cpp)
+target_compile_features(HoroSceneRuntimeSaveHandoffTests PRIVATE cxx_std_20)
+target_link_libraries(HoroSceneRuntimeSaveHandoffTests PRIVATE
+        HoroEngine::Runtime HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
+horo_register_catch_test(HoroSceneRuntimeSaveHandoffTests LABELS "unit;save;scene;headless")
+add_executable(HoroEditorPlaySaveCaptureTests unit/editor/EditorPlaySaveCaptureTests.cpp)
+target_compile_features(HoroEditorPlaySaveCaptureTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorPlaySaveCaptureTests PRIVATE HoroEditorPlaySaveHostInternal Catch2::Catch2WithMain)
+horo_register_catch_test(HoroEditorPlaySaveCaptureTests LABELS "unit;editor;save;scene;headless")
+set(_horo_play_save_test_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_play_save_test_headers")
+file(MAKE_DIRECTORY "${_horo_play_save_test_headers}")
+foreach(header SaveFilesystemTestSupport.h SaveTestUtils.h)
+    file(GENERATE OUTPUT "${_horo_play_save_test_headers}/${header}"
+        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/save/${header}\"\n")
+endforeach()
+add_executable(HoroEditorPlaySaveHostTests unit/editor/EditorPlaySaveHostTests.cpp)
+if (TARGET HoroEditorWorkspaceControllerTests)
+    target_include_directories(HoroEditorWorkspaceControllerTests PRIVATE "${_horo_play_save_test_headers}")
+endif()
+target_compile_features(HoroEditorPlaySaveHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorPlaySaveHostTests PRIVATE "${_horo_play_save_test_headers}")
+target_link_libraries(HoroEditorPlaySaveHostTests PRIVATE
+    HoroEditorPlaySaveHostInternal HoroEngine::Platform Catch2::Catch2WithMain)
+horo_register_catch_test(HoroEditorPlaySaveHostTests LABELS "unit;editor;save;scene;headless")
+add_executable(HoroEditorPlaySaveRetirementTests unit/editor/EditorPlaySaveRetirementTests.cpp)
+target_compile_features(HoroEditorPlaySaveRetirementTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorPlaySaveRetirementTests PRIVATE
+    HoroEngine::EditorServices HoroEditorPlaySceneHostInternal Catch2::Catch2WithMain)
+horo_register_catch_test(HoroEditorPlaySaveRetirementTests LABELS "unit;editor;save;scene;headless")
 add_executable(HoroRestoreReferenceApiPublicHeaderConsumer support/RestoreReferenceApiPublicHeaderConsumer.cpp)
+add_executable(HoroGameplayBehaviorRestorePublicHeaderConsumer support/GameplayBehaviorRestorePublicHeaderConsumer.cpp)
+target_compile_features(HoroGameplayBehaviorRestorePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayBehaviorRestorePublicHeaderConsumer PRIVATE HoroEngine::GameplayApi)
+add_test(NAME HoroGameplayBehaviorRestorePublicHeaderConsumer COMMAND HoroGameplayBehaviorRestorePublicHeaderConsumer)
+set_tests_properties(HoroGameplayBehaviorRestorePublicHeaderConsumer PROPERTIES LABELS "unit;gameplay;save;headless;public_headers")
 target_compile_features(HoroRestoreReferenceApiPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroRestoreReferenceApiPublicHeaderConsumer PRIVATE HoroEngine::GameplayApi)
 add_test(NAME HoroRestoreReferenceApiPublicHeaderConsumer COMMAND HoroRestoreReferenceApiPublicHeaderConsumer)
@@ -4885,6 +4935,7 @@ add_executable(HoroRuntimeSaveTestCompositionsTests
 target_compile_features(HoroRuntimeSaveTestCompositionsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveTestCompositionsTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSceneTests
+        unit/runtime/scene/RuntimeSceneIdentityCursorTests.cpp
         unit/runtime/scene/AudioSceneExtractionTests.cpp
         unit/runtime/scene/NavigationSceneComponentsTests.cpp
         unit/runtime/scene/NavigationSceneSourcesTests.cpp

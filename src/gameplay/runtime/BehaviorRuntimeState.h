@@ -177,7 +177,7 @@ namespace Horo::Gameplay {
 
         /** @brief Borrows the exact current service incarnation; retirement never dereferences an old Scene. */
         [[nodiscard]] Runtime::RuntimeSceneView SceneView() const noexcept {
-            return scenes ? scenes->ActiveScene().value_or(Runtime::RuntimeSceneView{}) : scene->View();
+            return scene ? scene->View() : scenes->ActiveScene().value_or(Runtime::RuntimeSceneView{});
         }
 
         /** @brief Routes simulation changes through the selected Scene owner. */
@@ -225,7 +225,7 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> BuildInstances() {
+        [[nodiscard]] Result<void> BuildInstances(bool activate = true) {
             if (!registry.IsFrozen())
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::RegistryFrozen, "Behavior registry must be frozen before scene activation."));
@@ -248,7 +248,7 @@ namespace Horo::Gameplay {
                 return left.component.instanceId < right.component.instanceId;
             });
 
-            return ActivateInstances(0);
+            return activate ? ActivateInstances(0) : Result<void>::Success();
         }
 
         /** @brief Activates only newly constructed attachments after their entire entity group is visible. */
@@ -501,6 +501,7 @@ namespace Horo::Gameplay {
             events.next.clear();
         }
 
+        bool inactive{};
         Runtime::RuntimeScene *scene{};
         Runtime::RuntimeSceneService *scenes{};
         const BehaviorRegistry &registry;

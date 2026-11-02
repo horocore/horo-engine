@@ -566,6 +566,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
         runtime/save/RuntimeSaveSession.cpp
+        runtime/save/RuntimeSaveSessionHandoff.cpp
         runtime/save/SaveRestoreTransaction.cpp
         runtime/save/SaveGameplayCheckpoint.cpp
         runtime/save/SaveRestoreTransactionReferences.cpp
@@ -1111,6 +1112,11 @@ target_compile_features(HoroGameplayNavigationIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayNavigationIntegration PUBLIC HoroEngine::NavigationRuntime)
 
 add_library(HoroGameplayRuntime STATIC
+        gameplay/runtime/BehaviorLifecycleCodec.cpp
+        gameplay/runtime/BehaviorRuntimeRestore.cpp
+        gameplay/runtime/BehaviorRuntimeRestoreInstances.cpp
+        gameplay/runtime/GameplayLifecyclePersistence.cpp
+        gameplay/runtime/GameplayRestoreReferences.cpp
         gameplay/runtime/BehaviorRegistry.cpp
         gameplay/runtime/BehaviorRuntime.cpp
         gameplay/runtime/BehaviorRuntimeState.h
@@ -3503,9 +3509,14 @@ endif ()
 set(_horo_editor_play_host_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_play_host_headers")
 file(MAKE_DIRECTORY "${_horo_editor_play_host_headers}")
 configure_file(editor/gameplay/EditorPlaySceneHost.h "${_horo_editor_play_host_headers}/EditorPlaySceneHost.h" COPYONLY)
+file(GENERATE OUTPUT "${_horo_editor_play_host_headers}/EditorPlaySaveSession.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/editor/gameplay/EditorPlaySaveSession.h\"\n")
+file(GENERATE OUTPUT "${_horo_editor_play_host_headers}/EditorPlaySaveRetirement.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/editor/gameplay/EditorPlaySaveRetirement.h\"\n")
 add_library(HoroEditorPlaySceneHostInternal INTERFACE)
 target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_INTERFACE:${_horo_editor_play_host_headers}>")
-target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
+target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime
+    HoroEngine::Runtime HoroEngine::GameplayModuleHost)
 
 add_library(HoroPrefabDocumentSessionInternal INTERFACE)
 set(_horo_prefab_document_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_document_internal")
@@ -3587,7 +3598,9 @@ add_library(HoroEditorServices STATIC
         editor/screens/project_creation/ProjectCreationController.cpp
         editor/gameplay/ProjectGameplayRegistryReplication.cpp
         editor/gameplay/ProjectGameplayRegistry.cpp
+        editor/gameplay/ProjectGameplayRegistrySave.cpp
         editor/gameplay/EditorPlaySessionController.cpp
+        editor/gameplay/EditorPlaySaveRetirement.cpp
         editor/screens/workspace/ContentBrowserModel.cpp
         editor/screens/workspace/prefab/PrefabAssetPreview.cpp
         editor/screens/workspace/GameplayBehaviorRequestValidation.cpp
@@ -3834,6 +3847,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/asset_import/AssetImportModalPresentation.cpp
             editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
             editor/modals/play_topology/PlayTopologyModal.cpp
+            editor/modals/save_load/SaveLoadManagerModal.cpp
             editor/modals/source_document/SourceDocumentCloseModal.cpp
             editor/modals/packages/PackageModal.cpp
             editor/modals/build_release/BuildReleaseModal.cpp

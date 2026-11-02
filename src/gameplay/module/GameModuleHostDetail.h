@@ -1,5 +1,5 @@
 #pragma once
-
+#include "../runtime/GameplayPersistenceBindingInternal.h"
 #include "Horo/Gameplay/BehaviorRegistry.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
@@ -88,9 +88,12 @@ namespace Horo::Gameplay {
         /** @brief Expose the already admitted scoped holders only after project service activation succeeds. */
         void PublishRuntimeContext();
         void Shutdown() noexcept;
+        void RevokeRuntimeServices() noexcept;
 
         std::shared_ptr<Detail::GameModuleCodeImage> codeImage;
         Detail::NativeRegistries registries;
+        mutable std::vector<std::shared_ptr<Detail::GameplayPersistenceSourceSlot>> persistenceSourceSlots;
+        [[nodiscard]] std::shared_ptr<Detail::GameplayPersistenceSourceSlot> PersistenceSourceSlot(std::size_t) const;
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
         std::shared_ptr<GameplayPhysicsContext> physics;

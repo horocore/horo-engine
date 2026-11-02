@@ -2,6 +2,7 @@
 #include "EditorProjectSceneHost.h"
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "PrefabSceneCookHostFixture.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
@@ -87,6 +88,15 @@ namespace Horo::Application::PrefabEditorProductTest {
             return result;
         }
 
+        /** @brief Seeds an explicitly adopted empty catalog; no surface or default is inferred by product loading. */
+        void WriteSurfaces(const PrefabCookTestSupport::HostFixture &fixture) {
+            const auto settings = ProjectSurfaceSettings::Create({.projectId = "p1"});
+            REQUIRE(settings.HasValue());
+            const auto encoded = EncodeProjectSurfaceSettings(settings.Value());
+            REQUIRE(encoded.HasValue());
+            fixture.WriteText(".horo/surfaces.json", encoded.Value());
+        }
+
         /** @brief Writes a real project schema shared by explicit Null and canonical product compositions. */
         void WriteCollision(const PrefabCookTestSupport::HostFixture &fixture) {
             using namespace PrefabCookTestSupport;
@@ -146,6 +156,7 @@ namespace Horo::Application::PrefabEditorProductTest {
                         .Publish({TestMeshRecord(), record(fixture.prefabId, "core.prefab", "assets/hierarchy.prefab"),
                                   record(fixture.sceneId, "core.scene", "assets/level.horo")})
                         .status == Assets::AssetRegistryBuildStatus::Complete);
+            WriteSurfaces(fixture);
             WriteCollision(fixture);
             if (components)
                 WriteCustomTemplate(fixture, *components);

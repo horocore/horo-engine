@@ -196,6 +196,9 @@ namespace Horo::Runtime {
     /** @copydoc StagedRestoreTransaction::StagedRestoreTransaction */
     StagedRestoreTransaction::StagedRestoreTransaction(StagedRestoreTransaction &&other) noexcept
         : context_(other.context_), operation_(std::move(other.operation_)), participants_(std::move(other.participants_)),
+          retainedPublishedBindings_(std::move(other.retainedPublishedBindings_)),
+          retiredTransientOwners_(std::move(other.retiredTransientOwners_)),
+          transientRetirementComplete_(other.transientRetirementComplete_), transientRetirementOwner_(other.transientRetirementOwner_),
           referenceResolver_(std::move(other.referenceResolver_)), references_(std::move(other.references_)),
           staged_(std::move(other.staged_)), requirements_(std::move(other.requirements_)), restorePlan_(std::move(other.restorePlan_)),
           trace_(std::move(other.trace_)), state_(other.state_) {
@@ -212,6 +215,10 @@ namespace Horo::Runtime {
         context_ = other.context_;
         operation_ = std::move(other.operation_);
         participants_ = std::move(other.participants_);
+        retainedPublishedBindings_ = std::move(other.retainedPublishedBindings_);
+        retiredTransientOwners_ = std::move(other.retiredTransientOwners_);
+        transientRetirementComplete_ = other.transientRetirementComplete_;
+        transientRetirementOwner_ = other.transientRetirementOwner_;
         referenceResolver_ = std::move(other.referenceResolver_);
         references_ = std::move(other.references_);
         staged_ = std::move(other.staged_);
@@ -345,6 +352,16 @@ namespace Horo::Runtime {
             return Result<void>::Failure(std::move(error));
         }
 
+        struct ActivePublication {
+            bool &active;
+
+            ~ActivePublication() {
+                active = false;
+            }
+        };
+
+        activationInProgress_ = true;
+        ActivePublication publicationScope{activationInProgress_};
         for (const std::size_t index : restorePlan_) {
             staged_[index]->PublishPrepared();
             Record(StagedRestorePhase::Activate, StagedRestoreEventOutcome::Succeeded, index);
@@ -367,6 +384,46 @@ namespace Horo::Runtime {
             operation_.Fail(std::move(error), SaveOperationCommitOutcome::NotCommitted) == SaveOperationTransitionResult::CancellationWon
                 ? RolledBack
                 : Failed;
+    }
+
+    namespace {
+        std::vector<SaveParticipantBinding> RetainPublishedBindings(const SaveParticipantRegistrySnapshot &participants,
+                                                                    std::span<const SaveParticipantId> retired) {
+            std::vector<SaveParticipantBinding> retained;
+            retained.reserve(participants.Bindings().size());
+            for (const auto &binding : participants.Bindings())
+                if (std::ranges::find(retired, binding.Descriptor().participant) == retired.end())
+                    retained.push_back(binding);
+            return retained;
+        }
+    }  // namespace
+
+    Result<std::optional<std::vector<SaveParticipantId>>> StagedRestoreTransaction::RetirePublishedTransient() {
+        using Outcome = Result<std::optional<std::vector<SaveParticipantId>>>;
+        if (std::this_thread::get_id() != transientRetirementOwner_)
+            return Outcome::Failure(MakeError(SaveErrors::ThreadAffinityViolation));
+        if (activationInProgress_ || state_ != StagedRestoreTransactionState::Activated)
+            return Outcome::Failure(MakeError(SaveErrors::RestoreTransitionInvalid));
+        if (transientRetirementComplete_)
+            return Outcome::Success(retiredTransientOwners_);
+        std::vector<SaveParticipantId> retired;
+        retired.reserve(staged_.size());
+        for (std::size_t index = 0; index < staged_.size(); ++index) {
+            auto *capability = dynamic_cast<IStagedRestoreTransientRetirement *>(staged_[index].get());
+            if (!capability)
+                continue;
+            auto released = capability->RetirePublishedTransient();
+            if (released.HasError())
+                return Outcome::Failure(released.ErrorValue());
+            if (!released.Value())
+                return Outcome::Success(std::nullopt);
+            retired.push_back(requirements_[index].participant);
+        }
+        retainedPublishedBindings_ = RetainPublishedBindings(participants_, retired);
+        retiredTransientOwners_ = std::move(retired);
+        participants_ = {};
+        transientRetirementComplete_ = true;
+        return Outcome::Success(retiredTransientOwners_);
     }
 
     /** @copydoc StagedRestoreTransaction::State */

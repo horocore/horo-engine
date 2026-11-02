@@ -1,12 +1,30 @@
 #include "GameModuleHostTestHelpers.h"
 #include "GameplayRetirementTestSupport.h"
 
+#include <thread>
+
 using namespace Horo;
 using namespace Horo::Gameplay;
 using namespace Horo::Runtime;
 using namespace Horo::Gameplay::HostTest;
 
 namespace {
+    /** @brief Creates a real aggregate operation retaining the exact registered native receipts. */
+    StagedRestoreTransaction MakeDurableTransaction(const SaveParticipantRegistrySnapshot &participants,
+                                                    std::vector<std::unique_ptr<IStagedRestoreParticipant>> receipts,
+                                                    const std::uint64_t operationId) {
+        auto operation = CreateSaveOperation({.operation = operationId, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 4});
+        REQUIRE(operation.HasValue());
+        auto created = StagedRestoreTransaction::Create({.operation = operationId,
+                                                         .registryGeneration = participants.Generation(),
+                                                         .sessionGeneration = 1,
+                                                         .sceneIncarnation = 1,
+                                                         .maximumParticipants = 4},
+                                                        std::move(operation).Value(), participants, std::move(receipts));
+        REQUIRE(created.HasValue());
+        return std::move(created).Value();
+    }
+
     /** @brief Copies canonical requirements from a real successfully frozen fixture generation. */
     GameplayReplicationAdmissionPolicy NativeAdmission() {
         auto loaded = GameModuleHost{}.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
@@ -86,6 +104,7 @@ TEST_CASE("Native admitted descriptors permit actual services and Start with opt
 
 TEST_CASE("loaded gameplay declarations participate in durable capture and aggregate restore", "[unit][gameplay][save]") {
     using namespace Horo::Runtime;
+    Tests::NativeGameplayFailureControl control{0};
     GameModuleHost moduleHost;
     auto loadedResult = moduleHost.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(loadedResult.HasValue());
@@ -104,7 +123,22 @@ TEST_CASE("loaded gameplay declarations participate in durable capture and aggre
     auto participants = registry.Snapshot().Value();
     auto snapshot = CaptureDurableParticipants(participants);
     REQUIRE(snapshot.Records().size() == 4);
-    auto receipts = StageDurableParticipants(adapters, snapshot);
+    auto transaction = MakeDurableTransaction(participants, StageDurableParticipants(adapters, snapshot), 1436);
+    auto prepared = transaction.Prepare();
+    INFO((prepared.HasError() ? prepared.ErrorValue().code.Value() + ": " + prepared.ErrorValue().message : "durable prepare admitted"));
+    REQUIRE(prepared.HasValue());
+    REQUIRE(
+        transaction.Activate({.registryGeneration = participants.Generation(), .sessionGeneration = 1, .sceneIncarnation = 1}).HasValue());
+    auto restoredCapture = RuntimeSaveCaptureBuilder::Create(snapshot.Provenance(), participants).Value();
+    REQUIRE(restoredCapture.CaptureParticipants().HasValue());
+    auto restored = restoredCapture.Seal().Value();
+
+    // Detached bytes and receipts retain code ownership, but do not grant new callback admission after reload closes it.
+    auto rejected = MakeDurableTransaction(participants, StageDurableParticipants(adapters, snapshot), 1437);
+    const auto capturedBeforeRevocation = control.control.durableCaptured;
+    const auto preparedBeforeRevocation = control.control.durablePrepared;
+    CHECK(capturedBeforeRevocation == 8);
+    CHECK(preparedBeforeRevocation == 4);
     RequireRestartRequired(loaded->PrepareReload());
     CHECK_FALSE(installed.Value().CanUse());
     CHECK(installed.Value().AcquireAdapter() == nullptr);
@@ -114,21 +148,18 @@ TEST_CASE("loaded gameplay declarations participate in durable capture and aggre
     CHECK(event.Value()->Invoke({}) == GameplayEventOutcome::CapabilityUnavailable);
     REQUIRE(participation.Close().HasValue());
     loaded.reset();
-    auto operation = CreateSaveOperation({.operation = 1436, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 4}).Value();
-    auto created = StagedRestoreTransaction::Create({.operation = 1436,
-                                                     .registryGeneration = participants.Generation(),
-                                                     .sessionGeneration = 1,
-                                                     .sceneIncarnation = 1,
-                                                     .maximumParticipants = 4},
-                                                    std::move(operation), participants, std::move(receipts));
-    REQUIRE(created.HasValue());
-    auto transaction = std::move(created).Value();
-    REQUIRE(transaction.Prepare().HasValue());
-    REQUIRE(
-        transaction.Activate({.registryGeneration = participants.Generation(), .sessionGeneration = 1, .sceneIncarnation = 1}).HasValue());
-    auto restoredCapture = RuntimeSaveCaptureBuilder::Create(snapshot.Provenance(), participants).Value();
-    REQUIRE(restoredCapture.CaptureParticipants().HasValue());
-    auto restored = restoredCapture.Seal().Value();
+    auto rejectedPrepare = rejected.Prepare();
+    INFO((rejectedPrepare.HasError() ? rejectedPrepare.ErrorValue().code.Value() + ": " + rejectedPrepare.ErrorValue().message
+                                     : "unexpected post-revocation prepare"));
+    REQUIRE(rejectedPrepare.HasError());
+    CHECK(rejectedPrepare.ErrorValue().code.Value() == SaveErrors::RestoreActivationStale.code.Value());
+    auto closedCapture = RuntimeSaveCaptureBuilder::Create(snapshot.Provenance(), participants).Value();
+    auto captured = closedCapture.CaptureParticipants();
+    REQUIRE(captured.HasError());
+    CHECK(captured.ErrorValue().code.Value() == SaveErrors::RestoreActivationStale.code.Value());
+    CHECK(control.control.destroyed == 0);
+    CHECK(control.control.durableCaptured == capturedBeforeRevocation);
+    CHECK(control.control.durablePrepared == preparedBeforeRevocation);
     for (const auto &record : restored.Records())
         CHECK(record.Segment(0).back() == std::byte{0x42});
     for (const auto &record : snapshot.Records())
@@ -281,7 +312,7 @@ TEST_CASE("generated gameplay bundle validation rejects incompatible identity be
     REQUIRE(mismatch.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
 }
 
-TEST_CASE("combined SDK22 boundary rejects previous native capability layouts before activation", "[unit][gameplay][sdk]") {
+TEST_CASE("current SDK boundary rejects previous native capability layouts before activation", "[unit][gameplay][sdk]") {
     ValidBundleStorage storage;
     const GameModuleLoadExpectation expected{
         .moduleId = "game.tests",
@@ -294,7 +325,7 @@ TEST_CASE("combined SDK22 boundary rejects previous native capability layouts be
     };
     REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
     REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
-    for (const std::uint32_t previousLayout : {6U, 7U, 10U, 11U, 15U, 16U, 17U, 18U, 19U, 20U, 21U}) {
+    for (std::uint32_t previousLayout = 1; previousLayout < GameplaySdkBoundaryVersion; ++previousLayout) {
         descriptor.sdkBoundaryVersion = previousLayout;
         storage.bundle.sdkBoundaryVersion = previousLayout;
         const auto oldModule = ValidateGameModuleDescriptor(descriptor, expected);
@@ -304,16 +335,19 @@ TEST_CASE("combined SDK22 boundary rejects previous native capability layouts be
         CHECK(oldModule.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
         CHECK(oldBundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
     }
-    // A stale SDK21 build fingerprint remains incompatible even if a descriptor reports the current boundary.
-    auto oldFingerprint = std::string{CurrentGameplayBuildFingerprint()};
-    const auto generation = oldFingerprint.find("gameplay-sdk22");
-    REQUIRE(generation != std::string::npos);
-    oldFingerprint.replace(generation, std::string_view{"gameplay-sdk22"}.size(), "gameplay-sdk21");
-    descriptor.sdkBoundaryVersion = GameplaySdkBoundaryVersion;
-    descriptor.buildFingerprint = oldFingerprint.c_str();
-    const auto oldBuild = ValidateGameModuleDescriptor(descriptor, expected);
-    REQUIRE(oldBuild.HasError());
-    CHECK(oldBuild.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
+    // Both the historical and immediate previous build remain incompatible even when the declared boundary is current.
+    const auto currentToken = "gameplay-sdk" + std::to_string(GameplaySdkBoundaryVersion);
+    for (const auto previous : {21U, GameplaySdkBoundaryVersion - 1}) {
+        auto oldFingerprint = std::string{CurrentGameplayBuildFingerprint()};
+        const auto generation = oldFingerprint.find(currentToken);
+        REQUIRE(generation != std::string::npos);
+        oldFingerprint.replace(generation, currentToken.size(), "gameplay-sdk" + std::to_string(previous));
+        descriptor.sdkBoundaryVersion = GameplaySdkBoundaryVersion;
+        descriptor.buildFingerprint = oldFingerprint.c_str();
+        const auto oldBuild = ValidateGameModuleDescriptor(descriptor, expected);
+        REQUIRE(oldBuild.HasError());
+        CHECK(oldBuild.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
+    }
 }
 
 TEST_CASE("generated gameplay bundle validation rejects incomplete bindings and bounded diagnostics") {
@@ -392,4 +426,46 @@ TEST_CASE("native module restart after releasing generation leases preserves rep
     CHECK(current.Value().Descriptors()->Fingerprint() == fingerprint);
     CHECK(current.Value().Serializers().Encode(schema, field, 3.5).Value() == encodedEvidence);
     CHECK(current.Value().Registrations().front().owner == owner);
+}
+
+TEST_CASE("Frozen native persistence inventory owns metadata without keeping a retired module admitted", "[unit][gameplay][save]") {
+    auto loadedResult = GameModuleHost{}.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(loadedResult.HasValue());
+    REQUIRE_FALSE(loadedResult.Value().diagnostic);
+    auto loaded = std::move(loadedResult).Value().owner;
+    auto inventory = loaded->PersistenceDeclarations();
+    REQUIRE(inventory.HasValue());
+    REQUIRE(inventory.Value().size() == 4);
+    for (const auto &declaration : inventory.Value()) {
+        REQUIRE(Runtime::IsValidGameplayPersistenceDescriptor(declaration.descriptor));
+        const auto acquired = loaded->AcquirePersistence(declaration.descriptor.participant.participant);
+        REQUIRE(acquired.HasValue());
+        CHECK(acquired.Value()->Descriptor().record == declaration.descriptor.record);
+        CHECK(acquired.Value()->Descriptor().participant == declaration.descriptor.participant);
+    }
+    REQUIRE(loaded->TryRetire().HasValue());
+    CHECK(loaded->PersistenceDeclarations().HasError());
+    loaded.reset();
+    for (const auto &declaration : inventory.Value())
+        CHECK(Runtime::IsValidGameplayPersistenceDescriptor(declaration.descriptor));
+}
+
+TEST_CASE("Frozen native persistence inventory rejects foreign-thread acquisition before touching registrations",
+          "[unit][gameplay][save]") {
+    auto loadedResult = GameModuleHost{}.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(loadedResult.HasValue());
+    REQUIRE_FALSE(loadedResult.Value().diagnostic);
+    auto loaded = std::move(loadedResult).Value().owner;
+    std::optional<Error> failure;
+    std::thread caller([&] {
+        const auto result = loaded->PersistenceDeclarations();
+        if (result.HasError())
+            failure = result.ErrorValue();
+    });
+    caller.join();
+    REQUIRE(failure);
+    CHECK(failure->domain.Value() == SaveErrors::ThreadAffinityViolation.domain.Value());
+    CHECK(failure->code.Value() == SaveErrors::ThreadAffinityViolation.code.Value());
+    REQUIRE(loaded->PersistenceDeclarations().HasValue());
+    REQUIRE(loaded->TryRetire().HasValue());
 }

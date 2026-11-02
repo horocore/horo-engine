@@ -496,6 +496,7 @@ horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/NativeDecisionNode.h
     Horo/Gameplay/GameEventRegistry.h
     Horo/Gameplay/Behavior.h
+    Horo/Gameplay/BehaviorRestore.h
     Horo/Gameplay/PersistenceSource.h
     Horo/Gameplay/PersistenceRegistration.h
     Horo/Gameplay/PersistenceInstallation.h
@@ -534,6 +535,7 @@ horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
     Horo/Gameplay/BehaviorRegistry.h
     Horo/Gameplay/SaveGameplayPersistence.h
     Horo/Gameplay/BehaviorRuntime.h
+    Horo/Gameplay/BehaviorRuntimeRestore.h
     Horo/Gameplay/GameplayRegistrationRuntime.h
 )
 horo_configure_target_header_boundary(HoroGameplayPerceptionIntegration PUBLIC_HEADERS

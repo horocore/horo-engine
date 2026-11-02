@@ -246,6 +246,186 @@ namespace Horo::Runtime {
             }
         };
 
+        /** @brief Test aggregate owner retains the same real registered staging and original producer; no synthetic operation. */
+        class Handoff final : public IRuntimeSaveRestoreHandoff {
+        public:
+            Result<void> Accept(RuntimeSavePreparedRestore &prepared) override {
+                ++calls;
+                calledOn = std::this_thread::get_id();
+                context = prepared.context;
+                if (fault == 1)
+                    return Result<void>::Failure(Error{ErrorCode{"game.restore.handoff_failed"}});
+                if (fault == 2)
+                    throw std::runtime_error{"handoff before transfer"};
+                if (fault == 3)
+                    return Result<void>::Success();
+                packet.emplace(std::move(prepared));
+                if (fault == 4)
+                    throw std::runtime_error{"handoff after transfer"};
+                return Result<void>::Success();
+            }
+
+            void Cancel() noexcept override {
+                ++cancelled;
+                if (packet)
+                    (void)packet->operation.RequestShutdownCancellation();
+            }
+
+            bool IsSettled() const noexcept override {
+                return !packet.has_value();
+            }
+
+            /** @brief Runs the existing real staged transaction only when this owner explicitly publishes it. */
+            Result<void> Activate(const SaveRuntimeGeneration generation) {
+                auto created = StagedRestoreTransaction::Create(packet->context, std::move(packet->operation), packet->participants,
+                                                                std::move(packet->staging.participants));
+                if (created.HasError())
+                    return Result<void>::Failure(created.ErrorValue());
+                auto transaction = std::move(created).Value();
+                if (packet->staging.references) {
+                    const auto bound = transaction.SetReferenceResolver(std::move(packet->staging.references));
+                    if (bound.HasError())
+                        return bound;
+                }
+                auto result = transaction.Prepare();
+                if (result.HasValue())
+                    result = transaction.Activate({generation.registry, generation.runtime, generation.scene});
+                packet.reset();
+                return result;
+            }
+
+            /** @brief Explicitly retires the original uncommitted producer and actual detached receipt leases. */
+            void Retire() {
+                REQUIRE(packet);
+                (void)packet->operation.RequestShutdownCancellation();
+                (void)packet->operation.ObserveCancellation();
+                packet.reset();
+            }
+
+            std::optional<RuntimeSavePreparedRestore> packet;
+            StagedRestoreContext context;
+            std::thread::id calledOn;
+            unsigned calls{}, cancelled{}, fault{};
+        };
+
+        /** @brief Produces the actual registered captured state before testing an owner-safe alternate restore path. */
+        void SaveForHandoff(Fixture &fixture) {
+            const auto saved = fixture.Save();
+            fixture.Finish(saved);
+            REQUIRE(fixture.session->Acknowledge().HasValue());
+            fixture.value->value = std::byte{0x7f};
+        }
+
+        /** @brief Waits only inside this bounded test until worker settlement reaches the actual owner handoff. */
+        void AwaitHandoff(Fixture &fixture, const Handoff &handoff) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (handoff.calls == 0 && std::chrono::steady_clock::now() < deadline) {
+                (void)fixture.Pump();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            REQUIRE(handoff.calls == 1);
+        }
+
+        TEST_CASE("Runtime load hands the original registered receipts and operation to one owner without early publication",
+                  "[save][session][handoff]") {
+            Fixture fixture;
+            SaveForHandoff(fixture);
+            auto handoff = std::make_shared<Handoff>();
+            const auto request =
+                fixture.session
+                    ->Load(fixture.Operation(2, SaveOperationKind::Load), std::make_shared<Source>(fixture.store, fixture.value), handoff)
+                    .Value();
+            AwaitHandoff(fixture, *handoff);
+            CHECK(handoff->calledOn == std::this_thread::get_id());
+            CHECK(handoff->context.operation == request.Operation().Id());
+            CHECK(handoff->packet->operation.Handle().Id() == request.Operation().Id());
+            CHECK_FALSE(request.Operation().Snapshot()->IsTerminal());
+            CHECK_FALSE(fixture.session->IsSettled());
+            CHECK(fixture.value->value == std::byte{0x7f});
+            CHECK(fixture.value->published.empty());
+            REQUIRE(fixture.Pump().HasValue());
+            CHECK(handoff->calls == 1);
+            CHECK(fixture.session->Acknowledge().HasError());
+            REQUIRE(handoff->Activate(fixture.generation).HasValue());
+            CHECK(request.Operation().Snapshot()->state == SaveOperationState::Completed);
+            CHECK(fixture.value->value == std::byte{0x31});
+            CHECK(fixture.value->published == std::vector<std::string>{"game.a", "game.b"});
+            CHECK(fixture.session->IsSettled());
+            CHECK(fixture.session->Acknowledge().HasValue());
+        }
+
+        TEST_CASE("Runtime handoff failures before producer transfer preserve original errors and cannot publish",
+                  "[save][session][handoff][failure]") {
+            for (const unsigned fault : {1U, 2U, 3U}) {
+                Fixture fixture;
+                SaveForHandoff(fixture);
+                auto handoff = std::make_shared<Handoff>();
+                handoff->fault = fault;
+                const auto request = fixture.session
+                                         ->Load(fixture.Operation(2, SaveOperationKind::Load),
+                                                std::make_shared<Source>(fixture.store, fixture.value), handoff)
+                                         .Value();
+                AwaitHandoff(fixture, *handoff);
+                REQUIRE(request.Operation().Snapshot()->terminalError);
+                if (fault == 1)
+                    CHECK(request.Operation().Snapshot()->terminalError->code.Value() == "game.restore.handoff_failed");
+                CHECK(request.Operation().Snapshot()->commit == SaveOperationCommitOutcome::NotCommitted);
+                CHECK(fixture.value->published.empty());
+                CHECK(fixture.session->IsSettled());
+                CHECK(fixture.session->Acknowledge().HasValue());
+            }
+        }
+
+        TEST_CASE("Runtime handoff exception after producer transfer retains the real pending owner until actual retirement",
+                  "[save][session][handoff][failure][lifecycle]") {
+            Fixture fixture;
+            SaveForHandoff(fixture);
+            auto handoff = std::make_shared<Handoff>();
+            handoff->fault = 4;
+            const auto request =
+                fixture.session
+                    ->Load(fixture.Operation(2, SaveOperationKind::Load), std::make_shared<Source>(fixture.store, fixture.value), handoff)
+                    .Value();
+            AwaitHandoff(fixture, *handoff);
+            CHECK(handoff->cancelled > 0);
+            CHECK_FALSE(request.Operation().Snapshot()->IsTerminal());
+            CHECK_FALSE(fixture.session->IsSettled());
+            CHECK(fixture.session->Acknowledge().HasError());
+            CHECK(fixture.value->published.empty());
+            handoff->Retire();
+            CHECK(request.Operation().Snapshot()->state == SaveOperationState::Cancelled);
+            CHECK(fixture.session->IsSettled());
+            CHECK(fixture.session->Acknowledge().HasValue());
+        }
+
+        TEST_CASE("Runtime retirement and stale generation retain handed-off ownership until its original operation settles",
+                  "[save][session][handoff][lifecycle]") {
+            for (const bool stale : {false, true}) {
+                Fixture fixture;
+                SaveForHandoff(fixture);
+                auto handoff = std::make_shared<Handoff>();
+                const auto request = fixture.session
+                                         ->Load(fixture.Operation(2, SaveOperationKind::Load),
+                                                std::make_shared<Source>(fixture.store, fixture.value), handoff)
+                                         .Value();
+                AwaitHandoff(fixture, *handoff);
+                if (stale) {
+                    auto replaced = fixture.generation;
+                    ++replaced.scene;
+                    CHECK(fixture.session->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, replaced).HasError());
+                } else {
+                    CHECK(fixture.session->Retire().HasValue());
+                }
+                CHECK(handoff->cancelled > 0);
+                CHECK_FALSE(fixture.session->IsSettled());
+                CHECK(fixture.session->Acknowledge().HasError());
+                handoff->Retire();
+                CHECK(request.Operation().Snapshot()->state == SaveOperationState::Cancelled);
+                CHECK(fixture.session->IsSettled());
+                CHECK(fixture.session->Acknowledge().HasValue());
+            }
+        }
+
         TEST_CASE("Runtime save foundation composes real participants capture worker processing and owner-only restore",
                   "[save][session]") {
             Fixture fixture;

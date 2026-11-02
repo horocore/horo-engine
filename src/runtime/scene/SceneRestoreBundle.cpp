@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <new>
+#include <set>
 #include <tuple>
 #include <type_traits>
 
@@ -31,6 +32,76 @@ namespace Horo::Runtime {
                     std::ranges::adjacent_find(component.references) != component.references.end())
                     return Failure<void>(SaveErrors::ReferenceInvalid);
             }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    namespace {
+        Result<std::size_t> ContributedCount(std::span<const StagedRestorePreparedParticipant> participants, std::size_t existing,
+                                             const RestoreReferenceGraphLimits &limits) {
+            if (existing > limits.maximumReferences)
+                return Failure<std::size_t>(SaveErrors::ReferenceResolutionInvalid);
+            auto total = existing;
+            for (const auto &participant : participants) {
+                const auto *source = dynamic_cast<const IRestoreReferenceContributor *>(participant.state);
+                if (!source)
+                    continue;
+                const auto count = source->ReferenceCount();
+                if (count > limits.maximumReferences - total)
+                    return Failure<std::size_t>(SaveErrors::ReferenceResolutionInvalid);
+                total += count;
+            }
+            return Result<std::size_t>::Success(total);
+        }
+
+        Result<void> MergeNodes(std::set<RestoreReferenceTarget> &nodes, const RestoreReferenceContribution &contribution,
+                                const RestoreReferenceGraphLimits &limits) {
+            for (const auto &node : contribution.nodes) {
+                if (nodes.contains(node))
+                    continue;
+                if (nodes.size() >= limits.maximumNodes)
+                    return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
+                nodes.insert(node);
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> MergeOwner(std::set<RestoreReferenceTarget> &nodes, std::vector<RestoreReferenceRequest> &references,
+                                const RestoreReferenceAuthorities &authorities, const StagedRestorePreparedParticipant &participant,
+                                const RestoreReferenceGraphLimits &limits) {
+            const auto *source = dynamic_cast<const IRestoreReferenceContributor *>(participant.state);
+            if (!source || source->ReferenceCount() == 0)
+                return Result<void>::Success();
+            auto contribution = source->Contribute(authorities, participant.requirement.participant, limits);
+            if (contribution.HasError())
+                return Result<void>::Failure(contribution.ErrorValue());
+            if (contribution.Value().references.size() != source->ReferenceCount())
+                return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
+            for (const auto &reference : contribution.Value().references)
+                if (reference.owner != participant.requirement.participant)
+                    return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
+            if (auto merged = MergeNodes(nodes, contribution.Value(), limits); merged.HasError())
+                return merged;
+            std::ranges::move(contribution.Value().references, std::back_inserter(references));
+            return Result<void>::Success();
+        }
+
+        Result<void> CollectContributedReferences(const RestoreReferenceAuthorities &authorities,
+                                                  std::span<const StagedRestorePreparedParticipant> participants,
+                                                  SceneRestoreBundleRequest &request) {
+            auto total = ContributedCount(participants, request.references.size(), request.graphLimits);
+            if (total.HasError())
+                return Result<void>::Failure(total.ErrorValue());
+            std::set<RestoreReferenceTarget> nodes(request.nodes.begin(), request.nodes.end());
+            if (nodes.size() != request.nodes.size())
+                return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
+            auto references = request.references;
+            references.reserve(total.Value());
+            for (const auto &participant : participants)
+                if (auto merged = MergeOwner(nodes, references, authorities, participant, request.graphLimits); merged.HasError())
+                    return merged;
+            request.nodes.assign(nodes.begin(), nodes.end());
+            request.references = std::move(references);
             return Result<void>::Success();
         }
     }  // namespace
@@ -197,6 +268,8 @@ namespace Horo::Runtime {
                                                               .serviceLease = state.request.serviceLease,
                                                               .participants = state.request.participants,
                                                               .preparedOwners = owners};
+                if (auto contributed = CollectContributedReferences(authorities, participants, state.request); contributed.HasError())
+                    return Result<SaveRestoreReferenceContext>::Failure(contributed.ErrorValue());
                 auto graph = PreparedRestoreReferenceGraph::Create(authorities, state.request.nodes, state.request.references,
                                                                    state.request.graphLimits);
                 if (graph.HasError())
@@ -242,6 +315,8 @@ namespace Horo::Runtime {
         std::optional<PreparedRestoreReferenceGraph> graph;
         std::vector<ComponentCandidate> components;
         std::optional<StagedRestoreTransaction> transaction;
+        std::vector<SaveParticipantBinding> retainedPublishedBindings;
+        bool transientRetired{};
         bool closed{};
         bool published{};
     };
@@ -389,6 +464,30 @@ namespace Horo::Runtime {
         Transfer transfer{state, sceneTransfer};
 
         return state.transaction->Activate(state.authority->Current(), transfer);
+    }
+
+    Result<bool> SceneRestoreBundle::RetirePublishedTransient() {
+        auto &state = *state_;
+        if (!state.published || !state.transaction)
+            return Failure<bool>(SaveErrors::RestoreTransitionInvalid);
+        if (state.transientRetired)
+            return Result<bool>::Success(true);
+        auto retired = state.transaction->RetirePublishedTransient();
+        if (retired.HasError())
+            return Result<bool>::Failure(retired.ErrorValue());
+        if (!retired.Value())
+            return Result<bool>::Success(false);
+        std::vector<SaveParticipantBinding> retained;
+        retained.reserve(state.request.participants.Bindings().size());
+        for (const auto &binding : state.request.participants.Bindings())
+            if (std::ranges::find(*retired.Value(), binding.Descriptor().participant) == retired.Value()->end())
+                retained.push_back(binding);
+        if (state.graph)
+            state.graph->RetireTransientParticipantPins(*retired.Value());
+        state.retainedPublishedBindings = std::move(retained);
+        state.request.participants = {};
+        state.transientRetired = true;
+        return Result<bool>::Success(true);
     }
 
     /** @copydoc SceneRestoreBundle::Rollback */

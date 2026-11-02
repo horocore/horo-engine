@@ -203,6 +203,16 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OpenPackagesModal();
         /** @brief Opens topology editing only while Play is idle. */
         void OpenPlayTopologyProfilesModal();
+        /** @brief Routes the existing packages and Play Save/Load Manager menu actions to real modal owners. */
+        [[nodiscard]] bool OpenWorkspaceManager(EditorMenuAction action);
+        /** @brief Preserves untitled-scene Save As normalization. */
+        [[nodiscard]] EditorMenuAction NormalizeSceneSaveAction(EditorMenuAction action) const;
+        /** @brief Routes exact primitive command payloads through the canonical workspace controller. */
+        [[nodiscard]] bool HandlePrimitiveMenu(const EditorMenuInvocation &invocation);
+        /** @brief Retains the existing source dialog result for Save As and Save Copy As. */
+        [[nodiscard]] std::optional<bool> HandleScenePersistenceMenu(EditorMenuAction action);
+        /** @brief Dispatches ordinary Save/Undo/Redo through the existing document owner. */
+        [[nodiscard]] bool HandleDocumentHistoryMenu(EditorMenuAction action);
         /** @brief Captures the external scene before opening its comparison modal. */
         void OpenSceneComparison();
         /** @brief Opens layer creation over the canonical world document owner. */

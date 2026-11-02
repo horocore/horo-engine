@@ -112,6 +112,15 @@ namespace Horo::Runtime {
         bool outer{};
     };
 
+    /** @copydoc RuntimeSceneService::RetirePublishedRestorePreparation */
+    Result<bool> RuntimeSceneService::RetirePublishedRestorePreparation() {
+        if (std::this_thread::get_id() != restoreRetirementOwner_ || mutatingLifecycle_)
+            return Result<bool>::Failure(MakeError(SceneErrors::OperationInProgress));
+        const LifecycleMutation mutation{*this};
+        auto result = RetirePublishedRestorePreparationInternal();
+        return result;
+    }
+
     RuntimeSceneService::RuntimeSceneService() = default;
 
     /** @copydoc RuntimeSceneService::RuntimeSceneService */

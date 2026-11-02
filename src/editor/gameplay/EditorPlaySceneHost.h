@@ -4,7 +4,8 @@
 /** @file EditorPlaySceneHost.h
  * @brief Non-installed app-injected ownership boundary for isolated Editor Play Scene services.
  */
-#include "Horo/Gameplay/BehaviorRuntime.h"
+#include "EditorPlaySaveSession.h"
+#include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <filesystem>
@@ -70,6 +71,20 @@ namespace Horo::Editor {
          */
         [[nodiscard]] virtual Runtime::RuntimeSceneService &Scenes() noexcept = 0;
 
+        /** @brief Borrows this activation's explicitly composed save owner; absence grants no save capability. */
+        [[nodiscard]] virtual EditorPlaySaveSession *SaveSession() noexcept {
+            return nullptr;
+        }
+
+        /** @brief Composes actual declared native save sources after the real Play Scene and behaviors are ready.
+         * @param bindings Complete actual module inventory; caller reserved deferred-owner capacity before activation.
+         * @return Original preparation failure, including explicit unsupported when this host has no selected save composition.
+         */
+        [[nodiscard]] virtual Result<void> ConfigureSaveSession(std::vector<PlaySaveGameplayBinding>,
+                                                                std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> = {}) {
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
+        }
+
         /** @brief Resolves explicitly granted gameplay services after aggregate readiness.
          * @return Captured typed services or a failure before behavior creation; default withholds all optional capabilities.
          */
@@ -86,6 +101,16 @@ namespace Horo::Editor {
             return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(nullptr);
         }
 
+        /** @brief Cancels and retires the selected save owner before module replacement, retaining it while work remains.
+         * @return Actual settlement; hosts without save composition have nothing to retire. */
+        [[nodiscard]] virtual bool RetireSaveSession() noexcept {
+            auto *save = SaveSession();
+            if (!save)
+                return true;
+            save->BeginRetirement();
+            return save->IsSettled();
+        }
+
         /** @brief Drives owned pending prefab preparation and the sole Scene safe-point transaction.
          * @param frame Actual owner-lane frame/cancellation boundary. @return Original preparation/commit failure. */
         [[nodiscard]] virtual Result<void> CommitSceneChanges(const Runtime::FrameContext &frame) {
@@ -95,6 +120,12 @@ namespace Horo::Editor {
         /** @brief Advances capability tick admission before behavior fixed callbacks without simulating or blocking.
          * @param delta Actual host fixed quantum. @return Admission failure or success for a host without prefabs. */
         [[nodiscard]] virtual Result<void> BeginFixedUpdate(Gameplay::FixedDeltaTime) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Opens synchronous presentation mutation admission before project callbacks; hosts without save ownership have no extra
+         * work. */
+        [[nodiscard]] virtual Result<void> BeginPresentationUpdate() {
             return Result<void>::Success();
         }
 

@@ -174,6 +174,7 @@ namespace Horo::Editor {
 
         m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
         LoadDocumentAssetMeshes();  // Cold SAME cache preparation before the XR Scene participant captures exact leases.
+        BindPlaySaveSources();
         const Result<void> started =
             m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), m_gameplayRegistry->Components(), m_playSceneFactory,
                                 m_triggerBinding,
@@ -187,21 +188,37 @@ namespace Horo::Editor {
         ExtractPlayViewportScene();
     }
 
+    /** @copydoc EditorWorkspaceController::BindPlaySaveSources */
+    void EditorWorkspaceController::BindPlaySaveSources() {
+        auto bindings = m_gameplayRegistry->AcquireSaveBindings();
+        if (bindings.HasError()) {
+            m_playSession.ConfigureSaveError(bindings.ErrorValue());
+            return;
+        }
+        m_playSession.ConfigureSaveBindings(std::move(bindings).Value());
+    }
+
     void EditorWorkspaceController::StopPlaySession() {
         m_playSession.Stop();
         RefreshCollisionActivation();
         m_nativeGameplayReloadPending = false;
+        FinishStoppedGameplayRegistry();
+        RefreshPlayStateProjection();
+        m_viewModel.activeDocumentPanelId = m_prePlayDocumentPanelId.empty() ? "horo.viewport" : m_prePlayDocumentPanelId;
+        SyncPanelHost(WorkspaceDockArea::Document, m_viewModel.activeDocumentPanelId);
+        m_activeRuntimeRevision = {};
+    }
+
+    /** @copydoc EditorWorkspaceController::FinishStoppedGameplayRegistry */
+    void EditorWorkspaceController::FinishStoppedGameplayRegistry() {
+        if (m_playSession.State() != EditorPlaySessionState::Idle)
+            return;
         if (m_pendingGameplayRegistry && !m_pendingGameplayRegistry->HasBlockingDiagnostics()) {
             m_gameplayRegistry = std::move(m_pendingGameplayRegistry);
             RefreshAvailableBehaviorProjection();
         } else {
             m_pendingGameplayRegistry.reset();
         }
-        m_viewModel.playError.clear();
-        m_viewModel.playState = EditorPlayState::Idle;
-        m_viewModel.activeDocumentPanelId = m_prePlayDocumentPanelId.empty() ? "horo.viewport" : m_prePlayDocumentPanelId;
-        SyncPanelHost(WorkspaceDockArea::Document, m_viewModel.activeDocumentPanelId);
-        m_activeRuntimeRevision = {};
     }
 
     void EditorWorkspaceController::RefreshPlayStateProjection() {
@@ -237,6 +254,8 @@ namespace Horo::Editor {
         if (!std::isfinite(elapsedSeconds) || elapsedSeconds < 0.0F)
             return;
         m_playSession.PresentationUpdate(Gameplay::FrameDeltaTime{static_cast<double>(elapsedSeconds)});
+        FinishStoppedGameplayRegistry();
+        ResumePlaySceneReplacement();
         RefreshPlayStateProjection();
         ExtractPlayViewportScene();
     }

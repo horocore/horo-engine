@@ -1,36 +1,13 @@
 #include "Horo/Runtime/Save/RuntimeSaveSession.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "RuntimeSaveSessionInternal.h"
 
 #include <mutex>
 #include <new>
 #include <utility>
 
 namespace Horo::Runtime {
-    namespace RuntimeSaveSessionDetail {
-        /** @brief Worker closures and consumer handles pin this state; no session/host borrow crosses into a worker.
-         * The mutex protects only detached staging handoff. Participant/user callbacks never execute under it.
-         * Producer ownership stays fixed for Save, and transfers to the restore transaction only after the Load job settles.
-         */
-        struct Work final {
-            explicit Work(SaveOperationController value, CancellationSource cancel)
-                : producer(std::move(value)), handle(producer.Handle()), cancellation(std::move(cancel)) {}
-
-            SaveOperationController producer;
-            SaveOperationHandle handle;
-            CancellationSource cancellation;
-            SaveParticipantRegistrySnapshot participants;
-            StagedRestoreContext context;
-            std::shared_ptr<IRuntimeSaveWriter> writer;
-            std::shared_ptr<IRuntimeSaveRestoreSource> source;
-            RuntimeSaveSnapshot capture;
-            std::mutex mutex;
-            std::optional<RuntimeSaveRestoreStaging> staging;
-            std::optional<JobHandle> job;
-            bool completionPublished{};
-        };
-    }  // namespace RuntimeSaveSessionDetail
-
     namespace {
         using RuntimeSaveSessionDetail::Work;
 
@@ -67,8 +44,7 @@ namespace Horo::Runtime {
 
         /** @brief Publishes original failure unless cancellation won first; commit errors retain uncertainty. */
         Result<void> Fail(Work &work, Error error, SaveOperationCommitOutcome outcome = SaveOperationCommitOutcome::NotCommitted) {
-            (void)work.producer.Fail(error, outcome);
-            return Result<void>::Failure(std::move(error));
+            return RuntimeSaveSessionDetail::FailOwned(work, std::move(error), outcome);
         }
 
         /** @brief Executes detached preparation/publication; cancellation linearizes at the existing commit gate. */
@@ -130,6 +106,8 @@ namespace Horo::Runtime {
                 }
                 if (!staging)
                     return Failure(SaveErrors::CompletionInvalid);
+                if (work_.handoff)
+                    return RuntimeSaveSessionDetail::DeliverRestore(work_, std::move(*staging));
                 auto created = StagedRestoreTransaction::Create(work_.context, std::move(work_.producer), work_.participants,
                                                                 std::move(staging->participants));
                 if (created.HasError())
@@ -180,6 +158,8 @@ namespace Horo::Runtime {
             auto drained = safePoints.CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation, 1, executor);
             if (drained.HasError())
                 return Result<void>::Failure(std::move(drained).ErrorValue());
+            if (work.handoffFailure)
+                return Result<void>::Failure(*work.handoffFailure);
             const auto result = work.handle.Snapshot();
             if (result->terminalError)
                 return Result<void>::Failure(*result->terminalError);
@@ -308,6 +288,14 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeSaveSession::Load */
     Result<RuntimeSaveRequest> RuntimeSaveSession::Load(SaveOperationDescriptor operation,
                                                         std::shared_ptr<IRuntimeSaveRestoreSource> source) {
+        return Load(operation, std::move(source), {});
+    }
+
+    /** @copydoc RuntimeSaveSession::Load(SaveOperationDescriptor, std::shared_ptr<IRuntimeSaveRestoreSource>,
+     * std::shared_ptr<IRuntimeSaveRestoreHandoff>) */
+    Result<RuntimeSaveRequest> RuntimeSaveSession::Load(SaveOperationDescriptor operation,
+                                                        std::shared_ptr<IRuntimeSaveRestoreSource> source,
+                                                        std::shared_ptr<IRuntimeSaveRestoreHandoff> handoff) {
         using Return = Result<RuntimeSaveRequest>;
         if (auto valid = ValidateOwner(); valid.HasError())
             return Return::Failure(std::move(valid).ErrorValue());
@@ -319,6 +307,7 @@ namespace Horo::Runtime {
             if (admitted.HasError())
                 return Return::Failure(std::move(admitted).ErrorValue());
             work_->source = std::move(source);
+            work_->handoff = std::move(handoff);
             (void)Dispatch(work_);
             return Return::Success(RuntimeSaveRequest(work_));
         } catch (const std::bad_alloc &) {
@@ -399,10 +388,12 @@ namespace Horo::Runtime {
             ReleaseBarrier();
             return Result<void>::Success();
         }
-        if (!work.job && work.writer)
-            return CaptureAndDispatch(provenance);
-        if (!work.job)
+        if (work.handoffAttempted) {
+            RuntimeSaveSessionDetail::PollRestoreCancellation(work);
             return Result<void>::Success();
+        }
+        if (!work.job)
+            return work.writer ? CaptureAndDispatch(provenance) : Result<void>::Success();
         const auto job = work.job->Snapshot();
         if (!job || JobPending(job->state))
             return Result<void>::Success();
@@ -450,11 +441,10 @@ namespace Horo::Runtime {
     Result<void> RuntimeSaveSession::RetireInternal() {
         closed_ = true;
         if (work_) {
-            (void)work_->producer.RequestShutdownCancellation();
+            RuntimeSaveSessionDetail::CancelRestore(*work_);
             work_->cancellation.RequestCancellation();
             if (work_->job)
                 (void)work_->job->RequestCancel();
-            (void)work_->producer.ObserveCancellation();
         }
         ReleaseBarrier();
         return safePoints_->BeginShutdown();
@@ -464,7 +454,8 @@ namespace Horo::Runtime {
     bool RuntimeSaveSession::IsSettled() const {
         if (owner_ != std::this_thread::get_id() || mutating_)
             return false;
-        return Settled(work_);
+        const MutationScope mutation(mutating_);
+        return Settled(work_) && (!work_ || RuntimeSaveSessionDetail::RestoreSettled(*work_));
     }
 
     /** @copydoc RuntimeSaveSession::Acknowledge */
@@ -472,7 +463,7 @@ namespace Horo::Runtime {
         if (auto valid = ValidateOwner(); valid.HasError())
             return valid;
         const MutationScope mutation(mutating_);
-        if (!work_ || !work_->handle.Snapshot()->IsTerminal() || !Settled(work_))
+        if (!work_ || !work_->handle.Snapshot()->IsTerminal() || !Settled(work_) || !RuntimeSaveSessionDetail::RestoreSettled(*work_))
             return Failure(SaveErrors::OperationInProgress);
         ReleaseBarrier();
         // Prepare a successor before retiring records which may still await final worker polling.

@@ -4,6 +4,7 @@
  * @brief Explicit non-installed Editor Play application composition over the canonical Scene owner.
  */
 #include "CommittedSceneAssets.h"
+#include "EditorPlaySaveHost.h"
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayXrHost.h"
 #include "Horo/AI/AISceneActivation.h"
@@ -23,8 +24,15 @@ namespace Horo::Application::Internal {
         Prefab::PrefabMetricHandles prefabMetrics; /**< Process-prebound numeric handles copied through each Scene lifetime. */
         bool prefabGranted{}; /**< Independent explicit host permission; committed file presence never grants access. */
         std::shared_ptr<RuntimeUiPaintProjectSources> uiSources; /**< App-owned optional canonical UI source composition. */
-        std::vector<AI::AiControllerDescriptor> aiControllers;   /**< Owned inert catalog copied with the app policy. */
+        std::optional<Error> saveError;    /**< Original cold host/storage error, surfaced by Manager without blocking ordinary Play. */
+        EditorPlaySaveFactory saveFactory; /**< Explicit Play-only sandbox composition; prefab/preview policies leave it absent. */
+        std::vector<AI::AiControllerDescriptor> aiControllers; /**< Owned inert catalog copied with the app policy. */
     };
+
+    /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.
+     */
+    void ConfigureEditorPlaySavePolicy(EditorProjectScenePolicy &policy, JobSystem &jobs, OperationStore &operations, Clock &clock,
+                                       WallClock &wallClock);
 
     /** @brief Keeps captured resources alive while RuntimeHost owns and schedules the sole preview Scene service.
      * @details Declare this bundle before RuntimeHost. Moving scenes into RuntimeHost transfers only its

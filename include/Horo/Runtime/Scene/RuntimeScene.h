@@ -59,6 +59,15 @@ namespace Horo::Runtime {
         virtual void Rollback() noexcept = 0;
     };
 
+    /** @brief Optional aggregate cleanup after actual old owner/Scene retirement, outside the publication gate.
+     * @details Active aggregate ownership remains intact. Failed/pending transient retirement is retryable cleanup, never rollback.
+     */
+    class ISceneRestoreTransientRetirement {
+    public:
+        virtual ~ISceneRestoreTransientRetirement() = default;
+        [[nodiscard]] virtual Result<bool> RetirePublishedTransient() = 0;
+    };
+
     /** @brief Prepared-owner declaration of persistent dataset participation; runtime/backend world handles are not dataset IDs. */
     enum class SceneCanonicalDatasetProjection : std::uint8_t {
         Unqualified,
@@ -951,6 +960,14 @@ namespace Horo::Runtime {
          * @return Success or null/duplicate/late registration failure without replacing another owner.
          */
         [[nodiscard]] Result<void> AddStructuralParticipant(std::unique_ptr<SceneStructuralParticipant> participant);
+        /** @brief Observes the actual next unconsumed Scene runtime identity without reserving or consuming it.
+         * @pre Called on the service construction/owner lane; violation fails the ownership invariant.
+         * @return Exact current cursor; zero means identity space was exhausted and must stay zero when carried to a new service.
+         * @details Allocation-free observation. Hosts carry this value after actual Save/Scene settlement and before service teardown
+         * to avoid reusing identities consumed by complete private aggregates, including later rejected publications.
+         * Early failed preparation does not consume an identity. This is not a new identity issuer or a global reservation.
+         */
+        [[nodiscard]] SceneRuntimeId NextRuntimeId() const noexcept;
         /** @brief Returns the current immutable active scene view. */
         [[nodiscard]] std::optional<RuntimeSceneView> ActiveScene() const noexcept;
         /**
@@ -964,6 +981,11 @@ namespace Horo::Runtime {
         [[nodiscard]] std::optional<StructuralCommitResult> TakeStructuralCommitResult();
         /** @brief Returns and clears the newest recoverable operation error. */
         [[nodiscard]] std::optional<Error> TakeOperationError();
+        /** @brief Retries only explicit published transient cleanup outside the publication gate.
+         * @return True after all opted-in transient preparation is retired, false while pending, or original cleanup error.
+         * @details Active Scene/core/reference/physics ownership is preserved. Failure is not a rolled-back Load.
+         * @pre Call on the Scene lifecycle owner outside another lifecycle mutation. */
+        [[nodiscard]] Result<bool> RetirePublishedRestorePreparation();
 
         [[nodiscard]] Result<void> Startup(const CancellationToken &cancellation) override;
 
@@ -1038,6 +1060,10 @@ namespace Horo::Runtime {
         /** @brief Retires only an unpublished queue receipt; already published identities remain immutable. */
         void RetirePublicationReceipt(ScenePublicationStatus status) noexcept;
 
+        [[nodiscard]] Result<bool> RetirePublishedRestorePreparationInternal();
+        static std::optional<Error> MakeRestoreRetirementFallback();
+        std::optional<Error> restoreRetirementFallback_{MakeRestoreRetirementFallback()};
+        std::thread::id restoreRetirementOwner_{std::this_thread::get_id()};
         SceneAggregate active_;
         Vfx::VfxExtractionOutcome vfxFrame_;
         SceneAggregate pending_;
