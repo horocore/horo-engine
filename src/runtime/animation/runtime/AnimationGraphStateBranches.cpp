@@ -29,7 +29,8 @@ namespace Horo::Animation::Detail {
     namespace {
         /** @brief Preflights/stages one original player, shared by ordinary clips and tree members during branch retirement. */
         GraphInstanceOutcome TraversePlayer(GraphInstanceState &state, const std::uint32_t playerIndex, const std::uint32_t clipIndex,
-                                            const GraphEvaluationInput &input, const bool stage) {
+                                            const GraphEvaluationInput &input, const bool stage,
+                                            const GraphInstructionOccurrence &occurrence) {
             auto player = state.candidate.players[playerIndex];
             const auto delta = ScaleGraphDelta(input, player);
             if (delta.HasError())
@@ -38,6 +39,12 @@ namespace Horo::Animation::Detail {
             if (traversal.HasError())
                 return {GraphInstanceFailure::ClipFailure, traversal.ErrorValue()};
             if (stage) {
+                const auto &descriptor = state.clips[clipIndex]->Data().descriptor;
+                if (const auto notified =
+                        StageClipNotifies(state, playerIndex, clipIndex, player.cursor, delta.Value(),
+                                          {{0}, {descriptor.duration.ticks}, descriptor.wrapMode}, ClipNotifyEligible(state, occurrence));
+                    notified.HasError())
+                    return notified;
                 player.cursor = traversal.Value().cursor;
                 state.candidate.players[playerIndex] = player;
             }
@@ -60,7 +67,7 @@ namespace Horo::Animation::Detail {
                 if (weights[i] <= 0.0F)
                     continue;
                 const auto &sample = occurrence.blendSamples[i];
-                if (const auto result = TraversePlayer(state, sample.player, sample.clip, input, stage); result.HasError())
+                if (const auto result = TraversePlayer(state, sample.player, sample.clip, input, stage, occurrence); result.HasError())
                     return result;
             }
             return {};
@@ -70,7 +77,7 @@ namespace Horo::Animation::Detail {
         GraphInstanceOutcome TraverseOccurrence(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                                 const GraphEvaluationInput &input, const bool stage) {
             if (occurrence.clipPlayer)
-                return TraversePlayer(state, *occurrence.clipPlayer, *occurrence.clipBindingIndex, input, stage);
+                return TraversePlayer(state, *occurrence.clipPlayer, *occurrence.clipBindingIndex, input, stage, occurrence);
             if (occurrence.blendTree)
                 return TraverseTree(state, occurrence, input, stage);
             return {};

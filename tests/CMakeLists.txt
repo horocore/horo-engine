@@ -1039,6 +1039,10 @@ horo_register_catch_test(HoroAnimationDocumentTests LABELS "unit;animation;edito
 
 add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationActionTests.cpp
+        unit/runtime/animation/AnimationActionNotifyTests.cpp
+        unit/runtime/animation/AnimationClipEventTests.cpp
+        unit/runtime/animation/AnimationClipNotifyTests.cpp
+        unit/runtime/animation/AnimationSyncNotifyTests.cpp
         unit/runtime/animation/AnimationSequenceTests.cpp
         unit/runtime/animation/AnimationBlendTreeTests.cpp
         unit/runtime/animation/AnimationSyncGroupTests.cpp

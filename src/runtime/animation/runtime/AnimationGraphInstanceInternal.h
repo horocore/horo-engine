@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AnimationActionInternal.h"
+#include "AnimationClipNotifyInternal.h"
 #include "AnimationStateMachineInternal.h"
 #include "Horo/Animation/AnimationGraphInstance.h"
 
@@ -104,6 +105,7 @@ namespace Horo::Animation::Detail {
         GraphBlendMemberObservation observation{};
         AnimationClipTraversal traversal{};
         AnimationTimeDelta delta{};
+        AnimationClipCursor before{};
     };
 
     /** @brief One occurrence membership and branch-local input; no independent
@@ -145,6 +147,7 @@ namespace Horo::Animation::Detail {
         GraphCurveBindings curves;
         GraphBlendWorkspace blends;
         GraphActionWorkspace actions;
+        NotifyWorkspace notifies;
         AnimationClipLimits clipLimits{};
         GraphPoseWorkspace poses;
         GraphScalarWorkspace scalars;

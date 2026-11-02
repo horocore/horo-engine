@@ -3,6 +3,9 @@
 #include "AnimationGraphTestFixtures.h"
 #include "Horo/Animation/AnimationGraphInstance.h"
 
+#include <catch2/catch_message.hpp>
+#include <string_view>
+
 namespace Horo::Animation::Test::Instance {
     /** @brief Discovers actual direct and state-branch clip dependencies without fabricating an executable plan. */
     inline bool ReferencesClip(const GraphNodePayload &payload, const AnimationClipId wanted) {
@@ -73,6 +76,9 @@ namespace Horo::Animation::Test::Instance {
 
         [[nodiscard]] AnimationGraphInstance Create() const {
             auto result = AnimationGraphInstance::Create(Assets(), context);
+            INFO("domain=" << (result.HasError() ? result.ErrorValue().domain.Value() : std::string_view{}));
+            INFO("code=" << (result.HasError() ? result.ErrorValue().code.Value() : std::string_view{}));
+            INFO((result.HasError() ? result.ErrorValue().message : "instance created"));
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }

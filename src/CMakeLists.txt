@@ -1781,6 +1781,7 @@ add_library(HoroAnimationApi STATIC
         runtime/animation/api/AnimationGraphNodeValidation.cpp
         runtime/animation/api/AnimationCompression.cpp
         runtime/animation/api/AnimationClip.cpp
+        runtime/animation/api/AnimationClipEventValidation.cpp
         runtime/animation/api/AnimationClipDiagnostics.cpp
         runtime/animation/api/AnimationComponents.cpp
         runtime/animation/api/AnimationErrors.cpp
@@ -1817,6 +1818,11 @@ add_library(HoroAnimationRuntime STATIC
         runtime/animation/runtime/AnimationActionTraversal.cpp
         runtime/animation/runtime/AnimationActionExecution.cpp
         runtime/animation/runtime/AnimationActionPublication.cpp
+        runtime/animation/runtime/AnimationClipNotifyPreparation.cpp
+        runtime/animation/runtime/AnimationClipNotifyIntervals.cpp
+        runtime/animation/runtime/AnimationClipNotifyTraversal.cpp
+        runtime/animation/runtime/AnimationClipNotifyQueues.cpp
+        runtime/animation/runtime/AnimationClipNotifyLifecycle.cpp
         runtime/animation/runtime/AnimationBlendTreePreparation.cpp
         runtime/animation/runtime/AnimationBlendTreeWeights.cpp
         runtime/animation/runtime/AnimationBlendTreeExecution.cpp

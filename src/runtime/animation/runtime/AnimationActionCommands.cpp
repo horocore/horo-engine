@@ -161,6 +161,7 @@ namespace Horo::Animation::Detail {
     void FinishAction(GraphInstanceState &state, const std::uint32_t index, const GraphActionCompletionReason reason,
                       const AnimationTickId tick) noexcept {
         auto &record = state.actions.candidateRecords[index];
+        CloseActionClipNotifies(state, index, reason);
         record.observation.phase = GraphActionPhase::Terminal;
         record.observation.reason = reason;
         record.observation.terminalTick = tick;
@@ -198,6 +199,7 @@ namespace Horo::Animation::Detail {
         slot.weight = definition.blendIn.ticks == 0 ? 1.0F : 0.0F;
         if (!handoff)
             slot.handoffAction = NoActionIndex;
+        ResetClipNotifyPlayer(state, ActionPlayer(state, prepared.slot), AnimationNotifyReason::Reentered);
         state.candidate.players[ActionPlayer(state, prepared.slot)].cursor = {};
         record.observation.phase = GraphActionPhase::Playing;
         record.observation.section = definition.sequence.sections[slot.section].id;
@@ -210,6 +212,7 @@ namespace Horo::Animation::Detail {
                     const GraphActionStopPolicy policy, const AnimationTickId tick) noexcept {
         auto &record = state.actions.candidateRecords[index];
         const auto &definition = state.program->Actions()[record.action];
+        CloseActionClipNotifies(state, index, reason);
         if (policy == GraphActionStopPolicy::Cut || definition.blendOut.ticks == 0) {
             FinishAction(state, index, reason, tick);
             return;

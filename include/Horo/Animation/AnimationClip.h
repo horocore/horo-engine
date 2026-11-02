@@ -10,14 +10,17 @@
 #include "Horo/Animation/SkeletonAsset.h"
 #include "Horo/Math/SceneMath.h"
 
+#include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace Horo::Animation {
@@ -146,6 +149,74 @@ namespace Horo::Animation {
         bool operator==(const AnimationClipRegion &) const = default;
     };
 
+    struct AnimationEventMarkerTag;
+    struct AnimationEventTypeTag;
+    struct AnimationEventFieldTag;
+    /** @brief Stable clip-local authored event identity, independent of vector order or display name. */
+    using AnimationEventMarkerId = Foundation::Detail::NonZeroId64<AnimationEventMarkerTag, AnimationErrors::IdentityInvalid>;
+    /** @brief Registered semantic event identity supplied by the owning cook/application adapter. */
+    using AnimationEventTypeId = Foundation::Detail::NonZeroId64<AnimationEventTypeTag, AnimationErrors::IdentityInvalid>;
+    /** @brief Stable schema-local typed payload field identity. */
+    using AnimationEventFieldId = Foundation::Detail::NonZeroId64<AnimationEventFieldTag, AnimationErrors::IdentityInvalid>;
+    /** @brief Closed portable event field vocabulary; no strings, callbacks, native handles or owning objects. */
+    enum class AnimationEventValueKind : std::uint8_t {
+        Boolean,
+        SignedInteger,
+        UnsignedInteger,
+        Number,
+        Vector3,
+        Asset,
+        Count
+    };
+    /** @brief Fixed value storage whose copies remain valid after clip/instance retirement. */
+    using AnimationEventValue = std::variant<bool, std::int64_t, std::uint64_t, double, Math::Vec3, Assets::AssetId>;
+
+    /** @brief One typed map entry; field ID is authoritative. */
+    struct AnimationEventField final {
+        AnimationEventFieldId id{};
+        AnimationEventValue value{false};
+        bool operator==(const AnimationEventField &) const = default;
+    };
+
+    /** @brief Fixed-capacity typed field map; unused entries must retain their default value. */
+    struct AnimationEventPayload final {
+        static constexpr std::uint32_t MaximumFields = 8;
+        std::array<AnimationEventField, MaximumFields> fields{};
+        std::uint32_t count{};
+        bool operator==(const AnimationEventPayload &) const = default;
+    };
+
+    /** @brief Cook-time field declaration; optional unsigned allowlists encode adjacent owner's finite registered values. */
+    struct AnimationEventFieldSchema final {
+        AnimationEventFieldId id{};
+        AnimationEventValueKind kind{AnimationEventValueKind::Boolean};
+        bool required{true};
+        std::vector<std::uint64_t> allowedUnsigned{};
+        bool operator==(const AnimationEventFieldSchema &) const = default;
+    };
+
+    /** @brief Immutable typed payload schema copied into this exact clip revision, not a runtime service. */
+    struct AnimationEventSchema final {
+        AnimationEventTypeId type{};
+        std::uint32_t revision{1};
+        std::vector<AnimationEventFieldSchema> fields{};
+        bool operator==(const AnimationEventSchema &) const = default;
+    };
+
+    /** @brief Authored point or half-open duration window [time,time+duration), owned by the actual clip publication. */
+    struct AnimationClipEvent final {
+        AnimationEventMarkerId id{};
+        std::string name{};
+        AnimationEventTypeId type{};
+        std::uint32_t schemaRevision{1};
+        AnimationTime time{};
+        std::optional<AnimationDeltaTime> duration{};
+        AnimationEventPayload payload{};
+        bool fireInReverse{};
+        bool fireOnActivation{true}; /**< Includes the first actual travelled origin; holding/sampling alone produces no point. */
+        bool operator==(const AnimationClipEvent &) const = default;
+    };
+
     /** @brief Immutable identity, binding, time, playback, and storage metadata for
      * one clip publication. */
     struct AnimationClipDescriptor final {
@@ -169,8 +240,9 @@ namespace Horo::Animation {
     struct AnimationClipData final {
         AnimationClipDescriptor descriptor{};
         std::vector<AnimationJointTrack> tracks{};
-        std::vector<AnimationSyncMarker> syncMarkers{}; /**< Pinned with this exact clip generation; never a
-                                                           runtime side table. */
+        std::vector<AnimationSyncMarker> syncMarkers{}; /**< Pinned with this exact clip generation; never a runtime side table. */
+        std::vector<AnimationEventSchema> eventSchemas{};
+        std::vector<AnimationClipEvent> events{};
         [[nodiscard]] bool operator==(const AnimationClipData &) const noexcept = default;
     };
 
@@ -178,10 +250,15 @@ namespace Horo::Animation {
      */
     struct AnimationClipHardLimits final {
         static constexpr std::uint32_t SyncMarkers = 256;
+        static constexpr std::uint32_t Events = 1024;
+        static constexpr std::uint32_t EventSchemas = 64;
+        static constexpr std::uint32_t EventNameBytes = 64;
+        static constexpr std::uint32_t AllowedEventValues = 32;
         static constexpr std::uint32_t Tracks = SkeletonAssetHardLimits::Joints;
         static constexpr std::uint32_t KeysPerTrack = 65'536;
         static constexpr std::uint32_t TotalKeys = 1'048'576;
         static constexpr std::uint32_t BoundaryCrossings = 4'096;
+        static constexpr std::uint32_t TraceSegments = BoundaryCrossings + 2;
         static constexpr std::uint32_t SampleRateNumerator = 240'000;
         static constexpr std::uint32_t SampleRateDenominator = 10'000;
         static constexpr std::int64_t DurationTicks = 24LL * 60LL * 60LL * AnimationTicksPerSecond;
@@ -193,6 +270,8 @@ namespace Horo::Animation {
         std::uint32_t maximumKeysPerTrack{AnimationClipHardLimits::KeysPerTrack};
         std::uint32_t maximumTotalKeys{AnimationClipHardLimits::TotalKeys};
         std::uint32_t maximumBoundaryCrossings{64};
+        std::uint32_t maximumEvents{AnimationClipHardLimits::Events};
+        std::uint32_t maximumEventSchemas{AnimationClipHardLimits::EventSchemas};
         [[nodiscard]] constexpr auto operator<=>(const AnimationClipLimits &) const noexcept = default;
     };
 
@@ -338,6 +417,25 @@ namespace Horo::Animation {
         }
     };
 
+    /** @brief One actual directed sample interval, split only by the canonical clip traversal provider. */
+    struct AnimationClipTraversalSegment final {
+        AnimationTime from{};
+        AnimationTime to{};
+        AnimationTraversalDirection direction{AnimationTraversalDirection::Held};
+        bool loopSeamBefore{}; /**< Reverse Loop departure from canonical phase zero enters the preceding cycle. */
+        bool loopSeamAfter{};
+        std::int8_t cycleDeltaBefore{}; /**< Checked reverse departure from cyclic phase zero; no independent clock. */
+        std::int8_t cycleDeltaAfter{};
+        /**< Checked forward arrival at cyclic phase zero; PingPong remains continuous. */ /**< Forward Loop arrival at duration enters
+                                                                                              the next canonical cycle. */
+    };
+
+    /** @brief Exact complete provider outcome and count in caller-owned segment storage. */
+    struct AnimationClipTrace final {
+        AnimationClipTraversal traversal{};
+        std::uint32_t segments{};
+    };
+
     /** @brief Converts typed hot failure to the original owned diagnostic at a
      * control boundary.
      * @param failure Library-owned typed failure and literal context.
@@ -443,6 +541,18 @@ namespace Horo::Animation {
          */
         [[nodiscard]] AnimationClipOutcome<AnimationClipTraversal> TraverseRegionPrepared(
             AnimationClipCursor cursor, AnimationTimeDelta delta, AnimationClipRegion region, const AnimationClipLimits &limits = {},
+            AnimationClipAdmissionState admission = AnimationClipAdmissionState::Accepting) const;
+
+        /** @brief Exposes the complete actual directed path through the same checked regional traversal kernel.
+         * @param cursor Exact region-relative starting cursor. @param delta Complete signed interval.
+         * @param region Exact clip-local region/wrap policy. @param output Caller-owned bounded segment storage.
+         * @param limits Existing boundary policy, checked before output writes. @param admission Captured owner admission.
+         * @return Exact TraverseRegionPrepared result plus complete segment count; failure leaves output untouched.
+         * @post No allocation/I/O; segments conserve actual travelled path, including loop seams and PingPong turns.
+         */
+        [[nodiscard]] AnimationClipOutcome<AnimationClipTrace> TraceRegionPrepared(
+            AnimationClipCursor cursor, AnimationTimeDelta delta, AnimationClipRegion region,
+            std::span<AnimationClipTraversalSegment> output, const AnimationClipLimits &limits = {},
             AnimationClipAdmissionState admission = AnimationClipAdmissionState::Accepting) const;
 
         /** @brief Executes the same pose sample with allocation-free failure

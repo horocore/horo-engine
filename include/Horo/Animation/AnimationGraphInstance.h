@@ -5,6 +5,7 @@
  * runtime.
  */
 
+#include "Horo/Animation/AnimationComponents.h"
 #include "Horo/Animation/AnimationGraph.h"
 #include "Horo/Animation/AnimationParameterCurve.h"
 #include "Horo/Foundation/CancellationToken.h"
@@ -46,6 +47,51 @@ namespace Horo::Animation {
         std::uint32_t transitionsPerTick{128};
     };
 
+    struct AnimationEventConsumerTag;
+    /** @brief Cold registered instance-local consumer identity; no callback or global queue service. */
+    using AnimationEventConsumerId = Foundation::Detail::NonZeroId64<AnimationEventConsumerTag, AnimationErrors::IdentityInvalid>;
+
+    /** @brief Exact semantic type/schema revision accepted by one consumer. */
+    struct AnimationEventTypeBinding final {
+        AnimationEventTypeId type{};
+        std::uint32_t schemaRevision{1};
+        bool operator==(const AnimationEventTypeBinding &) const = default;
+    };
+
+    /** @brief Captured cold subscription; Create copies this descriptor and every type binding before returning. */
+    struct AnimationEventSubscription final {
+        AnimationEventConsumerId consumer{};
+        std::span<const AnimationEventTypeBinding> types{};
+        std::uint32_t capacity{256};
+    };
+    /** @brief Explicit state-transition event source selection; generic pose-layer masks do not infer gameplay event policy. */
+    enum class GraphTransitionEventPolicy : std::uint8_t {
+        AllActive,
+        SourceOnly,
+        DestinationOnly,
+        HighestContribution,
+        SuppressWhileBlending,
+        Count
+    };
+
+    /** @brief Independent finite notify limits, admitted together with the existing graph storage/work budget. */
+    struct GraphClipEventSettings final {
+        std::uint32_t maximumOccurrencesPerTick{4096};
+        std::uint64_t maximumOperations{8ULL * 1024ULL * 1024ULL};
+        std::span<const AnimationEventSubscription> subscriptions{};
+        GraphTransitionEventPolicy transitions{GraphTransitionEventPolicy::HighestContribution};
+        float minimumStateContribution{};
+    };
+
+    /** @brief Fixed implementation ceilings for event payloads, owned queues and traversal scratch. */
+    struct AnimationNotifyHardLimits final {
+        static constexpr std::uint32_t OccurrencesPerTick = 16384;
+        static constexpr std::uint32_t Consumers = 16;
+        static constexpr std::uint32_t TypesPerConsumer = 64;
+        static constexpr std::uint32_t QueuedOccurrences = 65536;
+        static constexpr std::uint64_t Operations = 64ULL * 1024ULL * 1024ULL;
+    };
+
     /** @brief Owner-assigned identity and finite storage/work admission, captured
      * at the control boundary. */
     struct GraphInstanceCreateContext final {
@@ -58,6 +104,10 @@ namespace Horo::Animation {
         std::uint64_t maximumControlOperations{8ULL * 1024ULL * 1024ULL}; /**< Whole-plan guard/reset/condition/event
                                                                              work before allocation. */
         GraphActionLimits actions{};
+        GraphClipEventSettings clipEvents{};
+        AnimationEvaluationDomain evaluationDomain{
+            AnimationEvaluationDomain::Count}; /**< Adapters must forward the actual component domain when clips contain event metadata;
+                                                  Count only preserves event-empty legacy instances. */
     };
 
     /** @brief One attempted fixed tick; caller views are copied before execution
@@ -274,6 +324,56 @@ namespace Horo::Animation {
         bool operator==(const GraphActionSlotObservation &) const = default;
     };
 
+    /** @brief Actual point/window delivery phase, separate from graph state/action lifecycle records. */
+    enum class AnimationNotifyPhase : std::uint8_t {
+        End,
+        Begin,
+        Point
+    };
+    /** @brief Truthful cause of delivery/closure, including discontinuities with no fabricated endpoint travel. */
+    enum class AnimationNotifyReason : std::uint8_t {
+        Crossed,
+        Activation,
+        Resumed,
+        Loop,
+        SectionChanged,
+        Cancelled,
+        Interrupted,
+        Inactive,
+        Suppressed,
+        ReverseIneligible,
+        PlaybackEnd,
+        Reentered
+    };
+
+    /** @brief Stable value identity for the exact instance/player/revision/tick/directed occurrence. */
+    struct AnimationEventOccurrenceId final {
+        AnimationInstanceHandle instance{};
+        AnimationTickId tick{};
+        AnimationClipId clip{};
+        AnimationClipGeneration clipGeneration{};
+        AnimationEventMarkerId marker{};
+        std::uint32_t player{};
+        std::uint64_t serial{};
+        std::int64_t loopOrdinal{};
+        AnimationNotifyPhase phase{AnimationNotifyPhase::Point};
+        AnimationTraversalDirection direction{AnimationTraversalDirection::Held};
+        bool operator==(const AnimationEventOccurrenceId &) const = default;
+    };
+
+    /** @brief Fully owned fixed-capacity occurrence; payload remains valid after clip reload and instance retirement. */
+    struct AnimationEventOccurrence final {
+        AnimationEventOccurrenceId id{};
+        AnimationEventTypeId type{};
+        std::uint32_t schemaRevision{};
+        AnimationEventPayload payload{};
+        AnimationTime time{};
+        GraphActionHandle action{};
+        std::uint64_t windowBeginSerial{}; /**< End refers to the actual previously delivered Begin; zero only for points. */
+        AnimationNotifyReason reason{AnimationNotifyReason::Crossed};
+        bool operator==(const AnimationEventOccurrence &) const = default;
+    };
+
     /** @brief Exact bounded hot-path outcome; successful commit also carries
      * publication evidence. */
     struct GraphInstanceOutcome final {
@@ -453,6 +553,22 @@ namespace Horo::Animation {
          */
         [[nodiscard]] GraphInstanceOutcome CopyActionCompletions(const PoseHandle &publication, std::span<GraphActionObservation> output,
                                                                  std::uint32_t &written) const;
+
+        /** @brief Copies committed clip occurrences from an exact resident pose publication without consuming them.
+         * @param publication Current/previous exact pose handle. @param output Caller-owned occurrence storage.
+         * @param written Complete count or zero on failure. @return Typed graph residency/owner/capacity outcome.
+         * @post No queue mutation/allocation; repeated reads preserve exact IDs for downstream deduplication.
+         */
+        [[nodiscard]] GraphInstanceOutcome CopyClipEvents(const PoseHandle &publication, std::span<AnimationEventOccurrence> output,
+                                                          std::uint32_t &written) const;
+        /** @brief Removes a bounded prefix from one actual cold-subscribed owner queue exactly once.
+         * @param consumer Registered consumer ID in this instance. @param output Caller-owned prefix storage.
+         * @param written Actual removed count; zero on failure. @return Typed owner/registration/pending outcome.
+         * @pre Owner thread, no pending candidate. Draining after Shutdown is allowed for previously committed values.
+         * @post No callbacks/I/O/allocation; missing/stale consumer IDs never imply successful delivery.
+         */
+        [[nodiscard]] GraphInstanceOutcome DrainClipEvents(AnimationEventConsumerId consumer, std::span<AnimationEventOccurrence> output,
+                                                           std::uint32_t &written);
 
         /** @brief Copies exact member weights/cursors/event eligibility from a
          * current or previous pose publication.

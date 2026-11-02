@@ -84,6 +84,11 @@ namespace Horo::Animation::Detail {
             return std::ranges::find(occurrence.inputs, pin->id, &GraphOccurrenceInput::destination)->slot;
         }
 
+        /** @brief Validates the complete actual sampled pose before any notify candidate is recorded. */
+        bool SampledPoseValid(const std::span<const Math::Transform> pose) noexcept {
+            return std::ranges::all_of(pose, ValidPoseTransform);
+        }
+
         /** @brief Samples one actual immutable clip with its independent occurrence
          * player candidate. */
         GraphInstanceOutcome SampleClip(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
@@ -108,9 +113,8 @@ namespace Horo::Animation::Detail {
             }
             if (const auto sampled = clip.SamplePrepared(traversal.Value().sampleTime, sample); sampled.HasError())
                 return {GraphInstanceFailure::ClipFailure, sampled.ErrorValue()};
-            for (const auto &transform : state.Pose(occurrence.output))
-                if (!ValidPoseTransform(transform))
-                    return {GraphInstanceFailure::Malformed};
+            if (!SampledPoseValid(state.Pose(occurrence.output)))
+                return {GraphInstanceFailure::Malformed};
             const auto coverage = state.Coverage(occurrence.output);
             std::ranges::copy(occurrence.clipCoverage, coverage.begin());
             if (binding.kind == AnimationClipKind::Additive) {
@@ -118,6 +122,11 @@ namespace Horo::Animation::Detail {
                 for (std::size_t joint = 0; joint < coverage.size(); ++joint)
                     coverage[joint] = static_cast<std::uint8_t>(coverage[joint] != 0 || baseCoverage[joint] != 0);
             }
+            if (const auto notified =
+                    StageClipNotifies(state, *occurrence.clipPlayer, *occurrence.clipBindingIndex, player.cursor, delta.Value(),
+                                      {{0}, {binding.duration.ticks}, binding.wrapMode}, ClipNotifyEligible(state, occurrence));
+                notified.HasError())
+                return notified;
             player.cursor = traversal.Value().cursor;
             return {};
         }
@@ -246,6 +255,7 @@ namespace Horo::Animation::Detail {
             if (const auto captured = CaptureParameters(state, input); captured.HasError())
                 return captured;
             PrepareCandidate(state);
+            BeginClipNotifies(state, input.tick);
             if (const auto tree = PrepareTreeControl(state, input); tree.HasError())
                 return tree;
             return EvaluateActions(state, input);
@@ -283,6 +293,6 @@ namespace Horo::Animation::Detail {
         if (Cancelled(state, input))
             return {GraphInstanceFailure::Cancelled};
         CompleteRetirement(state);
-        return {};
+        return CompleteClipNotifies(state);
     }
 }  // namespace Horo::Animation::Detail

@@ -30,6 +30,31 @@ namespace Horo::Animation::Detail {
             return {};
         }
 
+        /** @brief A real held active request remains visited; sampling alone never creates an activation notify. */
+        GraphInstanceOutcome HoldNotifies(GraphInstanceState &state, const std::uint32_t slotIndex, const GraphPlaybackRate rate) noexcept {
+            const auto &slot = state.actions.candidateSlots[slotIndex];
+            if (slot.active == NoActionIndex)
+                return {};
+            const auto &record = state.actions.candidateRecords[slot.active];
+            const auto &section = state.actions.definitions[record.action].sections[slot.section];
+            const auto player = ActionPlayer(state, slotIndex);
+            const auto staged = StageClipNotifies(state, player, section.clip, state.candidate.players[player].cursor, {}, section.region,
+                                                  true, record.observation.handle);
+            if (staged.HasError())
+                return staged;
+            EnterActionClipNotifyLoop(state, player,
+                                      rate.millionths < 0 ? AnimationTraversalDirection::Reverse : AnimationTraversalDirection::Forward);
+            return {state.notifies.failure};
+        }
+
+        /** @brief Direction admission and held publication use the actual resulting action cursor in the same candidate. */
+        GraphInstanceOutcome DirectAndHold(GraphInstanceState &state, const std::uint32_t slotIndex,
+                                           const GraphPlaybackRate rate) noexcept {
+            if (const auto directed = Direction(state, slotIndex, rate); directed.HasError())
+                return directed;
+            return HoldNotifies(state, slotIndex, rate);
+        }
+
         /** @brief Dequeues an already admitted record into the same slot without
          * another allocation or request issue. */
         GraphInstanceOutcome NextQueued(GraphInstanceState &state, const std::uint32_t slotIndex) noexcept {
@@ -116,9 +141,21 @@ namespace Horo::Animation::Detail {
             return section.next;
         }
 
+        /** @brief Notify ownership follows the exact authored successor selected by the existing action loop controller. */
+        void ResetSectionNotifies(GraphInstanceState &state, const std::uint32_t slotIndex, const PreparedAction &prepared,
+                                  const std::uint32_t old, const std::uint32_t next, const GraphPlaybackRate rate) noexcept {
+            const auto &section = prepared.sections[old];
+            const bool repeated =
+                section.loop != NoActionIndex && prepared.loops[section.loop].last == old && prepared.loops[section.loop].first == next;
+            ResetClipNotifyPlayer(state, ActionPlayer(state, slotIndex),
+                                  repeated ? AnimationNotifyReason::Loop : AnimationNotifyReason::SectionChanged,
+                                  rate.millionths < 0 ? AnimationTraversalDirection::Reverse : AnimationTraversalDirection::Forward);
+        }
+
         /** @brief Carries a fully consumed section into its actual authored successor
          * or bounded terminal fade. */
-        GraphInstanceOutcome Boundary(GraphInstanceState &state, const std::uint32_t slotIndex, const AnimationTickId tick) {
+        GraphInstanceOutcome Boundary(GraphInstanceState &state, const std::uint32_t slotIndex, const AnimationTickId tick,
+                                      const GraphPlaybackRate rate) {
             if (const auto spent = SpendActionTransition(state); spent.HasError())
                 return spent;
             auto &work = state.actions;
@@ -138,6 +175,7 @@ namespace Horo::Animation::Detail {
                 StopAction(state, slot.active, GraphActionCompletionReason::Completed, GraphActionStopPolicy::BlendOut, tick);
                 return {};
             }
+            ResetSectionNotifies(state, slotIndex, prepared, slot.section, next, rate);
             slot.section = next;
             slot.directionPending = true;
             state.candidate.players[ActionPlayer(state, slotIndex)].cursor = {};
@@ -166,6 +204,10 @@ namespace Horo::Animation::Detail {
             if (work.boundaryCrossings > state.clipLimits.maximumBoundaryCrossings)
                 return {GraphInstanceFailure::ClipFailure,
                         {AnimationClipFailure::LimitExceeded, "The complete action interval exceeds its boundary budget."}};
+            if (const auto notified = StageClipNotifies(state, ActionPlayer(state, slotIndex), section.clip, player.cursor, {delta},
+                                                        section.region, true, record.observation.handle);
+                notified.HasError())
+                return notified;
             player.cursor = traversed.Value().cursor;
             slot.sampleTime = traversed.Value().sampleTime;
             BlendIn(state, slot, state.program->Actions()[record.action], amount);
@@ -194,16 +236,16 @@ namespace Horo::Animation::Detail {
                 return direction;
             if (state.actions.candidateRecords[slot.active].observation.phase == GraphActionPhase::BlendingOut) {
                 FadeOut(state, slotIndex, remaining, input.tick);
-                return {};
+                return HoldNotifies(state, slotIndex, input.rate);
             }
             if (remaining == 0)
-                return {};
+                return HoldNotifies(state, slotIndex, input.rate);
             if (AtEnd(state, slotIndex, remaining))
-                return Boundary(state, slotIndex, input.tick);
+                return Boundary(state, slotIndex, input.tick, input.rate);
             if (const auto moved = Segment(state, slotIndex, remaining); moved.HasError())
                 return moved;
             if (state.candidate.players[ActionPlayer(state, slotIndex)].cursor.terminal)
-                return Boundary(state, slotIndex, input.tick);
+                return Boundary(state, slotIndex, input.tick, input.rate);
             return {};
         }
 
@@ -230,7 +272,7 @@ namespace Horo::Animation::Detail {
                 return advanced;
             done = remaining == 0;
             if (done && slot.active != NoActionIndex && slot.directionPending)
-                return Direction(state, index, input.rate);
+                return DirectAndHold(state, index, input.rate);
             return {};
         }
     }  // namespace

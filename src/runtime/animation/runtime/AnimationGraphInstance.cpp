@@ -45,7 +45,8 @@ namespace Horo::Animation {
          * sampling limits. */
         GraphInstanceFailure AdmitClipTracks(const AnimationClipAsset &clip, const AnimationClipLimits &limits) noexcept {
             using enum GraphInstanceFailure;
-            if (clip.Data().tracks.size() > limits.maximumTracks)
+            if (clip.Data().tracks.size() > limits.maximumTracks || clip.Data().events.size() > limits.maximumEvents ||
+                clip.Data().eventSchemas.size() > limits.maximumEventSchemas)
                 return LimitExceeded;
             std::uint64_t keys = 0;
             for (const auto &track : clip.Data().tracks) {
@@ -134,7 +135,9 @@ namespace Horo::Animation {
             return limits.maximumTracks > 0 && limits.maximumTracks <= AnimationClipHardLimits::Tracks && limits.maximumKeysPerTrack > 0 &&
                    limits.maximumKeysPerTrack <= AnimationClipHardLimits::KeysPerTrack && limits.maximumTotalKeys > 0 &&
                    limits.maximumTotalKeys <= AnimationClipHardLimits::TotalKeys &&
-                   limits.maximumBoundaryCrossings <= AnimationClipHardLimits::BoundaryCrossings;
+                   limits.maximumBoundaryCrossings <= AnimationClipHardLimits::BoundaryCrossings &&
+                   limits.maximumEvents <= AnimationClipHardLimits::Events &&
+                   limits.maximumEventSchemas <= AnimationClipHardLimits::EventSchemas;
         }
 
         /** @brief Admits unique float curve bindings and their bounded binary-search
@@ -202,6 +205,12 @@ namespace Horo::Animation {
             return AdmitBlendStorage(assets.program->Memory(), charge) && charge(Detail::ActionStorageBytes(*assets.program, actions), 1);
         }
 
+        /** @brief Charges notify values and the existing base workspace as one checked admission category. */
+        bool AdmitPreparedStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context,
+                                  StorageBudget &charge) noexcept {
+            return charge(Detail::ClipNotifyStorageBytes(assets, context), 1) && AdmitBaseStorage(assets, charge, context.actions);
+        }
+
         /** @brief Resolves one immutable state declaration for both storage and
          * control-work admission. */
         const GraphStateMachineNode &MachineDefinition(const AnimationGraphProgram &program,
@@ -217,7 +226,7 @@ namespace Horo::Animation {
             using enum GraphInstanceFailure;
             const auto &memory = assets.program->Memory();
             StorageBudget charge{context.maximumStorageBytes};
-            if (!AdmitBaseStorage(assets, charge, context.actions))
+            if (!AdmitPreparedStorage(assets, context, charge))
                 return LimitExceeded;
             if (!charge(memory.stateMachines, 2ULL * sizeof(Detail::GraphMachineState) + sizeof(Detail::GraphPreparedMachine)) ||
                 !charge(memory.conditionLatches, 3ULL * sizeof(std::uint8_t) + sizeof(Detail::StateMachineCondition)) ||
@@ -276,7 +285,8 @@ namespace Horo::Animation {
             using enum GraphInstanceFailure;
             if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
                 return LimitExceeded;
-            std::uint64_t control = assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
+            std::uint64_t control = Detail::ClipNotifyOperations(assets, context) +
+                                    assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
             control += 2048ULL * assets.program->Memory().blendMembers;
             control += Detail::ActionControlOperations(*assets.program, context.actions);
             for (const auto &occurrence : assets.program->Occurrences())
@@ -302,6 +312,8 @@ namespace Horo::Animation {
             if (context.cancellation.IsCancellationRequested())
                 return Cancelled;
             if (const auto failure = AdmitCompatibility(assets, context); failure != None)
+                return failure;
+            if (const auto failure = Detail::AdmitClipNotifies(assets, context); failure != None)
                 return failure;
             if (const auto failure = AdmitStorage(assets, context); failure != None)
                 return failure;
@@ -359,6 +371,12 @@ namespace Horo::Animation {
                 state.blends.published[slot][index] = state.blends.members[index].observation;
         }
 
+        /** @brief Reload keeps the same owner/component/slot and advances exactly one nonwrapping incarnation. */
+        bool ReplacementIdentity(const AnimationInstanceHandle &old, const AnimationInstanceHandle &next) noexcept {
+            return next.owner == old.owner && next.component == old.component && next.slot.index == old.slot.index &&
+                   old.slot.generation != std::numeric_limits<std::uint32_t>::max() && next.slot.generation == old.slot.generation + 1;
+        }
+
         /** @brief Owner-thread gate does not inspect mutable runtime state from another
          * thread. */
         GraphInstanceOutcome Owner(const Detail::GraphInstanceState *state) noexcept {
@@ -411,6 +429,8 @@ namespace Horo::Animation {
             }
             if (const auto failure = PrepareWorkspace(*state, assets, context.actions); failure != GraphInstanceFailure::None)
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
+            if (const auto failure = Detail::PrepareClipNotifies(*state, context); failure != GraphInstanceFailure::None)
+                return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
             if (context.cancellation.IsCancellationRequested())
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::Cancelled}));
             return Result<AnimationGraphInstance>::Success(AnimationGraphInstance{std::move(state)});
@@ -431,11 +451,9 @@ namespace Horo::Animation {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return Result<void>::Failure(DescribeGraphInstanceFailure(owner));
         const auto &old = state_->identity;
-        if (state_->closed || state_->candidate.tick.IsValid())
+        if (state_->closed || state_->candidate.tick.IsValid() || Detail::ClipNotifyBacklog(*state_))
             return Result<void>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::StateInvalid}));
-        if (context.instance.owner != old.owner || context.instance.component != old.component ||
-            context.instance.slot.index != old.slot.index || old.slot.generation == std::numeric_limits<std::uint32_t>::max() ||
-            context.instance.slot.generation != old.slot.generation + 1)
+        if (!ReplacementIdentity(old, context.instance))
             return Result<void>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::HandleStale}));
         if (!assets.program || assets.program->Id() != state_->program->Id())
             return Result<void>::Failure(MakeError(AnimationErrors::GraphReloadMismatch));
@@ -493,6 +511,7 @@ namespace Horo::Animation {
         state_->machines.swap(state_->candidate.machines);
         state_->latches.swap(state_->candidate.latches);
         Detail::CommitActions(*state_, slot, tick);
+        Detail::CommitClipNotifies(*state_, slot);
         state_->published.eventCounts[slot] = state_->candidate.eventCount;
         std::copy_n(state_->candidate.events.begin(), state_->candidate.eventCount, state_->published.events[slot].begin());
         for (std::size_t index = 0; index < state_->machines.size(); ++index) {
@@ -566,6 +585,30 @@ namespace Horo::Animation {
         std::copy_n(state_->published.events[publication.slot.index].begin(), count, output.begin());
         written = count;
         return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::CopyClipEvents */
+    GraphInstanceOutcome AnimationGraphInstance::CopyClipEvents(const PoseHandle &publication,
+                                                                const std::span<AnimationEventOccurrence> output,
+                                                                std::uint32_t &written) const {
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
+        const auto count = state_->notifies.publishedCounts[publication.slot.index];
+        if (output.size() < count)
+            return {GraphInstanceFailure::LimitExceeded};
+        std::copy_n(state_->notifies.published[publication.slot.index].begin(), count, output.begin());
+        written = count;
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::DrainClipEvents */
+    GraphInstanceOutcome AnimationGraphInstance::DrainClipEvents(const AnimationEventConsumerId consumer,
+                                                                 const std::span<AnimationEventOccurrence> output, std::uint32_t &written) {
+        if (const auto owner = Owner(state_.get()); owner.HasError())
+            return owner;
+        if (state_->candidate.tick.IsValid())
+            return {GraphInstanceFailure::StateInvalid};
+        return Detail::DrainClipNotifyQueue(*state_, consumer, output, written);
     }
 
     /** @copydoc AnimationGraphInstance::CopyBlendMembers */

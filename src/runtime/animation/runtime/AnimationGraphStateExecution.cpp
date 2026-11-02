@@ -78,10 +78,14 @@ namespace Horo::Animation::Detail {
         /** @brief Resets exactly the compiler's newly entered branch, including nested candidate machines and clip players. */
         void ResetBranch(GraphInstanceState &state, const GraphStateBranch &branch, const std::uint8_t lane) {
             for (const auto &occurrence : GraphStateBranchOccurrences(state, branch, lane)) {
-                if (occurrence.clipPlayer.has_value())
+                if (occurrence.clipPlayer.has_value()) {
+                    ResetClipNotifyPlayer(state, *occurrence.clipPlayer, AnimationNotifyReason::Reentered);
                     state.candidate.players[*occurrence.clipPlayer] = {};
-                for (const auto &sample : occurrence.blendSamples)
+                }
+                for (const auto &sample : occurrence.blendSamples) {
+                    ResetClipNotifyPlayer(state, sample.player, AnimationNotifyReason::Reentered);
                     state.candidate.players[sample.player] = {};
+                }
                 if (occurrence.phase == GraphOccurrencePhase::StateBegin) {
                     ResetGraphStateControl(state, *occurrence.stateMachine);
                 }

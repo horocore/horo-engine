@@ -7,6 +7,9 @@
 static_assert(!std::is_convertible_v<Horo::Animation::GraphNodeId, Horo::Animation::GraphPinId>);
 static_assert(!std::is_convertible_v<Horo::Animation::GraphStateId, Horo::Animation::GraphTransitionId>);
 static_assert(std::is_trivially_copyable_v<Horo::Animation::GraphStateEvent>);
+static_assert(!std::is_convertible_v<Horo::Animation::AnimationEventMarkerId, Horo::Animation::AnimationSyncMarkerId>);
+static_assert(Horo::Animation::AnimationEventPayload::MaximumFields == 8);
+static_assert(std::is_nothrow_copy_constructible_v<Horo::Animation::AnimationEventOccurrence>);
 static_assert(Horo::Animation::CurrentAnimationGraphSchemaVersion == 6);
 static_assert(Horo::Animation::CurrentAnimationGraphContractVersion == Horo::Animation::AnimationGraphContractVersion{1, 4, 0});
 static_assert(Horo::Animation::GraphBlendNode{}.mode == Horo::Animation::GraphBlendMode::Normalized);
