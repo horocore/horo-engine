@@ -99,6 +99,12 @@ namespace Horo::Render {
                 return Queue(descriptor, std::as_bytes(words), record.forces);
             }
 
+            /** @brief Queues the already charged arena through the same ordinary registry as every particle buffer. */
+            Result<void> ParameterArena() {
+                const auto &descriptor = record.preparationResources.parameterArena;
+                return descriptor.byteSize ? Queue(descriptor, {}, record.parameterArena) : Result<void>::Success();
+            }
+
             Result<void> Observations() {
                 const auto &readback = record.descriptor.readback;
                 const auto bytes = readback.enabled ? std::size_t{readback.maximumRecords} * VfxGpuObservationWords::Bytes : 4;
@@ -120,7 +126,7 @@ namespace Horo::Render {
         const auto states = VfxGpuStateBufferCount(record.descriptor);
         const auto &readback = record.descriptor.readback;
         const auto observations = readback.enabled ? readback.maximumPendingResults : 1U;
-        record.buffers.reserve(std::size_t{states} + observations + 1);
+        record.buffers.reserve(std::size_t{states} + observations + 1 + (record.preparationResources.parameterArena.byteSize != 0));
         record.states.resize(states);
         record.observations.resize(observations);
         record.generations.resize(states);
@@ -129,12 +135,14 @@ namespace Horo::Render {
         record.observationCompleted.resize(observations);
         record.observationSteps.resize(observations);
         record.steps.resize(record.descriptor.maximumPendingSteps);
-        GpuBufferBuilder builder{*this, *backend_, record};
+        GpuBufferBuilder builder{*this, *backend_, record, record.parameterArenaBytes};
         if (const auto created = builder.States(preparation); created.HasError())
             return created;
         if (const auto created = builder.Forces(preparation); created.HasError())
             return created;
         if (const auto created = builder.Observations(); created.HasError())
+            return created;
+        if (const auto created = builder.ParameterArena(); created.HasError())
             return created;
         record.nativeBufferBytes = builder.charged;
         return Result<void>::Success();

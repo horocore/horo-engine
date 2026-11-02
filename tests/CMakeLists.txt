@@ -5859,9 +5859,14 @@ if (HORO_BUILD_RENDER_VULKAN)
     if (HORO_ENABLE_GPU_SMOKE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(HoroVulkanCommandExecutionSmoke integration/renderer/VulkanCommandExecutionSmoke.cpp)
         target_compile_features(HoroVulkanCommandExecutionSmoke PRIVATE cxx_std_20)
-        target_include_directories(HoroVulkanCommandExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src)
+        target_include_directories(HoroVulkanCommandExecutionSmoke PRIVATE
+                ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests)
+        target_compile_definitions(HoroVulkanCommandExecutionSmoke PRIVATE
+                HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+                HORO_VFX_GPU_VULKAN_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/vfx_gpu_vulkan_locked")
         target_link_libraries(HoroVulkanCommandExecutionSmoke PRIVATE Catch2::Catch2WithMain
-                HoroEngine::RenderFrontend HoroEngine::RenderVulkan HoroRenderVulkanHostInterface Vulkan::Headers ${CMAKE_DL_LIBS})
+                HoroEngine::RenderFrontend HoroEngine::RenderVulkan HoroRenderVulkanHostInterface
+                HoroEngine::VfxApi HoroVfxGpuVulkanCookInternal Vulkan::Headers ${CMAKE_DL_LIBS})
         add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)
         set_tests_properties(HoroVulkanCommandExecutionSmoke PROPERTIES
                 LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE

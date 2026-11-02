@@ -33,7 +33,7 @@ namespace Horo::Render::Detail {
         VfxGpuSimulationId id;
         VfxGpuSimulationDescriptor descriptor;
         std::uint64_t deviceIncarnation{};
-        std::size_t nativeBufferBytes{}, reservedCpuPayloadBytes{};
+        std::size_t nativeBufferBytes{}, reservedCpuPayloadBytes{}, parameterArenaBytes{};
         Sha256Digest simulationProgram, drawProgram;
         CancellationToken lifetime, unitLifetime;
         bool unitLifetimeBound{};
@@ -42,7 +42,8 @@ namespace Horo::Render::Detail {
         std::shared_ptr<IResidentVfxGpuSimulation> native;
         std::vector<ResourceCreation<RenderBufferHandle>> buffers;
         std::vector<NativeVfxGpuBuffer> states, observations;
-        NativeVfxGpuBuffer forces;
+        NativeVfxGpuBuffer forces, parameterArena;
+        NativeVfxGpuPreparationResources preparationResources;
         std::vector<std::uint64_t> generations;
         std::vector<std::uint8_t> observationHeld, observationCompleted;
         std::vector<VfxGpuStepIdentity> observationSteps;

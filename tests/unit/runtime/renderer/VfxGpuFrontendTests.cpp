@@ -2,6 +2,7 @@
 #include "VfxGpuProtocolProvider.h"
 #include "support/AllocationProbe.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <thread>
 
 namespace Horo::Render::ProtocolFake {
@@ -496,4 +497,207 @@ namespace Horo::Render::ProtocolFake {
         REQUIRE(frontend->BeginShutdown().HasValue());
         CHECK(Value(frontend->PollDrain()) == RenderBackendDrainProgress::Drained);
     }
+
+    /** @brief Provides a valid large fake arena so double charging exceeds the deliberately tight per-simulation budget. */
+    NativeVfxGpuPreparationResources ArenaPlan() {
+        return {{512U * 1024U, RenderBufferUsage::Uniform, RenderBufferAccess::HostVisible}, 2048, 256};
+    }
+
+    /** @brief Computes only exact delegated Null buffer bytes, excluding separately admitted CPU ownership payload. */
+    std::size_t InventoryBytes(const VfxGpuSimulationDescriptor &descriptor, const NativeVfxGpuPreparationResources &plan) {
+        return descriptor.layout.byteCount * VfxGpuStateBufferCount(descriptor) + GpuParticleForceWords::Bytes + 4 +
+               plan.parameterArena.byteSize;
+    }
+
+    /** @brief Uses the existing real memory-budget owner with exactly one inventory worth of physical backing. */
+    RenderFrontendMemoryConfig InventoryMemory(const std::size_t bytes) {
+        RenderFrontendMemoryConfig memory;
+        memory.budget = {.hardCapBytes = bytes,
+                         .defaultBlockBytes = bytes,
+                         .maximumBlockBytes = bytes,
+                         .maximumAlignment = 16,
+                         .maximumPools = 4,
+                         .maximumBlocks = 16,
+                         .maximumReservations = 16,
+                         .maximumAllocations = 16};
+        return memory;
+    }
+
+    /** @brief Drains the real frontend under this explicit fake provider's quiescence contract. */
+    void CloseCold(RenderFrontend &frontend) {
+        REQUIRE(frontend.BeginShutdown().HasValue());
+        CHECK(Value(frontend.PollDrain()) == RenderBackendDrainProgress::Drained);
+    }
+
+    TEST_CASE("FAKE native uniform arena is real registry inventory charged once and pinned through logical release",
+              "[vfx-gpu][frontend][protocol-fake][native-arena][ledger]") {
+        Vfx::Tests::GpuSeedFixture seed;
+        auto info = seed.Info();
+        info.maximumRetainedBytes = 640U * 1024U;
+        auto logical = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(seed.Source()), info));
+        auto audit = std::make_shared<Audit>();
+        audit->preparationResources = ArenaPlan();
+        const auto physical = InventoryBytes(logical->Preparation().descriptor, audit->preparationResources);
+        auto frontend = Create(audit, InventoryMemory(physical));
+        const auto receipt = Value(PrepareCold(*frontend, *logical));
+        auto simulation = audit->Sim();
+        REQUIRE(simulation->parameterArena.handle.IsValid());
+        CHECK(simulation->parameterArena.instance ==
+              Value(Detail::RenderFrontendResourceAccess::BackendInstance(*frontend, simulation->parameterArena.handle)));
+        CHECK(simulation->preparationResources.parameterArena.byteSize == ArenaPlan().parameterArena.byteSize);
+        CHECK(simulation->preparationResources.operationSlots == ArenaPlan().operationSlots);
+        CHECK(simulation->preparationResources.parameterStrideBytes == ArenaPlan().parameterStrideBytes);
+        CHECK(simulation->lease);
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == physical);
+        const auto firstQueries = audit->preparationQueries;
+        CHECK(Value(PrepareCold(*frontend, *logical)).Id() == receipt.Id());
+        CHECK(audit->preparationQueries == firstQueries);
+        CHECK(audit->nativePreparations == 1);
+        REQUIRE(frontend->ReleaseVfxGpuSimulation(receipt).HasValue());
+        Value(frontend->ProcessResourceRequests());
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == physical);
+        simulation.reset();
+        audit->Reap();
+        Value(frontend->ProcessResourceRequests());
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        CloseCold(*frontend);
+        CHECK(audit->simulation.expired());
+        CHECK(std::ranges::count(std::span{audit->coldCalls}.first(audit->coldCallCount), ColdCall::CreateBuffer) ==
+              VfxGpuStateBufferCount(logical->Preparation().descriptor) + 3);
+        CHECK(std::ranges::count(std::span{audit->coldCalls}.first(audit->coldCallCount), ColdCall::DestroyBuffer) ==
+              VfxGpuStateBufferCount(logical->Preparation().descriptor) + 3);
+    }
+
+    /** @brief Mutates only returned plan metadata, never native handles or shader artifacts. */
+    NativeVfxGpuPreparationResources MalformedArena(const unsigned mode) {
+        auto plan = ArenaPlan();
+        switch (mode) {
+            case 0:
+                plan.parameterArena.usage = RenderBufferUsage::Storage;
+                break;
+            case 1:
+                plan.parameterArena.access = RenderBufferAccess::DeviceLocal;
+                break;
+            case 2:
+                plan.operationSlots = 0;
+                break;
+            case 3:
+                plan.parameterStrideBytes = 127;
+                break;
+            case 4:
+                plan.parameterStrideBytes = 129;
+                break;
+            case 5:
+                --plan.parameterArena.byteSize;
+                break;
+            case 6:
+                plan.parameterArena.byteSize = 0;
+                break;
+            default:
+                plan.operationSlots = std::numeric_limits<std::uint32_t>::max();
+                plan.parameterStrideBytes = std::numeric_limits<std::uint32_t>::max() - 15;
+                plan.parameterArena.byteSize = 1;
+        }
+        return plan;
+    }
+
+    TEST_CASE("FAKE native arena rejects malformed plans before buffer reservation or native preparation",
+              "[vfx-gpu][frontend][protocol-fake][native-arena][invalid]") {
+        const unsigned mode = GENERATE(0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U);
+        Vfx::Tests::GpuSeedFixture seed;
+        auto logical = seed.Prepare();
+        auto audit = std::make_shared<Audit>();
+        audit->preparationResources = MalformedArena(mode);
+        auto frontend = Create(audit);
+        CHECK(PrepareCold(*frontend, *logical).HasError());
+        CHECK(audit->preparationQueries == 1);
+        CHECK(audit->nativePreparations == 0);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        CHECK(std::ranges::count(std::span{audit->coldCalls}.first(audit->coldCallCount), ColdCall::CreateBuffer) == 0);
+        CloseCold(*frontend);
+    }
+
+    TEST_CASE("FAKE native arena query preserves its original typed error without allocation",
+              "[vfx-gpu][frontend][protocol-fake][native-arena][query-error]") {
+        Vfx::Tests::GpuSeedFixture seed;
+        auto logical = seed.Prepare();
+        auto audit = std::make_shared<Audit>();
+        audit->preparationQueryError = Failure();
+        auto frontend = Create(audit);
+        const auto result = PrepareCold(*frontend, *logical);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().domain.Value() == audit->preparationQueryError->domain.Value());
+        CHECK(result.ErrorValue().code.Value() == audit->preparationQueryError->code.Value());
+        CHECK(result.ErrorValue().message == audit->preparationQueryError->message);
+        CHECK(audit->nativePreparations == 0);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        CloseCold(*frontend);
+    }
+
+    TEST_CASE("FAKE native arena cost overflow rejects the whole cold inventory before any resource queueing",
+              "[vfx-gpu][frontend][protocol-fake][native-arena][overflow]") {
+        Vfx::Tests::GpuSeedFixture seed;
+        auto logical = seed.Prepare();
+        auto audit = std::make_shared<Audit>();
+        audit->preparationResources = ArenaPlan();
+        audit->overflowArenaCost = true;
+        auto frontend = Create(audit);
+        CHECK(PrepareCold(*frontend, *logical).HasError());
+        CHECK(audit->nativePreparations == 0);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        CHECK(std::ranges::count(std::span{audit->coldCalls}.first(audit->coldCallCount), ColdCall::CreateBuffer) == 0);
+        CloseCold(*frontend);
+    }
+
+    TEST_CASE("FAKE native arena cannot bypass the actual global physical budget",
+              "[vfx-gpu][frontend][protocol-fake][native-arena][global-budget]") {
+        Vfx::Tests::GpuSeedFixture seed;
+        auto logical = seed.Prepare();
+        auto audit = std::make_shared<Audit>();
+        audit->preparationResources = ArenaPlan();
+        auto frontend = Create(audit, InventoryMemory(InventoryBytes(logical->Preparation().descriptor, audit->preparationResources) - 1));
+        CHECK(PrepareCold(*frontend, *logical).HasError());
+        CHECK(audit->nativePreparations == 0);
+        CHECK(frontend->UploadSnapshot().pendingRequests == 0);
+        CloseCold(*frontend);
+    }
+
+    TEST_CASE("FAKE native arena rollback reclaims its real pinned allocation before a frame-free retry",
+              "[vfx-gpu][frontend][protocol-fake][native-arena][rollback]") {
+        Vfx::Tests::GpuSeedFixture seed;
+        auto small = seed.Info();
+        small.maximumRetainedBytes = 128U * 1024U;
+        auto rejected = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(seed.Source()), small));
+        auto audit = std::make_shared<Audit>();
+        audit->preparationResources = {{4096, RenderBufferUsage::Uniform, RenderBufferAccess::HostVisible}, 16, 256};
+        audit->extraMetadataBytes = 256U * 1024U;
+        const auto physical = InventoryBytes(rejected->Preparation().descriptor, audit->preparationResources);
+        auto frontend = Create(audit, InventoryMemory(physical));
+        CHECK(PrepareCold(*frontend, *rejected).HasError());
+        REQUIRE(audit->nativePreparations == 1);
+        const std::weak_ptr<Simulation> abandoned = audit->simulation;
+        REQUIRE_FALSE(abandoned.expired());
+        REQUIRE(audit->Sim()->parameterArena.handle.IsValid());
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == physical);
+        auto retry = seed.Prepare();
+        const auto receipt = Value(PrepareCold(*frontend, *retry));
+        CHECK(receipt.IsLive());
+        CHECK(abandoned.expired());
+        CHECK(audit->reaped == 1);
+        CHECK(audit->nativePreparations == 2);
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == physical);
+        const auto buffers = VfxGpuStateBufferCount(retry->Preparation().descriptor) + 3;
+        CHECK(std::ranges::count(std::span{audit->coldCalls}.first(audit->coldCallCount), ColdCall::DestroyBuffer) == buffers);
+        REQUIRE(frontend->ReleaseVfxGpuSimulation(receipt).HasValue());
+        audit->Reap();
+        Value(frontend->ProcessResourceRequests());
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        CloseCold(*frontend);
+        CHECK(audit->simulation.expired());
+        CHECK(std::ranges::count(std::span{audit->coldCalls}.first(audit->coldCallCount), ColdCall::DestroyBuffer) == 2 * buffers);
+    }
+
 }  // namespace Horo::Render::ProtocolFake

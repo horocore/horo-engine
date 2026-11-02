@@ -33,11 +33,11 @@ preparation receipt. Native adapters must validate their private preparation,
 buffer capacities and current generations before encoding. GL 4.1 and Null reject
 these operations explicitly.
 
-HORO-1731 remains in progress. The qualified native slice is Metal with explicitly
-prepared initial particles; it does not implement a complete authored GPU emitter.
-Vulkan offline cooking is qualified, while its native integration is active work.
-D3D12 native compute/direct-draw/readback integration remains open. Neither offline
-artifacts nor the Metal qualification establish all-backend ticket completion.
+HORO-1731 remains in progress. Metal and Vulkan implement the explicitly prepared
+initial-particle slice; neither implements a complete authored GPU emitter. Vulkan
+has been exercised through its real Linux loader and Mesa lavapipe CPU driver.
+D3D12 native compute/direct-draw/readback integration remains open. Offline
+artifacts and these backend qualifications do not establish all-backend ticket completion.
 
 ## Supported initial-particle slice
 
@@ -129,3 +129,43 @@ revocation and next-frame retirement. The explicit fixture completion waits and
 pixel diagnostic readback are test operations, not a normal-frame synchronization
 or observation-off rendering requirement. This evidence applies to the Metal
 `PreparedParticles` slice only.
+
+## Vulkan preparation and qualification
+
+The Vulkan backend uses the same frontend preparation, world snapshots, graph
+workloads and acknowledgement sequence. Its preparation query reports the required
+uniform parameter arena, operation count and device-aligned stride. The frontend
+creates that arena as an ordinary registered Uniform/HostVisible buffer and charges
+it once alongside the simulation inventory. Buffer identity, completion pins,
+rollback and retirement use the existing registry. Metal's inline parameters do
+not require this additional buffer. Driver allocation overhead remains outside
+the logical payload accounting described above.
+
+Dynamic uniform offsets and descriptor sets are reserved during cold preparation.
+Compute and draw retain the exact issued buffers and kernel owner; actual accepted
+submissions and timeline completion produce the acknowledgements. The specialized
+VFX capability requires a compute-capable selected graphics queue and initialized
+native implementation. It does not enable generic compute or invent a dedicated
+compute queue.
+
+Linux ARM64 GCC 15.2 Debug qualification used the genuinely cooked fixture under
+`tests/fixtures/shaders/vfx_gpu_vulkan_locked`, Vulkan validation layers and Mesa
+26.0.8 lavapipe. The unit suite passed 132 cases / 7,428 assertions, with three
+explicit unsupported cases skipped. Native qualification passed 933 assertions
+across three executed cases; the separate queue-family case was skipped because
+the driver exposes no such queue. This proves real Vulkan compute, direct-draw
+submission, normalized CPU observation parity and native ownership on a CPU
+driver. It does not establish physical-GPU pixels, performance or Windows parity.
+
+The native fault test forwards the first real submission, then injects an
+out-of-host-memory failure before forwarding the second. The accepted compute
+generation remains observable and matches the CPU oracle; the suffix is never
+submitted. The existing Vulkan backend deliberately rejects further frames after
+a submission failure while allowing accepted work to be observed and drained.
+There is no same-owner automatic recovery or blind replay. Shutdown must still
+prove native settlement before releasing resources.
+
+An acquired observation result retains its request until the consumer lease is
+released and the owner pumps `ProcessVfxGpuReadbacks`. Pump released results before
+the next intended step. A full result ledger remains real backpressure; neither
+extraction nor elapsed frame numbers prove that a slot is free.

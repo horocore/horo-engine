@@ -49,35 +49,47 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    Result<void> VulkanGraphRuntime::Impl::ValidateColor(const RenderGraphColorAttachment &operation, RenderQueueId queue) {
+        const auto *color = &operation;
+
+        const auto &binding = bindings[color->texture.value - 1];
+        if (const auto *nativeQueue = Queue(queue); nativeQueue == nullptr || !nativeQueue->supportsGraphics ||
+                                                    binding.colorView == VK_NULL_HANDLE ||
+                                                    binding.kind != RenderGraphResourceKind::Texture || !color->operations.IsValid() ||
+                                                    color->operations.storeOperation != AttachmentStoreOperation::Store ||
+                                                    color->operations.loadOperation == AttachmentLoadOperation::DontCare)
+            return Result<void>::Failure(Unsupported(
+                "Color work requires an admitted graphics queue and whole single-sample color attachment with preserved store."));
+        auto &state = states[color->texture.value - 1];
+        if (color->operations.loadOperation == AttachmentLoadOperation::Load && !state.contentsDefined)
+            return Result<void>::Failure(Invalid("Color attachment Load requires defined native contents."));
+        state.contentsDefined = true;
+        return Result<void>::Success();
+    }
+
+    namespace {
+        bool SeparatelyPrepared(const RenderGraphWorkload &workload) {
+            return std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphVfxGpuCompute>(workload) ||
+                   std::holds_alternative<RenderGraphVfxGpuDraw>(workload);
+        }
+    }  // namespace
+
     /** @brief Validates native descriptor roles and contents before recording; unsupported adjacent capabilities remain explicit. */
     Result<void> VulkanGraphRuntime::Impl::ValidateWorkload(const RenderGraphWorkload &workload, const RenderQueueId queue) {
         if (const auto *multiviewWork = std::get_if<RenderGraphMultiview>(&workload)) {
             PrepareMultiviewContents(*multiviewWork, bindings, states);
             return Result<void>::Success();
         }
-        if (std::holds_alternative<RenderGraphVfx>(workload))
-            return Result<void>::Success();  // Complete native scene admission is performed with the full request in PreparePass.
+        if (SeparatelyPrepared(workload))
+            return Result<void>::Success();
         if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
             return ValidateDepthAttachment(*depth, queue);
         if (std::holds_alternative<std::monostate>(workload))
             return Result<void>::Success();
         if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload))
             return ValidateBufferCopy(*copy);
-        if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
-            const auto &binding = bindings[color->texture.value - 1];
-            if (const auto *nativeQueue = Queue(queue); nativeQueue == nullptr || !nativeQueue->supportsGraphics ||
-                                                        binding.colorView == VK_NULL_HANDLE ||
-                                                        binding.kind != RenderGraphResourceKind::Texture || !color->operations.IsValid() ||
-                                                        color->operations.storeOperation != AttachmentStoreOperation::Store ||
-                                                        color->operations.loadOperation == AttachmentLoadOperation::DontCare)
-                return Result<void>::Failure(Unsupported(
-                    "Color work requires an admitted graphics queue and whole single-sample color attachment with preserved store."));
-            auto &state = states[color->texture.value - 1];
-            if (color->operations.loadOperation == AttachmentLoadOperation::Load && !state.contentsDefined)
-                return Result<void>::Failure(Invalid("Color attachment Load requires defined native contents."));
-            state.contentsDefined = true;
-            return Result<void>::Success();
-        }
+        if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload))
+            return ValidateColor(*color, queue);
         if (std::holds_alternative<PrimaryOutputAttachment>(workload))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported,
                                                    "Primary output acquisition/presentation belongs to the Vulkan WSI capability."));
@@ -153,6 +165,22 @@ namespace Horo::Render::Detail {
         }, workload);
     }
 
+    Result<void> VulkanGraphRuntime::Impl::RecordPass(VkCommandBuffer command, VulkanCommandTicket ticket,
+                                                      const RenderQueueSubmission &submission, const RenderGraphExecutionRequest &request,
+                                                      std::size_t pass) {
+        Barriers(command, passes[pass].before);
+        const auto &workload = request.workloads[pass].workload;
+        if (std::holds_alternative<RenderGraphVfx>(workload))
+            EncodeVfx(command, pass);
+        else if (std::holds_alternative<RenderGraphVfxGpuCompute>(workload) || std::holds_alternative<RenderGraphVfxGpuDraw>(workload)) {
+            if (const auto encoded = vfxGpu.Encode(command, ticket, submission, request, pass, bindings); encoded.HasError())
+                return encoded;
+        } else
+            Encode(command, workload);
+        Barriers(command, passes[pass].after);
+        return Result<void>::Success();
+    }
+
     /** @brief Copies submission ownership into preallocated tickets; no graph/request views survive admission. */
     Result<void> VulkanGraphRuntime::Impl::Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins) {
         for (auto &submission : submissions) {
@@ -171,12 +199,8 @@ namespace Horo::Render::Detail {
             if (buffer.HasError())
                 return Result<void>::Failure(std::move(buffer).ErrorValue());
             for (std::size_t pass = submission.passes.offset; pass < submission.passes.offset + submission.passes.count; ++pass) {
-                Barriers(buffer.Value(), passes[pass].before);
-                if (std::holds_alternative<RenderGraphVfx>(request.workloads[pass].workload))
-                    EncodeVfx(buffer.Value(), pass);
-                else
-                    Encode(buffer.Value(), request.workloads[pass].workload);
-                Barriers(buffer.Value(), passes[pass].after);
+                if (const auto encoded = RecordPass(buffer.Value(), submission.ticket, submission.value, request, pass); encoded.HasError())
+                    return encoded;
             }
             if (auto finished = commands.Finish(submission.ticket); finished.HasError())
                 return finished;

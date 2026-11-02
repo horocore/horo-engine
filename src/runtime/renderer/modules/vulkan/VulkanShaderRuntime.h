@@ -10,6 +10,11 @@
 #include <memory>
 
 namespace Horo::Render::Detail {
+    namespace VulkanShaderDetail {
+        /** @brief Existing bounded exact-entry SPIR-V check shared by native graphics and particle program creation. */
+        [[nodiscard]] bool HasEntry(const std::vector<std::uint32_t> &, const RenderShaderModuleDescriptor &);
+    }  // namespace VulkanShaderDetail
+
     struct VulkanGraphResourceState;
 
     /** @brief Typed selected-device identity borrowed by native material leases. */

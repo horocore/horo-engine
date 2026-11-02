@@ -58,6 +58,69 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        /** @brief Checks the exact optional uniform plan without overflowing its slot/stride product. */
+        bool ArenaShape(const NativeVfxGpuPreparationResources &plan) noexcept {
+            return plan.parameterArena.usage == RenderBufferUsage::Uniform &&
+                   plan.parameterArena.access == RenderBufferAccess::HostVisible && plan.operationSlots > 0 &&
+                   plan.parameterStrideBytes >= 128 && plan.parameterStrideBytes % 16 == 0 &&
+                   plan.operationSlots <= std::numeric_limits<std::size_t>::max() / plan.parameterStrideBytes &&
+                   plan.parameterArena.byteSize == std::size_t{plan.operationSlots} * plan.parameterStrideBytes;
+        }
+
+        /** @brief Rejects malformed native plans before any inventory or readback reservation. */
+        Result<void> ValidatePreparationResources(const NativeVfxGpuPreparationResources &plan) {
+            if (plan.parameterArena.byteSize == 0) {
+                if (plan.operationSlots == 0 && plan.parameterStrideBytes == 0)
+                    return Result<void>::Success();
+            } else if (ArenaShape(plan)) {
+                return ValidateRenderBufferDescriptor(plan.parameterArena);
+            }
+            return Result<void>::Failure(MakeError(VfxGpuSimulationErrors::InvalidPreparation,
+                                                   "Native GPU parameter arena requires an exact Uniform/HostVisible slot/stride plan."));
+        }
+
+        /** @brief Queries real arena backing cost before any slot, payload or readback allocation is reserved. */
+        Result<std::size_t> QueryParameterCost(const IRenderBackend &backend, const NativeVfxGpuPreparationResources &resources,
+                                               const VfxGpuSimulationDescriptor &descriptor) {
+            if (!resources.parameterArena.byteSize)
+                return Result<std::size_t>::Success(0);
+            const auto cost = backend.QueryBufferMemoryCost(resources.parameterArena);
+            if (cost.HasError())
+                return Result<std::size_t>::Failure(cost.ErrorValue());
+            if (!cost.Value().IsValid() || cost.Value().requiredBytes > descriptor.maximumRetainedBytes)
+                return Result<std::size_t>::Failure(
+                    MakeError(FrontendErrors::ResourceCapacityExhausted, "Native GPU parameter arena exceeds its retained-byte slice."));
+            return Result<std::size_t>::Success(cost.Value().requiredBytes);
+        }
+
+        /** @brief Retains only the successfully realized program family and validated immutable resource plan. */
+        struct NativePreparationPlan final {
+            std::shared_ptr<IResidentVfxGpuKernel> kernel;
+            NativeVfxGpuPreparationResources resources;
+            std::size_t parameterArenaBytes{};
+        };
+
+        /** @brief Runs native cold maintenance and canonical retirement before querying additional registered backing. */
+        Result<NativePreparationPlan> PrepareNativeResources(RenderFrontend &frontend, IRenderBackend &backend,
+                                                             const CookedVfxGpuPrograms &programs,
+                                                             const VfxGpuSimulationDescriptor &descriptor) {
+            using Outcome = Result<NativePreparationPlan>;
+            const auto kernel = backend.RealizeVfxGpuPrograms(programs);
+            if (kernel.HasError())
+                return Outcome::Failure(kernel.ErrorValue());
+            if (const auto processed = frontend.ProcessResourceRequests(); processed.HasError())
+                return Outcome::Failure(processed.ErrorValue());
+            const auto resources = backend.QueryVfxGpuNativePreparationResources(descriptor);
+            if (resources.HasError())
+                return Outcome::Failure(resources.ErrorValue());
+            if (const auto valid = ValidatePreparationResources(resources.Value()); valid.HasError())
+                return Outcome::Failure(valid.ErrorValue());
+            const auto cost = QueryParameterCost(backend, resources.Value(), descriptor);
+            if (cost.HasError())
+                return Outcome::Failure(cost.ErrorValue());
+            return Outcome::Success({kernel.Value(), resources.Value(), cost.Value()});
+        }
+
         /** @brief Rolls back every already queued prefix handle if a cold allocation/callback fails. */
         struct Rollback final {
             RenderFrontend &frontend;
@@ -75,6 +138,17 @@ namespace Horo::Render {
             }
         };
 
+        /** @brief Resolves one ordinary registered buffer without exposing its CPU backing or native API type. */
+        Result<void> ResolveBuffer(RenderResourceRegistry &registry, NativeVfxGpuBuffer &buffer) {
+            const auto native =
+                registry.BackendInstance(RenderResourceClass::Buffer, {buffer.handle.owner, buffer.handle.slot, buffer.handle.generation});
+            if (native.HasError())
+                return Result<void>::Failure(native.ErrorValue());
+            buffer.instance = native.Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves all exact registered inventory generations before passing cold native borrows. */
         Result<void> ResolveInventory(RenderResourceRegistry &registry, VfxGpuRecord &record) {
             for (auto &buffer : record.states) {
                 const auto native = registry.BackendInstance(RenderResourceClass::Buffer,
@@ -90,12 +164,10 @@ namespace Horo::Render {
                     return Result<void>::Failure(native.ErrorValue());
                 buffer.instance = native.Value();
             }
-            const auto native =
-                registry.BackendInstance(RenderResourceClass::Buffer,
-                                         {record.forces.handle.owner, record.forces.handle.slot, record.forces.handle.generation});
-            if (native.HasError())
-                return Result<void>::Failure(native.ErrorValue());
-            record.forces.instance = native.Value();
+            if (const auto force = ResolveBuffer(registry, record.forces); force.HasError())
+                return force;
+            if (record.parameterArena.handle.IsValid())
+                return ResolveBuffer(registry, record.parameterArena);
             return Result<void>::Success();
         }
 
@@ -185,6 +257,9 @@ namespace Horo::Render {
             return existing;
         if (const auto idle = QueueIsIdle(*this); idle.HasError())
             return Outcome::Failure(idle.ErrorValue());
+        const auto nativePlan = PrepareNativeResources(*this, *backend_, programs, preparation.descriptor);
+        if (nativePlan.HasError())
+            return Outcome::Failure(nativePlan.ErrorValue());
         const auto reserved = vfxGpuStorage_->ReserveSlot();
         if (reserved.HasError())
             return Outcome::Failure(reserved.ErrorValue());
@@ -197,13 +272,9 @@ namespace Horo::Render {
         record->simulationProgram = programs.simulation.artifact.artifactKey;
         record->drawProgram = programs.draw.artifact.artifactKey;
         record->lifetime = lifetime;
-        const auto kernel = backend_->RealizeVfxGpuPrograms(programs);
-        if (kernel.HasError())
-            return Outcome::Failure(kernel.ErrorValue());
-        record->kernel = kernel.Value();
-        // Native cold maintenance releases pins; the canonical bounded drain retires their actual backing before reuse.
-        if (const auto processed = ProcessResourceRequests(); processed.HasError())
-            return Outcome::Failure(processed.ErrorValue());
+        record->kernel = nativePlan.Value().kernel;
+        record->preparationResources = nativePlan.Value().resources;
+        record->parameterArenaBytes = nativePlan.Value().parameterArenaBytes;
         if (const auto reservedReadback =
                 Detail::ReserveVfxGpuReadback(*vfxGpuStorage_, *record,
                                               backend_->Capabilities().support.features.Supports(RenderCapability::VfxGpuReadback));
@@ -263,7 +334,8 @@ namespace Horo::Render {
         if (lease.HasError())
             return Result<void>::Failure(lease.ErrorValue());
         const auto native = backend_->PrepareNativeVfxGpuSimulation({record.id, record.deviceIncarnation, preparation, record.kernel,
-                                                                     record.states, record.forces, record.observations, lease.Value()});
+                                                                     record.states, record.forces, record.observations, lease.Value(),
+                                                                     record.parameterArena, record.preparationResources});
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
         if (!native.Value())

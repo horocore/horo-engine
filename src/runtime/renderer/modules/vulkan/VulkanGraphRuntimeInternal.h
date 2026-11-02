@@ -3,6 +3,7 @@
 #include "VulkanGraphRuntime.h"
 #include "VulkanMultiviewRuntime.h"
 #include "VulkanRenderBackendErrors.h"
+#include "VulkanVfxGpuRuntime.h"
 
 #include <array>
 #include <bit>
@@ -24,6 +25,8 @@ namespace Horo::Render::Detail {
         bool release{false};
         bool acquire{false};
         bool discardPriorAccess{false};
+        bool computeAvailable{false}; /**< Queried capability of every queue whose compute scope participates. */
+        bool particleHandoff{false};  /**< Exact prepared particle inventory only; does not broaden generic external imports. */
     };
 
     /** @brief Creates one native dependency without native side effects. */
@@ -112,6 +115,7 @@ namespace Horo::Render::Detail {
         std::vector<MaterialDraw> vfxDraws; /**< Cold-reserved against the canonical whole-scene draw ceiling. */
         std::uint64_t deviceIncarnation{};
         VulkanCommandRuntime commands;
+        VulkanVfxGpuRuntime vfxGpu;
         VulkanMultiviewRecorder multiview;
         VulkanResourceRuntime *resources{};
         std::thread::id owner;
@@ -219,6 +223,23 @@ namespace Horo::Render::Detail {
             }
         }
 
+        [[nodiscard]] Result<void> InitializeNativeDispatch(const VulkanGraphInitialization &);
+        [[nodiscard]] Result<void> InitializeCommandOwners(const VulkanGraphInitialization &);
+        [[nodiscard]] Result<RenderBackendDrainProgress> DrainOwners();
+        void FinishDrained() noexcept;
+        [[nodiscard]] Result<void> InitializeImportedState(const RenderGraphExecutionRequest &, std::size_t);
+        [[nodiscard]] Result<void> PreserveImportedState(const RenderGraphExecutionRequest &, std::size_t);
+        [[nodiscard]] Result<VulkanGraphBarrierOptions> TransitionOptions(const RenderGraphTransition &, bool, bool) const;
+        [[nodiscard]] Result<void> ValidatePassUses(const RenderGraphExecutionRequest &, std::size_t) const;
+        [[nodiscard]] Result<void> PrepareClassicWork(const RenderGraphExecutionRequest &, std::size_t, VulkanCommandRetention &);
+        [[nodiscard]] Result<void> PrepareParticleWork(const RenderGraphExecutionRequest &, std::size_t);
+        [[nodiscard]] Result<void> FinishPass(const RenderGraphExecutionRequest &, std::size_t);
+        [[nodiscard]] Result<void> ValidateColor(const RenderGraphColorAttachment &, RenderQueueId);
+        [[nodiscard]] Result<void> GpuAccess(bool cold) const;
+        [[nodiscard]] Result<void> ValidateGraphAdmission(const RenderGraphExecutionRequest &) const;
+        [[nodiscard]] Result<void> ExecuteGraphCommands(const RenderGraphExecutionRequest &);
+        [[nodiscard]] Result<void> RecordPass(VkCommandBuffer, VulkanCommandTicket, const RenderQueueSubmission &,
+                                              const RenderGraphExecutionRequest &, std::size_t pass);
         [[nodiscard]] Result<void> Access(bool admission = true) const;
         [[nodiscard]] const VulkanCommandQueue *Queue(RenderQueueId id) const noexcept;
         [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
@@ -228,6 +249,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> AppendTransition(const RenderGraphTransition &transition, bool release, bool acquire);
         [[nodiscard]] Result<void> PrepareTransitions(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                                       bool releases);
+        [[nodiscard]] Result<void> FinishParticleStates(const RenderGraphExecutionRequest &, std::size_t pass);
         /** @brief Validates exact foreign acquisition/final-state obligations before generic state initialization. */
         [[nodiscard]] Result<void> ValidateExternalAcquisition(const RenderGraphExecutionRequest &request, std::size_t index) const;
         /** @brief Prepares native post-producer release barriers from exact external acquisition evidence. */

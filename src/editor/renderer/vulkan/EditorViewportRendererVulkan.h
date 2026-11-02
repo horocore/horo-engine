@@ -1,6 +1,7 @@
 #pragma once
 /** @file EditorViewportRendererVulkan.h
  * @brief Selected Vulkan viewport using canonical cooked material, frontend resources and frame submission. */
+#include "EditorViewportForwardLighting.h"
 #include "EditorVulkanViewportShader.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
@@ -9,7 +10,6 @@
 #include "VulkanEditorGraphicsBridge.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/ViewportOverlayTriangles.h"
-#include "editor/renderer/lighting/EditorViewportForwardLighting.h"
 
 #include <array>
 #include <thread>

@@ -3140,6 +3140,14 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanResourceConversions.cpp
             runtime/renderer/modules/vulkan/VulkanResourceRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanShaderRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxGpuCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxGpuDraw.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxGpuGraphDelegation.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxGpuHandoff.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxGpuPrograms.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxGpuReadback.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxGpuRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanVfxGpuSimulation.cpp
             runtime/renderer/modules/vulkan/VulkanPipelineResources.cpp
             runtime/renderer/modules/vulkan/VulkanMaterialResources.cpp
             runtime/renderer/modules/vulkan/VulkanCommandRuntime.cpp

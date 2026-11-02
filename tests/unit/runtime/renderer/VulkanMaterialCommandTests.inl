@@ -191,7 +191,7 @@ TEST_CASE("Vulkan material batch records depth atlas tiles before sampling with 
                                            .precedingPasses = preceding};
     REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
     auto recorded = fixture.graph.ExecuteMaterialPass(request);
-    INFO(recorded.HasError() ? recorded.ErrorValue().message : "atlas and lit recorded");
+    INFO((recorded.HasError() ? recorded.ErrorValue().message : "atlas and lit recorded"));
     REQUIRE(recorded.HasValue());
     REQUIRE(fixture.encoded.renderingCalls.size() == 3);
     CHECK(fixture.encoded.renderingCalls[0].colors == 0);

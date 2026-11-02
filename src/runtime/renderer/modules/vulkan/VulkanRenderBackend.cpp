@@ -80,6 +80,47 @@ namespace Horo::Render {
 
 #include "VulkanBackendShaderDelegation.inl"
 
+            Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
+                const VfxGpuSimulationDescriptor &descriptor) const override {
+                if (const auto access = VfxGpuAccess(true); access.HasError())
+                    return Result<NativeVfxGpuPreparationResources>::Failure(access.ErrorValue());
+                return commandPort_->QueryVfxGpuNativePreparationResources(descriptor);
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs) override {
+                if (const auto access = VfxGpuAccess(true); access.HasError())
+                    return Result<std::shared_ptr<IResidentVfxGpuKernel>>::Failure(access.ErrorValue());
+                return commandPort_->RealizeVfxGpuPrograms(programs);
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+                const NativeVfxGpuSimulationPreparation &preparation) override {
+                if (const auto access = VfxGpuAccess(true); access.HasError())
+                    return Result<std::shared_ptr<IResidentVfxGpuSimulation>>::Failure(access.ErrorValue());
+                return commandPort_->PrepareNativeVfxGpuSimulation(preparation);
+            }
+
+            Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                         std::span<NativeGpuVfxStepReceipt> destination) override {
+                if (const auto access = VfxGpuAccess(false); access.HasError())
+                    return Result<std::size_t>::Failure(access.ErrorValue());
+                return commandPort_->PollNativeVfxGpuReceipts(simulation, destination);
+            }
+
+            Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                               const VfxGpuStepIdentity &step, std::span<std::byte> destination) override {
+                if (const auto access = VfxGpuAccess(false); access.HasError())
+                    return Result<std::size_t>::Failure(access.ErrorValue());
+                return commandPort_->CopyCompletedVfxGpuObservation(simulation, step, destination);
+            }
+
+            Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                           const VfxGpuStepIdentity &step) override {
+                if (const auto access = VfxGpuAccess(false); access.HasError())
+                    return Result<void>::Failure(access.ErrorValue());
+                return commandPort_->DiscardCompletedVfxGpuObservation(simulation, step);
+            }
+
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
                 return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->QueryBufferMemoryCost(descriptor)
                                                                    : Unsupported<RenderMemoryCostPlan>();
@@ -303,6 +344,16 @@ namespace Horo::Render {
                 capabilities_.supportsOffscreenTargets = capabilities_.support.features.Supports(OffscreenTargets);
                 requirePresentation_ = config.requirePresentation;
                 presentMode_ = config.presentMode;
+            }
+
+            Result<void> VfxGpuAccess(bool cold) const {
+                if (ownerThread_ != std::this_thread::get_id())
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::WrongThread));
+                if (!deviceCreated_ || !commandPort_)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
+                if (cold && (closing_ || activeFrame_.IsValid()))
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                return Result<void>::Success();
             }
 
             [[nodiscard]] Result<void> CommandAccess() const {

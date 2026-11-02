@@ -609,6 +609,14 @@ namespace Horo::Render {
          */
         [[nodiscard]] virtual Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs);
 
+        /** @brief Queries optional native parameter storage after cold program realization, before frontend allocation.
+         * @param descriptor Exact admitted simulation descriptor; this query performs no resource allocation.
+         * @return Immutable storage plan or original typed failure. The default empty plan requires no additional buffer.
+         * @details The frontend validates and accounts this plan through its ordinary registry, cost and inventory lease.
+         */
+        [[nodiscard]] virtual Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
+            const VfxGpuSimulationDescriptor &descriptor) const;
+
         /** @brief Registers one exact initialized particle inventory in the existing native resource authority.
          * @param preparation Synchronous cold borrows, registry-issued identities and retained inventory pins.
          * @return Private native simulation/ring lease or typed unsupported/original preparation failure.

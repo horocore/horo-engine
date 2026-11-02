@@ -6,10 +6,12 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "RenderFrontendResourceAccess.h"
+#include "RenderMemoryTestSupport.h"
 #include "support/VfxGpuTestSupport.h"
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <optional>
 
 namespace Horo::Render::ProtocolFake {
@@ -36,7 +38,8 @@ namespace Horo::Render::ProtocolFake {
     struct Simulation final : IResidentVfxGpuSimulation {
         explicit Simulation(const NativeVfxGpuSimulationPreparation &p, std::size_t metadataBytes)
             : id(p.id), device(p.deviceIncarnation), descriptor(p.preparation.descriptor), states(p.states.begin(), p.states.end()),
-              observations(p.observations.begin(), p.observations.end()), forces(p.forces), lease(p.resourceLease), metadata(metadataBytes),
+              observations(p.observations.begin(), p.observations.end()), forces(p.forces), parameterArena(p.parameterArena),
+              preparationResources(p.preparationResources), lease(p.resourceLease), metadata(metadataBytes),
               opaque(p.preparation.descriptor.readback.enabled
                          ? p.preparation.descriptor.readback.maximumRecords * VfxGpuObservationWords::Bytes
                          : 0) {}
@@ -68,7 +71,8 @@ namespace Horo::Render::ProtocolFake {
         std::uint64_t device;
         VfxGpuSimulationDescriptor descriptor;
         std::vector<NativeVfxGpuBuffer> states, observations;
-        NativeVfxGpuBuffer forces;
+        NativeVfxGpuBuffer forces, parameterArena;
+        NativeVfxGpuPreparationResources preparationResources;
         std::shared_ptr<IRenderGraphResourceLease> lease;
         std::vector<std::byte> metadata;
         bool everEncoded{};
@@ -98,7 +102,10 @@ namespace Horo::Render::ProtocolFake {
         std::weak_ptr<Simulation> simulation;
         std::array<std::shared_ptr<Simulation>, 4> canonicalInventory;
         std::array<ColdCall, 128> coldCalls;
-        std::size_t coldCallCount{}, extraMetadataBytes{}, nativePreparations{}, reaped{};
+        std::size_t coldCallCount{}, extraMetadataBytes{}, nativePreparations{}, reaped{}, preparationQueries{};
+        NativeVfxGpuPreparationResources preparationResources;
+        std::optional<Error> preparationQueryError;
+        bool overflowArenaCost{};
 
         /** @brief Records bounded cold call order without allocating during resource callbacks. */
         void Log(ColdCall call) noexcept {
@@ -263,9 +270,19 @@ namespace Horo::Render::ProtocolFake {
             return Result<bool>::Success(true);
         }
 
+        /** @brief Returns an authored fake resource plan; actual registry allocation and limits remain frontend-owned. */
+        Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(const VfxGpuSimulationDescriptor &) const override {
+            ++audit_->preparationQueries;
+            if (audit_->preparationQueryError)
+                return Result<NativeVfxGpuPreparationResources>::Failure(*audit_->preparationQueryError);
+            return Result<NativeVfxGpuPreparationResources>::Success(audit_->preparationResources);
+        }
+
         /** @brief Delegates exact resource identity, memory and lifetime handling to the existing Null owner. */
         Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &d) const override {
             audit_->Log(ColdCall::QueryBuffer);
+            if (audit_->overflowArenaCost && d.usage == RenderBufferUsage::Uniform)
+                return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(std::numeric_limits<std::size_t>::max(), 1));
             return base_->QueryBufferMemoryCost(d);
         }
 

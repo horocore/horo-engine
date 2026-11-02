@@ -1,13 +1,22 @@
 #include "../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "../../support/renderer/RenderGraphSubmissionFixture.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Vfx/CpuParticleSimulator.h"
+#include "Horo/Vfx/GpuParticleSimulator.h"
+#include "Horo/Vfx/VfxWorld.h"
+#include "VfxGpuVulkanCook.h"
+#include "support/VfxTestSupport.h"
 
 #include <VulkanBackendModule.h>
 #include <array>
 #include <bit>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
+#include <fstream>
 #include <memory>
 
 namespace {
@@ -24,7 +33,14 @@ namespace {
         Result<void> AcquireLoader() override {
             if (library_ != nullptr)
                 return Result<void>::Success();
-            for (const char *path : {"/usr/lib/x86_64-linux-gnu/libvulkan.so.1", "/lib/x86_64-linux-gnu/libvulkan.so.1"}) {
+#if defined(__aarch64__)
+            constexpr std::array paths{"/usr/lib/aarch64-linux-gnu/libvulkan.so.1", "/lib/aarch64-linux-gnu/libvulkan.so.1"};
+#elif defined(__x86_64__)
+            constexpr std::array paths{"/usr/lib/x86_64-linux-gnu/libvulkan.so.1", "/lib/x86_64-linux-gnu/libvulkan.so.1"};
+#else
+            constexpr std::array<const char *, 0> paths{};
+#endif
+            for (const char *path : paths) {
                 library_ = dlopen(path, RTLD_NOW | RTLD_LOCAL);
                 if (library_ != nullptr)
                     break;
@@ -40,7 +56,10 @@ namespace {
         }
 
         PFN_vkGetInstanceProcAddr GetInstanceProcAddr() noexcept override {
-            return resolver_;
+            if (active_ != nullptr && active_ != this)
+                return nullptr;
+            active_ = this;
+            return &ResolveInstance;
         }
 
         Result<std::vector<std::string>> RequiredPresentationExtensions() override {
@@ -56,13 +75,74 @@ namespace {
             return Result<bool>::Success(true);
         }
 
+        void ArmSecondSubmitFailure() {
+            REQUIRE(active_ == this);
+            REQUIRE(!faultArmed_);
+            submitAttempts_ = forwardedSubmits_ = injectedSubmits_ = 0;
+            faultArmed_ = true;
+        }
+
+        std::uint32_t SubmitAttempts() const noexcept {
+            return submitAttempts_;
+        }
+
+        std::uint32_t ForwardedSubmits() const noexcept {
+            return forwardedSubmits_;
+        }
+
+        std::uint32_t InjectedSubmits() const noexcept {
+            return injectedSubmits_;
+        }
+
         void ReleaseLoader() noexcept override {
+            if (active_ == this)
+                active_ = nullptr;
+            deviceResolver_ = nullptr;
+            submit_ = nullptr;
             resolver_ = nullptr;
             if (library_ != nullptr)
                 dlclose(std::exchange(library_, nullptr));
         }
 
     private:
+        static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ResolveInstance(VkInstance instance, const char *name) {
+            auto &owner = *active_;
+            const auto actual = owner.resolver_(instance, name);
+            if (actual && std::strcmp(name, "vkGetDeviceProcAddr") == 0) {
+                owner.deviceResolver_ = std::bit_cast<PFN_vkGetDeviceProcAddr>(actual);
+                return std::bit_cast<PFN_vkVoidFunction>(&ResolveDevice);
+            }
+            return actual;
+        }
+
+        static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL ResolveDevice(VkDevice device, const char *name) {
+            auto &owner = *active_;
+            const auto actual = owner.deviceResolver_(device, name);
+            if (actual && std::strcmp(name, "vkQueueSubmit2") == 0) {
+                owner.submit_ = std::bit_cast<PFN_vkQueueSubmit2>(actual);
+                return std::bit_cast<PFN_vkVoidFunction>(&Submit);
+            }
+            return actual;
+        }
+
+        static VKAPI_ATTR VkResult VKAPI_CALL Submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo2 *submissions, VkFence fence) {
+            auto &owner = *active_;
+            ++owner.submitAttempts_;
+            if (owner.faultArmed_ && owner.submitAttempts_ == 2) {
+                owner.faultArmed_ = false;
+                ++owner.injectedSubmits_;
+                return VK_ERROR_OUT_OF_HOST_MEMORY;
+            }
+            ++owner.forwardedSubmits_;
+            return owner.submit_(queue, count, submissions, fence);
+        }
+
+        inline static thread_local SystemLoader *active_{};
+        PFN_vkGetDeviceProcAddr deviceResolver_{};
+        PFN_vkQueueSubmit2 submit_{};
+        std::uint32_t submitAttempts_{}, forwardedSubmits_{}, injectedSubmits_{};
+        bool faultArmed_{};
+
         static Result<void> Failure(const char *message) {
             return Result<void>::Failure(Error{ErrorCode{"render.test.system_loader_unavailable"},
                                                ErrorDomainId{"horo.render.test"},
@@ -80,6 +160,7 @@ namespace {
         SystemLoader loader;
         RenderBackendRegistry registry;
         std::unique_ptr<RenderFrontend> frontend;
+        std::vector<RenderQueueAssignment> selectedQueues;
 
         NativeOwner() {
             REQUIRE(RegisterVulkanRenderBackend(registry, loader).HasValue());
@@ -106,6 +187,7 @@ namespace {
         Result<void> Initialize(const bool distinctTransfer) {
             RenderBackendConfig config{.requirePresentation = false, .enableValidation = true};
             config.queueAssignments = {{RenderQueueRole::Graphics, {1}}, {RenderQueueRole::Transfer, {distinctTransfer ? 2U : 1U}}};
+            selectedQueues = config.queueAssignments;
             auto created = RenderFrontend::Create(registry, RenderBackendId{"vulkan"}, config);
             if (created.HasError())
                 return Result<void>::Failure(std::move(created).ErrorValue());
@@ -200,7 +282,8 @@ namespace {
         REQUIRE(frontend.ProcessResourceRequests().HasValue());
     }
 
-    TEST_CASE("Vulkan system driver executes canonical offscreen copy submissions and timeline observation",
+    TEST_CASE("Vulkan system driver executes canonical offscreen copy submissions "
+              "and timeline observation",
               "[integration][renderer][vulkan][gpu]") {
         NativeOwner owner;
         const auto initialized = owner.Initialize(false);
@@ -215,17 +298,21 @@ namespace {
         Horo::Render::Test::RequireDrainedOwner(*owner.frontend);
     }
 
-    TEST_CASE("Vulkan distinct-family native execution never aliases an unavailable transfer queue",
+    TEST_CASE("Vulkan distinct-family native execution never aliases an "
+              "unavailable transfer queue",
               "[integration][renderer][vulkan][gpu][ownership]") {
         NativeOwner owner;
         const auto initialized = owner.Initialize(true);
         if (initialized.HasError() && initialized.ErrorValue().code.Value() == "render.vulkan.graphics_queue_unavailable") {
             REQUIRE(owner.frontend == nullptr);
-            SKIP("The actual driver has no separate transfer-capable queue family; cross-family native qualification is unavailable.");
+            SKIP("The actual driver has no separate transfer-capable queue family; "
+                 "cross-family native qualification is unavailable.");
         }
         INFO((initialized.HasError() ? initialized.ErrorValue().message : "distinct native queue families admitted"));
         REQUIRE(initialized.HasValue());
         ExecuteCopies(*owner.frontend, {2});
         Horo::Render::Test::RequireDrainedOwner(*owner.frontend);
     }
+
+#include "VulkanVfxGpuNativeSmoke.inl"
 }  // namespace

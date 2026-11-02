@@ -1,5 +1,6 @@
 #pragma once
 /** @file VfxGpuKernel.h @brief Complete authentic compute/direct-draw cooked family for the GPU particle word ABI. */
+#include "Horo/Runtime/Render/RenderResourceDescriptors.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipeline.h"
 #include "Horo/Runtime/Render/ShaderReflection.h"
 #include "Horo/Runtime/Render/VfxGpuSimulation.h"
@@ -120,6 +121,17 @@ namespace Horo::Render {
         std::uint64_t instance{};
     };
 
+    /** @brief Cold native parameter-storage requirements fulfilled through ordinary frontend buffer ownership.
+     * @details No arena uses zero byteSize, operationSlots and parameterStrideBytes. Otherwise the descriptor must be exactly
+     * Uniform/HostVisible, with operationSlots positive and byteSize equal to their checked product with parameterStrideBytes.
+     * The stride is at least 128 bytes and aligned to 16 bytes. Native adapters may impose additional device alignment.
+     */
+    struct NativeVfxGpuPreparationResources final {
+        RenderBufferDescriptor parameterArena;
+        std::uint32_t operationSlots{};
+        std::uint32_t parameterStrideBytes{};
+    };
+
     /** @brief Synchronous cold native realization inputs; every span expires when preparation returns.
      * @details The returned native simulation retains scalar descriptor/inventory and resourceLease, not preparation source spans.
      * Native state tracks exact issued simulation/device, complete kernel/ring inventory, current generation and actual commit journals.
@@ -133,6 +145,8 @@ namespace Horo::Render {
         NativeVfxGpuBuffer forces;
         std::span<const NativeVfxGpuBuffer> observations;
         std::shared_ptr<IRenderGraphResourceLease> resourceLease;
+        NativeVfxGpuBuffer parameterArena;
+        NativeVfxGpuPreparationResources preparationResources;
     };
 
     /** @brief Creates one exact portable interface for an explicitly selected target, without compiling or registering anything.

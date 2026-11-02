@@ -28,6 +28,8 @@ namespace Horo::Render::Detail {
         VulkanResourceRuntime &resources;
         const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver;
         bool vertexLayerEnabled{false};
+        const VkPhysicalDeviceProperties
+            *properties{}; /**< Actual selected device facts; absent old fake ports expose no particle execution. */
     };
 
     /** @brief Bounded render-owner graph recorder; native parents outlive its explicit drain. */
@@ -61,6 +63,18 @@ namespace Horo::Render::Detail {
         /** @brief Records one GUI tail through this frame's sole submission/retention owner. */
         [[nodiscard]] Result<void> ExecuteGui(const GuiCompositionRequest &request, const VulkanGuiOutput &output,
                                               IVulkanGuiEncoder &encoder);
+        [[nodiscard]] Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
+            const VfxGpuSimulationDescriptor &descriptor) const;
+        [[nodiscard]] Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs);
+        [[nodiscard]] Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+            const NativeVfxGpuSimulationPreparation &preparation);
+        [[nodiscard]] Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                   std::span<NativeGpuVfxStepReceipt> destination);
+        [[nodiscard]] Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                         const VfxGpuStepIdentity &step, std::span<std::byte> destination);
+        [[nodiscard]] Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                     const VfxGpuStepIdentity &step);
+        [[nodiscard]] bool SupportsVfxGpu() const noexcept;
         /** @brief Submits exact copied Horo records; partial success retains accepted work and closes admission on failure. */
         [[nodiscard]] Result<void> SubmitFrame(FrameToken frame);
         void AbortFrame(FrameToken frame) noexcept;

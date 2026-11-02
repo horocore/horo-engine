@@ -7,6 +7,12 @@ namespace Horo::Render {
         return Result<std::shared_ptr<IResidentVfxGpuKernel>>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
     }
 
+    /** @copydoc IRenderBackend::QueryVfxGpuNativePreparationResources */
+    Result<NativeVfxGpuPreparationResources> IRenderBackend::QueryVfxGpuNativePreparationResources(
+        const VfxGpuSimulationDescriptor &) const {
+        return Result<NativeVfxGpuPreparationResources>::Success({});
+    }
+
     /** @copydoc IRenderBackend::PrepareNativeVfxGpuSimulation */
     Result<std::shared_ptr<IResidentVfxGpuSimulation>> IRenderBackend::PrepareNativeVfxGpuSimulation(
         const NativeVfxGpuSimulationPreparation &) {

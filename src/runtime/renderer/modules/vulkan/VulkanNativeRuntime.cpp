@@ -339,6 +339,30 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            Result<std::vector<Detail::VulkanCommandQueue>> PrepareCommandQueues(VkPhysicalDevice physical,
+                                                                                 const VulkanDeviceRequest &request) {
+                using Outcome = Result<std::vector<Detail::VulkanCommandQueue>>;
+                const auto queueFacts = EnumerateQueues(physical);
+                if (queueFacts.HasError())
+                    return Outcome::Failure(queueFacts.ErrorValue());
+                std::vector<Detail::VulkanCommandQueue> queues;
+                for (const auto &assignment : request.queueAssignments) {
+                    if (std::ranges::any_of(queues, [&assignment](const Detail::VulkanCommandQueue &queue) {
+                        return queue.identity == assignment.queue;
+                    }))
+                        continue;
+                    const bool graphics =
+                        assignment.role == RenderQueueRole::Graphics || request.transferQueueFamily == request.graphicsQueueFamily;
+                    const auto family = graphics ? request.graphicsQueueFamily : request.transferQueueFamily;
+                    const auto facts = std::ranges::find(queueFacts.Value(), family, &VulkanQueueFamily::index);
+                    if (facts == queueFacts.Value().end())
+                        return Outcome::Failure(MakeError(VulkanBackendErrors::GraphicsQueueUnavailable));
+                    queues.emplace_back(assignment.queue, family, graphics ? graphicsQueue_ : transferQueue_, graphics,
+                                        facts->supportsCompute);
+                }
+                return Outcome::Success(std::move(queues));
+            }
+
             /** @brief Attaches the sole resource registry and shader owner to the selected native device. */
             Result<void> InitializeResources(VkPhysicalDevice physical, const VulkanDeviceRequest &request) {
                 if (auto bound = BindEditorDevice(physical, request); bound.HasError())
@@ -354,17 +378,9 @@ namespace Horo::Render {
                                                                      .pNext = &allocationLimits};
                 VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &timeline};
                 dispatch_.getPhysicalDeviceProperties2(physical, &properties);
-                std::vector<Detail::VulkanCommandQueue> queues;
-                for (const auto &assignment : request.queueAssignments) {
-                    if (std::ranges::any_of(queues, [&assignment](const Detail::VulkanCommandQueue &queue) {
-                        return queue.identity == assignment.queue;
-                    }))
-                        continue;
-                    const bool graphics =
-                        assignment.role == RenderQueueRole::Graphics || request.transferQueueFamily == request.graphicsQueueFamily;
-                    queues.emplace_back(assignment.queue, graphics ? request.graphicsQueueFamily : request.transferQueueFamily,
-                                        graphics ? graphicsQueue_ : transferQueue_, graphics);
-                }
+                const auto queues = PrepareCommandQueues(physical, request);
+                if (queues.HasError())
+                    return Result<void>::Failure(queues.ErrorValue());
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError())
                     return Result<void>::Failure(incarnation.ErrorValue());
@@ -373,13 +389,14 @@ namespace Horo::Render {
                     shaders.HasError())
                     return shaders;
                 if (auto prepared = graph_.Initialize({.device = device_,
-                                                       .queues = queues,
+                                                       .queues = queues.Value(),
                                                        .frames = request.maxFramesInFlight,
                                                        .timelineDifference = timeline.maxTimelineSemaphoreValueDifference,
                                                        .deviceIncarnation = incarnation.Value(),
                                                        .resources = resources_,
                                                        .resolver = dispatch_.getDeviceProcAddr,
-                                                       .vertexLayerEnabled = request.enableVertexLayerRouting});
+                                                       .vertexLayerEnabled = request.enableVertexLayerRouting,
+                                                       .properties = &properties.properties});
                     prepared.HasError())
                     return prepared;
                 if (auto published = PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
@@ -430,6 +447,35 @@ namespace Horo::Render {
 
             RenderCapabilitySnapshot ResourceCapabilities() const noexcept override {
                 return resourceCapabilities_;
+            }
+
+            Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
+                const VfxGpuSimulationDescriptor &descriptor) const override {
+                return graph_.QueryVfxGpuNativePreparationResources(descriptor);
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs) override {
+                return graph_.RealizeVfxGpuPrograms(programs);
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+                const NativeVfxGpuSimulationPreparation &preparation) override {
+                return graph_.PrepareNativeVfxGpuSimulation(preparation);
+            }
+
+            Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                         std::span<NativeGpuVfxStepReceipt> destination) override {
+                return graph_.PollNativeVfxGpuReceipts(simulation, destination);
+            }
+
+            Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                               const VfxGpuStepIdentity &step, std::span<std::byte> destination) override {
+                return graph_.CopyCompletedVfxGpuObservation(simulation, step, destination);
+            }
+
+            Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                           const VfxGpuStepIdentity &step) override {
+                return graph_.DiscardCompletedVfxGpuObservation(simulation, step);
             }
 
             Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
@@ -654,6 +700,10 @@ namespace Horo::Render {
                         usage = usage | CopyDestination;
                     snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
                 }
+                if (graph_.SupportsVfxGpu())
+                    for (const auto capability :
+                         {RenderCapability::VfxGpuSimulation, RenderCapability::VfxGpuDraw, RenderCapability::VfxGpuReadback})
+                        snapshot.features.Enable(capability);
                 return PublishMultiviewCapabilities(device, properties);
             }
 
@@ -830,6 +880,7 @@ namespace Horo::Render {
                         .supportsTransfer =
                             properties[index].queueCount > 0 &&
                             (properties[index].queueFlags & (VK_QUEUE_TRANSFER_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0,
+                        .supportsCompute = properties[index].queueCount > 0 && (properties[index].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0,
                     });
                 }
                 return Result<std::vector<VulkanQueueFamily>>::Success(std::move(queues));

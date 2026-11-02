@@ -203,7 +203,8 @@ namespace {
 
         Result<std::uint64_t> Pipeline() {
             auto cost = runtime.QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
-            REQUIRE(cost.HasValue());
+            if (cost.HasError())
+                return Result<std::uint64_t>::Failure(cost.ErrorValue());
             return runtime.CreateGraphicsPipeline(descriptor, vertex, fragment, TestSupport::PlacementFor(cost.Value(), next));
         }
 
@@ -646,7 +647,7 @@ TEST_CASE("Vulkan resource delegate publishes sampled Depth32 material with its 
     RegistryMaterialFixture fixture;
     fixture.CreateDepth(RenderTextureFormat::Depth32Float, RenderTextureAspect::Depth);
     auto material = fixture.Material();
-    INFO(material.HasError() ? material.ErrorValue().message : "depth descriptor admitted by real registry resolver");
+    INFO((material.HasError() ? material.ErrorValue().message : "depth descriptor admitted by real registry resolver"));
     REQUIRE(material.HasValue());
     const auto *native = dynamic_cast<const VulkanPreparedMaterialBinding *>(material.Value().get());
     REQUIRE(native);

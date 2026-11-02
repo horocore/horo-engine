@@ -99,7 +99,7 @@ namespace Horo::Render::Detail {
             if (end == name.end())
                 return false;
             const auto length = static_cast<std::size_t>(end - name.begin());
-            const auto model = descriptor.stage == ShaderStage::Vertex ? 0U : 4U;
+            const auto model = descriptor.stage == ShaderStage::Compute ? 5U : descriptor.stage == ShaderStage::Vertex ? 0U : 4U;
             return entry[1] == model && length == descriptor.entryPoint.size() &&
                    std::ranges::equal(name.first(length), std::as_bytes(std::span{descriptor.entryPoint}), {}, [](std::byte value) {
                 return std::to_integer<unsigned char>(value);
