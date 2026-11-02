@@ -9,7 +9,8 @@ namespace Horo::Animation {
     namespace {
         using namespace GraphSourceDetail;
 
-        /** @brief Decodes only unsigned non-zero stable IDs; floating/signed/overflowed representations fail. */
+        /** @brief Decodes only unsigned non-zero stable IDs; floating/signed/overflowed
+         * representations fail. */
         template <typename Identity> Identity Id(const Json &value) {
             if (!value.is_number_unsigned())
                 Reject(AnimationErrors::GraphMalformed);
@@ -19,7 +20,8 @@ namespace Horo::Animation {
             return created.Value();
         }
 
-        /** @brief Decodes a canonical Assets identity without admitting alternate UUID spellings. */
+        /** @brief Decodes a canonical Assets identity without admitting alternate UUID
+         * spellings. */
         Assets::AssetId Asset(const Json &value) {
             if (!value.is_string())
                 Reject(AnimationErrors::GraphMalformed);
@@ -29,7 +31,8 @@ namespace Horo::Animation {
             return parsed.Value();
         }
 
-        /** @brief Wraps an already canonical identity into the exact animation asset domain. */
+        /** @brief Wraps an already canonical identity into the exact animation asset
+         * domain. */
         template <typename Identity> Identity AssetIdentity(const Json &value) {
             auto created = Identity::Create(Asset(value));
             if (created.HasError())
@@ -37,7 +40,8 @@ namespace Horo::Animation {
             return created.Value();
         }
 
-        /** @brief Maps a stable textual vocabulary without accepting numeric enum values. */
+        /** @brief Maps a stable textual vocabulary without accepting numeric enum
+         * values. */
         template <typename Enum, std::size_t Size> Enum EnumValue(const Json &value, const std::array<std::string_view, Size> &names) {
             if (!value.is_string())
                 Reject(AnimationErrors::GraphMalformed);
@@ -72,12 +76,15 @@ namespace Horo::Animation {
             std::size_t maskEntries{};
             std::size_t blendSamples{};
             std::size_t blendTriangles{};
+            std::size_t actionSlots{}, actions{}, actionSections{}, actionLoops{};
         };
 
-        /** @brief Decodes one exact finite scalar using the same parameter transport rules. */
+        /** @brief Decodes one exact finite scalar using the same parameter transport
+         * rules. */
         GraphParameterValue Default(const Json &value, GraphValueType type);
 
-        /** @brief Reads exact nonnegative nanosecond integers without floating-time coercion or narrowing. */
+        /** @brief Reads exact nonnegative nanosecond integers without floating-time
+         * coercion or narrowing. */
         std::int64_t Time(const Json &value) {
             if (!value.is_number_integer() ||
                 (value.is_number_unsigned() &&
@@ -89,7 +96,8 @@ namespace Horo::Animation {
             return ticks;
         }
 
-        /** @brief Resolves one condition's declared transport type before decoding its threshold. */
+        /** @brief Resolves one condition's declared transport type before decoding its
+         * threshold. */
         GraphStateCondition StateCondition(const Json &condition, const std::span<const GraphParameter> parameters) {
             Keys(condition, {"parameter", "predicate", "threshold", "release"});
             const auto parameterId = Id<GraphParameterId>(condition["parameter"]);
@@ -101,7 +109,8 @@ namespace Horo::Animation {
                     std::get<float>(Default(condition["release"], GraphValueType::Float))};
         }
 
-        /** @brief Decodes bounded state tables; every retained field still undergoes authoritative compiler validation. */
+        /** @brief Decodes bounded state tables; every retained field still undergoes
+         * authoritative compiler validation. */
         GraphStateMachineNode StateMachine(const Json &value, Budget &budget, const AnimationGraphCompileContext &context,
                                            const std::span<const GraphParameter> parameters) {
             Keys(value, {"initial", "states", "transitions"});
@@ -147,7 +156,8 @@ namespace Horo::Animation {
             return machine;
         }
 
-        /** @brief Reads a finite coordinate without integer/float narrowing beyond binary32. */
+        /** @brief Reads a finite coordinate without integer/float narrowing beyond
+         * binary32. */
         float Coordinate(const Json &value) {
             if (!value.is_number())
                 Reject(AnimationErrors::GraphMalformed);
@@ -157,7 +167,8 @@ namespace Horo::Animation {
             return static_cast<float>(number);
         }
 
-        /** @brief Reads bounded sample records before authoritative compiler geometry/parameter validation. */
+        /** @brief Reads bounded sample records before authoritative compiler
+         * geometry/parameter validation. */
         void BlendSamples(GraphBlendTreeNode &tree, const Json &values, Budget &budget, const AnimationGraphCompileContext &context) {
             const auto count = Spend(values, budget.blendSamples, context.limits.clipPlayers, AnimationGraphHardLimits::BlendMembers);
             if (count > AnimationGraphHardLimits::BlendSamplesPerTree)
@@ -173,7 +184,8 @@ namespace Horo::Animation {
             }
         }
 
-        /** @brief Reads authored triangle identities; aggregate source JSON limits bound the inert source representation. */
+        /** @brief Reads authored triangle identities; aggregate source JSON limits
+         * bound the inert source representation. */
         void BlendTriangles(GraphBlendTreeNode &tree, const Json &values, Budget &budget, const AnimationGraphCompileContext &context) {
             const auto count = Spend(values, budget.blendTriangles, context.limits.connections, AnimationGraphHardLimits::Connections);
             if (count > AnimationGraphHardLimits::BlendTrianglesPerTree)
@@ -188,7 +200,8 @@ namespace Horo::Animation {
             }
         }
 
-        /** @brief Decodes complete owned tree metadata, never runtime phases or group state. */
+        /** @brief Decodes complete owned tree metadata, never runtime phases or group
+         * state. */
         GraphBlendTreeNode BlendTree(const Json &value, Budget &budget, const AnimationGraphCompileContext &context) {
             Keys(value, {"dimension", "x", "y", "outside", "group", "sync", "events", "leader", "samples", "triangles"});
             GraphBlendTreeNode tree;
@@ -206,7 +219,8 @@ namespace Horo::Animation {
             return tree;
         }
 
-        /** @brief Decodes a finite binary32 mask weight before compiler range validation. */
+        /** @brief Decodes a finite binary32 mask weight before compiler range
+         * validation. */
         float MaskWeight(const Json &value) {
             if (!value.is_number())
                 Reject(AnimationErrors::GraphMalformed);
@@ -216,31 +230,38 @@ namespace Horo::Animation {
             return static_cast<float>(number);
         }
 
-        /** @brief Decodes the explicit additive reference identity independently of runtime generation. */
+        /** @brief Decodes the explicit additive reference identity independently of
+         * runtime generation. */
         void ReadSettings(GraphClipNode &clip, const Json &settings, Budget &, const AnimationGraphCompileContext &) {
             Keys(settings, {"referencePose"});
             if (!settings["referencePose"].is_null())
                 clip.referencePose = Id<AnimationReferencePoseId>(settings["referencePose"]);
         }
 
-        /** @brief Decodes typed layer settings under aggregate sparse-mask storage bounds. */
-        void ReadSettings(GraphBlendNode &blend, const Json &settings, Budget &budget, const AnimationGraphCompileContext &context) {
-            Keys(settings, {"mode", "missingJoint", "mask"});
-            blend.mode = EnumValue<GraphBlendMode>(settings["mode"], BlendModes);
-            blend.missingJoint = EnumValue<GraphMissingJointPolicy>(settings["missingJoint"], MissingJoints);
-            const auto &mask = settings["mask"];
+        /** @brief Shared bounded sparse-mask decoder for layers and immutable actions.
+         */
+        void ReadBoneMask(GraphBoneMask &destination, const Json &mask, Budget &budget, const AnimationGraphCompileContext &context) {
             Keys(mask, {"defaultWeight", "joints"});
-            blend.mask.defaultWeight = MaskWeight(mask["defaultWeight"]);
+            destination.defaultWeight = MaskWeight(mask["defaultWeight"]);
             const auto count =
                 Spend(mask["joints"], budget.maskEntries, context.limits.poseTransforms, AnimationGraphHardLimits::PoseTransforms);
             if (count > SkeletonAssetHardLimits::Joints)
                 Reject(AnimationErrors::GraphLimitExceeded);
-            blend.mask.joints.reserve(count);
+            destination.joints.reserve(count);
             for (const auto &entry : mask["joints"]) {
                 CheckAdmission(context);
                 Keys(entry, {"joint", "weight"});
-                blend.mask.joints.push_back({Id<JointId>(entry["joint"]), MaskWeight(entry["weight"])});
+                destination.joints.push_back({Id<JointId>(entry["joint"]), MaskWeight(entry["weight"])});
             }
+        }
+
+        /** @brief Decodes typed layer settings under aggregate sparse-mask storage
+         * bounds. */
+        void ReadSettings(GraphBlendNode &blend, const Json &settings, Budget &budget, const AnimationGraphCompileContext &context) {
+            Keys(settings, {"mode", "missingJoint", "mask"});
+            blend.mode = EnumValue<GraphBlendMode>(settings["mode"], BlendModes);
+            blend.missingJoint = EnumValue<GraphMissingJointPolicy>(settings["missingJoint"], MissingJoints);
+            ReadBoneMask(blend.mask, settings["mask"], budget, context);
         }
 
         /** @brief Rejects settings on opcodes that declare no policy fields. */
@@ -248,14 +269,16 @@ namespace Horo::Animation {
             Keys(settings, {});
         }
 
-        /** @brief Exhaustively visits the typed payload rather than testing variant alternatives. */
+        /** @brief Exhaustively visits the typed payload rather than testing variant
+         * alternatives. */
         void Settings(GraphNodePayload &payload, const Json &settings, Budget &budget, const AnimationGraphCompileContext &context) {
             std::visit([&settings, &budget, &context](auto &value) {
                 ReadSettings(value, settings, budget, context);
             }, payload);
         }
 
-        /** @brief Decodes a pin's exact shape; semantic validation remains the compiler's authority. */
+        /** @brief Decodes a pin's exact shape; semantic validation remains the
+         * compiler's authority. */
         GraphPin Pin(const Json &value) {
             Keys(value, {"id", "role", "type", "output", "interface"});
             if (!value["output"].is_boolean())
@@ -265,13 +288,111 @@ namespace Horo::Animation {
                     value["interface"].is_null() ? GraphInterfaceId{} : Id<GraphInterfaceId>(value["interface"])};
         }
 
-        /** @brief Requires the schema introducing an opcode before decoding its typed payload. */
+        /** @brief Reads a bounded unsigned loop count without accepting floating,
+         * signed or overflowed representations. */
+        std::uint32_t ActionCount(const Json &value) {
+            if (!value.is_number_unsigned() || value.get<std::uint64_t>() > AnimationGraphHardLimits::ActionTransitions)
+                Reject(AnimationErrors::GraphMalformed);
+            return value.get<std::uint32_t>();
+        }
+
+        /** @brief Reads exact section identity, immutable clip range and sole
+         * successor. */
+        GraphActionSection ActionSection(const Json &value) {
+            Keys(value, {"id", "name", "clip", "begin", "end", "next"});
+            GraphActionSection result{Id<GraphActionSectionId>(value["id"]),
+                                      value["name"].get<std::string>(),
+                                      AssetIdentity<AnimationClipId>(value["clip"]),
+                                      {Time(value["begin"])},
+                                      {Time(value["end"])}};
+            if (!value["next"].is_null())
+                result.next = Id<GraphActionSectionId>(value["next"]);
+            return result;
+        }
+
+        /** @brief Reads only explicit loop regions; ordinary section cycles remain
+         * invalid. */
+        GraphActionLoopRegion ActionLoop(const Json &value) {
+            Keys(value, {"id", "first", "last", "mode", "repetitions"});
+            return {Id<GraphActionLoopId>(value["id"]), Id<GraphActionSectionId>(value["first"]), Id<GraphActionSectionId>(value["last"]),
+                    EnumValue<GraphActionLoopMode>(value["mode"], ActionLoops), ActionCount(value["repetitions"])};
+        }
+
+        /** @brief Accounts the complete section/loop source payload before retaining
+         * parsed values. */
+        GraphActionSequence ActionSequence(const Json &value, Budget &budget, const AnimationGraphCompileContext &context) {
+            Keys(value, {"entry", "sections", "loops"});
+            GraphActionSequence result;
+            result.entry = Id<GraphActionSectionId>(value["entry"]);
+            result.sections.reserve(
+                Spend(value["sections"], budget.actionSections, context.limits.actionSections, AnimationGraphHardLimits::ActionSections));
+            for (const auto &section : value["sections"]) {
+                CheckAdmission(context);
+                result.sections.push_back(ActionSection(section));
+            }
+            result.loops.reserve(
+                Spend(value["loops"], budget.actionLoops, context.limits.actionLoops, AnimationGraphHardLimits::ActionLoops));
+            for (const auto &loop : value["loops"]) {
+                CheckAdmission(context);
+                result.loops.push_back(ActionLoop(loop));
+            }
+            return result;
+        }
+
+        /** @brief Reads a complete owned immutable action, not live playback data. */
+        GraphActionDefinition Action(const Json &value, Budget &budget, const AnimationGraphCompileContext &context) {
+            Keys(value,
+                 {"id", "name", "slot", "blendIn", "blendOut", "curve", "interruption", "reverse", "missingJoint", "mask", "sequence"});
+            GraphActionDefinition result;
+            result.id = Id<GraphActionId>(value["id"]);
+            result.name = value["name"].get<std::string>();
+            result.slot = Id<GraphActionSlotId>(value["slot"]);
+            result.blendIn = {Time(value["blendIn"])};
+            result.blendOut = {Time(value["blendOut"])};
+            result.curve = EnumValue<GraphStateBlendCurve>(value["curve"], BlendCurves);
+            result.interruption = EnumValue<GraphActionInterruption>(value["interruption"], ActionInterruptions);
+            result.reverse = EnumValue<GraphActionReverse>(value["reverse"], ActionReverse);
+            result.missingJoint = EnumValue<GraphMissingJointPolicy>(value["missingJoint"], MissingJoints);
+            ReadBoneMask(result.mask, value["mask"], budget, context);
+            result.sequence = ActionSequence(value["sequence"], budget, context);
+            return result;
+        }
+
+        /** @brief Proves the complete versioned object shape before any const JSON field lookup. */
+        void PayloadKeys(const Json &payload, const std::uint32_t schema) {
+            if (schema < 6)
+                Keys(payload, {"skeleton", "entry", "parameters", "definitions"});
+            else
+                Keys(payload, {"skeleton", "entry", "actionSlots", "actions", "parameters", "definitions"});
+        }
+
+        /** @brief Exact source-version fields make action data impossible to hide under
+         * a pre-action schema. */
+        void ActionCatalog(AnimationGraphData &data, const Json &payload, Budget &budget, const AnimationGraphCompileContext &context) {
+            if (data.schemaVersion < 6)
+                return;
+            data.actionSlots.reserve(
+                Spend(payload["actionSlots"], budget.actionSlots, context.limits.actionSlots, AnimationGraphHardLimits::ActionSlots));
+            for (const auto &slot : payload["actionSlots"]) {
+                Keys(slot, {"id", "name"});
+                data.actionSlots.push_back({Id<GraphActionSlotId>(slot["id"]), slot["name"].get<std::string>()});
+            }
+            data.actions.reserve(Spend(payload["actions"], budget.actions, context.limits.actions, AnimationGraphHardLimits::Actions));
+            for (const auto &action : payload["actions"]) {
+                CheckAdmission(context);
+                data.actions.push_back(Action(action, budget, context));
+            }
+        }
+
+        /** @brief Requires the schema introducing an opcode before decoding its typed
+         * payload. */
         void RequireVersion(const std::uint32_t actual, const std::uint32_t minimum) {
             if (actual < minimum)
                 Reject(AnimationErrors::GraphVersionUnsupported);
         }
 
-        /** @brief Decodes typed semantics without preserving unknown opaque node payloads. */
+        /** @brief Decodes typed semantics without preserving unknown opaque node
+         * payloads. */
         GraphNodePayload Payload(const Json &kind, const Json &reference, Budget &budget, const AnimationGraphCompileContext &context,
                                  const std::span<const GraphParameter> parameters, const std::uint32_t version) {
             const auto value = EnumValue<std::uint8_t>(kind, Kinds);
@@ -284,6 +405,9 @@ namespace Horo::Animation {
                     return GraphInputNode{Id<GraphInterfaceId>(reference)};
                 case 5:
                     return GraphCallNode{Id<GraphDefinitionId>(reference)};
+                case 8:
+                    RequireVersion(version, 6);
+                    return GraphActionSlotNode{Id<GraphActionSlotId>(reference)};
                 case 7:
                     RequireVersion(version, 5);
                     return BlendTree(reference, budget, context);
@@ -361,7 +485,8 @@ namespace Horo::Animation {
             return definition;
         }
 
-        /** @brief Decodes exact finite binary32/scalar defaults without narrowing overflow or coercion. */
+        /** @brief Decodes exact finite binary32/scalar defaults without narrowing
+         * overflow or coercion. */
         GraphParameterValue Default(const Json &value, GraphValueType type) {
             using enum GraphValueType;
             if (type == Float) {
@@ -388,7 +513,8 @@ namespace Horo::Animation {
             return value.get<bool>();
         }
 
-        /** @brief Decodes static parameter declarations without creating a mutable runtime parameter store. */
+        /** @brief Decodes static parameter declarations without creating a mutable
+         * runtime parameter store. */
         GraphParameter Parameter(const Json &value) {
             Keys(value, {"id", "name", "type", "default"});
             if (!value["name"].is_string())
@@ -397,7 +523,8 @@ namespace Horo::Animation {
             return {Id<GraphParameterId>(value["id"]), value["name"].get<std::string>(), type, Default(value["default"], type)};
         }
 
-        /** @brief The migration selector admits only its explicit supported source-schema range. */
+        /** @brief The migration selector admits only its explicit supported
+         * source-schema range. */
         bool AdmittedSchema(const std::uint32_t schema, const AnimationGraphSourceMigration migration) {
             if (schema == CurrentAnimationGraphSchemaVersion)
                 return true;
@@ -410,18 +537,20 @@ namespace Horo::Animation {
                 case MigrateLegacySchemas:
                     return schema >= 1 && schema <= 2;
                 case MigrateSupported:
-                    return schema >= 1 && schema <= 4;
+                    return schema >= 1 && schema <= 5;
             }
             return false;
         }
 
-        /** @brief Serialized semantic-version fields must be exact unsigned components of the schema's contract. */
+        /** @brief Serialized semantic-version fields must be exact unsigned components
+         * of the schema's contract. */
         bool ContractMatches(const Json &value, const AnimationGraphContractVersion expected) {
             return value["major"].is_number_unsigned() && value["minor"].is_number_unsigned() && value["patch"].is_number_unsigned() &&
                    value["major"] == expected.major && value["minor"] == expected.minor && value["patch"] == expected.patch;
         }
 
-        /** @brief Decodes only the current model contract and explicit source-schema migration versions. */
+        /** @brief Decodes only the current model contract and explicit source-schema
+         * migration versions. */
         std::uint32_t Version(const Json &envelope, AnimationGraphSourceMigration migration) {
             Keys(envelope, {"schemaVersion", "assetType", "contractVersion", "dependencies", "payload"});
             Keys(envelope["contractVersion"], {"major", "minor", "patch"});
@@ -437,9 +566,12 @@ namespace Horo::Animation {
             return schema;
         }
 
-        /** @brief Requires the exact dependency set; field/collection order is canonicalized, duplicates are rejected. */
+        /** @brief Requires the exact dependency set; field/collection order is
+         * canonicalized, duplicates are rejected. */
         void ValidateDependencies(const Json &values, const AnimationGraphData &data) {
-            if (!values.is_array() || values.size() > AnimationGraphHardLimits::Nodes + AnimationGraphHardLimits::States + 1U)
+            if (!values.is_array() || values.size() > AnimationGraphHardLimits::Nodes + AnimationGraphHardLimits::States +
+                                                          AnimationGraphHardLimits::BlendMembers +
+                                                          AnimationGraphHardLimits::ActionSections + 1U)
                 Reject(AnimationErrors::GraphLimitExceeded);
             std::set<std::pair<std::string, Assets::AssetId>> actual;
             std::set<std::pair<std::string, Assets::AssetId>> expected;
@@ -450,10 +582,7 @@ namespace Horo::Animation {
                 if (!actual.emplace(dependency["assetType"].get<std::string>(), Asset(dependency["assetId"])).second)
                     Reject(AnimationErrors::GraphBindingMismatch);
             }
-            DependencyProjection projection;
-            for (const auto &definition : data.definitions)
-                for (const auto &node : definition.nodes)
-                    std::visit(projection, node.payload);
+            const auto projection = ProjectDependencies(data);
             for (const auto clip : projection.clips)
                 expected.emplace("core.animation.clip", clip.Asset());
             expected.emplace("core.animation.skeleton", data.skeleton.Asset());
@@ -461,11 +590,13 @@ namespace Horo::Animation {
                 Reject(AnimationErrors::GraphBindingMismatch);
         }
 
-        /** @brief Releases admitted-depth JSON trees without allocating inside basic_json's noexcept destructor. */
+        /** @brief Releases admitted-depth JSON trees without allocating inside
+         * basic_json's noexcept destructor. */
         struct SourceTreeGuard final {
             Json &root;
 
-            /** @brief Empties children before their containers are destroyed; admitted nesting is at most the codec hard ceiling. */
+            /** @brief Empties children before their containers are destroyed; admitted
+             * nesting is at most the codec hard ceiling. */
             static void Clear(Json &value) noexcept {
                 if (value.is_structured()) {
                     for (auto &child : value)
@@ -479,7 +610,8 @@ namespace Horo::Animation {
             }
         };
 
-        /** @brief Parses with hard byte/depth/value/string ceilings and duplicate-key rejection. */
+        /** @brief Parses with hard byte/depth/value/string ceilings and duplicate-key
+         * rejection. */
         Json Parse(std::string_view source, const AnimationGraphCompileContext &context, const AnimationGraphSourceLimits &limits) {
             if (source.empty() || source.size() > limits.bytes)
                 Reject(AnimationErrors::GraphLimitExceeded);
@@ -527,10 +659,11 @@ namespace Horo::Animation {
             data.contractVersion = SourceContract(data.schemaVersion);
             data.id = identity;
             const auto &payload = envelope["payload"];
-            Keys(payload, {"skeleton", "entry", "parameters", "definitions"});
+            PayloadKeys(payload, data.schemaVersion);
             data.skeleton = AssetIdentity<SkeletonId>(payload["skeleton"]);
             data.entry = Id<GraphDefinitionId>(payload["entry"]);
             Budget budget;
+            ActionCatalog(data, payload, budget, context);
             data.parameters.reserve(
                 Spend(payload["parameters"], budget.parameters, context.limits.parameters, AnimationGraphHardLimits::Parameters));
             for (const auto &parameter : payload["parameters"]) {

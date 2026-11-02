@@ -34,7 +34,8 @@ namespace Horo::Animation::Detail {
 
     namespace {
 
-        /** @brief Validates one scalar override's variant and value before storing the candidate snapshot. */
+        /** @brief Validates one scalar override's variant and value before storing the
+         * candidate snapshot. */
         GraphInstanceFailure ValidateParameterValue(const GraphParameter &declaration, const GraphParameterInput &parameter) noexcept {
             using enum GraphInstanceFailure;
             if (declaration.defaultValue.index() != parameter.value.index())
@@ -44,7 +45,8 @@ namespace Horo::Animation::Detail {
             return None;
         }
 
-        /** @brief Captures all defaults and exact typed overrides before any instruction runs. */
+        /** @brief Captures all defaults and exact typed overrides before any
+         * instruction runs. */
         GraphInstanceOutcome CaptureParameters(GraphInstanceState &state, const GraphEvaluationInput &input) noexcept {
             const auto declarations = state.program->Parameters();
             if (input.parameters.size() > declarations.size())
@@ -74,14 +76,16 @@ namespace Horo::Animation::Detail {
             return {};
         }
 
-        /** @brief Resolves a compiled semantic operand; compiler validation already proves exactly one matching input. */
+        /** @brief Resolves a compiled semantic operand; compiler validation already
+         * proves exactly one matching input. */
         GraphWorkingSlot Operand(const GraphInstructionOccurrence &occurrence, const GraphInstruction &instruction,
                                  const GraphPinRole role) noexcept {
             const auto pin = std::ranges::find(instruction.pins, role, &GraphPin::role);
             return std::ranges::find(occurrence.inputs, pin->id, &GraphOccurrenceInput::destination)->slot;
         }
 
-        /** @brief Samples one actual immutable clip with its independent occurrence player candidate. */
+        /** @brief Samples one actual immutable clip with its independent occurrence
+         * player candidate. */
         GraphInstanceOutcome SampleClip(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                         const GraphInstruction &instruction, const GraphEvaluationInput &input) {
             auto &player = state.candidate.players[*occurrence.clipPlayer];
@@ -118,7 +122,8 @@ namespace Horo::Animation::Detail {
             return {};
         }
 
-        /** @brief Propagates authored coverage using only contributions that affect the candidate pose. */
+        /** @brief Propagates authored coverage using only contributions that affect the
+         * candidate pose. */
         void LayerCoverage(const GraphBlendNode &policy, const std::span<const float> mask, const float weight,
                            const std::span<const std::uint8_t> base, const std::span<const std::uint8_t> overlay,
                            const std::span<std::uint8_t> output) noexcept {
@@ -130,7 +135,8 @@ namespace Horo::Animation::Detail {
             }
         }
 
-        /** @brief Executes one ordered layer using the compiler's exact immutable mask and pose operands. */
+        /** @brief Executes one ordered layer using the compiler's exact immutable mask
+         * and pose operands. */
         GraphInstanceOutcome BlendPose(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                        const GraphInstruction &instruction) {
             using enum GraphPinRole;
@@ -159,7 +165,8 @@ namespace Horo::Animation::Detail {
             return {};
         }
 
-        /** @brief Executes one compiler occurrence with exhaustive typed opcode dispatch. */
+        /** @brief Executes one compiler occurrence with exhaustive typed opcode
+         * dispatch. */
         GraphInstanceOutcome ExecuteOccurrence(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                                const GraphInstruction &instruction, const GraphEvaluationInput &input) {
             return std::visit([&state, &occurrence, &instruction, &input]<typename Payload>(const Payload &) -> GraphInstanceOutcome {
@@ -170,18 +177,22 @@ namespace Horo::Animation::Detail {
                         .values[state.scalars.offsets[static_cast<std::size_t>(occurrence.output.type)] + occurrence.output.index] =
                         state.candidate.parameters[*occurrence.parameterRead];
                     return {};
+                } else if constexpr (std::is_same_v<Payload, GraphActionSlotNode>) {
+                    return ComposeActionSlot(state, occurrence);
                 } else if constexpr (std::is_same_v<Payload, GraphBlendTreeNode>) {
                     return ExecuteGraphBlendTree(state, occurrence);
                 } else if constexpr (std::is_same_v<Payload, GraphBlendNode>) {
                     return BlendPose(state, occurrence, instruction);
                 } else {
-                    // Input, Call and Output alias the actual earlier writer in the compiled access plan.
+                    // Input, Call and Output alias the actual earlier writer in the
+                    // compiled access plan.
                     return {};
                 }
             }, instruction.payload);
         }
 
-        /** @brief Starts a tick transaction in already allocated candidate storage; committed state is untouched. */
+        /** @brief Starts a tick transaction in already allocated candidate storage;
+         * committed state is untouched. */
         void PrepareCandidate(GraphInstanceState &state) {
             std::ranges::copy(state.players, state.candidate.players.begin());
             std::ranges::copy(state.machines, state.candidate.machines.begin());
@@ -194,7 +205,8 @@ namespace Horo::Animation::Detail {
             }
         }
 
-        /** @brief Executes one active guarded phase using the sole prepared clip/pose dispatch path. */
+        /** @brief Executes one active guarded phase using the sole prepared clip/pose
+         * dispatch path. */
         GraphInstanceOutcome ExecuteGuardedOccurrence(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                                       const GraphEvaluationInput &input) {
             const auto &instruction = state.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
@@ -210,7 +222,8 @@ namespace Horo::Animation::Detail {
             return ExecuteOccurrence(state, occurrence, instruction, branchInput);
         }
 
-        /** @brief Stages parent-before-child state control once before choosing leaders across all active tree occurrences. */
+        /** @brief Stages parent-before-child state control once before choosing leaders
+         * across all active tree occurrences. */
         GraphInstanceOutcome PrepareTreeControl(GraphInstanceState &state, const GraphEvaluationInput &input) {
             if (state.blends.trees.empty())
                 return {};
@@ -228,12 +241,24 @@ namespace Horo::Animation::Detail {
             return PrepareGraphSync(state, input);
         }
 
-        /** @brief Either invocation or owner cancellation aborts the candidate before publication. */
+        /** @brief Captures all invocation data and stages owner controls/actions before any pose instruction runs. */
+        GraphInstanceOutcome PrepareExecution(GraphInstanceState &state, const GraphEvaluationInput &input) {
+            if (const auto captured = CaptureParameters(state, input); captured.HasError())
+                return captured;
+            PrepareCandidate(state);
+            if (const auto tree = PrepareTreeControl(state, input); tree.HasError())
+                return tree;
+            return EvaluateActions(state, input);
+        }
+
+        /** @brief Either invocation or owner cancellation aborts the candidate before
+         * publication. */
         bool Cancelled(const GraphInstanceState &state, const GraphEvaluationInput &input) noexcept {
             return input.cancellation.IsCancellationRequested() || state.ownerCancellation.IsCancellationRequested();
         }
 
-        /** @brief Completes retirement only after the full occurrence stream and final cancellation fence succeed. */
+        /** @brief Completes retirement only after the full occurrence stream and final
+         * cancellation fence succeed. */
         void CompleteRetirement(GraphInstanceState &state) {
             for (std::size_t index = 0; index < state.candidate.machines.size(); ++index)
                 if (state.candidate.machines[index].retiring)
@@ -245,17 +270,15 @@ namespace Horo::Animation::Detail {
     GraphInstanceOutcome ExecuteGraph(GraphInstanceState &state, const GraphEvaluationInput &input) {
         if (input.delta.ticks < 0 || input.rate.millionths < -MaximumRate || input.rate.millionths > MaximumRate)
             return {GraphInstanceFailure::Malformed};
-        if (const auto captured = CaptureParameters(state, input); captured.HasError())
-            return captured;
-        PrepareCandidate(state);
-        if (const auto prepared = PrepareTreeControl(state, input); prepared.HasError())
+        if (const auto prepared = PrepareExecution(state, input); prepared.HasError())
             return prepared;
         for (const auto &occurrence : state.program->Occurrences()) {
             if (Cancelled(state, input))
                 return {GraphInstanceFailure::Cancelled};
             if (const auto executed = ExecuteGuardedOccurrence(state, occurrence, input); executed.HasError())
                 return executed;
-            // Input, Call and Output alias the actual earlier writer, as established by the compiled access plan.
+            // Input, Call and Output alias the actual earlier writer, as established by
+            // the compiled access plan.
         }
         if (Cancelled(state, input))
             return {GraphInstanceFailure::Cancelled};

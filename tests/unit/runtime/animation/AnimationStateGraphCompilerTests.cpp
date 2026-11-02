@@ -43,6 +43,8 @@ namespace Horo::Animation::Test {
         for (const std::uint32_t schema : {1U, 2U, 3U}) {
             auto old = nlohmann::json::parse(encoded.Value());
             old["schemaVersion"] = schema;
+            old["payload"].erase("actionSlots");
+            old["payload"].erase("actions");
             old["contractVersion"] = {{"major", 1}, {"minor", schema == 3 ? 1 : 0}, {"patch", 0}};
             if (schema < 3)
                 for (auto &definition : old["payload"]["definitions"])
@@ -137,6 +139,9 @@ namespace Horo::Animation::Test {
         REQUIRE(encoded.HasValue());
         auto old = nlohmann::ordered_json::parse(encoded.Value());
         old["schemaVersion"] = 3;
+        // Legacy schemas have no action catalog fields.
+        old["payload"].erase("actionSlots");
+        old["payload"].erase("actions");
         old["contractVersion"]["minor"] = 1;
         CHECK(DeserializeAnimationGraphSource(old.dump(), source.id).HasError());
         CHECK(

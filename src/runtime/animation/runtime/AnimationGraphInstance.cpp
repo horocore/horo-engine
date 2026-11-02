@@ -8,7 +8,8 @@
 
 namespace Horo::Animation {
     namespace {
-        /** @brief Selects the registered diagnostic without constructing an owning error on the hot path. */
+        /** @brief Selects the registered diagnostic without constructing an owning
+         * error on the hot path. */
         const ErrorCodeDescriptor &FailureDescriptor(const GraphInstanceFailure failure) noexcept {
             using enum GraphInstanceFailure;
             switch (failure) {
@@ -40,7 +41,8 @@ namespace Horo::Animation {
             return AnimationErrors::GraphMalformed;
         }
 
-        /** @brief Checks immutable track storage against the instance's admitted sampling limits. */
+        /** @brief Checks immutable track storage against the instance's admitted
+         * sampling limits. */
         GraphInstanceFailure AdmitClipTracks(const AnimationClipAsset &clip, const AnimationClipLimits &limits) noexcept {
             using enum GraphInstanceFailure;
             if (clip.Data().tracks.size() > limits.maximumTracks)
@@ -54,7 +56,8 @@ namespace Horo::Animation {
             return keys > limits.maximumTotalKeys ? LimitExceeded : None;
         }
 
-        /** @brief Proves exactly one exact immutable publication exists for each compiled clip binding. */
+        /** @brief Proves exactly one exact immutable publication exists for each
+         * compiled clip binding. */
         GraphInstanceFailure AdmitClipBindings(const GraphInstanceAssets &assets, const AnimationClipLimits &limits) noexcept {
             using enum GraphInstanceFailure;
             for (const auto &expected : assets.program->ClipBindings()) {
@@ -76,7 +79,8 @@ namespace Horo::Animation {
             return None;
         }
 
-        /** @brief Charges the actual pinned clip's pose and key-search work for ordinary and tree players. */
+        /** @brief Charges the actual pinned clip's pose and key-search work for
+         * ordinary and tree players. */
         std::uint64_t ClipJointCost(const GraphInstanceAssets &assets, const std::uint32_t binding) noexcept {
             const auto &descriptor = assets.program->ClipBindings()[binding];
             const auto clip = std::ranges::find_if(assets.clips, [&](const auto &value) {
@@ -88,7 +92,8 @@ namespace Horo::Animation {
             return cost;
         }
 
-        /** @brief Charges one prepared writer's complete pose and binary-search work, including state control phases. */
+        /** @brief Charges one prepared writer's complete pose and binary-search work,
+         * including state control phases. */
         std::uint64_t OccurrenceJointCost(const GraphInstanceAssets &assets, const GraphInstructionOccurrence &occurrence) noexcept {
             const auto &instruction = assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex];
             std::uint64_t cost = 0;
@@ -105,10 +110,11 @@ namespace Horo::Animation {
             return cost;
         }
 
-        /** @brief Charges complete per-tick pose/key-search work after exact clip bindings have been admitted. */
+        /** @brief Charges complete per-tick pose/key-search work after exact clip
+         * bindings have been admitted. */
         GraphInstanceFailure AdmitClipWork(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             using enum GraphInstanceFailure;
-            std::uint64_t operations = 0;
+            std::uint64_t operations = Detail::ActionJointOperations(assets);
             for (const auto &curve : assets.curves)
                 operations += 1 + std::bit_width(curve->Keys().size());
             if (operations > context.maximumJointOperations)
@@ -122,7 +128,8 @@ namespace Horo::Animation {
             return None;
         }
 
-        /** @brief Validates sampling policy against fixed engine bounds before inspecting clip contents. */
+        /** @brief Validates sampling policy against fixed engine bounds before
+         * inspecting clip contents. */
         bool ValidClipLimits(const AnimationClipLimits &limits) noexcept {
             return limits.maximumTracks > 0 && limits.maximumTracks <= AnimationClipHardLimits::Tracks && limits.maximumKeysPerTrack > 0 &&
                    limits.maximumKeysPerTrack <= AnimationClipHardLimits::KeysPerTrack && limits.maximumTotalKeys > 0 &&
@@ -130,7 +137,8 @@ namespace Horo::Animation {
                    limits.maximumBoundaryCrossings <= AnimationClipHardLimits::BoundaryCrossings;
         }
 
-        /** @brief Admits unique float curve bindings and their bounded binary-search work before allocation. */
+        /** @brief Admits unique float curve bindings and their bounded binary-search
+         * work before allocation. */
         GraphInstanceFailure AdmitCurves(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             using enum GraphInstanceFailure;
             const auto declarations = assets.program->Parameters();
@@ -141,7 +149,8 @@ namespace Horo::Animation {
                 const auto &curve = assets.curves[index];
                 if (!curve)
                     return BindingMismatch;
-                // Moving a prepared value can retain its binding while retiring its key storage.
+                // Moving a prepared value can retain its binding while retiring its key
+                // storage.
                 if (curve->Keys().empty())
                     return Malformed;
                 const auto found = std::ranges::lower_bound(declarations, curve->Parameter(), {}, &GraphParameter::id);
@@ -157,7 +166,8 @@ namespace Horo::Animation {
             return work > context.maximumJointOperations ? LimitExceeded : None;
         }
 
-        /** @brief Load-time checked byte accumulator; a failed charge never wraps or admits an oversized workspace. */
+        /** @brief Load-time checked byte accumulator; a failed charge never wraps or
+         * admits an oversized workspace. */
         struct StorageBudget final {
             std::uint64_t maximum;
             std::uint64_t bytes{sizeof(Detail::GraphInstanceState)};
@@ -170,15 +180,17 @@ namespace Horo::Animation {
             }
         };
 
-        /** @brief Charges fixed tree/group scratch and complete double-buffered member observations before allocation. */
+        /** @brief Charges fixed tree/group scratch and complete double-buffered member
+         * observations before allocation. */
         bool AdmitBlendStorage(const GraphMemoryRequirements &memory, StorageBudget &charge) noexcept {
             return charge(memory.blendTrees, sizeof(Detail::GraphBlendTreeWork) + sizeof(Detail::GraphSyncGroupWork)) &&
                    charge(memory.blendMembers,
                           sizeof(Detail::GraphBlendMemberWork) + 2ULL * sizeof(GraphBlendMemberObservation) + 2ULL * sizeof(std::uint32_t));
         }
 
-        /** @brief Charges the existing pose/player/parameter and immutable-publication categories in their original order. */
-        bool AdmitBaseStorage(const GraphInstanceAssets &assets, StorageBudget &charge) noexcept {
+        /** @brief Charges the existing pose/player/parameter and immutable-publication
+         * categories in their original order. */
+        bool AdmitBaseStorage(const GraphInstanceAssets &assets, StorageBudget &charge, const GraphActionLimits &actions) noexcept {
             if (const auto &memory = assets.program->Memory();
                 !charge(memory.poseTransforms + 2ULL * assets.program->SkeletonBinding().joints, sizeof(Math::Transform)) ||
                 !charge(memory.poseTransforms, sizeof(std::uint8_t)) ||
@@ -187,10 +199,11 @@ namespace Horo::Animation {
                 !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
                 !charge(assets.curves.size(), sizeof(std::shared_ptr<const AnimationParameterCurve>) + sizeof(std::size_t)))
                 return false;
-            return AdmitBlendStorage(assets.program->Memory(), charge);
+            return AdmitBlendStorage(assets.program->Memory(), charge) && charge(Detail::ActionStorageBytes(*assets.program, actions), 1);
         }
 
-        /** @brief Resolves one immutable state declaration for both storage and control-work admission. */
+        /** @brief Resolves one immutable state declaration for both storage and
+         * control-work admission. */
         const GraphStateMachineNode &MachineDefinition(const AnimationGraphProgram &program,
                                                        const GraphStateMachineBinding &binding) noexcept {
             const auto &occurrence = program.Occurrences()[binding.beginOccurrence];
@@ -198,12 +211,13 @@ namespace Horo::Animation {
                 program.Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
         }
 
-        /** @brief Charges every retained workspace and both transaction/publication buffers without overflow. */
+        /** @brief Charges every retained workspace and both transaction/publication
+         * buffers without overflow. */
         GraphInstanceFailure AdmitStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             using enum GraphInstanceFailure;
             const auto &memory = assets.program->Memory();
             StorageBudget charge{context.maximumStorageBytes};
-            if (!AdmitBaseStorage(assets, charge))
+            if (!AdmitBaseStorage(assets, charge, context.actions))
                 return LimitExceeded;
             if (!charge(memory.stateMachines, 2ULL * sizeof(Detail::GraphMachineState) + sizeof(Detail::GraphPreparedMachine)) ||
                 !charge(memory.conditionLatches, 3ULL * sizeof(std::uint8_t) + sizeof(Detail::StateMachineCondition)) ||
@@ -221,7 +235,8 @@ namespace Horo::Animation {
             return None;
         }
 
-        /** @brief The immutable program must exactly pin the supplied skeleton publication. */
+        /** @brief The immutable program must exactly pin the supplied skeleton
+         * publication. */
         bool SkeletonMatches(const GraphInstanceAssets &assets) noexcept {
             const auto &binding = assets.program->SkeletonBinding();
             const auto &skeleton = assets.skeleton->Data();
@@ -229,13 +244,15 @@ namespace Horo::Animation {
                    binding.contractVersion == skeleton.contractVersion && binding.joints == skeleton.joints.size();
         }
 
-        /** @brief Caller instruction policy must admit the entire prepared stream, not merely its active subset. */
+        /** @brief Caller instruction policy must admit the entire prepared stream, not
+         * merely its active subset. */
         bool InstructionsAdmitted(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             return context.maximumInstructions != 0 && context.maximumInstructions <= AnimationGraphHardLimits::EvaluationInstructions &&
                    assets.program->Occurrences().size() <= context.maximumInstructions;
         }
 
-        /** @brief Checks runtime identity, skeleton publication compatibility and immutable instruction/clip policy. */
+        /** @brief Checks runtime identity, skeleton publication compatibility and
+         * immutable instruction/clip policy. */
         GraphInstanceFailure AdmitCompatibility(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             using enum GraphInstanceFailure;
             if (!context.instance.IsValid())
@@ -248,18 +265,20 @@ namespace Horo::Animation {
                 return LimitExceeded;
             if (assets.clips.size() != assets.program->ClipBindings().size())
                 return BindingMismatch;
-            if (!ValidClipLimits(context.clipLimits))
+            if (!ValidClipLimits(context.clipLimits) || !Detail::ValidActionLimits(context.actions))
                 return LimitExceeded;
             return None;
         }
 
-        /** @brief Charges the complete bounded control/latch/event stream independently of pose sampling work. */
+        /** @brief Charges the complete bounded control/latch/event stream independently
+         * of pose sampling work. */
         GraphInstanceFailure AdmitControlWork(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             using enum GraphInstanceFailure;
             if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
                 return LimitExceeded;
             std::uint64_t control = assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
             control += 2048ULL * assets.program->Memory().blendMembers;
+            control += Detail::ActionControlOperations(*assets.program, context.actions);
             for (const auto &occurrence : assets.program->Occurrences())
                 if (occurrence.blendTree) {
                     const auto &tree = std::get<GraphBlendTreeNode>(
@@ -276,7 +295,8 @@ namespace Horo::Animation {
             return None;
         }
 
-        /** @brief Checks identity, immutable compatibility and complete storage before any runtime allocation. */
+        /** @brief Checks identity, immutable compatibility and complete storage before
+         * any runtime allocation. */
         GraphInstanceFailure Admit(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
             using enum GraphInstanceFailure;
             if (context.cancellation.IsCancellationRequested())
@@ -294,8 +314,10 @@ namespace Horo::Animation {
             return AdmitClipWork(assets, context);
         }
 
-        /** @brief Allocates all scalar, pose, control and publication workspaces before the instance can execute. */
-        GraphInstanceFailure PrepareWorkspace(Detail::GraphInstanceState &state, const GraphInstanceAssets &assets) {
+        /** @brief Allocates all scalar, pose, control and publication workspaces before
+         * the instance can execute. */
+        GraphInstanceFailure PrepareWorkspace(Detail::GraphInstanceState &state, const GraphInstanceAssets &assets,
+                                              const GraphActionLimits &actions) {
             const auto &memory = state.program->Memory();
             state.poses.transforms.resize(static_cast<std::size_t>(memory.poseTransforms));
             state.poses.coverage.resize(static_cast<std::size_t>(memory.poseTransforms));
@@ -310,6 +332,8 @@ namespace Horo::Animation {
             if (const auto failure = Detail::PrepareGraphBlendTrees(state); failure != GraphInstanceFailure::None)
                 return failure;
             if (const auto failure = Detail::PrepareGraphStateMachines(state); failure != GraphInstanceFailure::None)
+                return failure;
+            if (const auto failure = Detail::PrepareActions(state, actions); failure != GraphInstanceFailure::None)
                 return failure;
             state.parameters.resize(memory.parameters);
             state.candidate.parameters.resize(memory.parameters);
@@ -328,13 +352,15 @@ namespace Horo::Animation {
             return GraphInstanceFailure::None;
         }
 
-        /** @brief Publishes exactly the candidate member observations in the same prepared pose slot. */
+        /** @brief Publishes exactly the candidate member observations in the same
+         * prepared pose slot. */
         void PublishBlendMembers(Detail::GraphInstanceState &state, const std::uint32_t slot) noexcept {
             for (std::size_t index = 0; index < state.blends.members.size(); ++index)
                 state.blends.published[slot][index] = state.blends.members[index].observation;
         }
 
-        /** @brief Owner-thread gate does not inspect mutable runtime state from another thread. */
+        /** @brief Owner-thread gate does not inspect mutable runtime state from another
+         * thread. */
         GraphInstanceOutcome Owner(const Detail::GraphInstanceState *state) noexcept {
             if (!state)
                 return {GraphInstanceFailure::AdmissionRejected};
@@ -343,7 +369,8 @@ namespace Horo::Animation {
             return {};
         }
 
-        /** @brief Fences all copied publications before reading mutable handle metadata or caller outputs. */
+        /** @brief Fences all copied publications before reading mutable handle metadata
+         * or caller outputs. */
         GraphInstanceOutcome ResidentPublication(const Detail::GraphInstanceState *state, const PoseHandle &publication) noexcept {
             if (const auto owner = Owner(state); owner.HasError())
                 return owner;
@@ -382,7 +409,7 @@ namespace Horo::Animation {
                 });
                 state->clips.push_back(*found);
             }
-            if (const auto failure = PrepareWorkspace(*state, assets); failure != GraphInstanceFailure::None)
+            if (const auto failure = PrepareWorkspace(*state, assets, context.actions); failure != GraphInstanceFailure::None)
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
             if (context.cancellation.IsCancellationRequested())
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::Cancelled}));
@@ -465,6 +492,7 @@ namespace Horo::Animation {
         state_->players.swap(state_->candidate.players);
         state_->machines.swap(state_->candidate.machines);
         state_->latches.swap(state_->candidate.latches);
+        Detail::CommitActions(*state_, slot, tick);
         state_->published.eventCounts[slot] = state_->candidate.eventCount;
         std::copy_n(state_->candidate.events.begin(), state_->candidate.eventCount, state_->published.events[slot].begin());
         for (std::size_t index = 0; index < state_->machines.size(); ++index) {
@@ -555,6 +583,36 @@ namespace Horo::Animation {
         return {};
     }
 
+    /** @copydoc AnimationGraphInstance::CopyActionSlots */
+    GraphInstanceOutcome AnimationGraphInstance::CopyActionSlots(const PoseHandle &publication,
+                                                                 std::span<GraphActionSlotObservation> output,
+                                                                 std::uint32_t &written) const {
+        written = 0;
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
+        const auto &values = state_->actions.published[publication.slot.index];
+        if (output.size() < values.size())
+            return {GraphInstanceFailure::LimitExceeded};
+        std::ranges::copy(values, output.begin());
+        written = static_cast<std::uint32_t>(values.size());
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::CopyActionCompletions */
+    GraphInstanceOutcome AnimationGraphInstance::CopyActionCompletions(const PoseHandle &publication,
+                                                                       std::span<GraphActionObservation> output,
+                                                                       std::uint32_t &written) const {
+        written = 0;
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
+        const auto count = state_->actions.completionCounts[publication.slot.index];
+        if (output.size() < count)
+            return {GraphInstanceFailure::LimitExceeded};
+        std::copy_n(state_->actions.completions[publication.slot.index].begin(), count, output.begin());
+        written = count;
+        return {};
+    }
+
     /** @copydoc AnimationGraphInstance::CopyPose */
     GraphInstanceOutcome AnimationGraphInstance::CopyPose(const PoseHandle &pose, const std::span<Math::Transform> output) const {
         if (const auto resident = ResidentPublication(state_.get(), pose); resident.HasError())
@@ -577,6 +635,7 @@ namespace Horo::Animation {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
         state_->closed = true;
+        Detail::ShutdownActions(*state_);
         std::ranges::fill(state_->queuedTriggers, 0);
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};

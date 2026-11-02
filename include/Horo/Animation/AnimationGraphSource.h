@@ -1,6 +1,7 @@
 #pragma once
 /** @file AnimationGraphSource.h
- * @brief Bounded canonical animation graph source bytes, isolated from runtime evaluation.
+ * @brief Bounded canonical animation graph source bytes, isolated from runtime
+ * evaluation.
  */
 #include "Horo/Animation/AnimationGraph.h"
 
@@ -21,33 +22,49 @@ namespace Horo::Animation {
         std::size_t jsonValues{AnimationGraphSourceHardLimits::JsonValues};
         std::size_t depth{AnimationGraphSourceHardLimits::Depth};
     };
-    /** @brief Explicit legacy migration policy; MigrateVersion1 remains restricted to schema 1. */
+    /** @brief Explicit legacy migration policy; MigrateVersion1 remains restricted
+     * to schema 1. */
     enum class AnimationGraphSourceMigration : std::uint8_t {
         RequireCurrent,
         MigrateVersion1,
-        /** @brief Preserves the schema-3 API policy: only schemas 1 and 2 may migrate. */
+        /** @brief Preserves the schema-3 API policy: only schemas 1 and 2 may
+           migrate. */
         MigrateLegacySchemas,
-        /** @brief Explicitly admits schemas 1, 2, 3 and 4 with their exact historical semantic contracts. */
+        /** @brief Explicitly admits schemas 1, 2, 3, 4 and 5 with their exact historical
+           semantic contracts. */
         MigrateSupported
     };
-    /** @brief Serializes a valid current-schema candidate as canonical UTF-8 JSON with one trailing newline.
-     * @param data Current typed source; stable asset identity is supplied by the sidecar and is not duplicated in bytes.
-     * @param context Captured authoring limits, cancellation and replacement identity; runtime dependencies are not needed.
+    /** @brief Serializes a valid current-schema candidate as canonical UTF-8 JSON
+     * with one trailing newline.
+     * @param data Current typed source; stable asset identity is supplied by the
+     * sidecar and is not duplicated in bytes.
+     * @param context Captured authoring limits, cancellation and replacement
+     * identity; runtime dependencies are not needed.
      * @param limits Encoded-byte and parser policy; hard ceilings cannot be raised.
-     * @return Canonical complete bytes or stable graph failure. No files or registry state are mutated.
-     * @throws std::bad_alloc When bounded load/tool-boundary storage cannot be allocated.
+     * @return Canonical complete bytes or stable graph failure. No files or
+     * registry state are mutated.
+     * @throws std::bad_alloc When bounded load/tool-boundary storage cannot be
+     * allocated.
      */
     [[nodiscard]] Result<std::string> SerializeAnimationGraphSource(const AnimationGraphData &data,
                                                                     const AnimationGraphCompileContext &context = {},
                                                                     const AnimationGraphSourceLimits &limits = {});
-    /** @brief Decodes detached graph source, rejecting duplicate/unknown keys, malformed identities and unsupported versions.
-     * @param source Complete bounded UTF-8 JSON input; trailing whitespace is admitted, trailing data is rejected.
-     * @param identity Exact sidecar-owned graph identity injected into the detached candidate.
-     * @param context Captured authoring validation, cancellation and replacement identity.
-     * @param limits Byte, nesting and parser-value limits applied before/between parsing work.
-     * @param migration Explicit version-1-only or all-supported 1/2/3/4 migration policy; current is required by default.
-     * @return Fully validated canonical current-schema candidate or stable failure; no partial result or publication.
-     * @throws std::bad_alloc When bounded load/tool-boundary storage cannot be allocated.
+    /** @brief Decodes detached graph source, rejecting duplicate/unknown keys,
+     * malformed identities and unsupported versions.
+     * @param source Complete bounded UTF-8 JSON input; trailing whitespace is
+     * admitted, trailing data is rejected.
+     * @param identity Exact sidecar-owned graph identity injected into the detached
+     * candidate.
+     * @param context Captured authoring validation, cancellation and replacement
+     * identity.
+     * @param limits Byte, nesting and parser-value limits applied before/between
+     * parsing work.
+     * @param migration Explicit version-1-only or all-supported 1/2/3/4/5 migration
+     * policy; current is required by default.
+     * @return Fully validated canonical current-schema candidate or stable failure;
+     * no partial result or publication.
+     * @throws std::bad_alloc When bounded load/tool-boundary storage cannot be
+     * allocated.
      */
     [[nodiscard]] Result<AnimationGraphData> DeserializeAnimationGraphSource(
         std::string_view source, AnimationGraphId identity, const AnimationGraphCompileContext &context = {},

@@ -9,21 +9,25 @@ namespace Horo::Animation::GraphCompileDetail {
             const ErrorCodeDescriptor *code;
         };
 
-        /** @brief Retains exact canonical pose-binding diagnostics across compile-only expansion unwinding. */
+        /** @brief Retains exact canonical pose-binding diagnostics across compile-only
+         * expansion unwinding. */
         struct BindingRejection final {
             Error error;
         };
 
-        /** @brief Exact earlier writer access, independent of aliases and active state lanes. */
+        /** @brief Exact earlier writer access, independent of aliases and active state
+         * lanes. */
         struct Access final {
             GraphWorkingSlot slot;
             std::uint32_t producer{};
         };
 
-        /** @brief Builds a single bounded guarded access plan; runtime executes it without recursion. */
+        /** @brief Builds a single bounded guarded access plan; runtime executes it
+         * without recursion. */
         class Builder final {
         public:
-            /** @brief Captures immutable dependency compatibility for this detached compilation. */
+            /** @brief Captures immutable dependency compatibility for this detached
+             * compilation. */
             Builder(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context, const GraphSkeletonBinding &skeleton,
                     std::vector<AnimationClipDescriptor> clips)
                 : program_(program), context_(context) {
@@ -41,7 +45,8 @@ namespace Horo::Animation::GraphCompileDetail {
             }
 
         private:
-            /** @brief Checks caller admission and cancellation at bounded expansion checkpoints. */
+            /** @brief Checks caller admission and cancellation at bounded expansion
+             * checkpoints. */
             void Check() const {
                 if (!context_.accepting)
                     throw Rejection{&AnimationErrors::GraphAdmissionRejected};
@@ -49,7 +54,8 @@ namespace Horo::Animation::GraphCompileDetail {
                     throw Rejection{&AnimationErrors::GraphOperationCancelled};
             }
 
-            /** @brief Allocates one exact typed working slot within the captured memory policy. */
+            /** @brief Allocates one exact typed working slot within the captured memory
+             * policy. */
             GraphWorkingSlot Slot(const GraphValueType type) {
                 const auto kind = static_cast<std::size_t>(type);
                 const auto index = plan_.memory.workingSlots[kind]++;
@@ -68,7 +74,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 return {type, index};
             }
 
-            /** @brief Appends one complete occurrence after charging actual call-path and guard storage. */
+            /** @brief Appends one complete occurrence after charging actual call-path and
+             * guard storage. */
             std::uint32_t Append(GraphInstructionOccurrence occurrence) {
                 Check();
                 pathEntries_ += occurrence.callPath.size() + occurrence.guards.size();
@@ -80,7 +87,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 return index;
             }
 
-            /** @brief Gives this exact clip occurrence its own player and complete pose storage. */
+            /** @brief Gives this exact clip occurrence its own player and complete pose
+             * storage. */
             Access Clip(const GraphClipNode &clip, GraphInstructionOccurrence occurrence) {
                 if (plan_.memory.clipPlayers >= context_.limits.clipPlayers)
                     throw Rejection{&AnimationErrors::GraphLimitExceeded};
@@ -95,7 +103,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 return output;
             }
 
-            /** @brief Expands the two incarnations of one state with exact guarded child ranges. */
+            /** @brief Expands the two incarnations of one state with exact guarded child
+             * ranges. */
             GraphStateBranch StateBranch(const GraphState &state, const GraphInstructionOccurrence &occurrence, const std::uint32_t machine,
                                          const std::uint32_t stateIndex) {
                 GraphStateBranch branch;
@@ -121,7 +130,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 return branch;
             }
 
-            /** @brief Resolves one state source through canonical clip binding or the bounded subgraph expander. */
+            /** @brief Resolves one state source through canonical clip binding or the
+             * bounded subgraph expander. */
             Access StateSource(const GraphState &state, GraphInstructionOccurrence child) {
                 if (const auto *clip = std::get_if<AnimationClipId>(&state.source))
                     return Clip(GraphClipNode{*clip}, std::move(child));
@@ -131,7 +141,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 return Expand(static_cast<std::uint32_t>(found - definitions.begin()), child.callPath, child.guards, {});
             }
 
-            /** @brief Emits control, guarded state lanes, and final composition in actual runtime order. */
+            /** @brief Emits control, guarded state lanes, and final composition in actual
+             * runtime order. */
             Access Machine(const GraphStateMachineNode &machine, GraphInstructionOccurrence occurrence) {
                 const auto index = static_cast<std::uint32_t>(plan_.stateMachines.size());
                 if (index >= context_.limits.stateMachines)
@@ -150,11 +161,13 @@ namespace Horo::Animation::GraphCompileDetail {
                 occurrence.output = Slot(GraphValueType::Pose);
                 binding.beginOccurrence = Append(occurrence);
                 plan_.stateMachines.push_back(binding);
-                // Four complete owner buffers: committed/candidate composed poses and frozen interruption sources.
+                // Four complete owner buffers: committed/candidate composed poses and
+                // frozen interruption sources.
                 for (std::size_t buffer = 0; buffer < 4; ++buffer)
                     plan_.stateMachines[index].poses[buffer] = Slot(GraphValueType::Pose);
                 for (std::uint32_t stateIndex = 0; stateIndex < machine.states.size(); ++stateIndex) {
-                    // Expanding a nested source may grow stateMachines; reacquire its owner only after that expansion.
+                    // Expanding a nested source may grow stateMachines; reacquire its owner
+                    // only after that expansion.
                     auto branch = StateBranch(machine.states[stateIndex], occurrence, index, stateIndex);
                     plan_.stateMachines[index].branches.push_back(branch);
                 }
@@ -166,7 +179,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 return output;
             }
 
-            /** @brief Binds ordinary aliases/calls or a new typed writer without changing evaluation order. */
+            /** @brief Binds ordinary aliases/calls or a new typed writer without changing
+             * evaluation order. */
             Access OutputAccess(const GraphInstruction &instruction, GraphInstructionOccurrence &occurrence,
                                 const std::map<GraphInterfaceId, Access> &interfaceInputs) {
                 Access output;
@@ -191,7 +205,8 @@ namespace Horo::Animation::GraphCompileDetail {
                 return output;
             }
 
-            /** @brief Expands only a compiler-proven acyclic, depth-bounded definition while preserving actual writer aliases. */
+            /** @brief Expands only a compiler-proven acyclic, depth-bounded definition
+             * while preserving actual writer aliases. */
             Access Expand(const std::uint32_t definitionIndex, const std::vector<GraphSourceLocation> &path,
                           const std::vector<GraphStateGuard> &guards, const std::map<GraphInterfaceId, Access> &interfaceInputs) {
                 Check();
@@ -208,6 +223,7 @@ namespace Horo::Animation::GraphCompileDetail {
                     occurrence.definitionIndex = definitionIndex;
                     occurrence.instructionIndex = instructionIndex;
                     occurrence.parameterRead = instruction.parameterIndex;
+                    occurrence.actionSlot = instruction.actionSlot;
                     occurrence.blendParameters = instruction.blendParameters;
                     for (const auto &input : instruction.inputs)
                         occurrence.inputs.emplace_back(input.destination, outputs[input.instruction].slot,

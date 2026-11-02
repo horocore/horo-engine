@@ -733,6 +733,14 @@ Interpolation rules:
 - translations and scales use linear interpolation
 - blend weights are normalized and clamped
 
+## Action Playback and Animation Sequences
+
+Typed gameplay actions, named slots, section/loop sequences, request queues,
+interruption, masks, bounded envelopes and terminal result ownership follow
+[Action playback, slots and animation sequences](animation-actions-and-sequences.md).
+They use the existing graph instance's fixed tick and Commit boundary. Cinematic
+sequence ownership and clip-notify dispatch remain separate contracts.
+
 ## Inverse Kinematics
 
 IK nodes modify a pose after animation sampling.

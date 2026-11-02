@@ -17,12 +17,14 @@ namespace Horo::Animation::GraphCompileDetail {
             GraphSourceLocation location;
         };
 
-        /** @brief Constructs one semantic pin shape without assigning authored identity. */
+        /** @brief Constructs one semantic pin shape without assigning authored
+         * identity. */
         GraphPin Pin(const GraphPinRole role, const GraphValueType type, const bool output, const GraphInterfaceId input = {}) {
             return {{}, role, type, output, input};
         }
 
-        /** @brief Validates an absolute or explicitly reference-bound additive clip's exact shape. */
+        /** @brief Validates an absolute or explicitly reference-bound additive clip's
+         * exact shape. */
         Shape NodePins(const GraphClipNode &clip, const ShapeContext &context) {
             using enum GraphValueType;
             if (!clip.clip.IsValid() || clip.clip.Asset() == context.data.id.Asset() || clip.clip.Asset() == context.data.skeleton.Asset())
@@ -37,7 +39,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return Shape::Success(std::move(pins));
         }
 
-        /** @brief Checks finite sparse mask values and unique canonical stable joint identities. */
+        /** @brief Checks finite sparse mask values and unique canonical stable joint
+         * identities. */
         bool ValidMask(const GraphBoneMask &mask) {
             const auto validWeight = [](const float weight) {
                 return std::isfinite(weight) && weight >= 0.0F && weight <= 1.0F;
@@ -66,11 +69,19 @@ namespace Horo::Animation::GraphCompileDetail {
             return Shape::Success(std::move(pins));
         }
 
-        /** @brief Admits a multi-clip tree through the same authoritative node shape and parameter namespace. */
+        /** @brief Admits a multi-clip tree through the same authoritative node shape
+         * and parameter namespace. */
         Shape NodePins(const GraphBlendTreeNode &tree, const ShapeContext &context) {
             if (auto validated = ValidateBlendTree(tree, context.data, context.location); validated.HasError())
                 return Shape::Failure(validated.ErrorValue());
             return Shape::Success({Pin(Result, GraphValueType::Pose, true)});
+        }
+
+        /** @brief A named action channel composes the actual connected base pose. */
+        Shape NodePins(const GraphActionSlotNode &slot, const ShapeContext &context) {
+            if (!Find(context.data.actionSlots, slot.slot))
+                return Shape::Failure(Failure(GraphBindingMismatch, context.location));
+            return Shape::Success({Pin(FirstPose, GraphValueType::Pose, false), Pin(Result, GraphValueType::Pose, true)});
         }
 
         /** @brief Requires an exact declared parameter and its transport type. */
@@ -86,7 +97,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return Shape::Success({Pin(Value, GraphValueType::Pose, false)});
         }
 
-        /** @brief Requires an exact definition interface and exposes its transport type. */
+        /** @brief Requires an exact definition interface and exposes its transport
+         * type. */
         Shape NodePins(const GraphInputNode &input, const ShapeContext &context) {
             const auto *value = Find(context.definition.inputs, input.input);
             if (!value)
@@ -106,13 +118,19 @@ namespace Horo::Animation::GraphCompileDetail {
             return Shape::Success(std::move(pins));
         }
 
-        /** @brief Admits state control through the same authoritative typed node-shape validation. */
+        /** @brief Admits state control through the same authoritative typed node-shape
+         * validation. */
         Shape NodePins(const GraphStateMachineNode &machine, const ShapeContext &context) {
             if (auto validated = ValidateStateNode(machine, context.data, context.location); validated.HasError())
                 return Shape::Failure(validated.ErrorValue());
             return Shape::Success({Pin(Result, GraphValueType::Pose, true)});
         }
     }  // namespace
+
+    /** @copydoc ValidGraphBoneMask */
+    bool ValidGraphBoneMask(const GraphBoneMask &mask) {
+        return ValidMask(mask);
+    }
 
     /** @copydoc ValidatePins */
     Validation ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data) {

@@ -4,7 +4,8 @@ namespace Horo::Animation::GraphCompileDetail {
     namespace {
         using namespace AnimationErrors;
 
-        /** @brief Checks caller structural ceilings without traversing candidate storage. */
+        /** @brief Checks caller structural ceilings without traversing candidate
+         * storage. */
         bool ValidStructureLimits(const AnimationGraphLimits &limits) {
             const AnimationGraphLimits hard{};
             return limits.definitions > 0 && limits.definitions <= hard.definitions && limits.nodes > 0 && limits.nodes <= hard.nodes &&
@@ -12,7 +13,8 @@ namespace Horo::Animation::GraphCompileDetail {
                    limits.parameters <= hard.parameters;
         }
 
-        /** @brief Checks finite expansion policy independently from allocation categories. */
+        /** @brief Checks finite expansion policy independently from allocation
+         * categories. */
         bool ValidExpansionLimits(const AnimationGraphLimits &limits) {
             const AnimationGraphLimits hard{};
             return limits.callDepth > 0 && limits.callDepth <= hard.callDepth && limits.evaluationInstructions > 0 &&
@@ -40,7 +42,8 @@ namespace Horo::Animation::GraphCompileDetail {
             std::uint64_t blendMembers{};
         };
 
-        /** @brief Charges the complete inert state table independently of node pins and pose masks. */
+        /** @brief Charges the complete inert state table independently of node pins and
+         * pose masks. */
         Result<void> CountState(const GraphStateMachineNode &machine, CandidateCounts &counts, const AnimationGraphLimits &limits) {
             ++counts.machines;
             counts.states += machine.states.size();
@@ -53,7 +56,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Bounds the entire detached blend payload before canonical copying or dependency binding. */
+        /** @brief Bounds the entire detached blend payload before canonical copying or
+         * dependency binding. */
         Result<void> CountTree(const GraphBlendTreeNode &tree, CandidateCounts &counts, const AnimationGraphLimits &limits) {
             counts.blendMembers += tree.samples.size();
             if (tree.samples.size() > AnimationGraphHardLimits::BlendSamplesPerTree ||
@@ -80,7 +84,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Charges one definition with cancellation checkpoints between nodes. */
+        /** @brief Charges one definition with cancellation checkpoints between nodes.
+         */
         Result<void> CountDefinition(const GraphDefinition &definition, CandidateCounts &counts,
                                      const AnimationGraphCompileContext &context) {
             counts.nodes += definition.nodes.size();
@@ -98,25 +103,29 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Keeps state-policy hard ceilings separate from pose and expansion policies. */
+        /** @brief Keeps state-policy hard ceilings separate from pose and expansion
+         * policies. */
         bool ValidStateLimits(const AnimationGraphLimits &limits) {
             return limits.stateMachines <= AnimationGraphHardLimits::StateMachines && limits.states <= AnimationGraphHardLimits::States &&
                    limits.transitions <= AnimationGraphHardLimits::Transitions &&
                    limits.conditions <= AnimationGraphHardLimits::Conditions && limits.stateEvents <= AnimationGraphHardLimits::StateEvents;
         }
 
-        /** @brief Validates persistent asset-role identity before inspecting any nested containers. */
+        /** @brief Validates persistent asset-role identity before inspecting any nested
+         * containers. */
         bool ValidIdentity(const AnimationGraphData &data) {
             return data.id.IsValid() && data.skeleton.IsValid() && data.entry.IsValid() && data.id.Asset() != data.skeleton.Asset();
         }
 
-        /** @brief Requires bounded nonempty top-level storage before charging its nested nodes. */
+        /** @brief Requires bounded nonempty top-level storage before charging its
+         * nested nodes. */
         bool ValidCollections(const AnimationGraphData &data, const AnimationGraphLimits &limits) {
             return !data.definitions.empty() && data.definitions.size() <= limits.definitions &&
                    data.parameters.size() <= limits.parameters;
         }
 
-        /** @brief Rejects malformed parameter names before the canonical copy can allocate them. */
+        /** @brief Rejects malformed parameter names before the canonical copy can
+         * allocate them. */
         Result<void> CheckNames(const AnimationGraphData &data) {
             for (const auto &parameter : data.parameters)
                 if (parameter.name.empty() || parameter.name.size() > AnimationGraphHardLimits::ParameterNameBytes)
@@ -124,7 +133,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Captures the complete caller-lowerable policy before traversing any candidate table. */
+        /** @brief Captures the complete caller-lowerable policy before traversing any
+         * candidate table. */
         bool ValidLimits(const AnimationGraphLimits &limits) {
             return ValidStateLimits(limits) && ValidStructureLimits(limits) && ValidExpansionLimits(limits) && ValidStorageLimits(limits);
         }
@@ -147,6 +157,8 @@ namespace Horo::Animation::GraphCompileDetail {
         for (const auto &definition : data.definitions)
             if (auto counted = CountDefinition(definition, counts, context); counted.HasError())
                 return counted;
+        if (const auto actions = PreflightActions(data, context); actions.HasError())
+            return actions;
         return CheckNames(data);
     }
 

@@ -39,8 +39,22 @@ namespace Horo::Animation {
         using namespace AnimationErrors;
         using namespace GraphCompileDetail;
 
-        /** @brief Canonicalizes semantically unordered authoring collections by stable identities. */
+        /** @brief Canonicalizes the inert action catalog without changing authored
+         * successor/loop semantics. */
+        void CanonicalizeActions(AnimationGraphData &data) {
+            std::ranges::sort(data.actionSlots, {}, &GraphActionSlot::id);
+            std::ranges::sort(data.actions, {}, &GraphActionDefinition::id);
+            for (auto &action : data.actions) {
+                std::ranges::sort(action.sequence.sections, {}, &GraphActionSection::id);
+                std::ranges::sort(action.sequence.loops, {}, &GraphActionLoopRegion::id);
+                std::ranges::sort(action.mask.joints, {}, &GraphBoneWeight::joint);
+            }
+        }
+
+        /** @brief Canonicalizes semantically unordered authoring collections by stable
+         * identities. */
         void Canonicalize(AnimationGraphData &data) {
+            CanonicalizeActions(data);
             const auto byId = [](const auto &left, const auto &right) {
                 return left.id < right.id;
             };
@@ -81,14 +95,16 @@ namespace Horo::Animation {
             });
         }
 
-        /** @brief Requires every legacy definition to retain its original opcode defaults. */
+        /** @brief Requires every legacy definition to retain its original opcode
+         * defaults. */
         bool LegacyDefaults(const AnimationGraphData &data) {
             return std::ranges::all_of(data.definitions, [](const GraphDefinition &definition) {
                 return std::ranges::all_of(definition.nodes, LegacyNode);
             });
         }
 
-        /** @brief Checks scalar defaults without interpreting gameplay values or trigger consumption. */
+        /** @brief Checks scalar defaults without interpreting gameplay values or
+         * trigger consumption. */
         bool ValidParameter(const GraphParameter &parameter) {
             const auto asciiLetter = [](const unsigned char c) {
                 return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
@@ -112,7 +128,8 @@ namespace Horo::Animation {
             }
         }
 
-        /** @brief Invocation-local dependency indexes; never retained by the immutable program. */
+        /** @brief Invocation-local dependency indexes; never retained by the immutable
+         * program. */
         struct DefinitionTopology final {
             std::map<GraphNodeId, std::size_t> indexes;
             std::vector<std::vector<std::size_t>> incoming;
@@ -121,7 +138,8 @@ namespace Horo::Animation {
             std::size_t output{};
         };
 
-        /** @brief Validates node shapes, the unique sink and exact definition-input declarations. */
+        /** @brief Validates node shapes, the unique sink and exact definition-input
+         * declarations. */
         Result<void> IndexNodes(const GraphDefinition &definition, const AnimationGraphData &data,
                                 const AnimationGraphCompileContext &context, DefinitionTopology &topology) {
             const GraphSourceLocation location{definition.id, {}, {}};
@@ -156,7 +174,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Indexes one edge only after validating both endpoint directions and its exact type. */
+        /** @brief Indexes one edge only after validating both endpoint directions and
+         * its exact type. */
         Result<void> IndexEdge(const GraphDefinition &definition, std::size_t index, DefinitionTopology &topology,
                                std::set<GraphEndpoint> &destinations) {
             const auto &edge = definition.connections[index];
@@ -178,7 +197,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Builds bounded adjacency tables and rejects every unconnected required input. */
+        /** @brief Builds bounded adjacency tables and rejects every unconnected
+         * required input. */
         Result<void> IndexEdges(const GraphDefinition &definition, const AnimationGraphCompileContext &context,
                                 DefinitionTopology &topology) {
             topology.incoming.resize(definition.nodes.size());
@@ -198,7 +218,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Checks that every node contributes to the sink, without recursive stack growth. */
+        /** @brief Checks that every node contributes to the sink, without recursive
+         * stack growth. */
         Result<void> ValidateReachability(const GraphDefinition &definition, const DefinitionTopology &topology,
                                           const AnimationGraphCompileContext &context) {
             std::vector<bool> reached(definition.nodes.size());
@@ -222,7 +243,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Materializes exact typed operands after their source instructions have been emitted. */
+        /** @brief Materializes exact typed operands after their source instructions
+         * have been emitted. */
         GraphInstruction EmitInstruction(const GraphDefinition &definition, const AnimationGraphData &data,
                                          const DefinitionTopology &topology, std::size_t index,
                                          const std::vector<std::uint32_t> &registers) {
@@ -247,6 +269,8 @@ namespace Horo::Animation {
                 if (tree->dimension == GraphBlendDimension::Two)
                     instruction.blendParameters[1] = static_cast<std::uint32_t>(Find(data.parameters, tree->y) - data.parameters.data());
             }
+            if (const auto *slot = std::get_if<GraphActionSlotNode>(&node.payload))
+                instruction.actionSlot = static_cast<std::uint32_t>(Find(data.actionSlots, slot->slot) - data.actionSlots.data());
             if (const auto *call = std::get_if<GraphCallNode>(&node.payload))
                 instruction.definitionIndex =
                     static_cast<std::uint32_t>(Find(data.definitions, call->definition) - data.definitions.data());
@@ -258,7 +282,8 @@ namespace Horo::Animation {
             return instruction;
         }
 
-        /** @brief Builds a stable-id topological schedule and exact operand/source map for one definition. */
+        /** @brief Builds a stable-id topological schedule and exact operand/source map
+         * for one definition. */
         Result<GraphCompiledDefinition> CompileDefinition(const GraphDefinition &definition, const AnimationGraphData &data,
                                                           const AnimationGraphCompileContext &context) {
             DefinitionTopology topology;
@@ -294,13 +319,15 @@ namespace Horo::Animation {
             return Result<GraphCompiledDefinition>::Success(std::move(result));
         }
 
-        /** @brief State branches charge both admitted lanes, control completion and full guarded call provenance. */
+        /** @brief State branches charge both admitted lanes, control completion and
+         * full guarded call provenance. */
         void AccumulateStateBudget(GraphCompiledDefinition &definition, std::span<const GraphCompiledDefinition> definitions) {
             for (const auto &instruction : definition.instructions) {
                 const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload);
                 if (!machine)
                     continue;
-                ++definition.evaluationInstructions;  // Control precedes guarded children and pose completion.
+                ++definition.evaluationInstructions;  // Control precedes guarded children
+                                                      // and pose completion.
                 const auto clipStates = static_cast<std::uint64_t>(std::ranges::count_if(machine->states, [](const GraphState &state) {
                     return std::holds_alternative<AnimationClipId>(state.source);
                 }));
@@ -317,7 +344,8 @@ namespace Horo::Animation {
             }
         }
 
-        /** @brief Propagates completed callee costs into one definition under exact captured limits. */
+        /** @brief Propagates completed callee costs into one definition under exact
+         * captured limits. */
         Result<void> AccumulateCallBudget(GraphCompiledDefinition &definition, std::span<const GraphCompiledDefinition> definitions,
                                           const AnimationGraphCompileContext &context) {
             definition.callDepth = 1;
@@ -337,7 +365,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Builds one canonical dependency relation for ordinary calls and every state subgraph. */
+        /** @brief Builds one canonical dependency relation for ordinary calls and every
+         * state subgraph. */
         void IndexCallDependencies(const std::span<const GraphCompiledDefinition> definitions,
                                    std::vector<std::set<std::size_t>> &dependencies, std::vector<std::set<std::size_t>> &callers) {
             for (std::size_t index = 0; index < definitions.size(); ++index)
@@ -353,7 +382,8 @@ namespace Horo::Animation {
                 }
         }
 
-        /** @brief Rejects recursive calls and budgets expanded execution without expanding stored programs. */
+        /** @brief Rejects recursive calls and budgets expanded execution without
+         * expanding stored programs. */
         Result<void> BoundCalls(std::vector<GraphCompiledDefinition> &definitions, const AnimationGraphCompileContext &context) {
             std::vector<std::set<std::size_t>> dependencies(definitions.size());
             std::vector<std::set<std::size_t>> callers(definitions.size());
@@ -382,7 +412,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Infers legacy edge types on a detached definition while preserving cancellation and error order. */
+        /** @brief Infers legacy edge types on a detached definition while preserving
+         * cancellation and error order. */
         Result<void> MigrateConnections(GraphDefinition &definition, const AnimationGraphCompileContext &context) {
             for (auto &edge : definition.connections) {
                 if (auto state = Admission(context); state.HasError())
@@ -396,14 +427,16 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Canonical sorted ID tables reject duplicate persistent declarations. */
+        /** @brief Canonical sorted ID tables reject duplicate persistent declarations.
+         */
         Result<void> ValidateCanonicalIdentities(const AnimationGraphData &canonical) {
             if (!UniqueIds(canonical.definitions) || !UniqueIds(canonical.parameters))
                 return Result<void>::Failure(Failure(GraphMalformed));
             return Result<void>::Success();
         }
 
-        /** @brief Resolves the one closed entry definition to its canonical stable program index. */
+        /** @brief Resolves the one closed entry definition to its canonical stable
+         * program index. */
         Result<std::uint32_t> ResolveEntryIndex(const AnimationGraphData &canonical) {
             const auto *entry = Find(canonical.definitions, canonical.entry);
             if (!entry || !entry->inputs.empty())
@@ -411,7 +444,8 @@ namespace Horo::Animation {
             return Result<std::uint32_t>::Success(static_cast<std::uint32_t>(entry - canonical.definitions.data()));
         }
 
-        /** @brief All typed parameter declarations and names are validated before compiling any definition. */
+        /** @brief All typed parameter declarations and names are validated before
+         * compiling any definition. */
         Result<void> ValidateCanonicalParameters(const AnimationGraphData &canonical) {
             std::set<std::string, std::less<>> names;
             for (const auto &parameter : canonical.parameters)
@@ -420,7 +454,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Projects one typed opcode's direct clips, including every inactive state source. */
+        /** @brief Projects one typed opcode's direct clips, including every inactive
+         * state source. */
         void CollectPayloadClips(const GraphNodePayload &opcode, std::set<AnimationClipId> &clips) {
             std::visit([&clips]<typename Payload>(const Payload &payload) {
                 if constexpr (std::is_same_v<Payload, GraphClipNode>)
@@ -435,13 +470,15 @@ namespace Horo::Animation {
             }, opcode);
         }
 
-        /** @brief Collects each compiled definition's immutable dependency set without selecting active branches. */
+        /** @brief Collects each compiled definition's immutable dependency set without
+         * selecting active branches. */
         void CollectClips(const GraphCompiledDefinition &definition, std::set<AnimationClipId> &clips) {
             for (const auto &instruction : definition.instructions)
                 CollectPayloadClips(instruction.payload, clips);
         }
 
-        /** @brief Compiles the complete detached definition set and collects even inactive clip dependencies before publication. */
+        /** @brief Compiles the complete detached definition set and collects even
+         * inactive clip dependencies before publication. */
         Result<std::vector<GraphCompiledDefinition>> CompileDefinitions(const AnimationGraphData &canonical,
                                                                         const AnimationGraphCompileContext &context,
                                                                         std::set<AnimationClipId> &clips) {
@@ -456,7 +493,8 @@ namespace Horo::Animation {
             return Result<std::vector<GraphCompiledDefinition>>::Success(std::move(definitions));
         }
 
-        /** @brief State authoring payloads are not valid in any pre-state source schema. */
+        /** @brief State authoring payloads are not valid in any pre-state source
+         * schema. */
         bool HasStatePayload(const AnimationGraphData &data) {
             for (const auto &definition : data.definitions)
                 for (const auto &node : definition.nodes)
@@ -465,7 +503,8 @@ namespace Horo::Animation {
             return false;
         }
 
-        /** @brief Exact semantic contract corresponding to an already range-admitted authoring schema. */
+        /** @brief Exact semantic contract corresponding to an already range-admitted
+         * authoring schema. */
         AnimationGraphContractVersion SourceContract(const std::uint32_t schema) noexcept {
             if (schema <= 2)
                 return {1, 0, 0};
@@ -473,24 +512,61 @@ namespace Horo::Animation {
                 return {1, 1, 0};
             if (schema == 4)
                 return {1, 2, 0};
+            if (schema == 5)
+                return {1, 3, 0};
             return CurrentAnimationGraphContractVersion;
         }
 
-        /** @brief Each admitted source schema has exactly one semantic contract; pose policies remain unchanged in schema 3. */
+        /** @brief Action authoring cannot be mislabeled as a legacy contract. */
+        bool HasActionPayload(const AnimationGraphData &data) {
+            if (!data.actions.empty() || !data.actionSlots.empty())
+                return true;
+            for (const auto &definition : data.definitions)
+                for (const auto &node : definition.nodes)
+                    if (std::holds_alternative<GraphActionSlotNode>(node.payload))
+                        return true;
+            return false;
+        }
+
+        /** @brief Blend-space semantics retain their exact introduction version. */
+        bool HasBlendPayload(const AnimationGraphData &data) {
+            for (const auto &definition : data.definitions)
+                for (const auto &node : definition.nodes)
+                    if (std::holds_alternative<GraphBlendTreeNode>(node.payload))
+                        return true;
+            return false;
+        }
+
+        /** @brief Each admitted source schema has exactly one semantic contract; pose
+         * policies remain unchanged in schema 3. */
         bool ValidSourceVersion(const AnimationGraphData &data) {
             if (data.schemaVersion == 0 || data.schemaVersion > CurrentAnimationGraphSchemaVersion)
                 return false;
             if (const auto expected = SourceContract(data.schemaVersion); data.contractVersion != expected)
                 return false;
-            if (data.schemaVersion < 5)
-                for (const auto &definition : data.definitions)
-                    for (const auto &node : definition.nodes)
-                        if (std::holds_alternative<GraphBlendTreeNode>(node.payload))
-                            return false;
+            if (data.schemaVersion < 6 && HasActionPayload(data))
+                return false;
+            if (data.schemaVersion < 5 && HasBlendPayload(data))
+                return false;
             return data.schemaVersion >= 4 || !HasStatePayload(data);
         }
 
-        /** @brief Publishes a complete detached schema or bound program only after the final admission/cancellation fence. */
+        /** @brief Validates both typed namespaces before emitting any instruction. */
+        Result<void> ValidateCanonicalCatalog(const AnimationGraphData &data) {
+            if (const auto parameters = ValidateCanonicalParameters(data); parameters.HasError())
+                return parameters;
+            return ValidateActions(data);
+        }
+
+        /** @brief Every immutable action section remains an exact clip dependency, including inactive requests. */
+        void CollectActionClips(const AnimationGraphData &data, std::set<AnimationClipId> &clips) {
+            for (const auto &action : data.actions)
+                for (const auto &section : action.sequence.sections)
+                    clips.insert(section.clip);
+        }
+
+        /** @brief Publishes a complete detached schema or bound program only after the
+         * final admission/cancellation fence. */
         Result<AnimationGraphProgram> PublishProgram(AnimationGraphProgram program, const AnimationGraphCompileContext &context) {
             if (auto state = Admission(context); state.HasError())
                 return Result<AnimationGraphProgram>::Failure(state.ErrorValue());
@@ -512,9 +588,11 @@ namespace Horo::Animation {
         const auto entry = ResolveEntryIndex(canonical);
         if (entry.HasError())
             return Result<AnimationGraphProgram>::Failure(entry.ErrorValue());
-        if (auto parameters = ValidateCanonicalParameters(canonical); parameters.HasError())
-            return Result<AnimationGraphProgram>::Failure(parameters.ErrorValue());
+        if (const auto catalog = ValidateCanonicalCatalog(canonical); catalog.HasError())
+            return Result<AnimationGraphProgram>::Failure(catalog.ErrorValue());
         AnimationGraphProgram result;
+        result.actionSlots_ = canonical.actionSlots;
+        result.actions_ = canonical.actions;
         result.id_ = canonical.id;
         result.skeleton_ = canonical.skeleton;
         result.parameters_ = canonical.parameters;
@@ -526,6 +604,7 @@ namespace Horo::Animation {
         result.definitions_ = std::move(definitions).Value();
         if (auto calls = BoundCalls(result.definitions_, context); calls.HasError())
             return Result<AnimationGraphProgram>::Failure(calls.ErrorValue());
+        CollectActionClips(canonical, clips);
         result.clips_.assign(clips.begin(), clips.end());
         return PublishProgram(std::move(result), context);
     }

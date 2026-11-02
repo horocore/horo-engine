@@ -2,7 +2,8 @@
 
 /**
  * @file AnimationClip.h
- * @brief Immutable animation clips, exact traversal, and allocation-free pose sampling.
+ * @brief Immutable animation clips, exact traversal, and allocation-free pose
+ * sampling.
  */
 
 #include "Horo/Animation/AnimationIdentity.h"
@@ -26,7 +27,8 @@ namespace Horo::Animation {
         [[nodiscard]] constexpr auto operator<=>(const AnimationTime &) const noexcept = default;
     };
 
-    /** @brief Exact signed traversal amount in nanosecond ticks; negative values request reverse playback. */
+    /** @brief Exact signed traversal amount in nanosecond ticks; negative values
+     * request reverse playback. */
     struct AnimationTimeDelta final {
         std::int64_t ticks{};
         [[nodiscard]] constexpr auto operator<=>(const AnimationTimeDelta &) const noexcept = default;
@@ -75,7 +77,8 @@ namespace Horo::Animation {
         Count
     };
 
-    /** @brief Cook-time compression metadata; runtime keys are already decoded portable values. */
+    /** @brief Cook-time compression metadata; runtime keys are already decoded
+     * portable values. */
     enum class AnimationCompressionScheme : std::uint8_t {
         None,
         Linear,
@@ -99,7 +102,8 @@ namespace Horo::Animation {
         Count
     };
 
-    /** @brief Stable identity and immutable generation of an additive clip's reference pose. */
+    /** @brief Stable identity and immutable generation of an additive clip's
+     * reference pose. */
     struct AnimationReferencePoseBinding final {
         AnimationReferencePoseId id{};
         AnimationReferencePoseGeneration generation{};
@@ -125,14 +129,25 @@ namespace Horo::Animation {
     /** @brief Semantic marker name shared by compatible clip publications. */
     using AnimationSyncMarkerId = Foundation::Detail::NonZeroId64<AnimationSyncMarkerTag, AnimationErrors::IdentityInvalid>;
 
-    /** @brief Immutable clip-local marker; exact times increase strictly in [0,duration). */
+    /** @brief Immutable clip-local marker; exact times increase strictly in
+     * [0,duration). */
     struct AnimationSyncMarker final {
         AnimationSyncMarkerId id{};
         AnimationTime time{};
         bool operator==(const AnimationSyncMarker &) const = default;
     };
 
-    /** @brief Immutable identity, binding, time, playback, and storage metadata for one clip publication. */
+    /** @brief Explicit player-local region within an immutable clip; the clip
+     * descriptor stays unchanged. */
+    struct AnimationClipRegion final {
+        AnimationTime begin{};
+        AnimationTime end{};
+        AnimationWrapMode wrap{AnimationWrapMode::Once};
+        bool operator==(const AnimationClipRegion &) const = default;
+    };
+
+    /** @brief Immutable identity, binding, time, playback, and storage metadata for
+     * one clip publication. */
     struct AnimationClipDescriptor final {
         AnimationClipContractVersion contractVersion{CurrentAnimationClipContractVersion};
         AnimationClipId id{};
@@ -149,15 +164,18 @@ namespace Horo::Animation {
         [[nodiscard]] auto operator<=>(const AnimationClipDescriptor &) const noexcept = default;
     };
 
-    /** @brief Mutable clip candidate copied into an immutable canonical snapshot after validation. */
+    /** @brief Mutable clip candidate copied into an immutable canonical snapshot
+     * after validation. */
     struct AnimationClipData final {
         AnimationClipDescriptor descriptor{};
         std::vector<AnimationJointTrack> tracks{};
-        std::vector<AnimationSyncMarker> syncMarkers{}; /**< Pinned with this exact clip generation; never a runtime side table. */
+        std::vector<AnimationSyncMarker> syncMarkers{}; /**< Pinned with this exact clip generation; never a
+                                                           runtime side table. */
         [[nodiscard]] bool operator==(const AnimationClipData &) const noexcept = default;
     };
 
-    /** @brief Compile-time safety ceilings for one portable clip and one traversal. */
+    /** @brief Compile-time safety ceilings for one portable clip and one traversal.
+     */
     struct AnimationClipHardLimits final {
         static constexpr std::uint32_t SyncMarkers = 256;
         static constexpr std::uint32_t Tracks = SkeletonAssetHardLimits::Joints;
@@ -178,7 +196,8 @@ namespace Horo::Animation {
         [[nodiscard]] constexpr auto operator<=>(const AnimationClipLimits &) const noexcept = default;
     };
 
-    /** @brief Captured owner state used to fail closed before validation, traversal, or sampling. */
+    /** @brief Captured owner state used to fail closed before validation,
+     * traversal, or sampling. */
     enum class AnimationClipAdmissionState : std::uint8_t {
         Accepting,
         CancellationRequested,
@@ -186,14 +205,16 @@ namespace Horo::Animation {
         Count
     };
 
-    /** @brief Immutable operation inputs captured by the clip owner before validation. */
+    /** @brief Immutable operation inputs captured by the clip owner before
+     * validation. */
     struct AnimationClipBuildContext final {
         AnimationClipAdmissionState admission{AnimationClipAdmissionState::Accepting};
         std::optional<AnimationClipId> replacing{};
         AnimationClipLimits limits{};
     };
 
-    /** @brief Canonical bounded player state; phase is normalized for the descriptor's wrap mode. */
+    /** @brief Canonical bounded player state; phase is normalized for the
+     * descriptor's wrap mode. */
     struct AnimationClipCursor final {
         AnimationTime phase{};
         bool terminal{};
@@ -210,10 +231,12 @@ namespace Horo::Animation {
     };
 
     /**
-     * @brief Caller-owned immutable and mutable views required for one frame-hot sample.
+     * @brief Caller-owned immutable and mutable views required for one frame-hot
+     * sample.
      *
-     * Additive output may exactly alias the complete base pose for in-place application. Partial
-     * base/output overlap and any reference/output overlap are rejected before output mutation.
+     * Additive output may exactly alias the complete base pose for in-place
+     * application. Partial base/output overlap and any reference/output overlap are
+     * rejected before output mutation.
      */
     struct AnimationClipSampleContext final {
         AnimationClipAdmissionState admission{AnimationClipAdmissionState::Accepting};
@@ -234,7 +257,8 @@ namespace Horo::Animation {
         [[nodiscard]] constexpr auto operator<=>(const AnimationClipSample &) const noexcept = default;
     };
 
-    /** @brief Allocation-free clip failure vocabulary; diagnostic codes are projected outside the hot path. */
+    /** @brief Allocation-free clip failure vocabulary; diagnostic codes are
+     * projected outside the hot path. */
     enum class AnimationClipFailure : std::uint8_t {
         None,
         Cancelled,
@@ -249,13 +273,15 @@ namespace Horo::Animation {
         ReferencePoseMismatch
     };
 
-    /** @brief Immutable failure evidence; detail refers only to library-owned string literals. */
+    /** @brief Immutable failure evidence; detail refers only to library-owned
+     * string literals. */
     struct AnimationClipFailureInfo final {
         AnimationClipFailure failure{AnimationClipFailure::None};
         std::string_view detail{};
     };
 
-    /** @brief Clip-specific bounded result that owns no diagnostic string or allocation. */
+    /** @brief Clip-specific bounded result that owns no diagnostic string or
+     * allocation. */
     template <typename T> struct AnimationClipOutcome final {
         static_assert(std::is_trivially_copyable_v<T>);
         T value{};
@@ -286,7 +312,8 @@ namespace Horo::Animation {
         }
     };
 
-    /** @brief Allocation-free validation outcome used by the same prepared clip validators. */
+    /** @brief Allocation-free validation outcome used by the same prepared clip
+     * validators. */
     template <> struct AnimationClipOutcome<void> final {
         AnimationClipFailureInfo failure{};
 
@@ -311,73 +338,115 @@ namespace Horo::Animation {
         }
     };
 
-    /** @brief Converts typed hot failure to the original owned diagnostic at a control boundary.
+    /** @brief Converts typed hot failure to the original owned diagnostic at a
+     * control boundary.
      * @param failure Library-owned typed failure and literal context.
-     * @return Original stable code, domain, severity and diagnostic context; may allocate.
+     * @return Original stable code, domain, severity and diagnostic context; may
+     * allocate.
      * @pre failure.failure is not None.
      */
     [[nodiscard]] Error DescribeAnimationClipFailure(AnimationClipFailureInfo failure);
 
     /**
-     * @brief Immutable validated animation clip with canonical tracks and pre-resolved skeleton indices.
+     * @brief Immutable validated animation clip with canonical tracks and
+     * pre-resolved skeleton indices.
      *
-     * Create is a load/cook/control-boundary transaction and may allocate. Prepared operations are
-     * history-independent, thread-safe, bounded, allocation-free on all outcomes, and perform no blocking I/O while
-     * this object, its immutable skeleton publication, and caller-provided spans remain alive. Legacy
-     * Result wrappers use the same kernels and may allocate only when projecting failure diagnostics.
+     * Create is a load/cook/control-boundary transaction and may allocate. Prepared
+     * operations are history-independent, thread-safe, bounded, allocation-free on
+     * all outcomes, and perform no blocking I/O while this object, its immutable
+     * skeleton publication, and caller-provided spans remain alive. Legacy Result
+     * wrappers use the same kernels and may allocate only when projecting failure
+     * diagnostics.
      */
     class AnimationClipAsset final {
     public:
         /**
-         * @brief Validates and takes ownership of a complete animation clip transactionally.
+         * @brief Validates and takes ownership of a complete animation clip
+         * transactionally.
          * @param candidate Candidate descriptor and joint tracks.
-         * @param skeleton Exact immutable skeleton publication referenced by the descriptor.
+         * @param skeleton Exact immutable skeleton publication referenced by the
+         * descriptor.
          * @param context Captured lifecycle, reload identity, and finite limits.
-         * @return Immutable canonical clip or a stable version, binding, malformed, duplicate, unsupported, or limit failure.
-         * @pre Load/cook/control boundary; never invoke from frame-hot animation evaluation.
+         * @return Immutable canonical clip or a stable version, binding, malformed,
+         * duplicate, unsupported, or limit failure.
+         * @pre Load/cook/control boundary; never invoke from frame-hot animation
+         * evaluation.
          * @post Failure publishes no partial asset or replacement.
          */
         [[nodiscard]] static Result<AnimationClipAsset> Create(AnimationClipData candidate, const SkeletonAsset &skeleton,
                                                                const AnimationClipBuildContext &context = {});
 
-        /** @brief Returns immutable canonical clip data. @return Borrowed data owned by this asset. */
+        /** @brief Returns immutable canonical clip data. @return Borrowed data owned
+         * by this asset. */
         [[nodiscard]] const AnimationClipData &Data() const noexcept;
 
         /**
-         * @brief Advances one canonical cursor by an exact signed amount without mutating player state.
-         * @param cursor Current cursor previously initialized to zero or returned by this clip.
+         * @brief Advances one canonical cursor by an exact signed amount without
+         * mutating player state.
+         * @param cursor Current cursor previously initialized to zero or returned by
+         * this clip.
          * @param delta Exact signed player-local traversal amount.
          * @param limits Captured finite crossing policy; hard ceilings always apply.
          * @param admission Captured owner lifecycle state.
-         * @return Complete candidate cursor/sample metadata or a stable lifecycle, cursor, overflow, or budget failure.
-         * @post Failure leaves caller-owned player state unchanged; success allocates nothing.
+         * @return Complete candidate cursor/sample metadata or a stable lifecycle,
+         * cursor, overflow, or budget failure.
+         * @post Failure leaves caller-owned player state unchanged; success allocates
+         * nothing.
          */
         [[nodiscard]] Result<AnimationClipTraversal> Traverse(
             AnimationClipCursor cursor, AnimationTimeDelta delta, const AnimationClipLimits &limits = {},
             AnimationClipAdmissionState admission = AnimationClipAdmissionState::Accepting) const;
 
         /**
-         * @brief Samples a complete local pose into caller-owned storage at an in-range clip time.
+         * @brief Samples a complete local pose into caller-owned storage at an
+         * in-range clip time.
          * @param time Exact local time in the closed interval `[0, duration]`.
-         * @param context Exact asset-generation bindings and non-overlapping pose views, except that additive output may exactly alias
-         * base.
-         * @return Sample metadata or a stable lifecycle, stale, binding, malformed-pose, time, or size failure.
-         * @post Success allocates nothing and writes every output joint; failure performs no output writes.
+         * @param context Exact asset-generation bindings and non-overlapping pose
+         * views, except that additive output may exactly alias base.
+         * @return Sample metadata or a stable lifecycle, stale, binding,
+         * malformed-pose, time, or size failure.
+         * @post Success allocates nothing and writes every output joint; failure
+         * performs no output writes.
          */
         [[nodiscard]] Result<AnimationClipSample> Sample(AnimationTime time, const AnimationClipSampleContext &context) const;
 
-        /** @brief Executes the same exact traversal with allocation-free failure evidence.
+        /** @brief Executes the same exact traversal with allocation-free failure
+         * evidence.
          * @param cursor Canonical current cursor.
          * @param delta Exact signed player-local traversal amount.
          * @param limits Captured finite crossing policy.
          * @param admission Captured lifecycle state.
-         * @return Complete candidate traversal or typed failure; no state mutation or allocation.
+         * @return Complete candidate traversal or typed failure; no state mutation or
+         * allocation.
          */
         [[nodiscard]] AnimationClipOutcome<AnimationClipTraversal> TraversePrepared(
             AnimationClipCursor cursor, AnimationTimeDelta delta, const AnimationClipLimits &limits = {},
             AnimationClipAdmissionState admission = AnimationClipAdmissionState::Accepting) const;
 
-        /** @brief Executes the same pose sample with allocation-free failure evidence.
+        /** @brief Traverses one admitted region using the same checked clip traversal
+         * kernel.
+         * @param cursor Exact region-relative cursor (phase origin is region.begin).
+         * @param delta Signed exact traversal interval; reverse eligibility belongs
+         * to the caller.
+         * @param region Exact nonempty interval within this clip and explicit player
+         * wrap policy.
+         * @param limits Finite traversal/boundary policy; implementation hard limits
+         * cannot be raised.
+         * @param admission Captured owner admission state, checked before region or
+         * cursor access.
+         * @return Region-relative next cursor and absolute clip-local sample time, or
+         * typed failure.
+         * @pre The immutable clip and caller's captured owner admission remain valid
+         * for this call.
+         * @post This clip's descriptor, tracks and marker publication remain
+         * unchanged. No allocation or I/O.
+         */
+        [[nodiscard]] AnimationClipOutcome<AnimationClipTraversal> TraverseRegionPrepared(
+            AnimationClipCursor cursor, AnimationTimeDelta delta, AnimationClipRegion region, const AnimationClipLimits &limits = {},
+            AnimationClipAdmissionState admission = AnimationClipAdmissionState::Accepting) const;
+
+        /** @brief Executes the same pose sample with allocation-free failure
+         * evidence.
          * @param time Exact in-range clip time.
          * @param context Exact immutable dependencies and caller-owned pose spans.
          * @return Complete sample or typed failure before writes; allocates nothing.

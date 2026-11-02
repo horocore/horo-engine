@@ -1763,6 +1763,8 @@ target_compile_features(HoroGameplayPerceptionIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime)
 
 add_library(HoroAnimationApi STATIC
+        runtime/animation/api/AnimationActionValidation.cpp
+        runtime/animation/api/AnimationActionBinding.cpp
         runtime/animation/api/AnimationBlendTreeValidation.cpp
         runtime/animation/api/AnimationBlendTreeBinding.cpp
         runtime/animation/api/AnimationGraphStateValidation.cpp
@@ -1804,6 +1806,11 @@ target_include_directories(HoroAnimationBlendTreeMathInternal INTERFACE
 target_link_libraries(HoroAnimationBlendTreeMathInternal INTERFACE HoroEngine::AnimationApi)
 
 add_library(HoroAnimationRuntime STATIC
+        runtime/animation/runtime/AnimationActionPreparation.cpp
+        runtime/animation/runtime/AnimationActionCommands.cpp
+        runtime/animation/runtime/AnimationActionTraversal.cpp
+        runtime/animation/runtime/AnimationActionExecution.cpp
+        runtime/animation/runtime/AnimationActionPublication.cpp
         runtime/animation/runtime/AnimationBlendTreePreparation.cpp
         runtime/animation/runtime/AnimationBlendTreeWeights.cpp
         runtime/animation/runtime/AnimationBlendTreeExecution.cpp

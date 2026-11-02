@@ -422,4 +422,97 @@ namespace Horo::Animation {
         CHECK(held.Value().boundaryCrossings == 0);
     }
 
+    TEST_CASE("Animation regional one-shot playback retains the terminal pose of an immutable Loop clip", "[animation][clip][region]") {
+        const auto skeleton = ClipSkeleton();
+        const auto clip = Clip(skeleton, AnimationWrapMode::Loop);
+        const AnimationClipRegion region{{20}, {80}, AnimationWrapMode::Once};
+        const auto before = clip.Data().descriptor;
+        const auto result = clip.TraverseRegionPrepared({}, {100}, region);
+        REQUIRE(result.HasValue());
+        CHECK(result.Value().cursor.phase.ticks == 60);
+        CHECK(result.Value().cursor.terminal);
+        CHECK(result.Value().sampleTime.ticks == 80);
+        CHECK(clip.Data().descriptor == before);
+        const auto held = clip.TraverseRegionPrepared(result.Value().cursor, {100}, region);
+        REQUIRE(held.HasValue());
+        CHECK(held.Value().sampleTime.ticks == 80);
+        CHECK(held.Value().direction == AnimationTraversalDirection::Held);
+    }
+
+    TEST_CASE("Animation regional traversal preserves reverse edges and paused reverse ping-pong samples", "[animation][clip][region]") {
+        const auto skeleton = ClipSkeleton();
+        const auto clip = Clip(skeleton, AnimationWrapMode::Loop);
+        const auto reverse = clip.TraverseRegionPrepared({{60}, false}, {-100}, {{20}, {80}, AnimationWrapMode::Once});
+        REQUIRE(reverse.HasValue());
+        CHECK(reverse.Value().sampleTime.ticks == 20);
+        CHECK(reverse.Value().cursor.terminal);
+        const auto held = clip.TraverseRegionPrepared({{90}, false}, {0}, {{20}, {80}, AnimationWrapMode::PingPong});
+        REQUIRE(held.HasValue());
+        CHECK(held.Value().sampleTime.ticks == 50);
+        CHECK(held.Value().cursor.phase.ticks == 90);
+    }
+
+    TEST_CASE("Animation regional traversal rejects zero reversed overflowing and stale ranges without allocation",
+              "[animation][clip][region]") {
+        const auto skeleton = ClipSkeleton();
+        const auto clip = Clip(skeleton);
+        AnimationClipRegion region{{20}, {80}, AnimationWrapMode::Once};
+        SECTION("empty") {
+            region.end = region.begin;
+        }
+        SECTION("reversed") {
+            region.end = {10};
+        }
+        SECTION("negative") {
+            region.begin = {std::numeric_limits<std::int64_t>::min()};
+        }
+        SECTION("overflow") {
+            region.end = {std::numeric_limits<std::int64_t>::max()};
+        }
+        SECTION("outside publication") {
+            region.end = {101};
+        }
+        const auto before = HoroAnimationTestAllocationCount();
+        const auto result = clip.TraverseRegionPrepared({}, {1}, region);
+        const auto after = HoroAnimationTestAllocationCount();
+        CHECK(after == before);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().failure == AnimationClipFailure::Malformed);
+    }
+
+    TEST_CASE("Animation regional traversal preserves owner admission precedence and exact cursor policy", "[animation][clip][region]") {
+        const auto skeleton = ClipSkeleton();
+        const auto clip = Clip(skeleton);
+        const AnimationClipRegion malformed{{80}, {20}, AnimationWrapMode::Once};
+        const auto cancelled = clip.TraverseRegionPrepared({}, {1}, malformed, {}, AnimationClipAdmissionState::CancellationRequested);
+        REQUIRE(cancelled.HasError());
+        CHECK(cancelled.ErrorValue().failure == AnimationClipFailure::Cancelled);
+        const auto closed = clip.TraverseRegionPrepared({}, {1}, malformed, {}, AnimationClipAdmissionState::ShuttingDown);
+        REQUIRE(closed.HasError());
+        CHECK(closed.ErrorValue().failure == AnimationClipFailure::AdmissionRejected);
+        const auto wrap = clip.TraverseRegionPrepared({}, {1}, {{20}, {80}, AnimationWrapMode::Count});
+        REQUIRE(wrap.HasError());
+        CHECK(wrap.ErrorValue().failure == AnimationClipFailure::Unsupported);
+        const auto cursor = clip.TraverseRegionPrepared({{61}, false}, {1}, {{20}, {80}, AnimationWrapMode::Once});
+        CHECK(cursor.HasError());
+    }
+
+    TEST_CASE("Animation successful regional traversal and atomic crossing rejection allocate nothing", "[animation][clip][region]") {
+        const auto skeleton = ClipSkeleton();
+        const auto clip = Clip(skeleton);
+        const AnimationClipCursor cursor{{10}, false};
+        AnimationClipLimits limits;
+        limits.maximumBoundaryCrossings = 0;
+        const auto before = HoroAnimationTestAllocationCount();
+        const auto advanced = clip.TraverseRegionPrepared(cursor, {5}, {{20}, {80}, AnimationWrapMode::Once});
+        const auto rejected = clip.TraverseRegionPrepared(cursor, {200}, {{20}, {80}, AnimationWrapMode::Loop}, limits);
+        const auto after = HoroAnimationTestAllocationCount();
+        CHECK(after == before);
+        REQUIRE(advanced.HasValue());
+        CHECK(advanced.Value().sampleTime.ticks == 35);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().failure == AnimationClipFailure::LimitExceeded);
+        CHECK(cursor.phase.ticks == 10);
+    }
+
 }  // namespace Horo::Animation
