@@ -311,15 +311,23 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Owns complete project admission policy while binding the explicitly selected world services. */
-        [[nodiscard]] Result<Net::NetworkModeFactories> ComposeProductWorldServices(
+        [[nodiscard]] Result<NetworkProductComposition> ComposeProductWorldServices(
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductLaunch &launch,
-            const Net::NetworkProjectSettings &project, Net::NetworkModeFactories factories, HeadlessProjectSceneResources *resources) {
+            const Net::NetworkProjectSettings &project, Net::NetworkModeFactories factories, HeadlessProjectSceneResources *resources,
+            std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities) {
             std::optional<Gameplay::GameplayReplicationAdmissionPolicy> replicationAdmission;
             if (launch.role != Net::NetworkProjectRole::Standalone)
                 replicationAdmission.emplace(Gameplay::GameplayReplicationAdmissionPolicy{.inventory = project.ReplicationInventory()});
             if (!resources)
-                return Result<Net::NetworkModeFactories>::Success(
-                    ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay, replicationAdmission));
+                return Result<NetworkProductComposition>::Success(
+                    {ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay, replicationAdmission), {}});
+            AssetCookTargetId animationTarget;
+            if (!launch.sceneInput.cookTarget.empty()) {
+                auto selected = AssetCookTargetId::Parse(launch.sceneInput.cookTarget);
+                if (selected.HasError())
+                    return Result<NetworkProductComposition>::Failure(std::move(selected).ErrorValue());
+                animationTarget = std::move(selected).Value();
+            }
             HeadlessSceneActivationInput input{.mode = launch.sceneInput.physicsMode,
                                                .settings = *resources->settings,
                                                .registry = resources->registry,
@@ -327,7 +335,9 @@ namespace Horo::Application::Internal {
                                                .load = resources->load,
                                                .prefabLoads = resources->prefabLoads.get(),
                                                .prefabMetrics = resources->prefabMetrics,
-                                               .prefabPolicy = resources->prefabPolicy};
+                                               .prefabPolicy = resources->prefabPolicy,
+                                               .animationTarget = animationTarget,
+                                               .animationIdentities = animationTarget.IsValid() ? std::move(animationIdentities) : nullptr};
             return ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay,
                                                        replicationAdmission);
         }
@@ -345,6 +355,7 @@ namespace Horo::Application::Internal {
             HeadlessProjectSceneResources *resources{};
             std::shared_ptr<const NetworkProductAdmission> admission;
             std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity;
+            std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities;
         };
 
         /** @brief Reject requested network gameplay before composition when no explicit world authority was supplied. */
@@ -397,7 +408,7 @@ namespace Horo::Application::Internal {
                 ComposeProductWorldServices(std::move(scene), launch, project,
                                             ProductFactories(launch.role, launch.bind, launch.connect, debugger, sessions,
                                                              std::move(capabilities.admission), std::move(capabilities.nativeSecurity)),
-                                            capabilities.resources);
+                                            capabilities.resources, std::move(capabilities.animationIdentities));
             if (configured.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
             return NetworkProductHost::Create(*clock,
@@ -412,8 +423,9 @@ namespace Horo::Application::Internal {
                                                presentation,
                                                std::move(sessions),
                                                launch.purpose,
-                                               binding},
-                                              std::move(configured).Value(), &diagnostic, debugger);
+                                               binding,
+                                               configured.Value().fixedParticipant},
+                                              std::move(configured).Value().factories, &diagnostic, debugger);
         }
 
         /** @brief Enforce the selected purpose without manufacturing a gameplay role for transport qualification. */
@@ -460,10 +472,22 @@ namespace Horo::Application::Internal {
             runtime.Shutdown();
             return 0;
         }
+
+        void CloseProductModules(const ProductLaunch &launch) {
+            if (launch.gameplay && launch.gameplay->moduleRetirements) {
+                auto closed = launch.gameplay->moduleRetirements->Close();
+                if (closed.HasError()) {
+                    std::cerr << "horo-engine: gameplay shutdown incomplete: " << closed.ErrorValue().message << '\n';
+                    // This closed product composition exposes no external generation leases. An escaped owner violates final shutdown.
+                    std::terminate();
+                }
+            }
+        }
     }  // namespace
 
     int RunNetworkProduct(const std::span<char *> arguments, std::shared_ptr<const NetworkProductAdmission> admission,
-                          std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity, const Prefab::PrefabMetricHandles &metrics) {
+                          std::shared_ptr<const Net::GnsNativeSecurityOptions> nativeSecurity, const Prefab::PrefabMetricHandles &metrics,
+                          std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities) {
         auto launch = ParseNetworkProductLaunch(arguments);
         if (launch.HasError()) {
             std::cerr << "horo-engine: " << launch.ErrorValue().message << '\n';
@@ -487,7 +511,7 @@ namespace Horo::Application::Internal {
         auto clock = std::make_shared<SteadyClock>();
         Net::NetworkTargetDiagnostic diagnostic;
         auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic,
-                                      {resources.get(), std::move(admission), std::move(nativeSecurity)});
+                                      {resources.get(), std::move(admission), std::move(nativeSecurity), std::move(animationIdentities)});
         if (runtime.HasError()) {
             std::cerr << "horo-engine: network product admission failed (" << runtime.ErrorValue().code.Value() << ", capability "
                       << static_cast<int>(diagnostic.capability) << ", reason " << static_cast<int>(diagnostic.reason)
@@ -496,14 +520,7 @@ namespace Horo::Application::Internal {
         }
         auto outcome = RunProductFrames(*runtime.Value(), launch.Value(), worlds);
         runtime.Value()->Shutdown();
-        if (launch.Value().gameplay && launch.Value().gameplay->moduleRetirements) {
-            auto closed = launch.Value().gameplay->moduleRetirements->Close();
-            if (closed.HasError()) {
-                std::cerr << "horo-engine: gameplay shutdown incomplete: " << closed.ErrorValue().message << '\n';
-                // This closed product composition exposes no external generation leases. An escaped owner violates final shutdown.
-                std::terminate();
-            }
-        }
+        CloseProductModules(launch.Value());
         if (outcome == 0)
             std::cout << "network product completed " << launch.Value().frames << " frames in mode " << arguments[0] << '\n';
         return outcome;

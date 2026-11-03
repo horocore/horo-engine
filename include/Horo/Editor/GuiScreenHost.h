@@ -14,6 +14,7 @@
 #include "Horo/Foundation/Diagnostics.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/RuntimeDispatchEvidence.h"
 
 #include <cstdint>
 #include <memory>
@@ -115,6 +116,7 @@ namespace Horo::Editor {
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
         std::shared_ptr<const Application::TerrainAuthoringCookFactory> terrainCook;
         std::shared_ptr<const Application::TerrainAuthoringAssetFactory> terrainAssets;
+        Runtime::RuntimeDispatchSource dispatchSource; /**< Actual application scheduler issuer; no numeric reconstruction. */
     };
 
     /**
@@ -205,6 +207,18 @@ namespace Horo::Editor {
          */
         void OnFixedUpdate(std::uint64_t simulationTick, double fixedDeltaSeconds);
 
+        /** @brief Binds an initially absent issuer exactly once, on its idle owner thread before fixed execution. */
+        [[nodiscard]] Result<void> BindRuntimeDispatch(Runtime::RuntimeDispatchSource source);
+
+        /** @brief Reserves the active screen for one genuine scheduler fixed attempt. */
+        [[nodiscard]] Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context);
+        /** @brief Prepares that same screen while its dispatch is still uncommitted. */
+        [[nodiscard]] Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context);
+        /** @brief Publishes after the actual scheduler commitment; defers all navigation and destruction. */
+        void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
+        /** @brief Releases the exact staged attempt without executing navigation callbacks. */
+        void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
+
         /** @brief Renders the active screen and any active leave-resolution modals. */
         void Draw();
 
@@ -254,16 +268,23 @@ namespace Horo::Editor {
         void InitializeExtensionInspectors(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities);
         /** @brief Publishes initial status items after extension composition and status-bar ownership are established. */
         void InitializeStatusItems(const RendererAvailabilitySnapshot &rendererAvailability);
+        [[nodiscard]] Result<void> CheckNavigationAdmission(const GuiRoute &destination) const;
         Result<void> ExecuteLeaveCheckAndCommit(const LeaveTarget &target);
         Result<void> CommitApplicationClose();
         void FlushPendingNavigation();
         void CommitRoute(GuiRoute destination);
+        [[nodiscard]] Result<void> EnterScreen(GuiScreen &screen, const GuiRoute &route);
         void PresentLeaveDialog(const LeaveRequirement &requirement, const LeaveTarget &target);
         void ExecuteLeaveResolution(LeaveAction action, const LeaveRequirement &requirement, const LeaveTarget &target);
         std::unique_ptr<GuiScreen> CreateScreen(const GuiRoute &route);
 
         /** @brief Refreshes the common extension theme, pumps page results and opens prepared settings when the modal host is available. */
         void UpdateExtensionPages();
+        void UpdateBuildStatus(float dt);
+        void UpdateExtensionCommands();
+        void ShutdownExtensions() noexcept;
+        [[nodiscard]] bool MatchesFixedAttempt(const Runtime::FixedStepContext &context) const noexcept;
+        void ReleaseFixedAttempt() noexcept;
 
         const EditorGuiContext &context_;
         EditorModalHost *modalHost_;
@@ -308,6 +329,12 @@ namespace Horo::Editor {
         std::shared_ptr<const Application::TerrainAuthoringCookFactory> terrainCookFactory_;
         std::shared_ptr<const Application::TerrainAuthoringAssetFactory> terrainAssetFactory_;
         std::unique_ptr<GuiScreen> activeScreen_;
+        Runtime::RuntimeDispatchSource dispatchSource_;
+        Runtime::RuntimeDispatchEvidence fixedEvidence_;
+        Runtime::RuntimeDispatchFacts fixedFacts_;
+        GuiScreen *fixedScreen_{}; /**< Borrow protected by deferral of all screen replacement/destruction. */
+        bool fixedPrepared_{};
+        bool shutdownPending_{};
         std::optional<GuiRoute> pendingNavigation_;
         std::optional<ProjectCreationOperationId> activeCreationId_;
         std::optional<EditorRendererRestartRequest> rendererRestartRequest_;

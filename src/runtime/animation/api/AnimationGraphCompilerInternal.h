@@ -17,6 +17,10 @@ namespace Horo::Animation::GraphCompileDetail {
     /** @brief Admits whole-asset identity, structural counts and caller-lowerable
      * budgets before copying any candidate storage. */
     Result<void> PreflightGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context);
+    /** @brief Admits every cooked declaration count before copying or interpreting any instruction. */
+    Result<void> PreflightCookedGraph(const AnimationGraphCookedData &data, const AnimationGraphCompileContext &context);
+    /** @brief Checks fixed direct-clip shape and exact dependencies before any execution-local plan allocation. */
+    Result<void> PreflightClipProgram(AnimationClipId clip, const AnimationGraphCompileContext &context);
     /** @brief Validates exact typed node settings and semantic pin shape. */
     Result<void> ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data);
 
@@ -49,6 +53,8 @@ namespace Horo::Animation::GraphCompileDetail {
     bool ValidGraphBoneMask(const GraphBoneMask &mask);
     /** @brief Bounds the complete action catalog before copying it. */
     Result<void> PreflightActions(const AnimationGraphData &data, const AnimationGraphCompileContext &context);
+    /** @brief Uses the same bounded action admission for detached cooked declarations. */
+    Result<void> PreflightActions(const AnimationGraphCookedData &data, const AnimationGraphCompileContext &context);
     /** @brief Validates stable names, sections, loop topology and slot membership
      * in the canonical catalog. */
     Result<void> ValidateActions(const AnimationGraphData &data);

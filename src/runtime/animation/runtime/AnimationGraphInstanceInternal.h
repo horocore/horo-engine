@@ -62,6 +62,7 @@ namespace Horo::Animation::Detail {
         std::uint32_t eventCount{};
         AnimationTickId tick{};
         CancellationToken cancellation{};
+        bool commitArmed{};
     };
 
     /** @brief Retained immutable curves and their admitted parameter destinations;

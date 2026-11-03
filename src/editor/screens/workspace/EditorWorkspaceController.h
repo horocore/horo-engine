@@ -484,6 +484,11 @@ namespace Horo::Editor {
         void UpdatePlayPresentation(float elapsedSeconds);
         /** @brief Advances one play-mode fixed tick with already-routed semantic actions. */
         void UpdatePlayFixed(std::span<const Gameplay::GameplayInputAction> input, double fixedDeltaSeconds);
+        [[nodiscard]] Result<void> BindPlayRuntimeDispatch(const Runtime::RuntimeDispatchSource &source);
+        void UpdatePlayFixed(std::span<const Gameplay::GameplayInputAction> input, const Runtime::FixedStepContext &context);
+        void PreparePlayFixedCommit(const Runtime::FixedStepContext &context);
+        void CommitPlayFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
+        void AbortPlayFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
 
     private:
         /** @brief Composes the explicit controller-owned operation from host-borrowed process capabilities.

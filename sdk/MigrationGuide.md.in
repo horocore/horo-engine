@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 26 / `gameplay-sdk26`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 27 / `gameplay-sdk27`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -32,6 +32,35 @@ or that this snapshot has passed every platform. The extension SDK has no engine
 library link dependency; native libraries still require matching OS/architecture
 and their own private dependency/toolchain compatibility. No Android, mobile,
 cross-architecture, or generic C++ binary compatibility is promised here.
+
+## Gameplay SDK26 → SDK27 (Animation components and Scene activation)
+
+Rebuild native gameplay modules and generated descriptor bundles against boundary
+27 and the exact `gameplay-sdk27` engine/toolchain/platform/configuration
+fingerprint. Scene component values now contain the optional typed Animation
+component, and the closed builtin component vocabulary includes Animation.
+Scene activation participant contract 5 adds bounded loaded-asset dependency
+discovery and explicit required-owner admission. Runtime lifecycle participants
+also expose fixed prepare/commit/abort callbacks for the actual scheduler fence.
+These layouts and virtual interfaces must not be mixed with SDK26 objects.
+
+Keep Animation authoring data inert: persist stable component/Skeleton/Clip/Graph
+identities and policies, not live runtime owners, clocks or pose handles. Recook
+animated Scenes with the current producer (source schema4 and cooked Scene v4).
+Scenes without Animation retain their established source/cooked formats. Prefab
+cook's optional projected dependency span is invocation-scoped metadata owned by
+the same cook transaction; it is not durable or runtime authority.
+
+The host supplies the real dispatch issuer and one shared nonwrapping Animation
+identity source. Register one Animation Scene owner and forward the same actual
+fixed attempt through evaluation, prepare, commit or abort; native modules must
+not issue their own scheduler proof or add a second evaluator. Runtime binary
+loading stays source/JSON-free. Standalone additive clips without a real base,
+native retarget and root-motion integration remain explicitly unsupported.
+
+Old boundary numbers and old fingerprints are rejected before factory entry.
+Retain a coherent prior engine/SDK/module/cooked-artifact set for rollback;
+never relabel an SDK26 binary as SDK27. The external extension C ABI is unchanged.
 
 ## Gameplay SDK25 → SDK26 (Prefab persistence and Scene group contracts)
 

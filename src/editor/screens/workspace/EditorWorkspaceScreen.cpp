@@ -167,6 +167,43 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         PublishViewportSceneIfChanged();
     }
 
+    Result<void> EditorWorkspaceScreen::BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &source) {
+        if (!controller_)
+            return Result<void>::Failure(MakeError(NavigationErrors::HostNotStarted));
+        return controller_->BindPlayRuntimeDispatch(source);
+    }
+
+    Result<void> EditorWorkspaceScreen::OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) {
+        if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
+                             controller_->ViewModel().playState != EditorPlayState::Paused))
+            return Result<void>::Success();
+        const auto command = input_.gameplayFrames.Consume(context.simulationTick);
+        const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
+                                                   command.moveX,
+                                                   command.moveY,
+                                                   command.moveDown,
+                                                   command.movePressed,
+                                                   command.moveReleased};
+        controller_->UpdatePlayFixed({&action, 1}, context);
+        return Result<void>::Success();
+    }
+
+    Result<void> EditorWorkspaceScreen::PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) {
+        if (controller_)
+            controller_->PreparePlayFixedCommit(context);
+        return Result<void>::Success();
+    }
+
+    void EditorWorkspaceScreen::CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        if (controller_)
+            controller_->CommitPlayFixedUpdate(context);
+    }
+
+    void EditorWorkspaceScreen::AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        if (controller_)
+            controller_->AbortPlayFixedUpdate(context);
+    }
+
     /** @copydoc EditorWorkspaceScreen::Draw */
     void EditorWorkspaceScreen::Draw(const GuiContentRegion &contentRegion) {
         if (!controller_) {

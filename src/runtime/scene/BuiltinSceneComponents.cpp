@@ -21,7 +21,8 @@ namespace Horo::Runtime {
                     BuiltinSceneComponentSchema{BuiltinSceneComponentKind::CharacterController, "game.horo.character_controller"},
                     BuiltinSceneComponentSchema{BuiltinSceneComponentKind::RigidBody, "game.horo.rigid_body"},
                     BuiltinSceneComponentSchema{BuiltinSceneComponentKind::Collider, "game.horo.collider"},
-                    BuiltinSceneComponentSchema{BuiltinSceneComponentKind::PhysicsConstraint, "game.horo.physics_constraint"}};
+                    BuiltinSceneComponentSchema{BuiltinSceneComponentKind::PhysicsConstraint, "game.horo.physics_constraint"},
+                    BuiltinSceneComponentSchema{BuiltinSceneComponentKind::Animation, "game.horo.animation"}};
     }
 
     /** @copydoc BuiltinSceneComponentSchemas */
@@ -40,46 +41,27 @@ namespace Horo::Runtime {
     /** @copydoc BuiltinSceneComponentCount */
     std::size_t BuiltinSceneComponentCount(const RuntimeComponentSet &components, const BuiltinSceneComponentKind kind,
                                            const bool primitiveMesh) noexcept {
-        using enum BuiltinSceneComponentKind;
-        switch (kind) {
-            case PrimitiveMesh:
-                return static_cast<std::size_t>(primitiveMesh);
-            case Camera:
-                return static_cast<std::size_t>(components.camera.has_value());
-            case Light:
-                return static_cast<std::size_t>(components.light.has_value());
-            case AudioSource:
-                return static_cast<std::size_t>(components.audioSource.has_value());
-            case AudioListener:
-                return static_cast<std::size_t>(components.audioListener.has_value());
-            case UiCanvas:
-                return static_cast<std::size_t>(components.uiCanvas.has_value());
-            case NavigationSurface:
-                return static_cast<std::size_t>(components.navigationSurface.has_value());
-            case NavigationRegion:
-                return static_cast<std::size_t>(components.navigationRegion.has_value());
-            case NavigationModifier:
-                return static_cast<std::size_t>(components.navigationModifier.has_value());
-            case NavigationLink:
-                return static_cast<std::size_t>(components.navigationLink.has_value());
-            case NavigationAgent:
-                return static_cast<std::size_t>(components.navigationAgent.has_value());
-            case AiAgent:
-                return static_cast<std::size_t>(components.aiAgent.has_value());
-            case AiController:
-                return static_cast<std::size_t>(components.aiController.has_value());
-            case CharacterController:
-                return static_cast<std::size_t>(components.characterController.has_value());
-            case RigidBody:
-                return static_cast<std::size_t>(components.rigidBody.has_value());
-            case Collider:
-                return components.colliders.size();
-            case PhysicsConstraint:
-                return components.physicsConstraints.size();
-            case Count:
-                return 0;
-        }
-        return 0;
+        const std::array<std::size_t, static_cast<std::size_t>(BuiltinSceneComponentKind::Count)>
+            counts{static_cast<std::size_t>(primitiveMesh),
+                   static_cast<std::size_t>(components.camera.has_value()),
+                   static_cast<std::size_t>(components.light.has_value()),
+                   static_cast<std::size_t>(components.audioSource.has_value()),
+                   static_cast<std::size_t>(components.audioListener.has_value()),
+                   static_cast<std::size_t>(components.uiCanvas.has_value()),
+                   static_cast<std::size_t>(components.navigationSurface.has_value()),
+                   static_cast<std::size_t>(components.navigationRegion.has_value()),
+                   static_cast<std::size_t>(components.navigationModifier.has_value()),
+                   static_cast<std::size_t>(components.navigationLink.has_value()),
+                   static_cast<std::size_t>(components.navigationAgent.has_value()),
+                   static_cast<std::size_t>(components.aiAgent.has_value()),
+                   static_cast<std::size_t>(components.aiController.has_value()),
+                   static_cast<std::size_t>(components.characterController.has_value()),
+                   static_cast<std::size_t>(components.rigidBody.has_value()),
+                   components.colliders.size(),
+                   components.physicsConstraints.size(),
+                   components.animation.has_value()};
+        const auto index = static_cast<std::size_t>(kind);
+        return index < counts.size() ? counts[index] : 0;
     }
 
     /** @copydoc BuiltinSceneComponentCount */

@@ -1,7 +1,9 @@
+#include "AnimationRuntimeIdentitySource.h"
 #include "NetworkProductLaunch.h"
 #include "cli_host/CliHost.h"
 
 #include <iostream>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -34,7 +36,10 @@ namespace {
             } catch (...) { /* Observation startup is best-effort; product authority is unchanged. */
             }
             const auto metrics = Horo::Prefab::RegisterPrefabMetricHandles(Horo::Telemetry::MetricCollectionLevel::Detailed, true);
-            return Horo::Application::Internal::RunNetworkProduct(argv.subspan(2), nullptr, nullptr, metrics);
+            auto animationIdentities = std::make_shared<Horo::Application::Internal::AnimationRuntimeIdentitySource>(
+                Horo::Application::Internal::AnimationRuntimeIdentityRange{1, std::numeric_limits<std::uint64_t>::max()});
+            return Horo::Application::Internal::RunNetworkProduct(argv.subspan(2), nullptr, nullptr, metrics,
+                                                                  std::move(animationIdentities));
         }
         std::vector<std::string_view> arguments;
         for (std::size_t index = 1; index < argv.size(); ++index)

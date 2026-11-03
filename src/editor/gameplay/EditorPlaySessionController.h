@@ -114,8 +114,16 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Step();
         /** @brief Shuts down behaviors and destroys the isolated runtime clone. */
         void Stop() noexcept;
-        /** @brief Runs one host fixed tick when playing, or consumes one queued paused step. */
+        /** @brief Legacy stepping for unbound private callers; a bound real host must supply its actual fixed context. */
         [[nodiscard]] Result<void> FixedUpdate(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
+        /** @brief Binds one genuine live issuer cold; permits active-frame composition without granting callback admission. */
+        [[nodiscard]] Result<void> BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &source);
+        /** @brief Stages one actual host attempt; paused step remains pending until its real commit. */
+        [[nodiscard]] Result<void> OnRuntimeFixedUpdate(std::span<const Gameplay::GameplayInputAction> input,
+                                                        const Runtime::FixedStepContext &context);
+        [[nodiscard]] Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context);
+        void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
+        void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
         /** @brief Runs presentation callbacks for an active session. */
         void PresentationUpdate(Gameplay::FrameDeltaTime delta);
         /**
@@ -155,6 +163,23 @@ namespace Horo::Editor {
         [[nodiscard]] DocumentRevision AuthoringRevision() const noexcept;
 
     private:
+        [[nodiscard]] bool ShouldTick() const noexcept;
+        [[nodiscard]] Result<void> RunGameplayFixed(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
+        [[nodiscard]] Result<void> RejectFixedAttempt(const Runtime::FixedStepContext &context, Error error);
+        [[nodiscard]] bool MatchesFixedAttempt(const Runtime::FixedStepContext &context) const noexcept;
+        void FlushPendingStop() noexcept;
+
+        struct FixedAttempt final {
+            EditorPlaySceneHost *scene{};
+            Runtime::RuntimeDispatchEvidence evidence;
+            Runtime::RuntimeDispatchFacts facts;
+            bool consumesStep{};
+            bool prepared{};
+        };
+
+        Runtime::RuntimeDispatchSource dispatchSource_;
+        std::optional<FixedAttempt> fixedAttempt_;
+        bool stopPending_{};
         EditorPlayViewSource viewSource_{EditorPlayViewSource::AuthoredCamera};
         const IEditorPlayXrHost *selectedXrHost_{};
         /** @brief Reserves leave capacity and a callback lookup before any Scene activation is admitted. */

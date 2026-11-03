@@ -4,6 +4,7 @@
  * @brief Versioned animation graph authoring and bounded immutable compilation.
  */
 #include "Horo/Animation/AnimationClip.h"
+#include "Horo/Animation/AnimationComponents.h"
 #include "Horo/Foundation/CancellationToken.h"
 
 #include <array>
@@ -764,6 +765,28 @@ namespace Horo::Animation {
         bool operator==(const GraphMemoryRequirements &) const = default;
     };
 
+    /**
+     * @brief Detached target-independent compiled declarations for a cooked graph payload.
+     * @details Contains no source document, native pointers, runtime publication generations or
+     *          dependency-bound occurrence layout. Stable compiled order, operand provenance and
+     *          declared expansion costs are verified before dependency binding. Binary codecs
+     *          must bound every table before allocation and encode fields explicitly.
+     */
+    struct AnimationGraphCookedData final {
+        AnimationGraphContractVersion contractVersion{CurrentAnimationGraphContractVersion};
+        AnimationGraphId id{};
+        SkeletonId skeleton{};
+        GraphDefinitionId entry{};
+        std::vector<GraphParameter> parameters;
+        std::vector<GraphActionSlot> actionSlots;
+        std::vector<GraphActionDefinition> actions;
+        std::vector<GraphCompiledDefinition> definitions;
+    };
+
+    namespace Detail {
+        struct ClipSceneProgramAccess;
+    }
+
     /** @brief Owned validated program; runtime instances borrow immutable spans and
      * own mutable state. */
     class AnimationGraphProgram final {
@@ -784,9 +807,28 @@ namespace Horo::Animation {
         [[nodiscard]] static Result<AnimationGraphProgram> Compile(const AnimationGraphData &data,
                                                                    const AnimationGraphCompileContext &context = {});
 
-        /** @brief Returns the stable asset identity. @return Persistent graph id. */
+        /**
+         * @brief Verifies a cooked instruction schedule and binds actual immutable dependencies.
+         * @param data Bounded detached cooked declarations; never source JSON or a native object dump.
+         * @param context Current policy and host-issued skeleton/clip publication generations.
+         * @return Complete immutable program, or a typed failure before any publication.
+         * @details Reuses canonical node, catalog and binding validation. It does not select a
+         *          new instruction schedule, parse authoring source, or trust serialized runtime state.
+         * @throws std::bad_alloc When bounded cold validation or binding storage cannot be allocated.
+         */
+        [[nodiscard]] static Result<AnimationGraphProgram> FromCooked(const AnimationGraphCookedData &data,
+                                                                      const AnimationGraphCompileContext &context);
+
+        /** @brief Returns the persistent graph identity, absent for an execution-local direct-clip program. */
         [[nodiscard]] AnimationGraphId Id() const noexcept {
             return id_;
+        }
+
+        /** @brief Returns exact authored Clip or Graph lineage, without manufacturing a graph asset for a clip. */
+        [[nodiscard]] AnimationSourceReference Source() const noexcept {
+            if (sourceClip_.IsValid())
+                return {AnimationSourceKind::Clip, sourceClip_, {}};
+            return {AnimationSourceKind::Graph, {}, id_};
         }
 
         /** @brief Returns the required skeleton identity. @return Persistent skeleton
@@ -871,10 +913,16 @@ namespace Horo::Animation {
 
     private:
         AnimationGraphProgram() = default;
+        friend struct Detail::ClipSceneProgramAccess;
+        /** @brief Prepares an execution-local absolute-clip plan through the same validator, binder and executor. */
+        [[nodiscard]] static Result<AnimationGraphProgram> PrepareClip(AnimationClipId clip, const AnimationGraphCompileContext &context);
         /** @brief Validates authoring topology without runtime dependency admission.
          */
         [[nodiscard]] static Result<AnimationGraphProgram> CompileSchema(const AnimationGraphData &data,
                                                                          const AnimationGraphCompileContext &context);
+        /** @brief Binds a validated declaration program through the one canonical dependency owner. */
+        [[nodiscard]] static Result<AnimationGraphProgram> BindProgram(AnimationGraphProgram program,
+                                                                       const AnimationGraphCompileContext &context);
         friend Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &, const AnimationGraphCompileContext &);
         std::vector<GraphInstructionOccurrence> occurrences_{};
         std::vector<GraphStateMachineBinding> stateMachines_{};
@@ -882,6 +930,7 @@ namespace Horo::Animation {
         GraphSkeletonBinding skeletonBinding_{};
         std::vector<AnimationClipDescriptor> clipBindings_{};
         AnimationGraphId id_{};
+        AnimationClipId sourceClip_{};
         SkeletonId skeleton_{};
         std::vector<GraphParameter> parameters_{};
         std::vector<GraphActionSlot> actionSlots_{};

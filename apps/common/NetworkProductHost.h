@@ -3,6 +3,7 @@
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "NetworkProductComposition.h"
 #include "NetworkProductSession.h"
 
 #include <memory>
@@ -25,6 +26,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<ClientSessionOwner> sessions; /**< Required in network modes; retained through teardown. */
         Network::NetworkWorldCompositionPurpose purpose{Network::NetworkWorldCompositionPurpose::Gameplay};
         std::optional<Network::NetworkWorldBindingSetup> worldBinding; /**< Required for network gameplay, not transport qualification. */
+        NetworkFixedParticipantFactory fixedParticipant;               /**< Optional cold factory from the SAME world composition. */
     };
 
     // Application-owned bridge: target admission precedes the canonical runtime lifecycle.
@@ -85,6 +87,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<Network::ReplicationWorldReadLease> AcquireReplication(Network::NetworkModeWorldKind world,
                                                                                     const Network::ReplicationWorldWorkRequest &request,
                                                                                     Network::ReplicationWorldCapability capability) const;
+        /** @brief Cooperative callback-safe request through the actual RuntimeHost cancellation authority. */
+        void RequestShutdown() const noexcept;
         void Shutdown() noexcept;
 
     private:

@@ -134,7 +134,7 @@ namespace Horo::Animation::GraphCompileDetail {
         };
 
         /** @brief Whole detached catalog must fit before canonical copying. */
-        bool Structure(const AnimationGraphData &data, const AnimationGraphLimits &limits) noexcept {
+        template <typename Data> bool Structure(const Data &data, const AnimationGraphLimits &limits) noexcept {
             return Limits(limits) && data.actionSlots.size() <= limits.actionSlots && data.actions.size() <= limits.actions;
         }
 
@@ -168,8 +168,8 @@ namespace Horo::Animation::GraphCompileDetail {
         }
     }  // namespace
 
-    /** @copydoc PreflightActions */
-    Result<void> PreflightActions(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
+    /** @brief Reuses one action storage admission for source and cooked declarations. */
+    template <typename Data> Result<void> PreflightActionTables(const Data &data, const AnimationGraphCompileContext &context) {
         if (!Structure(data, context.limits))
             return Result<void>::Failure(Failure(GraphLimitExceeded));
         ActionCounts counts;
@@ -178,11 +178,23 @@ namespace Horo::Animation::GraphCompileDetail {
                 return admission;
             if (!CountAction(action, counts, context.limits))
                 return Result<void>::Failure(Failure(GraphLimitExceeded));
+            if (!ActionNames(action))
+                return Result<void>::Failure(Failure(GraphMalformed));
         }
         for (const auto &slot : data.actionSlots)
             if (!Name(slot.name))
                 return Result<void>::Failure(Failure(GraphMalformed));
         return Result<void>::Success();
+    }
+
+    /** @copydoc PreflightActions */
+    Result<void> PreflightActions(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
+        return PreflightActionTables(data, context);
+    }
+
+    /** @copydoc PreflightActions */
+    Result<void> PreflightActions(const AnimationGraphCookedData &data, const AnimationGraphCompileContext &context) {
+        return PreflightActionTables(data, context);
     }
 
     /** @copydoc ValidateActions */

@@ -1,4 +1,5 @@
 #include "Horo/Prefab/PrefabTemplateCook.h"
+#include "PrefabCookBuiltinProjection.h"
 #include "PrefabSceneCookState.h"
 
 #include <algorithm>
@@ -15,6 +16,19 @@ namespace Horo::Application::PrefabCookDetail {
             std::vector<Assets::AssetId> dependencies;
         };
 
+        Result<void> CollectEntitySchemas(const Prefab::CookedPrefabEntity &entity, std::vector<Gameplay::SerializedComponent> &components,
+                                          std::vector<Gameplay::BehaviorComponent> &behaviors) {
+            CookBuiltinProjection builtins;
+            for (const auto &member : entity.members) {
+                if (const auto *component = std::get_if<Prefab::RawComponentPayload>(&member)) {
+                    if (auto projected = builtins.Collect(*component, components); projected.HasError())
+                        return projected;
+                } else
+                    behaviors.push_back(std::get<Gameplay::BehaviorComponent>(member));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Admits fully resolved member schemas using the same inert authority as static scene cooking. */
         Result<void> ValidateSchemas(const Prefab::CookedPrefabData &data, const TemplateCookState &state,
                                      const CancellationToken &cancellation) {
@@ -23,12 +37,8 @@ namespace Horo::Application::PrefabCookDetail {
                     return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
                 std::vector<Gameplay::SerializedComponent> components;
                 std::vector<Gameplay::BehaviorComponent> behaviors;
-                for (const auto &member : entity.members) {
-                    if (const auto *component = std::get_if<Prefab::RawComponentPayload>(&member))
-                        components.push_back(component->component);
-                    else
-                        behaviors.push_back(std::get<Gameplay::BehaviorComponent>(member));
-                }
+                if (auto collected = CollectEntitySchemas(entity, components, behaviors); collected.HasError())
+                    return collected;
                 if (!state.schemas && (!components.empty() || !behaviors.empty()))
                     return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
                 if (state.schemas) {
@@ -39,29 +49,57 @@ namespace Horo::Application::PrefabCookDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Borrows only the root's resource closure from the verified candidate envelopes, never from cache paths. */
-        Result<std::vector<Prefab::PrefabTemplateCookResource>> RootResources(
-            const TemplateCookState &state, const Assets::AssetId root,
-            const std::span<const Assets::AssetCookCandidateArtifactView> artifacts) {
+        struct RootResourceProjection final {
+            std::vector<Prefab::PrefabTemplateCookResource> envelopes;
+            std::vector<Assets::AssetDependency> expected;
+        };
+
+        Result<std::vector<Assets::AssetDependency>> DirectResources(const TemplateCookState &state, Assets::AssetId root) {
+            using Return = Result<std::vector<Assets::AssetDependency>>;
             auto closure = state.graph.DependencyClosure(std::span{&root, 1});
             if (closure.HasError())
-                return Result<std::vector<Prefab::PrefabTemplateCookResource>>::Failure(closure.ErrorValue());
-            std::vector<Prefab::PrefabTemplateCookResource> resources;
+                return Return::Failure(std::move(closure).ErrorValue());
+            std::vector<Assets::AssetDependency> roles;
             for (const auto asset : closure.Value()) {
                 const auto *node = state.graph.FindNode(asset);
                 if (!node)
-                    return Result<std::vector<Prefab::PrefabTemplateCookResource>>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
-                if (node->sourceRevision)
-                    continue;
-                const auto found = std::ranges::find_if(artifacts, [asset](const auto &artifact) {
-                    return artifact.identity.id == asset;
+                    return Return::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+                if (!node->sourceRevision)
+                    roles.push_back({node->assetId, node->assetType});
+            }
+            return Return::Success(std::move(roles));
+        }
+
+        /** @brief One actual Animation projection determines BOTH envelope selection and the canonical expected role set. */
+        Result<RootResourceProjection> RootResources(const TemplateCookState &state, Assets::AssetId root,
+                                                     std::span<const Assets::AssetCookCandidateArtifactView> artifacts,
+                                                     const CancellationToken &cancellation) {
+            using Return = Result<RootResourceProjection>;
+            auto direct = DirectResources(state, root);
+            if (direct.HasError())
+                return Return::Failure(std::move(direct).ErrorValue());
+            auto roles = std::move(direct).Value();
+            if (state.animation) {
+                auto expanded = state.animation->ExpandDependencies(roles, artifacts,
+                                                                    std::min<std::size_t>(state.assetLimits.maximumAssets,
+                                                                                          state.limits.Policy().maximumReferencedAssets),
+                                                                    cancellation);
+                if (expanded.HasError())
+                    return Return::Failure(std::move(expanded).ErrorValue());
+                roles = std::move(expanded).Value();
+            }
+            RootResourceProjection projection;
+            for (const auto &role : roles) {
+                const auto found = std::ranges::find(artifacts, role.id, [](const auto &artifact) {
+                    return artifact.identity.id;
                 });
                 if (found == artifacts.end())
-                    return Result<std::vector<Prefab::PrefabTemplateCookResource>>::Failure(
-                        MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                resources.emplace_back(asset, found->envelope);
+                    return Return::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+                projection.envelopes.push_back({role.id, found->envelope});
             }
-            return Result<std::vector<Prefab::PrefabTemplateCookResource>>::Success(std::move(resources));
+            if (state.animation)
+                projection.expected = std::move(roles);
+            return Return::Success(std::move(projection));
         }
 
         /** @brief Projects raw identity only after the same sealed source bytes match the resolver's exact canonical document. */
@@ -90,11 +128,11 @@ namespace Horo::Application::PrefabCookDetail {
             const auto source = CapturedTemplateDigest(state, root);
             if (source.HasError())
                 return Result<PreparedTemplate>::Failure(source.ErrorValue());
-            auto resources = RootResources(state, root, artifacts);
+            auto resources = RootResources(state, root, artifacts, cancellation);
             if (resources.HasError())
                 return Result<PreparedTemplate>::Failure(resources.ErrorValue());
-            auto cooked = Prefab::CookPrefabTemplate(state.resolver, state.registry, root, resources.Value(), state.target, state.limits,
-                                                     {cancellation, state.assetLimits});
+            auto cooked = Prefab::CookPrefabTemplate(state.resolver, state.registry, root, resources.Value().envelopes, state.target,
+                                                     state.limits, {cancellation, state.assetLimits, resources.Value().expected});
             if (cooked.HasError())
                 return Result<PreparedTemplate>::Failure(cooked.ErrorValue());
             if (auto admitted = ValidateSchemas(cooked.Value().Data(), state, cancellation); admitted.HasError())
@@ -180,11 +218,22 @@ namespace Horo::Application::PrefabCookDetail {
         }
     }  // namespace
 
+    static Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>> TemplateCatalogAfterAnimationValidation(
+        const TemplateCookState &state, std::span<const Assets::AssetCookCandidateArtifactView> artifacts,
+        const CancellationToken &cancellation) {
+        if (state.animation) {
+            if (auto valid = state.animation->ValidateEmitted(artifacts, cancellation); valid.HasError())
+                return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(std::move(valid).ErrorValue());
+        }
+        return TemplateCatalog(state, artifacts, cancellation);
+    }
+
     /** @brief Binds semantic graph and raw producer identities to the same actual sealed capture before admitting a template phase. */
-    static bool SameTemplateCapture(const TemplateCookState &state) noexcept {
+    static bool SameTemplateCapture(const TemplateCookState &state) {
         return state.inputs.Registry().Revision() == state.registry.Revision() &&
                state.resolver.RegistryRevision() == state.registry.Revision() &&
-               state.graph.RegistryRevision() == state.registry.Revision();
+               state.graph.RegistryRevision() == state.registry.Revision() &&
+               (!state.animation || state.animation->UsesCapture(state.inputs));
     }
 
     /** @copydoc PrepareTemplatePhase */
@@ -209,7 +258,7 @@ namespace Horo::Application::PrefabCookDetail {
         const auto captured = std::make_shared<const TemplateCookState>(std::move(state));
         phase->makeCatalog = [captured](const std::span<const Assets::AssetCookCandidateArtifactView> artifacts,
                                         const CancellationToken &cancellation) {
-            return TemplateCatalog(*captured, artifacts, cancellation);
+            return TemplateCatalogAfterAnimationValidation(*captured, artifacts, cancellation);
         };
         return Result<std::shared_ptr<const Assets::AssetCookDependentPhase>>::Success(std::move(phase));
     }

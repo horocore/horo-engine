@@ -117,6 +117,15 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Creates the load services after the immutable definition and committed providers are captured. */
+        void PrepareProductLoaders(HeadlessProjectSceneResources &resources) {
+            resources.loads =
+                std::make_unique<Assets::AssetLoadService>(resources.jobs,
+                                                           resources.committed ? resources.committed->SceneProvider() : resources.empty);
+            if (resources.committed)
+                resources.prefabLoads = std::make_unique<Assets::AssetLoadService>(resources.jobs, resources.committed->ArtifactProvider());
+        }
+
     }  // namespace
 
     /** @copydoc PrepareHeadlessProjectSceneResources */
@@ -143,11 +152,7 @@ namespace Horo::Application::Internal {
                 MakeError(Net::NetworkErrors::NetworkModeInvalid,
                           "This Scene requires committed asset payloads; provide --cooked-root and --cook-target."));
         resources->definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
-        resources->loads =
-            std::make_unique<Assets::AssetLoadService>(resources->jobs,
-                                                       resources->committed ? resources->committed->Provider() : resources->empty);
-        if (resources->committed)
-            resources->prefabLoads = std::make_unique<Assets::AssetLoadService>(resources->jobs, resources->committed->ArtifactProvider());
+        PrepareProductLoaders(*resources);
         if (const auto settings = CaptureProductPhysics(launch, *resources, metadata.Value().projectId); settings.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(settings.ErrorValue());
         return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Success(std::move(resources));

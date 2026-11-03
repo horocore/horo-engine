@@ -19,6 +19,7 @@ namespace Horo::Prefab {
         /** @brief Counts every typed component occurrence without interpreting payload semantics. */
         [[nodiscard]] std::size_t ComponentCount(const Runtime::RuntimeComponentSet &components) noexcept {
             const std::array present{components.camera.has_value(),
+                                     components.animation.has_value(),
                                      components.light.has_value(),
                                      components.audioSource.has_value(),
                                      components.audioListener.has_value(),

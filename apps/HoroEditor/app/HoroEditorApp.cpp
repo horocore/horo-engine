@@ -1392,6 +1392,8 @@ namespace Horo::Editor {
             }
 
             Result<void> Startup(const CancellationToken &cancellation) override {
+                if (auto bound = screenHost_->BindRuntimeDispatch(authorities_.runtime->DispatchSource()); bound.HasError())
+                    return bound;
                 if (auto liveUi = liveGui_.Start(BuildEditorGuiLiveReloadConfiguration()); liveUi.HasError())
                     return liveUi;
                 pacing_.hostCancellation = cancellation;
@@ -1493,9 +1495,19 @@ namespace Horo::Editor {
             }
 
             Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
-                screenHost_->OnFixedUpdate(context.simulationTick,
-                                           static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
-                return Result<void>::Success();
+                return screenHost_->OnRuntimeFixedUpdate(context);
+            }
+
+            Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) override {
+                return screenHost_->PrepareRuntimeFixedCommit(context);
+            }
+
+            void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                screenHost_->CommitRuntimeFixedUpdate(context);
+            }
+
+            void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                screenHost_->AbortRuntimeFixedUpdate(context);
             }
 
             void Shutdown() noexcept override {
@@ -2274,7 +2286,8 @@ namespace Horo::Editor {
         }
 
         /** @brief Captures explicit cooked selection and Physics mode before constructing Scene owners. */
-        [[nodiscard]] Result<Application::Internal::EditorProjectScenePolicy> CaptureEditorScenePolicy(const EditorGuiOptions &options) {
+        [[nodiscard]] Result<Application::Internal::EditorProjectScenePolicy> CaptureEditorScenePolicy(
+            const EditorGuiOptions &options, const Runtime::RuntimeDispatchSource &dispatch) {
             Application::Internal::EditorProjectScenePolicy scenePolicy{.physicsMode = options.physicsMode.value(),
                                                                         .prefabGranted = options.prefabGranted.value()};
             if (!options.cookedRoot.empty()) {
@@ -2289,6 +2302,11 @@ namespace Horo::Editor {
                     return Result<Application::Internal::EditorProjectScenePolicy>::Failure(root.ErrorValue());
                 }
                 scenePolicy.cooked.emplace(std::move(root).Value(), std::move(target).Value());
+                scenePolicy.animation = Application::Internal::
+                    SceneAnimationHostSelection{dispatch, scenePolicy.cooked->target,
+                                                std::make_shared<Application::Internal::AnimationRuntimeIdentitySource>(
+                                                    Application::Internal::AnimationRuntimeIdentityRange{1, std::numeric_limits<
+                                                                                                                std::uint64_t>::max()})};
             }
             return Result<Application::Internal::EditorProjectScenePolicy>::Success(std::move(scenePolicy));
         }
@@ -2424,6 +2442,213 @@ namespace Horo::Editor {
             return Output::Success(std::move(packages));
         }
 
+        /** @brief Pins the refreshed inventory before the marketplace that borrows it; failed refresh disables both GUI capabilities. */
+        class EditorExtensionSources final {
+        public:
+            explicit EditorExtensionSources(JobSystem &jobs)
+                : available_(Refresh(inventory_)),
+                  marketplace_(jobs, inventory_, Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()) {}
+
+            EditorExtensionSources(const EditorExtensionSources &) = delete;
+            EditorExtensionSources &operator=(const EditorExtensionSources &) = delete;
+            EditorExtensionSources(EditorExtensionSources &&) = delete;
+            EditorExtensionSources &operator=(EditorExtensionSources &&) = delete;
+
+            Extensions::ExtensionInventory *Inventory() noexcept {
+                return available_ ? &inventory_ : nullptr;
+            }
+
+            Extensions::ExtensionMarketplaceService *Marketplace() noexcept {
+                return available_ ? &marketplace_ : nullptr;
+            }
+
+        private:
+            /** @brief Preserves the original nonfatal inventory error while preventing partially available GUI services. */
+            static bool Refresh(Extensions::ExtensionInventory &inventory) {
+                const auto refreshed = inventory.Refresh();
+                if (refreshed.HasError()) {
+                    LOG_ERROR("editor.extensions", "Unable to refresh extension inventory: %s", refreshed.ErrorValue().message.c_str());
+                    return false;
+                }
+                return true;
+            }
+
+            Extensions::ExtensionInventory inventory_;
+            const bool available_;
+            Extensions::ExtensionMarketplaceService marketplace_;
+        };
+
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        /** @brief Releases the selected XR input owner only after the screen and RuntimeHost lifetimes end. */
+        struct XrInputOwnerScope final {
+            explicit XrInputOwnerScope(Application::Internal::OpenXRPlayHost *owner) noexcept : host(owner) {}
+
+            XrInputOwnerScope(const XrInputOwnerScope &) = delete;
+            XrInputOwnerScope &operator=(const XrInputOwnerScope &) = delete;
+
+            Application::Internal::OpenXRPlayHost *host;
+
+            ~XrInputOwnerScope() {
+                if (host)
+                    host->ReleaseInputOwner();
+            }
+        };
+
+        /** @brief Publishes only the explicitly composed XR Play capability to the entered screen's services. */
+        void RegisterEditorXrPlayServices(GuiScreenHost &screens, Application::Internal::OpenXRPlayHost *host) {
+            if (host)
+                screens.Services().Register<IEditorPlayXrHost>(*host);
+        }
+#endif
+
+        /** @brief Keeps the canonical paint participant and its shared project source factory in one preparation result. */
+        struct PreparedEditorUi final {
+            Application::Internal::RuntimeUiPaintComposition paint;
+            std::shared_ptr<Application::Internal::RuntimeUiPaintProjectSources> sources;
+        };
+
+        /** @brief Prepares the explicit UI producer, allocator and initial physical output before Scene factories borrow them. */
+        std::optional<PreparedEditorUi> PrepareEditorUi(RunEditorMainLoopParams &p, const Runtime::RuntimeDispatchSource &dispatch) {
+            auto uiComposition =
+                Application::Internal::RuntimeUiPaintHost::Compose(p.presentation.renderFrontend, dispatch,
+                                                                   {.ownership = Runtime::Ui::UiOwnershipGeneration::Create(1).Value(),
+                                                                    .maximumInstances = 8,
+                                                                    .maximumRetiredInstances = 8,
+                                                                    .maximumPreparedTransitions = 2});
+            if (uiComposition.HasError())
+                return std::nullopt;
+            auto allocator = Runtime::Ui::UiElementSlotAllocator::Create(Runtime::Ui::UiOwnershipGeneration::Create(1).Value());
+            if (allocator.HasError())
+                return std::nullopt;
+            Application::Internal::RuntimeUiPaintProjectPolicy uiPolicy;
+            if (p.presentation.renderFrontend.Capabilities().backend == Render::RenderBackendId{"metal"})
+                uiPolicy.source =
+                    Application::Internal::RuntimeUiPaintPackagedAssets{EditorAssetRoot(), Render::ShaderTargetBackend::Metal};
+            if (p.operationServices.uiPaintTarget)
+                uiPolicy.source = Application::Internal::RuntimeUiPaintProjectCompiler{p.background.jobs, p.operationServices.shaderBuild,
+                                                                                       AssetPath("shaders/runtime/ui_paint.hlsl"),
+                                                                                       *p.operationServices.uiPaintTarget};
+            if (!InitializeRuntimeUiOutput(*p.presentation.window, uiComposition.Value().port))
+                return std::nullopt;
+            auto projectUi =
+                Application::Internal::RuntimeUiPaintProjectSources::Create(uiComposition.Value().port,
+                                                                            std::make_shared<Runtime::Ui::UiElementSlotAllocator>(
+                                                                                std::move(allocator).Value()),
+                                                                            std::move(uiPolicy));
+            if (projectUi.HasError())
+                return std::nullopt;
+            return PreparedEditorUi{std::move(uiComposition).Value(), std::move(projectUi).Value()};
+        }
+
+        /** @brief Owns captured Scene policy and preview authorities until screens and the RuntimeHost have been destroyed. */
+        struct PreparedEditorScenes final {
+            Application::Internal::EditorProjectScenePolicy policy;
+            std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
+            std::filesystem::path projectRoot;
+            Application::Internal::EditorProjectPreviewScene preview;
+
+            /** @brief Registers the explicitly captured cook authority without transferring its lifetime to the screen. */
+            void RegisterWorldBakeDependencies(GuiScreenHost &screens) const {
+                if (worldBakeDependencies)
+                    screens.Services().RegisterConst<Application::WorldBakeDependencySource>(*worldBakeDependencies);
+            }
+
+            /** @brief Projects the actual preview backend into the canonical collision activation evidence. */
+            CollisionActivationEvidence CollisionEvidence() const {
+                CollisionActivationEvidence evidence{.revision = 1};
+                if (preview.physicsMode == Physics::PhysicsRuntimeMode::Null)
+                    evidence.state = CollisionActivationState::NoPhysics;
+                return evidence;
+            }
+        };
+
+        /** @brief Captures one shared Animation issuer and UI namespace for the preview, Play and prefab factories. */
+        std::optional<PreparedEditorScenes> PrepareEditorScenes(
+            RunEditorMainLoopParams &p, const Runtime::RuntimeDispatchSource &dispatch,
+            std::shared_ptr<Application::Internal::RuntimeUiPaintProjectSources> uiSources) {
+            auto capturedPolicy = CaptureEditorScenePolicy(p.options, dispatch);
+            if (capturedPolicy.HasError())
+                return std::nullopt;
+            auto scenePolicy = std::move(capturedPolicy).Value();
+            scenePolicy.prefabMetrics = p.telemetry.prefab;
+            scenePolicy.uiSources = std::move(uiSources);
+            std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
+            if (scenePolicy.cooked)
+                worldBakeDependencies.emplace(scenePolicy.cooked->targetRoot, scenePolicy.cooked->target,
+                                              std::make_shared<NativeDurableFileSystem>());
+            auto capturedRoot = CaptureEditorPreviewRoot(p.options);
+            if (capturedRoot.HasError())
+                return std::nullopt;
+            auto previewProjectRoot = std::move(capturedRoot).Value();
+            auto preparedPreview = Application::Internal::PrepareEditorProjectPreview(previewProjectRoot, p.background.jobs, scenePolicy);
+            if (preparedPreview.HasError()) {
+                LOG_ERROR("editor.runtime", "Scene project capture rejected: %s", preparedPreview.ErrorValue().message.c_str());
+                return std::nullopt;
+            }
+            // RuntimeHost receives the sole preview service; captured assets/native authorities
+            // remain alive here through RuntimeHost and screen teardown. Play owns distinct services.
+            auto preview = std::move(preparedPreview).Value();
+            return PreparedEditorScenes{std::move(scenePolicy), std::move(worldBakeDependencies), std::move(previewProjectRoot),
+                                        std::move(preview)};
+        }
+
+        /** @brief Borrows the screen's longer-lived services while owning the shorter-lived runtime execution and shutdown scope. */
+        struct EditorRuntimeSession final {
+            RunEditorMainLoopParams &p;
+            GuiScreenHost &screenHost;
+            EditorViewportSceneState &viewportSceneState;
+            EditorSettingsSnapshot &settingsSnapshot;
+            EditorGuiLiveReload &liveGui;
+            Clock &clock;
+            Application::Internal::PackageProjectHost *packages;
+            EditorNavigationBakeHost &navigationBakes;
+            std::optional<UpdateExperienceSession> &updateSession;
+
+            /** @brief Transfers the sole Scene/UI participants into the RuntimeHost and retains every borrowed authority through shutdown.
+             */
+            std::optional<EditorRendererRestartRequest> Run(std::unique_ptr<Runtime::RuntimeHost> preparedRuntime,
+                                                            std::unique_ptr<Runtime::RuntimeSceneService> runtimeScene,
+                                                            Application::Internal::RuntimeUiPaintComposition ui) {
+                std::optional<EditorRendererRestartRequest> rendererRestart;
+                // Runtime participants borrow rendererRestart; destroy them before this callback storage.
+                auto runtime = std::move(preparedRuntime);
+                auto runtimeSources = RegisterEditorRuntimeSources(*runtime, std::move(runtimeScene), p.presentation, std::move(ui));
+                if (runtimeSources.HasError()) {
+                    screenHost.RequestFatalShutdown();
+                    screenHost.Shutdown();
+                    return std::nullopt;
+                }
+                if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
+                    LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
+                    screenHost.RequestFatalShutdown();
+                    screenHost.Shutdown();
+                    return std::nullopt;
+                }
+                auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui,
+                                                                              rendererRestart, clock,
+                                                                              EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
+                                                                                                       runtimeSources.Value()});
+                participant->BindHost(*runtime);
+                EditorRuntimeParticipant *pacingParticipant = participant.get();
+                Result<void> startup = runtime->AddParticipant(std::move(participant));
+                if (startup.HasValue()) {
+                    startup = runtime->Startup();
+                }
+                if (startup.HasError()) {
+                    LOG_ERROR("editor.runtime", "Runtime host startup failed [%s]: %s", startup.ErrorValue().code.Value().c_str(),
+                              startup.ErrorValue().message.c_str());
+                    screenHost.RequestFatalShutdown();
+                    runtime->Shutdown();
+                    return std::nullopt;
+                }
+
+                const bool healthy = RunEditorFrames(p.options, *pacingParticipant, *runtime, screenHost);
+                p.healthy = CompleteEditorRuntimeShutdown(*runtime, *pacingParticipant, healthy, runtimeSources.Value());
+                RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
+                return rendererRestart;
+            }
+        };
+
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             EditorGuiLiveReload liveGui;
@@ -2470,72 +2695,17 @@ namespace Horo::Editor {
             if (!ComposeSelectedEditorXrPlay(p, *createdRuntime.Value(), schedulerConfig.fixedStep))
                 return std::nullopt;
 
-            struct XrInputOwnerScope final {
-                explicit XrInputOwnerScope(Application::Internal::OpenXRPlayHost *owner) noexcept : host(owner) {}
-
-                XrInputOwnerScope(const XrInputOwnerScope &) = delete;
-                XrInputOwnerScope &operator=(const XrInputOwnerScope &) = delete;
-
-                Application::Internal::OpenXRPlayHost *host;
-
-                ~XrInputOwnerScope() {
-                    if (host)
-                        host->ReleaseInputOwner();
-                }
-            };
-
             XrInputOwnerScope xrInputOwner{xrComposition.xrPlay.get()};
 #endif
-            auto uiComposition =
-                Application::Internal::RuntimeUiPaintHost::Compose(p.presentation.renderFrontend, createdRuntime.Value()->DispatchSource(),
-                                                                   {.ownership = Runtime::Ui::UiOwnershipGeneration::Create(1).Value(),
-                                                                    .maximumInstances = 8,
-                                                                    .maximumRetiredInstances = 8,
-                                                                    .maximumPreparedTransitions = 2});
-            if (uiComposition.HasError())
+            auto preparedUi = PrepareEditorUi(p, createdRuntime.Value()->DispatchSource());
+            if (!preparedUi)
                 return std::nullopt;
-            auto allocator = Runtime::Ui::UiElementSlotAllocator::Create(Runtime::Ui::UiOwnershipGeneration::Create(1).Value());
-            if (allocator.HasError())
+            auto preparedScenes = PrepareEditorScenes(p, createdRuntime.Value()->DispatchSource(), std::move(preparedUi->sources));
+            if (!preparedScenes)
                 return std::nullopt;
-            Application::Internal::RuntimeUiPaintProjectPolicy uiPolicy;
-            if (p.presentation.renderFrontend.Capabilities().backend == Render::RenderBackendId{"metal"})
-                uiPolicy.source =
-                    Application::Internal::RuntimeUiPaintPackagedAssets{EditorAssetRoot(), Render::ShaderTargetBackend::Metal};
-            if (p.operationServices.uiPaintTarget)
-                uiPolicy.source = Application::Internal::RuntimeUiPaintProjectCompiler{p.background.jobs, p.operationServices.shaderBuild,
-                                                                                       AssetPath("shaders/runtime/ui_paint.hlsl"),
-                                                                                       *p.operationServices.uiPaintTarget};
-            if (!InitializeRuntimeUiOutput(*p.presentation.window, uiComposition.Value().port))
-                return std::nullopt;
-            auto projectUi =
-                Application::Internal::RuntimeUiPaintProjectSources::Create(uiComposition.Value().port,
-                                                                            std::make_shared<Runtime::Ui::UiElementSlotAllocator>(
-                                                                                std::move(allocator).Value()),
-                                                                            std::move(uiPolicy));
-            if (projectUi.HasError())
-                return std::nullopt;
-            auto capturedPolicy = CaptureEditorScenePolicy(p.options);
-            if (capturedPolicy.HasError())
-                return std::nullopt;
-            auto scenePolicy = std::move(capturedPolicy).Value();
-            scenePolicy.prefabMetrics = p.telemetry.prefab;
-            scenePolicy.uiSources = std::move(projectUi).Value();
-            std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
-            if (scenePolicy.cooked)
-                worldBakeDependencies.emplace(scenePolicy.cooked->targetRoot, scenePolicy.cooked->target,
-                                              std::make_shared<NativeDurableFileSystem>());
-            auto capturedRoot = CaptureEditorPreviewRoot(p.options);
-            if (capturedRoot.HasError())
-                return std::nullopt;
-            auto previewProjectRoot = std::move(capturedRoot).Value();
-            auto preparedPreview = Application::Internal::PrepareEditorProjectPreview(previewProjectRoot, p.background.jobs, scenePolicy);
-            if (preparedPreview.HasError()) {
-                LOG_ERROR("editor.runtime", "Scene project capture rejected: %s", preparedPreview.ErrorValue().message.c_str());
-                return std::nullopt;
-            }
-            // RuntimeHost receives the sole preview service; captured assets/native authorities
-            // remain alive here through RuntimeHost and screen teardown. Play owns distinct services.
-            auto preview = std::move(preparedPreview).Value();
+            auto &scenePolicy = preparedScenes->policy;
+            auto &previewProjectRoot = preparedScenes->projectRoot;
+            auto &preview = preparedScenes->preview;
             auto runtimeScene = std::move(preview.scenes);
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playPolicy = scenePolicy;
@@ -2547,9 +2717,7 @@ namespace Horo::Editor {
             auto playSceneFactory = Application::Internal::MakeEditorProjectSceneFactory(p.background.jobs, std::move(playPolicy));
             auto prefabStageFactory = Application::Internal::MakeEditorProjectPrefabStageFactory(p.background.jobs, scenePolicy);
             // Null is explicit; canonical activation needs an exact owner receipt.
-            CollisionActivationEvidence collisionActivation{.revision = 1};
-            if (preview.physicsMode == Physics::PhysicsRuntimeMode::Null)
-                collisionActivation.state = CollisionActivationState::NoPhysics;
+            auto collisionActivation = preparedScenes->CollisionEvidence();
             const EditorPreviewCollisionReceiptSource previewCollisionReceipt{[&preview]() noexcept {
                 return preview.owners->CollisionReceipt();
             }};
@@ -2580,14 +2748,7 @@ namespace Horo::Editor {
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
-            Extensions::ExtensionInventory extensionInventory;
-            const Result<void> extensionInventoryRefresh = extensionInventory.Refresh();
-            if (extensionInventoryRefresh.HasError()) {
-                LOG_ERROR("editor.extensions", "Unable to refresh extension inventory: %s",
-                          extensionInventoryRefresh.ErrorValue().message.c_str());
-            }
-            Extensions::ExtensionMarketplaceService extensionMarketplace{p.background.jobs, extensionInventory,
-                                                                         Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()};
+            EditorExtensionSources extensionSources{p.background.jobs};
             PfdNativeDialogs nativeDialogs;
             Application::NetworkDebuggerService networkDebugger;
 
@@ -2622,10 +2783,8 @@ namespace Horo::Editor {
                                                     .screenRegistry = std::move(screenRegistry),
                                                     .workspacePanelRegistry = std::move(workspacePanelRegistry),
                                                     .logoTexture = p.textures.logo,
-                                                    .extensionInventory =
-                                                        extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
-                                                    .extensionMarketplace =
-                                                        extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
+                                                    .extensionInventory = extensionSources.Inventory(),
+                                                    .extensionMarketplace = extensionSources.Marketplace(),
                                                     .nativeDialogs = &nativeDialogs,
                                                     .extensionSettingsFiles = &durableFiles,
                                                     .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
@@ -2671,8 +2830,7 @@ namespace Horo::Editor {
                                                    packages,          p.operationServices.shaderReload, playSaveRetirement};
             screenHost.Services().Register<EditorPlaySaveRetirement>(*playSaveRetirement);
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-            if (xrComposition.xrPlay)
-                screenHost.Services().Register<IEditorPlayXrHost>(*xrComposition.xrPlay);
+            RegisterEditorXrPlayServices(screenHost, xrComposition.xrPlay.get());
 #endif
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
@@ -2700,8 +2858,7 @@ namespace Horo::Editor {
             screenHost.Services().RegisterConst<Log::IStructuredLogQuery>(p.logQuery);
             screenHost.Services().RegisterConst<IBuildOutputQuery>(p.operationServices.buildOutputStore);
             screenHost.Services().Register<BuildOutputStore>(p.operationServices.buildOutputStore);
-            if (worldBakeDependencies)
-                screenHost.Services().RegisterConst<Application::WorldBakeDependencySource>(*worldBakeDependencies);
+            preparedScenes->RegisterWorldBakeDependencies(screenHost);
             screenHost.Services().Register<Application::ShaderBuildService>(p.operationServices.shaderBuild);
             screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);
@@ -2709,43 +2866,9 @@ namespace Horo::Editor {
             screenHost.Services().Register<Application::NetworkDebuggerService>(networkDebugger);
             screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(networkDebugger);
             screenHost.Services().Register<Application::INetworkDebuggerControl>(networkDebugger);
-            std::optional<EditorRendererRestartRequest> rendererRestart;
-            std::unique_ptr<Runtime::RuntimeHost> runtime = std::move(createdRuntime).Value();
-            auto runtimeSources =
-                RegisterEditorRuntimeSources(*runtime, std::move(runtimeScene), p.presentation, std::move(uiComposition).Value());
-            if (runtimeSources.HasError()) {
-                screenHost.RequestFatalShutdown();
-                screenHost.Shutdown();
-                return std::nullopt;
-            }
-            if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
-                LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
-                screenHost.RequestFatalShutdown();
-                screenHost.Shutdown();
-                return std::nullopt;
-            }
-            auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui,
-                                                                          rendererRestart, clock,
-                                                                          EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
-                                                                                                   runtimeSources.Value()});
-            participant->BindHost(*runtime);
-            EditorRuntimeParticipant *pacingParticipant = participant.get();
-            Result<void> startup = runtime->AddParticipant(std::move(participant));
-            if (startup.HasValue()) {
-                startup = runtime->Startup();
-            }
-            if (startup.HasError()) {
-                LOG_ERROR("editor.runtime", "Runtime host startup failed [%s]: %s", startup.ErrorValue().code.Value().c_str(),
-                          startup.ErrorValue().message.c_str());
-                screenHost.RequestFatalShutdown();
-                runtime->Shutdown();
-                return std::nullopt;
-            }
-
-            const bool healthy = RunEditorFrames(p.options, *pacingParticipant, *runtime, screenHost);
-            p.healthy = CompleteEditorRuntimeShutdown(*runtime, *pacingParticipant, healthy, runtimeSources.Value());
-            RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
-            return rendererRestart;
+            EditorRuntimeSession session{p,     screenHost, viewportSceneState, settingsSnapshot, liveGui,
+                                         clock, packages,   navigationBakes,    updateSession};
+            return session.Run(std::move(createdRuntime).Value(), std::move(runtimeScene), std::move(preparedUi->paint));
         }
     }  // namespace
 

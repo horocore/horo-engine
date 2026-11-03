@@ -1,6 +1,7 @@
 #pragma once
 
 /** @file PrefabSceneCookState.h @brief Target-private immutable host capture and cooker candidate handoff. */
+#include "Horo/Animation/AnimationAssetCook.h"
 #include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Assets/AssetCookInputSnapshot.h"
 #include "Horo/Assets/AssetSourcePublication.h"
@@ -30,6 +31,7 @@ namespace Horo::Application::PrefabCookDetail {
         Sha256Digest settings;
         std::shared_ptr<const PrefabCookSchemaContext> schemas;
         std::uint64_t maximumOutputBytes;
+        std::shared_ptr<const Animation::PreparedAnimationCook> animation; /**< Same canonical prepared buffers and actual input capture. */
         Assets::AssetCookInputSnapshot inputs; /**< Same sealed raw source/sidecar capture used by AssetCook; required, never recaptured. */
     };
 

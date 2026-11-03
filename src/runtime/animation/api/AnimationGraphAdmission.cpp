@@ -68,7 +68,7 @@ namespace Horo::Animation::GraphCompileDetail {
         }
 
         /** @brief Charges one node's bounded pins and sparse mask storage. */
-        Result<void> CountNode(const GraphNode &node, CandidateCounts &counts, const AnimationGraphLimits &limits) {
+        template <typename Node> Result<void> CountNode(const Node &node, CandidateCounts &counts, const AnimationGraphLimits &limits) {
             counts.pins += node.pins.size();
             if (counts.pins > limits.pins)
                 return Result<void>::Failure(Failure(GraphLimitExceeded));
@@ -103,6 +103,25 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Charges stored operands before any compiled schedule is copied. */
+        Result<void> CountDefinition(const GraphCompiledDefinition &definition, CandidateCounts &counts,
+                                     const AnimationGraphCompileContext &context) {
+            counts.nodes += definition.instructions.size();
+            counts.interfaces += definition.inputs.size();
+            if (counts.nodes > context.limits.nodes || counts.interfaces > context.limits.pins)
+                return Result<void>::Failure(Failure(GraphLimitExceeded));
+            for (const auto &instruction : definition.instructions) {
+                if (auto admission = Admission(context); admission.HasError())
+                    return admission;
+                counts.connections += instruction.inputs.size();
+                if (counts.connections > context.limits.connections || instruction.stateDefinitions.size() > context.limits.states)
+                    return Result<void>::Failure(Failure(GraphLimitExceeded));
+                if (auto counted = CountNode(instruction, counts, context.limits); counted.HasError())
+                    return counted;
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Keeps state-policy hard ceilings separate from pose and expansion
          * policies. */
         bool ValidStateLimits(const AnimationGraphLimits &limits) {
@@ -113,24 +132,29 @@ namespace Horo::Animation::GraphCompileDetail {
 
         /** @brief Validates persistent asset-role identity before inspecting any nested
          * containers. */
-        bool ValidIdentity(const AnimationGraphData &data) {
+        template <typename Data> bool ValidIdentity(const Data &data) {
             return data.id.IsValid() && data.skeleton.IsValid() && data.entry.IsValid() && data.id.Asset() != data.skeleton.Asset();
         }
 
         /** @brief Requires bounded nonempty top-level storage before charging its
          * nested nodes. */
-        bool ValidCollections(const AnimationGraphData &data, const AnimationGraphLimits &limits) {
+        template <typename Data> bool ValidCollections(const Data &data, const AnimationGraphLimits &limits) {
             return !data.definitions.empty() && data.definitions.size() <= limits.definitions &&
                    data.parameters.size() <= limits.parameters;
         }
 
         /** @brief Rejects malformed parameter names before the canonical copy can
          * allocate them. */
-        Result<void> CheckNames(const AnimationGraphData &data) {
+        template <typename Data> Result<void> CheckNames(const Data &data) {
             for (const auto &parameter : data.parameters)
                 if (parameter.name.empty() || parameter.name.size() > AnimationGraphHardLimits::ParameterNameBytes)
                     return Result<void>::Failure(Failure(GraphMalformed));
             return Result<void>::Success();
+        }
+
+        /** @brief Direct clip execution has exactly two nodes and one typed operand; caller policy cannot omit them. */
+        bool ClipProgramShapeFits(const AnimationGraphLimits &limits) {
+            return limits.nodes >= 2 && limits.pins >= 2 && limits.connections >= 1;
         }
 
         /** @brief Captures the complete caller-lowerable policy before traversing any
@@ -140,8 +164,8 @@ namespace Horo::Animation::GraphCompileDetail {
         }
     }  // namespace
 
-    /** @copydoc PreflightGraph */
-    Result<void> PreflightGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
+    /** @brief Shares identity, policy and whole-table admission across source and cooked declarations. */
+    template <typename Data> Result<void> PreflightCandidate(const Data &data, const AnimationGraphCompileContext &context) {
         if (auto state = Admission(context); state.HasError())
             return state;
         if (!ValidIdentity(data))
@@ -160,6 +184,36 @@ namespace Horo::Animation::GraphCompileDetail {
         if (const auto actions = PreflightActions(data, context); actions.HasError())
             return actions;
         return CheckNames(data);
+    }
+
+    /** @copydoc PreflightClipProgram */
+    Result<void> PreflightClipProgram(const AnimationClipId clip, const AnimationGraphCompileContext &context) {
+        if (auto admission = Admission(context); admission.HasError())
+            return admission;
+        if (context.replacing)
+            return Result<void>::Failure(Failure(GraphReloadMismatch));
+        if (!ValidLimits(context.limits))
+            return Result<void>::Failure(Failure(GraphLimitExceeded));
+        if (!ClipProgramShapeFits(context.limits))
+            return Result<void>::Failure(Failure(GraphLimitExceeded));
+        if (!clip.IsValid() || !context.skeleton || context.clips.size() != 1)
+            return Result<void>::Failure(Failure(GraphBindingMismatch));
+        const auto &descriptor = context.clips.front().Data().descriptor;
+        if (descriptor.id != clip)
+            return Result<void>::Failure(Failure(GraphBindingMismatch));
+        if (descriptor.kind != AnimationClipKind::Absolute)
+            return Result<void>::Failure(Failure(ClipUnsupported));
+        return PreflightActions(AnimationGraphData{}, context);
+    }
+
+    /** @copydoc PreflightGraph */
+    Result<void> PreflightGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context) {
+        return PreflightCandidate(data, context);
+    }
+
+    /** @copydoc PreflightCookedGraph */
+    Result<void> PreflightCookedGraph(const AnimationGraphCookedData &data, const AnimationGraphCompileContext &context) {
+        return PreflightCandidate(data, context);
     }
 
 }  // namespace Horo::Animation::GraphCompileDetail

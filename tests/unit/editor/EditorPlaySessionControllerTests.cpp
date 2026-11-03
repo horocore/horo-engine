@@ -1,5 +1,6 @@
 #include "EditorPlayXrHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
@@ -7,6 +8,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -206,6 +208,13 @@ namespace {
         std::size_t ticks{};
         std::size_t closed{};
         bool failTick{};
+        Runtime::RuntimeDispatchSource source;
+        Runtime::RuntimeDispatchEvidence evidence;
+        Runtime::RuntimeDispatchFacts updateFacts, prepareFacts, commitFacts;
+        Runtime::RuntimeDispatchStatus abortStatus{};
+        std::size_t prepares{}, publications{}, aborts{};
+        Editor::EditorPlaySessionController *stopDuringUpdate{}, *stopDuringPrepare{};
+        bool failPrepare{}, pending{}, stopRetainedOwner{};
     };
 
     /** @brief Exercises the injected owner protocol using an actual assetless Scene service; no native backend claim. */
@@ -230,6 +239,45 @@ namespace {
             ++observations_->ticks;
             return observations_->failTick ? Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable))
                                            : Result<void>::Success();
+        }
+
+        Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
+            observations_->evidence = context.dispatchEvidence;
+            REQUIRE(context.dispatchEvidence.Read(observations_->source, Runtime::RuntimePhase::FixedUpdate, observations_->updateFacts) ==
+                    Runtime::RuntimeDispatchStatus::Valid);
+            observations_->pending = true;
+            if (observations_->stopDuringUpdate) {
+                observations_->stopDuringUpdate->Stop();
+                observations_->stopRetainedOwner = observations_->closed == 0;
+            }
+            return FixedUpdate(Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
+        }
+
+        Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) override {
+            ++observations_->prepares;
+            REQUIRE(context.dispatchEvidence.Read(observations_->source, Runtime::RuntimePhase::FixedUpdate, observations_->prepareFacts) ==
+                    Runtime::RuntimeDispatchStatus::Valid);
+            if (observations_->stopDuringPrepare) {
+                observations_->stopDuringPrepare->Stop();
+                observations_->stopRetainedOwner = observations_->closed == 0;
+            }
+            return observations_->failPrepare ? Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable))
+                                              : Result<void>::Success();
+        }
+
+        void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            Runtime::RuntimeDispatchFacts facts;
+            static_cast<void>(context.dispatchEvidence.Read(observations_->source, Runtime::RuntimePhase::FixedUpdate, facts));
+            observations_->commitFacts = facts;
+            ++observations_->publications;
+            observations_->pending = false;
+        }
+
+        void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            Runtime::RuntimeDispatchFacts ignored;
+            observations_->abortStatus = context.dispatchEvidence.Read(observations_->source, Runtime::RuntimePhase::FixedUpdate, ignored);
+            ++observations_->aborts;
+            observations_->pending = false;
         }
 
         void Shutdown() noexcept override {
@@ -468,4 +516,219 @@ TEST_CASE("Play injected-owner failure preserves cause and closes the single Sce
     CHECK(play.State() == Editor::EditorPlaySessionState::Failed);
     CHECK_FALSE(play.SceneView());
     CHECK(observations->closed == 1);
+}
+
+namespace {
+    /** @brief Matches the real workspace boundary: Play errors stay local while the Editor host continues. */
+    class PlayFixedParticipant final : public Runtime::RuntimeLifecycleParticipant {
+    public:
+        explicit PlayFixedParticipant(Editor::EditorPlaySessionController &play) : play_(play) {}
+
+        Result<void> Startup(const CancellationToken &) override {
+            return Result<void>::Success();
+        }
+
+        void Shutdown() noexcept override {}
+
+        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+            localFailure = play_.OnRuntimeFixedUpdate({}, context).HasError();
+            return Result<void>::Success();
+        }
+
+        Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) override {
+            localFailure = play_.PrepareRuntimeFixedCommit(context).HasError() || localFailure;
+            return Result<void>::Success();
+        }
+
+        void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            play_.CommitRuntimeFixedUpdate(context);
+        }
+
+        void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            play_.AbortRuntimeFixedUpdate(context);
+        }
+
+        bool localFailure{};
+
+    private:
+        Editor::EditorPlaySessionController &play_;
+    };
+
+    class PlayFixedGate final : public Runtime::RuntimeLifecycleParticipant {
+    public:
+        Result<void> Startup(const CancellationToken &) override {
+            return Result<void>::Success();
+        }
+
+        void Shutdown() noexcept override {}
+
+        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &) override {
+            if (retire)
+                scheduler->RetireDispatch();
+            return fail ? Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable)) : Result<void>::Success();
+        }
+
+        Runtime::FrameScheduler *scheduler{};
+        bool fail{}, retire{};
+    };
+
+    struct PlayFixedFixture final {
+        PlayFixedFixture() {
+            auto made = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+            REQUIRE(made.HasValue());
+            scheduler = std::move(made).Value();
+            observations->source = scheduler->DispatchSource();
+            REQUIRE(play.BindRuntimeDispatch(observations->source).HasValue());
+            REQUIRE(play.Start(AuthoringScene(), registry, ObservePlayOwner(observations)).HasValue());
+            auto participant = std::make_unique<PlayFixedParticipant>(play);
+            session = participant.get();
+            REQUIRE(lifecycle.AddParticipant(std::move(participant)).HasValue());
+            auto late = std::make_unique<PlayFixedGate>();
+            gate = late.get();
+            gate->scheduler = scheduler.get();
+            REQUIRE(lifecycle.AddParticipant(std::move(late)).HasValue());
+            REQUIRE(lifecycle.Startup(token).HasValue());
+            REQUIRE(scheduler->RunFrame(lifecycle, token, false).HasValue());
+        }
+
+        Result<void> Tick() {
+            clock.Advance(Duration::FromMilliseconds(10));
+            return scheduler->RunFrame(lifecycle, token, false);
+        }
+
+        DeterministicClock clock;
+        CancellationSource cancellation;
+        CancellationToken token{cancellation.Token()};
+        std::unique_ptr<Runtime::FrameScheduler> scheduler;
+        std::shared_ptr<PlayOwnerObservations> observations{std::make_shared<PlayOwnerObservations>()};
+        Gameplay::BehaviorRegistry registry{Registry()};
+        Editor::EditorPlaySessionController play;
+        Runtime::RuntimeLifecycle lifecycle;
+        PlayFixedParticipant *session{};
+        PlayFixedGate *gate{};
+    };
+}  // namespace
+
+TEST_CASE("Play typed fixed path publishes only after actual same-attempt commitment", "[editor][play][fixed-commit]") {
+    PlayFixedFixture fixture;
+    REQUIRE(fixture.Tick().HasValue());
+    const auto &seen = *fixture.observations;
+    CHECK(seen.ticks == 1);
+    CHECK(seen.prepares == 1);
+    CHECK(seen.publications == 1);
+    CHECK(seen.aborts == 0);
+    CHECK_FALSE(seen.pending);
+    CHECK(seen.prepareFacts.committedTick == 0);
+    CHECK(seen.commitFacts.committedTick == seen.updateFacts.fixedTick);
+    CHECK(seen.commitFacts.committedAttempt == seen.updateFacts.fixedAttempt);
+    CHECK(seen.closed == 0);
+    CHECK_FALSE(fixture.session->localFailure);
+}
+
+TEST_CASE("Play retains a paused step across global rollback and consumes it only at commit", "[editor][play][fixed-commit]") {
+    PlayFixedFixture fixture;
+    REQUIRE(fixture.play.Pause().HasValue());
+    REQUIRE(fixture.play.Step().HasValue());
+    fixture.gate->fail = true;
+    REQUIRE(fixture.Tick().HasError());
+    CHECK(fixture.observations->aborts == 1);
+    CHECK(fixture.observations->publications == 0);
+    CHECK(fixture.play.State() == Editor::EditorPlaySessionState::Paused);
+    fixture.gate->fail = false;
+    REQUIRE(fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false).HasValue());
+    CHECK(fixture.observations->ticks == 2);
+    CHECK(fixture.observations->publications == 1);
+    REQUIRE(fixture.Tick().HasValue());
+    CHECK(fixture.observations->ticks == 2);
+}
+
+TEST_CASE("Play rollback reaches the retained Scene owner after pre-fence retirement", "[editor][play][fixed-commit]") {
+    PlayFixedFixture fixture;
+    fixture.gate->retire = true;
+    REQUIRE(fixture.Tick().HasError());
+    CHECK(fixture.observations->aborts == 1);
+    CHECK(fixture.observations->abortStatus == Runtime::RuntimeDispatchStatus::Retired);
+    CHECK_FALSE(fixture.observations->pending);
+    CHECK(fixture.observations->closed == 0);
+}
+
+TEST_CASE("Play native or preparation failure aborts locally before closing its Scene", "[editor][play][fixed-commit]") {
+    PlayFixedFixture fixture;
+    SECTION("native update") {
+        fixture.observations->failTick = true;
+    }
+    SECTION("preparation") {
+        fixture.observations->failPrepare = true;
+    }
+    REQUIRE(fixture.Tick().HasValue());
+    CHECK(fixture.session->localFailure);
+    CHECK(fixture.play.State() == Editor::EditorPlaySessionState::Failed);
+    CHECK(fixture.observations->aborts == 1);
+    CHECK(fixture.observations->publications == 0);
+    CHECK(fixture.observations->closed == 1);
+    CHECK(fixture.scheduler->Statistics().completedSimulationTick == 1);
+}
+
+TEST_CASE("Play Stop inside a fixed callback retains its owner until safe rollback", "[editor][play][fixed-commit]") {
+    PlayFixedFixture fixture;
+    SECTION("native update") {
+        fixture.observations->stopDuringUpdate = &fixture.play;
+    }
+    SECTION("preparation") {
+        fixture.observations->stopDuringPrepare = &fixture.play;
+    }
+    REQUIRE(fixture.Tick().HasValue());
+    CHECK(fixture.observations->stopRetainedOwner);
+    CHECK(fixture.observations->aborts == 1);
+    CHECK(fixture.observations->publications == 0);
+    CHECK(fixture.observations->closed == 1);
+    CHECK(fixture.play.State() == Editor::EditorPlaySessionState::Idle);
+}
+
+TEST_CASE("Play rejects fabricated stale and replacement issuers before mutation", "[editor][play][fixed-commit]") {
+    PlayFixedFixture fixture;
+    CHECK(fixture.play.BindRuntimeDispatch(fixture.observations->source).HasError());
+    CHECK(fixture.play.FixedUpdate({}, Gameplay::FixedDeltaTime{0.01}).HasError());
+    Runtime::FixedStepContext forged{.simulationTick = 1, .fixedDelta = Duration::FromMilliseconds(10), .cancellation = fixture.token};
+    CHECK(fixture.play.OnRuntimeFixedUpdate({}, forged).HasError());
+    CHECK(fixture.observations->ticks == 0);
+    REQUIRE(fixture.Tick().HasValue());
+    forged.dispatchEvidence = fixture.observations->evidence;
+    CHECK(fixture.play.OnRuntimeFixedUpdate({}, forged).HasError());
+    CHECK(fixture.observations->ticks == 1);
+}
+
+TEST_CASE("Play checks actual proof before idle preparation and foreign-thread rollback", "[editor][play][fixed-commit]") {
+    PlayFixedFixture fixture;
+    REQUIRE(fixture.Tick().HasValue());
+    const auto &facts = fixture.observations->updateFacts;
+    const Runtime::FixedStepContext expired{.simulationTick = facts.fixedTick,
+                                            .fixedDelta = facts.fixedDuration,
+                                            .cancellation = fixture.token,
+                                            .attemptNumber = facts.fixedAttempt,
+                                            .frameNumber = facts.frame,
+                                            .dispatchEvidence = fixture.observations->evidence};
+    CHECK(fixture.play.PrepareRuntimeFixedCommit(expired).HasError());
+    bool rejected = false;
+    std::thread foreign([&] {
+        rejected = fixture.play.PrepareRuntimeFixedCommit(expired).HasError();
+        fixture.play.AbortRuntimeFixedUpdate(expired);
+    });
+    foreign.join();
+    CHECK(rejected);
+    CHECK(fixture.observations->publications == 1);
+    CHECK(fixture.observations->aborts == 0);
+    CHECK(fixture.observations->closed == 0);
 }

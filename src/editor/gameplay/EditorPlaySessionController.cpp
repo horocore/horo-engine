@@ -344,6 +344,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPlaySessionController::Pause */
     Result<void> EditorPlaySessionController::Pause() {
+        if (fixedAttempt_)
+            return Result<void>::Failure(InvalidTransition("Play control waits for fixed commit or abort."));
         if (state_ != EditorPlaySessionState::Playing)
             return Result<void>::Failure(InvalidTransition("Only a playing session can be paused."));
         state_ = EditorPlaySessionState::Paused;
@@ -352,6 +354,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPlaySessionController::Resume */
     Result<void> EditorPlaySessionController::Resume() {
+        if (fixedAttempt_)
+            return Result<void>::Failure(InvalidTransition("Play control waits for fixed commit or abort."));
         if (state_ != EditorPlaySessionState::Paused)
             return Result<void>::Failure(InvalidTransition("Only a paused session can be resumed."));
         stepPending_ = false;
@@ -361,6 +365,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPlaySessionController::Step */
     Result<void> EditorPlaySessionController::Step() {
+        if (fixedAttempt_)
+            return Result<void>::Failure(InvalidTransition("Play control waits for fixed commit or abort."));
         if (state_ != EditorPlaySessionState::Paused)
             return Result<void>::Failure(InvalidTransition("Step is available only while paused."));
         stepPending_ = true;
@@ -436,6 +442,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPlaySessionController::Stop */
     void EditorPlaySessionController::Stop() noexcept {
+        if (fixedAttempt_) {
+            stopPending_ = true;
+            return;
+        }
+        stopPending_ = false;
         CancelModuleScripts();
         if (debugger_)
             debugger_->Producer().Detach();
@@ -518,24 +529,17 @@ namespace Horo::Editor {
     /** @copydoc EditorPlaySessionController::FixedUpdate */
     Result<void> EditorPlaySessionController::FixedUpdate(std::span<const Gameplay::GameplayInputAction> input,
                                                           const Gameplay::FixedDeltaTime delta) {
+        if (fixedAttempt_ || dispatchSource_.IsValid())
+            return Result<void>::Failure(InvalidTransition("Legacy fixed update cannot bypass a bound runtime dispatch."));
+        FlushPendingStop();
         if (const auto prepared = AdvancePreparation(); prepared.HasError())
             return prepared;
-        if (const bool shouldTick = state_ == EditorPlaySessionState::Playing || (state_ == EditorPlaySessionState::Paused && stepPending_);
-            !shouldTick)
+        if (!ShouldTick())
             return Result<void>::Success();
         stepPending_ = false;
-        if (const auto admitted = sceneHost_->BeginFixedUpdate(delta); admitted.HasError()) {
-            Fail(admitted.ErrorValue());
-            return admitted;
-        }
-        if (Result<void> updated = behaviors_->FixedUpdate(input, delta); updated.HasError()) {
-            Error error = updated.ErrorValue();
-            Fail(error);
-            return Result<void>::Failure(std::move(error));
-        }
-        if (const auto committed = CommitSceneChanges(); committed.HasError()) {
-            Fail(committed.ErrorValue());
-            return committed;
+        if (auto gameplay = RunGameplayFixed(input, delta); gameplay.HasError()) {
+            Fail(gameplay.ErrorValue());
+            return gameplay;
         }
         if (const auto native = sceneHost_->FixedUpdate(delta); native.HasError()) {
             Fail(native.ErrorValue());
@@ -544,8 +548,24 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    bool EditorPlaySessionController::ShouldTick() const noexcept {
+        return state_ == EditorPlaySessionState::Playing || (state_ == EditorPlaySessionState::Paused && stepPending_);
+    }
+
+    Result<void> EditorPlaySessionController::RunGameplayFixed(std::span<const Gameplay::GameplayInputAction> input,
+                                                               const Gameplay::FixedDeltaTime delta) {
+        if (auto admitted = sceneHost_->BeginFixedUpdate(delta); admitted.HasError())
+            return admitted;
+        if (auto updated = behaviors_->FixedUpdate(input, delta); updated.HasError())
+            return updated;
+        return CommitSceneChanges();
+    }
+
     /** @copydoc EditorPlaySessionController::PresentationUpdate */
     void EditorPlaySessionController::PresentationUpdate(const Gameplay::FrameDeltaTime delta) {
+        if (fixedAttempt_)
+            return;
+        FlushPendingStop();
         PollStopping();
         DispatchSaveCommand();
         if (const auto prepared = AdvancePreparation(); prepared.HasError())
@@ -588,7 +608,7 @@ namespace Horo::Editor {
     /** @copydoc EditorPlaySessionController::QuiesceForReload */
     Result<EditorPlayReloadSnapshot> EditorPlaySessionController::QuiesceForReload() {
         using enum EditorPlaySessionState;
-        if (!sceneHost_ || !behaviors_ || (state_ != Playing && state_ != Paused))
+        if (fixedAttempt_ || !sceneHost_ || !behaviors_ || (state_ != Playing && state_ != Paused))
             return Result<EditorPlayReloadSnapshot>::Failure(InvalidTransition("Native reload requires an active play session."));
         if (!PrepareSaveRetirement())
             return Result<EditorPlayReloadSnapshot>::Failure(MakeError(Runtime::SaveErrors::OperationInProgress));

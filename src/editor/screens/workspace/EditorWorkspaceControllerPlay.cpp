@@ -272,6 +272,32 @@ namespace Horo::Editor {
         ExtractPlayViewportScene();
     }
 
+    Result<void> EditorWorkspaceController::BindPlayRuntimeDispatch(const Runtime::RuntimeDispatchSource &source) {
+        return m_playSession.BindRuntimeDispatch(source);
+    }
+
+    void EditorWorkspaceController::UpdatePlayFixed(const std::span<const Gameplay::GameplayInputAction> input,
+                                                    const Runtime::FixedStepContext &context) {
+        ApplyNativeGameplayReload();
+        ApplyPendingGameplayRegistry();
+        if (auto updated = m_playSession.OnRuntimeFixedUpdate(input, context); updated.HasError())
+            LOG_ERROR("editor.play_mode", "Play Mode fixed update failed: %s", updated.ErrorValue().message.c_str());
+        // Presentation projection/extraction waits for ordinary update, after the real commit or abort.
+    }
+
+    void EditorWorkspaceController::PreparePlayFixedCommit(const Runtime::FixedStepContext &context) {
+        if (auto prepared = m_playSession.PrepareRuntimeFixedCommit(context); prepared.HasError())
+            LOG_ERROR("editor.play_mode", "Play Mode fixed preparation failed: %s", prepared.ErrorValue().message.c_str());
+    }
+
+    void EditorWorkspaceController::CommitPlayFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        m_playSession.CommitRuntimeFixedUpdate(context);
+    }
+
+    void EditorWorkspaceController::AbortPlayFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        m_playSession.AbortRuntimeFixedUpdate(context);
+    }
+
     EditorViewportCamera EditorWorkspaceController::ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const {
         EditorViewportCamera camera = m_viewport.Current().camera;
         for (std::size_t slot = 0; slot < runtimeView.SlotCount(); ++slot) {

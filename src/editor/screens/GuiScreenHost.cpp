@@ -187,7 +187,7 @@ namespace Horo::Editor {
           engineEvents_(&composition.engineEvents), logoTexture_(composition.logoTexture),
           extensionInventory_(composition.extensionInventory), extensionMarketplace_(composition.extensionMarketplace),
           nativeDialogs_(composition.nativeDialogs), screenRegistry_(std::move(composition.screenRegistry)),
-          workspacePanelRegistry_(std::move(composition.workspacePanelRegistry)) {
+          workspacePanelRegistry_(std::move(composition.workspacePanelRegistry)), dispatchSource_(std::move(composition.dispatchSource)) {
         gameplayRetirements_ = composition.gameplayRetirements ? std::move(composition.gameplayRetirements)
                                                                : std::make_shared<Gameplay::GameModuleRetirementQueue>();
         RegisterApplicationServices(composition);
@@ -399,7 +399,7 @@ namespace Horo::Editor {
         if (!initialScreen) {
             return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::ScreenCreationFailed>()));
         }
-        if (Result<void> entered = initialScreen->OnEnter(initialRoute); entered.HasError()) {
+        if (Result<void> entered = EnterScreen(*initialScreen, initialRoute); entered.HasError()) {
             return entered;
         }
 
@@ -429,6 +429,10 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::Shutdown */
     void GuiScreenHost::Shutdown() noexcept {
+        if (fixedScreen_) {
+            shutdownPending_ = true;
+            return;
+        }
         if (shutdown_) {
             return;
         }
@@ -437,6 +441,12 @@ namespace Horo::Editor {
             activeScreen_->OnLeave();
             activeScreen_.reset();
         }
+        ShutdownExtensions();
+        CloseUnborrowedGameplayModules(services_, *gameplayRetirements_);
+        services_.Clear();
+    }
+
+    void GuiScreenHost::ShutdownExtensions() noexcept {
         if (editorViewportHost_)
             editorViewportHost_->BeginShutdown();
         if (editorInspectorHost_)
@@ -453,8 +463,6 @@ namespace Horo::Editor {
         extensionThemeIds_.clear();
         if (settingsService_)
             settingsService_->SetContributedInputActions({});
-        CloseUnborrowedGameplayModules(services_, *gameplayRetirements_);
-        services_.Clear();
     }
 
     /** @copydoc GuiScreenHost::GameplayRetirements */
@@ -546,7 +554,7 @@ namespace Horo::Editor {
         return std::filesystem::current_path();
     }
 
-    Result<void> GuiScreenHost::Navigate(GuiRoute destination) {
+    Result<void> GuiScreenHost::CheckNavigationAdmission(const GuiRoute &destination) const {
         if (gameplayClosePending_)
             return Result<void>::Failure(
                 MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Application gameplay retirement is still pending."));
@@ -564,10 +572,16 @@ namespace Horo::Editor {
         if (pendingRequirement_.has_value() || pendingTarget_.has_value()) {
             return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Leave resolution already pending."));
         }
+        return Result<void>::Success();
+    }
+
+    Result<void> GuiScreenHost::Navigate(GuiRoute destination) {
+        if (auto admitted = CheckNavigationAdmission(destination); admitted.HasError())
+            return admitted;
         if (AreRoutesIdentical(activeRoute_, destination)) {
             return Result<void>::Success();
         }
-        if (isScreenCallbackActive_) {
+        if (isScreenCallbackActive_ || fixedScreen_) {
             if (pendingNavigation_.has_value()) {
                 return Result<void>::Failure(
                     MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Navigation already queued this frame."));
@@ -585,6 +599,10 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::HostNotStarted>()));
         if (navigationBusy_ || pendingRequirement_.has_value() || pendingTarget_.has_value()) {
             return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&NavigationErrors::Busy>(), "Navigation already in progress."));
+        }
+        if (fixedScreen_) {
+            gameplayClosePending_ = true;
+            return Result<void>::Success();
         }
         return ExecuteLeaveCheckAndCommit(LeaveTarget{ApplicationCloseTarget{}});
     }
@@ -628,6 +646,10 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::CommitRoute(GuiRoute destination) {
+        if (fixedScreen_) {
+            pendingNavigation_ = std::move(destination);
+            return;
+        }
         navigationBusy_ = true;
         resolutionAttemptCount_ = 0;
         pendingRequirement_.reset();
@@ -643,10 +665,10 @@ namespace Horo::Editor {
             activeScreen_->OnLeave();
         }
 
-        if (const auto enterRes = candidate->OnEnter(destination); enterRes.HasError()) {
+        if (const auto enterRes = EnterScreen(*candidate, destination); enterRes.HasError()) {
             LOG_ERROR("editor.screens", "Destination OnEnter failed: %s", enterRes.ErrorValue().message.c_str());
             if (activeScreen_) {
-                if (const auto rollback = activeScreen_->OnEnter(activeRoute_); rollback.HasError()) {
+                if (const auto rollback = EnterScreen(*activeScreen_, activeRoute_); rollback.HasError()) {
                     LOG_ERROR("editor.screens", "Active screen rollback OnEnter failed: %s", rollback.ErrorValue().message.c_str());
                     activeScreen_.reset();
                     closeRequested_ = true;
@@ -674,6 +696,17 @@ namespace Horo::Editor {
         }
     }
 
+    Result<void> GuiScreenHost::EnterScreen(GuiScreen &screen, const GuiRoute &route) {
+        if (auto entered = screen.OnEnter(route); entered.HasError())
+            return entered;
+        if (!dispatchSource_.IsValid())
+            return Result<void>::Success();
+        auto bound = screen.BindRuntimeDispatch(dispatchSource_);
+        if (bound.HasError())
+            screen.OnLeave();
+        return bound;
+    }
+
     std::unique_ptr<GuiScreen> GuiScreenHost::CreateScreen(const GuiRoute &route) {
         return screenRegistry_.CreateScreen(route, services_);
     }
@@ -698,8 +731,7 @@ namespace Horo::Editor {
         }
     }
 
-    void GuiScreenHost::OnUpdate(float dt) {
-        PollPlaySaveRetirement(services_);
+    void GuiScreenHost::UpdateBuildStatus(float dt) {
         if (!shutdown_ && localization_ && std::isfinite(dt) && dt > 0) {
             buildStatusElapsed_ += dt;
             if (buildStatusElapsed_ >= 0.25F) {
@@ -712,10 +744,9 @@ namespace Horo::Editor {
                                                                                                             *localization_, modalVisible)));
             }
         }
-        if (auto *audio = services_.TryGet<IAudioComponentPreview>())
-            static_cast<void>(audio->Pump());
-        if (!shutdown_ && context_.updates != nullptr)
-            context_.updates->Poll();
+    }
+
+    void GuiScreenHost::UpdateExtensionCommands() {
         if (editorActivityHost_) {
             editorActivityHost_->Update();
             const auto revision = editorActivityHost_->Registry().Revision();
@@ -732,6 +763,23 @@ namespace Horo::Editor {
                 extensionCommandRevision_ = revision;
             }
         }
+    }
+
+    void GuiScreenHost::OnUpdate(float dt) {
+        if (fixedScreen_)
+            return;
+        if (shutdownPending_)
+            Shutdown();
+        if (shutdown_)
+            return;
+        (void)gameplayRetirements_->Drain();
+        PollPlaySaveRetirement(services_);
+        UpdateBuildStatus(dt);
+        if (auto *audio = services_.TryGet<IAudioComponentPreview>())
+            static_cast<void>(audio->Pump());
+        if (context_.updates != nullptr)
+            context_.updates->Poll();
+        UpdateExtensionCommands();
         UpdateExtensionPages();
         if (localization_ != nullptr) {
             static_cast<void>(
@@ -750,6 +798,8 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::OnInputSnapshot */
     void GuiScreenHost::OnInputSnapshot() {
+        if (fixedScreen_)
+            return;
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
             activeScreen_->OnInputSnapshot();
@@ -760,6 +810,8 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::OnFixedUpdate */
     void GuiScreenHost::OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) {
+        if (fixedScreen_)
+            return;
         (void)gameplayRetirements_->Drain();
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
@@ -770,8 +822,11 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::FlushPendingNavigation() {
+        if (fixedScreen_)
+            return;
         if (gameplayClosePending_ && !isScreenCallbackActive_) {
-            (void)CommitApplicationClose();
+            gameplayClosePending_ = false;
+            (void)RequestCloseApplication();
             return;
         }
         if (!pendingNavigation_.has_value()) {
@@ -1053,7 +1108,7 @@ namespace Horo::Editor {
     }
 
     Result<void> GuiScreenHost::CommitApplicationClose() {
-        if (isScreenCallbackActive_) {
+        if (isScreenCallbackActive_ || fixedScreen_) {
             gameplayClosePending_ = true;
             return Result<void>::Success();
         }

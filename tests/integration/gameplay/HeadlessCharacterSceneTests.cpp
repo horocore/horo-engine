@@ -59,7 +59,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                           .completeness =
                                                                               Network::NetworkReplicationInventoryCompleteness::Complete}});
                 REQUIRE(composed.HasValue());
-                factories = std::move(composed).Value();
+                factories = std::move(composed).Value().factories;
             }
 
             Result<std::unique_ptr<Network::INetworkModeService>> Make(const Network::NetworkModeServiceKind kind,

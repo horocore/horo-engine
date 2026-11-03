@@ -33,6 +33,9 @@ namespace Horo::Application::Internal {
                                                                                    const Assets::AssetRegistrySnapshot &registry);
         /** @brief Borrows the real payload provider; this owner must outlive every AssetLoadService request. */
         [[nodiscard]] const Assets::IAssetProvider &Provider() const noexcept;
+        /** @brief Borrows the Scene loader view: full verified envelopes for Animation, existing payloads for other types.
+         * @pre This object was returned by a successful Capture; the immutable view shares the retained providers. */
+        [[nodiscard]] const Assets::IAssetProvider &SceneProvider() const noexcept;
         /** @brief Borrows exact original verified envelopes for prefab loading; lifetime matches Provider(). */
         [[nodiscard]] const Assets::IAssetProvider &ArtifactProvider() const noexcept;
         /** @brief Finds exact retained verified envelope metadata. @param id Stable project identity.
@@ -48,5 +51,6 @@ namespace Horo::Application::Internal {
         std::vector<Assets::AssetCookArtifact> artifacts_;
         Assets::MemoryAssetProvider provider_;
         Assets::MemoryAssetProvider artifactProvider_;
+        std::unique_ptr<Assets::IAssetProvider> sceneProvider_;
     };
 }  // namespace Horo::Application::Internal

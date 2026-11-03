@@ -1,11 +1,14 @@
 #pragma once
 
+#include "AnimationRuntimeIdentitySource.h"
 #include "GameplayWorldComposition.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Prefab/PrefabLimits.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
+#include "Horo/Runtime/Scene/SceneAnimationRuntime.h"
+#include "NetworkProductComposition.h"
 #include "ScenePhysicsHost.h"
 
 #include <memory>
@@ -35,7 +38,11 @@ namespace Horo::Application::Internal {
         AI::AiSceneRuntimeSettings aiSettings{};
         Assets::AssetLoadService *prefabLoads{};   /**< Optional exact-envelope loader; outlives all granted prefab services. */
         Prefab::PrefabMetricHandles prefabMetrics; /**< Explicit process-prebound observation configuration. */
-        Prefab::PrefabProjectPolicy prefabPolicy;  /**< Explicit host-admitted policy; declared engine defaults preserve old callers. */
+        Prefab::PrefabProjectPolicy prefabPolicy;  /**< Explicit host-admitted policy. */
+        AssetCookTargetId animationTarget;         /**< Exact selected committed target, never inferred from runtime source. */
+        std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities; /**< One cold host issuer shared by all records/travel. */
+        std::shared_ptr<const Runtime::SceneAnimationInputSource>
+            animationInputs; /**< Exact optional adjacent-owner snapshot, no new store. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
@@ -44,10 +51,15 @@ namespace Horo::Application::Internal {
      * @return Factories or original selected backend rejection; never substitutes another backend.
      * @details Normal frame phases never block. Startup/travel Prepare drives only the bounded owned asset-load boundary.
      */
-    [[nodiscard]] Result<Network::NetworkModeFactories> ComposeHeadlessSceneNetworkServices(
+    [[nodiscard]] Result<NetworkProductComposition> ComposeHeadlessSceneNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition, HeadlessSceneActivationInput input,
         Network::NetworkModeFactories selectedFactories = {}, const std::optional<GameplayWorldSelection> &gameplay = std::nullopt,
         const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission = std::nullopt);
+
+    /** @brief Borrow canonical Animation observation on the service owner lane; no ownership or mutation grant. */
+    [[nodiscard]] const Runtime::SceneAnimationRuntime *InspectHeadlessAnimation(const Network::INetworkModeService &service) noexcept;
+    [[nodiscard]] std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
+                                                                                   Runtime::SceneObjectId object) noexcept;
 
     /** @brief Inspect the already-bound execution context of an explicitly selected headless world service.
      * @param service Borrowed application-owned service, not a process-global discovery source.

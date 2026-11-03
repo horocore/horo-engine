@@ -49,8 +49,9 @@ namespace Horo::Application::Internal {
 
     class ModeParticipant final : public Runtime::RuntimeLifecycleParticipant {
     public:
-        ModeParticipant(Network::NetworkModeComposition mode, std::shared_ptr<ClientSessionOwner> sessions) noexcept
-            : mode_(std::move(mode)), sessions_(std::move(sessions)) {
+        ModeParticipant(Network::NetworkModeComposition mode, std::shared_ptr<ClientSessionOwner> sessions,
+                        std::unique_ptr<Runtime::RuntimeLifecycleParticipant> fixed) noexcept
+            : mode_(std::move(mode)), sessions_(std::move(sessions)), fixed_(std::move(fixed)) {
             sessions_->Bind(mode_);
         }
 
@@ -90,34 +91,48 @@ namespace Horo::Application::Internal {
         Result<void> Startup(const CancellationToken &cancellation) override {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeShuttingDown));
+            if (fixed_) {
+                auto started = fixed_->Startup(cancellation);
+                if (started.HasError())
+                    return started;
+            }
             return mode_.Start();
         }
 
-        Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &) override {
-            if (auto reconciled = sessions_->Reconcile(); reconciled.HasError())
-                return FailPhase(reconciled.ErrorValue());
-            if (phase == Runtime::RuntimePhase::NetworkPoll) {
-                if (auto polled = sessions_->BeginPoll(); polled.HasError())
-                    return FailPhase(polled.ErrorValue());
-            }
+        Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) override {
+            if (auto prepared = PreparePhase(phase, frame); prepared.HasError())
+                return FailPhase(prepared.ErrorValue());
             if (auto advanced = mode_.RunPhase(phase); advanced.HasError())
                 return FailPhase(advanced.ErrorValue());
             if (auto failed = mode_.TakeTravelFailure(); failed && !travelFailure_)
                 travelFailure_ = std::move(failed);
-            if (phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges || !pending_)
-                return Result<void>::Success();
-            pending_ = false;
-            if (auto reconciled = sessions_->Reconcile(); reconciled.HasError())
-                return reconciled;
-            if (auto traveled = mode_.Travel({nextWorlds_.data(), nextWorldCount_}, phase, nextSession_); traveled.HasError())
-                travelFailure_ = traveled.ErrorValue();
-            return Result<void>::Success();
+            return phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && pending_ ? AdvanceQueuedTravel()
+                                                                                              : Result<void>::Success();
         }
 
         Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
             if (auto reconciled = sessions_->Reconcile(); reconciled.HasError())
                 return reconciled;
+            if (fixed_) {
+                auto begun = fixed_->OnFixedUpdate(context);
+                if (begun.HasError())
+                    return begun;
+            }
             return mode_.RunFixedTick(context);
+        }
+
+        Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) override {
+            return fixed_ ? fixed_->PrepareFixedCommit(context) : Result<void>::Success();
+        }
+
+        void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            if (fixed_)
+                fixed_->CommitFixedUpdate(context);
+        }
+
+        void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            if (fixed_)
+                fixed_->AbortFixedUpdate(context);
         }
 
         void Shutdown() noexcept override {
@@ -125,9 +140,33 @@ namespace Horo::Application::Internal {
             // Failure teardown must preserve the original queued-travel diagnostic for the caller.
             sessions_->Shutdown();
             mode_.Shutdown();
+            if (fixed_)
+                fixed_->Shutdown();
         }
 
     private:
+        Result<void> PreparePhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) {
+            if (fixed_) {
+                auto forwarded = fixed_->OnPhase(phase, frame);
+                if (forwarded.HasError())
+                    return forwarded;
+            }
+            if (auto reconciled = sessions_->Reconcile(); reconciled.HasError())
+                return reconciled;
+            return phase == Runtime::RuntimePhase::NetworkPoll ? sessions_->BeginPoll() : Result<void>::Success();
+        }
+
+        Result<void> AdvanceQueuedTravel() {
+            pending_ = false;
+            if (auto reconciled = sessions_->Reconcile(); reconciled.HasError())
+                return reconciled;
+            if (auto traveled = mode_.Travel({nextWorlds_.data(), nextWorldCount_}, Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                             nextSession_);
+                traveled.HasError())
+                travelFailure_ = traveled.ErrorValue();
+            return Result<void>::Success();
+        }
+
         Result<void> FailPhase(const Error &error) {
             if (pending_) {
                 pending_ = false;
@@ -138,6 +177,7 @@ namespace Horo::Application::Internal {
 
         Network::NetworkModeComposition mode_;
         std::shared_ptr<ClientSessionOwner> sessions_;
+        std::unique_ptr<Runtime::RuntimeLifecycleParticipant> fixed_;
         std::array<Network::NetworkModeWorld, 2> nextWorlds_{};
         std::size_t nextWorldCount_{};
         std::optional<Network::NetworkOperationGeneration> nextSession_;
@@ -146,6 +186,35 @@ namespace Horo::Application::Internal {
     };
 
     namespace {
+        Result<Network::NetworkModePlan> PrepareProductPlan(const NetworkProductHostInputs &inputs,
+                                                            Network::NetworkTargetDiagnostic *diagnostic) {
+            if (inputs.selection.role != Network::NetworkProjectRole::Standalone) {
+                if (const auto complete = Network::RequireCompleteNetworkReplicationInventory(inputs.project); complete.HasError())
+                    return Result<Network::NetworkModePlan>::Failure(complete.ErrorValue());
+            }
+            const auto assessment = Network::AssessNetworkTarget(inputs.project, inputs.product, inputs.inventory, inputs.hostFacts,
+                                                                 inputs.requirements, inputs.selection);
+            if (diagnostic != nullptr)
+                *diagnostic = assessment.diagnostic;
+            if (!assessment.Admitted())
+                return Result<Network::NetworkModePlan>::Failure(MakeError(Network::NetworkErrors::NetworkModeUnavailable,
+                                                                           "Product, package, host or project does not admit this mode."));
+            return Network::ResolveNetworkModePlan(assessment, inputs.selection, inputs.hostGeneration, inputs.worlds, inputs.presentation);
+        }
+
+        Result<std::unique_ptr<Runtime::RuntimeLifecycleParticipant>> PrepareFixedParticipant(const NetworkProductHostInputs &inputs,
+                                                                                              Runtime::RuntimeDispatchSource source) {
+            using Return = Result<std::unique_ptr<Runtime::RuntimeLifecycleParticipant>>;
+            if (!inputs.fixedParticipant)
+                return Return::Success(nullptr);
+            auto created = inputs.fixedParticipant(std::move(source));
+            if (created.HasError())
+                return created;
+            if (!created.Value())
+                return Return::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            return created;
+        }
+
         /** @brief Install one session boundary only after host target and mode admission have succeeded. */
         Result<std::shared_ptr<ClientSessionOwner>> PrepareSessionOwner(const NetworkProductHostInputs &inputs,
                                                                         Network::NetworkModeFactories &factories) {
@@ -186,19 +255,7 @@ namespace Horo::Application::Internal {
                                                                            Network::NetworkModeFactories factories,
                                                                            Network::NetworkTargetDiagnostic *diagnostic,
                                                                            std::shared_ptr<NetworkDebuggerService> debugger) {
-        if (inputs.selection.role != Network::NetworkProjectRole::Standalone) {
-            if (const auto complete = Network::RequireCompleteNetworkReplicationInventory(inputs.project); complete.HasError())
-                return Result<std::unique_ptr<NetworkProductHost>>::Failure(complete.ErrorValue());
-        }
-        const auto assessment = Network::AssessNetworkTarget(inputs.project, inputs.product, inputs.inventory, inputs.hostFacts,
-                                                             inputs.requirements, inputs.selection);
-        if (diagnostic != nullptr)
-            *diagnostic = assessment.diagnostic;
-        if (!assessment.Admitted())
-            return Result<std::unique_ptr<NetworkProductHost>>::Failure(
-                MakeError(Network::NetworkErrors::NetworkModeUnavailable, "Product, package, host or project does not admit this mode."));
-        auto plan =
-            Network::ResolveNetworkModePlan(assessment, inputs.selection, inputs.hostGeneration, inputs.worlds, inputs.presentation);
+        auto plan = PrepareProductPlan(inputs, diagnostic);
         if (plan.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(plan.ErrorValue());
         auto sessions = PrepareSessionOwner(inputs, factories);
@@ -211,7 +268,11 @@ namespace Horo::Application::Internal {
         auto runtime = Runtime::RuntimeHost::Create(clock);
         if (runtime.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(runtime.ErrorValue());
-        auto participant = std::make_unique<ModeParticipant>(std::move(composition).Value(), std::move(sessions).Value());
+        auto fixed = PrepareFixedParticipant(inputs, runtime.Value()->DispatchSource());
+        if (fixed.HasError())
+            return Result<std::unique_ptr<NetworkProductHost>>::Failure(std::move(fixed).ErrorValue());
+        auto participant =
+            std::make_unique<ModeParticipant>(std::move(composition).Value(), std::move(sessions).Value(), std::move(fixed).Value());
         auto *mode = participant.get();
         if (auto added = runtime.Value()->AddParticipant(std::move(participant)); added.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(added.ErrorValue());
@@ -280,6 +341,11 @@ namespace Horo::Application::Internal {
         const Network::NetworkModeWorldKind world, const Network::ReplicationWorldWorkRequest &request,
         const Network::ReplicationWorldCapability capability) const {
         return mode_->Mode().AcquireReplication(world, request, capability);
+    }
+
+    void NetworkProductHost::RequestShutdown() const noexcept {
+        if (runtime_)
+            runtime_->RequestShutdown();
     }
 
     void NetworkProductHost::Shutdown() noexcept {

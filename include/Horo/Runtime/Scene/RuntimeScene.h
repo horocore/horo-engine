@@ -137,7 +137,7 @@ namespace Horo::Runtime {
         DerivedResources
     };
     /** @brief Host-only activation virtual contract revision; all host participants must rebuild together. */
-    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 4;
+    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 5;
     struct SceneInitialPlacement;
 
     /** @brief Detached subsystem state prepared for one aggregate runtime-scene candidate. */
@@ -216,10 +216,41 @@ namespace Horo::Runtime {
         }
     };
 
+    struct RuntimeSceneAssetView;
+
+    /** @brief Closed typed owner requirements for newly supported Scene activation capabilities. */
+    enum class SceneActivationOwner : std::uint8_t {
+        Animation
+    };
+
     /** @brief Host-injected subsystem participating in aggregate runtime-scene publication. */
     class SceneActivationParticipant {
     public:
         virtual ~SceneActivationParticipant() = default;
+
+        /** @brief Discovers bounded portable dependency roles from one exact already-loaded asset.
+         * @param asset Invocation-scoped loaded HCAF bytes and actual pinned registry identity/type; never retain the view.
+         * @param cancellation Exact current owner callback cancellation; never retain a context reference.
+         * @param maximumReturnedDependencies Remaining whole-preparation charged-reference budget, including duplicates.
+         * @return Complete bounded declarations or typed failure; default legacy participants declare none.
+         * @details Cold owner lane only. No I/O, loads, actor activation, cache/publication or retained Scene borrow.
+         * The Scene service validates/merges into its existing snapshot/load group and inspects each asset once per participant.
+         */
+        [[nodiscard]] virtual Result<std::vector<SceneAssetDependency>> DiscoverDependencies(const RuntimeSceneAssetView &asset,
+                                                                                             const CancellationToken &cancellation,
+                                                                                             std::size_t maximumReturnedDependencies) {
+            (void)asset;
+            (void)cancellation;
+            (void)maximumReturnedDependencies;
+            return Result<std::vector<SceneAssetDependency>>::Success({});
+        }
+
+        /** @brief Declares one actual composed owner; legacy participants do not claim new capabilities.
+         * @return Animation only for the canonical Animation-owned activation adapter, otherwise absent.
+         */
+        [[nodiscard]] virtual std::optional<SceneActivationOwner> RequiredOwner() const noexcept {
+            return std::nullopt;
+        }
 
         /** @brief Declares preparation dependency without backend discovery or incidental registration ordering.
          * @return InitialPlacement only for owners projecting recovered initial poses; all other owners derive resources afterward.
@@ -342,6 +373,8 @@ namespace Horo::Runtime {
         std::size_t maximumDependencies{1024};                         /**< Maximum required assets in one definition. */
         std::size_t maximumConcurrentLoads{8};                         /**< Maximum in-flight provider requests. */
         std::size_t maximumResidentBytes{1024ULL * 1024ULL * 1024ULL}; /**< Per-candidate logical byte budget. */
+        std::size_t maximumDependencyReferences{
+            65536}; /**< Whole discovered-edge work budget, including duplicates; hard ceiling 1048576. */
     };
 
     /** @brief Allocation-free borrowed cooked payload resolved for an active scene. */
@@ -728,7 +761,8 @@ namespace Horo::Runtime {
     enum class SceneStructuralOwner {
         Physics,
         Gameplay,
-        AI
+        AI,
+        Animation
     };
 
     /** @brief Explicit structural preparation order, independent of host registration order. */
@@ -1170,9 +1204,17 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> StageCandidate(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config,
                                                   Assets::AssetRegistryRevision revision, std::vector<RuntimeScene::ResolvedAsset> assets);
         [[nodiscard]] Result<void> PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const;
-        [[nodiscard]] Result<void> ProcessCompletedPreparationLoads();
+        [[nodiscard]] Result<void> ReusePreparationPayload(Preparation &preparation, std::size_t entry) const;
+        [[nodiscard]] Result<void> AppendPreparationDependency(const SceneAssetDependency &dependency);
+        [[nodiscard]] Result<void> DiscoverPreparationDependencies(const CancellationToken &cancellation);
+        [[nodiscard]] Result<void> DiscoverPreparationEntry(std::size_t entry, const CancellationToken &cancellation);
+        [[nodiscard]] Result<std::vector<SceneAssetDependency>> InvokePreparationDiscovery(std::size_t entry, std::size_t participant,
+                                                                                           const CancellationToken &cancellation);
+        [[nodiscard]] Result<void> MergePreparationDependencies(std::span<const SceneAssetDependency> dependencies);
+        [[nodiscard]] Result<void> ProcessCompletedPreparationLoads(const CancellationToken &cancellation);
+        [[nodiscard]] Result<void> CompletePreparationDefinition();
         [[nodiscard]] Result<void> FinalizePreparation();
-        void AdvancePreparation();
+        void AdvancePreparation(const CancellationToken &cancellation);
         void CancelPreparation(bool waitForCompletion) noexcept;
         [[nodiscard]] Result<void> SubmitPreparationLoads();
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);

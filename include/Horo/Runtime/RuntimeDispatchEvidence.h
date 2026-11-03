@@ -53,7 +53,8 @@ namespace Horo::Runtime {
     /**
      * @brief Read-only expected scheduler issuer bound explicitly by application composition.
      * @details A copied capability pins only producer identity/storage, never a callback context or scheduler object. The
-     *          scheduler owns all mutation and retires admission on shutdown. It has no numeric or serialized representation.
+     *          scheduler owns all mutation and retires admission on shutdown. A fixed attempt that has already committed
+     *          retains readable commitment evidence until its current dispatch ends. It has no numeric or serialized representation.
      *          Destruction after producer retirement is a quiescent lifetime operation; retain the composition pin on hot paths.
      */
     class RuntimeDispatchSource final {
@@ -109,6 +110,8 @@ namespace Horo::Runtime {
         [[nodiscard]] RuntimeDispatchStatus ValidateRun() const noexcept;
         /** @brief Reserves checked actual callback admission with copied producer facts. */
         [[nodiscard]] RuntimeDispatchStatus Begin(RuntimePhase phase, const RuntimeDispatchFacts &facts) noexcept;
+        /** @brief Stamps commitment only for the currently admitted actual fixed attempt, without allocation. */
+        [[nodiscard]] RuntimeDispatchStatus CommitFixed() noexcept;
         /** @brief Revokes the current owner-thread callback reservation. */
         void End() noexcept;
         /** @brief Closes admission; immutable source pins remain safe through quiescence. */
@@ -135,6 +138,14 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] RuntimeDispatchStatus Read(const RuntimeDispatchSource &expected, RuntimePhase phase,
                                                  RuntimeDispatchFacts &facts) const noexcept;
+
+        /**
+         * @brief Compares opaque callback identity without reading mutable issuer state.
+         * @details This remains true for copies after retirement or expiry and grants no admission or commitment.
+         *          A rollback owner must first check Read against its expected source on the owner thread, then
+         *          compare against evidence retained when its candidate was admitted. Default evidence never matches.
+         */
+        [[nodiscard]] bool RefersToSameDispatch(const RuntimeDispatchEvidence &other) const noexcept;
 
     private:
         friend class RuntimeDispatchSource;

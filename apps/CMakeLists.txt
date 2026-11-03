@@ -179,6 +179,25 @@ target_include_directories(HoroScenePhysicsHost PUBLIC "${HORO_SCENE_PHYSICS_HOS
 target_link_libraries(HoroScenePhysicsHost PUBLIC HoroPhysicsSceneHostInternal HoroEngine::SceneCook HoroEngine::Assets
         HoroEngine::ProjectPhysicsCapture)
 
+# Non-installed identity authority shared by application Scene factories, never by copied counters.
+set(HORO_ANIMATION_HOST_IDENTITY_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/animation_host_identity_headers")
+file(MAKE_DIRECTORY "${HORO_ANIMATION_HOST_IDENTITY_HEADERS}")
+file(GENERATE OUTPUT "${HORO_ANIMATION_HOST_IDENTITY_HEADERS}/AnimationRuntimeIdentitySource.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/common/AnimationRuntimeIdentitySource.h\"\n")
+add_library(HoroAnimationHostIdentityInternal INTERFACE)
+target_compile_features(HoroAnimationHostIdentityInternal INTERFACE cxx_std_20)
+target_include_directories(HoroAnimationHostIdentityInternal INTERFACE "${HORO_ANIMATION_HOST_IDENTITY_HEADERS}")
+target_link_libraries(HoroAnimationHostIdentityInternal INTERFACE HoroEngine::AnimationApi)
+
+set(HORO_ANIMATION_SCENE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/animation_scene_host_headers")
+file(MAKE_DIRECTORY "${HORO_ANIMATION_SCENE_HOST_HEADERS}")
+file(GENERATE OUTPUT "${HORO_ANIMATION_SCENE_HOST_HEADERS}/SceneAnimationHostSelection.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/common/SceneAnimationHostSelection.h\"\n")
+add_library(HoroAnimationSceneHostInternal INTERFACE)
+target_compile_features(HoroAnimationSceneHostInternal INTERFACE cxx_std_20)
+target_include_directories(HoroAnimationSceneHostInternal INTERFACE "${HORO_ANIMATION_SCENE_HOST_HEADERS}")
+target_link_libraries(HoroAnimationSceneHostInternal INTERFACE HoroAnimationHostIdentityInternal HoroEngine::AnimationSceneIntegration)
+
 # Non-installed Play save composition. Forward to one canonical header identity
 # so app and editor consumers cannot duplicate pragma-once declarations.
 set(HORO_EDITOR_PLAY_SAVE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_play_save_headers")
@@ -226,6 +245,7 @@ file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(common/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC common/EditorProjectSceneHost.cpp)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal)
+target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroAnimationSceneHostInternal)
 target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
@@ -238,6 +258,8 @@ add_library(HoroNetworkProductHost STATIC
     common/NetworkProductSession.cpp
     common/NetworkProductTransport.cpp
     common/HeadlessNetworkServices.cpp
+    common/HeadlessAnimationFixed.h
+    common/NetworkProductComposition.h
     common/HeadlessSceneLoadBoundary.cpp
     common/HeadlessProjectScene.cpp
     common/GameplayWorldComposition.cpp
@@ -251,6 +273,7 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime H
     HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::AnimationSceneIntegration HoroAnimationHostIdentityInternal)
 if(HORO_BUILD_NETWORK_GNS)
     target_sources(HoroNetworkProductHost PRIVATE common/NetworkProductGnsSelection.cpp)
     target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::NetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
@@ -277,6 +300,7 @@ target_sources(horo-engine PRIVATE
     horo-engine/cli_host/ExtensionScriptCliHost.cpp
     horo-engine/cli_host/ExtensionScriptCliCommand.cpp)
 target_link_libraries(horo-engine PRIVATE HoroEngine::ExtensionLuaBindings HoroHostSignatureDocuments)
+target_link_libraries(horo-engine PRIVATE HoroEngine::AnimationCookedAssets)
 target_sources(horo-engine PRIVATE horo-engine/cli_host/ModuleScriptCliExecution.cpp)
 target_link_libraries(horo-engine PRIVATE HoroScriptModuleHostInternal HoroModuleScriptPackageInternal)
 target_compile_features(horo-engine PRIVATE cxx_std_20)

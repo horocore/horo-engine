@@ -49,7 +49,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Rejects native peer fields for which this host profile has no canonical adapter; no metadata grants coverage. */
         bool UnsupportedPeerState(const RuntimeComponentSet &c) {
-            return PhysicalState(c) || AgentState(c) || c.audioSource || c.audioListener || c.uiCanvas || !c.gameplayComponents.empty();
+            return PhysicalState(c) || AgentState(c) || c.animation || c.audioSource || c.audioListener || c.uiCanvas ||
+                   !c.gameplayComponents.empty();
         }
 
         /** @brief Required peer state cannot disappear behind a successful core Scene record. */

@@ -1,5 +1,7 @@
 #include "Horo/Prefab/PrefabTemplateCook.h"
 
+#include "Horo/Prefab/PrefabAssetDependencyClosure.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -7,13 +9,13 @@ namespace Horo::Prefab {
     namespace {
         /** @brief Admits exactly one captured canonical resource and computes its
          * actual full-envelope digest. */
-        [[nodiscard]] Result<CookedPrefabDependency> ResourceDependency(const PrefabDependencyNode &node,
+        [[nodiscard]] Result<CookedPrefabDependency> ResourceDependency(const Assets::AssetDependency &node,
                                                                         const std::span<const PrefabTemplateCookResource> resources,
                                                                         const AssetCookTargetId &target,
                                                                         const Assets::AssetCookLimits &resourceLimits) {
             const PrefabTemplateCookResource *found{};
             for (const auto &resource : resources) {
-                if (resource.asset != node.assetId)
+                if (resource.asset != node.id)
                     continue;
                 if (found != nullptr)
                     return Result<CookedPrefabDependency>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
@@ -24,9 +26,9 @@ namespace Horo::Prefab {
             auto envelope = Assets::DecodeCookedArtifact(found->artifact, resourceLimits);
             if (envelope.HasError())
                 return Result<CookedPrefabDependency>::Failure(envelope.ErrorValue());
-            if (envelope.Value().id != node.assetId || envelope.Value().type != node.assetType || envelope.Value().target != target)
+            if (envelope.Value().id != node.id || envelope.Value().type != node.expectedType || envelope.Value().target != target)
                 return Result<CookedPrefabDependency>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
-            return Result<CookedPrefabDependency>::Success({{node.assetId, node.assetType}, ComputeSha256(std::as_bytes(found->artifact))});
+            return Result<CookedPrefabDependency>::Success({{node.id, node.expectedType}, ComputeSha256(std::as_bytes(found->artifact))});
         }
 
         /** @brief Uses the same validated graph to separate flattened source closure
@@ -39,19 +41,20 @@ namespace Horo::Prefab {
             auto graph = BuildPrefabDependencyGraph(registry, sourceValues, limits, sources.Metrics());
             if (graph.HasError())
                 return Result<std::vector<CookedPrefabDependency>>::Failure(graph.ErrorValue());
-            auto closure = graph.Value().DependencyClosure(std::span{&root, 1});
+            std::vector<PrefabAssetDependency> projected;
+            for (const auto &role : options.projectedResourceDependencies)
+                projected.push_back({role.id, role.expectedType, {}});
+            auto closure = BuildPrefabAssetDependencyClosure(registry, graph.Value(), std::span{&root, 1}, projected,
+                                                             std::min<std::size_t>(limits.Policy().maximumReferencedAssets,
+                                                                                   options.resourceLimits.maximumAssets),
+                                                             PrefabDependencyConflictPolicy::Reject);
             if (closure.HasError())
                 return Result<std::vector<CookedPrefabDependency>>::Failure(closure.ErrorValue());
             std::vector<CookedPrefabDependency> result;
-            for (const auto asset : closure.Value()) {
+            for (const auto &role : closure.Value().RuntimeDependencies()) {
                 if (options.cancellation.IsCancellationRequested())
                     return Result<std::vector<CookedPrefabDependency>>::Failure(MakeError(PrefabErrors::Cancelled));
-                const auto *node = graph.Value().FindNode(asset);
-                if (node == nullptr)
-                    return Result<std::vector<CookedPrefabDependency>>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-                if (node->sourceRevision)
-                    continue;
-                auto dependency = ResourceDependency(*node, resources, target, options.resourceLimits);
+                auto dependency = ResourceDependency(role, resources, target, options.resourceLimits);
                 if (dependency.HasError())
                     return Result<std::vector<CookedPrefabDependency>>::Failure(dependency.ErrorValue());
                 result.push_back(std::move(dependency).Value());

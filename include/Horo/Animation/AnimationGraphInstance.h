@@ -400,7 +400,8 @@ namespace Horo::Animation {
 
     namespace Detail {
         struct GraphInstanceState;
-    }
+        struct GraphSceneCommitAccess;
+    }  // namespace Detail
 
     /**
      * @brief Animation-owned graph execution and publication for one exact runtime
@@ -599,6 +600,11 @@ namespace Horo::Animation {
         [[nodiscard]] GraphInstanceOutcome Shutdown();
 
     private:
+        friend struct Detail::GraphSceneCommitAccess;
+        /** @brief Performs every fallible admission before a Scene-owned global fixed-tick fence. */
+        [[nodiscard]] GraphInstanceOutcome PrepareCommit(AnimationTickId tick);
+        /** @brief Publishes one exclusively owned armed candidate; caller has committed the actual tick. */
+        [[nodiscard]] GraphInstancePublication PublishPrepared() noexcept;
         explicit AnimationGraphInstance(std::unique_ptr<Detail::GraphInstanceState> state) noexcept;
         std::unique_ptr<Detail::GraphInstanceState> state_;
     };

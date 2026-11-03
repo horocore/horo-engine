@@ -394,39 +394,57 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief Projects additions and retirements from detached storage, retaining every admitted asset lease. */
+        /** @brief New animation components use the same structural owner transaction even outside a prefab group. */
+        static bool NeedsOwnerPreparation(const Slot &slot) noexcept {
+            return slot.groupResources || slot.components.animation.has_value();
+        }
+
+        /** @brief Selects only genuinely new active entity incarnations from the detached candidate. */
+        bool IsCreatedSlot(std::size_t index) const noexcept {
+            const auto &slot = candidate.slots[index];
+            return slot.active && (index >= scene.storage_.slots.size() || !scene.storage_.slots[index].active ||
+                                   scene.storage_.slots[index].generation != slot.generation);
+        }
+
+        /** @brief Borrows exact candidate fields; ordinary animation entities have no fabricated group resources. */
+        RuntimeEntityView OwnerEntity(std::size_t index) const {
+            const auto &slot = candidate.slots[index];
+            const EntityRef entity{scene.runtimeId_, {static_cast<std::uint32_t>(index), slot.generation}};
+            const auto parent = slot.parent ? std::optional<EntityRef>{{scene.runtimeId_, *slot.parent}} : std::nullopt;
+            return {entity,
+                    slot.authoredObject,
+                    parent,
+                    &slot.localTransform,
+                    &slot.primitiveMesh,
+                    &slot.components,
+                    slot.groupPhysicsReferences ? std::span<const ResolvedGroupPhysicsBodyReference>{*slot.groupPhysicsReferences}
+                                                : std::span<const ResolvedGroupPhysicsBodyReference>{},
+                    slot.groupResources ? std::span<const RuntimeGroupAssetLease>{*slot.groupResources}
+                                        : std::span<const RuntimeGroupAssetLease>{},
+                    slot.groupReferences ? std::span<const RuntimeResolvedGroupReference>{*slot.groupReferences}
+                                         : std::span<const RuntimeResolvedGroupReference>{},
+                    slot.groupSpawnLineage ? std::span<const Assets::AssetId>{*slot.groupSpawnLineage}
+                                           : std::span<const Assets::AssetId>{}};
+        }
+
+        /** @brief Detects exact retired owner-bearing entities without treating a recycled slot as the old entity. */
+        bool IsRetiredOwnerSlot(std::size_t index) const noexcept {
+            const auto &old = scene.storage_.slots[index];
+            return old.active && NeedsOwnerPreparation(old) &&
+                   (!candidate.slots[index].active || candidate.slots[index].generation != old.generation);
+        }
+
+        /** @brief Projects additions and retirements through the existing sole owner transaction. */
         bool ProjectResourceGroup(std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed) const {
-            bool resourceGroup{};
             created.reserve(candidate.slots.size());
-            for (std::size_t index = 0; index < candidate.slots.size(); ++index) {
-                const auto &slot = candidate.slots[index];
-                if (!slot.active || (index < scene.storage_.slots.size() && scene.storage_.slots[index].active &&
-                                     scene.storage_.slots[index].generation == slot.generation))
-                    continue;
-                if (!slot.groupResources)
-                    continue;
-                resourceGroup = true;
-                const EntityRef entity{scene.runtimeId_, {static_cast<std::uint32_t>(index), slot.generation}};
-                const auto parent = slot.parent ? std::optional<EntityRef>{{scene.runtimeId_, *slot.parent}} : std::nullopt;
-                created.emplace_back(entity, slot.authoredObject, parent, &slot.localTransform, &slot.primitiveMesh, &slot.components,
-                                     slot.groupPhysicsReferences
-                                         ? std::span<const ResolvedGroupPhysicsBodyReference>{*slot.groupPhysicsReferences}
-                                         : std::span<const ResolvedGroupPhysicsBodyReference>{},
-                                     std::span<const RuntimeGroupAssetLease>{*slot.groupResources},
-                                     slot.groupReferences ? std::span<const RuntimeResolvedGroupReference>{*slot.groupReferences}
-                                                          : std::span<const RuntimeResolvedGroupReference>{},
-                                     slot.groupSpawnLineage ? std::span<const Assets::AssetId>{*slot.groupSpawnLineage}
-                                                            : std::span<const Assets::AssetId>{});
-            }
-            for (std::size_t index = 0; index < scene.storage_.slots.size(); ++index) {
-                const auto &old = scene.storage_.slots[index];
-                if (old.active && old.groupResources &&
-                    (!candidate.slots[index].active || candidate.slots[index].generation != old.generation)) {
-                    resourceGroup = true;
-                    destroyed.emplace_back(scene.runtimeId_, EntityId{static_cast<std::uint32_t>(index), old.generation});
-                }
-            }
-            return resourceGroup;
+            for (std::size_t index = 0; index < candidate.slots.size(); ++index)
+                if (IsCreatedSlot(index) && NeedsOwnerPreparation(candidate.slots[index]))
+                    created.push_back(OwnerEntity(index));
+            for (std::size_t index = 0; index < scene.storage_.slots.size(); ++index)
+                if (IsRetiredOwnerSlot(index))
+                    destroyed.emplace_back(scene.runtimeId_,
+                                           EntityId{static_cast<std::uint32_t>(index), scene.storage_.slots[index].generation});
+            return !created.empty() || !destroyed.empty();
         }
 
         /** @brief Native Navigation has only whole-Scene activation today; structural work must never silently omit that owner. */
@@ -436,6 +454,22 @@ namespace Horo::Runtime {
             };
             return enabled(components.navigationSurface) || enabled(components.navigationRegion) ||
                    enabled(components.navigationModifier) || enabled(components.navigationLink) || enabled(components.navigationAgent);
+        }
+
+        /** @brief One closed component-to-owner predicate shared by created and destroyed entity evidence. */
+        static bool ComponentNeedsOwner(const RuntimeComponentSet &components, SceneStructuralOwner owner) {
+            using enum SceneStructuralOwner;
+            switch (owner) {
+                case Physics:
+                    return components.rigidBody.has_value() || !components.colliders.empty() || !components.physicsConstraints.empty();
+                case Gameplay:
+                    return !components.behaviors.empty() || !components.gameplayComponents.empty();
+                case AI:
+                    return components.aiAgent.has_value() || components.aiController.has_value();
+                case Animation:
+                    return components.animation.has_value();
+            }
+            return false;
         }
 
         /** @brief Requires explicit composition of each owner needed by the projected typed components. */
@@ -450,26 +484,14 @@ namespace Horo::Runtime {
             }))
                 return Result<void>::Failure(MakeError(SceneErrors::NavigationStructuralUnsupported));
             const auto needs = [&](SceneStructuralOwner owner) {
-                const auto componentsNeed = [owner](const RuntimeComponentSet &components) {
-                    using enum SceneStructuralOwner;
-                    switch (owner) {
-                        case Physics:
-                            return components.rigidBody.has_value() || !components.colliders.empty() ||
-                                   !components.physicsConstraints.empty();
-                        case Gameplay:
-                            return !components.behaviors.empty() || !components.gameplayComponents.empty();
-                        case AI:
-                            return components.aiAgent.has_value() || components.aiController.has_value();
-                    }
-                    return false;
-                };
                 return std::ranges::any_of(created, [&](const auto &entity) {
-                    return componentsNeed(*entity.components);
+                    return ComponentNeedsOwner(*entity.components, owner);
                 }) || std::ranges::any_of(destroyed, [&](const auto &entity) {
-                    return componentsNeed(scene.storage_.slots[entity.entity.index].components);
+                    return ComponentNeedsOwner(scene.storage_.slots[entity.entity.index].components, owner);
                 });
             };
-            for (const auto owner : {SceneStructuralOwner::Physics, SceneStructuralOwner::Gameplay, SceneStructuralOwner::AI}) {
+            for (const auto owner : {SceneStructuralOwner::Physics, SceneStructuralOwner::Gameplay, SceneStructuralOwner::AI,
+                                     SceneStructuralOwner::Animation}) {
                 if (needs(owner) && !std::ranges::any_of(participants, [owner](const auto &participant) {
                     return participant->Owner() == owner;
                 })) {

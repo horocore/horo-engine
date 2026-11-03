@@ -205,6 +205,7 @@ namespace Horo::SceneSource {
                 occupied.emplace_back(object.id.value);
                 Runtime::RuntimeComponentSet components{
                     .camera = ActiveComponent(object.components.camera),
+                    .animation = object.components.animation,
                     .light = ActiveComponent(object.components.light),
                     .audioSource = ActiveComponent(object.components.audioSource),
                     .audioListener = ActiveComponent(object.components.audioListener),

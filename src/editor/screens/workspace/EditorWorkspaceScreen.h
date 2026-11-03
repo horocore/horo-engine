@@ -157,6 +157,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OnInputSnapshot() override;
         /** @brief Delivers the captured gameplay command to the fixed simulation tick. */
         void OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) override;
+        [[nodiscard]] Result<void> BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &source) override;
+        [[nodiscard]] Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override;
+        [[nodiscard]] Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) override;
+        void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override;
+        void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override;
         /** @brief Draws the workspace before routing its current-frame command and input. */
         void Draw(const GuiContentRegion &contentRegion) override;
         /** @brief Collects only currently presented panel identities. */

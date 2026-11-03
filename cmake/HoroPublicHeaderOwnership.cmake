@@ -786,6 +786,18 @@ horo_configure_target_header_boundary(HoroAnimationRuntime PUBLIC_HEADERS
     Horo/Animation/AnimationGraphInstance.h
     Horo/Animation/AnimationParameterCurve.h
 )
+horo_configure_target_header_boundary(HoroAnimationCookedAssets PUBLIC_HEADERS
+    Horo/Animation/AnimationCookedAssets.h
+)
+horo_configure_target_header_boundary(HoroAnimationAssetSourceCodec PUBLIC_HEADERS
+    Horo/Animation/AnimationAssetSource.h
+)
+horo_configure_target_header_boundary(HoroAnimationAssetCook PUBLIC_HEADERS
+    Horo/Animation/AnimationAssetCook.h
+)
+horo_configure_target_header_boundary(HoroAnimationSceneIntegration PUBLIC_HEADERS
+    Horo/Runtime/Scene/SceneAnimationRuntime.h
+)
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationGraph.h
     Horo/Animation/AnimationCompression.h

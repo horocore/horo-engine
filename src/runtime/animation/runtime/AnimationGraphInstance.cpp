@@ -1,8 +1,10 @@
 #include "AnimationGraphInstanceInternal.h"
+#include "AnimationGraphSceneCommitAccess.h"
 
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <new>
 
@@ -455,7 +457,7 @@ namespace Horo::Animation {
             return Result<void>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::StateInvalid}));
         if (!ReplacementIdentity(old, context.instance))
             return Result<void>::Failure(DescribeGraphInstanceFailure({GraphInstanceFailure::HandleStale}));
-        if (!assets.program || assets.program->Id() != state_->program->Id())
+        if (!assets.program || assets.program->Source() != state_->program->Source())
             return Result<void>::Failure(MakeError(AnimationErrors::GraphReloadMismatch));
         auto candidate = Create(assets, context);
         if (candidate.HasError())
@@ -485,18 +487,39 @@ namespace Horo::Animation {
         return {};
     }
 
-    /** @copydoc AnimationGraphInstance::Commit */
-    GraphInstanceOutcome AnimationGraphInstance::Commit(const AnimationTickId tick) {
+    /** @copydoc AnimationGraphInstance::PrepareCommit */
+    GraphInstanceOutcome AnimationGraphInstance::PrepareCommit(const AnimationTickId tick) {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
         if (state_->closed)
             return {GraphInstanceFailure::AdmissionRejected};
         if (!tick.IsValid() || tick != state_->candidate.tick)
             return {GraphInstanceFailure::TickStale};
+        if (state_->candidate.commitArmed)
+            return {GraphInstanceFailure::StateInvalid};
         if (state_->ownerCancellation.IsCancellationRequested() || state_->candidate.cancellation.IsCancellationRequested()) {
             state_->candidate.tick = {};
+            state_->candidate.cancellation = {};
             return {GraphInstanceFailure::Cancelled};
         }
+        state_->candidate.commitArmed = true;
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::Commit */
+    GraphInstanceOutcome AnimationGraphInstance::Commit(const AnimationTickId tick) {
+        if (auto prepared = PrepareCommit(tick); prepared.HasError())
+            return prepared;
+        return {GraphInstanceFailure::None, {}, PublishPrepared()};
+    }
+
+    /** @copydoc AnimationGraphInstance::PublishPrepared */
+    GraphInstancePublication AnimationGraphInstance::PublishPrepared() noexcept {
+        // Only the Scene bridge owns this armed instance across the scheduler's commitment fence.
+        // A violated programming contract must never masquerade as a successful partial tick.
+        if (Owner(state_.get()).HasError() || state_->closed || !state_->candidate.commitArmed)
+            std::terminate();
+        const auto tick = state_->candidate.tick;
         const auto generation = state_->published.nextGeneration;
         const auto slot = static_cast<std::uint32_t>((generation - 1) % 2);
         const PoseHandle handle{state_->identity,
@@ -528,7 +551,18 @@ namespace Horo::Animation {
         state_->published.nextGeneration = generation == std::numeric_limits<std::uint64_t>::max() ? 0 : generation + 1;
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
-        return {GraphInstanceFailure::None, {}, state_->published.publication};
+        state_->candidate.commitArmed = false;
+        return state_->published.publication;
+    }
+
+    /** @copydoc Detail::GraphSceneCommitAccess::Prepare */
+    GraphInstanceOutcome Detail::GraphSceneCommitAccess::Prepare(AnimationGraphInstance &instance, const AnimationTickId tick) {
+        return instance.PrepareCommit(tick);
+    }
+
+    /** @copydoc Detail::GraphSceneCommitAccess::Publish */
+    GraphInstancePublication Detail::GraphSceneCommitAccess::Publish(AnimationGraphInstance &instance) noexcept {
+        return instance.PublishPrepared();
     }
 
     /** @copydoc AnimationGraphInstance::Abort */
@@ -538,6 +572,7 @@ namespace Horo::Animation {
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
         state_->candidate.eventCount = 0;
+        state_->candidate.commitArmed = false;
         return {};
     }
 
@@ -683,6 +718,7 @@ namespace Horo::Animation {
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
         state_->candidate.eventCount = 0;
+        state_->candidate.commitArmed = false;
         return {};
     }
 }  // namespace Horo::Animation

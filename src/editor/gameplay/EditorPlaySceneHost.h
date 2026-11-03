@@ -18,6 +18,10 @@ namespace Horo::Gameplay {
     class ComponentRegistry;
 }
 
+namespace Horo::Runtime {
+    class SceneAnimationRuntime;
+}
+
 namespace Horo::Editor {
     /** @brief Host-reserved namespace divider; edit preview admission stays strictly below this value. */
     inline constexpr std::uint64_t EditorPlaySceneNamespace = 0x8000000000000000ULL;
@@ -70,6 +74,12 @@ namespace Horo::Editor {
          * @return Service owned by this host until shutdown/destruction.
          */
         [[nodiscard]] virtual Runtime::RuntimeSceneService &Scenes() noexcept = 0;
+
+        /** @brief Borrows the actual composed Animation owner on its owner lane; never register a second evaluation path.
+         * @return Null when unselected; the Scene host retains lifecycle ownership through shutdown/retirement. */
+        [[nodiscard]] virtual Runtime::SceneAnimationRuntime *AnimationRuntime() noexcept {
+            return nullptr;
+        }
 
         /** @brief Borrows this activation's explicitly composed save owner; absence grants no save capability. */
         [[nodiscard]] virtual EditorPlaySaveSession *SaveSession() noexcept {
@@ -146,6 +156,25 @@ namespace Horo::Editor {
          * @details Called only while playing or for one admitted paused step; never used for load progress.
          */
         [[nodiscard]] virtual Result<void> FixedUpdate(Gameplay::FixedDeltaTime delta) = 0;
+
+        /** @brief Actual host fixed callback after gameplay; legacy native owners retain their existing numeric stepping.
+         * @details An Animation-bearing application composition overrides this boundary to stage its real adapter before Physics.
+         * The legacy default introduces no animation or transactional native-state claim. */
+        [[nodiscard]] virtual Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) {
+            return FixedUpdate(Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
+        }
+
+        /** @brief Arms owned candidates before the actual scheduler fence; default owners have no staged state. */
+        [[nodiscard]] virtual Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Publishes the same prepared attempt without allocation, I/O or cancellation reconsideration. */
+        virtual void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {}
+
+        /** @brief Discards only staged state, including a retired-before-fence callback. */
+        virtual void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {}
+
         /** @brief Revokes borrowed native admission before cancelling/joining Scene work and releasing its candidates. */
         virtual void Shutdown() noexcept = 0;
     };

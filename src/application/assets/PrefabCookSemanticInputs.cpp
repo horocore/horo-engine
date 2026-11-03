@@ -2,6 +2,7 @@
 
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabValueOverrides.h"
+#include "Horo/Scene/PrefabComponentProjection.h"
 #include "Horo/Scene/SceneSource.h"
 
 #include <algorithm>
@@ -31,76 +32,110 @@ namespace Horo::Application::PrefabCookDetail {
             Assets::AssetId root;
             std::span<const Assets::AssetId> sceneResources;
             std::set<Gameplay::ComponentTypeId> components;
+            std::set<Gameplay::ComponentTypeId> builtins;
             std::set<Gameplay::BehaviorTypeId> behaviors;
             std::map<Assets::AssetId, std::uint8_t> colors;
             std::map<Assets::AssetId, std::string> providers;
             std::size_t edges{};
+            bool nativeScene{};
+
+            void CollectPrefabTypes(const Prefab::PrefabObjectNode &object) {
+                for (const auto &component : object.components) {
+                    const auto &type = component.component.typeId;
+                    if (Runtime::FindBuiltinSceneComponent(type.Value()))
+                        builtins.insert(type);
+                    else
+                        components.insert(type);
+                }
+                for (const auto &behavior : object.behaviors)
+                    behaviors.insert(behavior.typeId);
+            }
+
+            Result<std::vector<Assets::AssetId>> PrefabDependencies(const Assets::AssetCookPinnedSource &source) {
+                using Return = Result<std::vector<Assets::AssetId>>;
+                const auto found = std::ranges::find_if(resolver.Sources(), [&](const auto &entry) {
+                    return entry.document.Data().assetId == source.record.id;
+                });
+                if (found == resolver.Sources().end() || !graph.FindNode(source.record.id))
+                    return Return::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+                for (const auto &object : found->document.Data().objects)
+                    CollectPrefabTypes(object);
+                std::vector<Assets::AssetId> dependencies;
+                for (const auto &edge : graph.DirectDependencies(source.record.id))
+                    dependencies.push_back(edge.targetAsset);
+                return Return::Success(std::move(dependencies));
+            }
+
+            Result<std::vector<Assets::AssetId>> SceneDependencies(const Assets::AssetCookPinnedSource &source) {
+                using Return = Result<std::vector<Assets::AssetId>>;
+                if (source.record.id != root)
+                    return Return::Failure(MakeError(PrefabSceneCookErrors::Invalid,
+                                                     "A resource producer cannot consume an undeclared Scene conversion context."));
+                const auto parsed =
+                    SceneSource::DecodeSceneSource({reinterpret_cast<const char *>(source.bytes.data()), source.bytes.size()});
+                if (parsed.HasError())
+                    return Return::Failure(parsed.ErrorValue());
+                nativeScene = true;
+                for (const auto &object : parsed.Value().objects) {
+                    for (const auto &component : object.components.gameplayComponents)
+                        components.insert(component.typeId);
+                    for (const auto &behavior : object.components.behaviors)
+                        behaviors.insert(behavior.typeId);
+                }
+                std::vector<Assets::AssetId> dependencies;
+                for (const auto &placement : parsed.Value().prefabInstances)
+                    dependencies.push_back(placement.sourcePrefab.Asset());
+                dependencies.insert(dependencies.end(), sceneResources.begin(), sceneResources.end());
+                return Return::Success(std::move(dependencies));
+            }
+
+            Result<std::vector<Assets::AssetId>> ResourceDependencies(const Assets::AssetCookPinnedSource &source) {
+                using Return = Result<std::vector<Assets::AssetId>>;
+                const auto *contribution = catalog.FindContribution(source.record.type, target);
+                if (!contribution || !contribution->strategy)
+                    return Return::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+                const Assets::CookSourceView view{source.record.id,    source.record.type, target,
+                                                  source.sourceDigest, source.bytes,       source.record.sourcePath.String()};
+                auto declared = contribution->strategy->InputDependencies(view, cancellation);
+                if (declared.HasError())
+                    return Return::Failure(declared.ErrorValue());
+                if (!declared.Value())
+                    return Return::Failure(
+                        MakeError(PrefabSceneCookErrors::Invalid,
+                                  "Resource cooker has no complete input dependency contract: " + contribution->contributionId));
+                const auto cache = contribution->strategy->CacheIdentity();
+                if (contribution->contributionId.size() > 1024 || cache.version.size() > 1024)
+                    return Return::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
+                auto &identity = providers[source.record.id];
+                Append(identity, source.record.type.Value());
+                Append(identity, contribution->contributionId);
+                Append(identity, cache.version);
+                Append(identity, FormatSha256(cache.settingsDigest));
+                Append(identity, std::to_string(cache.settingsSchemaVersion));
+                return Return::Success(std::move(*std::move(declared).Value()));
+            }
+
+            Result<std::vector<Assets::AssetId>> SelectDependencies(const Assets::AssetCookPinnedSource &source) {
+                if (source.record.type.Value() == "core.prefab")
+                    return PrefabDependencies(source);
+                if (source.record.type.Value() == "core.scene")
+                    return SceneDependencies(source);
+                return ResourceDependencies(source);
+            }
 
             Result<std::vector<Assets::AssetId>> Dependencies(const Assets::AssetCookPinnedSource &source) {
-                std::vector<Assets::AssetId> dependencies;
-                if (source.record.type.Value() == "core.prefab") {
-                    const auto found = std::ranges::find_if(resolver.Sources(), [&](const auto &entry) {
-                        return entry.document.Data().assetId == source.record.id;
-                    });
-                    if (found == resolver.Sources().end() || !graph.FindNode(source.record.id))
-                        return Result<std::vector<Assets::AssetId>>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                    for (const auto &object : found->document.Data().objects) {
-                        for (const auto &component : object.components)
-                            components.insert(component.component.typeId);
-                        for (const auto &behavior : object.behaviors)
-                            behaviors.insert(behavior.typeId);
-                    }
-                    for (const auto &edge : graph.DirectDependencies(source.record.id))
-                        dependencies.push_back(edge.targetAsset);
-                } else if (source.record.type.Value() == "core.scene") {
-                    if (source.record.id != root)
-                        return Result<std::vector<Assets::AssetId>>::Failure(
-                            MakeError(PrefabSceneCookErrors::Invalid,
-                                      "A resource producer cannot consume an undeclared Scene conversion context."));
-                    const auto parsed =
-                        SceneSource::DecodeSceneSource({reinterpret_cast<const char *>(source.bytes.data()), source.bytes.size()});
-                    if (parsed.HasError())
-                        return Result<std::vector<Assets::AssetId>>::Failure(parsed.ErrorValue());
-                    for (const auto &object : parsed.Value().objects) {
-                        for (const auto &component : object.components.gameplayComponents)
-                            components.insert(component.typeId);
-                        for (const auto &behavior : object.components.behaviors)
-                            behaviors.insert(behavior.typeId);
-                    }
-                    for (const auto &placement : parsed.Value().prefabInstances)
-                        dependencies.push_back(placement.sourcePrefab.Asset());
-                    dependencies.insert(dependencies.end(), sceneResources.begin(), sceneResources.end());
-                } else {
-                    const auto *contribution = catalog.FindContribution(source.record.type, target);
-                    if (!contribution || !contribution->strategy)
-                        return Result<std::vector<Assets::AssetId>>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                    const Assets::CookSourceView view{source.record.id,    source.record.type, target,
-                                                      source.sourceDigest, source.bytes,       source.record.sourcePath.String()};
-                    auto declared = contribution->strategy->InputDependencies(view, cancellation);
-                    if (declared.HasError())
-                        return Result<std::vector<Assets::AssetId>>::Failure(declared.ErrorValue());
-                    if (!declared.Value())
-                        return Result<std::vector<Assets::AssetId>>::Failure(
-                            MakeError(PrefabSceneCookErrors::Invalid,
-                                      "Resource cooker has no complete input dependency contract: " + contribution->contributionId));
-                    dependencies = std::move(*declared.Value());
-                    const auto cache = contribution->strategy->CacheIdentity();
-                    if (contribution->contributionId.size() > 1024 || cache.version.size() > 1024)
-                        return Result<std::vector<Assets::AssetId>>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
-                    auto &identity = providers[source.record.id];
-                    Append(identity, source.record.type.Value());
-                    Append(identity, contribution->contributionId);
-                    Append(identity, cache.version);
-                    Append(identity, FormatSha256(cache.settingsDigest));
-                    Append(identity, std::to_string(cache.settingsSchemaVersion));
-                }
+                using Return = Result<std::vector<Assets::AssetId>>;
+                auto selected = SelectDependencies(source);
+                if (selected.HasError())
+                    return selected;
+                auto dependencies = std::move(selected).Value();
                 if (dependencies.size() > maximum || components.size() > 1024 || behaviors.size() > 1024 ||
                     dependencies.size() > 1'048'576U - edges)
-                    return Result<std::vector<Assets::AssetId>>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
+                    return Return::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
                 edges += dependencies.size();
                 std::ranges::sort(dependencies);
                 dependencies.erase(std::unique(dependencies.begin(), dependencies.end()), dependencies.end());
-                return Result<std::vector<Assets::AssetId>>::Success(std::move(dependencies));
+                return Return::Success(std::move(dependencies));
             }
 
             Result<void> Walk() {
@@ -138,8 +173,23 @@ namespace Horo::Application::PrefabCookDetail {
         };
 
         /** @brief Admits actual used project schemas before committing any descriptor digest into cook identity. */
+        Result<void> AppendBuiltinSchemas(const Closure &closure, std::string &identity) {
+            if (!closure.nativeScene && closure.builtins.empty())
+                return Result<void>::Success();
+            Append(identity, "horo.prefab.cook.native-scene-components");
+            Append(identity, FormatSha256(SceneSource::PrefabBuiltinComponentCodecFingerprint()));
+            for (const auto &type : closure.builtins) {
+                if (!Runtime::FindBuiltinSceneComponent(type.Value()))
+                    return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+                Append(identity, type.Value());
+            }
+            return Result<void>::Success();
+        }
+
         Result<void> AppendUsedSchemas(const Closure &closure, const std::shared_ptr<const PrefabCookSchemaContext> &schemas,
                                        std::string &identity) {
+            if (auto native = AppendBuiltinSchemas(closure, identity); native.HasError())
+                return native;
             if (closure.components.empty() && closure.behaviors.empty())
                 return Result<void>::Success();
             if (!schemas)

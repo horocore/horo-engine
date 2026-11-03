@@ -7,12 +7,15 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <utility>
 
 namespace Horo::Application::Internal {
     namespace {
+        class HeadlessFixedParticipant;
+
         /** @brief One generation-owned Scene/Physics pair; equal Scene IDs never imply shared storage. */
         struct WorldRecord final {
             explicit WorldRecord(const Network::NetworkModeServiceRequest &input) : request(input), native({input.scene, input.scene}) {}
@@ -24,6 +27,10 @@ namespace Horo::Application::Internal {
             GameplayWorldComposition *activeGameplay{};
             CancellationToken sceneCancellation;
             ScenePhysicsHost native;
+            std::unique_ptr<Runtime::SceneAnimationRuntime> animation;
+            bool fixedReserved{};
+            bool closeRequested{};
+            bool closed{};
             std::unique_ptr<AI::AiSceneRuntime> ai;
             std::unique_ptr<Runtime::RuntimeSceneService> scenes;
             std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
@@ -55,12 +62,44 @@ namespace Horo::Application::Internal {
             // Weak receipts retain known IDs while any actual service still owns that record;
             // retired slots are reusable without keeping an unbounded historical ID set.
             std::array<std::weak_ptr<WorldRecord>, 4> known;
+            HeadlessFixedParticipant *fixed{};  // Borrowed only while its lifecycle owner retains these owners.
+            bool fixedBound{};                  // Permanent one-shot binding, even after the participant retires.
         };
+
+        void CloseRecord(WorldRecord &record) noexcept {
+            if (record.closed)
+                return;
+            record.closeRequested = true;
+            if (record.fixedReserved)
+                return;
+            record.closed = true;
+            if (record.animation)
+                record.animation->Shutdown();
+            if (record.templates)
+                record.templates->Shutdown();
+            if (record.scenes)
+                record.scenes->Shutdown();
+            if (record.ai)
+                record.ai->BeginShutdown();
+        }
+
+#include "HeadlessAnimationFixed.h"
 
         class WorldService final : public Network::INetworkModeService {
         public:
             [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept {
                 return gameplay_ ? gameplay_->PhysicsContext() : nullptr;
+            }
+
+            const Runtime::SceneAnimationRuntime *AnimationOwner() const noexcept {
+                return std::this_thread::get_id() == owners_->owner && record_ ? record_->animation.get() : nullptr;
+            }
+
+            std::optional<Runtime::EntityRef> AnimationEntity(Runtime::SceneObjectId object) const noexcept {
+                if (std::this_thread::get_id() != owners_->owner || !record_ || !record_->scenes)
+                    return {};
+                const auto scene = record_->scenes->ActiveScene();
+                return scene ? scene->Find(object) : std::nullopt;
             }
 
             WorldService(std::shared_ptr<WorldOwners> owners, const Network::NetworkModeServiceRequest &request,
@@ -176,12 +215,30 @@ namespace Horo::Application::Internal {
             }
 
             void Shutdown() noexcept override {
-                if (record_) {
+                RevokeGameplayContext();
+                RetireGameplay();
+                if (IsSceneOwner())
+                    CloseRecord(*record_);
+                DrainModuleRetirements();
+                if (physicsWorld_)
+                    physicsWorld_->Shutdown();
+                physicsWorld_.reset();
+                record_.reset();
+            }
+
+        private:
+            bool IsSceneOwner() const noexcept {
+                return record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene;
+            }
+
+            void RevokeGameplayContext() noexcept {
+                if (record_)
                     if (const auto context = record_->gameplay.lock())
                         context->Revoke();
-                }
-                if (record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene &&
-                    record_->activeGameplay) {
+            }
+
+            void RetireGameplay() noexcept {
+                if (IsSceneOwner() && record_->activeGameplay) {
                     record_->activeGameplay->Shutdown();
                     record_->activeGameplay = nullptr;
                 }
@@ -190,24 +247,13 @@ namespace Horo::Application::Internal {
                 if (gameplay_)
                     gameplay_->Shutdown();
                 gameplay_.reset();
-                // Scene is the only aggregate owner. The paired Physics service never closes it.
-                if (record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene) {
-                    if (record_->templates)
-                        record_->templates->Shutdown();
-                    if (record_->scenes)
-                        record_->scenes->Shutdown();
-                    if (record_->ai)
-                        record_->ai->BeginShutdown();
-                }
-                if (owners_->gameplay && owners_->gameplay->moduleRetirements)
-                    (void)owners_->gameplay->moduleRetirements->Drain();
-                if (physicsWorld_ != nullptr)
-                    physicsWorld_->Shutdown();
-                physicsWorld_.reset();
-                record_.reset();
             }
 
-        private:
+            void DrainModuleRetirements() noexcept {
+                if (owners_->gameplay && owners_->gameplay->moduleRetirements)
+                    (void)owners_->gameplay->moduleRetirements->Drain();
+            }
+
             /** @brief Resolves admission only from the actual world role, retaining the complete owned project inventory. */
             Result<void> PrepareGameplaySelection() {
                 selectedGameplay_ = owners_->gameplay;
@@ -255,6 +301,20 @@ namespace Horo::Application::Internal {
                 record_->sceneCancellation = boundary.cancellation;
                 record_->scenes = std::make_unique<Runtime::RuntimeSceneService>(input.registry, input.loads,
                                                                                  Runtime::RuntimeSceneAssetLimits{}, request_.scene);
+                if (auto native = PrepareConfiguredNative(); native.HasError())
+                    return native;
+                if (auto ai = PrepareConfiguredAi(); ai.HasError())
+                    return ai;
+                if (auto animation = PrepareConfiguredAnimation(*owners_, *record_); animation.HasError())
+                    return animation;
+                if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary);
+                    prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+                return PrepareConfiguredTemplates();
+            }
+
+            Result<void> PrepareConfiguredNative() {
+                const auto &input = *owners_->configured;
                 auto participant = record_->native.MakeParticipant(*owners_->physics, owners_->authority, input.settings);
                 if (participant.HasError())
                     return Result<void>::Failure(participant.ErrorValue());
@@ -268,6 +328,11 @@ namespace Horo::Application::Internal {
                 if (auto added = record_->scenes->AddStructuralParticipant(MakeGameplayStructuralParticipant(record_->activeGameplay));
                     added.HasError())
                     return added;
+                return Result<void>::Success();
+            }
+
+            Result<void> PrepareConfiguredAi() {
+                const auto &input = *owners_->configured;
                 auto ai = AI::AiSceneRuntime::Create(input.aiSettings);
                 if (ai.HasError())
                     return Result<void>::Failure(ai.ErrorValue());
@@ -279,9 +344,12 @@ namespace Horo::Application::Internal {
                 if (auto added = record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(input.aiControllers));
                     added.HasError())
                     return added;
-                if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary);
-                    prepared.HasError())
-                    return Result<void>::Failure(prepared.ErrorValue());
+                return Result<void>::Success();
+            }
+
+            Result<void> PrepareConfiguredTemplates() {
+                const auto &input = *owners_->configured;
+                const auto &boundary = input.load;
                 if (owners_->gameplay && owners_->gameplay->prefabPermission == GameplayPrefabPermission::Granted) {
                     auto limits = Prefab::PrefabLimitProfile::Create(input.prefabPolicy);
                     if (limits.HasError())
@@ -318,11 +386,16 @@ namespace Horo::Application::Internal {
 
             /** @brief Uses ordinary fixed stages only after readiness; load progress never dispatches a tick. */
             Result<void> RunConfiguredTick(const Runtime::FixedStepContext &context) {
-                if (!configuredActivated_)
+                if (!configuredActivated_ || !record_ || record_->closeRequested)
                     return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
                 if (gameplay_) {
                     if (const auto advanced = gameplay_->FixedTick(context); advanced.HasError())
                         return advanced;
+                }
+                if (record_->animation) {
+                    auto animation = owners_->fixed->Evaluate(record_, context);
+                    if (animation.HasError())
+                        return animation;
                 }
                 auto advanced = record_->native.AdvanceFixedTick(context.fixedDelta);
                 if (advanced.HasError() && gameplay_)
@@ -465,26 +538,65 @@ namespace Horo::Application::Internal {
         return InstallWorldFactories(owners, std::move(selectedFactories));
     }
 
+    namespace {
+        Result<void> ValidateConfiguredInput(const std::shared_ptr<const Runtime::RuntimeSceneDefinition> &definition,
+                                             const HeadlessSceneActivationInput &input,
+                                             const std::optional<GameplayWorldSelection> &gameplay) {
+            if (const auto policy = Prefab::PrefabLimitProfile::Create(input.prefabPolicy); policy.HasError())
+                return Result<void>::Failure(policy.ErrorValue());
+            if (!definition || input.load.deadline == std::chrono::steady_clock::time_point{} ||
+                input.load.deadline == std::chrono::steady_clock::time_point::max())
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)
+                return Result<void>::Failure(
+                    MakeError(Network::NetworkErrors::NetworkModeInvalid, "Prefab grant requires an explicit committed artifact loader."));
+            return Result<void>::Success();
+        }
+
+        Result<void> ValidateAnimationSelection(const HeadlessSceneActivationInput &input) {
+            if (input.animationTarget.IsValid() != static_cast<bool>(input.animationIdentities))
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            if (input.animationInputs && !input.animationIdentities)
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc ComposeHeadlessSceneNetworkServices */
-    Result<Network::NetworkModeFactories> ComposeHeadlessSceneNetworkServices(
+    Result<NetworkProductComposition> ComposeHeadlessSceneNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition, HeadlessSceneActivationInput input,
         Network::NetworkModeFactories selectedFactories, const std::optional<GameplayWorldSelection> &gameplay,
         const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission) {
-        if (const auto policy = Prefab::PrefabLimitProfile::Create(input.prefabPolicy); policy.HasError())
-            return Result<Network::NetworkModeFactories>::Failure(policy.ErrorValue());
-        if (!definition || input.load.deadline == std::chrono::steady_clock::time_point{} ||
-            input.load.deadline == std::chrono::steady_clock::time_point::max())
-            return Result<Network::NetworkModeFactories>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
-        if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)
-            return Result<Network::NetworkModeFactories>::Failure(
-                MakeError(Network::NetworkErrors::NetworkModeInvalid, "Prefab grant requires an explicit committed artifact loader."));
+        if (auto valid = ValidateConfiguredInput(definition, input, gameplay); valid.HasError())
+            return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
+        if (auto valid = ValidateAnimationSelection(input); valid.HasError())
+            return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
         auto runtime = Physics::PhysicsRuntime::Create(input.mode);
         if (runtime.HasError())
-            return Result<Network::NetworkModeFactories>::Failure(runtime.ErrorValue());
+            return Result<NetworkProductComposition>::Failure(runtime.ErrorValue());
         auto owners = std::make_shared<WorldOwners>(std::move(definition), gameplay, replicationAdmission);
         owners->physics = std::move(runtime).Value();
         owners->configured.emplace(std::move(input));
-        return Result<Network::NetworkModeFactories>::Success(InstallWorldFactories(owners, std::move(selectedFactories)));
+        NetworkProductComposition composition{InstallWorldFactories(owners, std::move(selectedFactories)), {}};
+        if (owners->configured->animationIdentities) {
+            if (!owners->configured->animationTarget.IsValid())
+                return Result<NetworkProductComposition>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+            composition.fixedParticipant = [owners](Runtime::RuntimeDispatchSource source) {
+                return HeadlessFixedParticipant::Create(owners, std::move(source));
+            };
+        }
+        return Result<NetworkProductComposition>::Success(std::move(composition));
+    }
+
+    const Runtime::SceneAnimationRuntime *InspectHeadlessAnimation(const Network::INetworkModeService &service) noexcept {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->AnimationOwner() : nullptr;
+    }
+
+    std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
+                                                                     Runtime::SceneObjectId object) noexcept {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->AnimationEntity(object) : std::nullopt;
     }
 
     /** @copydoc InspectHeadlessGameplayContext */

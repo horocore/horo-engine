@@ -1,3 +1,4 @@
+#include "AnimationClipSceneProgramAccess.h"
 #include "AnimationGraphCompilerInternal.h"
 
 #include <algorithm>
@@ -565,6 +566,159 @@ namespace Horo::Animation {
                     clips.insert(section.clip);
         }
 
+        /** @brief Projects supplied instructions into the existing semantic validator, never selecting an execution order. */
+        GraphDefinition CookedValidationDefinition(const GraphCompiledDefinition &compiled) {
+            GraphDefinition result{.id = compiled.id, .inputs = compiled.inputs};
+            for (const auto &instruction : compiled.instructions) {
+                result.nodes.push_back({instruction.source.node, instruction.payload, instruction.pins});
+                for (const auto &input : instruction.inputs)
+                    result.connections.push_back(
+                        {{input.source.node, input.source.pin}, {instruction.source.node, input.destination}, input.type});
+            }
+            return result;
+        }
+
+        /** @brief Builds bounded validation-only declarations after whole-candidate cold admission. */
+        AnimationGraphData CookedValidationModel(const AnimationGraphCookedData &data) {
+            AnimationGraphData model;
+            model.id = data.id;
+            model.skeleton = data.skeleton;
+            model.entry = data.entry;
+            model.parameters = data.parameters;
+            model.actionSlots = data.actionSlots;
+            model.actions = data.actions;
+            for (const auto &definition : data.definitions)
+                model.definitions.push_back(CookedValidationDefinition(definition));
+            Canonicalize(model);
+            return model;
+        }
+
+        /** @brief Cooked catalogs must already use the same canonical ordering as compiler output. */
+        bool CookedCatalogMatches(const AnimationGraphCookedData &data, const AnimationGraphData &model) {
+            return data.parameters == model.parameters && data.actionSlots == model.actionSlots && data.actions == model.actions;
+        }
+
+        /** @brief Runs the shared semantic topology checks without compiling or replacing the supplied schedule. */
+        Result<void> CookedTopology(const GraphDefinition &definition, const AnimationGraphData &model,
+                                    const AnimationGraphCompileContext &context, DefinitionTopology &topology) {
+            if (auto nodes = IndexNodes(definition, model, context, topology); nodes.HasError())
+                return nodes;
+            if (auto edges = IndexEdges(definition, context, topology); edges.HasError())
+                return edges;
+            return ValidateReachability(definition, topology, context);
+        }
+
+        /** @brief Verifies one stored instruction against the existing canonical operand encoder. */
+        Result<std::size_t> VerifyCookedInstruction(const GraphInstruction &instruction, const GraphDefinition &definition,
+                                                    const AnimationGraphData &model, const DefinitionTopology &topology,
+                                                    const std::vector<std::uint32_t> &registers, const std::set<std::size_t> &ready) {
+            const auto found = topology.indexes.find(instruction.source.node);
+            if (found == topology.indexes.end() || ready.empty() || found->second != *ready.begin())
+                return Result<std::size_t>::Failure(Failure(GraphMalformed, instruction.source));
+            // This checks already supplied code. It neither chooses a schedule nor emits a replacement program.
+            if (EmitInstruction(definition, model, topology, found->second, registers) != instruction)
+                return Result<std::size_t>::Failure(Failure(GraphMalformed, instruction.source));
+            return Result<std::size_t>::Success(found->second);
+        }
+
+        /** @brief Advances the validation frontier only after the exact stored instruction has been checked. */
+        void AdvanceCookedFrontier(DefinitionTopology &topology, const std::size_t node, std::set<std::size_t> &ready) {
+            ready.erase(node);
+            for (const auto next : topology.outgoing[node])
+                if (--topology.indegree[next] == 0)
+                    ready.insert(next);
+        }
+
+        /** @brief Checks source provenance, operand indexes and the deterministic supplied topological order. */
+        Result<void> VerifyCookedSchedule(const GraphCompiledDefinition &compiled, const GraphDefinition &definition,
+                                          const AnimationGraphData &model, const AnimationGraphCompileContext &context) {
+            DefinitionTopology topology;
+            if (auto checked = CookedTopology(definition, model, context, topology); checked.HasError())
+                return checked;
+            std::set<std::size_t> ready;
+            for (std::size_t index = 0; index < topology.indegree.size(); ++index)
+                if (topology.indegree[index] == 0)
+                    ready.insert(index);
+            std::vector<std::uint32_t> registers(definition.nodes.size());
+            for (std::size_t index = 0; index < compiled.instructions.size(); ++index) {
+                if (auto admission = Admission(context); admission.HasError())
+                    return admission;
+                auto node = VerifyCookedInstruction(compiled.instructions[index], definition, model, topology, registers, ready);
+                if (node.HasError())
+                    return Result<void>::Failure(node.ErrorValue());
+                registers[node.Value()] = static_cast<std::uint32_t>(index);
+                AdvanceCookedFrontier(topology, node.Value(), ready);
+            }
+            if (compiled.outputInstruction != registers[topology.output])
+                return Result<void>::Failure(Failure(GraphMalformed));
+            return Result<void>::Success();
+        }
+
+        /** @brief Verifies every canonical definition before any stored index reaches binding or call expansion. */
+        Result<void> VerifyCookedDefinitions(const AnimationGraphCookedData &data, const AnimationGraphData &model,
+                                             const AnimationGraphCompileContext &context) {
+            for (std::size_t index = 0; index < data.definitions.size(); ++index) {
+                const auto &compiled = data.definitions[index];
+                const auto &definition = model.definitions[index];
+                if (compiled.id != definition.id || compiled.inputs != definition.inputs)
+                    return Result<void>::Failure(Failure(GraphMalformed));
+                if (auto checked = VerifyCookedSchedule(compiled, definition, model, context); checked.HasError())
+                    return checked;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Verifies claimed expansion costs against the one existing bounded call-graph accounting path. */
+        Result<void> VerifyCookedCosts(std::vector<GraphCompiledDefinition> &definitions, const AnimationGraphCookedData &data,
+                                       const AnimationGraphCompileContext &context) {
+            for (auto &definition : definitions)
+                definition.sourceMapCallEntries = 0;
+            if (auto bounded = BoundCalls(definitions, context); bounded.HasError())
+                return bounded;
+            for (std::size_t index = 0; index < definitions.size(); ++index) {
+                const auto &actual = definitions[index];
+                const auto &claimed = data.definitions[index];
+                if (actual.callDepth != claimed.callDepth || actual.evaluationInstructions != claimed.evaluationInstructions ||
+                    actual.sourceMapCallEntries != claimed.sourceMapCallEntries)
+                    return Result<void>::Failure(Failure(GraphMalformed));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Admits an exact current contract and canonical semantic namespace without a source compiler call. */
+        Result<AnimationGraphData> ValidateCookedModel(const AnimationGraphCookedData &data, const AnimationGraphCompileContext &context) {
+            if (data.contractVersion != CurrentAnimationGraphContractVersion)
+                return Result<AnimationGraphData>::Failure(Failure(GraphVersionUnsupported));
+            if (auto admitted = PreflightCookedGraph(data, context); admitted.HasError())
+                return Result<AnimationGraphData>::Failure(admitted.ErrorValue());
+            auto model = CookedValidationModel(data);
+            if (auto identities = ValidateCanonicalIdentities(model); identities.HasError())
+                return Result<AnimationGraphData>::Failure(identities.ErrorValue());
+            if (!CookedCatalogMatches(data, model))
+                return Result<AnimationGraphData>::Failure(Failure(GraphMalformed));
+            if (auto catalog = ValidateCanonicalCatalog(model); catalog.HasError())
+                return Result<AnimationGraphData>::Failure(catalog.ErrorValue());
+            if (auto definitions = VerifyCookedDefinitions(data, model, context); definitions.HasError())
+                return Result<AnimationGraphData>::Failure(definitions.ErrorValue());
+            return Result<AnimationGraphData>::Success(std::move(model));
+        }
+
+        /** @brief Defines execution-local operands only; these IDs never claim a persistent graph asset. */
+        AnimationGraphData DirectClipDeclarations(const AnimationClipId clip, const SkeletonId skeleton) {
+            AnimationGraphData model;
+            model.skeleton = skeleton;
+            model.entry = GraphDefinitionId::Create(1).Value();
+            const auto sample = GraphNodeId::Create(1).Value();
+            const auto output = GraphNodeId::Create(2).Value();
+            const auto pin = GraphPinId::Create(1).Value();
+            GraphDefinition definition{.id = model.entry};
+            definition.nodes = {{sample, GraphClipNode{clip, {}}, {{pin, GraphPinRole::Result, GraphValueType::Pose, true}}},
+                                {output, GraphOutputNode{}, {{pin, GraphPinRole::Value, GraphValueType::Pose, false}}}};
+            definition.connections = {{{sample, pin}, {output, pin}, GraphValueType::Pose}};
+            model.definitions.push_back(std::move(definition));
+            return model;
+        }
+
         /** @brief Publishes a complete detached schema or bound program only after the
          * final admission/cancellation fence. */
         Result<AnimationGraphProgram> PublishProgram(AnimationGraphProgram program, const AnimationGraphCompileContext &context) {
@@ -615,7 +769,12 @@ namespace Horo::Animation {
         auto schema = CompileSchema(data, context);
         if (schema.HasError())
             return schema;
-        auto result = std::move(schema).Value();
+        return BindProgram(std::move(schema).Value(), context);
+    }
+
+    /** @copydoc AnimationGraphProgram::BindProgram */
+    Result<AnimationGraphProgram> AnimationGraphProgram::BindProgram(AnimationGraphProgram result,
+                                                                     const AnimationGraphCompileContext &context) {
         auto bound = GraphCompileDetail::Bind(result, context);
         if (bound.HasError())
             return Result<AnimationGraphProgram>::Failure(bound.ErrorValue());
@@ -626,6 +785,58 @@ namespace Horo::Animation {
         result.occurrences_ = std::move(owned.occurrences);
         result.stateMachines_ = std::move(owned.stateMachines);
         return PublishProgram(std::move(result), context);
+    }
+
+    /** @copydoc AnimationGraphProgram::FromCooked */
+    Result<AnimationGraphProgram> AnimationGraphProgram::FromCooked(const AnimationGraphCookedData &data,
+                                                                    const AnimationGraphCompileContext &context) {
+        auto model = ValidateCookedModel(data, context);
+        if (model.HasError())
+            return Result<AnimationGraphProgram>::Failure(model.ErrorValue());
+        const auto entry = ResolveEntryIndex(model.Value());
+        if (entry.HasError())
+            return Result<AnimationGraphProgram>::Failure(entry.ErrorValue());
+        AnimationGraphProgram result;
+        result.id_ = data.id;
+        result.skeleton_ = data.skeleton;
+        result.entry_ = entry.Value();
+        result.parameters_ = data.parameters;
+        result.actionSlots_ = data.actionSlots;
+        result.actions_ = data.actions;
+        result.definitions_ = data.definitions;
+        if (auto costs = VerifyCookedCosts(result.definitions_, data, context); costs.HasError())
+            return Result<AnimationGraphProgram>::Failure(costs.ErrorValue());
+        std::set<AnimationClipId> clips;
+        for (const auto &definition : result.definitions_)
+            CollectClips(definition, clips);
+        CollectActionClips(model.Value(), clips);
+        result.clips_.assign(clips.begin(), clips.end());
+        return BindProgram(std::move(result), context);
+    }
+
+    /** @copydoc AnimationGraphProgram::PrepareClip */
+    Result<AnimationGraphProgram> AnimationGraphProgram::PrepareClip(const AnimationClipId clip,
+                                                                     const AnimationGraphCompileContext &context) {
+        if (auto admitted = PreflightClipProgram(clip, context); admitted.HasError())
+            return Result<AnimationGraphProgram>::Failure(admitted.ErrorValue());
+        const auto declarations = DirectClipDeclarations(clip, context.skeleton->Data().skeleton);
+        auto definition = CompileDefinition(declarations.definitions.front(), declarations, context);
+        if (definition.HasError())
+            return Result<AnimationGraphProgram>::Failure(definition.ErrorValue());
+        AnimationGraphProgram result;
+        result.sourceClip_ = clip;
+        result.skeleton_ = declarations.skeleton;
+        result.definitions_.push_back(std::move(definition).Value());
+        result.clips_.push_back(clip);
+        if (auto costs = BoundCalls(result.definitions_, context); costs.HasError())
+            return Result<AnimationGraphProgram>::Failure(costs.ErrorValue());
+        return BindProgram(std::move(result), context);
+    }
+
+    /** @copydoc Detail::ClipSceneProgramAccess::Prepare */
+    Result<AnimationGraphProgram> Detail::ClipSceneProgramAccess::Prepare(const AnimationClipId clip,
+                                                                          const AnimationGraphCompileContext &context) {
+        return AnimationGraphProgram::PrepareClip(clip, context);
     }
 
     /** @copydoc MigrateAnimationGraph */

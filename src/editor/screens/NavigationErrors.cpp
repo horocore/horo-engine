@@ -53,6 +53,15 @@ namespace Horo::Editor::NavigationErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor FixedDispatchInvalid{
+        .domain = ScreenHostDomain,
+        .code = ErrorCode{"navigation.fixed_dispatch_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Screen fixed update does not match its active scheduler dispatch.",
+        .remediationHint = "Bind the actual scheduler issuer and finalize the same fixed attempt before screen replacement.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor Busy{
         .domain = ScreenHostDomain,
         .code = ErrorCode{"navigation.busy"},

@@ -1,5 +1,7 @@
 #include "CliHostErrorTranslation.h"
 
+#include "Horo/Animation/AnimationCookedAssets.h"
+#include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Application/ProjectErrorDomain.h"
 #include "Horo/Assets/AssetErrorDomain.h"
 #include "Horo/Cli/CliErrors.h"
@@ -82,6 +84,56 @@ namespace Horo::Application::Internal {
                 mappings[mappings.size() - entries.size() + i].category = entries[i].category;
             return true;
         }
+
+        constexpr std::array AnimationEntries{Entry{&Animation::AnimationErrors::IdentityInvalid, Validation},
+                                              Entry{&Animation::AnimationErrors::HandleMalformed, Validation},
+                                              Entry{&Animation::AnimationErrors::HandleOwnerMismatch, Validation},
+                                              Entry{&Animation::AnimationErrors::HandleStale, Validation},
+                                              Entry{&Animation::AnimationErrors::GenerationExhausted, Invariant},
+                                              Entry{&Animation::AnimationErrors::ComponentInvalid, Validation},
+                                              Entry{&Animation::AnimationErrors::ComponentBindingMismatch, Validation},
+                                              Entry{&Animation::AnimationErrors::ContractVersionUnsupported, Capability},
+                                              Entry{&Animation::AnimationErrors::SkeletonVersionUnsupported, Capability},
+                                              Entry{&Animation::AnimationErrors::SkeletonAdmissionRejected, Operation},
+                                              Entry{&Animation::AnimationErrors::SkeletonValidationCancelled, Cancelled},
+                                              Entry{&Animation::AnimationErrors::SkeletonReloadMismatch, Validation},
+                                              Entry{&Animation::AnimationErrors::SkeletonLimitExceeded, Validation},
+                                              Entry{&Animation::AnimationErrors::SkeletonDuplicateIdentity, Validation},
+                                              Entry{&Animation::AnimationErrors::SkeletonJointMissing, Validation},
+                                              Entry{&Animation::AnimationErrors::SkeletonHierarchyCycle, Validation},
+                                              Entry{&Animation::AnimationErrors::SkeletonTransformInvalid, Validation},
+                                              Entry{&Animation::AnimationErrors::SkeletonMetadataInvalid, Validation},
+                                              Entry{&Animation::AnimationErrors::PoseFrameStale, Validation},
+                                              Entry{&Animation::AnimationErrors::PoseThreadViolation, Invariant},
+                                              Entry{&Animation::AnimationErrors::ClipVersionUnsupported, Capability},
+                                              Entry{&Animation::AnimationErrors::ClipAdmissionRejected, Operation},
+                                              Entry{&Animation::AnimationErrors::ClipOperationCancelled, Cancelled},
+                                              Entry{&Animation::AnimationErrors::ClipReloadMismatch, Validation},
+                                              Entry{&Animation::AnimationErrors::ClipSkeletonMismatch, Validation},
+                                              Entry{&Animation::AnimationErrors::ClipBindingStale, Validation},
+                                              Entry{&Animation::AnimationErrors::ClipLimitExceeded, Validation},
+                                              Entry{&Animation::AnimationErrors::ClipDuplicateIdentity, Validation},
+                                              Entry{&Animation::AnimationErrors::ClipJointMissing, Validation},
+                                              Entry{&Animation::AnimationErrors::ClipMalformed, Validation},
+                                              Entry{&Animation::AnimationErrors::ClipUnsupported, Capability},
+                                              Entry{&Animation::AnimationErrors::ClipTimeOverflow, Validation},
+                                              Entry{&Animation::AnimationErrors::ClipReferencePoseMismatch, Validation},
+                                              Entry{&Animation::AnimationErrors::GraphVersionUnsupported, Capability},
+                                              Entry{&Animation::AnimationErrors::GraphAdmissionRejected, Operation},
+                                              Entry{&Animation::AnimationErrors::GraphOperationCancelled, Cancelled},
+                                              Entry{&Animation::AnimationErrors::GraphReloadMismatch, Validation},
+                                              Entry{&Animation::AnimationErrors::GraphLimitExceeded, Operation},
+                                              Entry{&Animation::AnimationErrors::GraphMalformed, Validation},
+                                              Entry{&Animation::AnimationErrors::GraphTypeMismatch, Validation},
+                                              Entry{&Animation::AnimationErrors::GraphCycle, Validation},
+                                              Entry{&Animation::AnimationErrors::GraphBindingMismatch, Validation}};
+
+        constexpr std::array AnimationAssetEntries{Entry{&Animation::AnimationAssetErrors::Malformed, Validation},
+                                                   Entry{&Animation::AnimationAssetErrors::Unsupported, Capability},
+                                                   Entry{&Animation::AnimationAssetErrors::Capacity, Operation},
+                                                   Entry{&Animation::AnimationAssetErrors::Cancelled, Cancelled},
+                                                   Entry{&Animation::AnimationAssetErrors::Unavailable, Operation},
+                                                   Entry{&Animation::AnimationAssetErrors::Stale, Validation}};
 
         constexpr std::array NavigationEntries{Entry{&Navigation::NavigationErrors::IdentityInvalid, Validation},
                                                Entry{&Navigation::NavigationErrors::InvalidHandle, Invariant},
@@ -254,7 +306,9 @@ namespace Horo::Application::Internal {
         bool AddHostDependencies(std::vector<ModuleDescriptor> &modules, std::vector<Hosts::ErrorMapping> &mappings) {
             return AddEntries(modules, mappings, "horo.physics", PhysicsEntries) && AddEntries(modules, mappings, "horo.mcp", McpEntries) &&
                    AddEntries(modules, mappings, "horo.security", SecurityEntries) &&
-                   AddEntries(modules, mappings, "horo.extensions", ScriptModuleEntries);
+                   AddEntries(modules, mappings, "horo.extensions", ScriptModuleEntries) &&
+                   AddEntries(modules, mappings, "horo.animation", AnimationEntries) &&
+                   AddEntries(modules, mappings, "horo.animation", AnimationAssetEntries);
         }
 
         /** @brief Registers closed producer scopes; every resulting mapping is an exact domain/code pair. */

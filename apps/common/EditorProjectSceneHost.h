@@ -9,6 +9,7 @@
 #include "EditorPlayXrHost.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Prefab/PrefabMetrics.h"
+#include "SceneAnimationHostSelection.h"
 #include "ScenePhysicsHost.h"
 
 #include <optional>
@@ -27,6 +28,7 @@ namespace Horo::Application::Internal {
         std::optional<Error> saveError;    /**< Original cold host/storage error, surfaced by Manager without blocking ordinary Play. */
         EditorPlaySaveFactory saveFactory; /**< Explicit Play-only sandbox composition; prefab/preview policies leave it absent. */
         std::vector<AI::AiControllerDescriptor> aiControllers; /**< Owned inert catalog copied with the app policy. */
+        std::optional<SceneAnimationHostSelection> animation;
     };
 
     /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.

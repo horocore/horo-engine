@@ -67,6 +67,8 @@ namespace Horo::Application::Internal {
                     return captured;
                 if (const auto prepared = PrepareNativeOwners(root, policy); prepared.HasError())
                     return prepared;
+                if (const auto animation = PrepareAnimation(policy); animation.HasError())
+                    return animation;
                 if (policy.prefabGranted) {
                     if (auto prepared = PreparePrefabServices(std::move(*prefabLimits), policy); prepared.HasError())
                         return prepared;
@@ -77,6 +79,32 @@ namespace Horo::Application::Internal {
             /** @brief Cold host identity and backend-neutral root admission, before creating any owner. */
             bool ValidPreparation(const std::filesystem::path &root, const EditorProjectScenePolicy &policy) const noexcept {
                 return identity_.IsValid() && (!root.empty() || policy.physicsMode == Physics::PhysicsRuntimeMode::Null);
+            }
+
+            Result<void> PrepareAnimation(const EditorProjectScenePolicy &policy) {
+                if (!policy.animation)
+                    return Result<void>::Success();
+                const auto &selected = *policy.animation;
+                if (!selected.identities || !selected.target.IsValid() || (policy.cooked && policy.cooked->target != selected.target))
+                    return Result<void>::Failure(MakeError(InvalidProjectScene, "Animation requires an explicit matching host selection."));
+                const auto identity = selected.identities->Issue();
+                if (!identity.HasValue())
+                    return Result<void>::Failure(MakeError(InvalidProjectScene, "Animation runtime identity admission failed."));
+                Runtime::SceneAnimationRuntimeConfig config{selected.dispatch,          identity.identity, selected.target,
+                                                            animationLifetime_.Token(), selected.limits,   selected.inputs};
+                auto created = Runtime::SceneAnimationRuntime::Create(std::move(config));
+                if (created.HasError())
+                    return Result<void>::Failure(created.ErrorValue());
+                animation_ = std::move(created).Value();
+                if (auto started = animation_->Startup(animationLifetime_.Token()); started.HasError())
+                    return started;
+                if (auto added = scenes_->AddActivationParticipant(animation_->MakeActivationParticipant()); added.HasError())
+                    return added;
+                return scenes_->AddStructuralParticipant(animation_->MakeStructuralParticipant());
+            }
+
+            Runtime::SceneAnimationRuntime *AnimationRuntime() noexcept override {
+                return animation_.get();
             }
 
             /** @brief Composes the one shared provider and Scene-owned service participant before presentation seals. */
@@ -292,6 +320,8 @@ namespace Horo::Application::Internal {
             }
 
             Result<void> FixedUpdate(const Gameplay::FixedDeltaTime delta) override {
+                if (animation_)
+                    return Result<void>::Failure(MakeError(InvalidProjectScene, "Animation requires the actual runtime fixed context."));
                 // The existing Editor screen contract supplies seconds. Convert that one
                 // host quantum once to the nearest representable nanosecond, never from
                 // frame time.
@@ -302,6 +332,28 @@ namespace Horo::Application::Internal {
                 return native_.AdvanceFixedTick(Duration::FromNanoseconds(std::llround(delta.seconds * 1'000'000'000.0)));
             }
 
+            Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
+                if (animation_) {
+                    if (auto evaluated = animation_->OnFixedUpdate(context); evaluated.HasError())
+                        return evaluated;
+                }
+                return native_.AdvanceFixedTick(context.fixedDelta);
+            }
+
+            Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) override {
+                return animation_ ? animation_->PrepareFixedCommit(context) : Result<void>::Success();
+            }
+
+            void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                if (animation_)
+                    animation_->CommitFixedUpdate(context);
+            }
+
+            void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                if (animation_)
+                    animation_->AbortFixedUpdate(context);
+            }
+
             void Shutdown() noexcept override {
                 ShutdownSave();
                 QuiesceGameplay();
@@ -309,6 +361,9 @@ namespace Horo::Application::Internal {
                     prefab_.templates->Shutdown();
                 if (scenes_)
                     scenes_->Shutdown();
+                animationLifetime_.RequestCancellation();
+                if (animation_)
+                    animation_->Shutdown();
                 if (ai_)
                     ai_->BeginShutdown();
                 if (uiLoads_)
@@ -339,15 +394,8 @@ namespace Horo::Application::Internal {
             /** @brief Captures immutable registry/cook payloads before constructing any Scene/native owner. */
             Result<void> CaptureAssets(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                                        const Runtime::RuntimeSceneDefinition *definition) {
-                if (!root.empty()) {
-                    auto candidate = Assets::PrepareAssetRegistryCandidate(root);
-                    if (candidate.HasError())
-                        return Result<void>::Failure(candidate.ErrorValue());
-                    auto report = registry_.Publish(std::move(candidate).Value());
-                    if (report.status != Assets::AssetRegistryBuildStatus::Complete)
-                        return Result<void>::Failure(report.diagnostics.empty() ? MakeError(InvalidProjectScene)
-                                                                                : report.diagnostics.front().error);
-                }
+                if (auto captured = CaptureProjectRegistry(root); captured.HasError())
+                    return captured;
                 if ((policy.prefabGranted || (definition && !definition->AssetDependencies().empty())) && !policy.cooked)
                     return Result<void>::Failure(MakeError(InvalidProjectScene, "This Play Scene requires committed assets: "
                                                                                 "supply --cooked-root and --cook-target."));
@@ -358,7 +406,27 @@ namespace Horo::Application::Internal {
                         return Result<void>::Failure(captured.ErrorValue());
                     assets_ = std::move(captured).Value();
                 }
-                loads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_ ? assets_->Provider() : emptyProvider_);
+                CreateAssetLoaders(jobs, policy);
+                return Result<void>::Success();
+            }
+
+            /** @brief Publishes only the selected project's canonical registry; the welcome host keeps its empty registry. */
+            Result<void> CaptureProjectRegistry(const std::filesystem::path &root) {
+                if (root.empty())
+                    return Result<void>::Success();
+                auto candidate = Assets::PrepareAssetRegistryCandidate(root);
+                if (candidate.HasError())
+                    return Result<void>::Failure(candidate.ErrorValue());
+                auto report = registry_.Publish(std::move(candidate).Value());
+                if (report.status != Assets::AssetRegistryBuildStatus::Complete)
+                    return Result<void>::Failure(report.diagnostics.empty() ? MakeError(InvalidProjectScene)
+                                                                            : report.diagnostics.front().error);
+                return Result<void>::Success();
+            }
+
+            /** @brief Builds each existing loader over its exact captured view after cook admission succeeds. */
+            void CreateAssetLoaders(JobSystem &jobs, const EditorProjectScenePolicy &policy) {
+                loads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_ ? assets_->SceneProvider() : emptyProvider_);
                 if (policy.uiSources) {
                     uiArtifactLoads_ =
                         std::make_unique<Assets::AssetLoadService>(jobs, assets_ ? assets_->ArtifactProvider() : emptyProvider_);
@@ -366,7 +434,6 @@ namespace Horo::Application::Internal {
                 }
                 if (policy.prefabGranted)
                     prefabLoads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_->ArtifactProvider());
-                return Result<void>::Success();
             }
 
             /** @brief Captures the selected project schema before any candidate/native-world staging. */
@@ -419,6 +486,8 @@ namespace Horo::Application::Internal {
             ScenePhysicsHost native_;
             std::vector<AI::AiControllerDescriptor> controllers_;
             std::unique_ptr<AI::AiSceneRuntime> ai_;
+            CancellationSource animationLifetime_;
+            std::unique_ptr<Runtime::SceneAnimationRuntime> animation_;
             std::unique_ptr<Runtime::RuntimeSceneService> scenes_;
 
             /** @brief Owns the projector/provider/spawn chain and its shared gameplay borrow in their required lifetime order. */
