@@ -5,6 +5,7 @@
  */
 #include "EditorPlaySaveHostArchive.h"
 #include "EditorPlaySaveHostCapture.h"
+#include "Horo/Prefab/PrefabPersistentCodec.h"
 #include "Horo/Runtime/Save/SaveSlotLifecycle.h"
 #include "Horo/Security/SecureMemory.h"
 
@@ -16,6 +17,7 @@ namespace Horo::Application::Internal {
         std::vector<Runtime::PersistentEntityRecord> identities;
         std::vector<Gameplay::GameplayPersistenceDeclaration> gameplay;
         std::optional<Runtime::CanonicalStateParticipantDescriptor> lifecycle; /**< Frozen inert Gameplay schema, never a runtime lease. */
+        std::optional<Prefab::PrefabLimitProfile> prefabProfile; /**< Inert bounded recipe codec policy; never provider/Scene authority. */
     };
 
     /** @brief Explicit host-approved sandbox scope, independent of authoring/project and production save directories. */

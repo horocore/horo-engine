@@ -17,7 +17,7 @@
           "source": "00000000-0000-0000-0000-000000000001"
         }
       ],
-      "cookedHash": "sha256:8555f02d38f42a19f16d37eb944c483bbe3098488b0ce66aac5a168f10afedfe"
+      "cookedHash": "sha256:6d13dcce1f95334fc89ca25fd1d7e1fbdd4c44762d63de9ac560a8c11fe590a3"
     },
     {
       "file": "multi.prefab",
@@ -39,7 +39,7 @@
           "source": "00000000-0000-0000-0000-000000000002"
         }
       ],
-      "cookedHash": "sha256:042ae1d6dd697496992a4f653a489bcf9c44899f71bab87b4f3ce161516008a7"
+      "cookedHash": "sha256:cbc425e698192d01f8d0c698cd0e51be2ee9eeba287ac5ab23b5b30bd253534e"
     },
     {
       "file": "resource.prefab",
@@ -54,7 +54,7 @@
           "source": "00000000-0000-0000-0000-000000000003"
         }
       ],
-      "cookedHash": "sha256:6a41672ba227c2c8a8742a6e9e6b923366eb355140a0b1c1c6da09e3f83facff"
+      "cookedHash": "sha256:1f1c48bb71f14359277759e601c580dbc60e6fde7eb83e235501b00a2b711ee6"
     },
     {
       "file": "nested.prefab",
@@ -87,7 +87,7 @@
           "source": "00000000-0000-0000-0000-000000000002"
         }
       ],
-      "cookedHash": "sha256:d50e99ed63cd754c74427ca8cf649d3707a51a94c479ca37d9e39a976bee1d10"
+      "cookedHash": "sha256:ce0c6552aa7c37c3819f01499813d95c108c0d0989df02b4ead81c458c80140e"
     },
     {
       "file": "variant.prefab",
@@ -109,7 +109,7 @@
           "source": "00000000-0000-0000-0000-000000000002"
         }
       ],
-      "cookedHash": "sha256:f76e99c348f847986308178b74a2d4db7077d1ec7d3cb20d8cafc059d8d9c557"
+      "cookedHash": "sha256:c427e23230e7f55fe60f688191cbf101c501ab2f7639ea2daa86309deb7bfe5c"
     }
   ],
   "failures": [

@@ -1,5 +1,7 @@
 #include "EditorPlaySaveHostCapture.h"
 
+#include "EditorPlaySavePrefabServices.h"
+
 #include <algorithm>
 #include <set>
 #include <tuple>
@@ -99,14 +101,34 @@ namespace Horo::Application::Internal {
             return Outcome::Success({*entity.authoredObject, parent, *entity.localTransform, *entity.primitiveMesh, *entity.components});
         }
 
+        /** @brief Dynamic existence is owned by the same canonical inventory and all subsystem state still requires actual adapters. */
+        Result<void> CaptureDynamic(const RuntimeEntityView &entity, const PersistentEntityIdentityMap &inventory,
+                                    std::span<const Editor::PlaySaveGameplayBinding> gameplay) {
+            auto identity = inventory.Find(entity.entity);
+            if (identity.HasError())
+                return Result<void>::Failure(identity.ErrorValue());
+            const auto records = inventory.Records();
+            const auto record = std::ranges::find(records, identity.Value(), &PersistentEntityRecord::identity);
+            if (record == records.end() || !std::holds_alternative<SpawnedPersistentEntityProvenance>(record->provenance) ||
+                !entity.components || UnregisteredState(*entity.components, gameplay))
+                return Result<void>::Failure(Unsupported());
+            return Result<void>::Success();
+        }
+
         /** @brief Freezes current typed values only after bounds and actual Scene identity have been admitted. */
         Result<RuntimeSceneDefinition> CaptureDefinition(const RuntimeSceneView &scene, const RuntimeSceneDefinition &baseline,
-                                                         std::span<const Editor::PlaySaveGameplayBinding> gameplay) {
+                                                         std::span<const Editor::PlaySaveGameplayBinding> gameplay,
+                                                         const PersistentEntityIdentityMap *inventory) {
             SceneDefinitionBuilder builder(baseline.Id(), baseline.Revision());
             for (std::size_t index = 0; index < scene.SlotCount(); ++index) {
                 const auto entity = scene.EntityAt(index);
                 if (!entity)
                     continue;
+                if (!entity->authoredObject && inventory) {
+                    if (auto admitted = CaptureDynamic(*entity, *inventory, gameplay); admitted.HasError())
+                        return Result<RuntimeSceneDefinition>::Failure(admitted.ErrorValue());
+                    continue;
+                }
                 auto captured = CaptureEntity(scene, *entity, gameplay);
                 if (captured.HasError())
                     return Result<RuntimeSceneDefinition>::Failure(captured.ErrorValue());
@@ -215,13 +237,14 @@ namespace Horo::Application::Internal {
     /** @copydoc CapturePlaySaveScene */
     Result<PlaySaveSceneState> CapturePlaySaveScene(Runtime::RuntimeSceneView scene, const Runtime::RuntimeSceneDefinition &baseline,
                                                     std::span<const Runtime::PersistentEntityRecord> identities,
-                                                    std::span<const Editor::PlaySaveGameplayBinding> gameplay) {
+                                                    std::span<const Editor::PlaySaveGameplayBinding> gameplay,
+                                                    const Runtime::PersistentEntityIdentityMap *inventory) {
         using Outcome = Result<PlaySaveSceneState>;
         if (!scene.IsCurrent() || scene.DefinitionId() != baseline.Id() || scene.DefinitionRevision() != baseline.Revision())
             return Outcome::Failure(MakeError(Runtime::SaveErrors::CaptureContextInvalid));
         if (scene.SlotCount() > MaximumEntities || scene.BaselineCount() != 0)
             return Outcome::Failure(Unsupported());
-        auto definition = CaptureDefinition(scene, baseline, gameplay);
+        auto definition = CaptureDefinition(scene, baseline, gameplay, inventory);
         if (definition.HasError())
             return Outcome::Failure(definition.ErrorValue());
         const auto map = CaptureIdentities(scene, baseline, identities, definition.Value().Entities().size());
@@ -233,8 +256,26 @@ namespace Horo::Application::Internal {
     /** @copydoc PlaySaveSceneCapture::PlaySaveSceneCapture */
     PlaySaveSceneCapture::PlaySaveSceneCapture(Runtime::RuntimeSceneService &scenes, Runtime::RuntimeSceneDefinition baseline,
                                                std::vector<Runtime::PersistentEntityRecord> identities,
-                                               std::weak_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> gameplay)
-        : scenes_(scenes), baseline_(std::move(baseline)), identities_(std::move(identities)), gameplay_(std::move(gameplay)) {}
+                                               std::weak_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> gameplay,
+                                               std::shared_ptr<PlaySavePrefabServices> prefabs)
+        : scenes_(scenes), baseline_(std::move(baseline)), identities_(std::move(identities)), gameplay_(std::move(gameplay)),
+          prefabs_(std::move(prefabs)) {}
+
+    /** @copydoc PlaySaveSceneCapture::CompleteIdentities */
+    Result<std::optional<Runtime::PersistentEntityIdentityMap>> PlaySaveSceneCapture::CompleteIdentities() const {
+        using Outcome = Result<std::optional<Runtime::PersistentEntityIdentityMap>>;
+        std::optional<Runtime::PersistentEntityIdentityMap> complete;
+        if (prefabs_) {
+            const auto inventory = prefabs_->Inventory();
+            if (!inventory)
+                return Outcome::Failure(MakeError(Runtime::SaveErrors::CaptureContextInvalid));
+            auto mapped = inventory->Identities();
+            if (mapped.HasError())
+                return Outcome::Failure(mapped.ErrorValue());
+            complete.emplace(std::move(mapped).Value());
+        }
+        return Outcome::Success(std::move(complete));
+    }
 
     /** @copydoc PlaySaveSceneCapture::Capture */
     Result<Runtime::CanonicalCaptureDisposition> PlaySaveSceneCapture::Capture(const Runtime::CanonicalCaptureContext &context,
@@ -247,7 +288,10 @@ namespace Horo::Application::Internal {
         const auto admitted = gameplay_.lock();
         const auto bindings =
             admitted ? std::span<const Editor::PlaySaveGameplayBinding>{*admitted} : std::span<const Editor::PlaySaveGameplayBinding>{};
-        const auto state = CapturePlaySaveScene(*scene, baseline_, identities_, bindings);
+        auto complete = CompleteIdentities();
+        if (complete.HasError())
+            return Outcome::Failure(complete.ErrorValue());
+        const auto state = CapturePlaySaveScene(*scene, baseline_, identities_, bindings, complete.Value() ? &*complete.Value() : nullptr);
         if (state.HasError())
             return Outcome::Failure(state.ErrorValue());
         const auto encoded = EncodePlaySaveScene(state.Value());

@@ -2,6 +2,8 @@
 
 #include "PrefabSpawnState.h"
 
+#include <new>
+
 namespace Horo::Gameplay {
     /** @copydoc GameplayPrefabContext::GameplayPrefabContext */
     GameplayPrefabContext::GameplayPrefabContext(ConstructionKey, std::shared_ptr<Prefab::Detail::PrefabSpawnState> state,
@@ -16,7 +18,7 @@ namespace Horo::Gameplay {
     /** @copydoc GameplayPrefabContext::Spawn */
     Result<Prefab::PrefabOperation> GameplayPrefabContext::Spawn(const Prefab::PrefabSpawnRequest &request,
                                                                  const CancellationToken &cancellation) const {
-        return state_->submitSpawn(*state_, request, scope_, revocation_.Token(), cancellation, lineage_);
+        return state_->submitSpawn(*state_, request, scope_, revocation_.Token(), cancellation, lineage_, binding_.moduleId);
     }
 
     /** @copydoc GameplayPrefabContext::Despawn */
@@ -24,6 +26,11 @@ namespace Horo::Gameplay {
                                                                    const std::uint64_t notBeforeTick,
                                                                    const CancellationToken &cancellation) const {
         return state_->submitDespawn(*state_, instance, notBeforeTick, scope_, revocation_.Token(), cancellation);
+    }
+
+    /** @copydoc GameplayPrefabContext::FindPersistent */
+    Result<Prefab::PrefabInstance> GameplayPrefabContext::FindPersistent(Runtime::SavePrefabInstanceId instance) const {
+        return state_->Lookup(instance, scope_, revocation_.Token(), binding_.moduleId);
     }
 
     /** @copydoc GameplayPrefabContext::CurrentTick */
@@ -48,9 +55,12 @@ namespace Horo::Gameplay {
     /** @copydoc GameplayPrefabContext::ForEntity */
     Result<std::shared_ptr<const GameplayPrefabContext>> GameplayPrefabContext::ForEntity(const Runtime::EntityRef entity) const {
         using Context = std::shared_ptr<const GameplayPrefabContext>;
-        if (auto valid = state_->Check(); valid.HasError())
-            return Result<Context>::Failure(valid.ErrorValue());
-        auto owner = state_->scenes->ActiveScene()->Get(entity);
+        auto view = state_->BindingView();
+        if (view.HasError())
+            return Result<Context>::Failure(view.ErrorValue());
+        if (revocation_.Token().IsCancellationRequested())
+            return Result<Context>::Failure(MakeError(Prefab::PrefabErrors::Cancelled));
+        auto owner = view.Value().Get(entity);
         if (owner.HasError())
             return Result<Context>::Failure(owner.ErrorValue());
         std::vector<Assets::AssetId> lineage(owner.Value().groupSpawnLineage.begin(), owner.Value().groupSpawnLineage.end());
@@ -117,6 +127,13 @@ namespace Horo::Prefab {
         return state_ && !state_->entities.empty() ? state_->entities.front() : Runtime::EntityRef{};
     }
 
+    /** @copydoc PrefabInstance::PersistentId */
+    std::optional<Runtime::SavePrefabInstanceId> PrefabInstance::PersistentId() const noexcept {
+        if (!state_ || !state_->persistence)
+            return {};
+        return state_->persistence->InstanceIdentity();
+    }
+
     /** @copydoc PrefabOperation::State */
     PrefabSpawnState PrefabOperation::State() const noexcept {
         using enum PrefabSpawnState;
@@ -164,29 +181,70 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabSpawnService::PrefabSpawnService */
     PrefabSpawnService::PrefabSpawnService(PrefabTemplateProvider &provider, Runtime::RuntimeSceneService &scenes,
-                                           const Gameplay::ComponentRegistry *components, const PrefabComponentProjector *projector)
+                                           const Gameplay::ComponentRegistry *components, const PrefabComponentProjector *projector,
+                                           std::shared_ptr<IPrefabPersistenceOwner> persistence,
+                                           std::shared_ptr<const PrefabValueSchemaSnapshot> schemas)
         : state_(
               std::make_shared<Detail::PrefabSpawnState>(provider, scenes, components, projector,
                                                          +[](Detail::PrefabSpawnState &state, const PrefabSpawnRequest &request,
                                                              const std::uint64_t scope, const CancellationToken &revocation,
                                                              const CancellationToken &cancellation,
-                                                             const std::span<const Assets::AssetId> lineage) {
-                                                             return state.Spawn(request, scope, revocation, cancellation, lineage);
+                                                             const std::span<const Assets::AssetId> lineage, std::string_view creator) {
+                                                             return state.Spawn(request, scope, revocation, cancellation, lineage, creator);
                                                          },
                                                          +[](Detail::PrefabSpawnState &state, const PrefabInstance &instance,
                                                              const std::uint64_t due, const std::uint64_t scope,
                                                              const CancellationToken &revocation, const CancellationToken &cancellation) {
                                                              return state.Despawn(instance, due, scope, revocation, cancellation);
-                                                         })) {}
+                                                         },
+                                                         std::move(persistence), std::move(schemas))) {}
+
+    /** @copydoc PrefabSpawnService::PrepareForScene */
+    Result<std::unique_ptr<PrefabSpawnService>> PrefabSpawnService::PrepareForScene(
+        PrefabTemplateProvider &provider, Runtime::RuntimeSceneService &scenes, Runtime::RuntimeScene &candidate,
+        const Gameplay::ComponentRegistry *components, const PrefabComponentProjector *projector,
+        std::shared_ptr<IPrefabPersistenceOwner> persistence, std::shared_ptr<const PrefabValueSchemaSnapshot> schemas,
+        std::uint64_t initialTick) {
+        if (!candidate.View().RuntimeId().IsValid() || !provider.UsesSceneService(scenes) || !scenes.IsRestoreCandidate(candidate))
+            return Result<std::unique_ptr<PrefabSpawnService>>::Failure(MakeError(PrefabErrors::SceneUnavailable));
+        try {
+            auto service =
+                std::make_unique<PrefabSpawnService>(provider, scenes, components, projector, std::move(persistence), std::move(schemas));
+            service->state_->scene = candidate.View().RuntimeId();
+            service->state_->preparedScene = &candidate;
+            service->state_->tick = initialTick;
+            if (auto bound = service->state_->BindingView(); bound.HasError())
+                return Result<std::unique_ptr<PrefabSpawnService>>::Failure(bound.ErrorValue());
+            return Result<std::unique_ptr<PrefabSpawnService>>::Success(std::move(service));
+        } catch (const std::bad_alloc &) {
+            return Result<std::unique_ptr<PrefabSpawnService>>::Failure(MakeError(PrefabErrors::ComponentAllocationFailed));
+        }
+    }
 
     PrefabSpawnService::~PrefabSpawnService() {
         Shutdown();
     }
 
+    /** @copydoc PrefabSpawnService::InstallPersistenceOwner */
+    Result<void> PrefabSpawnService::InstallPersistenceOwner(std::shared_ptr<IPrefabPersistenceOwner> persistence) {
+        if (auto owner = state_->Check(); owner.HasError())
+            return owner;
+        if (!persistence)
+            return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "A durable prefab identity owner is required."));
+        if (state_->persistence == persistence)
+            return Result<void>::Success();
+        if (state_->persistence || state_->hasQueuedStructure)
+            return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected,
+                                                   "Prefab persistence must be installed before any structural prefab admission; "
+                                                   "restart Play with the Save owner configured."));
+        state_->persistence = std::move(persistence);
+        return Result<void>::Success();
+    }
+
     /** @copydoc PrefabSpawnService::Acquire */
     Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabSpawnService::Acquire(GameplayPrefabBinding binding) const {
         using Context = std::shared_ptr<Gameplay::GameplayPrefabContext>;
-        if (auto valid = state_->Check(); valid.HasError())
+        if (auto valid = state_->BindingView(); valid.HasError())
             return Result<Context>::Failure(valid.ErrorValue());
         std::erase_if(state_->scopes, [](const auto &entry) {
             return entry.expired();
@@ -287,6 +345,7 @@ namespace Horo::Prefab {
         state_->pending.clear();
         state_->provider = nullptr;
         state_->scenes = nullptr;
+        state_->preparedScene = nullptr;
         state_->components = nullptr;
         state_->projector = nullptr;
     }

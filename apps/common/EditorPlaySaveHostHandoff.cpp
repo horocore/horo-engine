@@ -1,4 +1,6 @@
+#include "EditorPlaySaveFailurePublication.h"
 #include "EditorPlaySaveHostRestore.h"
+#include "EditorPlaySavePrefabServices.h"
 
 #include <type_traits>
 
@@ -17,6 +19,9 @@ namespace Horo::Application::Internal {
             SceneRestoreBundle *bundle{}; /**< Borrowed only by the source actually owned
                                              inside this bundle. */
             SceneRuntimeId candidate;
+            std::shared_ptr<PlaySavePrefabServices> prefabs;
+            std::shared_ptr<Prefab::PrefabRestoreEntities> dynamic;
+            std::shared_ptr<const PlaySaveSceneState> decoded;
         };
 
         /** @brief Preserves canonical cancellation evidence without assuming an optional snapshot exists. */
@@ -99,23 +104,48 @@ namespace Horo::Application::Internal {
                 Rollback();
             }
 
+            Result<void> ValidateRestorePartitions(std::span<const SceneRestoreGroupPartition> partitions) const override {
+                return bundle_->ValidateRestorePartitions(partitions);
+            }
+
+            SceneRestoreStructuralLimits StructuralLimits() const noexcept override {
+                return bundle_->StructuralLimits();
+            }
+
             /** @copydoc SceneAggregateRestore::PrepareScene */
             Result<void> PrepareScene(RuntimeScene &scene) override {
-                const auto prepared = bundle_->PrepareScene(scene);
+                auto prepared = bundle_->PrepareScene(scene);
                 if (prepared.HasError())
-                    return prepared;
+                    return RecordFailure(std::move(prepared));
+                return RecordFailure(PrepareGameplay(scene));
+            }
+
+            Result<void> PrepareScene(RuntimeScene &scene, SceneRestoreCandidateCommands &commands) override {
+                auto prepared = bundle_->PrepareScene(scene, commands);
+                if (prepared.HasError())
+                    return RecordFailure(std::move(prepared));
+                return RecordFailure(PrepareGameplay(scene));
+            }
+
+            Result<void> PrepareGameplay(RuntimeScene &scene) {
                 control_->candidate = scene.View().RuntimeId();
+                std::shared_ptr<const Gameplay::GameplayPrefabContext> prefabs;
+                if (control_->dynamic && control_->prefabs) {
+                    auto services = control_->prefabs->PrepareRestored(scene, *control_->decoded->prefabs, *control_->dynamic,
+                                                                       control_->prefabs->Tick());
+                    if (services.HasError())
+                        return Result<void>::Failure(services.ErrorValue());
+                    prefabs = std::move(services).Value();
+                }
                 if (!control_->behaviorOwner)
                     return Result<void>::Success();
-                // Candidate-specific native clients are explicitly withheld by this
-                // profile, never borrowed from the active world.
-                const auto gameplay = control_->behaviorOwner->PrepareRestoreCandidate(scene, {});
+                const auto gameplay = control_->behaviorOwner->PrepareRestoreCandidate(scene, {}, std::move(prefabs));
                 return gameplay.HasError() ? Result<void>::Failure(gameplay.ErrorValue()) : Result<void>::Success();
             }
 
             /** @copydoc SceneAggregateRestore::PrepareOwners */
             Result<bool> PrepareOwners() override {
-                return bundle_->PrepareOwners();
+                return RecordFailure(bundle_->PrepareOwners());
             }
 
             /** @copydoc SceneAggregateRestore::ValidatePublication */
@@ -141,10 +171,19 @@ namespace Horo::Application::Internal {
                 bundle_->Rollback();
                 if (control_->behaviorOwner)
                     control_->behaviorOwner->CancelPrepared(control_->candidate);
+                if (!state_->published && control_->prefabs)
+                    control_->prefabs->CancelPrepared(control_->candidate);
                 state_->retired = true;
             }
 
         private:
+            /** @brief Preserve the actual failure before rollback cancellation only while this control still owns the original producer. */
+            template <typename T> Result<T> RecordFailure(Result<T> result) {
+                if (control_->packet)
+                    return PreservePlaySaveFailure(control_->packet->operation, std::move(result));
+                return result;
+            }
+
             std::unique_ptr<SceneRestoreBundle> bundle_;
             std::shared_ptr<PlaySaveSceneHandoffState> state_;
             std::shared_ptr<PacketControl> control_;
@@ -172,56 +211,207 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    struct PlaySaveSceneHandoff::Pending final {
+        std::shared_ptr<PacketControl> control;
+        std::vector<std::optional<Prefab::PrefabTemplateLoadHandle>> loads;
+        std::vector<Prefab::PrefabTemplateLease> leases;
+        CancellationSource cancellation;
+        std::size_t next{};
+        bool draining{};
+        Error allocationFailure{MakeError(SaveErrors::RestoreAllocationFailed)};
+        Error callbackFailure{MakeError(SaveErrors::RestoreAdapterContractInvalid)};
+    };
+
     /** @copydoc PlaySaveSceneHandoff::PlaySaveSceneHandoff */
     PlaySaveSceneHandoff::PlaySaveSceneHandoff(Runtime::RuntimeSceneService &scenes, std::shared_ptr<PlaySaveRestoreSource> source,
                                                std::shared_ptr<const Runtime::ISceneRestoreGenerationAuthority> authority,
-                                               std::shared_ptr<PlaySaveSceneHandoffState> state, Runtime::SaveWorldId world)
-        : scenes_(scenes), source_(std::move(source)), authority_(std::move(authority)), state_(std::move(state)), world_(world) {}
+                                               std::shared_ptr<PlaySaveSceneHandoffState> state, Runtime::SaveWorldId world,
+                                               std::shared_ptr<PlaySavePrefabServices> prefabs)
+        : scenes_(scenes), source_(std::move(source)), authority_(std::move(authority)), state_(std::move(state)), world_(world),
+          prefabs_(std::move(prefabs)) {}
+
+    PlaySaveSceneHandoff::~PlaySaveSceneHandoff() = default;
 
     /** @copydoc PlaySaveSceneHandoff::Accept */
     Result<void> PlaySaveSceneHandoff::Accept(Runtime::RuntimeSavePreparedRestore &prepared) {
         if (const auto admitted = AdmitHandoff(source_, authority_, state_, prepared); admitted.HasError())
             return admitted;
         const auto decoded = source_->PreparedScene();
-        if (!decoded)
+        if (!decoded || (decoded->prefabs && !prefabs_))
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreTransitionInvalid));
-        auto control = std::make_shared<PacketControl>(PacketControl{state_, {}, decoded->definition.Id(), decoded->definition.Revision()});
-        control->source = source_;
-        control->behaviorOwner = source_->BehaviorOwner();
-        Runtime::SceneRestoreBundleRequest request{.context = prepared.context,
+        auto pending = std::make_unique<Pending>();
+        pending->control =
+            std::make_shared<PacketControl>(PacketControl{state_, {}, decoded->definition.Id(), decoded->definition.Revision()});
+        pending->control->source = source_;
+        pending->control->behaviorOwner = source_->BehaviorOwner();
+        pending->control->prefabs = prefabs_;
+        pending->control->decoded = decoded;
+        const auto count = decoded->prefabs ? decoded->prefabs->instances.size() : 0;
+        pending->loads.resize(count);
+        pending->leases.resize(count);
+        static_assert(std::is_nothrow_move_constructible_v<Runtime::RuntimeSavePreparedRestore>);
+        pending->control->packet.emplace(std::move(prepared));
+        state_->operation = pending->control->packet->operation.Handle();
+        state_->transferred = true;
+        pending_ = std::move(pending);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PlaySaveSceneHandoff::RejectPending */
+    void PlaySaveSceneHandoff::RejectPending(Error error) {
+        if (!pending_ || pending_->draining)
+            return;
+        pending_->draining = true;
+        pending_->cancellation.RequestCancellation();
+        for (const auto &load : pending_->loads)
+            if (load)
+                load->RequestCancel();
+        if (pending_->control->packet)
+            static_cast<void>(pending_->control->packet->operation.Fail(std::move(error), SaveOperationCommitOutcome::NotCommitted));
+    }
+
+    /** @copydoc PlaySaveSceneHandoff::QueueReady */
+    Result<void> PlaySaveSceneHandoff::QueueReady() {
+        auto &pending = *pending_;
+        auto control = pending.control;
+        auto &packet = *control->packet;
+        const auto &decoded = *control->decoded;
+        if (!CurrentAuthority(*authority_, packet.context))
+            return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
+        if (decoded.prefabs) {
+            auto adapter = prefabs_->PrepareEntities(*decoded.prefabs, std::move(pending.leases), pending.cancellation.Token());
+            if (adapter.HasError())
+                return Result<void>::Failure(adapter.ErrorValue());
+            control->dynamic = std::move(adapter).Value();
+        }
+        Runtime::SceneRestoreBundleRequest request{.context = packet.context,
                                                    .world = world_,
-                                                   .definition = decoded->definition.Id(),
-                                                   .revision = decoded->definition.Revision(),
-                                                   .participants = prepared.participants,
-                                                   .entities = decoded->identities,
+                                                   .definition = decoded.definition.Id(),
+                                                   .revision = decoded.definition.Revision(),
+                                                   .participants = packet.participants,
+                                                   .entities = decoded.identities,
                                                    .maximumEntities = 16'384,
-                                                   .maximumComponentBytes = PlaySaveMaximumPayloadBytes};
+                                                   .maximumComponentBytes = PlaySaveMaximumPayloadBytes,
+                                                   .dynamicEntities = control->dynamic};
+        if (decoded.prefabs)
+            for (const auto &instance : decoded.prefabs->instances)
+                for (const auto &member : instance.members)
+                    request.entities.push_back(member.record);
         auto bundle = Runtime::SceneRestoreBundle::Create(std::move(request), std::make_unique<PacketSource>(control), authority_);
         if (bundle.HasError())
             return Result<void>::Failure(bundle.ErrorValue());
         control->bundle = bundle.Value().get();
         auto observed = std::make_unique<ObservedRestore>(std::move(bundle).Value(), control);
-        if (const auto queued = scenes_.QueuePreparationWithRestore(decoded->definition, std::move(observed)); queued.HasError())
-            return queued;
-        if (state_->retired)
-            return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreTransitionInvalid));
-        static_assert(std::is_nothrow_move_constructible_v<Runtime::RuntimeSavePreparedRestore>);
-        // QueuePreparation performs candidate preparation only; owners/TakeReady run
-        // at the next exclusive Scene safe point.
-        control->packet.emplace(std::move(prepared));
-        state_->operation = control->packet->operation.Handle();
-        state_->transferred = true;
+        return scenes_.QueuePreparationWithRestore(decoded.definition, std::move(observed));
+    }
+
+    /** @copydoc PlaySaveSceneHandoff::Advance */
+    Result<void> PlaySaveSceneHandoff::Advance() {
+        try {
+            return AdvanceInternal();
+        } catch (const std::bad_alloc &) {
+            if (pending_ && !pending_->draining)
+                RejectPending(std::move(pending_->allocationFailure));
+        } catch (...) {
+            if (pending_ && !pending_->draining)
+                RejectPending(std::move(pending_->callbackFailure));
+        }
         return Result<void>::Success();
+    }
+
+    /** @copydoc PlaySaveSceneHandoff::AdvanceInternal */
+    Result<void> PlaySaveSceneHandoff::AdvanceInternal() {
+        if (!pending_)
+            return Result<void>::Success();
+        auto &pending = *pending_;
+        ObservePending();
+        std::size_t active = ConsumeLoads();
+        if (pending.draining) {
+            if (!active) {
+                state_->retired = true;
+                pending_.reset();
+            }
+            return Result<void>::Success();
+        }
+        SubmitLoads(active);
+        if (pending.draining)
+            return Result<void>::Success();
+        if (pending.next != pending.loads.size() || active)
+            return Result<void>::Success();
+        auto queued = QueueReady();
+        if (queued.HasError())
+            RejectPending(queued.ErrorValue());
+        else
+            pending_.reset();  // Scene-owned PacketSource now retains the sole original packet and all source/lease roots.
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PlaySaveSceneHandoff::ObservePending */
+    void PlaySaveSceneHandoff::ObservePending() {
+        auto &pending = *pending_;
+        if (!pending.draining && pending.control->packet->operation.ObserveCancellation() == SaveCancellationObservation::Cancelled)
+            RejectPending(CancelledPacketError(state_->operation));
+        if (prefabs_)
+            if (auto advanced = prefabs_->Provider().Advance(); advanced.HasError())
+                RejectPending(advanced.ErrorValue());
+    }
+
+    /** @copydoc PlaySaveSceneHandoff::ConsumeLoads */
+    std::size_t PlaySaveSceneHandoff::ConsumeLoads() {
+        auto &pending = *pending_;
+        std::size_t active{};
+        for (std::size_t index = 0; index < pending.loads.size(); ++index) {
+            auto &load = pending.loads[index];
+            if (!load)
+                continue;
+            if (load->State() == Prefab::PrefabTemplateLoadState::Loading) {
+                ++active;
+                continue;
+            }
+            if (!pending.draining) {
+                auto lease = prefabs_->Provider().TakeResult(*load);
+                if (lease.HasError())
+                    RejectPending(lease.ErrorValue());
+                else
+                    pending.leases[index] = std::move(lease).Value();
+            }
+            load.reset();
+        }
+        return active;
+    }
+
+    /** @copydoc PlaySaveSceneHandoff::SubmitLoads */
+    void PlaySaveSceneHandoff::SubmitLoads(std::size_t &active) {
+        auto &pending = *pending_;
+        while (pending.next < pending.loads.size() && active < 8) {
+            const auto index = pending.next++;
+            const auto &recipe = pending.control->decoded->prefabs->instances[index];
+            if (recipe.disposition == PersistentEntityDisposition::Tombstone)
+                continue;
+            auto loaded = prefabs_->Provider().LoadAsync(recipe.source, pending.cancellation.Token());
+            if (loaded.HasError()) {
+                RejectPending(loaded.ErrorValue());
+                return;
+            }
+            pending.loads[index].emplace(std::move(loaded).Value());
+            ++active;
+        }
     }
 
     /** @copydoc PlaySaveSceneHandoff::Cancel */
     void PlaySaveSceneHandoff::Cancel() noexcept {
         if (state_ && state_->operation.IsValid())
             static_cast<void>(state_->operation.RequestCancellation());
+        if (pending_) {
+            pending_->cancellation.RequestCancellation();
+            for (const auto &load : pending_->loads)
+                if (load)
+                    load->RequestCancel();
+        }
     }
 
     /** @copydoc PlaySaveSceneHandoff::IsSettled */
     bool PlaySaveSceneHandoff::IsSettled() const noexcept {
-        return !state_ || !state_->transferred || state_->published || state_->retired;
+        return !pending_ && (!state_ || !state_->transferred || state_->published || state_->retired);
     }
 }  // namespace Horo::Application::Internal

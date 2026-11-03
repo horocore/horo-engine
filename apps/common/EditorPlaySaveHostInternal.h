@@ -4,6 +4,7 @@
  */
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySaveHostRestore.h"
+#include "EditorPlaySavePrefabServices.h"
 
 #include <mutex>
 #include <thread>
@@ -48,6 +49,11 @@ namespace Horo::Application::Internal {
                                                                          std::shared_ptr<PlaySaveStorage> storage,
                                                                          std::optional<Runtime::SaveManagerCommand> selection,
                                                                          const CancellationToken &cancellation);
+    /** @brief Returns the same complete current inventory to every actual canonical Gameplay/lifecycle capture owner. */
+    [[nodiscard]] Result<Runtime::PersistentEntityIdentityMap> CurrentPlaySaveIdentities(Runtime::RuntimeSceneService &scenes,
+                                                                                         const PlaySaveStorageSchema &schema,
+                                                                                         const PlaySavePrefabServices *prefabs);
+
     /** @brief Polls genuine durable job state without joining or relying on bounded global history. */
     [[nodiscard]] bool PlaySaveJobSettled(const JobHandle &job);
 
@@ -55,7 +61,13 @@ namespace Horo::Application::Internal {
         State(Runtime::RuntimeSceneService &scenes, EditorPlaySaveEnvironment environment,
               std::shared_ptr<const PlaySaveStorageSchema> schema,
               std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
-              std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner);
+              std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner, std::shared_ptr<PlaySavePrefabServices> prefabs);
+        /** @brief Composes the actual initial owners before asynchronous storage opening. */
+        [[nodiscard]] Result<void> Initialize();
+        /** @brief Registers the disjoint Scene and prefab canonical capture owners once. */
+        [[nodiscard]] Result<void> RegisterCoreCapture();
+        /** @brief Reads the same exact complete current identity map for all canonical Gameplay owners. */
+        [[nodiscard]] Result<Runtime::PersistentEntityIdentityMap> CurrentIdentities() const;
         /** @brief Binds actual installed behavior sources through the real current
          * identity map, never metadata-only coverage. */
         [[nodiscard]] Result<void> BindActiveGameplay();
@@ -120,6 +132,8 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings;
         std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner;
         std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle;
+        std::shared_ptr<PlaySavePrefabServices> prefabs;
+        std::shared_ptr<PlaySaveSceneHandoff> handoff;
         Runtime::CanonicalStateParticipantRegistry registry;
         Runtime::SaveParticipantRegistrySnapshot participants;
         std::shared_ptr<PlaySaveGeneration> authority;

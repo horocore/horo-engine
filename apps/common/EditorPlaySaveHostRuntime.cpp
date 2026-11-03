@@ -1,4 +1,6 @@
 #include "EditorPlaySaveHostInternal.h"
+#include "EditorPlaySaveIdentityIssuing.h"
+#include "EditorPlaySavePrefabCapture.h"
 
 #include <algorithm>
 #include <array>
@@ -50,16 +52,6 @@ namespace Horo::Application::Internal {
             std::optional<FinalizedSaveArchive> archive_;
         };
 
-        /** @brief Issues detached capture identity using the explicitly supplied real entropy authority. */
-        Result<CapturedStateId> CaptureIdentity(Security::SecureRandomSource &entropy) {
-            SaveIdentityDetail::Bytes bytes{};
-            if (const auto generated = entropy.Fill(std::as_writable_bytes(std::span{bytes})); generated.HasError())
-                return Result<CapturedStateId>::Failure(generated.ErrorValue());
-            bytes[6] = static_cast<std::uint8_t>((bytes[6] & 15U) | 64U);
-            bytes[8] = static_cast<std::uint8_t>((bytes[8] & 63U) | 128U);
-            return CapturedStateId::FromBytes(bytes);
-        }
-
         /** @brief Maps only actual canonical terminal state into the existing process diagnostics store. */
         OperationState PresentationState(SaveOperationState state) noexcept {
             switch (state) {
@@ -74,13 +66,58 @@ namespace Horo::Application::Internal {
             }
         }
 
+        /** @brief Rebinds the actual installed native source to the same current inventory inside the real capture barrier. */
+        class GameplayCapture final : public ICanonicalStateAdapter {
+        public:
+            using Identities = std::function<Result<PersistentEntityIdentityMap>()>;
+
+            GameplayCapture(std::shared_ptr<const Editor::PlaySaveGameplayBinding> binding,
+                            std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> owner, Identities identities)
+                : binding_(std::move(binding)), owner_(std::move(owner)), identities_(std::move(identities)) {}
+
+            Result<CanonicalCaptureDisposition> Capture(const CanonicalCaptureContext &context,
+                                                        ICanonicalCaptureSink &sink) const override {
+                using Outcome = Result<CanonicalCaptureDisposition>;
+                const auto *type = std::get_if<Gameplay::BehaviorTypeId>(&binding_->declaration.ownerIdentity);
+                if (!type || !owner_)
+                    return Outcome::Failure(MakeError(SaveErrors::ParticipantAdapterMissing));
+                auto identities = identities_();
+                if (identities.HasError())
+                    return Outcome::Failure(identities.ErrorValue());
+                auto target = owner_->BindingForActive(*type, identities.Value());
+                if (target.HasError())
+                    return Outcome::Failure(target.ErrorValue());
+                auto installed = binding_->adapter->BindRestoreCandidate(std::move(target).Value());
+                if (installed.HasError())
+                    return Outcome::Failure(installed.ErrorValue());
+                if (!binding_->installation.SameGeneration(installed.Value()))
+                    return Outcome::Failure(MakeError(SaveErrors::CaptureRegistryStale));
+                auto actual = installed.Value().AcquireAdapter();
+                if (!actual)
+                    return Outcome::Failure(MakeError(SaveErrors::ParticipantAdapterMissing));
+                return actual->Capture(context, sink);
+            }
+
+        private:
+            /** @brief Aliases the exact immutable host binding owner, preserving its unique installation and native pin. */
+            std::shared_ptr<const Editor::PlaySaveGameplayBinding> binding_;
+            std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> owner_;
+            Identities identities_;
+        };
+
         /** @brief Registers every installed owner under its frozen descriptor without inventing sources or authoritative IDs. */
         Result<void> RegisterGameplay(CanonicalStateParticipantRegistry &registry,
-                                      std::span<const Editor::PlaySaveGameplayBinding> bindings) {
-            for (const auto &binding : bindings) {
+                                      const std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> &bindings,
+                                      std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> owner, GameplayCapture::Identities identities) {
+            if (!bindings)
+                return Result<void>::Success();
+            for (const auto &binding : *bindings) {
                 auto adapter = binding.installation.AcquireAdapter();
                 if (!adapter)
                     return Result<void>::Failure(MakeError(SaveErrors::LifecycleUnavailable));
+                if (std::holds_alternative<Gameplay::BehaviorTypeId>(binding.declaration.ownerIdentity))
+                    adapter = std::make_shared<GameplayCapture>(std::shared_ptr<const Editor::PlaySaveGameplayBinding>{bindings, &binding},
+                                                                owner, identities);
                 const auto added = registry.Register(binding.declaration.descriptor.participant, std::move(adapter));
                 if (added.HasError())
                     return Result<void>::Failure(added.ErrorValue());
@@ -89,15 +126,29 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
-    /** @copydoc EditorPlaySaveHost::State::Compose */
-    Result<void> EditorPlaySaveHost::State::Compose() {
+    /** @copydoc EditorPlaySaveHost::State::RegisterCoreCapture */
+    Result<void> EditorPlaySaveHost::State::RegisterCoreCapture() {
         const auto core =
             registry.Register(PlaySaveSceneDescriptor(),
-                              std::make_shared<PlaySaveSceneCapture>(scenes, schema->baseline, schema->identities, liveBindings));
+                              std::make_shared<PlaySaveSceneCapture>(scenes, schema->baseline, schema->identities, liveBindings, prefabs));
         if (core.HasError())
             return Result<void>::Failure(core.ErrorValue());
-        if (const auto native = RegisterGameplay(registry, liveBindings ? std::span<const Editor::PlaySaveGameplayBinding>{*liveBindings}
-                                                                        : std::span<const Editor::PlaySaveGameplayBinding>{});
+        if (prefabs) {
+            const auto added = registry.Register(PlaySavePrefabDescriptor(), std::make_shared<PlaySavePrefabCaptureAdapter>(prefabs));
+            if (added.HasError())
+                return Result<void>::Failure(added.ErrorValue());
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorPlaySaveHost::State::Compose */
+    Result<void> EditorPlaySaveHost::State::Compose() {
+        if (auto core = RegisterCoreCapture(); core.HasError())
+            return core;
+        if (const auto native = RegisterGameplay(registry, liveBindings, behaviorOwner,
+                                                 [scene = &scenes, values = schema, prefabs = prefabs] {
+            return CurrentPlaySaveIdentities(*scene, *values, prefabs.get());
+        });
             native.HasError())
             return native;
         if (const auto registered = RegisterBehaviorLifecycle(); registered.HasError())
@@ -156,7 +207,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc EditorPlaySaveHost::State::StartRuntime */
     Result<void> EditorPlaySaveHost::State::StartRuntime(const Editor::PlaySaveCommand &command) {
-        const auto identity = CaptureIdentity(*environment.storage.entropy);
+        const auto identity = IssuePlaySaveIdentity<CapturedStateId>(*environment.storage.entropy);
         if (identity.HasError())
             return Result<void>::Failure(identity.ErrorValue());
         captured = identity.Value();
@@ -198,11 +249,13 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(SaveErrors::CompositionUnsupported));
             auto source =
                 std::make_shared<PlaySaveRestoreSource>(storage, schema, *command.selection, liveBindings, behaviorOwner, lifecycle);
-            auto handoff = std::make_shared<PlaySaveSceneHandoff>(scenes, source, authority, std::make_shared<PlaySaveSceneHandoffState>(),
-                                                                  environment.storage.world);
-            auto admitted = runtime->Load(descriptor, std::move(source), std::move(handoff));
+            auto preparedHandoff =
+                std::make_shared<PlaySaveSceneHandoff>(scenes, source, authority, std::make_shared<PlaySaveSceneHandoffState>(),
+                                                       environment.storage.world, prefabs);
+            auto admitted = runtime->Load(descriptor, std::move(source), preparedHandoff);
             if (admitted.HasError())
                 return Result<void>::Failure(admitted.ErrorValue());
+            handoff = std::move(preparedHandoff);
             request.emplace(std::move(admitted).Value());
             loading = true;
             return Result<void>::Success();
@@ -241,6 +294,9 @@ namespace Horo::Application::Internal {
     Result<void> EditorPlaySaveHost::State::PumpRuntime() {
         if (!request)
             return Result<void>::Success();
+        if (handoff)
+            if (auto advanced = handoff->Advance(); advanced.HasError())
+                return advanced;
         const auto current = request->Operation().Snapshot();
         if (current && current->revision != operationRevision) {
             ObserveRuntime(*current);
@@ -250,6 +306,7 @@ namespace Horo::Application::Internal {
         if (const auto acknowledged = runtime->Acknowledge(); acknowledged.HasError())
             return acknowledged;
         request.reset();
+        handoff.reset();
         loading = false;
         return ResumeAfterRequest();
     }

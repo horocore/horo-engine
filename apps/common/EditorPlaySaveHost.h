@@ -21,13 +21,15 @@ namespace Horo::Application::Internal {
         PlaySaveStorageConfig storage;
     };
 
+    class PlaySavePrefabServices;
     class EditorPlaySaveHost;
     /** @brief Cold host factory; every invocation issues a new sandbox namespace and actual authored identity inventory. */
     using EditorPlaySaveFactory =
         std::function<Result<std::unique_ptr<EditorPlaySaveHost>>(Runtime::SaveProjectId, Runtime::RuntimeSceneService &,
                                                                   const Runtime::RuntimeSceneDefinition &,
                                                                   std::vector<Editor::PlaySaveGameplayBinding>,
-                                                                  std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner>)>;
+                                                                  std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner>,
+                                                                  std::shared_ptr<PlaySavePrefabServices>)>;
 
     /** @brief Single owner-lane runtime save composition. Workers never retain this object or a live Scene borrow. */
     class EditorPlaySaveHost final : public Editor::EditorPlaySaveSession {
@@ -42,7 +44,7 @@ namespace Horo::Application::Internal {
             Runtime::RuntimeSceneService &scenes, EditorPlaySaveEnvironment environment,
             std::shared_ptr<const PlaySaveStorageSchema> schema,
             std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings = {},
-            std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner = {});
+            std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner = {}, std::shared_ptr<PlaySavePrefabServices> prefabs = {});
         ~EditorPlaySaveHost() override;
         [[nodiscard]] std::shared_ptr<const Editor::PlaySaveSnapshot> Snapshot() const noexcept override;
         [[nodiscard]] Result<void> Request(const Editor::PlaySaveCommand &command) override;

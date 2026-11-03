@@ -87,7 +87,7 @@ namespace Horo::Gameplay {
         static void Publish(BehaviorRuntime &, std::span<const BehaviorLifecycleFlags>) noexcept;
         [[nodiscard]] static Result<std::shared_ptr<BehaviorRuntimeRestoreCandidate>> Prepare(
             std::shared_ptr<BehaviorRuntimeSceneOwner::State>, Runtime::RuntimeScene &, bool restoring,
-            BehaviorRuntimeServiceBindings services = {});
+            BehaviorRuntimeServiceBindings services = {}, std::shared_ptr<const GameplayPrefabContext> prefabs = {});
         [[nodiscard]] static Result<std::unique_ptr<Runtime::SceneActivationCandidate>> SceneCandidate(
             std::shared_ptr<BehaviorRuntimeSceneOwner::State>, std::shared_ptr<BehaviorRuntimeRestoreCandidate>);
         [[nodiscard]] static std::unique_ptr<Runtime::SceneActivationParticipant> Participant(

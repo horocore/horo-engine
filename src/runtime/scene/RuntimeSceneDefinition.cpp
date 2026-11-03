@@ -68,12 +68,12 @@ namespace Horo::Runtime {
             return true;
         }
 
-        [[nodiscard]] bool ValidGameplayComponents(const std::span<const Gameplay::SerializedComponent> components) noexcept {
+        [[nodiscard]] bool ValidGameplayComponents(const std::span<const Gameplay::SerializedComponent> components) {
             return Gameplay::ValidateSerializedComponents(components).HasValue();
         }
 
         /** @brief Validates source playback and listener selection values as one audio component contract. */
-        [[nodiscard]] bool ValidAudioComponents(const RuntimeComponentSet &components) noexcept {
+        [[nodiscard]] bool ValidAudioComponents(const RuntimeComponentSet &components) {
             if (components.audioSource && (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
                                            Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError() ||
                                            Audio::ValidateAudioSceneLifecyclePolicy(components.audioSource->sceneLifecycle).HasError()))
@@ -84,34 +84,37 @@ namespace Horo::Runtime {
             return true;
         }
 
-        [[nodiscard]] bool ValidComponents(const RuntimeComponentSet &components) noexcept {
+        /** @brief Preserves presentation validation order while allowing allocation failures to reach the Scene transaction. */
+        [[nodiscard]] bool ValidPresentationPayloads(const RuntimeComponentSet &components) {
             if (components.camera && !ValidCamera(*components.camera))
                 return false;
             if (components.light && !ValidLight(*components.light))
                 return false;
             if (!ValidAudioComponents(components))
                 return false;
-            if (components.uiCanvas && Ui::ValidateUiCanvasAssetReference(components.uiCanvas->canvas).HasError())
-                return false;
-            if (components.navigationSurface && ValidateNavigationSurfaceComponent(*components.navigationSurface).HasError())
-                return false;
-            if (components.navigationRegion && ValidateNavigationRegionComponent(*components.navigationRegion).HasError())
-                return false;
-            if (components.navigationModifier && ValidateNavigationModifierComponent(*components.navigationModifier).HasError())
-                return false;
-            if (components.navigationLink && ValidateNavigationLinkComponent(*components.navigationLink).HasError())
-                return false;
-            if (components.navigationAgent && ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
-                return false;
-            if (components.aiAgent && AI::ValidateAiAgentComponent(*components.aiAgent).HasError())
-                return false;
-            if (components.aiController && AI::ValidateAiControllerComponent(*components.aiController).HasError())
-                return false;
-            if (components.characterController && ValidateCharacterControllerComponent(*components.characterController).HasError())
-                return false;
-            if (!ValidBehaviors(components.behaviors) || !ValidGameplayComponents(components.gameplayComponents))
-                return false;
-            return true;
+            return !components.uiCanvas || Ui::ValidateUiCanvasAssetReference(components.uiCanvas->canvas).HasValue();
+        }
+
+        /** @brief Validates the same optional navigation payloads without claiming their Result construction cannot allocate. */
+        [[nodiscard]] bool ValidNavigationPayloads(const RuntimeComponentSet &components) {
+            return (!components.navigationSurface || ValidateNavigationSurfaceComponent(*components.navigationSurface).HasValue()) &&
+                   (!components.navigationRegion || ValidateNavigationRegionComponent(*components.navigationRegion).HasValue()) &&
+                   (!components.navigationModifier || ValidateNavigationModifierComponent(*components.navigationModifier).HasValue()) &&
+                   (!components.navigationLink || ValidateNavigationLinkComponent(*components.navigationLink).HasValue()) &&
+                   (!components.navigationAgent || ValidateNavigationAgentComponent(*components.navigationAgent).HasValue());
+        }
+
+        /** @brief Preserves AI and Character payload validation ahead of behavior and serialized component validation. */
+        [[nodiscard]] bool ValidAgentPayloads(const RuntimeComponentSet &components) {
+            return (!components.aiAgent || AI::ValidateAiAgentComponent(*components.aiAgent).HasValue()) &&
+                   (!components.aiController || AI::ValidateAiControllerComponent(*components.aiController).HasValue()) &&
+                   (!components.characterController || ValidateCharacterControllerComponent(*components.characterController).HasValue());
+        }
+
+        /** @brief Runs the complete canonical component validators; allocation exceptions belong to the owning Scene transaction. */
+        [[nodiscard]] bool ValidComponents(const RuntimeComponentSet &components) {
+            return ValidPresentationPayloads(components) && ValidNavigationPayloads(components) && ValidAgentPayloads(components) &&
+                   ValidBehaviors(components.behaviors) && ValidGameplayComponents(components.gameplayComponents);
         }
 
         /** @brief Validates navigation identities and cross-component references across the complete scene. */

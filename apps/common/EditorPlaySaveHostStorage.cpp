@@ -1,5 +1,8 @@
 #include "EditorPlaySaveHostStorage.h"
 
+#include "EditorPlaySaveIdentityIssuing.h"
+#include "EditorPlaySavePrefabCapture.h"
+
 #include <algorithm>
 #include <atomic>
 #include <mutex>
@@ -9,16 +12,6 @@
 namespace Horo::Application::Internal {
     namespace {
         using namespace Runtime;
-
-        /** @brief Issues a fresh opaque UUID using the explicitly supplied native entropy owner, never a path or frame ordinal. */
-        template <typename Identity> Result<Identity> RandomIdentity(Security::SecureRandomSource &entropy) {
-            SaveIdentityDetail::Bytes bytes{};
-            if (const auto random = entropy.Fill(std::as_writable_bytes(std::span{bytes})); random.HasError())
-                return Result<Identity>::Failure(random.ErrorValue());
-            bytes[6] = static_cast<std::uint8_t>((bytes[6] & 15U) | 64U);
-            bytes[8] = static_cast<std::uint8_t>((bytes[8] & 63U) | 128U);
-            return Identity::FromBytes(bytes);
-        }
 
         /** @brief Only an exact private activation's immutable logical world may enter its sandbox. */
         bool SameWorld(const SaveArchiveHeader &header, const PlaySaveStorageConfig &config) noexcept {
@@ -49,6 +42,8 @@ namespace Horo::Application::Internal {
             policy.compatibility.productVersions.direct = {ProductSaveCompatibilityVersion::Create(1).Value(),
                                                            ProductSaveCompatibilityVersion::Create(1).Value()};
             policy.compatibility.participants.push_back(Compatibility(PlaySaveSceneDescriptor()));
+            if (schema.prefabProfile)
+                policy.compatibility.participants.push_back(Compatibility(PlaySavePrefabDescriptor()));
             if (schema.lifecycle)
                 policy.compatibility.participants.push_back(Compatibility(*schema.lifecycle));
             for (const auto &declaration : schema.gameplay)
@@ -102,7 +97,7 @@ namespace Horo::Application::Internal {
         /** @copydoc Runtime::ISaveSlotLifecycleHost::AllocateGeneration */
         Result<Runtime::SlotGenerationId> AllocateGeneration() override {
             std::lock_guard lock(entropyMutex);
-            return RandomIdentity<Runtime::SlotGenerationId>(*config.entropy);
+            return IssuePlaySaveIdentity<Runtime::SlotGenerationId>(*config.entropy);
         }
 
         /** @copydoc Runtime::ISaveSlotLifecycleHost::ValidateSemantics */
@@ -117,7 +112,10 @@ namespace Horo::Application::Internal {
             if (!bytes.Value())
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::CaptureIncomplete));
             const auto core = DecodePlaySaveSceneStructure(*bytes.Value(), schema->baseline, schema->identities);
-            return core.HasError() ? Result<void>::Failure(core.ErrorValue()) : Result<void>::Success();
+            if (core.HasError())
+                return Result<void>::Failure(core.ErrorValue());
+            const auto prefabs = DecodePlaySavePrefabs(archive, schema->prefabProfile, schema->identities.size());
+            return prefabs.HasError() ? Result<void>::Failure(prefabs.ErrorValue()) : Result<void>::Success();
         }
 
         /** @copydoc Runtime::ISaveSlotLifecycleHost::Verifier */
@@ -188,7 +186,7 @@ namespace Horo::Application::Internal {
         if (index.Value().entries.size() >= PlaySaveMaximumSlots)
             return Outcome::Failure(MakeError(Runtime::SaveErrors::CaptureBudgetExceeded));
         std::lock_guard lock(state_->entropyMutex);
-        const auto slot = RandomIdentity<Runtime::SaveGameSlotId>(*state_->config.entropy);
+        const auto slot = IssuePlaySaveIdentity<Runtime::SaveGameSlotId>(*state_->config.entropy);
         if (slot.HasError())
             return Outcome::Failure(slot.ErrorValue());
         if (std::ranges::any_of(index.Value().entries, [&](const auto &entry) {

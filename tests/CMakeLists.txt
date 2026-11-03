@@ -4745,9 +4745,16 @@ target_link_libraries(HoroRuntimeSaveManagerProjectionTests PRIVATE HoroEngine::
 add_executable(HoroRuntimeSaveOperationTests
         support/AllocationProbe.cpp
         unit/runtime/save/SaveOperationTests.cpp
+        unit/runtime/save/EditorPlaySaveFailurePublicationTests.cpp
 )
 target_compile_features(HoroRuntimeSaveOperationTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveOperationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# One deliberate noninstalled host contract; public Runtime owns the operation API.
+set(_horo_save_failure_test_headers "${CMAKE_CURRENT_BINARY_DIR}/play-save-failure-test-headers")
+configure_file("${PROJECT_SOURCE_DIR}/apps/common/EditorPlaySaveFailurePublication.h"
+    "${_horo_save_failure_test_headers}/EditorPlaySaveFailurePublication.h" COPYONLY)
+target_include_directories(HoroRuntimeSaveOperationTests PRIVATE
+    "${_horo_save_failure_test_headers}" "${PROJECT_SOURCE_DIR}/tests/support")
 target_link_libraries(HoroRuntimeSaveOperationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveParticipationTests
         unit/runtime/save/SaveParticipationTests.cpp
@@ -6610,3 +6617,6 @@ target_include_directories(HoroFoundationJsonTests PRIVATE "${PROJECT_SOURCE_DIR
 
 # Genuine two-VM module operations in both actual product owners.
 include(HoroScriptModuleTests)
+
+# Genuine dynamic prefab reconstruction through the existing Save and Scene owners.
+include(HoroPrefabPersistenceTests)

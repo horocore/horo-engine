@@ -204,6 +204,17 @@ add_library(HoroEditorPlaySaveHostInternal STATIC
     common/EditorPlaySaveHostPlatform.cpp
     common/EditorPlaySaveHostInternal.h)
 target_compile_features(HoroEditorPlaySaveHostInternal PUBLIC cxx_std_20)
+target_sources(HoroEditorPlaySaveHostInternal PRIVATE
+    common/EditorPlaySavePrefabInventory.cpp
+    common/EditorPlaySavePrefabServices.cpp
+    common/EditorPlaySavePrefabCapture.cpp
+)
+foreach(header IN ITEMS EditorPlaySaveIdentityIssuing.h EditorPlaySavePrefabInventory.h
+        EditorPlaySavePrefabServices.h EditorPlaySavePrefabCapture.h)
+    configure_file("common/${header}" "${HORO_EDITOR_PLAY_SAVE_HEADERS}/${header}" COPYONLY)
+endforeach()
+target_link_libraries(HoroEditorPlaySaveHostInternal PUBLIC HoroEngine::PrefabRuntime HoroEngine::PrefabPersistence)
+
 target_include_directories(HoroEditorPlaySaveHostInternal PUBLIC "${HORO_EDITOR_PLAY_SAVE_HEADERS}")
 target_link_libraries(HoroEditorPlaySaveHostInternal PUBLIC
     HoroEditorPlaySceneHostInternal HoroEngine::Runtime HoroEngine::RuntimeScene

@@ -15,7 +15,8 @@
 
 namespace Horo::Prefab {
     namespace {
-        /** @brief Captures authoritative canonical source evidence once at immutable resolver admission. */
+        /** @brief Captures authoritative canonical source evidence once at immutable
+         * resolver admission. */
         Result<std::vector<PrefabCanonicalSourceCommitment>> CaptureCanonicalSources(
             const std::span<const PrefabDependencySource> sources) {
             using Output = std::vector<PrefabCanonicalSourceCommitment>;
@@ -59,7 +60,8 @@ namespace Horo::Prefab {
 
         using ExpansionState = Detail::SourceExpansionState;
 
-        /** @brief Records the complete source path that made a required expansion fail. */
+        /** @brief Records the complete source path that made a required expansion fail.
+         */
         [[nodiscard]] Result<void> Fail(ExpansionState &state, Error error, const std::optional<Assets::AssetId> next = std::nullopt) {
             state.failureChain = state.active;
             if (next)
@@ -67,7 +69,8 @@ namespace Horo::Prefab {
             return Result<void>::Failure(std::move(error));
         }
 
-        /** @brief Adds immutable operation context without changing the underlying typed failure. */
+        /** @brief Adds immutable operation context without changing the underlying
+         * typed failure. */
         void AddFailureContext(Error &error, const PrefabInstanceId instance, const std::span<const Assets::AssetId> sourceChain) {
             std::string context = std::format("Prefab instance {} source chain", instance.Value());
             for (const Assets::AssetId source : sourceChain)
@@ -78,7 +81,8 @@ namespace Horo::Prefab {
         [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, std::size_t nestedDepth,
                                                 std::size_t variantDepth);
 
-        /** @brief Resolves the complete immediate parent before applying this variant layer, with no outer placement mount. */
+        /** @brief Resolves the complete immediate parent before applying this variant
+         * layer, with no outer placement mount. */
         Result<void> MaterializeVariantParent(ExpansionState &state, const PrefabDependencySource &source, std::size_t nestedDepth,
                                               std::size_t variantDepth) {
             if (variantDepth >= state.limits.Policy().maximumVariantInheritanceDepth)
@@ -107,7 +111,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Copies concrete source locals without importing an outer placement transform before its overrides. */
+        /** @brief Copies concrete source locals without importing an outer placement
+         * transform before its overrides. */
         Result<void> MaterializeLocalObjects(ExpansionState &state, const PrefabDocumentData &document) {
             for (const auto &object : document.objects) {
                 if (auto admitted = AdmitLocalObject(state); admitted.HasError())
@@ -131,24 +136,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Allows only finite engine-precision roundoff, never the shear discarded by Gram–Schmidt decomposition. */
-        bool SameAffineComponent(float expected, float actual) noexcept {
-            if (!std::isfinite(expected) || !std::isfinite(actual))
-                return false;
-            const double scale = std::max(std::fabs(static_cast<double>(expected)), std::fabs(static_cast<double>(actual)));
-            const double tolerance = static_cast<double>(Math::DefaultEpsilon) * (1.0 + scale);
-            return std::fabs(static_cast<double>(expected) - static_cast<double>(actual)) <= tolerance;
-        }
-
-        /** @brief Checks all sixteen original affine coefficients against the reconstructed, representable TRS. */
-        bool SameAffineMatrix(const Math::Mat4 &expected, const Math::Mat4 &actual) noexcept {
-            for (std::size_t i = 0; i < expected.values.size(); ++i)
-                if (!SameAffineComponent(expected.values[i], actual.values[i]))
-                    return false;
-            return true;
-        }
-
-        /** @brief Composes only the complete post-override root with its one actual containing placement. */
+        /** @brief Composes only the complete post-override root with its one actual
+         * containing placement. */
         Result<void> MountNested(ExpansionState &state, std::size_t begin, const std::optional<ExpandedPrefabObjectKey> &parent,
                                  const Math::Transform &transform) {
             if (state.unresolved)
@@ -163,7 +152,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Fully resolves and applies one stable nested occurrence before its scope and mount guards retire. */
+        /** @brief Fully resolves and applies one stable nested occurrence before its
+         * scope and mount guards retire. */
         Result<void> MaterializeNestedPlacement(ExpansionState &state, const PrefabDocumentData &document,
                                                 const NestedPrefabPlacement &placement, std::size_t nestedDepth, std::size_t variantDepth,
                                                 const std::optional<ExpandedPrefabObjectKey> &sourceRoot) {
@@ -196,7 +186,8 @@ namespace Horo::Prefab {
             return MountNested(state, begin, mountParent, placement.localRootTransform);
         }
 
-        /** @brief Processes complete nested occurrences in canonical placement order without continuing past unresolved input. */
+        /** @brief Processes complete nested occurrences in canonical placement order
+         * without continuing past unresolved input. */
         Result<void> MaterializeNestedPlacements(ExpansionState &state, const PrefabDocumentData &document, std::size_t nestedDepth,
                                                  std::size_t variantDepth, const std::optional<ExpandedPrefabObjectKey> &sourceRoot) {
             if (!document.composition)
@@ -211,7 +202,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Recursively materializes one source using only immutable resolver-owned documents. */
+        /** @brief Recursively materializes one source using only immutable
+         * resolver-owned documents. */
         [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, const std::size_t nestedDepth,
                                                 const std::size_t variantDepth) {
             if (state.cancellation.IsCancellationRequested())
@@ -234,7 +226,8 @@ namespace Horo::Prefab {
                                                ExpandedPrefabObjectKey{state.instance, rootAddress.Value()});
         }
 
-        /** @brief Adds exact stable source context to validation failure without exposing partial hierarchy. */
+        /** @brief Adds exact stable source context to validation failure without
+         * exposing partial hierarchy. */
         Result<void> ExpandAdmittedSource(ExpansionState &state, const PrefabDependencySource &root) {
             auto result = Detail::PreflightSourceExpansion(state, root);
             if (result.HasValue())
@@ -248,14 +241,16 @@ namespace Horo::Prefab {
             return Result<void>::Failure(std::move(error));
         }
 
-        /** @brief Registry advancement alone is harmless; all reachable semantic authorities must still match exactly. */
+        /** @brief Registry advancement alone is harmless; all reachable semantic
+         * authorities must still match exactly. */
         bool SameContents(const PrefabResolutionRevision &a, const PrefabResolutionRevision &b) noexcept {
             return a.rootSource == b.rootSource && a.dependencies == b.dependencies && a.edges == b.edges &&
                    a.canonicalSources == b.canonicalSources && a.valueSchemaRevision == b.valueSchemaRevision &&
                    a.sourceRevisionPolicy == b.sourceRevisionPolicy && a.revisionSkews == b.revisionSkews;
         }
 
-        /** @brief Retains only revision skew evidence reachable from this root, together with exact schema policy. */
+        /** @brief Retains only revision skew evidence reachable from this root,
+         * together with exact schema policy. */
         void CaptureLayerEvidence(PrefabResolutionRevision &revision, const PrefabDependencyGraphSnapshot &graph,
                                   const std::span<const Assets::AssetId> assets, const PrefabValueSchemaSnapshot *schemas) {
             revision.sourceRevisionPolicy = graph.RevisionPolicy();
@@ -266,27 +261,6 @@ namespace Horo::Prefab {
         }
 
     }  // namespace
-
-    /** @copydoc ValueDetail::ComposePrefabPlacement */
-    Result<Math::Transform> ValueDetail::ComposePrefabPlacement(const Math::Transform &placement, const Math::Transform &local) {
-        const auto parent = placement.TryToMatrix();
-        if (parent.HasError())
-            return Result<Math::Transform>::Failure(parent.ErrorValue());
-        const auto child = local.TryToMatrix();
-        if (child.HasError())
-            return Result<Math::Transform>::Failure(child.ErrorValue());
-        const auto matrix = Math::Multiply(parent.Value(), child.Value());
-        const auto composed = Math::TryDecomposeAffineTRS(matrix);
-        if (composed.HasError())
-            return composed;
-        const auto reconstructed = composed.Value().TryToMatrix();
-        if (reconstructed.HasError())
-            return Result<Math::Transform>::Failure(reconstructed.ErrorValue());
-        if (!SameAffineMatrix(matrix, reconstructed.Value()))
-            return Result<Math::Transform>::Failure(
-                MakeError(PrefabErrors::InvalidPlacement, "Nested placement cannot represent the final affine transform without shear."));
-        return composed;
-    }
 
     /** @copydoc EffectivePrefabCandidate::EffectivePrefabCandidate */
     EffectivePrefabCandidate::EffectivePrefabCandidate(Assets::AssetId rootAsset, PrefabResolutionRevision revision,
@@ -397,7 +371,8 @@ namespace Horo::Prefab {
         return result;
     }
 
-    /** @brief Performs operation-owned materialization only after complete graph/expansion preflight. */
+    /** @brief Performs operation-owned materialization only after complete
+     * graph/expansion preflight. */
     Result<PrefabSourceOverrideResolution> PrefabSourceResolverSnapshot::ResolveOverridesImpl(const Assets::AssetId rootAsset,
                                                                                               const PrefabInstanceId instance,
                                                                                               const PrefabLimitProfile &limits,
@@ -447,7 +422,8 @@ namespace Horo::Prefab {
         const auto *root = graph_.FindNode(rootAsset);
         if (root == nullptr || !root->sourceRevision)
             return Result<PrefabResolutionRevision>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-        // Charge the complete graph before the bounded closure walk and its temporary storage.
+        // Charge the complete graph before the bounded closure walk and its temporary
+        // storage.
         if (auto charged = budget.Consume(graph_.Nodes().size() + graph_.Edges().size()); charged.HasError())
             return Result<PrefabResolutionRevision>::Failure(charged.ErrorValue());
         auto closure = graph_.DependencyClosure(std::span{&rootAsset, 1});

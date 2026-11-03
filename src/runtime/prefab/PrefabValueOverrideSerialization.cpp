@@ -1,3 +1,4 @@
+#include "OwnedJsonReader.h"
 #include "PrefabValueOverridesInternal.h"
 
 #include <algorithm>
@@ -374,11 +375,10 @@ namespace Horo::Prefab {
         if (bytes.size() > limits.Policy().maximumOverrideSetBytes)
             return Result<PrefabValueOverrideSet>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
         try {
-            Detail::JsonParseGuard guard{32};
-            const auto value = Json::parse(bytes.begin(), bytes.end(), std::ref(guard), false);
-            if (value.is_discarded() || guard.HasDuplicate() || guard.IsTooDeep())
+            auto value = JsonEncoding::Detail::ReadOwnedJson(bytes, limits.Policy().maximumOverrideSetBytes, 32);
+            if (!value)
                 return Invalid<PrefabValueOverrideSet>();
-            return DecodeParsed(value, bytes, limits);
+            return DecodeParsed(value->Get(), bytes, limits);
         } catch (const std::bad_alloc &) {
             return Result<PrefabValueOverrideSet>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
         } catch (const Json::exception &) {

@@ -15,6 +15,8 @@
 #include <span>
 
 namespace Horo::Prefab {
+    class PreparedPrefabSpawn;
+
     namespace Detail {
         struct PrefabTemplateAllocation;
         struct PrefabTemplateRequest;
@@ -43,6 +45,10 @@ namespace Horo::Prefab {
         [[nodiscard]] Runtime::SceneRuntimeId Scene() const noexcept;
         /** @brief Returns canonical root envelope ownership. @return Empty only for an empty lease. */
         [[nodiscard]] Assets::AssetPayloadLease Artifact() const noexcept;
+        /** @brief Reads actual immutable cook-target evidence admitted by the provider, without re-decoding/copying the envelope.
+         * @return Borrowed exact target bounded by this lease, or null only for an empty lease.
+         */
+        [[nodiscard]] const AssetCookTargetId *Target() const noexcept;
         /** @brief Returns the complete verified required resource closure. @return Borrow bounded by this lease. */
         [[nodiscard]] std::span<const PrefabTemplateDependencyLease> Dependencies() const noexcept;
 
@@ -186,6 +192,16 @@ namespace Horo::Prefab {
          * Public gameplay requests/placement/initialization parameter validation remain owned by PFB-004.3.
          */
         [[nodiscard]] Result<std::vector<Runtime::DeferredEntity>> QueuePreparedGroup(const PrefabTemplateLease &lease,
+                                                                                      std::vector<Runtime::RuntimeComponentSet> components,
+                                                                                      const CancellationToken &cancellation = {},
+                                                                                      PrefabPreparedGroupOptions options = {});
+        /** @brief Queues only a complete actual-lease canonical delta preparation through the same structural path.
+         * @param prepared Immutable factory-issued baseline-plus-delta descriptors.
+         * @param components Actual typed projection of those descriptors.
+         * @param cancellation Existing operation ancestry. @param options Complete reference/member/placement projection.
+         * @return Exact deferred group tokens or original typed error; no partial publication.
+         */
+        [[nodiscard]] Result<std::vector<Runtime::DeferredEntity>> QueuePreparedGroup(const PreparedPrefabSpawn &prepared,
                                                                                       std::vector<Runtime::RuntimeComponentSet> components,
                                                                                       const CancellationToken &cancellation = {},
                                                                                       PrefabPreparedGroupOptions options = {});

@@ -1,5 +1,7 @@
 #include "EditorPlaySaveHostRestore.h"
 
+#include "EditorPlaySavePrefabCapture.h"
+
 #include <algorithm>
 
 namespace Horo::Application::Internal {
@@ -114,7 +116,12 @@ namespace Horo::Application::Internal {
         auto decoded = DecodePlaySaveScene(*bytes.Value(), schema_->baseline, schema_->identities, bindings);
         if (decoded.HasError())
             return Outcome::Failure(decoded.ErrorValue());
-        auto immutable = std::make_shared<const PlaySaveSceneState>(std::move(decoded).Value());
+        auto prefabs = DecodePlaySavePrefabs(archive.Value(), schema_->prefabProfile, schema_->identities.size());
+        if (prefabs.HasError())
+            return Outcome::Failure(prefabs.ErrorValue());
+        auto scene = std::move(decoded).Value();
+        scene.prefabs = std::move(prefabs).Value();
+        auto immutable = std::make_shared<const PlaySaveSceneState>(std::move(scene));
         {
             std::lock_guard lock(publication_);
             decoded_ = std::move(immutable);

@@ -1,5 +1,7 @@
 #include "PrefabDocumentOverrideLayers.h"
 
+#include "PrefabDocumentSerializationInternal.h"
+
 namespace Horo::Prefab::Detail {
     namespace {
         /** @brief Reject skewed layer metadata before the shared record validator can inspect or apply any intent. */

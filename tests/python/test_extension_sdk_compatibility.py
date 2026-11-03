@@ -105,6 +105,8 @@ def test_gameplay_generation_is_distinct_and_matches_real_native_boundary(offlin
     assert f"-gameplay-sdk{generation}-" in cmake
     assert f"GameplaySdkBoundaryVersion = {generation}" in header
     assert "not included" in gameplay["distribution"]
+    guide = (offline_sdk / "share/horo/extension-sdk/MigrationGuide.md").read_text(encoding="utf-8")
+    assert f"Native boundary {generation} / `gameplay-sdk{generation}`" in guide
 
 
 @pytest.mark.parametrize("section", (
@@ -120,6 +122,7 @@ def test_gameplay_generation_is_distinct_and_matches_real_native_boundary(offlin
     "Gameplay SDK21 → SDK22 (Scene borrowed-view lifetime)",
     "Gameplay SDK22 → SDK24 (Decision node and graph contracts)",
     "Gameplay SDK24 → SDK25 (Character surface and event contracts)",
+    "Gameplay SDK25 → SDK26 (Prefab persistence and Scene group contracts)",
     "Gameplay SDK10 → SDK15 (Character and Navigation runtime boundary 10 → 15)",
     "Retirement source API migration in this snapshot",
 ))

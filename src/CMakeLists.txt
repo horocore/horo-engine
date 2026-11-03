@@ -367,10 +367,12 @@ add_library(HoroEngine::PackageSecurity ALIAS HoroPackageSecurity)
 target_compile_features(HoroPackageSecurity PUBLIC cxx_std_20)
 target_link_libraries(HoroPackageSecurity PUBLIC HoroEngine::Foundation HoroPackages HoroEngine::Security PRIVATE nlohmann_json::nlohmann_json)
 
+include(HoroPrefabPersistence)
+horo_add_project_version_target()
+
 add_library(HoroApplication STATIC
         application/observability/HostObservability.cpp
         application/project/ProjectErrors.cpp
-        application/project/ProjectVersion.cpp
         application/project/ProjectCompatibility.cpp
         application/project_migration/ProjectMigrationRegistry.cpp
         application/project_migration/ProjectMigrationExecution.cpp
@@ -398,6 +400,7 @@ target_include_directories(HoroApplication
         PUBLIC ${PROJECT_SOURCE_DIR}/include
         PRIVATE ${HORO_GENERATED_DIR}
 )
+target_link_libraries(HoroApplication PUBLIC HoroEngine::ProjectVersion)
 target_link_libraries(HoroApplication
         PUBLIC HoroEngine::Foundation
         PRIVATE nlohmann_json::nlohmann_json
@@ -2545,6 +2548,7 @@ add_library(HoroPrefab STATIC
 add_library(HoroEngine::Prefab ALIAS HoroPrefab)
 target_compile_features(HoroPrefab PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::GameplayApi)
+target_link_libraries(HoroPrefab PUBLIC HoroEngine::ProjectVersion)
 
 # Explicit application bridge; generic Application/ProjectSettings never depend back on Prefab.
 add_library(HoroPrefabProjectSettings STATIC application/project/PrefabProjectSettings.cpp)
@@ -2567,15 +2571,9 @@ target_link_libraries(HoroPrefabRuntime PUBLIC HoroEngine::Prefab HoroEngine::Ru
 add_library(HoroPrefabOverrideModel INTERFACE)
 add_library(HoroEngine::PrefabOverrideModel ALIAS HoroPrefabOverrideModel)
 target_compile_features(HoroPrefabOverrideModel INTERFACE cxx_std_20)
-target_link_libraries(HoroPrefabOverrideModel INTERFACE HoroEngine::Prefab HoroEngine::Application)
+target_link_libraries(HoroPrefabOverrideModel INTERFACE HoroEngine::Prefab HoroEngine::ProjectVersion)
 
 add_library(HoroPrefabAuthoring STATIC
-        runtime/prefab/PrefabComponentOverrideResolution.cpp
-        runtime/prefab/PrefabComponentEdits.cpp
-        runtime/prefab/PrefabComponentOverrideCodec.cpp
-        runtime/prefab/PrefabComponentOverrideValidation.cpp
-        runtime/prefab/PrefabOverrideRecordOrdering.cpp
-        runtime/prefab/PrefabComponentSchemas.cpp
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabExpansionCache.cpp
@@ -2591,13 +2589,7 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabSourceResolver.cpp
         runtime/prefab/PrefabSourceOverrideLayers.cpp
         runtime/prefab/PrefabSourcePreflight.cpp
-        runtime/prefab/PrefabValueOverrideAddresses.cpp
-        runtime/prefab/PrefabValueOverrideBindings.cpp
-        runtime/prefab/PrefabValueOverrideResolution.cpp
         runtime/prefab/PrefabValueSnapshot.cpp
-        runtime/prefab/PrefabValueOverrideSerialization.cpp
-        runtime/prefab/PrefabValueOverrideValues.cpp
-        runtime/prefab/PrefabValueSchemas.cpp
         runtime/prefab/PrefabTemplateCook.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
@@ -2607,6 +2599,17 @@ target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::
         PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal)
 
 # Load/cook bridge. RuntimeScene never depends on prefab source authoring or Editor.
+horo_add_prefab_persistence_targets()
+target_sources(HoroPrefabRuntime PRIVATE
+    runtime/prefab/PrefabRuntimeProjection.cpp
+    runtime/prefab/PrefabPreparedGroup.cpp
+    runtime/prefab/PrefabCookedOverrides.cpp
+    runtime/prefab/PreparedPrefabSpawn.cpp
+)
+target_sources(HoroPrefabAuthoring PRIVATE
+    runtime/prefab/PrefabSourceValueOverrides.cpp
+)
+
 add_library(HoroPrefabSceneExpansion STATIC runtime/prefab/PrefabSceneExpansion.cpp)
 add_library(HoroEngine::PrefabSceneExpansion ALIAS HoroPrefabSceneExpansion)
 target_compile_features(HoroPrefabSceneExpansion PUBLIC cxx_std_20)

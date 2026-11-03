@@ -76,11 +76,13 @@ namespace Horo::Gameplay {
         /** @brief Called after the actual SceneRestoreBundle::PrepareScene; constructs that exact inactive Scene; its DerivedResources
          * participant later runs prehooks after initial placement.
          * @param scene Actual unpublished Scene, not a copied/authoring view. @param services Real prepared scopes or explicitly absent
-         * scopes.
+         * scopes. @param prefabs Actual prepared, revocable cooked-prefab scope for this exact candidate Scene; absent preserves the
+         * existing no-prefab profile. It cannot admit commands against the active world during private preparation.
          * @return Original preparation failure with complete unpublished rollback.
          */
         [[nodiscard]] Result<std::shared_ptr<BehaviorRuntimeRestoreCandidate>> PrepareRestoreCandidate(
-            Runtime::RuntimeScene &scene, BehaviorRuntimeServiceBindings services = {});
+            Runtime::RuntimeScene &scene, BehaviorRuntimeServiceBindings services = {},
+            std::shared_ptr<const GameplayPrefabContext> prefabs = {});
         /** @brief Revokes only the exact unpublished candidate during the existing Scene restore rollback. */
         void CancelPrepared(Runtime::SceneRuntimeId) noexcept;
         /** @brief Finds only the exact pending candidate; never falls back to the active runtime. */

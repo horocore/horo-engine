@@ -162,11 +162,13 @@ own those delivery decisions:
   for fixups, placement, scope cancellation, occurrence metadata, references and
   lineage. The optional receipt output is borrowed only for synchronous submission
   and written after success; Scene retains the actual queued publication evidence.
-- **Initialization**: HPFB v2 owns at most 64 stable, distinct runtime initialization
+- **Initialization**: HPFB v3 owns at most 64 stable, distinct runtime initialization
   declarations, mapped by cook to existing typed behavior field occurrences. Exact
   kinds, required/optional coverage, finite bounds and uniqueness validate before
   staging. Optional omission preserves the immutable default. No caller property
-  paths, structural edits or authoring override records enter this capability.
+  paths or source documents enter this initialization interface. Explicit typed
+  `PrefabSpawnRequest::overrides` uses the same runtime-safe baseline/delta core;
+  initialization, placement and external bindings retain separate ownership.
 - **Lifecycle Guarantees**: Owner-thread `EntityId` allocation, staged component copy, commit,
   then `OnCreate`, `OnEnable` when enabled, and `OnStart` once before the first eligible fixed
   update after first enable. Created-disabled behaviors defer enable/start. Repeated IDs in
@@ -175,6 +177,55 @@ own those delivery decisions:
   spawn recursion fail the operation without publishing entities or invoking hooks.
 - **Async load**: Unloaded-but-catalogued assets become an ADR-018 `WorkerJob` + `OperationStore`
   load-then-spawn. Callers do not poll `AssetNotLoaded`.
+
+### Durable dynamic prefab reconstruction
+
+Dynamic Save records are creation recipes over exact verified cooked content.
+They retain stable occurrence/member IDs and incarnations, full AssetCook envelope
+digest and target, the actual cooker's root source revision, exact member source
+provenance, stable admitted creator principal, independent creation lineage,
+parent, root placement, initialization, external bindings, canonical typed deltas
+and explicit tombstones. Gameplay and other semantic owners retain their own
+state records; component memory and source documents never become a replacement
+Save format. Root TRS is owned once by placement; child/property/component deltas
+use the same typed override implementation that Authoring reexports.
+
+HPFB3 is the sole supported current cooked format. Source cooking records the
+actual effective root revision; a procedural cooked producer may omit it only
+for ephemeral spawning. Durable capture rejects absent genuine provenance.
+HPFB2 and unknown versions reject before projection and require recooking;
+there is no legacy fallback or runtime source migration.
+
+The existing application Save handoff owns the sole original restore packet and
+bounded provider loads on the owner lane. Cancellation retains the packet and
+accepted requests through actual settlement. Once ready, SceneRestoreBundle
+prepares a private Scene: parent hierarchy remains acyclic and ordered, while
+forward or cyclic inter-instance bindings resolve through one complete canonical
+CreateGroup reservation. The service issues a synchronous, noncopyable command
+capability for that exact unpublished candidate, using its actual registry and
+existing structural validation. Domain code cannot retain this capability or
+publish active state. Private aggregate limits are clamped to actual lower host
+asset/resident budgets and Bundle graph/entity bounds; the ordinary public group
+limits remain unchanged. Dense external-binding slots resolve only after complete
+reservation and preserve the published external-reference category. Exact qualified
+partition membership is validated against the same Bundle records; Scene issues
+separate occurrence ownership pins so shared asset bytes do not couple Despawn
+ownership. The same Bundle identity/reference/aggregate gate remains
+the only publication authority.
+
+Each Scene activation owns a fresh PrefabSpawnService and revocable Gameplay
+scope over the existing host provider/loader/cache. Genuine prepared services
+bind before Gameplay restore prehooks; ordinary OnCreate/Enable/Start do not
+replay during Load. Stable source/runtime behavior occurrence IDs, type/schema
+and lifecycle state are restored by their owning Gameplay contracts. Future
+ordinary spawns continue from the actual Scene's behavior-ID maximum.
+
+The same bounded receipt-qualified Save inventory covers authored and dynamic
+identities and excludes pending spawns. `FindPersistent` authorizes the current
+admitted creator principal, validates exact live member incarnations and issues
+a fresh ordinary capability for the current service/scope cookie. Old handles
+remain stale; tombstones cannot be reacquired. Despawn still requires the real
+Scene structural receipt before any durable deletion fact is published.
 
 ### Tier 2: Live Variant Inheritance & Dynamic Override Tracking (Deferred)
 
@@ -587,7 +638,7 @@ falls back to source parsing.
 
 ### Binary Layout
 
-The implemented V1 contract is `Horo::Prefab::CookedPrefab` in
+The current HPFB3 contract is `Horo::Prefab::CookedPrefab` in
 `Horo/Prefab/CookedPrefab.h`, owned by `HoroEngine::Prefab`. Construction and
 decoding are bounded load-time operations with no registry discovery, source
 resolution, I/O, provider callbacks, scene activation or backend selection.
@@ -597,7 +648,7 @@ and publishing a complete immutable value. Runtime provider lease/cache lifecycl
 and scene-owned spawn transactions remain separate consumers of this schema.
 
 The 64-byte `HPFB` header contains, in order: four magic bytes, a big-endian u32
-`cookedFormatVersion` (currently 1), the 16 persistent AssetId bytes, big-endian
+`cookedFormatVersion` (currently 3), the 16 persistent AssetId bytes, big-endian
 u32 object count, big-endian u32 payload byte count, and 32 SHA-256 digest bytes
 computed over the **actual encoded payload**. The caller must supply the expected
 template identity from its catalog. This integrity check is not authentication;
@@ -610,7 +661,8 @@ artifact identity/digest independently.
 All payload collection/string/blob lengths are big-endian u32 values. Stable
 member/property/binding IDs are big-endian u64 values; floating values preserve
 IEEE-754 bits in network byte order. There is no native struct padding. The
-payload consists of these four length-prefixed tables in order:
+payload consists of these five length-prefixed tables, followed by optional genuine
+root source revision metadata, in order:
 
 1. **Entities**, in parent-before-child order, root first: parent u32 (`UINT32_MAX`
    for the root), local translation xyz, quaternion xyzw, scale xyz (ten f32s),
@@ -633,6 +685,15 @@ payload consists of these four length-prefixed tables in order:
    Every owner and target must exist before admission. Dense slots are template
    addresses, never runtime handles. Provider schema interpretation and required
    binding validation occur before the later scene-owned spawn publication.
+
+5. **Initialization**, at most64 sorted stable IDs: exact behavior member/field,
+   closed value kind, required flag and finite optional bounds. Initialization
+   remains distinct from property/component deltas and external bindings.
+6. **Root source revision**, a strict presence byte followed, when present, by
+   canonical project version text and exact source SHA-256. The actual source
+   cooker supplies the effective root revision. Procedural omission grants no
+   durable Save provenance. This is separate from member source provenance,
+   HPFB payload digest and the full outer AssetCook envelope digest.
 
 Member tag 0 contains a stable component occurrence u64, ComponentTypeId text,
 schema u32, payload encoding u8 and length-prefixed canonical component bytes.

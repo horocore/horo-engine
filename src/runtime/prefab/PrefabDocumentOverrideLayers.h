@@ -1,5 +1,6 @@
 #pragma once
 /** @file PrefabDocumentOverrideLayers.h @brief Private composition-layer admission shared by canonical prefab codecs. */
+#include "Horo/Prefab/PrefabDocument.h"
 #include "PrefabValueOverridesInternal.h"
 
 namespace Horo::Prefab::Detail {

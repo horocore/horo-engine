@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <map>
 #include <ranges>
 #include <utility>
 
@@ -49,6 +50,25 @@ namespace Horo::Runtime {
             return detached;
         }
 
+        /** @brief Complete live membership is checked against the actual Scene-issued ownership pin, independent of shared bytes. */
+        Result<void> ValidateDestroyMembership(const SceneCommandBuffer::DestroyGroupCommand &group,
+                                               const std::shared_ptr<const void> &identity) const {
+            if (const auto count = std::ranges::count_if(candidate.slots,
+                                                         [&identity](const auto &slot) {
+                return slot.active && slot.groupIdentity == identity;
+            });
+                static_cast<std::size_t>(count) != group.entities.size())
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            for (const auto entity : group.entities) {
+                if (!scene.IsValid(candidate, entity) || candidate.slots[entity.entity.index].groupIdentity != identity)
+                    return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
+                if (candidate.slots[entity.entity.index].baselineOwner)
+                    return Result<void>::Failure(
+                        MakeError(SceneErrors::BaselineInvalid, "Baseline entities retire only through exact baseline ownership."));
+            }
+            return Result<void>::Success();
+        }
+
         Result<void> operator()(const SceneCommandBuffer::DestroyGroupCommand &group) const {
             const auto root = group.entities.front();
             if (!scene.IsValid(candidate, root))
@@ -56,22 +76,11 @@ namespace Horo::Runtime {
             if (candidate.slots[root.entity.index].baselineOwner)
                 return Result<void>::Failure(
                     MakeError(SceneErrors::BaselineInvalid, "Baseline entities retire only through exact baseline ownership."));
-            const auto resources = candidate.slots[root.entity.index].groupResources;
-            if (!resources)
+            const auto identity = candidate.slots[root.entity.index].groupIdentity;
+            if (!identity)
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
-            if (const auto count = std::ranges::count_if(candidate.slots,
-                                                         [&resources](const auto &slot) {
-                return slot.active && slot.groupResources == resources;
-            });
-                static_cast<std::size_t>(count) != group.entities.size())
-                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
-            for (const auto entity : group.entities) {
-                if (!scene.IsValid(candidate, entity) || candidate.slots[entity.entity.index].groupResources != resources)
-                    return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-                if (candidate.slots[entity.entity.index].baselineOwner)
-                    return Result<void>::Failure(
-                        MakeError(SceneErrors::BaselineInvalid, "Baseline entities retire only through exact baseline ownership."));
-            }
+            if (auto valid = ValidateDestroyMembership(group, identity); valid.HasError())
+                return valid;
             for (const auto entity : group.entities | std::views::reverse) {
                 if (auto destroyed = scene.DestroyEntity(candidate, entity); destroyed.HasError())
                     return destroyed;
@@ -80,12 +89,48 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        using SharedLineage = std::shared_ptr<const std::vector<Assets::AssetId>>;
+        using PreparedLineages = std::map<std::vector<Assets::AssetId>, SharedLineage>;
+
+        /** @brief Shares each exact restore lineage canonically while preserving ordinary single-lineage allocation behavior. */
+        static SharedLineage GroupLineage(const SceneCommandBuffer::CreateGroupCommand &group, std::size_t index,
+                                          const SharedLineage &ordinary, PreparedLineages &prepared) {
+            if (group.uniformLineage)
+                return ordinary;
+            const auto &value = group.entries[index].spawnLineage;
+            const auto found = prepared.find(value);
+            if (found != prepared.end())
+                return found->second;
+            auto owned =
+                value == group.entries.front().spawnLineage ? ordinary : std::make_shared<const std::vector<Assets::AssetId>>(value);
+            prepared.emplace(value, owned);
+            return owned;
+        }
+
+        /** @brief Mints actual Scene-owned occurrence pins only during the one canonical private reservation. */
+        static std::vector<std::shared_ptr<const void>> ReserveGroupIdentities(const SceneCommandBuffer::CreateGroupCommand &group) {
+            std::vector<std::shared_ptr<const void>> identities;
+            identities.reserve(group.partitions.size());
+            for (std::size_t index = 0; index < group.partitions.size(); ++index)
+                identities.push_back(std::make_shared<const std::uint8_t>(0));
+            return identities;
+        }
+
+        /** @brief Ordinary groups alias their existing resource pin; private groups use only Scene-issued partition pins. */
+        static std::shared_ptr<const void> GroupIdentity(const SceneCommandBuffer::CreateGroupCommand &group, std::size_t index,
+                                                         const std::shared_ptr<const std::vector<RuntimeGroupAssetLease>> &resources,
+                                                         std::span<const std::shared_ptr<const void>> identities) {
+            return group.uniformLineage ? std::shared_ptr<const void>{resources} : identities[*group.entries[index].restorePartition];
+        }
+
         Result<void> operator()(const SceneCommandBuffer::CreateGroupCommand &group) const {
             if (group.admission.scene != scene.runtimeId_ || group.admission.cancellation.IsCancellationRequested() ||
                 group.admission.ownerCancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
             auto resources = std::make_shared<const std::vector<RuntimeGroupAssetLease>>(group.resources);
             auto lineage = std::make_shared<const std::vector<Assets::AssetId>>(group.entries.front().spawnLineage);
+            PreparedLineages preparedLineages;
+            const auto groupIdentities = ReserveGroupIdentities(group);
             std::vector<EntityRef> entities;
             entities.reserve(group.entries.size());
             for (std::size_t index = 0; index < group.entries.size(); ++index) {
@@ -97,7 +142,8 @@ namespace Horo::Runtime {
                     return Result<void>::Failure(created.ErrorValue());
                 entities.push_back(created.Value());
                 candidate.slots[created.Value().entity.index].groupResources = resources;
-                candidate.slots[created.Value().entity.index].groupSpawnLineage = lineage;
+                candidate.slots[created.Value().entity.index].groupIdentity = GroupIdentity(group, index, resources, groupIdentities);
+                candidate.slots[created.Value().entity.index].groupSpawnLineage = GroupLineage(group, index, lineage, preparedLineages);
                 result.created.emplace_back(group.deferred[index], created.Value());
             }
             if (auto resolved = ResolveInterfaces(group, entities); resolved.HasError())
@@ -169,6 +215,34 @@ namespace Horo::Runtime {
             return true;
         }
 
+        /** @brief Resolves an aggregate-local external binding only after full reservation, preserving its published category. */
+        bool ResolveInterfaceExternalSlot(const RuntimeGroupExternalEntitySlot &target, const SceneCommandBuffer::CreateGroupCommand &group,
+                                          std::span<const EntityRef> entities, RuntimeResolvedGroupReference &output) const {
+            if (target.entity.index >= entities.size() || target.entity.index >= group.entries.size())
+                return false;
+            const auto &entry = group.entries[target.entity.index];
+            if (target.component && !std::ranges::any_of(entry.info.components.gameplayComponents, [&](const auto &component) {
+                return component.typeId == *target.component;
+            }))
+                return false;
+            RuntimeGroupExternalReference resolved{entities[target.entity.index], target.component};
+            if (!HasExternal(resolved))
+                return false;
+            output.target = std::move(resolved);
+            return true;
+        }
+
+        /** @brief Requires exact metadata in the actual retained resource closure. */
+        static bool ResolveInterfaceAsset(const Assets::AssetDependency &target, const SceneCommandBuffer::CreateGroupCommand &group,
+                                          RuntimeResolvedGroupReference &output) {
+            if (!std::ranges::any_of(group.resources, [&target](const auto &resource) {
+                return resource.metadata.id == target.id && resource.metadata.expectedType == target.expectedType;
+            }))
+                return false;
+            output.target = target;
+            return true;
+        }
+
         /** @brief Validates one portable interface target against queued resources and live external authority. */
         bool ResolveInterfaceTarget(const RuntimeGroupReference &reference, const SceneCommandBuffer::CreateGroupCommand &group,
                                     const std::span<const EntityRef> entities, RuntimeResolvedGroupReference &output) const {
@@ -177,13 +251,11 @@ namespace Horo::Runtime {
                     return ResolveInterfaceEntity(target, entities, output);
                 else if constexpr (std::is_same_v<Target, RuntimeGroupMemberSlot>)
                     return ResolveInterfaceMember(target, group, entities, output);
-                else if constexpr (std::is_same_v<Target, Assets::AssetDependency>) {
-                    if (!std::ranges::any_of(group.resources, [&target](const auto &resource) {
-                        return resource.metadata.id == target.id && resource.metadata.expectedType == target.expectedType;
-                    }))
-                        return false;
-                    output.target = target;
-                } else if constexpr (std::is_same_v<Target, RuntimeGroupExternalReference>) {
+                else if constexpr (std::is_same_v<Target, RuntimeGroupExternalEntitySlot>)
+                    return ResolveInterfaceExternalSlot(target, group, entities, output);
+                else if constexpr (std::is_same_v<Target, Assets::AssetDependency>)
+                    return ResolveInterfaceAsset(target, group, output);
+                else if constexpr (std::is_same_v<Target, RuntimeGroupExternalReference>) {
                     if (!scene.IsValid(scene.storage_, target.entity) || !HasExternal(target))
                         return false;
                     output.target = target;
@@ -534,23 +606,25 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief Prepares and validates all owner candidates before Scene's final admission fence. */
-        Result<void> PrepareOwners(const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
-                                   std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+        /** @brief Runs complete canonical Scene/member/reference/owner validation for both commit purposes. */
+        Result<void> ValidateStructuralCandidate(std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
+                                                 std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed,
+                                                 bool &resourceGroup) const {
             if (auto authorities = ValidatePreparationAuthorities(participants); authorities.HasError())
                 return authorities;
             if (auto characters = ValidateCharacterStructuralChanges(); characters.HasError())
                 return characters;
             if (const auto valid = ValidateGroupReferences(); valid.HasError())
                 return valid;
-            std::vector<RuntimeEntityView> created;
-            std::vector<EntityRef> destroyed;
-            const bool resourceGroup = ProjectResourceGroup(created, destroyed);
-            if (const auto valid = ValidateOwners(created, destroyed, participants); valid.HasError())
-                return valid;
+            resourceGroup = ProjectResourceGroup(created, destroyed);
+            return ValidateOwners(created, destroyed, participants);
+        }
+
+        /** @brief Ordinary structural callbacks stay on their existing live Scene route, after the same canonical validation. */
+        Result<void> PrepareOrdinaryOwners(std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
+                                           std::span<const RuntimeEntityView> created, std::span<const EntityRef> destroyed,
+                                           std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
             owners.reserve(participants.size());
-            if (!resourceGroup)
-                return Result<void>::Success();
             std::span<const SceneAgentIdentityProjection> identities;
             for (const auto phase : {SceneStructuralPreparationPhase::Identity, SceneStructuralPreparationPhase::DerivedResources}) {
                 if (auto prepared = PrepareOwnerPhase(participants, phase, created, destroyed, owners, identities); prepared.HasError())
@@ -565,6 +639,62 @@ namespace Horo::Runtime {
                     return Result<void>::Failure(valid.ErrorValue());
             }
             return Result<void>::Success();
+        }
+
+        /** @brief Private service-issued materialization defers ordinary native callbacks to full candidate restore/activation. */
+        Result<void> PrepareOwners(std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
+                                   std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners, CommitPurpose purpose) const {
+            std::vector<RuntimeEntityView> created;
+            std::vector<EntityRef> destroyed;
+            bool resourceGroup{};
+            if (auto valid = ValidateStructuralCandidate(participants, created, destroyed, resourceGroup); valid.HasError())
+                return valid;
+            if (purpose == CommitPurpose::RestoreMaterialization || !resourceGroup)
+                return Result<void>::Success();
+            return PrepareOrdinaryOwners(participants, created, destroyed, owners);
+        }
+
+        /** @brief Reuses the existing command admission and exact resource validator without introducing another policy. */
+        static Result<void> ValidateResourceAdmission(const SceneCommandBuffer &commands, SceneRuntimeId runtime,
+                                                      const Assets::AssetRegistry *registry, CommitPurpose purpose) {
+            if (purpose == CommitPurpose::Ordinary && commands.HasRestoreGroups())
+                return Result<void>::Failure(
+                    MakeError(SceneErrors::InvalidCandidate, "Private restore groups cannot enter ordinary commit."));
+            const auto revision = registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
+            if (auto valid = commands.ValidateAdmission(runtime, revision); valid.HasError())
+                return valid;
+            return commands.ValidateBaselineResources(registry);
+        }
+
+        /** @brief Preserves complete baseline-owner validation before allocating the detached candidate storage. */
+        static Result<void> ValidateBaselineParticipants(const SceneCommandBuffer &commands, RuntimeSceneView scene,
+                                                         std::span<const std::unique_ptr<SceneStructuralParticipant>> participants) {
+            std::vector<SceneBaselinePreparationView> baselines;
+            for (const auto &command : commands.commands_)
+                if (const auto *baseline = std::get_if<SceneCommandBuffer::AttachBaselineCommand>(&command))
+                    baselines.emplace_back(baseline->definition, baseline->resources);
+            if (baselines.empty())
+                return Result<void>::Success();
+            for (const auto &participant : participants)
+                if (const auto valid = participant->ValidateBaselines(scene, baselines); valid.HasError())
+                    return valid;
+            return Result<void>::Success();
+        }
+
+        /** @brief Applies the exact complete command batch through the same variant visitor. */
+        Result<void> ApplyCommands(const SceneCommandBuffer &commands) const {
+            for (const auto &command : commands.commands_)
+                if (const auto status = std::visit(*this, command); status.HasError())
+                    return status;
+            return Result<void>::Success();
+        }
+
+        /** @brief Preserves the first postpublication notification error without changing the committed Scene outcome. */
+        static void NotifyOwners(std::span<const std::unique_ptr<SceneStructuralCandidate>> owners,
+                                 std::optional<Error> *notificationError) {
+            for (const auto &owner : owners)
+                if (auto notified = owner->AfterPublication(); notified.HasError() && notificationError && !*notificationError)
+                    *notificationError = std::move(notified).ErrorValue();
         }
 
         Result<void> operator()(const SceneCommandBuffer::SetLocalTransformCommand &transform) const {

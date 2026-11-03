@@ -4,16 +4,20 @@
  * @brief Actual isolated Play Scene capture and bounded canonical record admission.
  */
 #include "EditorPlaySaveSession.h"
+#include "Horo/Prefab/PrefabPersistentState.h"
 #include "Horo/Runtime/Save/SaveCanonicalCodec.h"
 #include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
 #include "Horo/Runtime/Scene/PersistentEntityIdentity.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 
 namespace Horo::Application::Internal {
+    class PlaySavePrefabServices;
+
     /** @brief Detached current core Scene values and explicit durable live/deleted identity records. */
     struct PlaySaveSceneState final {
         Runtime::RuntimeSceneDefinition definition;
         std::vector<Runtime::PersistentEntityRecord> identities;
+        std::optional<Prefab::PrefabPersistentState> prefabs; /**< Separate owned recipe state, never flattened into definition. */
     };
 
     /** @brief Stable single core-Scene owner; other subsystem state requires its own registered adapters. */
@@ -41,7 +45,8 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<PlaySaveSceneState> CapturePlaySaveScene(Runtime::RuntimeSceneView scene,
                                                                   const Runtime::RuntimeSceneDefinition &baseline,
                                                                   std::span<const Runtime::PersistentEntityRecord> identities,
-                                                                  std::span<const Editor::PlaySaveGameplayBinding> gameplay = {});
+                                                                  std::span<const Editor::PlaySaveGameplayBinding> gameplay = {},
+                                                                  const Runtime::PersistentEntityIdentityMap *inventory = nullptr);
     /** @brief Validates every captured core entity against implemented participant coverage before archive admission.
      * @param definition Detached actual or decoded Scene state. @return Original typed unsupported or bounds failure.
      */
@@ -79,15 +84,19 @@ namespace Horo::Application::Internal {
         /** @brief Captures explicit owner references and durable inventory without reading or mutating the Scene. */
         PlaySaveSceneCapture(Runtime::RuntimeSceneService &scenes, Runtime::RuntimeSceneDefinition baseline,
                              std::vector<Runtime::PersistentEntityRecord> identities,
-                             std::weak_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> gameplay = {});
+                             std::weak_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> gameplay = {},
+                             std::shared_ptr<PlaySavePrefabServices> prefabs = {});
         /** @copydoc Runtime::ICanonicalStateAdapter::Capture */
         [[nodiscard]] Result<Runtime::CanonicalCaptureDisposition> Capture(const Runtime::CanonicalCaptureContext &context,
                                                                            Runtime::ICanonicalCaptureSink &sink) const override;
 
     private:
+        /** @brief Obtains the one actual complete dynamic inventory without admitting an alternate identity authority. */
+        [[nodiscard]] Result<std::optional<Runtime::PersistentEntityIdentityMap>> CompleteIdentities() const;
         Runtime::RuntimeSceneService &scenes_;
         Runtime::RuntimeSceneDefinition baseline_;
         std::vector<Runtime::PersistentEntityRecord> identities_;
         std::weak_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> gameplay_;
+        std::shared_ptr<PlaySavePrefabServices> prefabs_;
     };
 }  // namespace Horo::Application::Internal

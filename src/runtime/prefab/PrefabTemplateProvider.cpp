@@ -1,108 +1,14 @@
 #include "Horo/Prefab/PrefabTemplateProvider.h"
 
 #include "Horo/Prefab/PrefabErrors.h"
+#include "Horo/Prefab/PreparedPrefabSpawn.h"
+#include "PrefabPreparedGroup.h"
 #include "PrefabTemplateProviderInternal.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace Horo::Prefab {
-    namespace {
-        /** @brief Preserves cooked schema/occurrence authority while allowing fresh runtime behavior identities. */
-        bool MatchesCookedMember(const CookedPrefabMember &source, const Runtime::RuntimeGroupMemberIdentity &projected) {
-            if (const auto *raw = std::get_if<RawComponentPayload>(&source)) {
-                const auto *type = std::get_if<Gameplay::ComponentTypeId>(&projected.type);
-                return type && *type == raw->component.typeId && projected.instance == raw->instance.Value();
-            }
-            const auto *type = std::get_if<Gameplay::BehaviorTypeId>(&projected.type);
-            return type && *type == std::get<Gameplay::BehaviorComponent>(source).typeId && projected.instance != 0;
-        }
-
-        /** @brief Checks portable target preservation; Scene still admits actual external entities at its final fence. */
-        bool MatchesCookedReference(const CookedPrefabData &data, const CookedPrefabReference &source,
-                                    const Runtime::RuntimeGroupReference &projected) {
-            return std::visit([&data, &projected]<typename Target>(const Target &target) {
-                if constexpr (std::is_same_v<Target, CookedPrefabEntitySlot>) {
-                    const auto *value = std::get_if<Runtime::RuntimeGroupEntitySlot>(&projected.target);
-                    return value && value->index == target.value;
-                } else if constexpr (std::is_same_v<Target, CookedPrefabMemberSlot>) {
-                    const auto *value = std::get_if<Runtime::RuntimeGroupMemberSlot>(&projected.target);
-                    return value && value->entity.index == target.entity.value && value->member == target.member;
-                } else if constexpr (std::is_same_v<Target, CookedPrefabAssetSlot>) {
-                    const auto *value = std::get_if<Assets::AssetDependency>(&projected.target);
-                    return value && value->id == data.dependencies[target.value].asset.id &&
-                           value->expectedType == data.dependencies[target.value].asset.expectedType;
-                } else {
-                    const auto &binding = data.bindings[target.value];
-                    if (std::holds_alternative<std::monostate>(projected.target))
-                        return !binding.required;
-                    const auto *value = std::get_if<Runtime::RuntimeGroupExternalReference>(&projected.target);
-                    return value && value->component == binding.componentType;
-                }
-            }, source.target);
-        }
-
-        /** @brief Requires every cooked occurrence and reference before transferring anything to the Scene queue. */
-        Result<void> ValidatePreparedInterfaces(const CookedPrefabData &data, const PrefabPreparedGroupOptions &options) {
-            std::size_t reference{};
-            for (std::size_t entity = 0; entity < data.entities.size(); ++entity) {
-                const auto &members = data.entities[entity].members;
-                const auto projected = options.members.empty()
-                                           ? std::span<const Runtime::RuntimeGroupMemberIdentity>{}
-                                           : std::span<const Runtime::RuntimeGroupMemberIdentity>{options.members[entity]};
-                if (projected.size() != members.size())
-                    return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Incomplete cooked member projection."));
-                for (std::size_t member = 0; member < members.size(); ++member) {
-                    if (!MatchesCookedMember(members[member], projected[member]))
-                        return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Cooked member identity changed."));
-                }
-                const auto references = options.references.empty()
-                                            ? std::span<const Runtime::RuntimeGroupReference>{}
-                                            : std::span<const Runtime::RuntimeGroupReference>{options.references[entity]};
-                std::size_t index{};
-                while (reference < data.references.size() && data.references[reference].owner.entity.value == entity) {
-                    if (const auto &source = data.references[reference++];
-                        index >= references.size() || references[index].ownerMember != source.owner.member ||
-                        references[index].property != source.property.Value() || !MatchesCookedReference(data, source, references[index]))
-                        return Result<void>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
-                    ++index;
-                }
-                if (index != references.size())
-                    return Result<void>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
-            }
-            return Result<void>::Success();
-        }
-
-        /** @brief Transfers dense projected components and metadata while preserving cooked topology and ordering. */
-        std::vector<Runtime::RuntimeEntityGroupEntry> MakePreparedEntries(const std::span<const CookedPrefabEntity> entities,
-                                                                          std::vector<Runtime::RuntimeComponentSet> components,
-                                                                          PrefabPreparedGroupOptions &options) {
-            std::vector<Runtime::RuntimeEntityGroupEntry> entries;
-            entries.reserve(entities.size());
-            for (std::size_t index = 0; index < entities.size(); ++index) {
-                Runtime::RuntimeEntityGroupEntry entry;
-                entry.info.localTransform = entities[index].localTransform;
-                entry.info.components = std::move(components[index]);
-                if (!options.primitiveMeshes.empty())
-                    entry.info.primitiveMesh = std::move(options.primitiveMeshes[index]);
-                if (!options.physicsReferences.empty())
-                    entry.physicsReferences = std::move(options.physicsReferences[index]);
-                if (!options.members.empty())
-                    entry.members = std::move(options.members[index]);
-                if (!options.references.empty())
-                    entry.references = std::move(options.references[index]);
-                entry.spawnLineage = options.spawnLineage;
-                if (entities[index].parent)
-                    entry.parentInGroup = entities[index].parent->value;
-                entries.push_back(std::move(entry));
-            }
-            if (options.rootPlacement)
-                entries.front().info.localTransform = *options.rootPlacement;
-            entries.front().info.parent = options.parent;
-            return entries;
-        }
-    }  // namespace
-
     /** @copydoc PrefabTemplateLease::PrefabTemplateLease */
     PrefabTemplateLease::PrefabTemplateLease(std::shared_ptr<const Detail::PrefabTemplateAllocation> allocation,
                                              Runtime::SceneRuntimeId scene) noexcept
@@ -126,6 +32,11 @@ namespace Horo::Prefab {
     /** @copydoc PrefabTemplateLease::Artifact */
     Assets::AssetPayloadLease PrefabTemplateLease::Artifact() const noexcept {
         return allocation_ ? allocation_->root : Assets::AssetPayloadLease{};
+    }
+
+    /** @copydoc PrefabTemplateLease::Target */
+    const AssetCookTargetId *PrefabTemplateLease::Target() const noexcept {
+        return allocation_ ? &allocation_->target : nullptr;
     }
 
     /** @copydoc PrefabTemplateLease::Dependencies */
@@ -192,6 +103,25 @@ namespace Horo::Prefab {
         Shutdown();
     }
 
+    namespace {
+        /** @brief Pure exact request identity check before provider/catalog admission. */
+        bool ValidLoadIdentity(const PrefabTemplateLoadRequest &input) noexcept {
+            return input.asset.IsValid() && input.target.IsValid() && input.artifactDigest != Sha256Digest{};
+        }
+
+        /** @brief Reads the same canonical residency table without creating a second cache or authority. */
+        std::shared_ptr<const Detail::PrefabTemplateAllocation> FindCached(std::span<const Detail::PrefabTemplateCacheEntry> entries,
+                                                                           const Detail::PrefabTemplateRequest &request) {
+            for (const auto &entry : entries)
+                if (const auto &allocation = entry.resident; allocation && allocation->value.Data().assetId == request.root.asset &&
+                                                             allocation->registry.Revision() == request.registry.Revision() &&
+                                                             allocation->root.Digest() == request.root.artifactDigest &&
+                                                             allocation->target == request.root.target)
+                    return allocation;
+            return {};
+        }
+    }  // namespace
+
     /** @copydoc PrefabTemplateProvider::LoadAsync */
     Result<PrefabTemplateLoadHandle> PrefabTemplateProvider::LoadAsync(PrefabTemplateLoadRequest input,
                                                                        const CancellationToken &cancellation) {
@@ -205,7 +135,7 @@ namespace Horo::Prefab {
             return Result<PrefabTemplateLoadHandle>::Failure(admission.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<PrefabTemplateLoadHandle>::Failure(MakeError(PrefabErrors::Cancelled));
-        if (!input.asset.IsValid() || !input.target.IsValid() || input.artifactDigest == Sha256Digest{})
+        if (!ValidLoadIdentity(input))
             return Result<PrefabTemplateLoadHandle>::Failure(MakeError(PrefabErrors::IdentityInvalid));
         const auto *record = snapshot.Find(input.asset);
         if (!record)
@@ -218,17 +148,13 @@ namespace Horo::Prefab {
 
         auto request =
             std::make_shared<Detail::PrefabTemplateRequest>(std::move(input), snapshot, scene->RuntimeId(), cancellation, state_->identity);
-        for (const auto &entry : state_->cache) {
-            if (const auto allocation = entry.resident; allocation && allocation->value.Data().assetId == request->root.asset &&
-                                                        allocation->registry.Revision() == snapshot.Revision() &&
-                                                        allocation->root.Digest() == request->root.artifactDigest &&
-                                                        allocation->target == request->root.target) {
-                request->result = allocation;
-                request->status = PrefabTemplateLoadState::Succeeded;
-                return Result<PrefabTemplateLoadHandle>::Success(PrefabTemplateLoadHandle(std::move(request)));
-            }
+        if (auto allocation = FindCached(state_->cache, *request)) {
+            request->result = std::move(allocation);
+            request->status = PrefabTemplateLoadState::Succeeded;
+            return Result<PrefabTemplateLoadHandle>::Success(PrefabTemplateLoadHandle(std::move(request)));
         }
-        // Publication precedes submission; a vector allocation failure cannot abandon accepted worker work.
+        // Publication precedes submission; a vector allocation failure cannot abandon
+        // accepted worker work.
         state_->requests.push_back(request);
         return Result<PrefabTemplateLoadHandle>::Success(PrefabTemplateLoadHandle(std::move(request)));
     }
@@ -275,54 +201,73 @@ namespace Horo::Prefab {
         return &state_->scenes == &scenes;
     }
 
+    namespace {
+        /** @brief Validates copied cancellation, lineage and placement without constructing a Scene command. */
+        Result<void> ValidateGroupOptions(const PrefabPreparedGroupOptions &options, const CancellationToken &cancellation,
+                                          std::optional<Runtime::RuntimeSceneView> scene, std::size_t maximumDepth) {
+            if (cancellation.IsCancellationRequested() || options.scopeCancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
+            if (options.spawnLineage.size() > maximumDepth)
+                return Result<void>::Failure(MakeError(PrefabErrors::SpawnDepthExceeded));
+            if (options.rootPlacement && options.rootPlacement->TryToMatrix().HasError())
+                return Result<void>::Failure(MakeError(PrefabErrors::InvalidPlacement));
+            if (options.parent) {
+                const auto active = scene;
+                if (!active || active->Get(*options.parent).HasError())
+                    return Result<void>::Failure(MakeError(PrefabErrors::InvalidParent));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Every optional dense projection is either absent or covers the exact complete entity table. */
+        Result<void> ValidateGroupDimensions(const PrefabPreparedGroupOptions &options, std::size_t componentCount,
+                                             std::size_t entityCount) {
+            if (componentCount != entityCount || (!options.physicsReferences.empty() && options.physicsReferences.size() != entityCount) ||
+                (!options.members.empty() && options.members.size() != entityCount) ||
+                (!options.references.empty() && options.references.size() != entityCount) ||
+                (!options.primitiveMeshes.empty() && options.primitiveMeshes.size() != entityCount))
+                return Result<void>::Failure(MakeError(PrefabErrors::ComponentAllocationFailed));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc PrefabTemplateProvider::QueuePreparedGroup */
     Result<std::vector<Runtime::DeferredEntity>> PrefabTemplateProvider::QueuePreparedGroup(
         const PrefabTemplateLease &lease, std::vector<Runtime::RuntimeComponentSet> components, const CancellationToken &cancellation,
         PrefabPreparedGroupOptions options) {
+        return QueuePreparedGroup(PreparedPrefabSpawn{lease}, std::move(components), cancellation, std::move(options));
+    }
+
+    /** @copydoc PrefabTemplateProvider::QueuePreparedGroup */
+    Result<std::vector<Runtime::DeferredEntity>> PrefabTemplateProvider::QueuePreparedGroup(
+        const PreparedPrefabSpawn &preparedTemplate, std::vector<Runtime::RuntimeComponentSet> components,
+        const CancellationToken &cancellation, PrefabPreparedGroupOptions options) {
+        const auto &lease = preparedTemplate.Source();
         using Tokens = std::vector<Runtime::DeferredEntity>;
         if (auto admission = ValidateAdmission(lease); admission.HasError())
             return Result<Tokens>::Failure(admission.ErrorValue());
-        if (cancellation.IsCancellationRequested() || options.scopeCancellation.IsCancellationRequested())
-            return Result<Tokens>::Failure(MakeError(PrefabErrors::Cancelled));
-        if (options.spawnLineage.size() > state_->profile.Policy().maximumRuntimeSpawnDepth)
-            return Result<Tokens>::Failure(MakeError(PrefabErrors::SpawnDepthExceeded));
-        const auto &entities = lease.Template()->Data().entities;
-        if (options.rootPlacement && options.rootPlacement->TryToMatrix().HasError())
-            return Result<Tokens>::Failure(MakeError(PrefabErrors::InvalidPlacement));
-        if (options.parent) {
-            const auto active = state_->scenes.ActiveScene();
-            if (!active || active->Get(*options.parent).HasError())
-                return Result<Tokens>::Failure(MakeError(PrefabErrors::InvalidParent));
-        }
-        if (components.size() != entities.size() ||
-            (!options.physicsReferences.empty() && options.physicsReferences.size() != entities.size()) ||
-            (!options.members.empty() && options.members.size() != entities.size()) ||
-            (!options.references.empty() && options.references.size() != entities.size()) ||
-            (!options.primitiveMeshes.empty() && options.primitiveMeshes.size() != entities.size()))
-            return Result<Tokens>::Failure(MakeError(PrefabErrors::ComponentAllocationFailed));
-        if (auto projected = ValidatePreparedInterfaces(lease.Template()->Data(), options); projected.HasError())
-            return Result<Tokens>::Failure(projected.ErrorValue());
-        auto entries = MakePreparedEntries(entities, std::move(components), options);
-        std::vector<Runtime::RuntimeGroupAssetLease> resources;
-        resources.reserve(lease.Dependencies().size() + 1);
-        resources.emplace_back(Assets::AssetDependency{lease.Template()->Data().assetId, Assets::AssetTypeId::Parse("core.prefab").Value()},
-                               lease.Artifact());
-        for (const auto &dependency : lease.Dependencies())
-            resources.emplace_back(dependency.metadata, dependency.artifact);
-        Runtime::SceneCommandBuffer commands;
-        auto tokens = commands.CreateGroup(std::move(entries), std::move(resources),
-                                           {lease.Scene(), lease.RegistryRevision(), cancellation, state_->retirement.Token(),
-                                            options.scopeCancellation});
-        if (tokens.HasError())
-            return tokens;
-        if (options.receipt) {
-            auto queued = state_->scenes.QueueTrackedStructuralCommands(std::move(commands));
+        if (auto valid = ValidateGroupOptions(options, cancellation, state_->scenes.ActiveScene(),
+                                              state_->profile.Policy().maximumRuntimeSpawnDepth);
+            valid.HasError())
+            return Result<Tokens>::Failure(valid.ErrorValue());
+        if (auto valid = ValidateGroupDimensions(options, components.size(), preparedTemplate.Data().entities.size()); valid.HasError())
+            return Result<Tokens>::Failure(valid.ErrorValue());
+        const auto receipt = options.receipt;
+        const auto scopeCancellation = options.scopeCancellation;
+        auto prepared = Detail::PreparePrefabGroupCommands(preparedTemplate, std::move(components), std::move(options),
+                                                           {lease.Scene(), lease.RegistryRevision(), cancellation,
+                                                            state_->retirement.Token(), scopeCancellation});
+        if (prepared.HasError())
+            return Result<Tokens>::Failure(prepared.ErrorValue());
+        auto group = std::move(prepared).Value();
+        if (receipt) {
+            auto queued = state_->scenes.QueueTrackedStructuralCommands(std::move(group.commands));
             if (queued.HasError())
                 return Result<Tokens>::Failure(queued.ErrorValue());
-            *options.receipt = std::move(queued).Value();
-        } else if (auto queued = state_->scenes.QueueStructuralCommands(std::move(commands)); queued.HasError())
+            *receipt = std::move(queued).Value();
+        } else if (auto queued = state_->scenes.QueueStructuralCommands(std::move(group.commands)); queued.HasError())
             return Result<Tokens>::Failure(queued.ErrorValue());
-        return tokens;
+        return Result<Tokens>::Success(std::move(group.entities));
     }
 
     /** @copydoc PrefabTemplateProvider::Evict */

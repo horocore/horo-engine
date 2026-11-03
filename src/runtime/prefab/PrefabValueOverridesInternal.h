@@ -1,7 +1,7 @@
 #pragma once
 #include "CanonicalJsonWriter.h"
-#include "Horo/Prefab/PrefabValueOverrides.h"
-#include "PrefabDocumentSerializationInternal.h"
+#include "Horo/Prefab/PrefabOverrideOperations.h"
+#include "PrefabValueJsonInternal.h"
 
 namespace Horo::Prefab::ValueDetail {
     using OwnedJson = JsonEncoding::Detail::OwnedJsonValue;
@@ -13,7 +13,8 @@ namespace Horo::Prefab::ValueDetail {
         return Result<T>::Failure(MakeError(PrefabErrors::OverrideInvalid, std::move(message)));
     }
 
-    /** @brief Composes actual placement/local matrices only when the final affine result is representable as TRS within engine precision.
+    /** @brief Composes actual placement/local matrices only when the final affine
+     * result is representable as TRS within engine precision.
      */
     [[nodiscard]] Result<Math::Transform> ComposePrefabPlacement(const Math::Transform &placement, const Math::Transform &local);
     [[nodiscard]] Result<void> ValidateValue(const PrefabOverrideValue &value, const PrefabValuePropertySchema *schema = nullptr);
@@ -27,7 +28,8 @@ namespace Horo::Prefab::ValueDetail {
     [[nodiscard]] Result<PrefabValueOverrideRecord> DecodeRecord(const Json &value);
     [[nodiscard]] Sha256Digest ValueDigest(const PrefabOverrideValue &value);
     [[nodiscard]] bool SameValue(const PrefabOverrideValue &left, const PrefabOverrideValue &right);
-    /** @brief Parses only bounded unique-key component objects into allocation-free-retiring ownership, preserving caller diagnostics. */
+    /** @brief Parses only bounded unique-key component objects into
+     * allocation-free-retiring ownership, preserving caller diagnostics. */
     [[nodiscard]] Result<OwnedJson> DecodeComponentPayload(std::span<const std::byte> bytes, std::string_view failure);
     [[nodiscard]] Result<PrefabOverrideValue> ReadPayloadValue(const Json &value, Gameplay::ComponentPropertyKind kind);
     [[nodiscard]] OwnedJson PayloadValue(const PrefabOverrideValue &value);
@@ -45,7 +47,8 @@ namespace Horo::Prefab::ValueDetail {
     [[nodiscard]] Wire EncodeComponentOrphan(const PrefabComponentOverrideOrphan &orphan);
     [[nodiscard]] Result<PrefabComponentOverrideConflict> DecodeComponentConflict(const Json &value);
     [[nodiscard]] Result<PrefabComponentOverrideOrphan> DecodeComponentOrphan(const Json &value);
-    /** @brief Encode the single override envelope for standalone and composition-layer serialization. */
+    /** @brief Encode the single override envelope for standalone and
+     * composition-layer serialization. */
     [[nodiscard]] Wire EncodeSet(const PrefabValueOverrideSet &set, Wire records = Wire::array(), Wire conflicts = Wire::array(),
                                  Wire orphans = Wire::array());
     [[nodiscard]] Wire EncodeCombinedRecords(const PrefabValueOverrideSet &set);

@@ -1,4 +1,6 @@
 #include "BehaviorRuntimeRestoreInternal.h"
+#include "Horo/Prefab/PrefabErrors.h"
+#include "Horo/Prefab/PrefabSpawnService.h"
 
 #include <limits>
 #include <new>
@@ -52,7 +54,10 @@ namespace Horo::Gameplay {
 
             bool SameOwner(const IBehaviorPersistenceTargetAccess &other) const noexcept override {
                 const auto *actual = dynamic_cast<const TargetAccess *>(&other);
-                return actual && epoch_ == actual->epoch_ && state_.lock() == actual->state_.lock() && type_ == actual->type_;
+                return actual && epoch_ == actual->epoch_ && state_.lock() == actual->state_.lock() && type_ == actual->type_ &&
+                       std::ranges::equal(identities_, actual->identities_, [](const auto &left, const auto &right) {
+                    return left.runtime == right.runtime && left.identity == right.identity && left.type == right.type;
+                });
             }
 
             void MarkMaterialized() const noexcept override {
@@ -239,12 +244,14 @@ namespace Horo::Gameplay {
 
     Result<std::shared_ptr<BehaviorRuntimeRestoreCandidate>> BehaviorRuntimeRestoreAccess::Prepare(
         std::shared_ptr<BehaviorRuntimeSceneOwner::State> owner, Runtime::RuntimeScene &scene, bool restoring,
-        BehaviorRuntimeServiceBindings services) {
+        BehaviorRuntimeServiceBindings services, std::shared_ptr<const GameplayPrefabContext> prefabs) {
         using Outcome = Result<std::shared_ptr<BehaviorRuntimeRestoreCandidate>>;
         if (!OnOwner(*owner))
             return Outcome::Failure(MakeError(Runtime::SaveErrors::ThreadAffinityViolation));
         if (!owner->registry)
             return Outcome::Failure(BehaviorRestoreError("Gameplay module owner is quiesced."));
+        if (prefabs && prefabs->Binding().scene != scene.View().RuntimeId())
+            return Outcome::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
         try {
             auto state = std::make_shared<BehaviorRuntimeRestoreCandidate::State>();
             state->scene = &scene;
@@ -256,7 +263,8 @@ namespace Horo::Gameplay {
             state->runtime = std::move(runtime).Value();
             auto candidate = std::shared_ptr<BehaviorRuntimeRestoreCandidate>{new BehaviorRuntimeRestoreCandidate{state}};
             if (restoring)
-                if (auto configured = Configure(*state->runtime, std::move(services), {}, owner->scenes); configured.HasError())
+                if (auto configured = Configure(*state->runtime, std::move(services), std::move(prefabs), owner->scenes);
+                    configured.HasError())
                     return Outcome::Failure(configured.ErrorValue());
             state->generation = Generation(*state->runtime);
             return Outcome::Success(std::move(candidate));
@@ -343,11 +351,14 @@ namespace Horo::Gameplay {
     }
 
     Result<std::shared_ptr<BehaviorRuntimeRestoreCandidate>> BehaviorRuntimeSceneOwner::PrepareRestoreCandidate(
-        Runtime::RuntimeScene &scene, BehaviorRuntimeServiceBindings services) {
+        Runtime::RuntimeScene &scene, BehaviorRuntimeServiceBindings services, std::shared_ptr<const GameplayPrefabContext> prefabs) {
+        if (prefabs && !state_->scenes->IsRestoreCandidate(scene))
+            return Result<std::shared_ptr<BehaviorRuntimeRestoreCandidate>>::Failure(
+                BehaviorRestoreError("Prepared prefab services must belong to the exact actual unpublished Scene candidate."));
         if (state_->pending)
             return Result<std::shared_ptr<BehaviorRuntimeRestoreCandidate>>::Failure(
                 BehaviorRestoreError("Another Scene candidate is pending."));
-        auto prepared = BehaviorRuntimeRestoreAccess::Prepare(state_, scene, true, std::move(services));
+        auto prepared = BehaviorRuntimeRestoreAccess::Prepare(state_, scene, true, std::move(services), std::move(prefabs));
         if (prepared.HasValue())
             state_->pending = prepared.Value();
         return prepared;

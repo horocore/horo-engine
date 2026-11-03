@@ -1,19 +1,11 @@
 #include "EditorPlaySaveHost.h"
+#include "EditorPlaySaveIdentityIssuing.h"
+#include "EditorPlaySavePrefabServices.h"
 #include "Horo/Application/ProjectCompatibility.h"
 
 namespace Horo::Application::Internal {
     namespace {
         using namespace Runtime;
-
-        /** @brief Issues real opaque guest/session/object identities, never hashes runtime slots or paths into authority. */
-        template <class Identity> Result<Identity> IssueIdentity(Security::SecureRandomSource &entropy) {
-            SaveIdentityDetail::Bytes bytes{};
-            if (const auto filled = entropy.Fill(std::as_writable_bytes(std::span{bytes})); filled.HasError())
-                return Result<Identity>::Failure(filled.ErrorValue());
-            bytes[6] = static_cast<std::uint8_t>((bytes[6] & 15U) | 64U);
-            bytes[8] = static_cast<std::uint8_t>((bytes[8] & 63U) | 128U);
-            return Identity::FromBytes(bytes);
-        }
 
         /** @brief Issues the entire authored durable inventory once, preserving it through later runtime deletion/tombstones. */
         Result<std::vector<PersistentEntityRecord>> IssueEntities(const RuntimeSceneDefinition &definition,
@@ -24,7 +16,7 @@ namespace Horo::Application::Internal {
             std::vector<PersistentEntityRecord> identities;
             identities.reserve(definition.Entities().size());
             for (const auto &entity : definition.Entities()) {
-                const auto issued = IssueIdentity<PersistentEntityId>(entropy);
+                const auto issued = IssuePlaySaveIdentity<PersistentEntityId>(entropy);
                 if (issued.HasError())
                     return Outcome::Failure(issued.ErrorValue());
                 identities.push_back({issued.Value(),
@@ -41,11 +33,11 @@ namespace Horo::Application::Internal {
             using Outcome = Result<PlaySaveStorageConfig>;
             if (!project.IsValid())
                 return Outcome::Failure(MakeError(SaveErrors::IdentityInvalid));
-            const auto environment = IssueIdentity<EnvironmentStorageId>(*entropy);
-            const auto user = IssueIdentity<LocalUserStorageId>(*entropy);
-            const auto profile = IssueIdentity<GameProfileId>(*entropy);
-            const auto world = IssueIdentity<SaveWorldId>(*entropy);
-            const auto baseline = IssueIdentity<SaveBaseSceneId>(*entropy);
+            const auto environment = IssuePlaySaveIdentity<EnvironmentStorageId>(*entropy);
+            const auto user = IssuePlaySaveIdentity<LocalUserStorageId>(*entropy);
+            const auto profile = IssuePlaySaveIdentity<GameProfileId>(*entropy);
+            const auto world = IssuePlaySaveIdentity<SaveWorldId>(*entropy);
+            const auto baseline = IssuePlaySaveIdentity<SaveBaseSceneId>(*entropy);
             if (environment.HasError())
                 return Outcome::Failure(environment.ErrorValue());
             if (user.HasError())
@@ -80,12 +72,12 @@ namespace Horo::Application::Internal {
         auto root = ResolveProductSaveRoot({product.Value(), platform, {}}, processes);
         if (root.HasError())
             return Outcome::Failure(root.ErrorValue());
-        return Outcome::Success([&jobs, &operations, &clock, &wallClock, root = std::move(root).Value(),
-                                 entropy = std::move(entropy)](SaveProjectId project, RuntimeSceneService &scenes,
-                                                               const RuntimeSceneDefinition &definition,
-                                                               std::vector<Editor::PlaySaveGameplayBinding> bindings,
-                                                               std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner)
-                                    -> Result<std::unique_ptr<EditorPlaySaveHost>> {
+        return Outcome::Success(
+            [&jobs, &operations, &clock, &wallClock, root = std::move(root).Value(),
+             entropy = std::move(entropy)](SaveProjectId project, RuntimeSceneService &scenes, const RuntimeSceneDefinition &definition,
+                                           std::vector<Editor::PlaySaveGameplayBinding> bindings,
+                                           std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
+                                           std::shared_ptr<PlaySavePrefabServices> prefabs) -> Result<std::unique_ptr<EditorPlaySaveHost>> {
             using Host = Result<std::unique_ptr<EditorPlaySaveHost>>;
             auto scope = Scope(root, entropy, project);
             if (scope.HasError())
@@ -99,10 +91,11 @@ namespace Horo::Application::Internal {
                 declarations.push_back(binding.declaration);
             auto schema = std::make_shared<PlaySaveStorageSchema>(
                 PlaySaveStorageSchema{definition, std::move(identities).Value(), std::move(declarations),
-                                      behaviorOwner ? std::optional{Gameplay::BehaviorLifecycleParticipant()} : std::nullopt});
+                                      behaviorOwner ? std::optional{Gameplay::BehaviorLifecycleParticipant()} : std::nullopt,
+                                      prefabs ? std::optional{prefabs->Provider().LimitProfile()} : std::nullopt});
             auto live = std::make_shared<const std::vector<Editor::PlaySaveGameplayBinding>>(std::move(bindings));
             return EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wallClock, std::move(scope).Value()}, std::move(schema),
-                                              std::move(live), std::move(behaviorOwner));
+                                              std::move(live), std::move(behaviorOwner), std::move(prefabs));
         });
     }
 }  // namespace Horo::Application::Internal

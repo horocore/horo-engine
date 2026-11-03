@@ -5,7 +5,8 @@
 
 namespace Horo::Prefab {
     namespace {
-        /** @brief Admits exactly one captured canonical resource and computes its actual full-envelope digest. */
+        /** @brief Admits exactly one captured canonical resource and computes its
+         * actual full-envelope digest. */
         [[nodiscard]] Result<CookedPrefabDependency> ResourceDependency(const PrefabDependencyNode &node,
                                                                         const std::span<const PrefabTemplateCookResource> resources,
                                                                         const AssetCookTargetId &target,
@@ -28,7 +29,8 @@ namespace Horo::Prefab {
             return Result<CookedPrefabDependency>::Success({{node.assetId, node.assetType}, ComputeSha256(std::as_bytes(found->artifact))});
         }
 
-        /** @brief Uses the same validated graph to separate flattened source closure from required runtime resources. */
+        /** @brief Uses the same validated graph to separate flattened source closure
+         * from required runtime resources. */
         [[nodiscard]] Result<std::vector<CookedPrefabDependency>> Dependencies(
             const PrefabSourceResolverSnapshot &sources, const Assets::AssetRegistrySnapshot &registry, const Assets::AssetId root,
             const std::span<const PrefabTemplateCookResource> resources, const AssetCookTargetId &target, const PrefabLimitProfile &limits,
@@ -59,7 +61,8 @@ namespace Horo::Prefab {
             return Result<std::vector<CookedPrefabDependency>>::Success(std::move(result));
         }
 
-        /** @brief Maps one resolver object to a dense slot while retaining original provider payloads and provenance. */
+        /** @brief Maps one resolver object to a dense slot while retaining original
+         * provider payloads and provenance. */
         [[nodiscard]] Result<CookedPrefabEntity> Entity(const ResolvedPrefabObject &object,
                                                         const std::span<const ResolvedPrefabObject> preceding,
                                                         const PrefabSourceResolverSnapshot &sources) {
@@ -86,6 +89,33 @@ namespace Horo::Prefab {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Transfers the same source resolver's actual entities/provenance under its one expansion budget. */
+        Result<void> PopulateEntities(CookedPrefabData &data, const EffectivePrefabCandidate &candidate,
+                                      const PrefabSourceResolverSnapshot &sources, const PrefabLimitProfile &limits,
+                                      const CancellationToken &cancellation) {
+            const auto objects = candidate.Objects();
+            data.entities.reserve(objects.size());
+            PrefabExpansionBudget budget(limits);
+            for (std::size_t index = 0; index < objects.size(); ++index) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
+                const auto &object = objects[index];
+                if (auto consumed = budget.Consume(1 + index + sources.Sources().size() + object.object.components.size() +
+                                                   object.object.behaviors.size());
+                    consumed.HasError())
+                    return Result<void>::Failure(consumed.ErrorValue());
+                auto entity = Entity(object, objects.first(index), sources);
+                if (entity.HasError())
+                    return Result<void>::Failure(entity.ErrorValue());
+                data.entities.push_back(std::move(entity).Value());
+            }
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc CookPrefabTemplate */
     Result<CookedPrefab> CookPrefabTemplate(const PrefabSourceResolverSnapshot &sources, const Assets::AssetRegistrySnapshot &registry,
                                             const Assets::AssetId root, const std::span<const PrefabTemplateCookResource> resources,
@@ -108,24 +138,9 @@ namespace Horo::Prefab {
             if (dependencies.HasError())
                 return Result<CookedPrefab>::Failure(dependencies.ErrorValue());
             CookedPrefabData data{.assetId = root, .dependencies = std::move(dependencies).Value()};
-            const auto objects = candidate.Value().Objects();
-            data.entities.reserve(objects.size());
-            PrefabExpansionBudget budget(limits);
-            for (std::size_t index = 0; index < objects.size(); ++index) {
-                if (options.cancellation.IsCancellationRequested())
-                    return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::Cancelled));
-                const auto &object = objects[index];
-                if (auto consumed = budget.Consume(1 + index + sources.Sources().size() + object.object.components.size() +
-                                                   object.object.behaviors.size());
-                    consumed.HasError())
-                    return Result<CookedPrefab>::Failure(consumed.ErrorValue());
-                auto entity = Entity(object, objects.first(index), sources);
-                if (entity.HasError())
-                    return Result<CookedPrefab>::Failure(entity.ErrorValue());
-                data.entities.push_back(std::move(entity).Value());
-            }
-            if (options.cancellation.IsCancellationRequested())
-                return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::Cancelled));
+            data.rootSourceRevision = candidate.Value().Revision().rootSource;
+            if (auto populated = PopulateEntities(data, candidate.Value(), sources, limits, options.cancellation); populated.HasError())
+                return Result<CookedPrefab>::Failure(populated.ErrorValue());
             return CookedPrefab::Create(std::move(data), limits);
         }();
         if (result.HasError())

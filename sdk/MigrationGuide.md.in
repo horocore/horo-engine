@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 22 / `gameplay-sdk22`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 26 / `gameplay-sdk26`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -32,6 +32,34 @@ or that this snapshot has passed every platform. The extension SDK has no engine
 library link dependency; native libraries still require matching OS/architecture
 and their own private dependency/toolchain compatibility. No Android, mobile,
 cross-architecture, or generic C++ binary compatibility is promised here.
+
+## Gameplay SDK25 → SDK26 (Prefab persistence and Scene group contracts)
+
+Rebuild every native gameplay module and descriptor bundle, including optional
+Physics, RuntimeUi and AI consumers, with boundary 26 and the exact
+`gameplay-sdk26` engine/toolchain/platform/configuration fingerprint. Typed
+`PrefabSpawnRequest` override inputs and Scene group command/reference layouts
+have changed. Old boundaries/fingerprints are rejected before factory entry;
+never mix SDK25 static objects with these new C++ value layouts.
+
+Use the same canonical prefab provider/spawn boundary for ordinary creation and
+Save reconstruction. Restore groups use Scene-issued qualified ownership and
+command-only dense external references; they do not expose a second public spawn
+or persistent-ID issuer. Persistent lookup returns a fresh current Scene/service
+binding; old handles remain stale and explicit tombstones remain unavailable.
+
+Recook authored prefab assets using the actual producer. `HPFB3` is the sole
+current cooked format and records genuine root source revision/provenance;
+`HPFB2` is rejected, not interpreted through an unqualified fallback. Ordinary
+procedural templates may lack source provenance, but durable capture then fails
+with typed compatibility diagnostics. Physical checkpoint state still requires
+its actual owning canonical Physics Save adapter; this change does not fabricate
+that coverage. External C ABI 1.8 is unchanged.
+
+Rollback: stop the host and restore the previous exact engine, SDK, modules,
+cooked artifacts and project/Save backup as one coherent set. Rebuild against
+that retained generation; do not relabel SDK26 modules as SDK25 or reinterpret
+new cooked bytes as an old schema.
 
 ## External C ABI 1.0 → 1.1
 

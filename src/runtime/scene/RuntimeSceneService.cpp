@@ -7,6 +7,7 @@
 #include <format>
 #include <limits>
 #include <new>
+#include <set>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -38,6 +39,11 @@ namespace Horo::Runtime {
                                            std::format("Scene {} requires asset {}.", scene.value, asset.ToString()),
                                            SourceLocation{asset.ToString(), 0, 0});
             return error;
+        }
+
+        /** @brief Reads the same actual registry revision for ordinary structural admission without adding another validator. */
+        Assets::AssetRegistryRevision StructuralRegistryRevision(const Assets::AssetRegistry *registry) {
+            return registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
         }
 
         [[nodiscard]] Result<void> ValidateRuntimeIdentity(const std::uint64_t nextRuntimeId) {
@@ -241,34 +247,39 @@ namespace Horo::Runtime {
     }
 
     Result<void> RuntimeSceneService::BeginPreparation(RuntimeSceneDefinition definition, const RuntimeSceneConfig config) {
-        if (const auto validation = ValidatePreparation(definition, config, assetPreparationServices_.limits, nextRuntimeId_);
-            validation.HasError())
-            return validation;
+        try {
+            if (const auto validation = ValidatePreparation(definition, config, assetPreparationServices_.limits, nextRuntimeId_);
+                validation.HasError())
+                return validation;
 
-        if (definition.AssetDependencies().empty()) {
-            if (const auto staged = StageCandidate(definition, config, {}, {}); staged.HasError())
-                return staged;
-            transition_ = TransitionKind::Activate;
+            if (definition.AssetDependencies().empty()) {
+                if (const auto staged = StageCandidate(definition, config, {}, {}); staged.HasError())
+                    return staged;
+                transition_ = TransitionKind::Activate;
+                return Result<void>::Success();
+            }
+            if (!assetPreparationServices_.registry || !assetPreparationServices_.loads)
+                return Result<void>::Failure(MakeError(SceneErrors::AssetServicesUnavailable));
+
+            Assets::AssetRegistrySnapshot snapshot = assetPreparationServices_.registry->Snapshot();
+            if (const auto checked = CheckDependenciesExist(definition, snapshot); checked.HasError())
+                return checked;
+
+            auto prep = std::make_unique<Preparation>(std::move(definition), config, std::move(snapshot));
+            if (const auto populated = PopulatePreparationEntries(*prep, prep->definition); populated.HasError())
+                return populated;
+
+            preparation_ = std::move(prep);
+            if (const Result<void> submitted = SubmitPreparationLoads(); submitted.HasError()) {
+                const Error error = submitted.ErrorValue();
+                CancelPreparation(false);
+                return Result<void>::Failure(error);
+            }
             return Result<void>::Success();
-        }
-        if (!assetPreparationServices_.registry || !assetPreparationServices_.loads)
-            return Result<void>::Failure(MakeError(SceneErrors::AssetServicesUnavailable));
-
-        Assets::AssetRegistrySnapshot snapshot = assetPreparationServices_.registry->Snapshot();
-        if (const auto checked = CheckDependenciesExist(definition, snapshot); checked.HasError())
-            return checked;
-
-        auto prep = std::make_unique<Preparation>(std::move(definition), config, std::move(snapshot));
-        if (const auto populated = PopulatePreparationEntries(*prep, prep->definition); populated.HasError())
-            return populated;
-
-        preparation_ = std::move(prep);
-        if (const Result<void> submitted = SubmitPreparationLoads(); submitted.HasError()) {
-            const Error error = submitted.ErrorValue();
+        } catch (const std::bad_alloc &) {
             CancelPreparation(false);
-            return Result<void>::Failure(error);
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene preparation allocation failed."));
         }
-        return Result<void>::Success();
     }
 
     /** @copydoc RuntimeSceneService::QueueUnload */
@@ -307,8 +318,9 @@ namespace Horo::Runtime {
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         const LifecycleMutation mutation{*this};
-        const auto revision = assetPreparationServices_.registry ? assetPreparationServices_.registry->Snapshot().Revision()
-                                                                 : Assets::AssetRegistryRevision{};
+        const auto revision = StructuralRegistryRevision(assetPreparationServices_.registry);
+        if (commands.HasRestoreGroups())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Private restore groups cannot enter ordinary commit."));
         if (auto admission = commands.ValidateAdmission(active_.scene->View().RuntimeId(), revision); admission.HasError())
             return admission;
         if (!commands.Empty())
@@ -517,31 +529,145 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @brief Synchronous private-candidate borrow; never stored in a restore owner. */
+    struct RuntimeSceneService::RestoreCandidateCommands final : SceneRestoreCandidateCommands {
+        RestoreCandidateCommands(RuntimeSceneService &owner, RuntimeScene &candidate) noexcept
+            : owner(owner), candidate(candidate), runtime(candidate.View().RuntimeId()) {}
+
+        ~RestoreCandidateCommands() override {
+            if (seal)
+                seal->valid = false;
+        }
+
+        /** @brief Requires the exact issued payload control, which public assignment cannot forge or carry across attempts. */
+        bool IssuedBatch(const SceneCommandBuffer &commands) const noexcept {
+            if (!seal || !seal->valid || builtCommands != &commands || commands.commands_.size() != 1)
+                return false;
+            const auto *group = std::get_if<SceneCommandBuffer::CreateGroupCommand>(&commands.commands_.front());
+            return group && group->restoreSeal && !seal.owner_before(group->restoreSeal) && !group->restoreSeal.owner_before(seal);
+        }
+
+        /** @brief Service-issued proof of this exact still-unpublished candidate on its owning lane. */
+        bool Admits() const noexcept {
+            return std::this_thread::get_id() == owner.restoreRetirementOwner_ && owner.pending_.scene.get() == &candidate &&
+                   owner.active_.scene.get() != &candidate && candidate.View().RuntimeId() == runtime && runtime.value != 0 &&
+                   owner.aggregateRestore_;
+        }
+
+        Result<StructuralCommitResult> Commit(const SceneCommandBuffer &commands) override {
+            if (!Admits() || !IssuedBatch(commands))
+                return Result<StructuralCommitResult>::Failure(MakeError(SceneErrors::InvalidCandidate));
+            seal->valid = false;
+            builtCommands = nullptr;
+            return candidate.CommitWithRegistry(commands, owner.assetPreparationServices_.registry, owner.structuralParticipants_, nullptr,
+                                                RuntimeScene::CommitPurpose::RestoreMaterialization);
+        }
+
+        /** @brief Charges the actual private candidate's existing assets plus the new exact resource closure against live host policy. */
+        Result<void> ValidateResidentBudget(std::span<const RuntimeGroupAssetLease> resources) const {
+            const auto &limits = owner.assetPreparationServices_.limits;
+            std::set<Assets::AssetId> dependencies;
+            std::size_t bytes{};
+            for (const auto &asset : candidate.assets_) {
+                dependencies.insert(asset.dependency.id);
+                if (asset.payload && asset.payload->size() > limits.maximumResidentBytes - bytes)
+                    return Result<void>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
+                if (asset.payload)
+                    bytes += asset.payload->size();
+            }
+            for (const auto &resource : resources) {
+                dependencies.insert(resource.metadata.id);
+                if (resource.artifact.Bytes().size() > limits.maximumResidentBytes - bytes)
+                    return Result<void>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
+                bytes += resource.artifact.Bytes().size();
+            }
+            return dependencies.size() <= limits.maximumDependencies ? Result<void>::Success()
+                                                                     : Result<void>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
+        }
+
+        Result<std::vector<DeferredEntity>> CreateGroup(SceneCommandBuffer &commands, std::vector<RuntimeEntityGroupEntry> entries,
+                                                        std::vector<RuntimeGroupAssetLease> resources,
+                                                        const CancellationToken &cancellation,
+                                                        std::vector<SceneRestoreGroupPartition> partitions) override {
+            if (!Admits())
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidCandidate));
+            if (builtGroup || !commands.Empty())
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidCandidate));
+            if (auto valid = ValidateResidentBudget(resources); valid.HasError())
+                return Result<std::vector<DeferredEntity>>::Failure(valid.ErrorValue());
+            if (auto valid = owner.aggregateRestore_->ValidateRestorePartitions(partitions); valid.HasError())
+                return Result<std::vector<DeferredEntity>>::Failure(valid.ErrorValue());
+            auto limits = owner.aggregateRestore_->StructuralLimits();
+            limits.maximumEntities = std::min(limits.maximumEntities, std::size_t{16'384});
+            limits.maximumResources =
+                std::min({limits.maximumResources, owner.assetPreparationServices_.limits.maximumDependencies, std::size_t{16'384}});
+            limits.maximumReferences = std::min(limits.maximumReferences, std::size_t{65'536});
+            limits.maximumPhysicsReferences = std::min(limits.maximumPhysicsReferences, std::size_t{65'536});
+            limits.maximumLineageEntries = std::min(limits.maximumLineageEntries, limits.maximumEntities * 16);
+            limits.maximumResourceBytes =
+                std::min(limits.maximumResourceBytes, owner.assetPreparationServices_.limits.maximumResidentBytes);
+            const auto revision = owner.assetPreparationServices_.registry ? owner.assetPreparationServices_.registry->Snapshot().Revision()
+                                                                           : Assets::AssetRegistryRevision{};
+            auto issuedSeal = std::make_shared<SceneCommandBuffer::RestoreGroupSeal>();
+            auto created = commands.CreateGroupInternal(std::move(entries), std::move(resources), {runtime, revision, cancellation},
+                                                        {limits, false}, std::move(partitions));
+            builtGroup = created.HasValue();
+            if (builtGroup) {
+                seal = std::move(issuedSeal);
+                std::get<SceneCommandBuffer::CreateGroupCommand>(commands.commands_.front()).restoreSeal = seal;
+                builtCommands = &commands;
+            }
+            return created;
+        }
+
+        RuntimeSceneService &owner;
+        RuntimeScene &candidate;
+        SceneRuntimeId runtime;
+        bool builtGroup{};
+        const SceneCommandBuffer *builtCommands{}; /**< Exact synchronous single-group batch; cleared before its only commit attempt. */
+        std::shared_ptr<SceneCommandBuffer::RestoreGroupSeal> seal;
+    };
+
+    /** @copydoc RuntimeSceneService::IsRestoreCandidate */
+    bool RuntimeSceneService::IsRestoreCandidate(const RuntimeScene &candidate) const noexcept {
+        return std::this_thread::get_id() == restoreRetirementOwner_ && aggregateRestore_ && pending_.scene.get() == &candidate &&
+               active_.scene.get() != &candidate;
+    }
+
     /** @copydoc RuntimeSceneService::StageCandidate */
     Result<void> RuntimeSceneService::StageCandidate(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config,
                                                      const Assets::AssetRegistryRevision revision,
                                                      std::vector<RuntimeScene::ResolvedAsset> assets) {
-        auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets));
-        if (candidate.HasError())
-            return Result<void>::Failure(candidate.ErrorValue());
-        pending_.scene = std::move(candidate).Value();
-        if (aggregateRestore_) {
-            if (const auto prepared = aggregateRestore_->PrepareScene(*pending_.scene); prepared.HasError()) {
-                aggregateRestore_->Rollback();
-                pending_.scene.reset();
-                return prepared;
+        try {
+            auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets));
+            if (candidate.HasError())
+                return Result<void>::Failure(candidate.ErrorValue());
+            pending_.scene = std::move(candidate).Value();
+            if (aggregateRestore_) {
+                RestoreCandidateCommands commands{*this, *pending_.scene};
+                if (const auto prepared = aggregateRestore_->PrepareScene(*pending_.scene, commands); prepared.HasError()) {
+                    aggregateRestore_->Rollback();
+                    pending_.scene.reset();
+                    return prepared;
+                }
             }
-        }
-        if (const auto prepared = PrepareParticipants(definition); prepared.HasError()) {
+            if (const auto prepared = PrepareParticipants(definition); prepared.HasError()) {
+                if (aggregateRestore_)
+                    aggregateRestore_->Rollback();
+                pending_.scene.reset();
+                return Result<void>::Failure(prepared.ErrorValue());
+            }
+            // Only a complete private aggregate consumes its identity. Failed preparation may retry
+            // the same unpublished ID; unsigned wrap after a successful maximum ID closes admission.
+            ++nextRuntimeId_;
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
             if (aggregateRestore_)
                 aggregateRestore_->Rollback();
+            ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
             pending_.scene.reset();
-            return Result<void>::Failure(prepared.ErrorValue());
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene candidate allocation failed."));
         }
-        // Only a complete private aggregate consumes its identity. Failed preparation may retry
-        // the same unpublished ID; unsigned wrap after a successful maximum ID closes admission.
-        ++nextRuntimeId_;
-        return Result<void>::Success();
     }
 
     void RuntimeSceneService::AdvancePreparation() {

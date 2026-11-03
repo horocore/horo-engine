@@ -1,5 +1,6 @@
 #include "EditorProjectSceneHost.h"
 
+#include "EditorPlaySavePrefabServices.h"
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
@@ -51,7 +52,7 @@ namespace Horo::Application::Internal {
 
             Result<void> Prepare(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                                  const Runtime::RuntimeSceneDefinition *definition) {
-                if (!identity_.IsValid() || (root.empty() && policy.physicsMode != Physics::PhysicsRuntimeMode::Null))
+                if (!ValidPreparation(root, policy))
                     return Result<void>::Failure(MakeError(InvalidProjectScene));
                 std::optional<Prefab::PrefabLimitProfile> prefabLimits;
                 if (policy.prefabGranted) {
@@ -67,11 +68,27 @@ namespace Horo::Application::Internal {
                 if (const auto prepared = PrepareNativeOwners(root, policy); prepared.HasError())
                     return prepared;
                 if (policy.prefabGranted) {
-                    prefab_.templates =
-                        std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(*prefabLimits),
-                                                                         Prefab::PrefabTemplateProviderLimits{}, policy.prefabMetrics);
-                    return prefab_.templates->Startup({});
+                    if (auto prepared = PreparePrefabServices(std::move(*prefabLimits), policy); prepared.HasError())
+                        return prepared;
                 }
+                return RegisterPresentationParticipants(policy);
+            }
+
+            /** @brief Cold host identity and backend-neutral root admission, before creating any owner. */
+            bool ValidPreparation(const std::filesystem::path &root, const EditorProjectScenePolicy &policy) const noexcept {
+                return identity_.IsValid() && (!root.empty() || policy.physicsMode == Physics::PhysicsRuntimeMode::Null);
+            }
+
+            /** @brief Composes the one shared provider and Scene-owned service participant before presentation seals. */
+            Result<void> PreparePrefabServices(Prefab::PrefabLimitProfile limits, const EditorProjectScenePolicy &policy) {
+                prefab_.templates =
+                    std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(limits),
+                                                                     Prefab::PrefabTemplateProviderLimits{}, policy.prefabMetrics);
+                prefab_.services = std::make_shared<PlaySavePrefabServices>(*prefab_.templates, *scenes_, prefab_.projector);
+                if (auto added = scenes_->AddActivationParticipant(prefab_.services->MakeParticipant()); added.HasError())
+                    return added;
+                if (auto started = prefab_.templates->Startup({}); started.HasError())
+                    return started;
                 return Result<void>::Success();
             }
 
@@ -99,8 +116,6 @@ namespace Horo::Application::Internal {
                 if (structural.HasError())
                     return Result<void>::Failure(structural.ErrorValue());
                 if (auto added = scenes_->AddStructuralParticipant(std::move(structural).Value()); added.HasError())
-                    return added;
-                if (auto added = RegisterPresentationParticipants(policy); added.HasError())
                     return added;
                 return Result<void>::Success();
             }
@@ -132,7 +147,8 @@ namespace Horo::Application::Internal {
                     return save_->RebindGameplay(std::move(bindings));
                 if (!saveFactory_ || !saveBaseline_)
                     return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
-                auto composed = saveFactory_(saveProject_, *scenes_, *saveBaseline_, std::move(bindings), std::move(behaviorOwner));
+                auto composed =
+                    saveFactory_(saveProject_, *scenes_, *saveBaseline_, std::move(bindings), std::move(behaviorOwner), prefab_.services);
                 if (composed.HasError())
                     return Result<void>::Failure(composed.ErrorValue());
                 save_ = std::move(composed).Value();
@@ -200,40 +216,18 @@ namespace Horo::Application::Internal {
                 const Gameplay::BehaviorRegistry &registry, const Gameplay::ComponentRegistry &components) override {
                 if (!prefab_.templates)
                     return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(nullptr);
-                if (prefab_.context)
-                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(prefab_.context);
-                const auto active = scenes_->ActiveScene();
-                if (!active || !registry.IsFrozen() || !components.IsFrozen())
-                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Failure(MakeError(InvalidProjectScene));
-                prefab_.spawns =
-                    std::make_unique<Prefab::PrefabSpawnService>(*prefab_.templates, *scenes_, &components, &prefab_.projector);
-                if (const auto advanced = prefab_.spawns->Advance(tick_); advanced.HasError()) {
-                    prefab_.spawns.reset();
-                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Failure(advanced.ErrorValue());
-                }
-                Prefab::GameplayPrefabBinding binding{"editor.play", active->RuntimeId(), true, true,
-                                                      std::vector<Gameplay::BehaviorTypeId>{}};
-                binding.behaviorAllowlist->reserve(registry.Registrations().size());
-                for (const auto &registration : registry.Registrations())
-                    binding.behaviorAllowlist->push_back(registration.descriptor.typeId);
-                auto acquired = prefab_.spawns->Acquire(std::move(binding));
-                if (acquired.HasError()) {
-                    prefab_.spawns.reset();
-                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Failure(acquired.ErrorValue());
-                }
-                prefab_.context = std::move(acquired).Value();
-                return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(prefab_.context);
+                return prefab_.services->Bind(registry, components, tick_);
             }
 
             Result<void> CommitSceneChanges(const Runtime::FrameContext &frame) override {
                 const auto phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
-                if (prefab_.spawns)
-                    if (auto prepared = prefab_.spawns->OnPhase(phase, frame); prepared.HasError())
+                if (prefab_.services)
+                    if (auto prepared = prefab_.services->OnPhase(phase, frame); prepared.HasError())
                         return prepared;
                 if (auto committed = scenes_->OnPhase(phase, frame); committed.HasError())
                     return committed;
-                if (prefab_.spawns)
-                    if (const auto advanced = prefab_.spawns->Advance(tick_); advanced.HasError())
+                if (prefab_.services)
+                    if (const auto advanced = prefab_.services->Advance(tick_); advanced.HasError())
                         return advanced;
                 return FinishSavePhase(frame);
             }
@@ -269,20 +263,18 @@ namespace Horo::Application::Internal {
 
             /** @brief Advances only the actually admitted prefab tick; ordinary Play without that grant remains unchanged. */
             Result<void> AdvancePrefabTick(const Gameplay::FixedDeltaTime delta) {
-                if (!prefab_.spawns)
+                if (!prefab_.services)
                     return Result<void>::Success();
                 if (tick_ == std::numeric_limits<std::uint64_t>::max() || !std::isfinite(delta.seconds) || delta.seconds <= 0 ||
                     delta.seconds >= static_cast<double>(std::numeric_limits<std::int64_t>::max()) / 1'000'000'000.0)
                     return Result<void>::Failure(MakeError(InvalidProjectScene));
-                return prefab_.spawns->OnFixedUpdate(
+                return prefab_.services->OnFixedUpdate(
                     {++tick_, Duration::FromNanoseconds(std::llround(delta.seconds * 1'000'000'000.0)), {}});
             }
 
             void QuiesceGameplay() noexcept override {
-                if (prefab_.spawns)
-                    prefab_.spawns->Shutdown();
-                prefab_.context.reset();
-                prefab_.spawns.reset();
+                if (prefab_.services)
+                    prefab_.services->Quiesce();
             }
 
             std::optional<Editor::EditorSceneCollisionReceipt> CollisionReceipt() const noexcept override {
@@ -433,8 +425,7 @@ namespace Horo::Application::Internal {
             struct PrefabState final {
                 EditorPrefabProjector projector;
                 std::unique_ptr<Prefab::PrefabTemplateProvider> templates;
-                std::unique_ptr<Prefab::PrefabSpawnService> spawns;
-                std::shared_ptr<Gameplay::GameplayPrefabContext> context;
+                std::shared_ptr<PlaySavePrefabServices> services;
             };
 
             PrefabState prefab_;

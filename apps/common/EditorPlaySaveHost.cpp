@@ -25,38 +25,50 @@ namespace Horo::Application::Internal {
     EditorPlaySaveHost::State::State(Runtime::RuntimeSceneService &scenes, EditorPlaySaveEnvironment environment,
                                      std::shared_ptr<const PlaySaveStorageSchema> schema,
                                      std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
-                                     std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner)
+                                     std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
+                                     std::shared_ptr<PlaySavePrefabServices> prefabs)
         : scenes(scenes), environment(std::move(environment)), schema(std::move(schema)), liveBindings(std::move(liveBindings)),
-          behaviorOwner(std::move(behaviorOwner)), started(this->environment.clock.MonotonicNow()) {}
+          behaviorOwner(std::move(behaviorOwner)), prefabs(std::move(prefabs)), started(this->environment.clock.MonotonicNow()) {}
 
     /** @copydoc EditorPlaySaveHost::Create */
     Result<std::unique_ptr<EditorPlaySaveHost>> EditorPlaySaveHost::Create(
         Runtime::RuntimeSceneService &scenes, EditorPlaySaveEnvironment environment, std::shared_ptr<const PlaySaveStorageSchema> schema,
         std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
-        std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner) {
+        std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner, std::shared_ptr<PlaySavePrefabServices> prefabs) {
         using Outcome = Result<std::unique_ptr<EditorPlaySaveHost>>;
         try {
             if (const auto valid = ValidateOwnerInputs(scenes, environment, schema, liveBindings); valid.HasError())
                 return Outcome::Failure(valid.ErrorValue());
             auto state = std::make_unique<State>(scenes, std::move(environment), std::move(schema), std::move(liveBindings),
-                                                 std::move(behaviorOwner));
-            if (const auto checked =
-                    state->ValidateLiveBindings(state->liveBindings ? std::span<const Editor::PlaySaveGameplayBinding>{*state->liveBindings}
-                                                                    : std::span<const Editor::PlaySaveGameplayBinding>{});
-                checked.HasError())
-                return Outcome::Failure(checked.ErrorValue());
-            if (const auto bound = state->BindActiveGameplay(); bound.HasError())
-                return Outcome::Failure(bound.ErrorValue());
-            if (const auto composed = state->Compose(); composed.HasError())
-                return Outcome::Failure(composed.ErrorValue());
-            if (const auto opened = state->StartStorage(PlaySaveStorageAction::Open); opened.HasError())
-                return Outcome::Failure(opened.ErrorValue());
-            if (const auto published = state->Publish(); published.HasError())
-                return Outcome::Failure(published.ErrorValue());
+                                                 std::move(behaviorOwner), std::move(prefabs));
+            if (auto initialized = state->Initialize(); initialized.HasError())
+                return Outcome::Failure(initialized.ErrorValue());
             return Outcome::Success(std::unique_ptr<EditorPlaySaveHost>(new EditorPlaySaveHost(std::move(state))));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(Runtime::SaveErrors::StorageAllocationFailed));
         }
+    }
+
+    /** @copydoc EditorPlaySaveHost::State::Initialize */
+    Result<void> EditorPlaySaveHost::State::Initialize() {
+        if (const auto checked = ValidateLiveBindings(liveBindings ? std::span<const Editor::PlaySaveGameplayBinding>{*liveBindings}
+                                                                   : std::span<const Editor::PlaySaveGameplayBinding>{});
+            checked.HasError())
+            return Result<void>::Failure(checked.ErrorValue());
+        if (prefabs) {
+            if (auto installed = prefabs->InstallPersistence(environment.storage.world, schema->identities, environment.storage.entropy);
+                installed.HasError())
+                return Result<void>::Failure(installed.ErrorValue());
+        }
+        if (const auto bound = BindActiveGameplay(); bound.HasError())
+            return Result<void>::Failure(bound.ErrorValue());
+        if (const auto composed = Compose(); composed.HasError())
+            return Result<void>::Failure(composed.ErrorValue());
+        if (const auto opened = StartStorage(PlaySaveStorageAction::Open); opened.HasError())
+            return Result<void>::Failure(opened.ErrorValue());
+        if (const auto published = Publish(); published.HasError())
+            return Result<void>::Failure(published.ErrorValue());
+        return Result<void>::Success();
     }
 
     /** @brief Takes the one fully composed owner without replacing any operation, Scene or registry authority. */

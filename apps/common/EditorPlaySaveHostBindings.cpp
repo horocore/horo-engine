@@ -1,4 +1,5 @@
 #include "EditorPlaySaveHostInternal.h"
+#include "EditorPlaySavePrefabCapture.h"
 
 #include <algorithm>
 #include <new>
@@ -29,6 +30,26 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc EditorPlaySaveHost::State::CurrentIdentities */
+    Result<Runtime::PersistentEntityIdentityMap> EditorPlaySaveHost::State::CurrentIdentities() const {
+        return CurrentPlaySaveIdentities(scenes, *schema, prefabs.get());
+    }
+
+    /** @copydoc CurrentPlaySaveIdentities */
+    Result<Runtime::PersistentEntityIdentityMap> CurrentPlaySaveIdentities(Runtime::RuntimeSceneService &scenes,
+                                                                           const PlaySaveStorageSchema &schema,
+                                                                           const PlaySavePrefabServices *prefabs) {
+        if (prefabs) {
+            const auto inventory = prefabs->Inventory();
+            return inventory ? inventory->Identities()
+                             : Result<Runtime::PersistentEntityIdentityMap>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid));
+        }
+        const auto active = scenes.ActiveScene();
+        if (!active)
+            return Result<Runtime::PersistentEntityIdentityMap>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid));
+        return CapturePlaySaveIdentities(*active, schema.baseline, schema.identities);
+    }
+
     /** @copydoc EditorPlaySaveHost::State::BindActiveGameplay */
     Result<void> EditorPlaySaveHost::State::BindActiveGameplay() {
         if (!liveBindings)
@@ -36,7 +57,7 @@ namespace Horo::Application::Internal {
         const auto active = scenes.ActiveScene();
         if (!active)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid));
-        auto identities = CapturePlaySaveIdentities(*active, schema->baseline, schema->identities);
+        auto identities = CurrentIdentities();
         if (identities.HasError())
             return Result<void>::Failure(identities.ErrorValue());
         for (const auto &binding : *liveBindings) {
@@ -70,11 +91,9 @@ namespace Horo::Application::Internal {
             return behaviorOwner ? Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid)) : Result<void>::Success();
         if (!behaviorOwner || *schema->lifecycle != Gameplay::BehaviorLifecycleParticipant())
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid));
-        auto created = Gameplay::BehaviorLifecyclePersistenceAdapter::Create(behaviorOwner, [scene = &scenes, values = schema] {
-            const auto active = scene->ActiveScene();
-            if (!active)
-                return Result<Runtime::PersistentEntityIdentityMap>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid));
-            return CapturePlaySaveIdentities(*active, values->baseline, values->identities);
+        auto created =
+            Gameplay::BehaviorLifecyclePersistenceAdapter::Create(behaviorOwner, [scene = &scenes, values = schema, prefabs = prefabs] {
+            return CurrentPlaySaveIdentities(*scene, *values, prefabs.get());
         });
         if (created.HasError())
             return Result<void>::Failure(created.ErrorValue());
@@ -113,6 +132,10 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(removed.ErrorValue());
         }
         lifecycle.reset();
+        if (prefabs) {
+            if (auto removed = registry.Unregister(PlaySavePrefabDescriptor().participant); removed.HasError())
+                return Result<void>::Failure(removed.ErrorValue());
+        }
         const auto removed = registry.Unregister(PlaySaveSceneParticipant());
         if (removed.HasError())
             return Result<void>::Failure(removed.ErrorValue());

@@ -164,6 +164,9 @@ horo_configure_target_header_boundary(HoroPlatformServicesExtension PUBLIC_HEADE
     Horo/PlatformServices/PlatformProviderAdmission.h
 )
 
+horo_configure_target_header_boundary(HoroProjectVersion PUBLIC_HEADERS
+    Horo/Application/ProjectVersion.h)
+
 horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Application/ProjectErrorDomain.h
     Horo/Application/HostObservability.h
@@ -171,7 +174,6 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Application/ProjectSourceDocument.h
     Horo/Application/ProjectMigration.h
     Horo/Application/ProjectMigrationCatalog.h
-    Horo/Application/ProjectVersion.h
     Horo/Release/DistributionModel.h
     Horo/Release/ReleaseArtifactManifest.h
     Horo/Release/ReleaseCandidateVerification.h
@@ -1111,16 +1113,20 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
     Horo/Prefab/PrefabIdentity.h
     Horo/Prefab/PrefabCompositionOrigin.h
     Horo/Prefab/PrefabLimits.h
+    Horo/Prefab/PrefabResolvedObject.h
+    Horo/Prefab/PrefabSourceRevision.h
 )
 
 horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
     Horo/Prefab/PrefabTemplateProvider.h
     Horo/Prefab/PrefabSpawnService.h
+    Horo/Prefab/PrefabPersistenceOwner.h
+    Horo/Prefab/PrefabCookedOverrides.h
+    Horo/Prefab/PreparedPrefabSpawn.h
 )
 
 horo_configure_target_header_boundary(HoroPrefabOverrideModel PUBLIC_HEADERS
     Horo/Prefab/PrefabComponentOverrideTypes.h
-    Horo/Prefab/PrefabSourceRevision.h
     Horo/Prefab/PrefabValueOverrideTypes.h
 )
 
@@ -1514,6 +1520,17 @@ horo_configure_target_header_boundary(HoroJavaScriptModuleRuntime PUBLIC_HEADERS
     Horo/Extensions/JavaScriptModuleRuntime.h
 )
 horo_configure_target_header_boundary(HoroScriptModuleHost)
+
+
+horo_configure_target_header_boundary(HoroPrefabOverrides PUBLIC_HEADERS
+    Horo/Prefab/PrefabOverrideBaseline.h
+    Horo/Prefab/PrefabOverrideOperations.h
+)
+horo_configure_target_header_boundary(HoroPrefabPersistence PUBLIC_HEADERS
+    Horo/Prefab/PrefabPersistentState.h
+    Horo/Prefab/PrefabPersistentCodec.h
+    Horo/Prefab/PrefabRestoreEntities.h
+)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

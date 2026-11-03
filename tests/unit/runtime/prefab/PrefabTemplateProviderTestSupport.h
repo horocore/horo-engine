@@ -102,8 +102,9 @@ namespace Horo::Prefab::TestSupport {
         const CancellationToken frameCancellation{cancellation.Token()};
 
         explicit Fixture(const PrefabTemplateProviderLimits &limits = {},
-                         std::unique_ptr<Runtime::SceneStructuralParticipant> participant = {})
-            : provider(registry, loads, scenes, Profile(), limits) {
+                         std::unique_ptr<Runtime::SceneStructuralParticipant> participant = {},
+                         Runtime::RuntimeSceneAssetLimits sceneLimits = {})
+            : scenes(registry, loads, sceneLimits), provider(registry, loads, scenes, Profile(), limits) {
             for (std::uint16_t id = 1; id <= 3; ++id) {
                 const auto name = std::format("assets/asset{}{}", id, id == 2 ? ".obj" : ".prefab");
                 records.emplace_back(Test::Asset(id), Type(id == 2 ? "core.mesh" : "core.prefab"), ProjectPath::Parse(name).Value(),
