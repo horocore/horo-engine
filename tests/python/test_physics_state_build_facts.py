@@ -1,0 +1,301 @@
+"""Build-facts generator regressions. All metadata is explicitly synthetic test data."""
+import copy
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+SPEC = importlib.util.spec_from_file_location("physics_facts", Path(__file__).resolve().parents[2] / "cmake/physics/generate_physics_state_build_facts.py")
+facts = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(facts)
+import sys
+sys.modules["generate_physics_state_build_facts"] = facts
+COLLECTOR_SPEC = importlib.util.spec_from_file_location(
+    "physics_collector", Path(__file__).resolve().parents[2] / "cmake/physics/collect_physics_state_build_facts.py")
+collector = importlib.util.module_from_spec(COLLECTOR_SPEC)
+COLLECTOR_SPEC.loader.exec_module(collector)
+generator = facts
+
+
+
+class BuildFactsTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="horo-physics-facts-")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.a = self.root / "a.cpp"
+        self.b = self.root / "b.cpp"
+        self.a.write_bytes(b"source A")
+        self.b.write_bytes(b"source B")
+        self.header = self.root / "facts.h"
+        self.report = self.root / "facts.json"
+        self.manifest = {"version": 1}
+        for name, required in facts.REQUIRED.items():
+            self.manifest[name] = {
+                "facts": {key: "SYNTHETIC_TEST_ONLY" for key in required},
+                "files": [{"identity": name + "/a", "path": str(self.a)},
+                          {"identity": name + "/b", "path": str(self.b)}],
+                "recipes": ["test command B", "test command A"],
+            }
+
+    def generate(self, manifest=None):
+        facts.generate(manifest or self.manifest, self.header, self.report)
+        return json.loads(self.report.read_text())["digests"]
+
+    def assert_rejected(self, manifest):
+        before = self.header.read_bytes()
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            self.generate(manifest)
+        self.assertEqual(before, self.header.read_bytes())
+
+    def test_input_order_is_irrelevant_and_unchanged_header_keeps_mtime(self):
+        expected = self.generate()
+        stamp = self.header.stat().st_mtime_ns
+        for section in facts.REQUIRED:
+            self.manifest[section]["files"].reverse()
+            self.manifest[section]["recipes"].reverse()
+        self.assertEqual(expected, self.generate())
+        self.assertEqual(stamp, self.header.stat().st_mtime_ns)
+
+    def test_effective_solver_policy_change_invalidates_only_solver(self):
+        previous = self.generate()
+        self.manifest["solver"]["facts"]["effectiveOptions"] = "DIFFERENT_TEST_POLICY"
+        current = self.generate()
+        self.assertNotEqual(previous["solver"], current["solver"])
+        self.assertEqual(previous["physics"], current["physics"])
+        self.assertEqual(previous["platform"], current["platform"])
+
+    def test_real_source_bytes_change_invalidates_every_consumer(self):
+        previous = self.generate()
+        self.a.write_bytes(b"changed actual source bytes")
+        current = self.generate()
+        for section in facts.REQUIRED:
+            self.assertNotEqual(previous[section], current[section])
+
+    def test_invalid_build_evidence_rejects_without_replacing_header(self):
+        self.generate()
+        cases = []
+        case = copy.deepcopy(self.manifest)
+        del case["platform"]["facts"]["compiler"]
+        cases.append(case)
+        case = copy.deepcopy(self.manifest)
+        case["version"] = 2
+        cases.append(case)
+        case = copy.deepcopy(self.manifest)
+        case["solver"]["recipes"] = []
+        cases.append(case)
+        case = copy.deepcopy(self.manifest)
+        case["physics"]["files"][1]["identity"] = case["physics"]["files"][0]["identity"]
+        cases.append(case)
+        case = copy.deepcopy(self.manifest)
+        case["physics"]["files"][0]["path"] = str(self.root / "missing")
+        cases.append(case)
+        for case in cases:
+            with self.subTest(case=case):
+                self.assert_rejected(case)
+
+    def test_aggregate_budget_rejects_before_reading_the_next_file(self):
+        self.generate()
+        original = Path.open
+        opened = []
+        def observe(path, *args, **kwargs):
+            opened.append(path)
+            return original(path, *args, **kwargs)
+        with patch.object(facts, "MAX_TOTAL_BYTES", self.a.stat().st_size), patch.object(Path, "open", observe):
+            with self.assertRaises(ValueError):
+                self.generate()
+        self.assertNotIn(self.b, opened)
+
+
+
+import types
+
+class CollectorTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="horo-physics-collector-")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.source = self.root / "source"
+        self.build = self.source / "build"
+        self.jolt = self.source / "vendor/jolt"
+        files = {
+            self.source / "src/physics/World.cpp": "synthetic physics",
+            self.source / "src/physics/Model.cpp": "synthetic model",
+            self.source / "src/physics/PhysicsStateBuildFacts.cpp": "synthetic ABI helper",
+            self.source / "src/foundation/Invariant.h": "synthetic foundation",
+            self.source / "include/Horo/Physics/World.h": "synthetic public contract",
+            self.source / "src/CMakeLists.txt": "synthetic target composition",
+            self.source / "cmake/HoroPhysicsDependency.cmake": "synthetic pin",
+            self.source / "cmake/patches/HoroJoltConstraintReservation.cmake": "synthetic patch",
+            self.jolt / "Jolt/Solver.cpp": "synthetic solver",
+            self.jolt / "Build/CMakeLists.txt": "synthetic solver recipe",
+            self.jolt / "LICENSE": "synthetic license fixture",
+            self.build / "CMakeCache.txt": "synthetic local cache",
+        }
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        self.profile = {"version": 1, "sourceRoot": str(self.source), "buildRoot": str(self.build), "joltRoot": str(self.jolt)}
+        for section, keys in generator.REQUIRED.items():
+            self.profile[section] = {key: "SYNTHETIC_UNIT_FIXTURE" for key in keys}
+        self.database = [self.recipe("HoroPhysics", self.source / "src/physics/World.cpp"),
+                         self.recipe("HoroPhysicsModel", self.source / "src/physics/Model.cpp"),
+                         self.recipe("Jolt", self.jolt / "Jolt/Solver.cpp")]
+
+    def recipe(self, target, source):
+        output = self.build / ("CMakeFiles/" + target + ".dir/unit.o")
+        return {"directory": str(self.build), "file": str(source), "output": str(output),
+                "arguments": ["/synthetic/compiler", "-I" + str(self.source / "include"), "-DREAL_RECIPE_FIXTURE=1",
+                              "-o", str(output), "-MF", str(output) + ".d", "-c", str(source)]}
+
+    def manifest(self):
+        return collector.collect(self.profile, self.database)
+
+    def digests(self):
+        generator.generate(self.manifest(), self.root / "facts.h", self.root / "facts.json")
+        return json.loads((self.root / "facts.json").read_text())["digests"]
+
+    def test_collects_all_three_actual_target_owners_and_excludes_output_paths(self):
+        manifest = self.manifest()
+        self.assertEqual(len(manifest["solver"]["recipes"]), 1)
+        self.assertEqual(len(manifest["physics"]["recipes"]), 2)
+        recipe = manifest["physics"]["recipes"][0]
+        self.assertIn("$SOURCE", recipe)
+        self.assertNotIn(str(self.source), recipe)
+        self.assertNotIn("unit.o", recipe)
+        self.assertNotIn('"-MF"', recipe)
+        self.assertEqual(manifest["physics"]["facts"]["snapshotSchema"], self.profile["physics"]["snapshotSchema"])
+        self.assertEqual(manifest["physics"]["facts"]["compilePolicy"]["recipes"],
+                         sorted(manifest["physics"]["recipes"]))
+
+    def add_model_scene_recipe(self, name):
+        path = self.source / "src/runtime/scene" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("synthetic Scene component implementation")
+        self.database.append(self.recipe("HoroPhysicsModel", path))
+        return path
+
+    def test_real_model_scene_sources_are_owned_and_content_invalidates_physics(self):
+        paths = [self.add_model_scene_recipe(name) for name in
+                 ("PhysicsSceneComponents.cpp", "CharacterSceneComponents.cpp")]
+        manifest = self.manifest()
+        identities = {item["identity"] for item in manifest["physics"]["files"]}
+        for path in paths:
+            self.assertIn("engine/" + path.relative_to(self.source).as_posix(), identities)
+        before = self.digests()
+        paths[0].write_text("changed Scene component implementation")
+        after = self.digests()
+        self.assertNotEqual(before["physics"], after["physics"])
+        self.assertEqual(before["solver"], after["solver"])
+        self.assertEqual(before["platform"], after["platform"])
+
+    def test_other_scene_source_cannot_be_admitted_by_directory_alone(self):
+        self.add_model_scene_recipe("UnexpectedOwner.cpp")
+        with self.assertRaisesRegex(ValueError, "source owner"):
+            self.manifest()
+
+    def test_scene_component_exception_is_not_available_to_native_target(self):
+        path = self.add_model_scene_recipe("PhysicsSceneComponents.cpp")
+        self.database[-1] = self.recipe("HoroPhysics", path)
+        with self.assertRaisesRegex(ValueError, "source owner"):
+            self.manifest()
+
+    def test_configured_jolt_pch_content_is_accounted_as_solver_input(self):
+        folder = self.build / "third-party/horo_jolt/CMakeFiles/Jolt.dir"
+        folder.mkdir(parents=True)
+        source = folder / "cmake_pch.hxx.cxx"
+        header = folder / "cmake_pch.hxx"
+        source.write_text('#include "cmake_pch.hxx"')
+        header.write_text("synthetic configured PCH includes")
+        self.database.append(self.recipe("Jolt", source))
+        before = self.digests()
+        header.write_text("changed configured PCH includes")
+        after = self.digests()
+        self.assertNotEqual(before["solver"], after["solver"])
+        self.assertEqual(before["physics"], after["physics"])
+        self.assertEqual(before["platform"], after["platform"])
+
+    def test_pch_name_cannot_admit_another_build_or_target(self):
+        source = self.source / "foreign-build/CMakeFiles/Jolt.dir/cmake_pch.hxx.cxx"
+        source.parent.mkdir(parents=True)
+        source.write_text("foreign generated PCH")
+        self.database.append(self.recipe("Jolt", source))
+        with self.assertRaisesRegex(ValueError, "source owner"):
+            self.manifest()
+
+    def test_output_path_and_local_cache_changes_do_not_change_compatibility(self):
+        before = self.digests()
+        for entry in self.database:
+            entry["arguments"][entry["arguments"].index("-o") + 1] += ".other"
+            entry["arguments"][entry["arguments"].index("-MF") + 1] += ".other"
+        (self.build / "CMakeCache.txt").write_text("different local cache path/options")
+        self.assertEqual(before, self.digests())
+
+    def test_solver_compiler_policy_invalidates_only_solver(self):
+        before = self.digests()
+        self.database[2]["arguments"].append("-fno-fast-math")
+        after = self.digests()
+        self.assertNotEqual(before["solver"], after["solver"])
+        self.assertEqual(before["physics"], after["physics"])
+        self.assertEqual(before["platform"], after["platform"])
+
+    def test_physics_compiler_policy_invalidates_physics_and_platform(self):
+        before = self.digests()
+        self.database[0]["arguments"].append("-fno-fast-math")
+        after = self.digests()
+        self.assertEqual(before["solver"], after["solver"])
+        self.assertNotEqual(before["physics"], after["physics"])
+        self.assertNotEqual(before["platform"], after["platform"])
+
+    def test_owned_public_header_bytes_invalidate_physics_only(self):
+        before = self.digests()
+        (self.source / "include/Horo/Physics/World.h").write_text("different real bytes in fixture")
+        after = self.digests()
+        self.assertNotEqual(before["physics"], after["physics"])
+        self.assertEqual(before["solver"], after["solver"])
+        self.assertEqual(before["platform"], after["platform"])
+
+    def test_foreign_build_source_and_missing_native_target_are_rejected(self):
+        original = copy.deepcopy(self.database)
+        self.database[0]["directory"] = str(self.source)
+        with self.assertRaisesRegex(ValueError, "another build"):
+            self.manifest()
+        self.database = copy.deepcopy(original)
+        self.database[0]["file"] = str(self.jolt / "Jolt/Solver.cpp")
+        with self.assertRaisesRegex(ValueError, "source owner"):
+            self.manifest()
+        self.database = original[:2]
+        with self.assertRaisesRegex(ValueError, "Missing actual native"):
+            self.manifest()
+
+    def test_response_and_truncated_argument_recipes_are_rejected(self):
+        self.database[0]["arguments"].append("@unknown.rsp")
+        with self.assertRaisesRegex(ValueError, "Response-file"):
+            self.manifest()
+        self.database[0]["arguments"].pop()
+        self.database[0]["arguments"].append("-MF")
+        with self.assertRaisesRegex(ValueError, "Truncated"):
+            self.manifest()
+
+    def test_windows_command_string_cannot_be_posix_reinterpreted(self):
+        self.database[0]["command"] = "untrusted Windows quoting"
+        del self.database[0]["arguments"]
+        with patch.object(collector, "os", types.SimpleNamespace(name="nt")):
+            with self.assertRaisesRegex(ValueError, "argument-array export"):
+                self.manifest()
+
+    def test_missing_required_patch_or_license_is_rejected(self):
+        (self.source / "cmake/patches/HoroJoltConstraintReservation.cmake").unlink()
+        with self.assertRaisesRegex(ValueError, "Missing owning build input"):
+            self.manifest()
+
+    def test_ambiguous_native_target_recipe_is_rejected(self):
+        self.database[0]["arguments"].append("CMakeFiles/Jolt.dir/collision.o")
+        with self.assertRaisesRegex(ValueError, "Ambiguous"):
+            self.manifest()
+
+
+if __name__ == "__main__":
+    unittest.main()

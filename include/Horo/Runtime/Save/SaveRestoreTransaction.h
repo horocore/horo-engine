@@ -192,9 +192,27 @@ namespace Horo::Runtime {
      *          only transfer prepared ownership, without allocation, observers, provider work or failure.
      *          The object and every borrowed authority must outlive the synchronous Activate call.
      */
-    class IStagedRestoreAggregatePublication {
+    /** @brief Last owner-local fallible check, immediately before the existing commit gate.
+     * @details Runs after all preparation/provider validation. Implementations validate every
+     * fallible prerequisite before arming their private owners, invoke no callbacks after arm,
+     * and retain those exact owners through publication or rollback. This is not a commit gate.
+     */
+    class IStagedRestoreFinalPublicationCheck {
+    public:
+        virtual ~IStagedRestoreFinalPublicationCheck() = default;
+        /** @brief Validates and arms exact private owners; failure leaves live roots unchanged. */
+        [[nodiscard]] virtual Result<void> ValidateAndArm() = 0;
+    };
+
+    class IStagedRestoreAggregatePublication : public IStagedRestoreFinalPublicationCheck {
     public:
         virtual ~IStagedRestoreAggregatePublication() = default;
+
+        /** @brief Legacy aggregates have no separate final owner claim. */
+        [[nodiscard]] Result<void> ValidateAndArm() override {
+            return Result<void>::Success();
+        }
+
         /** @brief Transfers the prepared aggregate roots before operation completion becomes observable. */
         virtual void PublishPrepared() noexcept = 0;
 
@@ -323,6 +341,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> EnterReadyToActivate();
         /** @brief Resolves the complete applied aggregate before any owner fixup callback runs. */
         [[nodiscard]] Result<void> ResolveReferences();
+        /** @brief Runs the last fallible aggregate claim and enters the SAME operation gate. */
+        [[nodiscard]] Result<void> BeginAggregateCommit(IStagedRestoreAggregatePublication &aggregate);
         [[nodiscard]] Result<void> FailUnpublished(Error error);
         [[nodiscard]] Result<void> FailPreparation(Error error, StagedRestorePhase phase, std::size_t participantIndex);
 

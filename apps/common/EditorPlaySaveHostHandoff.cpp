@@ -88,7 +88,7 @@ namespace Horo::Application::Internal {
                 auto gameplay = control_->behaviorOwner ? control_->behaviorOwner->Prepared(candidate.RuntimeId()) : nullptr;
                 if (control_->behaviorOwner && !gameplay)
                     return Outcome::Failure(MakeError(SaveErrors::RestoreTransitionInvalid));
-                return control_->source->StageOwners(participants, std::move(gameplay), *identities);
+                return control_->source->StageOwners(participants, std::move(gameplay), *identities, candidate);
             }
 
             std::shared_ptr<PacketControl> control_;
@@ -292,6 +292,7 @@ namespace Horo::Application::Internal {
                                                    .entities = decoded.identities,
                                                    .maximumEntities = 16'384,
                                                    .maximumComponentBytes = PlaySaveMaximumPayloadBytes,
+                                                   .finalPublicationCheck = source_->PhysicsFinalCheck(),
                                                    .dynamicEntities = control->dynamic};
         if (decoded.prefabs)
             for (const auto &instance : decoded.prefabs->instances)

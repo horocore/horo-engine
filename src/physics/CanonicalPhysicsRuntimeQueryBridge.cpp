@@ -31,12 +31,13 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc CreateCanonicalQueryFixture */
     Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(const CanonicalWorldHandle world, const PhysicsWorldId owner,
-                                                            const PhysicsQueryFixtureDescriptor &fixture) {
+                                                            const PhysicsQueryFixtureDescriptor &fixture,
+                                                            const StateDetail::ConstructionRecipeLease *recipe) {
         if (world.value == nullptr)
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
         auto access = MakeQueryAccess(canonical);
-        return CreateCanonicalQueryFixtureFromAccess(access, owner, fixture);
+        return CreateCanonicalQueryFixtureFromAccess(access, owner, fixture, recipe, canonical.owner.constructionRecipes);
     }
 
     /** @copydoc DestroyCanonicalQueryFixture */

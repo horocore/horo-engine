@@ -1,3 +1,4 @@
+#include "PhysicsStateConstructionPlans.h"
 #include "PhysicsWorldBindingValidation.h"
 #include "PhysicsWorldContainmentInternal.h"
 #include "PhysicsWorldInternal.h"
@@ -302,19 +303,31 @@ namespace Horo::Physics {
         return static_cast<PhysicsAvailability>(canonical * (static_cast<std::uint8_t>(PhysicsAvailability::Unavailable) + ready));
     }
 
+    namespace {
+        bool OrdinaryCanonicalCapability(PhysicsCapability capability) noexcept {
+            using enum PhysicsCapability;
+            return capability == WorldCreation || capability == RigidBodies || capability == ImmutableShapes || capability == Constraints ||
+                   capability == ImmediateQueries || capability == BodyMutation || capability == ContinuousCollision;
+        }
+
+        PhysicsCapabilitySupport StateCapabilitySupport(const auto &owner) noexcept {
+            const bool prepared = owner.state == PhysicsRuntimeState::Ready && owner.native.value && owner.stateBuild.has_value() &&
+                                  owner.stateBuildBinding.has_value() && owner.stateInventory;
+            return prepared ? PhysicsCapabilitySupport::Available : PhysicsCapabilitySupport::Unavailable;
+        }
+    }  // namespace
+
     /** @copydoc PhysicsRuntime::Capability */
     PhysicsCapabilitySupport PhysicsRuntime::Capability(const PhysicsCapability capability) const noexcept {
-        using enum PhysicsCapability;
-        if (capability >= Count)
+        if (capability >= PhysicsCapability::Count)
             return PhysicsCapabilitySupport::Unknown;
-        const auto canonicalWorld =
-            static_cast<std::uint8_t>(impl_->mode == PhysicsRuntimeMode::Canonical) *
-            static_cast<std::uint8_t>(capability == WorldCreation || capability == RigidBodies || capability == ImmutableShapes ||
-                                      capability == Constraints || capability == ImmediateQueries || capability == BodyMutation ||
-                                      capability == ContinuousCollision);
-        const auto ready = static_cast<std::uint8_t>(impl_->state == PhysicsRuntimeState::Ready);
-        return static_cast<PhysicsCapabilitySupport>(static_cast<std::uint8_t>(PhysicsCapabilitySupport::Unsupported) +
-                                                     canonicalWorld * (1U + ready));
+        if (impl_->mode != PhysicsRuntimeMode::Canonical)
+            return PhysicsCapabilitySupport::Unsupported;
+        if (capability == PhysicsCapability::StateSnapshots || capability == PhysicsCapability::AtomicStateRestore)
+            return StateCapabilitySupport(*impl_);
+        if (!OrdinaryCanonicalCapability(capability))
+            return PhysicsCapabilitySupport::Unsupported;
+        return impl_->state == PhysicsRuntimeState::Ready ? PhysicsCapabilitySupport::Available : PhysicsCapabilitySupport::Unavailable;
     }
 
     /** @copydoc PhysicsWorld::PhysicsWorld */
@@ -492,7 +505,10 @@ namespace Horo::Physics {
             return Result<PhysicsQueryFixture>::Failure(valid.ErrorValue());
         if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
             return Result<PhysicsQueryFixture>::Failure(capacity.ErrorValue());
-        auto created = Detail::CreateCanonicalQueryFixture(impl_->native, impl_->identity, fixture);
+        auto recipe = Detail::PrepareQueryConstructionRecipe(impl_->runtime->stateRecipes, fixture.shape);
+        if (recipe.HasError())
+            return Result<PhysicsQueryFixture>::Failure(recipe.ErrorValue());
+        auto created = Detail::CreateCanonicalQueryFixture(impl_->native, impl_->identity, fixture, &recipe.Value());
         if (created.HasValue())
             impl_->InvalidateQueryEventPublication();
         return created;

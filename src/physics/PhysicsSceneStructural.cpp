@@ -245,10 +245,20 @@ namespace Horo::Physics::Detail {
                     registration_->active->scene != active.RuntimeId())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(MakeError(PhysicsErrors::InvalidState));
                 try {
-                    return PrepareOwned(active, created, destroyed);
+                    return PrepareOwned(registration_->active, active, created, destroyed);
                 } catch (const std::bad_alloc &) {
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
                 }
+            }
+
+            /** @brief Uses the same checked native builder against an explicitly owned unpublished recipient. */
+            static Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PreparePending(
+                const std::shared_ptr<PhysicsStructuralState> &state, Runtime::RuntimeSceneView scene,
+                std::span<const Runtime::RuntimeEntityView> created) {
+                if (!state || state->closed || !scene.IsCurrent() || state->scene != scene.RuntimeId() ||
+                    !state->authority->IsCurrent(state->evidence))
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(MakeError(PhysicsErrors::InvalidState));
+                return PrepareOwned(state, scene, created, {});
             }
 
         private:
@@ -565,13 +575,24 @@ namespace Horo::Physics::Detail {
                 }
             }
 
+            /** @brief Distinguishes a binding-only candidate from an actual native topology change. */
+            static bool NeedsNativeGroup(const GroupPlan &plan, std::span<const Runtime::RuntimeEntityView> created) {
+                if (!plan.bodies.empty() || !plan.retiredBodies.empty() || !plan.retiredShapes.empty() || !plan.retiredConstraints.empty())
+                    return true;
+                return std::ranges::any_of(created, [](const auto &entity) {
+                    return std::ranges::any_of(entity.components->physicsConstraints, [](const auto &constraint) {
+                        return constraint.enabled;
+                    });
+                });
+            }
+
             /** @brief Prepares the complete detached owner candidate; publication remains
              * a separate no-fail phase. */
-            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(
-                const Runtime::RuntimeSceneView &active, const std::span<const Runtime::RuntimeEntityView> created,
-                const std::span<const Runtime::EntityRef> destroyed) const {
+            static Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(
+                const std::shared_ptr<PhysicsStructuralState> &state, const Runtime::RuntimeSceneView &active,
+                const std::span<const Runtime::RuntimeEntityView> created, const std::span<const Runtime::EntityRef> destroyed) {
                 auto candidate = std::make_unique<StructuralCandidate>();
-                candidate->state = registration_->active;
+                candidate->state = state;
                 candidate->scene = active;
                 candidate->revision = candidate->state->revision;
                 candidate->bindings = candidate->state->bodies;
@@ -587,14 +608,7 @@ namespace Horo::Physics::Detail {
                 ProjectRetirement(*candidate, plan, destroyed);
                 if (const auto ready = PrepareBodies(plan, active, created, candidate->state->simulation.surfaces); ready.HasError())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(ready.ErrorValue());
-                if (const bool hasConstraints = std::ranges::any_of(created,
-                                                                    [](const auto &entity) {
-                    return std::ranges::any_of(entity.components->physicsConstraints, [](const auto &constraint) {
-                        return constraint.enabled;
-                    });
-                });
-                    plan.bodies.empty() && !hasConstraints && plan.retiredBodies.empty() && plan.retiredShapes.empty() &&
-                    plan.retiredConstraints.empty())
+                if (!NeedsNativeGroup(plan, created))
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
                 auto prepared = candidate->state->world->PrepareSceneGroup(plan.shapes, plan.bodies);
                 if (prepared.HasError())
@@ -613,6 +627,24 @@ namespace Horo::Physics::Detail {
             std::shared_ptr<PhysicsStructuralRegistration> registration_;
         };
     }  // namespace
+
+    /** @copydoc MaterializePendingPhysicsGroups */
+    Result<void> MaterializePendingPhysicsGroups(const std::shared_ptr<PhysicsStructuralState> &state,
+                                                 const Runtime::RuntimeSceneView scene) {
+        std::vector<Runtime::RuntimeEntityView> groups;
+        for (std::size_t slot = 0; slot < scene.SlotCount(); ++slot)
+            if (const auto entity = scene.EntityAt(slot); entity && !entity->authoredObject)
+                groups.push_back(*entity);
+        if (groups.empty())
+            return Result<void>::Success();
+        auto prepared = StructuralParticipant::PreparePending(state, scene, groups);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        if (const auto valid = prepared.Value()->ValidatePublication(); valid.HasError())
+            return valid;
+        prepared.Value()->Publish();
+        return Result<void>::Success();
+    }
 
     /** @copydoc MakePhysicsStructuralParticipant */
     std::unique_ptr<Runtime::SceneStructuralParticipant> MakePhysicsStructuralParticipant(

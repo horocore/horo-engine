@@ -48,6 +48,11 @@ namespace Horo::Editor {
 
         /** @brief Pumps only cancelled Scene/save ownership without running gameplay or waiting. @return Actual settlement. */
         [[nodiscard]] Result<bool> Poll();
+
+    private:
+        /** @brief Keeps exact Scene/registry owners until actual native retirement finishes. */
+        [[nodiscard]] Result<bool> PollNativeRetirement();
+        bool sceneClosed_{};
     };
 
     /** @brief Explicit application-owned deferred lifetime storage, not another Scene or save-operation authority.

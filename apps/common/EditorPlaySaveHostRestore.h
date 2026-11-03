@@ -12,6 +12,8 @@
 
 namespace Horo::Application::Internal {
     class PlaySavePrefabServices;
+    class PlaySavePhysicsServices;
+    class PlaySavePhysicsRestoreFence;
 
     /** @brief One exact load's worker-owned slot/codec/module inputs; publishes no mutable world state. */
     class PlaySaveRestoreSource final : public Runtime::IRuntimeSaveRestoreSource {
@@ -21,7 +23,8 @@ namespace Horo::Application::Internal {
                               Runtime::SaveManagerCommand selection,
                               std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
                               std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
-                              std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle);
+                              std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle,
+                              std::shared_ptr<PlaySavePhysicsServices> physics = {});
         /** @copydoc Runtime::IRuntimeSaveRestoreSource::Stage */
         [[nodiscard]] Result<Runtime::RuntimeSaveRestoreStaging> Stage(const Runtime::StagedRestoreContext &context,
                                                                        const Runtime::SaveParticipantRegistrySnapshot &participants,
@@ -30,8 +33,10 @@ namespace Horo::Application::Internal {
          * after the real Scene/prehook preparation. */
         [[nodiscard]] Result<Runtime::RuntimeSaveRestoreStaging> StageOwners(
             const Runtime::SaveParticipantRegistrySnapshot &participants,
-            std::shared_ptr<Gameplay::BehaviorRuntimeRestoreCandidate> candidate,
-            const Runtime::PersistentEntityIdentityMap &identities) const;
+            std::shared_ptr<Gameplay::BehaviorRuntimeRestoreCandidate> candidate, const Runtime::PersistentEntityIdentityMap &identities,
+            Runtime::RuntimeSceneView candidateScene) const;
+        /** @brief Same exact load fence, invoked only by the canonical transaction last fallible point. */
+        [[nodiscard]] std::shared_ptr<Runtime::IStagedRestoreFinalPublicationCheck> PhysicsFinalCheck() const noexcept;
         /** @brief Borrows only the canonical Scene-owned runtime binding for this
          * exact accepted operation. */
         [[nodiscard]] std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> BehaviorOwner() const noexcept;
@@ -39,12 +44,24 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::shared_ptr<const PlaySaveSceneState> PreparedScene() const;
 
     private:
+        [[nodiscard]] Result<PlaySaveSceneState> DecodeArchive(const Runtime::ValidatedSaveArchive &) const;
         std::shared_ptr<PlaySaveStorage> storage_;
         std::shared_ptr<const PlaySaveStorageSchema> schema_;
         Runtime::SaveManagerCommand selection_;
         std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings_;
         std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner_;
         std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle_;
+        std::shared_ptr<PlaySavePhysicsServices> physics_;
+        std::shared_ptr<PlaySavePhysicsRestoreFence> physicsFence_;
+        std::optional<Runtime::StagedRestoreContext> context_;
+        CancellationToken cancellation_;
+        [[nodiscard]] Result<void> StageLifecycle(Runtime::RuntimeSaveRestoreStaging &, const Runtime::ValidatedSaveArchive &,
+                                                  std::shared_ptr<Gameplay::BehaviorRuntimeRestoreCandidate>,
+                                                  const Runtime::PersistentEntityIdentityMap &) const;
+        [[nodiscard]] Result<void> StagePhysics(Runtime::RuntimeSaveRestoreStaging &,
+                                                const std::shared_ptr<const Runtime::ValidatedSaveArchive> &,
+                                                const Runtime::SaveParticipantRegistrySnapshot &, Runtime::RuntimeSceneView,
+                                                const Runtime::PersistentEntityIdentityMap &) const;
         std::shared_ptr<const Runtime::ValidatedSaveArchive> archive_;
         mutable std::mutex publication_; /**< Worker publishes one complete immutable result; owner only reads after job settlement. */
         std::shared_ptr<const PlaySaveSceneState> decoded_;

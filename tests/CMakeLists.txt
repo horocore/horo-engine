@@ -920,6 +920,98 @@ target_compile_definitions(HoroPhysicsTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<B
 target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::PhysicsTriggerVolumeHost HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
 target_link_libraries(HoroPhysicsTests PRIVATE HoroCharacterScenePlacementInternal HoroPhysicsSceneHostInternal HoroScenePhysicsHost)
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
+
+add_executable(HoroPhysicsStateCodecTests
+        support/AllocationProbe.cpp
+        unit/physics/PhysicsStateConstructionCodecTests.cpp
+        unit/physics/PhysicsStateConstructionManifestCodecTests.cpp
+        unit/physics/PhysicsStateConstructionManifestOwnerTests.cpp
+        unit/physics/PhysicsStateConstructionManifestTests.cpp
+        unit/runtime/physics/PhysicsStateConstructionStorageTests.cpp
+        unit/runtime/physics/PhysicsStateEnvelopeTests.cpp
+        unit/runtime/physics/PhysicsStateSolverCodecTests.cpp
+        unit/runtime/physics/PhysicsStatePersistentOwnerTests.cpp)
+target_compile_features(HoroPhysicsStateCodecTests PRIVATE cxx_std_20)
+target_include_directories(HoroPhysicsStateCodecTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/physics ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroPhysicsStateCodecTests PRIVATE HoroEngine::Physics Threads::Threads)
+horo_register_catch_test(HoroPhysicsStateCodecTests LABELS "unit;physics;state;headless")
+
+add_executable(HoroPhysicsStatePublicHeaderConsumer support/PhysicsStatePublicHeaderConsumer.cpp)
+target_compile_features(HoroPhysicsStatePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPhysicsStatePublicHeaderConsumer PRIVATE HoroEngine::Physics)
+add_test(NAME HoroPhysicsStatePublicHeaderConsumer COMMAND HoroPhysicsStatePublicHeaderConsumer)
+set_tests_properties(HoroPhysicsStatePublicHeaderConsumer PROPERTIES LABELS "unit;physics;headless;public_headers")
+
+if(HORO_BUILD_PHYSICS_NATIVE)
+    add_executable(HoroPhysicsStateWorldTests
+        support/AllocationProbe.cpp
+        unit/runtime/physics/PhysicsStateWorldTestSupport.cpp
+        unit/runtime/physics/PhysicsStateWorldSnapshotTests.cpp
+        unit/runtime/physics/PhysicsStateWorldRestoreTests.cpp
+        unit/runtime/physics/PhysicsStateRuntimeRetirementTests.cpp)
+    target_compile_features(HoroPhysicsStateWorldTests PRIVATE cxx_std_20)
+    target_include_directories(HoroPhysicsStateWorldTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/physics ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroPhysicsStateWorldTests PRIVATE HoroEngine::Physics HoroEngine::Platform
+        HoroPhysicsStateIdentityInternal HoroPlatformProcessImageInternal Threads::Threads)
+    target_sources(HoroPhysicsStateWorldTests PRIVATE
+        unit/runtime/physics/PhysicsStateSaveContractTests.cpp
+        unit/runtime/physics/PhysicsStateConsumerContractTests.cpp)
+    target_include_directories(HoroPhysicsStateWorldTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/save)
+    target_link_libraries(HoroPhysicsStateWorldTests PRIVATE HoroEngine::Runtime HoroEngine::NetworkApi
+        HoroEngine::PhysicsSceneIntegration)
+    target_sources(HoroPhysicsStateWorldTests PRIVATE
+        unit/runtime/physics/PhysicsSceneStateContinuationTests.cpp
+        unit/runtime/physics/PhysicsSceneStatePendingOwnerTests.cpp
+        unit/runtime/physics/PhysicsStateRestartProcessTests.cpp)
+    target_link_libraries(HoroPhysicsStateWorldTests PRIVATE HoroEditorPlaySaveHostInternal HoroScenePhysicsHost
+        HoroCharacterScenePlacementInternal)
+    target_sources(HoroPhysicsStateWorldTests PRIVATE
+        unit/runtime/physics/PhysicsSceneSaveIntegrationTests.cpp
+        unit/runtime/physics/PhysicsSceneSavePrefabTests.cpp)
+    target_include_directories(HoroPhysicsStateWorldTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/prefab ${CMAKE_CURRENT_SOURCE_DIR}/helpers)
+    target_link_libraries(HoroPhysicsStateWorldTests PRIVATE HoroEngine::PrefabAuthoring
+        HoroEngine::SceneRuntimeConversion nlohmann_json::nlohmann_json)
+    target_sources(HoroPhysicsStateWorldTests PRIVATE
+        unit/runtime/physics/PhysicsStateInactiveInertiaTests.cpp
+        unit/runtime/physics/PhysicsStateGeometryFpTests.cpp
+        unit/runtime/physics/PhysicsStateCompoundRecipeTests.cpp
+        unit/runtime/physics/PhysicsStateSurfaceContinuationTests.cpp)
+    horo_register_catch_test(HoroPhysicsStateWorldTests LABELS "unit;physics;state;native;headless")
+    add_executable(HoroPhysicsStateNativeTests
+        support/AllocationProbe.cpp
+        unit/runtime/physics/PhysicsStateNativeTestSupport.cpp
+        unit/runtime/physics/PhysicsStateNativeTests.cpp
+        unit/runtime/physics/PhysicsStateNativeContinuationTests.cpp
+        unit/runtime/physics/PhysicsStateConstructionTests.cpp
+        unit/physics/PhysicsStateConstructionExportTests.cpp
+        unit/physics/PhysicsStateSurfaceBindingTests.cpp
+        unit/physics/PhysicsStateBodyControlTests.cpp)
+    target_compile_features(HoroPhysicsStateNativeTests PRIVATE cxx_std_20)
+    target_include_directories(HoroPhysicsStateNativeTests PRIVATE ${PROJECT_SOURCE_DIR}/src/physics
+        ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroPhysicsStateNativeTests PRIVATE HoroEngine::Physics Jolt Threads::Threads)
+    target_compile_options(HoroPhysicsStateNativeTests PRIVATE
+        "$<$<CXX_COMPILER_ID:MSVC>:/GR->" "$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-rtti>")
+    horo_register_catch_test(HoroPhysicsStateNativeTests LABELS "unit;physics;state;native;headless")
+endif()
+
+add_executable(HoroPhysicsStateHostLifecycleTests
+    unit/application/PhysicsStateHostLifecycleNullTests.cpp)
+target_compile_features(HoroPhysicsStateHostLifecycleTests PRIVATE cxx_std_20)
+target_include_directories(HoroPhysicsStateHostLifecycleTests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/physics ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroPhysicsStateHostLifecycleTests PRIVATE HoroPhysicsStateProcessBindingInternal
+    HoroEditorSceneProductHost HoroNetworkProductHost HoroEngine::Physics HoroEngine::Platform)
+if(HORO_BUILD_PHYSICS_NATIVE)
+    target_sources(HoroPhysicsStateHostLifecycleTests PRIVATE
+        unit/application/PhysicsStateHostLifecycleNativeTests.cpp
+        unit/application/PhysicsStateHeadlessHostLifecycleTests.cpp)
+endif()
+horo_register_catch_test(HoroPhysicsStateHostLifecycleTests LABELS "unit;physics;state;host;headless")
+
 add_test(NAME HoroCharacterPropertyFuzzTests COMMAND HoroPhysicsTests "[character-property]")
 set_tests_properties(HoroCharacterPropertyFuzzTests PROPERTIES LABELS "unit;physics;character;property;fuzz;headless" TIMEOUT 90 RUN_SERIAL TRUE)
 add_test(NAME HoroCharacterReferenceSceneCorpusTests COMMAND HoroPhysicsTests "[character-reference]")
@@ -4377,7 +4469,8 @@ target_link_libraries(HoroRuntimeSaveParticipantRegistryTests PRIVATE HoroEngine
 add_executable(HoroRuntimeSaveSessionPublicConsumer support/RuntimeSaveSessionPublicConsumer.cpp)
 target_compile_features(HoroRuntimeSaveSessionPublicConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSessionPublicConsumer PRIVATE HoroEngine::Runtime)
-add_executable(HoroRuntimeSaveSessionTests unit/runtime/save/RuntimeSaveSessionTests.cpp)
+add_executable(HoroRuntimeSaveSessionTests unit/runtime/save/RuntimeSaveSessionTests.cpp
+        unit/runtime/save/RuntimeSaveSessionCapturePreparationTests.cpp)
 target_compile_features(HoroRuntimeSaveSessionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSessionTests PRIVATE HoroEngine::Runtime)
 horo_register_catch_test(HoroRuntimeSaveSessionTests LABELS "unit;runtime;save")
@@ -6725,3 +6818,4 @@ include(HoroScriptModuleTests)
 
 # Genuine dynamic prefab reconstruction through the existing Save and Scene owners.
 include(HoroPrefabPersistenceTests)
+

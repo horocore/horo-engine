@@ -27,6 +27,7 @@ namespace Horo::Application::Internal {
         Network::NetworkWorldCompositionPurpose purpose{Network::NetworkWorldCompositionPurpose::Gameplay};
         std::optional<Network::NetworkWorldBindingSetup> worldBinding; /**< Required for network gameplay, not transport qualification. */
         NetworkFixedParticipantFactory fixedParticipant;               /**< Optional cold factory from the SAME world composition. */
+        NetworkNativeRetirementPoll pollRetirement;                    /**< Exact same owner retained until actual native retirement. */
     };
 
     // Application-owned bridge: target admission precedes the canonical runtime lifecycle.
@@ -42,7 +43,7 @@ namespace Horo::Application::Internal {
         NetworkProductHost(const NetworkProductHost &) = delete;
         NetworkProductHost &operator=(const NetworkProductHost &) = delete;
         NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode,
-                           std::shared_ptr<NetworkDebuggerService> debugger) noexcept;
+                           std::shared_ptr<NetworkDebuggerService> debugger, NetworkNativeRetirementPoll retirement = {}) noexcept;
         ~NetworkProductHost() noexcept;
 
         [[nodiscard]] Result<void> Startup();
@@ -90,8 +91,13 @@ namespace Horo::Application::Internal {
         /** @brief Cooperative callback-safe request through the actual RuntimeHost cancellation authority. */
         void RequestShutdown() const noexcept;
         void Shutdown() noexcept;
+        /** @brief Polls exact native ownership after actual service shutdown and caller-owned worker settlement.
+         * @return Actual drained state; pending/error retains this host, runtime, callback and image/content owners.
+         * @pre Owner lane; caller has cancelled and joined any external Scene/Save/network worker sources. */
+        [[nodiscard]] Result<bool> PollShutdown(std::uint32_t maximumNativeRecords);
 
     private:
+        NetworkNativeRetirementPoll pollRetirement_;
         std::shared_ptr<NetworkDebuggerService> debugger_;
         std::unique_ptr<Runtime::RuntimeHost> runtime_;
         ModeParticipant *mode_{};  // Borrowed from runtime_'s lifecycle participant.

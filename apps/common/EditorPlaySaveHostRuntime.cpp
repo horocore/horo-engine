@@ -128,9 +128,9 @@ namespace Horo::Application::Internal {
 
     /** @copydoc EditorPlaySaveHost::State::RegisterCoreCapture */
     Result<void> EditorPlaySaveHost::State::RegisterCoreCapture() {
-        const auto core =
-            registry.Register(PlaySaveSceneDescriptor(),
-                              std::make_shared<PlaySaveSceneCapture>(scenes, schema->baseline, schema->identities, liveBindings, prefabs));
+        const auto core = registry.Register(PlaySaveSceneDescriptor(),
+                                            std::make_shared<PlaySaveSceneCapture>(scenes, schema->baseline, schema->identities,
+                                                                                   liveBindings, prefabs, physics));
         if (core.HasError())
             return Result<void>::Failure(core.ErrorValue());
         if (prefabs) {
@@ -138,7 +138,7 @@ namespace Horo::Application::Internal {
             if (added.HasError())
                 return Result<void>::Failure(added.ErrorValue());
         }
-        return Result<void>::Success();
+        return RegisterPhysicsCapture();
     }
 
     /** @copydoc EditorPlaySaveHost::State::Compose */
@@ -247,8 +247,8 @@ namespace Horo::Application::Internal {
         if (kind == SaveOperationKind::Load) {
             if (!command.selection)
                 return Result<void>::Failure(MakeError(SaveErrors::CompositionUnsupported));
-            auto source =
-                std::make_shared<PlaySaveRestoreSource>(storage, schema, *command.selection, liveBindings, behaviorOwner, lifecycle);
+            auto source = std::make_shared<PlaySaveRestoreSource>(storage, schema, *command.selection, liveBindings, behaviorOwner,
+                                                                  lifecycle, physics);
             auto preparedHandoff =
                 std::make_shared<PlaySaveSceneHandoff>(scenes, source, authority, std::make_shared<PlaySaveSceneHandoffState>(),
                                                        environment.storage.world, prefabs);
@@ -272,7 +272,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(SaveErrors::LifecycleUnavailable));
         auto writer = std::make_shared<PlaySaveWriter>(storage, command.displayName, static_cast<std::uint64_t>(milliseconds),
                                                        static_cast<std::uint64_t>(elapsed));
-        auto admitted = runtime->Save(descriptor, std::move(writer));
+        auto admitted = runtime->Save(descriptor, std::move(writer), CapturePreparation());
         if (admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
         request.emplace(std::move(admitted).Value());

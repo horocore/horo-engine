@@ -79,6 +79,10 @@ namespace Horo::Application::Internal {
          * @pre Do not retain the scope in jobs, callbacks, modules or through Scene lifecycle operations.
          */
         [[nodiscard]] Result<Physics::Detail::PhysicsSceneHostScope> Borrow();
+        /** @brief Returns only the actual published Physics candidate's issued state target. */
+        [[nodiscard]] Result<Physics::Detail::PhysicsSceneStateTarget> PublishedStateTarget();
+        /** @brief Returns only the exact actual pending candidate for this receiving Scene; no Scene-ID-only authority. */
+        [[nodiscard]] Result<Physics::Detail::PhysicsSceneStateTarget> PendingStateTarget(Runtime::SceneRuntimeId expected);
 
         /** @brief Advances the explicitly paired Character-before-Physics stages for one ordinary host quantum.
          * @param delta Exact immutable positive fixed quantum. @return Original query/Character/Physics failure.
@@ -92,5 +96,6 @@ namespace Horo::Application::Internal {
         std::thread::id owner_{std::this_thread::get_id()};
         Participant *participant_{};
         Physics::PhysicsSceneActivationCandidate *published_{};
+        Physics::PhysicsSceneActivationCandidate *pending_{};
     };
 }  // namespace Horo::Application::Internal

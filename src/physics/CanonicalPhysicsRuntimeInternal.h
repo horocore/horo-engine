@@ -5,6 +5,7 @@
 #include "CanonicalPhysicsRuntimeQuery.h"
 #include "Horo/Physics/PhysicsCollisionSchema.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "PhysicsStateConstructionStorage.h"
 
 #include <Jolt/Jolt.h>
 
@@ -46,10 +47,12 @@
 
 namespace Horo::Physics::Detail {
     /**
-     * @brief Applies the admitted mass policy to native body settings before allocation.
+     * @brief Applies the admitted mass policy to native body settings before
+     * allocation.
      * @param settings Native creation settings to update.
      * @param mass Validated Horo mass policy.
-     * @return Success, or DescriptorInvalid when density cannot derive a finite mass.
+     * @return Success, or DescriptorInvalid when density cannot derive a finite
+     * mass.
      */
     [[nodiscard]] Result<void> ApplyCanonicalMassPolicy(JPH::BodyCreationSettings &settings, const PhysicsMassPolicy &mass);
 
@@ -81,10 +84,12 @@ namespace Horo::Physics::Detail {
         JPH::AssertFailedFunction priorAssertFailed{};
 #endif
         CanonicalResourceCounts resources;
+        StateDetail::ConstructionRecipePool *constructionRecipes{}; /**< Borrowed from SAME Runtime::Impl; cleared by native teardown. */
         std::unique_ptr<JPH::Factory> factory;
     };
 
-    /** @brief Load-time compiled immutable layer rows; row zero always rejects simulation. */
+    /** @brief Load-time compiled immutable layer rows; row zero always rejects
+     * simulation. */
     struct CanonicalSimulationTable final {
         static constexpr std::size_t RowCount = 65;
         PhysicsWorldSimulationBinding binding;
@@ -92,7 +97,8 @@ namespace Horo::Physics::Detail {
         std::size_t layerCount{};
         std::array<SimulationPairResponse, RowCount * RowCount> responses{};
 
-        /** @brief Borrows the exact normalized profile during the joined world operation; never substitutes the default. */
+        /** @brief Borrows the exact normalized profile during the joined world
+         * operation; never substitutes the default. */
         [[nodiscard]] const CollisionProfileDefinition *Profile(const CollisionProfileId id) const noexcept {
             if (!binding.schema)
                 return nullptr;
@@ -101,7 +107,8 @@ namespace Horo::Physics::Detail {
             return found != profiles.end() && found->id == id ? std::to_address(found) : nullptr;
         }
 
-        /** @brief Borrows an exact enabled query channel; missing or disabled identity remains unavailable. */
+        /** @brief Borrows an exact enabled query channel; missing or disabled
+         * identity remains unavailable. */
         [[nodiscard]] const CollisionQueryChannelDefinition *Channel(const PhysicsQueryChannelId id) const noexcept {
             if (!binding.schema)
                 return nullptr;
@@ -110,7 +117,8 @@ namespace Horo::Physics::Detail {
             return found != channels.end() && found->id == id && found->enabled ? std::to_address(found) : nullptr;
         }
 
-        /** @brief Returns copied query response, or absence for unknown profile/channel; disabled querying is closed. */
+        /** @brief Returns copied query response, or absence for unknown
+         * profile/channel; disabled querying is closed. */
         [[nodiscard]] std::optional<CollisionQueryResponse> QueryResponse(const CollisionProfileId id,
                                                                           const PhysicsQueryChannelId channel) const noexcept {
             const auto *profile = Profile(id);
@@ -124,12 +132,14 @@ namespace Horo::Physics::Detail {
                        : std::nullopt;
         }
 
-        /** @brief Translates only a live compiled row to project identity; row zero is not an authored layer. */
+        /** @brief Translates only a live compiled row to project identity; row zero
+         * is not an authored layer. */
         [[nodiscard]] CollisionLayerId Layer(const JPH::ObjectLayer row) const noexcept {
             return row != 0 && row <= layerCount ? layers[row - 1].id : CollisionLayerId{};
         }
 
-        /** @brief Authoritative captured filter generation, independent of query fixture inventory revisions. */
+        /** @brief Authoritative captured filter generation, independent of query
+         * fixture inventory revisions. */
         [[nodiscard]] std::uint64_t SchemaGeneration() const noexcept {
             return binding.generation;
         }
@@ -182,7 +192,8 @@ namespace Horo::Physics::Detail {
     struct CanonicalWorld;
     class ContactCaptureRoute;
 
-    /** @brief Copies native contact callbacks into the owner-thread event projection seam. */
+    /** @brief Copies native contact callbacks into the owner-thread event
+     * projection seam. */
     class CanonicalContactListener final : public JPH::ContactListener {
     public:
         explicit CanonicalContactListener(CanonicalWorld &world) noexcept : world_(world) {}
@@ -205,7 +216,16 @@ namespace Horo::Physics::Detail {
     struct CanonicalSceneShapeRecord final {
         ShapeHandle handle;
         JPH::Ref<JPH::Shape> shape;
-        std::vector<PhysicsPose> compoundChildPoses; /**< Exact construction inputs, indexed by private child ordinal. */
+        std::size_t nativeRequestedBytes{}; /**< Conservative creation+retained-child
+                                               native request reservation; not RSS. */
+        StateDetail::ConstructionRecipeLease construction;
+        Sha256Digest recipe;                                     /**< Immutable witness derived from actual admitted
+                                                                    child/analytic construction, never native pointers. */
+        std::optional<PhysicsShapeDescriptor> analytic;          /**< Exact validated primitive input; absent only for a
+                                                                    compound. */
+        std::vector<PhysicsSceneShapeInstance> compoundChildren; /**< Exact ordered constructor poses for collider validation.
+            Child handles are local routing only and may be invalid after restart/retirement; the retained construction lease
+            and native shape refs, never these optional historical handles, own the complete transitive DAG. */
     };
 
     struct CanonicalSceneBodyRecord final {
@@ -218,6 +238,15 @@ namespace Horo::Physics::Detail {
         std::uint64_t sceneEntity{};
         std::optional<PhysicsSceneCollisionBinding> collision;
         JPH::RefConst<JPH::Shape> shapeEvidence;
+        std::size_t shapeNativeRequestedBytes{}; /**< Retained geometry reservation survives
+                                                    separate shape-record retirement. */
+        Sha256Digest shapeRecipe;
+        StateDetail::ConstructionRecipeLease shapeConstruction;
+        std::optional<PhysicsStateFpControl>
+            creationControl; /**< Actual settings/CreateBody boundary, never current-pose reconstruction. */
+        std::optional<PhysicsStateFpControl> stateArithmeticControl; /**< Sticky unknown after an incompatible mutation boundary. */
+        std::optional<PhysicsStateFpControl>
+            massArithmeticSubprofile; /**< Compiled invalid-mask guard profile, not a claim that its branch executed. */
         std::optional<float> injectedStateForTesting;
         std::uint8_t injectedComponentForTesting{};
         bool injectPostStepForTesting{true};
@@ -228,6 +257,21 @@ namespace Horo::Physics::Detail {
         const CanonicalSceneBodyRecord *second{};
     };
 
+    /** @brief Exact native endpoint frame at the actual canonical constraint
+     * constructor call, not a later body pose. */
+    struct CanonicalConstraintEndpointCreation final {
+        std::array<float, 3> centerOfMass{};
+        std::array<float, 4> rotation{0, 0, 0, 1};
+    };
+
+    /** @brief Original typed constructor provenance; later body pose/mass/COM
+     * changes cannot overwrite it. */
+    struct CanonicalConstraintCreation final {
+        PhysicsPose firstFrame, secondFrame;
+        CanonicalConstraintEndpointCreation first, second;
+        PhysicsStateFpControl floatingPoint;
+    };
+
     struct CanonicalSceneConstraintRecord final {
         ConstraintHandle handle;
         JPH::Ref<JPH::Constraint> constraint;
@@ -236,9 +280,30 @@ namespace Horo::Physics::Detail {
         JPH::BodyID firstBody;
         JPH::BodyID secondBody;
         PhysicsJointCollisionPolicy collisionPolicy{};
+        CanonicalConstraintCreation creation;
+        PhysicsConstraintDescriptor descriptor; /**< Exact admitted immutable Horo frames/limits, retained for
+                                                   state compatibility. */
     };
 
-    /** @brief Constructs a detached native constraint against resident or staged body records; never registers it. */
+    /** @brief The SAME typed native builder is used by ordinary creation and
+     * unpublished exact-creation replay. */
+    [[nodiscard]] Result<JPH::Ref<JPH::Constraint>> BuildCanonicalSceneConstraint(
+        JPH::Body &first, JPH::Body &second, const PhysicsPose &firstFrame, const PhysicsPose &secondFrame,
+        const decltype(PhysicsConstraintDescriptor::parameters) &parameters);
+    /** @brief Records actual endpoint COM poses and current FP controls before the
+     * native constructor executes. */
+    [[nodiscard]] Result<CanonicalConstraintCreation> CaptureCanonicalConstraintCreation(const JPH::Body &first, const JPH::Body &second,
+                                                                                         const PhysicsPose &firstFrame,
+                                                                                         const PhysicsPose &secondFrame);
+
+    /** @brief Single existing constraint-table/pair-filter/native-manager publication used by ordinary and cold receiver construction. */
+    [[nodiscard]] Result<ConstraintHandle> PublishCanonicalConstraintRecord(CanonicalWorld &, CanonicalSceneConstraintRecord);
+    /** @brief Private cold restart entry; caller owns the exact unpublished Scene/World candidate fence. */
+    [[nodiscard]] Result<CanonicalSceneConstraintRecord> PrepareCanonicalRestartConstraintRecord(CanonicalWorldHandle, PhysicsWorldId,
+                                                                                                 const PhysicsConstraintDescriptor &,
+                                                                                                 const CanonicalConstraintCreation &);
+    /** @brief Constructs a detached native constraint against resident or staged
+     * body records; never registers it. */
     [[nodiscard]] Result<CanonicalSceneConstraintRecord> PrepareCanonicalConstraintRecord(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                                           const PhysicsConstraintDescriptor &descriptor,
                                                                                           std::span<const CanonicalSceneBodyRecord> staged);
@@ -250,7 +315,8 @@ namespace Horo::Physics::Detail {
         std::unique_ptr<JPH::PhysicsSystem> system;
     };
 
-    /** @brief Scene-owned shape, body and constraint storage plus its bounded capacities. */
+    /** @brief Scene-owned shape, body and constraint storage plus its bounded
+     * capacities. */
     struct CanonicalWorldSceneState final {
         CanonicalWorldSceneState(const std::uint32_t maximumBodies, const std::uint32_t maximumShapes,
                                  const std::uint32_t maximumConstraints)
@@ -269,7 +335,8 @@ namespace Horo::Physics::Detail {
         std::uint32_t nextConstraintSlot{};
     };
 
-    /** @brief Query fixtures, stable native-index mapping and reusable bounded collectors for one world. */
+    /** @brief Query fixtures, stable native-index mapping and reusable bounded
+     * collectors for one world. */
     struct CanonicalWorldQueryState final {
         static constexpr std::size_t InvalidFixtureIndex = std::numeric_limits<std::size_t>::max();
 
@@ -284,7 +351,8 @@ namespace Horo::Physics::Detail {
         CanonicalQueryStorage storage;
     };
 
-    /** @brief Resolve a native compound user-data ordinal against the exact admitted collider vector. */
+    /** @brief Resolve a native compound user-data ordinal against the exact
+     * admitted collider vector. */
     [[nodiscard]] const PhysicsSceneColliderBinding *ResolveCanonicalSceneCollider(const CanonicalSceneBodyRecord &record,
                                                                                    JPH::SubShapeID subshape) noexcept;
 
@@ -297,6 +365,8 @@ namespace Horo::Physics::Detail {
         ~CanonicalWorld();
 
         CanonicalRuntime &owner;
+        PhysicsWorldSettingsIdentity settingsIdentity; /**< Exact immutable construction input for state
+                                                          scratch/configuration admission. */
         CanonicalSimulationTable simulation;
         CanonicalBroadPhaseLayers broadPhaseLayers;
         CanonicalObjectVsBroadPhase objectVsBroadPhase;
@@ -305,26 +375,30 @@ namespace Horo::Physics::Detail {
         CanonicalContactListener contactListener;
         DiagnosticInbox diagnostics;
         std::atomic<ContactCaptureRoute *> contactRoute{};
-        std::uint32_t nextResourceSlot{}; /**< Never reused across scene shapes, scene bodies, or query fixtures. */
+        std::uint32_t nextResourceSlot{}; /**< Never reused across scene shapes, scene
+                                             bodies, or query fixtures. */
         CanonicalWorldSceneState scene;
         PhysicsContinuousCollisionObservation continuousCollision;
         std::weak_ptr<CanonicalSceneBodyBatchState> pendingBodyBatch;
         CanonicalWorldQueryState query;
     };
 
-    /** @brief Rebuilds bounded resident indices at a joined publication boundary, never in a query callback. */
+    /** @brief Rebuilds bounded resident indices at a joined publication boundary,
+     * never in a query callback. */
     inline void RebuildCanonicalSceneBodyIndices(CanonicalWorld &world) noexcept {
         std::ranges::fill(world.scene.nativeBodyIndices, std::numeric_limits<std::size_t>::max());
         for (std::size_t index = 0; index < world.scene.bodies.size(); ++index)
             world.scene.nativeBodyIndices[world.scene.bodies[index].nativeBody.GetIndex()] = index;
     }
 
-    /** @brief Resolves explicit or inherited quality only after proving actual shape/motion/sensor eligibility. */
+    /** @brief Resolves explicit or inherited quality only after proving actual
+     * shape/motion/sensor eligibility. */
     [[nodiscard]] Result<JPH::EMotionQuality> ResolveCanonicalMotionQuality(const PhysicsContinuousCollisionPolicy &policy,
                                                                             const PhysicsBodyDescriptor &body, const JPH::Shape &shape,
                                                                             bool sensor);
 
-    /** @brief Limits native contact routing to one joined fixed step and clears borrowed state on exit. */
+    /** @brief Limits native contact routing to one joined fixed step and clears
+     * borrowed state on exit. */
     class ContactCaptureRoute final {
     public:
         ContactCaptureRoute(CanonicalWorld &world, const std::uint64_t simulationTick, const CanonicalContactSink sink) noexcept
@@ -373,7 +447,8 @@ namespace Horo::Physics::Detail {
                 created = JPH::CapsuleShapeSettings(shape.cylindricalHalfHeightMeters, shape.radiusMeters).Create();
             else {
                 static_assert(std::is_same_v<ShapeType, PhysicsStaticPlaneShape>);
-                // Horo stores dot(normal, point) = distance; Jolt stores dot(normal, point) + constant = 0.
+                // Horo stores dot(normal, point) = distance; Jolt stores dot(normal,
+                // point) + constant = 0.
                 created = JPH::PlaneShapeSettings(JPH::Plane(ToNative(shape.normal), -shape.signedDistanceMeters)).Create();
             }
         }, descriptor);

@@ -4,6 +4,7 @@
  */
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySaveHostRestore.h"
+#include "EditorPlaySavePhysicsServices.h"
 #include "EditorPlaySavePrefabServices.h"
 
 #include <mutex>
@@ -61,11 +62,17 @@ namespace Horo::Application::Internal {
         State(Runtime::RuntimeSceneService &scenes, EditorPlaySaveEnvironment environment,
               std::shared_ptr<const PlaySaveStorageSchema> schema,
               std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
-              std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner, std::shared_ptr<PlaySavePrefabServices> prefabs);
+              std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner, std::shared_ptr<PlaySavePrefabServices> prefabs,
+              std::shared_ptr<PlaySavePhysicsServices> physics);
         /** @brief Composes the actual initial owners before asynchronous storage opening. */
         [[nodiscard]] Result<void> Initialize();
         /** @brief Registers the disjoint Scene and prefab canonical capture owners once. */
         [[nodiscard]] Result<void> RegisterCoreCapture();
+        /** @brief Registers only the selected actual canonical Physics source. */
+        [[nodiscard]] Result<void> RegisterPhysicsCapture();
+        [[nodiscard]] Result<void> ReleasePhysicsCapture();
+        /** @brief Builds same-request preparation without retaining this state in detached workers. */
+        [[nodiscard]] std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> CapturePreparation();
         /** @brief Reads the same exact complete current identity map for all canonical Gameplay owners. */
         [[nodiscard]] Result<Runtime::PersistentEntityIdentityMap> CurrentIdentities() const;
         /** @brief Binds actual installed behavior sources through the real current
@@ -133,6 +140,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner;
         std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle;
         std::shared_ptr<PlaySavePrefabServices> prefabs;
+        std::shared_ptr<PlaySavePhysicsServices> physics;
         std::shared_ptr<PlaySaveSceneHandoff> handoff;
         Runtime::CanonicalStateParticipantRegistry registry;
         Runtime::SaveParticipantRegistrySnapshot participants;

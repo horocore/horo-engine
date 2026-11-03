@@ -22,7 +22,9 @@ namespace Horo::Physics {
         Unavailable,
         Available
     };
-    /** @brief Closed version-one feature identities; determinism and rollback are separate qualified contracts. */
+    /** @brief Closed version-two feature identities; the first nine retain their prior numeric values.
+     * Determinism, structural rollback and world readiness remain separate qualified contracts.
+     */
     enum class PhysicsCapability : std::uint8_t {
         WorldCreation,
         RigidBodies,
@@ -33,8 +35,13 @@ namespace Horo::Physics {
         OriginRebasing,
         BodyMutation,
         ContinuousCollision,
+        StateSnapshots,     /**< Canonical complete typed capture/codec, requiring actual bound native build/image evidence. */
+        AtomicStateRestore, /**< Exact retained-topology transaction; not structural rollback or an ADR088 determinism tier. */
         Count
     };
+
+    /** @brief Expanded closed capability array; version-one metadata is rejected rather than relabeled. */
+    inline constexpr std::uint32_t PhysicsCapabilityContractVersion = 2;
 
     /**
      * @brief Owned immutable-after-publication capability snapshot supplied by the Physics composition owner.
@@ -46,21 +53,21 @@ namespace Horo::Physics {
      * to load a solver or substitute a null world, and is not a durable or cross-process capability token.
      */
     struct PhysicsCapabilities final {
-        std::uint32_t contractVersion{1};
+        std::uint32_t contractVersion{PhysicsCapabilityContractVersion};
         std::uint64_t revision{};
         PhysicsAvailability availability{PhysicsAvailability::Unavailable};
         std::array<PhysicsCapabilitySupport, static_cast<std::size_t>(PhysicsCapability::Count)> features{};
     };
 
     /** @brief Validates the complete snapshot, including unused feature values. @param capabilities Owned reported evidence.
-     * @return True for coherent version-one metadata, not independent proof of its issuer's qualification.
+     * @return True for coherent version-two metadata, not independent proof of its issuer's qualification.
      */
     [[nodiscard]] bool ValidatePhysicsCapabilities(const PhysicsCapabilities &capabilities) noexcept;
 
     /**
      * @brief Requires one explicitly available feature without treating unknown evidence as support.
      * @param capabilities Immutable owner-published snapshot.
-     * @param capability Known version-one feature.
+     * @param capability Known version-two feature.
      * @param expectedRevision Exact non-zero revision retained by the caller's admission attempt.
      * @return Success or malformed/stale/unsupported/unavailable Physics error; no fallback or state mutation.
      */

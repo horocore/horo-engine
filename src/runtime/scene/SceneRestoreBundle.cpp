@@ -611,6 +611,14 @@ namespace Horo::Runtime {
         struct Transfer final : IStagedRestoreAggregatePublication {
             Transfer(State &state, IStagedRestoreAggregatePublication &scene) noexcept : state(state), scene(scene) {}
 
+            Result<void> ValidateAndArm() override {
+                // All outer fallible checks precede the exact final owner claim.
+                if (auto valid = scene.ValidateAndArm(); valid.HasError())
+                    return valid;
+                return state.request.finalPublicationCheck ? state.request.finalPublicationCheck->ValidateAndArm()
+                                                           : Result<void>::Success();
+            }
+
             void PublishPrepared() noexcept override {
                 for (auto &component : state.components)
                     component.candidate->PublishPrepared();

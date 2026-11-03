@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 27 / `gameplay-sdk27`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 28 / `gameplay-sdk28`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -32,6 +32,25 @@ or that this snapshot has passed every platform. The extension SDK has no engine
 library link dependency; native libraries still require matching OS/architecture
 and their own private dependency/toolchain compatibility. No Android, mobile,
 cross-architecture, or generic C++ binary compatibility is promised here.
+
+## Gameplay SDK27 → SDK28 (Physics state and restore publication)
+
+Rebuild native modules and their host together with the exact `gameplay-sdk28`
+engine, compiler, platform and configuration fingerprint. Physics capability
+metadata, World/runtime state APIs, Runtime Save session ownership and the final
+restore-publication callback extend native layouts. An SDK27 module must reject
+before invoking its factory; do not relabel an old binary or bypass its manifest.
+
+Use the optional Physics SDK target for the typed state headers. Construction,
+solver and snapshot wire schemas have their own versions; SDK28 does not renumber
+them. Keep private Scene restore targets, generated build facts and loaded-image
+leases in their existing owners. Live Animation state remains unsupported by
+Play Save capture, as documented for SDK27.
+
+For rollback of this SDK migration, restore both the host and all modules built
+for SDK27 together, including their original manifests. Do not mix SDK27 module
+objects with an SDK28 host. Snapshot compatibility still checks actual receiving
+build, solver, platform and content independently of this native boundary.
 
 ## Gameplay SDK26 → SDK27 (Animation components and Scene activation)
 

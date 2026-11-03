@@ -264,6 +264,8 @@ namespace Horo::Physics::Detail {
             structural->authoredBodies = std::move(resources.bodyBindings);
             structural->authoredShapes = std::move(resources.shapeBindings);
             structural->authoredConstraints = std::move(resources.constraintBindings);
+            if (const auto groups = MaterializePendingPhysicsGroups(structural, scene); groups.HasError())
+                return Result<std::shared_ptr<PhysicsStructuralState>>::Failure(groups.ErrorValue());
             return Result<std::shared_ptr<PhysicsStructuralState>>::Success(std::move(structural));
         }
     }  // namespace

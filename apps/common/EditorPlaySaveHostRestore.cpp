@@ -1,5 +1,7 @@
 #include "EditorPlaySaveHostRestore.h"
 
+#include "EditorPlaySavePhysicsArchive.h"
+#include "EditorPlaySavePhysicsServices.h"
 #include "EditorPlaySavePrefabCapture.h"
 
 #include <algorithm>
@@ -86,9 +88,11 @@ namespace Horo::Application::Internal {
                                                  std::shared_ptr<const PlaySaveStorageSchema> schema, Runtime::SaveManagerCommand selection,
                                                  std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
                                                  std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
-                                                 std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle)
+                                                 std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle,
+                                                 std::shared_ptr<PlaySavePhysicsServices> physics)
         : storage_(std::move(storage)), schema_(std::move(schema)), selection_(std::move(selection)),
-          liveBindings_(std::move(liveBindings)), behaviorOwner_(std::move(behaviorOwner)), lifecycle_(std::move(lifecycle)) {}
+          liveBindings_(std::move(liveBindings)), behaviorOwner_(std::move(behaviorOwner)), lifecycle_(std::move(lifecycle)),
+          physics_(std::move(physics)), physicsFence_(physics_ ? std::make_shared<PlaySavePhysicsRestoreFence>() : nullptr) {}
 
     /** @copydoc PlaySaveRestoreSource::Stage */
     Result<Runtime::RuntimeSaveRestoreStaging> PlaySaveRestoreSource::Stage(const Runtime::StagedRestoreContext &context,
@@ -106,28 +110,42 @@ namespace Horo::Application::Internal {
         auto archive = storage_->Read(selection_, cancellation);
         if (archive.HasError())
             return Outcome::Failure(archive.ErrorValue());
-        const auto bytes = archive.Value().SelectChunk(PlaySaveSceneRecord());
+        auto scene = DecodeArchive(archive.Value());
+        if (scene.HasError())
+            return Outcome::Failure(scene.ErrorValue());
+        auto immutable = std::make_shared<const PlaySaveSceneState>(std::move(scene).Value());
+        {
+            std::lock_guard lock(publication_);
+            context_ = context;
+            cancellation_ = cancellation;
+            decoded_ = std::move(immutable);
+            archive_ = std::make_shared<const Runtime::ValidatedSaveArchive>(std::move(archive).Value());
+        }
+        return Outcome::Success({});
+    }
+
+    /** @copydoc PlaySaveRestoreSource::DecodeArchive */
+    Result<PlaySaveSceneState> PlaySaveRestoreSource::DecodeArchive(const Runtime::ValidatedSaveArchive &archive) const {
+        using Outcome = Result<PlaySaveSceneState>;
+        const auto bytes = archive.SelectChunk(PlaySaveSceneRecord());
         if (bytes.HasError())
             return Outcome::Failure(bytes.ErrorValue());
         if (!bytes.Value())
             return Outcome::Failure(MakeError(Runtime::SaveErrors::CaptureIncomplete));
         const auto bindings = liveBindings_ ? std::span<const Editor::PlaySaveGameplayBinding>{*liveBindings_}
                                             : std::span<const Editor::PlaySaveGameplayBinding>{};
-        auto decoded = DecodePlaySaveScene(*bytes.Value(), schema_->baseline, schema_->identities, bindings);
+        const auto physics = ValidatePlaySavePhysicsArchive(archive, *schema_);
+        if (physics.HasError())
+            return Outcome::Failure(physics.ErrorValue());
+        auto decoded = DecodePlaySaveScene(*bytes.Value(), schema_->baseline, schema_->identities, bindings, physics.Value());
         if (decoded.HasError())
             return Outcome::Failure(decoded.ErrorValue());
-        auto prefabs = DecodePlaySavePrefabs(archive.Value(), schema_->prefabProfile, schema_->identities.size());
+        auto prefabs = DecodePlaySavePrefabs(archive, schema_->prefabProfile, schema_->identities.size());
         if (prefabs.HasError())
             return Outcome::Failure(prefabs.ErrorValue());
         auto scene = std::move(decoded).Value();
         scene.prefabs = std::move(prefabs).Value();
-        auto immutable = std::make_shared<const PlaySaveSceneState>(std::move(scene));
-        {
-            std::lock_guard lock(publication_);
-            decoded_ = std::move(immutable);
-            archive_ = std::make_shared<const Runtime::ValidatedSaveArchive>(std::move(archive).Value());
-        }
-        return Outcome::Success({});
+        return Outcome::Success(std::move(scene));
     }
 
     /** @copydoc PlaySaveRestoreSource::BehaviorOwner */
@@ -138,7 +156,7 @@ namespace Horo::Application::Internal {
     /** @copydoc PlaySaveRestoreSource::StageOwners */
     Result<Runtime::RuntimeSaveRestoreStaging> PlaySaveRestoreSource::StageOwners(
         const Runtime::SaveParticipantRegistrySnapshot &participants, std::shared_ptr<Gameplay::BehaviorRuntimeRestoreCandidate> candidate,
-        const Runtime::PersistentEntityIdentityMap &identities) const {
+        const Runtime::PersistentEntityIdentityMap &identities, Runtime::RuntimeSceneView candidateScene) const {
         using Outcome = Result<Runtime::RuntimeSaveRestoreStaging>;
         std::shared_ptr<const Runtime::ValidatedSaveArchive> archive;
         {
@@ -150,21 +168,14 @@ namespace Horo::Application::Internal {
         const auto bindings = liveBindings_ ? std::span<const Editor::PlaySaveGameplayBinding>{*liveBindings_}
                                             : std::span<const Editor::PlaySaveGameplayBinding>{};
         auto prepared = StageGameplayInventory(*archive, participants, bindings, candidate, identities);
-        if (prepared.HasError() || !lifecycle_)
+        if (prepared.HasError())
             return prepared;
-        const auto descriptor = Gameplay::BehaviorLifecycleParticipant();
-        const auto saved =
-            std::ranges::find(archive->Manifest().participants, descriptor.participant, &Runtime::SaveManifestParticipant::participant);
-        const auto bytes = archive->SelectChunk(Gameplay::BehaviorLifecycleRecord());
-        if (saved == archive->Manifest().participants.end() || bytes.HasError() || !bytes.Value())
-            return Outcome::Failure(MakeError(Runtime::SaveErrors::CaptureIncomplete));
-        auto lifecycle = lifecycle_->StageRestore(saved->schemaVersion, Gameplay::BehaviorLifecycleRecord(), *bytes.Value(),
-                                                  std::move(candidate), identities);
-        if (lifecycle.HasError())
+        auto staging = std::move(prepared).Value();
+        if (const auto lifecycle = StageLifecycle(staging, *archive, std::move(candidate), identities); lifecycle.HasError())
             return Outcome::Failure(lifecycle.ErrorValue());
-        auto result = std::move(prepared).Value();
-        result.participants.push_back(std::move(lifecycle).Value());
-        return Outcome::Success(std::move(result));
+        if (const auto physics = StagePhysics(staging, archive, participants, candidateScene, identities); physics.HasError())
+            return Outcome::Failure(physics.ErrorValue());
+        return Outcome::Success(std::move(staging));
     }
 
     /** @copydoc PlaySaveRestoreSource::PreparedScene */

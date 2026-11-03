@@ -151,7 +151,8 @@ namespace Horo::Application::Internal {
     /** @copydoc DecodePlaySaveSceneStructure */
     Result<PlaySaveSceneState> DecodePlaySaveSceneStructure(std::span<const std::byte> bytes,
                                                             const Runtime::RuntimeSceneDefinition &baseline,
-                                                            std::span<const Runtime::PersistentEntityRecord> identities) {
+                                                            std::span<const Runtime::PersistentEntityRecord> identities,
+                                                            PlaySavePhysicsReadPolicy physics) {
         using Outcome = Result<PlaySaveSceneState>;
         auto opened = Runtime::CanonicalValueReader::Create(bytes, {.maximumBytes = MaximumBytes});
         if (opened.HasError())
@@ -168,7 +169,7 @@ namespace Horo::Application::Internal {
         if (!std::ranges::equal(definition.Value().AssetDependencies(), baseline.AssetDependencies()) ||
             !std::ranges::equal(definition.Value().TriggerVolumeEvidence(), baseline.TriggerVolumeEvidence()))
             return Outcome::Failure(InvalidRecord());
-        if (const auto core = ValidatePlaySaveCoreStructure(definition.Value()); core.HasError())
+        if (const auto core = ValidatePlaySaveCoreStructure(definition.Value(), physics); core.HasError())
             return Outcome::Failure(core.ErrorValue());
         PlaySaveSceneState state{std::move(definition).Value(), std::move(records).Value()};
         if (!IdentityCoverage(state))
@@ -179,11 +180,12 @@ namespace Horo::Application::Internal {
     /** @copydoc DecodePlaySaveScene */
     Result<PlaySaveSceneState> DecodePlaySaveScene(std::span<const std::byte> bytes, const Runtime::RuntimeSceneDefinition &baseline,
                                                    std::span<const Runtime::PersistentEntityRecord> identities,
-                                                   std::span<const Editor::PlaySaveGameplayBinding> gameplay) {
-        auto decoded = DecodePlaySaveSceneStructure(bytes, baseline, identities);
+                                                   std::span<const Editor::PlaySaveGameplayBinding> gameplay,
+                                                   PlaySavePhysicsReadPolicy physics) {
+        auto decoded = DecodePlaySaveSceneStructure(bytes, baseline, identities, physics);
         if (decoded.HasError())
             return decoded;
-        if (const auto covered = ValidatePlaySaveCoreState(decoded.Value().definition, gameplay); covered.HasError())
+        if (const auto covered = ValidatePlaySaveCoreReadState(decoded.Value().definition, gameplay, physics); covered.HasError())
             return Result<PlaySaveSceneState>::Failure(covered.ErrorValue());
         return decoded;
     }

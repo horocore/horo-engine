@@ -171,8 +171,10 @@ target_link_libraries(HoroRuntimeUiPaintHost PUBLIC HoroEngine::UiAnimationRunti
 # this header and its declared non-installed Physics boundary reach consumers.
 set(HORO_SCENE_PHYSICS_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_physics_host_headers")
 file(MAKE_DIRECTORY "${HORO_SCENE_PHYSICS_HOST_HEADERS}")
-configure_file(common/ScenePhysicsHost.h "${HORO_SCENE_PHYSICS_HOST_HEADERS}/ScenePhysicsHost.h" COPYONLY)
-configure_file(common/CommittedSceneAssets.h "${HORO_SCENE_PHYSICS_HOST_HEADERS}/CommittedSceneAssets.h" COPYONLY)
+foreach(_horo_scene_host_header IN ITEMS ScenePhysicsHost.h CommittedSceneAssets.h)
+    file(GENERATE OUTPUT "${HORO_SCENE_PHYSICS_HOST_HEADERS}/${_horo_scene_host_header}"
+        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/common/${_horo_scene_host_header}\"\n")
+endforeach()
 add_library(HoroScenePhysicsHost STATIC common/ScenePhysicsHost.cpp common/CommittedSceneAssets.cpp)
 target_compile_features(HoroScenePhysicsHost PUBLIC cxx_std_20)
 target_include_directories(HoroScenePhysicsHost PUBLIC "${HORO_SCENE_PHYSICS_HOST_HEADERS}")
@@ -778,3 +780,43 @@ target_link_libraries(HoroVfxGpuVulkanCookInternal PUBLIC HoroEngine::RenderApi 
 add_executable(HoroVfxGpuVulkanShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VfxGpuVulkanCookMain.cpp)
 target_compile_features(HoroVfxGpuVulkanShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroVfxGpuVulkanShaderCook PRIVATE HoroVfxGpuVulkanCookInternal)
+
+# The application joins actual Platform image evidence with the selected native Physics owner.
+add_library(HoroPhysicsStateProcessBindingInternal STATIC)
+target_compile_features(HoroPhysicsStateProcessBindingInternal PUBLIC cxx_std_20)
+set(_horo_state_binding_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/physics-state-binding")
+file(MAKE_DIRECTORY "${_horo_state_binding_headers}")
+configure_file(common/PhysicsStateProcessBinding.h "${_horo_state_binding_headers}/PhysicsStateProcessBinding.h" COPYONLY)
+target_include_directories(HoroPhysicsStateProcessBindingInternal PUBLIC "$<BUILD_INTERFACE:${_horo_state_binding_headers}>")
+target_link_libraries(HoroPhysicsStateProcessBindingInternal PUBLIC HoroEngine::Physics
+    PRIVATE HoroPhysicsStateIdentityInternal HoroPlatformProcessImageInternal)
+if(HORO_BUILD_PHYSICS_NATIVE)
+    target_sources(HoroPhysicsStateProcessBindingInternal PRIVATE common/PhysicsStateProcessBinding.cpp)
+else()
+    target_sources(HoroPhysicsStateProcessBindingInternal PRIVATE common/PhysicsStateProcessBindingUnavailable.cpp)
+endif()
+
+# Canonical Physics state joins the existing application-owned Save transaction.
+target_sources(HoroScenePhysicsHost PRIVATE common/ScenePhysicsHostState.cpp)
+target_sources(HoroEditorPlaySaveHostInternal PRIVATE
+    common/EditorPlaySaveHostPhysicsPreparation.cpp
+    common/EditorPlaySaveHostPhysicsRestore.cpp
+    common/EditorPlaySavePhysicsArchive.cpp
+    common/EditorPlaySavePhysicsCapture.cpp
+    common/EditorPlaySavePhysicsContent.cpp
+    common/EditorPlaySavePhysicsFence.cpp
+    common/EditorPlaySavePhysicsReceipt.cpp
+    common/EditorPlaySavePhysicsRestore.cpp
+    common/EditorPlaySavePhysicsServices.cpp)
+target_link_libraries(HoroEditorPlaySaveHostInternal PRIVATE HoroScenePhysicsHost)
+foreach(_horo_save_state_header IN ITEMS EditorPlaySavePhysicsArchive.h EditorPlaySavePhysicsContent.h
+        EditorPlaySavePhysicsReceipt.h EditorPlaySavePhysicsServices.h)
+    file(GENERATE OUTPUT "${HORO_EDITOR_PLAY_SAVE_HEADERS}/${_horo_save_state_header}"
+        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/common/${_horo_save_state_header}\"\n")
+endforeach()
+
+target_sources(HoroPhysicsStateProcessBindingInternal PRIVATE common/PhysicsStateHostLifecycle.cpp)
+file(GENERATE OUTPUT "${_horo_state_binding_headers}/PhysicsStateHostLifecycle.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/common/PhysicsStateHostLifecycle.h\"\n")
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroPhysicsStateProcessBindingInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroPhysicsStateProcessBindingInternal)

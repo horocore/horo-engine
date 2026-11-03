@@ -48,7 +48,9 @@ namespace Horo::Application::Internal {
     public:
         Candidate(ScenePhysicsHost &host, std::unique_ptr<Runtime::SceneActivationCandidate> candidate) noexcept
             : host_(host), candidate_(std::move(candidate)),
-              physics_(static_cast<Physics::PhysicsSceneActivationCandidate *>(candidate_.get())) {}
+              physics_(static_cast<Physics::PhysicsSceneActivationCandidate *>(candidate_.get())) {
+            host_.pending_ = physics_;
+        }
 
         ~Candidate() override {
             Shutdown();
@@ -72,6 +74,8 @@ namespace Horo::Application::Internal {
         }
 
         void Publish() noexcept override {
+            if (host_.pending_ == physics_)
+                host_.pending_ = nullptr;
             candidate_->Publish();
             host_.published_ = physics_;
         }
@@ -81,6 +85,8 @@ namespace Horo::Application::Internal {
             // must never withdraw the replacement's observer.
             if (host_.published_ == physics_)
                 host_.published_ = nullptr;
+            if (host_.pending_ == physics_)
+                host_.pending_ = nullptr;
             candidate_->Shutdown();
         }
 

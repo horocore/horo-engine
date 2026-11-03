@@ -334,12 +334,56 @@ namespace Horo::Runtime {
     /** @copydoc StagedRestoreTransaction::Activate */
     Result<void> StagedRestoreTransaction::Activate(const StagedRestoreActivationEvidence evidence,
                                                     IStagedRestoreAggregatePublication &aggregate) {
-        if (state_ != StagedRestoreTransactionState::ReadyToActivate)
+        if (activationInProgress_ || state_ != StagedRestoreTransactionState::ReadyToActivate)
             return Failure<void>(SaveErrors::RestoreTransitionInvalid);
         if (evidence.registryGeneration != context_.registryGeneration || evidence.sessionGeneration != context_.sessionGeneration ||
             evidence.sceneIncarnation != context_.sceneIncarnation)
             return FailUnpublished(MakeError(SaveErrors::RestoreActivationStale));
 
+        struct ActivePublication {
+            bool &active;
+
+            ~ActivePublication() {
+                active = false;
+            }
+        };
+
+        activationInProgress_ = true;
+        ActivePublication publicationScope{activationInProgress_};
+        if (auto claimed = BeginAggregateCommit(aggregate); claimed.HasError())
+            return claimed;
+        for (const std::size_t index : restorePlan_) {
+            staged_[index]->PublishPrepared();
+            Record(StagedRestorePhase::Activate, StagedRestoreEventOutcome::Succeeded, index);
+        }
+        aggregate.PublishPrepared();
+        state_ = StagedRestoreTransactionState::Activated;
+        // Publication cannot be reversed safely; this impossible bookkeeping violation is a host fault under the save architecture.
+        if (operation_.Complete(SaveOperationCommitOutcome::Committed) != SaveOperationTransitionResult::Applied)
+            std::terminate();
+        return Result<void>::Success();
+    }
+
+    namespace {
+        /** @brief Contains foreign final-check faults before any owner publication. */
+        Result<void> CheckFinalPublication(IStagedRestoreAggregatePublication &aggregate) {
+            try {
+                return aggregate.ValidateAndArm();
+            } catch (const std::bad_alloc &) {
+                return Result<void>::Failure(MakeError(SaveErrors::OperationAllocationFailed));
+            } catch (...) {
+                return Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
+            }
+        }
+    }  // namespace
+
+    /** @copydoc StagedRestoreTransaction::BeginAggregateCommit */
+    Result<void> StagedRestoreTransaction::BeginAggregateCommit(IStagedRestoreAggregatePublication &aggregate) {
+        if (auto ready = CheckFinalPublication(aggregate); ready.HasError())
+            return FailUnpublished(std::move(ready).ErrorValue());
+        // A foreign validator cannot publish recursively or resume after explicitly rolling back.
+        if (state_ != StagedRestoreTransactionState::ReadyToActivate)
+            return Failure<void>(SaveErrors::RestoreTransitionInvalid);
         const SaveCommitGateResult gate = operation_.BeginCommit();
         if (gate == SaveCommitGateResult::CancellationWon) {
             RollbackCandidates();
@@ -352,25 +396,6 @@ namespace Horo::Runtime {
             return Result<void>::Failure(std::move(error));
         }
 
-        struct ActivePublication {
-            bool &active;
-
-            ~ActivePublication() {
-                active = false;
-            }
-        };
-
-        activationInProgress_ = true;
-        ActivePublication publicationScope{activationInProgress_};
-        for (const std::size_t index : restorePlan_) {
-            staged_[index]->PublishPrepared();
-            Record(StagedRestorePhase::Activate, StagedRestoreEventOutcome::Succeeded, index);
-        }
-        aggregate.PublishPrepared();
-        state_ = StagedRestoreTransactionState::Activated;
-        // Publication cannot be reversed safely; this impossible bookkeeping violation is a host fault under the save architecture.
-        if (operation_.Complete(SaveOperationCommitOutcome::Committed) != SaveOperationTransitionResult::Applied)
-            std::terminate();
         return Result<void>::Success();
     }
 

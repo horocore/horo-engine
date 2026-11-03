@@ -132,6 +132,8 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(removed.ErrorValue());
         }
         lifecycle.reset();
+        if (auto released = ReleasePhysicsCapture(); released.HasError())
+            return released;
         if (prefabs) {
             if (auto removed = registry.Unregister(PlaySavePrefabDescriptor().participant); removed.HasError())
                 return Result<void>::Failure(removed.ErrorValue());

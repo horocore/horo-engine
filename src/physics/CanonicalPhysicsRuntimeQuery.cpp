@@ -1,5 +1,9 @@
 #include "CanonicalPhysicsRuntimeInternal.h"
+#include "CanonicalPhysicsStateBodyControl.h"
+#include "CanonicalPhysicsStateShapeCreation.h"
+#include "CanonicalPhysicsStateShapeRecipe.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "PhysicsStateConstructionNative.h"
 
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
@@ -473,9 +477,66 @@ namespace Horo::Physics::Detail {
         return CollectCanonicalQuery(access, mapped, collectors, onlySupport);
     }
 
+    namespace {
+        struct CreatedFixtureBody final {
+            JPH::BodyID body;
+            std::optional<PhysicsStateFpControl> control;
+        };
+
+        /** @brief Reads controls across the complete actual static-body settings and creation boundary. */
+        Result<CreatedFixtureBody> CreateFixtureBody(CanonicalQueryAccess &access, const PhysicsQueryFixtureDescriptor &fixture,
+                                                     const JPH::Shape &shape, StateDetail::ConstructionRecipePool *pool) {
+            using Outcome = Result<CreatedFixtureBody>;
+            const auto before = ReadCanonicalBodyControl();
+            if (auto admitted = AdmitCanonicalBodyControl(pool, before); admitted.HasError())
+                return Outcome::Failure(admitted.ErrorValue());
+            JPH::BodyCreationSettings settings(&shape,
+                                               JPH::RVec3(fixture.pose.translation.x, fixture.pose.translation.y,
+                                                          fixture.pose.translation.z),
+                                               Horo::Physics::Detail::ToNative(fixture.pose.rotation), JPH::EMotionType::Static,
+                                               JPH::ObjectLayer{0});
+            settings.mIsSensor = fixture.trigger;
+            const auto body = access.system.GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+            const auto control = CompleteCanonicalBodyControl(before, ReadCanonicalBodyControl());
+            if (auto admitted = AdmitCanonicalBodyControl(pool, control); admitted.HasError()) {
+                if (!body.IsInvalid()) {
+                    access.system.GetBodyInterface().RemoveBody(body);
+                    access.system.GetBodyInterface().DestroyBody(body);
+                }
+                return Outcome::Failure(admitted.ErrorValue());
+            }
+            return Outcome::Success({body, control});
+        }
+
+        /** @brief A failed private fixture body cannot leave a published native index or retained resource. */
+        Result<void> ValidateCreatedFixtureBody(CanonicalQueryAccess &access, JPH::BodyID body) {
+            if (body.IsInvalid())
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::CapacityExceeded, "Canonical solver rejected the query fixture body admission."));
+            if (body.GetIndex() >= access.nativeFixtureIndices.size()) {
+                access.system.GetBodyInterface().RemoveBody(body);
+                access.system.GetBodyInterface().DestroyBody(body);
+                return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            }
+            return Result<void>::Success();
+        }
+
+        Result<CreatedFixtureBody> CreateValidatedFixtureBody(CanonicalQueryAccess &access, const PhysicsQueryFixtureDescriptor &fixture,
+                                                              const JPH::Shape &shape, StateDetail::ConstructionRecipePool *pool) {
+            auto created = CreateFixtureBody(access, fixture, shape, pool);
+            if (created.HasError())
+                return created;
+            if (auto valid = ValidateCreatedFixtureBody(access, created.Value().body); valid.HasError())
+                return Result<CreatedFixtureBody>::Failure(valid.ErrorValue());
+            return created;
+        }
+    }  // namespace
+
     /** @copydoc CreateCanonicalQueryFixtureFromAccess */
     Result<PhysicsQueryFixture> CreateCanonicalQueryFixtureFromAccess(CanonicalQueryAccess &access, const PhysicsWorldId owner,
-                                                                      const PhysicsQueryFixtureDescriptor &fixture) {
+                                                                      const PhysicsQueryFixtureDescriptor &fixture,
+                                                                      const StateDetail::ConstructionRecipeLease *recipe,
+                                                                      StateDetail::ConstructionRecipePool *pool) {
         if (!owner.IsValid())
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         if (access.nextFixtureSlot == std::numeric_limits<std::uint32_t>::max() ||
@@ -483,30 +544,37 @@ namespace Horo::Physics::Detail {
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         if (const auto authority = ValidateCanonicalFixtureAuthority(access, fixture); authority.HasError())
             return Result<PhysicsQueryFixture>::Failure(authority.ErrorValue());
+        if (auto admitted = ValidateCanonicalRecipeAdmission(pool, recipe); admitted.HasError())
+            return Result<PhysicsQueryFixture>::Failure(admitted.ErrorValue());
         PhysicsQueryFixtureDescriptor ownedFixture = fixture;
-        const auto nativeShape = CreateNativeShape(fixture.shape);
+        const auto nativeShape = ObserveCanonicalPhysicsShapeCreation([&] {
+            return CreateNativeShape(fixture.shape);
+        });
         if (nativeShape.HasError())
             return Result<PhysicsQueryFixture>::Failure(nativeShape.ErrorValue());
+
+        const auto digest =
+            BindCanonicalShapeCreationRecipe(CanonicalQueryGeometryRecipe(fixture.shape, nativeShape.Value().creationControl),
+                                             nativeShape.Value().creationControl);
+        auto witness = ValidateCanonicalCreatedRecipe(pool, recipe, nativeShape.Value().creationControl, digest);
+        if (witness.HasError())
+            return Result<PhysicsQueryFixture>::Failure(witness.ErrorValue());
 
         const std::uint32_t slot = access.nextFixtureSlot++;
         const std::uint32_t generation = access.nextFixtureGeneration++;
         const PhysicsQueryFixture identity{.body = {owner, {slot, generation}}, .shape = {owner, {slot, generation}}};
-        JPH::BodyCreationSettings settings(nativeShape.Value().GetPtr(),
-                                           JPH::RVec3(fixture.pose.translation.x, fixture.pose.translation.y, fixture.pose.translation.z),
-                                           Horo::Physics::Detail::ToNative(fixture.pose.rotation), JPH::EMotionType::Static,
-                                           JPH::ObjectLayer{0});
-        settings.mIsSensor = fixture.trigger;
-        const JPH::BodyID nativeBody = access.system.GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
-        if (nativeBody.IsInvalid())
-            return Result<PhysicsQueryFixture>::Failure(
-                MakeError(PhysicsErrors::CapacityExceeded, "Canonical solver rejected the query fixture body admission."));
-        if (nativeBody.GetIndex() >= access.nativeFixtureIndices.size()) {
-            access.system.GetBodyInterface().RemoveBody(nativeBody);
-            access.system.GetBodyInterface().DestroyBody(nativeBody);
-            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        }
-        access.fixtures.push_back(
-            {.fixture = identity, .descriptor = std::move(ownedFixture), .nativeBody = nativeBody, .shape = nativeShape.Value()});
+        auto createdBody = CreateValidatedFixtureBody(access, fixture, *nativeShape.Value().shape, pool);
+        if (createdBody.HasError())
+            return Result<PhysicsQueryFixture>::Failure(createdBody.ErrorValue());
+        const auto nativeBody = createdBody.Value().body;
+        access.fixtures.push_back({.fixture = identity,
+                                   .descriptor = std::move(ownedFixture),
+                                   .nativeBody = nativeBody,
+                                   .shape = nativeShape.Value().shape,
+                                   .construction = std::move(witness).Value(),
+                                   .bodyCreationControl = createdBody.Value().control,
+                                   .recipe = digest,
+                                   .nativeRequestedBytes = nativeShape.Value().nativeRequestedBytes});
         access.nativeFixtureIndices[nativeBody.GetIndex()] = access.fixtures.size() - 1;
         ++access.querySchemaGeneration;
         return Result<PhysicsQueryFixture>::Success(identity);

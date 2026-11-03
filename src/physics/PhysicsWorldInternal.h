@@ -1,21 +1,26 @@
 #pragma once
 
 /** @file PhysicsWorldInternal.h
- * @brief Target-private ownership definitions shared by PhysicsWorld implementation units.
+ * @brief Target-private ownership definitions shared by PhysicsWorld
+ * implementation units.
  */
 
 #include "CanonicalPhysicsRuntime.h"
+#include "CanonicalPhysicsStateBuild.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "PhysicsEventProjection.h"
+#include "PhysicsStateConstructionStorage.h"
+#include "PhysicsStateRuntimeInventory.h"
 #include "PhysicsWorldTickHelpers.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -28,14 +33,16 @@
 #include <vector>
 
 namespace Horo::Physics {
-    /** @brief Shared only by copied client handles; the world invalidates its borrowed pointer before retirement. */
+    /** @brief Shared only by copied client handles; the world invalidates its
+     * borrowed pointer before retirement. */
     struct PhysicsQueryEventCapabilityState final {
         using BatchAllocator = std::function<std::shared_ptr<PhysicsQueryBatchState>(std::span<const PhysicsQueryCommand>,
                                                                                      std::shared_ptr<PhysicsQueryEventCapabilityState>)>;
 
         explicit PhysicsQueryEventCapabilityState(BatchAllocator allocator) : allocateBatch(std::move(allocator)) {}
 
-        // Bound by the issuing world image. Client frontends cannot replace destruction authority.
+        // Bound by the issuing world image. Client frontends cannot replace
+        // destruction authority.
         const BatchAllocator allocateBatch;
         PhysicsWorld *world{};
         PhysicsQueryEventIdentity identity;
@@ -45,7 +52,8 @@ namespace Horo::Physics {
         bool stale{};
     };
 
-    /** @brief Bounded request ownership and mutex-protected terminal publication; only Physics owner reads commands. */
+    /** @brief Bounded request ownership and mutex-protected terminal publication;
+     * only Physics owner reads commands. */
     struct PhysicsQueryBatchState final {
         PhysicsQueryBatchState(const std::span<const PhysicsQueryCommand> commands,
                                std::shared_ptr<PhysicsQueryEventCapabilityState> access)
@@ -61,9 +69,10 @@ namespace Horo::Physics {
 
         [[nodiscard]] Result<std::shared_ptr<const PhysicsQueryBatchCompletion>> Poll() {
             std::lock_guard lock(terminalMutex);
-            // access_ is an immutable, non-null admission pin from QueueQueryBatch. Poll reads
-            // only its cancellation token, never the owner-thread-only world pointer/flags.
-            // The terminal lock arbitrates revocation and completion; committed results never change.
+            // access_ is an immutable, non-null admission pin from QueueQueryBatch.
+            // Poll reads only its cancellation token, never the owner-thread-only world
+            // pointer/flags. The terminal lock arbitrates revocation and completion;
+            // committed results never change.
             if (!terminal && access_->revocation.IsCancellationRequested()) {
                 failureCode = revokedCode_;
                 terminal = true;
@@ -106,7 +115,8 @@ namespace Horo::Physics {
                 terminal = true;
                 return false;
             }
-            // This lock is the publication point: a prior Cancel wins and discards all prepared hits.
+            // This lock is the publication point: a prior Cancel wins and discards all
+            // prepared hits.
             completion = std::move(value);
             terminal = true;
             return true;
@@ -129,7 +139,8 @@ namespace Horo::Physics {
         std::shared_ptr<const PhysicsQueryBatchCompletion> completion;
     };
 
-    /** @brief Keeps completed events and their world-scoped access registrations together. */
+    /** @brief Keeps completed events and their world-scoped access registrations
+     * together. */
     struct PhysicsQueryEventState final {
         explicit PhysicsQueryEventState(const PhysicsWorldSettings &settings)
             : events(settings.Values().budgets.maximumEvents, settings.Values().budgets.maximumInFlightPairs,
@@ -140,14 +151,16 @@ namespace Horo::Physics {
         std::uint64_t nextCapabilityGeneration{1};
     };
 
-    /** @brief Owner-thread batch admission bookkeeping; the terminal handle has its own synchronization. */
+    /** @brief Owner-thread batch admission bookkeeping; the terminal handle has its
+     * own synchronization. */
     struct PhysicsQueryBatchAdmissionState final {
         std::shared_ptr<PhysicsQueryBatchState> pending;
         std::uint64_t tick{};
         std::uint32_t admissions{};
     };
 
-    /** @brief Serializes one bounded completed-tick value between its owner writer and foreign snapshot readers. */
+    /** @brief Serializes one bounded completed-tick value between its owner writer
+     * and foreign snapshot readers. */
     class PhysicsPublicationState final {
     public:
         [[nodiscard]] PhysicsPublishedTick Snapshot() const noexcept {
@@ -170,7 +183,8 @@ namespace Horo::Physics {
             Detail::PublicationGuard guard{lock_};
             if (value_.completedTick == 0)
                 return;
-            // An immediate structural edit changes query results without completing a new event tick.
+            // An immediate structural edit changes query results without completing a
+            // new event tick.
             ++value_.publicationRevision;
             value_.eventTick = 0;
             value_.eventCount = 0;
@@ -192,7 +206,8 @@ namespace Horo::Physics {
         }
 
     private:
-        // The owner thread writes; foreign readers snapshot through this same bounded guard.
+        // The owner thread writes; foreign readers snapshot through this same bounded
+        // guard.
         mutable std::atomic_flag lock_ = ATOMIC_FLAG_INIT;  // NOSONAR(cpp:S8379) This guards value_.
         PhysicsPublishedTick value_{};
     };
@@ -207,14 +222,16 @@ namespace Horo::Physics {
                     PhysicsDiagnosticContextEntry{.key = SimulationTick, .value = simulationTick}};
         }
 
-        /** @brief World-owned bounded scratch and retirement notifications for body quarantine. */
+        /** @brief World-owned bounded scratch and retirement notifications for body
+         * quarantine. */
         struct PhysicsContainmentState final {
             CanonicalRetirementSink quarantineSink;
             std::vector<BodyHandle> quarantined;
             std::vector<PhysicsCommandOrderKey> retiredCommands;
         };
 
-        /** @brief Retained failure evidence and per-tick non-finite diagnostic precedence. */
+        /** @brief Retained failure evidence and per-tick non-finite diagnostic
+         * precedence. */
         struct PhysicsDiagnosticState final {
             std::optional<Error> lastFailure;
             std::optional<PhysicsDiagnosticRecord> lastDiagnostic;
@@ -222,7 +239,14 @@ namespace Horo::Physics {
         };
     }  // namespace Detail
 
-    /** @brief Shared only by the process wrapper and its worlds; identity pointers are owner-thread, stable-address registrations. */
+    namespace Detail {
+        /** @brief Closes native candidate ownership on the actual world owner before
+         * its native source retires. */
+        void RevokePhysicsWorldSnapshots(std::shared_ptr<PhysicsWorldSnapshotState> &state) noexcept;
+    }  // namespace Detail
+
+    /** @brief Shared only by the process wrapper and its worlds; identity pointers
+     * are owner-thread, stable-address registrations. */
     struct PhysicsRuntime::Impl final {
         explicit Impl(const PhysicsRuntimeMode selectedMode, JobSystem *solverJobSystem)
             : mode(selectedMode), solverJobs(solverJobSystem) {}
@@ -231,11 +255,21 @@ namespace Horo::Physics {
         Impl &operator=(const Impl &) = delete;
 
         ~Impl() {
+            if (native.value && ownerThread != std::this_thread::get_id())
+                std::terminate();
+            if (nativeStateCandidates != 0)
+                std::terminate();
+            if (stateInventory) {
+                (void)stateInventory->Collect(stateInventory->Count());
+                if (stateInventory->Count() != 0)
+                    std::terminate();
+            }
             Detail::DestroyCanonicalRuntime(native);
         }
 
         void ReleaseNativeWhenIdle() noexcept {
-            if (const std::array releaseConditions{state == PhysicsRuntimeState::Stopped, identities.empty()};
+            if (const std::array releaseConditions{state == PhysicsRuntimeState::Stopped, identities.empty(),
+                                                   !stateInventory || stateInventory->Count() == 0, nativeStateCandidates == 0};
                 !std::ranges::all_of(releaseConditions, std::identity{}))
                 return;
             Detail::DestroyCanonicalRuntime(native);
@@ -249,9 +283,15 @@ namespace Horo::Physics {
         JobSystem *solverJobs{};
         std::vector<const PhysicsWorldId *> identities;
         std::uint64_t nextWorldIdentity{1};
+        std::optional<PhysicsStateBuildBinding> stateBuildBinding;
+        std::optional<Detail::CanonicalPhysicsStateBuildIdentity> stateBuild;
+        std::unique_ptr<Detail::PhysicsStateRuntimeInventory> stateInventory;
+        std::shared_ptr<StateDetail::ConstructionRecipePool> stateRecipes;
+        std::uint32_t nativeStateCandidates{};
     };
 
-    /** @brief Owns one candidate's settings/native state and unregisters its identity before releasing the runtime lease. */
+    /** @brief Owns one candidate's settings/native state and unregisters its
+     * identity before releasing the runtime lease. */
     struct PhysicsWorld::Impl final {
         Impl(std::shared_ptr<PhysicsRuntime::Impl> runtimeOwner, const PhysicsWorldSettings &worldSettings)
             : runtime(std::move(runtimeOwner)), settings(worldSettings), commands(worldSettings.Values().budgets.maximumCommands),
@@ -271,6 +311,7 @@ namespace Horo::Physics {
         void Retire(const PhysicsWorldLifecycleCause cause) noexcept {
             if (state == PhysicsWorldState::Destroyed)
                 return;
+            Detail::RevokePhysicsWorldSnapshots(snapshots);
             InvalidateQueryEventCapabilities();
             const bool terminalFailure = state == PhysicsWorldState::Failed;
             Detail::DestroyCanonicalWorld(native);
@@ -371,6 +412,7 @@ namespace Horo::Physics {
         }
 
         void ClearForReset() noexcept {
+            Detail::RevokePhysicsWorldSnapshots(snapshots);
             InvalidateQueryEventCapabilities();
             identity = {};
             std::ranges::fill(commands, PhysicsStructuralCommand{});
@@ -466,6 +508,7 @@ namespace Horo::Physics {
 
         std::shared_ptr<PhysicsRuntime::Impl> runtime;
         PhysicsWorldSettings settings;
+        std::shared_ptr<Detail::PhysicsWorldSnapshotState> snapshots;
         PhysicsSurfaceWorldBinding surfaces;
         Sha256Digest surfaceFingerprint{};
         Detail::PhysicsContainmentState containment;
@@ -488,7 +531,8 @@ namespace Horo::Physics {
         PhysicsWorldLifecycleCause lifecycleCause{PhysicsWorldLifecycleCause::None};
     };
 
-    /** @brief Private deterministic corruption seam used only by containment tests. */
+    /** @brief Private deterministic corruption seam used only by containment tests.
+     */
     struct PhysicsWorldContainmentTestAccess final {
         [[nodiscard]] static bool Inject(const PhysicsWorld &world, const BodyHandle body, const float value,
                                          const std::uint8_t component = 0, const bool postStep = true) noexcept {

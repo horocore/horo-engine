@@ -86,9 +86,9 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc PhysicsEventProjection::PhysicsEventProjection */
     PhysicsEventProjection::PhysicsEventProjection(const std::uint32_t maximumEvents, const std::uint32_t maximumInFlightPairs,
-                                                   const PhysicsEventOverflowPolicy overflowPolicy)
+                                                   const PhysicsEventOverflowPolicy overflowPolicy, const bool prepareStateValidation)
         : maximumEvents_(maximumEvents), maximumInFlightPairs_(maximumInFlightPairs), overflowPolicy_(overflowPolicy),
-          observations_(maximumInFlightPairs) {
+          observations_(maximumInFlightPairs), stateEventIndices_(prepareStateValidation ? maximumEvents : 0) {
         previousPairs_.reserve(maximumInFlightPairs);
         currentPairs_.reserve(maximumInFlightPairs);
         for (auto &buffer : eventBuffers_)

@@ -175,6 +175,14 @@ namespace Horo::Editor {
         /** @brief Discards only staged state, including a retired-before-fence callback. */
         virtual void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {}
 
+        /** @brief Observes actual native owner retirement after Shutdown on the same owner lane.
+         * @return True only after native resource owners drain; pending/error retains this host and its providers.
+         * Hosts with synchronous shutdown have no deferred owner. No Scene or worker execution resumes here. */
+        [[nodiscard]] virtual Result<bool> PollShutdown(std::uint32_t maximumNativeRecords) {
+            static_cast<void>(maximumNativeRecords);
+            return Result<bool>::Success(true);
+        }
+
         /** @brief Revokes borrowed native admission before cancelling/joining Scene work and releasing its candidates. */
         virtual void Shutdown() noexcept = 0;
     };

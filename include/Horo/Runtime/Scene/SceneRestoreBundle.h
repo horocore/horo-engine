@@ -142,6 +142,8 @@ namespace Horo::Runtime {
         RestoreReferenceGraphLimits graphLimits;
         std::size_t maximumEntities{16'384};
         std::size_t maximumComponentBytes{16U * 1024U * 1024U};
+        std::shared_ptr<IStagedRestoreFinalPublicationCheck> finalPublicationCheck;
+        /**< Optional exact owner claim, retained through true commit/rollback. Preparation never invokes it. */
         std::shared_ptr<ISceneRestoreDynamicEntities> dynamicEntities; /**< Optional explicit domain source; absent rejects
                                                                           spawned provenance. */
     };

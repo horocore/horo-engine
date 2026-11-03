@@ -6,16 +6,30 @@
 
 namespace Horo::Application::Internal {
     namespace {
+        /** @brief Declares read scope without replacing the actual request's native preparation/capture. */
+        Result<void> ValidatePhysicsSelection(const PlaySaveStorageSchema &schema,
+                                              std::span<const Editor::PlaySaveGameplayBinding> gameplay,
+                                              const std::shared_ptr<PlaySavePhysicsServices> &physics, Runtime::RuntimeSceneView scene) {
+            if (!schema.physics || !physics)
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
+            if (*schema.physics != Physics::Detail::PhysicsStateSaveDescriptor())
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::CaptureRegistryStale));
+            return ValidatePlaySaveCurrentScope(scene, gameplay, PlaySavePhysicsReadPolicy::CanonicalRecordRequired);
+        }
+
         /** @brief Admits only a real active Play epoch and its complete actual typed state inventory. */
         Result<void> ValidateOwnerInputs(Runtime::RuntimeSceneService &scenes, const EditorPlaySaveEnvironment &environment,
                                          const std::shared_ptr<const PlaySaveStorageSchema> &schema,
-                                         const std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> &liveBindings) {
+                                         const std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> &liveBindings,
+                                         const std::shared_ptr<PlaySavePhysicsServices> &physics) {
             const auto active = scenes.ActiveScene();
             if (!active || !schema || !environment.storage.entropy || active->DefinitionId() != schema->baseline.Id() ||
                 active->DefinitionRevision() != schema->baseline.Revision())
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid));
             const auto gameplay = liveBindings ? std::span<const Editor::PlaySaveGameplayBinding>{*liveBindings}
                                                : std::span<const Editor::PlaySaveGameplayBinding>{};
+            if (schema->physics || physics)
+                return ValidatePhysicsSelection(*schema, gameplay, physics, *active);
             const auto captured = CapturePlaySaveScene(*active, schema->baseline, schema->identities, gameplay);
             return captured.HasError() ? Result<void>::Failure(captured.ErrorValue()) : Result<void>::Success();
         }
@@ -26,21 +40,23 @@ namespace Horo::Application::Internal {
                                      std::shared_ptr<const PlaySaveStorageSchema> schema,
                                      std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
                                      std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
-                                     std::shared_ptr<PlaySavePrefabServices> prefabs)
+                                     std::shared_ptr<PlaySavePrefabServices> prefabs, std::shared_ptr<PlaySavePhysicsServices> physics)
         : scenes(scenes), environment(std::move(environment)), schema(std::move(schema)), liveBindings(std::move(liveBindings)),
-          behaviorOwner(std::move(behaviorOwner)), prefabs(std::move(prefabs)), started(this->environment.clock.MonotonicNow()) {}
+          behaviorOwner(std::move(behaviorOwner)), prefabs(std::move(prefabs)), physics(std::move(physics)),
+          started(this->environment.clock.MonotonicNow()) {}
 
     /** @copydoc EditorPlaySaveHost::Create */
     Result<std::unique_ptr<EditorPlaySaveHost>> EditorPlaySaveHost::Create(
         Runtime::RuntimeSceneService &scenes, EditorPlaySaveEnvironment environment, std::shared_ptr<const PlaySaveStorageSchema> schema,
         std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
-        std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner, std::shared_ptr<PlaySavePrefabServices> prefabs) {
+        std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner, std::shared_ptr<PlaySavePrefabServices> prefabs,
+        std::shared_ptr<PlaySavePhysicsServices> physics) {
         using Outcome = Result<std::unique_ptr<EditorPlaySaveHost>>;
         try {
-            if (const auto valid = ValidateOwnerInputs(scenes, environment, schema, liveBindings); valid.HasError())
+            if (const auto valid = ValidateOwnerInputs(scenes, environment, schema, liveBindings, physics); valid.HasError())
                 return Outcome::Failure(valid.ErrorValue());
             auto state = std::make_unique<State>(scenes, std::move(environment), std::move(schema), std::move(liveBindings),
-                                                 std::move(behaviorOwner), std::move(prefabs));
+                                                 std::move(behaviorOwner), std::move(prefabs), std::move(physics));
             if (auto initialized = state->Initialize(); initialized.HasError())
                 return Outcome::Failure(initialized.ErrorValue());
             return Outcome::Success(std::unique_ptr<EditorPlaySaveHost>(new EditorPlaySaveHost(std::move(state))));

@@ -684,6 +684,10 @@ horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
     Horo/Runtime/Scene/PhysicsSceneComponents.h
 )
 horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
+    Horo/Physics/PhysicsStateSnapshot.h
+    Horo/Physics/PhysicsStateConstruction.h
+    Horo/Physics/PhysicsStateConstructionTypes.h
+    Horo/Physics/PhysicsStateConstructionManifest.h
     Horo/Physics/CharacterEvents.h
     Horo/Physics/CharacterClearanceQuery.h
     Horo/Physics/CharacterCapability.h

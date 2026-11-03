@@ -1,6 +1,7 @@
 #include "Horo/Physics/PhysicsConstraintDescriptor.h"
 
 #include "Horo/Physics/PhysicsCapabilities.h"
+#include "PhysicsConstraintParametersInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -60,22 +61,27 @@ namespace Horo::Physics {
         }
     }  // namespace
 
+    /** @copydoc Detail::ValidateCanonicalConstraintParameters */
+    Result<void> Detail::ValidateCanonicalConstraintParameters(const decltype(PhysicsConstraintDescriptor::parameters) &parameters,
+                                                               PhysicsJointCollisionPolicy policy) {
+        if (policy != PhysicsJointCollisionPolicy::DisableBetweenBodies && policy != PhysicsJointCollisionPolicy::AllowBetweenBodies)
+            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Unknown joint collision policy."));
+        if (const auto *distance = std::get_if<PhysicsDistanceConstraint>(&parameters))
+            return ValidateDistance(*distance);
+        if (const auto *hinge = std::get_if<PhysicsHingeConstraint>(&parameters))
+            return ValidateHinge(*hinge);
+        if (const auto *slider = std::get_if<PhysicsSliderConstraint>(&parameters))
+            return ValidateSlider(*slider);
+        return Result<void>::Success();
+    }
+
     /** @copydoc ValidatePhysicsConstraintDescriptor */
     Result<void> ValidatePhysicsConstraintDescriptor(const PhysicsConstraintDescriptor &descriptor, const PhysicsWorldId expectedWorld) {
         if (const auto first = ValidateBodyAnchor(descriptor.first, expectedWorld); first.HasError())
             return first;
         if (const auto second = ValidateSecondAnchor(descriptor, expectedWorld); second.HasError())
             return second;
-        if (descriptor.collisionPolicy != PhysicsJointCollisionPolicy::DisableBetweenBodies &&
-            descriptor.collisionPolicy != PhysicsJointCollisionPolicy::AllowBetweenBodies)
-            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Unknown joint collision policy."));
-        if (const auto *distance = std::get_if<PhysicsDistanceConstraint>(&descriptor.parameters))
-            return ValidateDistance(*distance);
-        if (const auto *hinge = std::get_if<PhysicsHingeConstraint>(&descriptor.parameters))
-            return ValidateHinge(*hinge);
-        if (const auto *slider = std::get_if<PhysicsSliderConstraint>(&descriptor.parameters))
-            return ValidateSlider(*slider);
-        return Result<void>::Success();
+        return Detail::ValidateCanonicalConstraintParameters(descriptor.parameters, descriptor.collisionPolicy);
     }
 
     /** @copydoc AdmitPhysicsConstraintDescriptor */

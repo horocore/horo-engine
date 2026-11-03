@@ -29,6 +29,8 @@ namespace Horo::Application::Internal {
         EditorPlaySaveFactory saveFactory; /**< Explicit Play-only sandbox composition; prefab/preview policies leave it absent. */
         std::vector<AI::AiControllerDescriptor> aiControllers; /**< Owned inert catalog copied with the app policy. */
         std::optional<SceneAnimationHostSelection> animation;
+        std::optional<Physics::PhysicsWorldSettings> physicsSettings; /**< Captured host override, never inferred from current occupancy.
+            Canonical Save setup installs its explicit bounded default only when this field is absent. */
     };
 
     /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.

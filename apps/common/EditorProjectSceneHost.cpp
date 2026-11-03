@@ -1,12 +1,15 @@
 #include "EditorProjectSceneHost.h"
 
+#include "EditorPlaySavePhysicsServices.h"
 #include "EditorPlaySavePrefabServices.h"
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
+#include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
+#include "PhysicsStateHostLifecycle.h"
 #include "RuntimeUiPaintProjectSources.h"
 #include "ScenePhysicsHost.h"
 
@@ -43,6 +46,9 @@ namespace Horo::Application::Internal {
 
             ~ProjectPlaySceneHost() override {
                 Shutdown();
+                auto retired = PollShutdown(64);
+                if (retired.HasError() || !retired.Value())
+                    std::terminate();
             }
 
             ProjectPlaySceneHost(const ProjectPlaySceneHost &) = delete;
@@ -126,7 +132,11 @@ namespace Horo::Application::Internal {
                 if (runtime.HasError())
                     return Result<void>::Failure(runtime.ErrorValue());
                 physics_ = std::move(runtime).Value();
-                auto settings = CaptureSettings(root, policy.physicsMode);
+                auto bound = PrepareProductPhysicsState(*physics_);
+                if (bound.HasError())
+                    return Result<void>::Failure(bound.ErrorValue());
+                physicsStateUnavailable_ = std::move(bound).Value();
+                auto settings = CaptureSettings(root, policy);
                 if (settings.HasError())
                     return Result<void>::Failure(settings.ErrorValue());
                 return PrepareSceneOwners(std::move(settings).Value(), policy);
@@ -166,6 +176,27 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             }
 
+            /** @brief Explicit finite product Save storage policy; Runtime aggregate budget is admitted separately. */
+            static PlaySavePhysicsPolicy SavePhysicsPolicy() {
+                return {.state = {{65'536, 16U * 1024U * 1024U}, 2, 256U * 1024U * 1024U},
+                        .content = {16'384, 4'096, 8U * 1024U * 1024U},
+                        .maximumWireBytes = 8U * 1024U * 1024U};
+            }
+
+            /** @brief Uses only the real bound provider; absent source preserves existing typed-denied PhysicalState scope. */
+            Result<std::shared_ptr<PlaySavePhysicsServices>> SavePhysicsServices() {
+                using Outcome = Result<std::shared_ptr<PlaySavePhysicsServices>>;
+                if (physicsSave_)
+                    return Outcome::Success(physicsSave_);
+                if (physics_->Capability(Physics::PhysicsCapability::StateSnapshots) != Physics::PhysicsCapabilitySupport::Available)
+                    return Outcome::Success(nullptr);
+                auto created = PlaySavePhysicsServices::Create(native_, *scenes_, SavePhysicsPolicy());
+                if (created.HasError())
+                    return created;
+                physicsSave_ = std::move(created).Value();
+                return Outcome::Success(physicsSave_);
+            }
+
             /** @copydoc Editor::EditorPlaySceneHost::ConfigureSaveSession */
             Result<void> ConfigureSaveSession(std::vector<Editor::PlaySaveGameplayBinding> bindings,
                                               std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner) override {
@@ -175,8 +206,11 @@ namespace Horo::Application::Internal {
                     return save_->RebindGameplay(std::move(bindings));
                 if (!saveFactory_ || !saveBaseline_)
                     return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
-                auto composed =
-                    saveFactory_(saveProject_, *scenes_, *saveBaseline_, std::move(bindings), std::move(behaviorOwner), prefab_.services);
+                auto physics = SavePhysicsServices();
+                if (physics.HasError())
+                    return Result<void>::Failure(physics.ErrorValue());
+                auto composed = saveFactory_(saveProject_, *scenes_, *saveBaseline_, std::move(bindings), std::move(behaviorOwner),
+                                             prefab_.services, std::move(physics).Value());
                 if (composed.HasError())
                     return Result<void>::Failure(composed.ErrorValue());
                 save_ = std::move(composed).Value();
@@ -355,8 +389,29 @@ namespace Horo::Application::Internal {
             }
 
             void Shutdown() noexcept override {
+                if (std::this_thread::get_id() != ownerLane_)
+                    std::terminate();
+                if (sceneClosed_)
+                    return;
                 ShutdownSave();
+                sceneClosed_ = true;
+                ClosePhysicsSaveSource();
                 QuiesceGameplay();
+                ShutdownSceneOwners();
+                ShutdownLoadOwners();
+            }
+
+            Result<bool> PollShutdown(std::uint32_t maximumNativeRecords) override {
+                if (std::this_thread::get_id() != ownerLane_)
+                    return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
+                if (!sceneClosed_)
+                    return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
+                return PollProductPhysicsRetirement(physics_, physicsRetirement_, maximumNativeRecords);
+            }
+
+        private:
+            /** @brief Stops actual Scene participants before native retirement can be observed. */
+            void ShutdownSceneOwners() noexcept {
                 if (prefab_.templates)
                     prefab_.templates->Shutdown();
                 if (scenes_)
@@ -366,6 +421,10 @@ namespace Horo::Application::Internal {
                     animation_->Shutdown();
                 if (ai_)
                     ai_->BeginShutdown();
+            }
+
+            /** @brief Revokes all app-owned loaders; caller's existing jobs owner joins accepted work. */
+            void ShutdownLoadOwners() noexcept {
                 if (uiLoads_)
                     uiLoads_->Shutdown();
                 if (uiArtifactLoads_)
@@ -374,11 +433,15 @@ namespace Horo::Application::Internal {
                     prefabLoads_->Shutdown();
                 if (loads_)
                     loads_->Shutdown();
-                if (physics_)
-                    physics_->Shutdown();
             }
 
-        private:
+            /** @brief Drops capture references only after actual Save settlement and before native Scene teardown. */
+            void ClosePhysicsSaveSource() noexcept {
+                if (physicsSave_)
+                    physicsSave_->CloseCapture();
+                physicsSave_.reset();
+            }
+
             /** @brief Refuses to unload Scene/module providers while an accepted save/delegate still owns callbacks. */
             void ShutdownSave() noexcept {
                 if (!save_)
@@ -438,8 +501,10 @@ namespace Horo::Application::Internal {
 
             /** @brief Captures the selected project schema before any candidate/native-world staging. */
             Result<Physics::PhysicsSceneActivationSettings> CaptureSettings(const std::filesystem::path &root,
-                                                                            const Physics::PhysicsRuntimeMode mode) {
-                auto physics = Physics::PhysicsWorldSettings::Capture({});
+                                                                            const EditorProjectScenePolicy &policy) {
+                const auto mode = policy.physicsMode;
+                auto physics = policy.physicsSettings ? Result<Physics::PhysicsWorldSettings>::Success(*policy.physicsSettings)
+                                                      : Physics::PhysicsWorldSettings::Capture({});
                 if (physics.HasError())
                     return Result<Physics::PhysicsSceneActivationSettings>::Failure(physics.ErrorValue());
                 auto character = Character::CharacterWorldSettings::Capture({});
@@ -481,6 +546,9 @@ namespace Horo::Application::Internal {
             std::unique_ptr<Runtime::Ui::UiRuntimeAssetLoadService> uiLoads_;
             std::shared_ptr<const ProjectCollisionSettings> collision_;
             std::unique_ptr<Physics::PhysicsRuntime> physics_;
+            std::optional<Physics::PhysicsRuntimeRetirement> physicsRetirement_;
+            std::optional<Error> physicsStateUnavailable_;
+            bool sceneClosed_{};
             Physics::PhysicsSceneActivationAuthority authority_;
             std::uint64_t capturedFilterGeneration_{};
             ScenePhysicsHost native_;
@@ -500,6 +568,7 @@ namespace Horo::Application::Internal {
             PrefabState prefab_;
             std::optional<Error> saveError_;
             EditorPlaySaveFactory saveFactory_;
+            std::shared_ptr<PlaySavePhysicsServices> physicsSave_;
             Runtime::SaveProjectId saveProject_;
             std::optional<Runtime::RuntimeSceneDefinition> saveBaseline_;
             std::unique_ptr<EditorPlaySaveHost> save_;
@@ -560,6 +629,14 @@ namespace Horo::Application::Internal {
     /** @copydoc ConfigureEditorPlaySavePolicy */
     void ConfigureEditorPlaySavePolicy(EditorProjectScenePolicy &policy, JobSystem &jobs, OperationStore &operations, Clock &clock,
                                        WallClock &wallClock) {
+        if (policy.physicsMode == Physics::PhysicsRuntimeMode::Canonical && !policy.physicsSettings) {
+            auto settings = ProductPhysicsSaveWorldSettings();
+            if (settings.HasError()) {
+                policy.saveError = settings.ErrorValue();
+                return;
+            }
+            policy.physicsSettings.emplace(std::move(settings).Value());
+        }
         auto factory = MakeNativeEditorPlaySaveFactory(jobs, operations, clock, wallClock);
         if (factory.HasError()) {
             policy.saveError = factory.ErrorValue();

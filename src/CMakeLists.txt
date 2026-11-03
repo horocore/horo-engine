@@ -1663,7 +1663,8 @@ target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics Hor
 # A separate application-only lifetime borrow; never installed/exported with the Gameplay SDK.
 set(_horo_physics_scene_host_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/physics-scene-host")
 file(MAKE_DIRECTORY "${_horo_physics_scene_host_headers}")
-configure_file(physics/internal/PhysicsSceneHostAccess.h "${_horo_physics_scene_host_headers}/PhysicsSceneHostAccess.h" COPYONLY)
+file(WRITE "${_horo_physics_scene_host_headers}/PhysicsSceneHostAccess.h"
+    "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/physics/internal/PhysicsSceneHostAccess.h\"\n")
 add_library(HoroPhysicsSceneHostInternal INTERFACE)
 target_include_directories(HoroPhysicsSceneHostInternal INTERFACE "$<BUILD_INTERFACE:${_horo_physics_scene_host_headers}>")
 target_link_libraries(HoroPhysicsSceneHostInternal INTERFACE HoroEngine::PhysicsSceneIntegration)
@@ -4496,3 +4497,5 @@ foreach(HORO_LIGHTING_CONSUMER IN ITEMS HoroEditorViewportOpenGL HoroEditorViewp
         target_link_libraries(${HORO_LIGHTING_CONSUMER} PUBLIC HoroEngine::EditorViewportLightingInternal)
     endif()
 endforeach()
+
+include("${PROJECT_SOURCE_DIR}/cmake/physics/HoroPhysicsState.cmake")

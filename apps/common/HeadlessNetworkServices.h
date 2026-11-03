@@ -19,7 +19,8 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Network::NetworkModeFactories ComposeHeadlessNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> sceneDefinition, Network::NetworkModeFactories selectedFactories = {},
         const std::optional<GameplayWorldSelection> &gameplay = std::nullopt,
-        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission = std::nullopt);
+        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission = std::nullopt,
+        NetworkNativeRetirementPoll *retirement = nullptr);
 
     /** @brief Explicit application input for real project Scene activation; no policy is inferred from source data.
      * @details The registry and load service (including its running JobSystem/provider) outlive every

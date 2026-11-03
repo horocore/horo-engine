@@ -64,6 +64,12 @@ namespace Horo::Physics::Detail {
     [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakePhysicsStructuralParticipant(
         std::shared_ptr<PhysicsStructuralRegistration> registration);
 
+    /** @brief Realizes restored group entities in the exact detached Physics candidate using the ordinary structural builder.
+     * @details Never installs the candidate as active; authored entities are already admitted by the baseline plan.
+     */
+    [[nodiscard]] Result<void> MaterializePendingPhysicsGroups(const std::shared_ptr<PhysicsStructuralState> &state,
+                                                               Runtime::RuntimeSceneView scene);
+
     /** @brief Resolves the shared unit-world-scale native body pose policy for activation and structural groups. */
     [[nodiscard]] Result<PhysicsPose> ToBodyPhysicsPose(const Math::Transform &transform);
 

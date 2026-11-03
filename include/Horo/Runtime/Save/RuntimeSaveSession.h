@@ -6,6 +6,8 @@
 #include "Horo/Runtime/Save/SaveCaptureBarrier.h"
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 
+#include <optional>
+
 namespace Horo::Runtime {
     /** @brief One operation-owned worker adapter; no live runtime or editor document may be borrowed.
      * @details Prepare receives only detached immutable state and must perform every fallible prepublication step.
@@ -23,6 +25,36 @@ namespace Horo::Runtime {
         [[nodiscard]] virtual Result<void> Prepare(const RuntimeSaveSnapshot &snapshot, const CancellationToken &cancellation) = 0;
         /** @brief Publish prepared state once. @return Success or original failure with potentially unknown publication. */
         [[nodiscard]] virtual Result<void> Commit() = 0;
+    };
+
+    /** @brief Actual owner-side evidence observed after cold preparation, not a copied callback input echo. */
+    struct RuntimeSaveCapturePreparationEvidence final {
+        SaveRuntimeGeneration generation;
+        RuntimeSaveCaptureProvenance provenance;
+        bool ready{true}; /**< False defers this SAME admitted request after actual cancellation/generation/provenance checks.
+            It caches no preparation, captures nothing, dispatches no worker and grants no new operation/commit authority.
+            The owner must re-observe current evidence at later safe points; cancellation/retirement remain available. */
+        [[nodiscard]] auto operator<=>(const RuntimeSaveCapturePreparationEvidence &) const noexcept = default;
+    };
+
+    /** @brief One exact admitted Save request; the handle permits observation/cancellation but grants no producer authority. */
+    struct RuntimeSaveCapturePreparationContext final {
+        SaveOperationHandle operation;
+        RuntimeSaveCapturePreparationEvidence expected;
+        CancellationToken cancellation;
+    };
+
+    /** @brief Optional cold owner preparation immediately before the EXISTING capture barrier.
+     * Never dispatched to a worker. Prepare may allocate bounded private capture storage but must not mutate canonical live state.
+     * Return freshly observed actual owner generations/provenance after all preparation. ready=false truthfully waits for
+     * an actual owner publication; stale evidence still fails rather than waiting. No mutex is held across this callback.
+     * The host/session/barrier must outlive the synchronous call; destroying them reentrantly is not an admitted operation.
+     * Reentrant owner calls reject; Retire during this specific callback requests cancellation and defers actual teardown until return.
+     */
+    class IRuntimeSaveCapturePreparation {
+    public:
+        virtual ~IRuntimeSaveCapturePreparation() = default;
+        [[nodiscard]] virtual Result<RuntimeSaveCapturePreparationEvidence> Prepare(const RuntimeSaveCapturePreparationContext &) = 0;
     };
 
     /** @brief Operation-owned detached restore staging; rollback is owned by the existing restore transaction.
@@ -130,6 +162,13 @@ namespace Horo::Runtime {
          * @param operation Fresh host-issued OperationStore descriptor of kind Save. @param writer Owned publication adapter.
          * @return Thread-safe request or typed busy/identity/lifecycle failure. */
         [[nodiscard]] Result<RuntimeSaveRequest> Save(SaveOperationDescriptor operation, std::shared_ptr<IRuntimeSaveWriter> writer);
+        /** @brief Adds explicit owner-only cold preparation for this SAME request; the two-argument form is unchanged.
+         * Preparation repeats while unready or when actual provenance changes, and never after capture dispatch.
+         * A selected preparation starts the original quiescence deadline only once ready; a begun barrier is never restarted.
+         * Null preparation retains immediate admission-time barrier request behavior.
+         */
+        [[nodiscard]] Result<RuntimeSaveRequest> Save(SaveOperationDescriptor, std::shared_ptr<IRuntimeSaveWriter>,
+                                                      std::shared_ptr<IRuntimeSaveCapturePreparation>);
         /** @brief Admit detached input staging and owner-safe-point restore.
          * @param operation Fresh host-issued descriptor of kind Load. @param source Owned detached staging adapter.
          * @return Thread-safe request or typed scheduler/admission failure. */
@@ -165,9 +204,18 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ValidateOwner() const;
         [[nodiscard]] Result<std::shared_ptr<RuntimeSaveSessionDetail::Work>> Admit(SaveOperationDescriptor operation);
         [[nodiscard]] Result<void> Dispatch(const std::shared_ptr<RuntimeSaveSessionDetail::Work> &work);
+        /** @brief Starts quiescence once for this exact admitted producer, after selected owner preparation is ready. */
+        [[nodiscard]] Result<void> RequestCaptureBarrier(RuntimeSaveSessionDetail::Work &);
         /** @brief Capture under the owner transition fence, then dispatch the admitted save work. */
         [[nodiscard]] Result<void> CaptureAndDispatch(const RuntimeSaveCaptureProvenance &provenance);
         [[nodiscard]] Result<void> Pump(const RuntimeSaveCaptureProvenance &provenance);
+        [[nodiscard]] Result<bool> PrepareCaptureOwner(const std::shared_ptr<RuntimeSaveSessionDetail::Work> &,
+                                                       const RuntimeSaveCaptureProvenance &);
+        [[nodiscard]] bool SettleCapturePreparationRetirement(const std::shared_ptr<RuntimeSaveSessionDetail::Work> &);
+        [[nodiscard]] Result<bool> RejectCapturePreparation(const std::shared_ptr<RuntimeSaveSessionDetail::Work> &, Error);
+        [[nodiscard]] Result<bool> ValidateCapturePreparation(const std::shared_ptr<RuntimeSaveSessionDetail::Work> &,
+                                                              const RuntimeSaveCapturePreparationEvidence &,
+                                                              const RuntimeSaveCaptureProvenance &);
         /** @brief Retire beneath an already held owner transition fence, including stale safe-point admission. */
         [[nodiscard]] Result<void> RetireInternal();
         void ReleaseBarrier() noexcept;
@@ -183,5 +231,9 @@ namespace Horo::Runtime {
         bool closed_{};
         mutable bool mutating_{};
         bool barrierPending_{};
+        std::shared_ptr<IRuntimeSaveCapturePreparation> capturePreparation_; /**< Owner-only; NEVER copied into worker Work. */
+        std::optional<RuntimeSaveCaptureProvenance> capturePreparedFor_;
+        bool preparingCapture_{};
+        bool retireAfterCapturePreparation_{};
     };
 }  // namespace Horo::Runtime

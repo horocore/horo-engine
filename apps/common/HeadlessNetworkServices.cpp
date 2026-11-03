@@ -2,8 +2,10 @@
 
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
+#include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "PhysicsStateHostLifecycle.h"
 
 #include <algorithm>
 #include <array>
@@ -43,12 +45,44 @@ namespace Horo::Application::Internal {
                 : definition(std::move(definition)), gameplay(gameplay), replicationAdmission(admission) {}
 
             ~WorldOwners() {
-                if (physics != nullptr)
-                    physics->Shutdown();
+                auto retired = PollRetirement(64);
+                if (retired.HasError() || !retired.Value())
+                    std::terminate();
+            }
+
+            /** @brief Binds the actual process before any native World/resource can be created. */
+            Result<void> PreparePhysicsRuntime(Physics::PhysicsRuntimeMode mode) {
+                if (std::this_thread::get_id() != owner)
+                    return Result<void>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
+                if (retirementStarted)
+                    return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
+                if (physics)
+                    return Result<void>::Success();
+                auto created = Physics::PhysicsRuntime::Create(mode);
+                if (created.HasError())
+                    return Result<void>::Failure(created.ErrorValue());
+                auto runtime = std::move(created).Value();
+                auto bound = PrepareProductPhysicsState(*runtime);
+                if (bound.HasError())
+                    return Result<void>::Failure(bound.ErrorValue());
+                stateUnavailable = std::move(bound).Value();
+                physics = std::move(runtime);
+                return Result<void>::Success();
+            }
+
+            /** @brief Called only after actual product services stop; preserves SAME owner on pending/error. */
+            Result<bool> PollRetirement(std::uint32_t maximumRecords) {
+                if (std::this_thread::get_id() != owner)
+                    return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
+                retirementStarted = true;
+                return PollProductPhysicsRetirement(physics, retirement, maximumRecords);
             }
 
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
             std::unique_ptr<Physics::PhysicsRuntime> physics;
+            std::optional<Physics::PhysicsRuntimeRetirement> retirement;
+            std::optional<Error> stateUnavailable;
+            bool retirementStarted{};
             std::optional<GameplayWorldSelection> gameplay;
             std::optional<Gameplay::GameplayReplicationAdmissionPolicy> replicationAdmission;
             // Factory calls are serialized on the host owner thread. Scene is immediately followed
@@ -405,12 +439,8 @@ namespace Horo::Application::Internal {
 
             /** @brief Prepare only canonical Physics for this exact paired Scene; no fallback or ambient lookup. */
             Result<void> PreparePhysics() {
-                if (owners_->physics == nullptr) {
-                    auto runtime = Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Canonical);
-                    if (runtime.HasError())
-                        return Result<void>::Failure(runtime.ErrorValue());
-                    owners_->physics = std::move(runtime).Value();
-                }
+                if (auto prepared = owners_->PreparePhysicsRuntime(Physics::PhysicsRuntimeMode::Canonical); prepared.HasError())
+                    return prepared;
                 Physics::PhysicsWorldSettingsDescriptor descriptor;
                 descriptor.world.capacity = {16, 32, 16, 4096};
                 descriptor.budgets.maximumContactPairs = 32;
@@ -480,11 +510,20 @@ namespace Horo::Application::Internal {
                    record->request.mode == request.mode;
         }
 
+        /** @brief Host factories borrow only their actual owner lane and cannot reopen retired native admission. */
+        Result<void> ValidateFactoryOwner(const WorldOwners &owners) {
+            if (std::this_thread::get_id() != owners.owner)
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
+            if (owners.retirementStarted)
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
+            return Result<void>::Success();
+        }
+
         /** @brief Pair factories before preparation, preserving exact candidate ownership even for repeated Scene IDs. */
         [[nodiscard]] Result<std::shared_ptr<WorldRecord>> SelectRecord(WorldOwners &owners,
                                                                         const Network::NetworkModeServiceRequest &request) {
-            if (owners.configured && std::this_thread::get_id() != owners.owner)
-                return Result<std::shared_ptr<WorldRecord>>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
+            if (auto valid = ValidateFactoryOwner(owners); valid.HasError())
+                return Result<std::shared_ptr<WorldRecord>>::Failure(valid.ErrorValue());
             using Kind = Network::NetworkModeServiceKind;
             if (request.service != Kind::Scene && request.service != Kind::Physics)
                 return Result<std::shared_ptr<WorldRecord>>::Success({});
@@ -533,8 +572,12 @@ namespace Horo::Application::Internal {
     Network::NetworkModeFactories ComposeHeadlessNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> sceneDefinition, Network::NetworkModeFactories selectedFactories,
         const std::optional<GameplayWorldSelection> &gameplay,
-        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission) {
+        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission, NetworkNativeRetirementPoll *retirement) {
         const auto owners = std::make_shared<WorldOwners>(std::move(sceneDefinition), gameplay, replicationAdmission);
+        if (retirement)
+            *retirement = [owners](std::uint32_t maximumRecords) {
+                return owners->PollRetirement(maximumRecords);
+            };
         return InstallWorldFactories(owners, std::move(selectedFactories));
     }
 
@@ -571,13 +614,15 @@ namespace Horo::Application::Internal {
             return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
         if (auto valid = ValidateAnimationSelection(input); valid.HasError())
             return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
-        auto runtime = Physics::PhysicsRuntime::Create(input.mode);
-        if (runtime.HasError())
-            return Result<NetworkProductComposition>::Failure(runtime.ErrorValue());
         auto owners = std::make_shared<WorldOwners>(std::move(definition), gameplay, replicationAdmission);
-        owners->physics = std::move(runtime).Value();
+        if (auto prepared = owners->PreparePhysicsRuntime(input.mode); prepared.HasError())
+            return Result<NetworkProductComposition>::Failure(prepared.ErrorValue());
         owners->configured.emplace(std::move(input));
-        NetworkProductComposition composition{InstallWorldFactories(owners, std::move(selectedFactories)), {}};
+        NetworkProductComposition composition{InstallWorldFactories(owners, std::move(selectedFactories)),
+                                              {},
+                                              [owners](std::uint32_t maximumRecords) {
+            return owners->PollRetirement(maximumRecords);
+        }};
         if (owners->configured->animationIdentities) {
             if (!owners->configured->animationTarget.IsValid())
                 return Result<NetworkProductComposition>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));

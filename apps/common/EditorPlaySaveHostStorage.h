@@ -18,6 +18,7 @@ namespace Horo::Application::Internal {
         std::vector<Gameplay::GameplayPersistenceDeclaration> gameplay;
         std::optional<Runtime::CanonicalStateParticipantDescriptor> lifecycle; /**< Frozen inert Gameplay schema, never a runtime lease. */
         std::optional<Prefab::PrefabLimitProfile> prefabProfile; /**< Inert bounded recipe codec policy; never provider/Scene authority. */
+        std::optional<Runtime::CanonicalStateParticipantDescriptor> physics; /**< Inert canonical schema, never native owner coverage. */
     };
 
     /** @brief Explicit host-approved sandbox scope, independent of authoring/project and production save directories. */

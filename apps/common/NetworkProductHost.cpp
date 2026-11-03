@@ -244,11 +244,15 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     NetworkProductHost::NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode,
-                                           std::shared_ptr<NetworkDebuggerService> debugger) noexcept
-        : debugger_(std::move(debugger)), runtime_(std::move(runtime)), mode_(mode) {}
+                                           std::shared_ptr<NetworkDebuggerService> debugger,
+                                           NetworkNativeRetirementPoll retirement) noexcept
+        : pollRetirement_(std::move(retirement)), debugger_(std::move(debugger)), runtime_(std::move(runtime)), mode_(mode) {}
 
     NetworkProductHost::~NetworkProductHost() noexcept {
         Shutdown();
+        auto retired = PollShutdown(64);
+        if (retired.HasError() || !retired.Value())
+            std::terminate();
     }
 
     Result<std::unique_ptr<NetworkProductHost>> NetworkProductHost::Create(Clock &clock, const NetworkProductHostInputs &inputs,
@@ -277,7 +281,8 @@ namespace Horo::Application::Internal {
         if (auto added = runtime.Value()->AddParticipant(std::move(participant)); added.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(added.ErrorValue());
         return Result<std::unique_ptr<NetworkProductHost>>::Success(
-            std::make_unique<NetworkProductHost>(ConstructionKey{}, std::move(runtime).Value(), mode, std::move(debugger)));
+            std::make_unique<NetworkProductHost>(ConstructionKey{}, std::move(runtime).Value(), mode, std::move(debugger),
+                                                 inputs.pollRetirement));
     }
 
     Result<void> NetworkProductHost::Startup() {
@@ -346,6 +351,16 @@ namespace Horo::Application::Internal {
     void NetworkProductHost::RequestShutdown() const noexcept {
         if (runtime_)
             runtime_->RequestShutdown();
+    }
+
+    /** @copydoc NetworkProductHost::PollShutdown */
+    Result<bool> NetworkProductHost::PollShutdown(std::uint32_t maximumNativeRecords) {
+        Shutdown();
+        if (runtime_ && runtime_->State() != Runtime::RuntimeLifecycleState::Stopped)
+            return Result<bool>::Success(false);
+        if (!pollRetirement_)
+            return Result<bool>::Success(true);
+        return pollRetirement_(maximumNativeRecords);
     }
 
     void NetworkProductHost::Shutdown() noexcept {

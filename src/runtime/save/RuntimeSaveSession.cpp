@@ -252,6 +252,12 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSaveSession::Save */
     Result<RuntimeSaveRequest> RuntimeSaveSession::Save(SaveOperationDescriptor operation, std::shared_ptr<IRuntimeSaveWriter> writer) {
+        return Save(operation, std::move(writer), {});
+    }
+
+    /** @copydoc RuntimeSaveSession::Save */
+    Result<RuntimeSaveRequest> RuntimeSaveSession::Save(SaveOperationDescriptor operation, std::shared_ptr<IRuntimeSaveWriter> writer,
+                                                        std::shared_ptr<IRuntimeSaveCapturePreparation> preparation) {
         using Return = Result<RuntimeSaveRequest>;
         if (auto valid = ValidateOwner(); valid.HasError())
             return Return::Failure(std::move(valid).ErrorValue());
@@ -265,12 +271,10 @@ namespace Horo::Runtime {
                 return Return::Failure(std::move(admitted).ErrorValue());
             admittedHere = true;
             work_->writer = std::move(writer);
-            auto requested = barrier_.Request(operation.operation, generation_);
-            if (requested.HasError()) {
-                (void)Fail(*work_, requested.ErrorValue());
-                return Return::Success(RuntimeSaveRequest(work_));
-            }
-            barrierPending_ = true;
+            capturePreparation_ = std::move(preparation);
+            capturePreparedFor_.reset();
+            if (!capturePreparation_)
+                (void)RequestCaptureBarrier(*work_);
             return Return::Success(RuntimeSaveRequest(work_));
         } catch (const std::bad_alloc &) {
             if (!admittedHere)
@@ -353,13 +357,32 @@ namespace Horo::Runtime {
         }
     }
 
+    /** @copydoc RuntimeSaveSession::RequestCaptureBarrier */
+    Result<void> RuntimeSaveSession::RequestCaptureBarrier(Work &work) {
+        if (barrierPending_)
+            return Result<void>::Success();
+        auto requested = barrier_.Request(work.handle.Id(), generation_);
+        if (requested.HasError())
+            return Fail(work, requested.ErrorValue());
+        barrierPending_ = true;
+        return Result<void>::Success();
+    }
+
     /** @brief Capture and release the owner barrier before dispatching detached save work. */
     Result<void> RuntimeSaveSession::CaptureAndDispatch(const RuntimeSaveCaptureProvenance &provenance) {
-        auto &work = *work_;
+        const auto retained = work_;  // Exact admitted producer survives all owner preparation callbacks.
+        auto &work = *retained;
         if (work.producer.ObserveCancellation() == SaveCancellationObservation::Cancelled) {
             ReleaseBarrier();
             return Result<void>::Success();
         }
+        auto prepared = PrepareCaptureOwner(retained, provenance);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        if (!prepared.Value())
+            return Result<void>::Success();
+        if (auto requested = RequestCaptureBarrier(work); requested.HasError())
+            return requested;
         (void)work.producer.PublishProgress(SaveOperationStage::CapturingSnapshot, {});
         auto outcome =
             barrier_.CaptureAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, provenance, participants_, limits_);
@@ -371,6 +394,8 @@ namespace Horo::Runtime {
             return Fail(work, outcome.Value().error ? std::move(*outcome.Value().error) : MakeError(SaveErrors::LifecycleUnavailable));
         }
         work.capture = std::move(*outcome.Value().capture);
+        capturePreparation_.reset();
+        capturePreparedFor_.reset();
         ReleaseBarrier();
         Executor executor(work);
         auto drained = safePoints_->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, 1, executor);
@@ -431,6 +456,14 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSaveSession::Retire */
     Result<void> RuntimeSaveSession::Retire() {
+        if (owner_ == std::this_thread::get_id() && preparingCapture_) {
+            retireAfterCapturePreparation_ = true;
+            if (work_) {
+                (void)work_->handle.RequestCancellation();
+                work_->cancellation.RequestCancellation();
+            }
+            return Result<void>::Success();
+        }
         if (auto valid = ValidateOwner(); valid.HasError())
             return valid;
         const MutationScope mutation(mutating_);
@@ -440,6 +473,8 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeSaveSession::RetireInternal */
     Result<void> RuntimeSaveSession::RetireInternal() {
         closed_ = true;
+        capturePreparation_.reset();
+        capturePreparedFor_.reset();
         if (work_) {
             RuntimeSaveSessionDetail::CancelRestore(*work_);
             work_->cancellation.RequestCancellation();
@@ -473,6 +508,8 @@ namespace Horo::Runtime {
         (void)safePoints_->BeginShutdown();
         safePoints_ = std::move(coordinator).Value();
         work_.reset();
+        capturePreparation_.reset();
+        capturePreparedFor_.reset();
         return Result<void>::Success();
     }
 }  // namespace Horo::Runtime

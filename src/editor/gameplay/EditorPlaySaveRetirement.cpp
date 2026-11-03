@@ -24,6 +24,8 @@ namespace Horo::Editor {
     Result<bool> EditorPlayRetiredUnit::Poll() {
         if (!scene)
             return Result<bool>::Success(true);
+        if (sceneClosed_)
+            return PollNativeRetirement();
         if (frame == std::numeric_limits<std::uint64_t>::max())
             return Result<bool>::Failure(MakeError(Runtime::SaveErrors::LifecycleUnavailable));
         const Runtime::FrameContext context{.frameNumber = ++frame, .cancellation = cancellation};
@@ -39,9 +41,19 @@ namespace Horo::Editor {
                      committed.ErrorValue().message.c_str());
         if (binding)
             binding->runtime = nullptr;
-        scene->Shutdown();  // Its actual activation candidates retire their runners
-                            // before the Scene is freed.
+        scene->Shutdown();
         behaviorOwner.reset();
+        sceneClosed_ = true;
+        return PollNativeRetirement();
+    }
+
+    /** @copydoc EditorPlayRetiredUnit::PollNativeRetirement */
+    Result<bool> EditorPlayRetiredUnit::PollNativeRetirement() {
+        auto native = scene->PollShutdown(64);
+        if (native.HasError())
+            return Result<bool>::Failure(native.ErrorValue());
+        if (!native.Value())
+            return Result<bool>::Success(false);
         scene.reset();
         registry.reset();
         binding.reset();

@@ -318,9 +318,12 @@ namespace Horo::Application::Internal {
             std::optional<Gameplay::GameplayReplicationAdmissionPolicy> replicationAdmission;
             if (launch.role != Net::NetworkProjectRole::Standalone)
                 replicationAdmission.emplace(Gameplay::GameplayReplicationAdmissionPolicy{.inventory = project.ReplicationInventory()});
-            if (!resources)
-                return Result<NetworkProductComposition>::Success(
-                    {ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay, replicationAdmission), {}});
+            if (!resources) {
+                NetworkProductComposition composition;
+                composition.factories = ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay,
+                                                                       replicationAdmission, &composition.pollRetirement);
+                return Result<NetworkProductComposition>::Success(std::move(composition));
+            }
             AssetCookTargetId animationTarget;
             if (!launch.sceneInput.cookTarget.empty()) {
                 auto selected = AssetCookTargetId::Parse(launch.sceneInput.cookTarget);
@@ -424,7 +427,8 @@ namespace Horo::Application::Internal {
                                                std::move(sessions),
                                                launch.purpose,
                                                binding,
-                                               configured.Value().fixedParticipant},
+                                               configured.Value().fixedParticipant,
+                                               configured.Value().pollRetirement},
                                               std::move(configured).Value().factories, &diagnostic, debugger);
         }
 
@@ -473,6 +477,37 @@ namespace Horo::Application::Internal {
             return 0;
         }
 
+        /** @brief Cancels and joins actual project workers before native/code owner retirement. */
+        void SettleProductSceneWorkers(HeadlessProjectSceneResources *resources) {
+            if (!resources)
+                return;
+            resources->cancellation.RequestCancellation();
+            if (resources->prefabLoads)
+                resources->prefabLoads->Shutdown();
+            if (resources->loads)
+                resources->loads->Shutdown();
+            resources->jobs.Shutdown(ShutdownPolicy::Cancel);
+        }
+
+        /** @brief Finite owner-only collection after real shutdown/join; pending never drops native owners. */
+        void CloseProductPhysicsOwners(NetworkProductHost &host, HeadlessProjectSceneResources *resources) {
+            host.Shutdown();
+            SettleProductSceneWorkers(resources);
+            constexpr std::uint32_t MaximumRetirementPolls = 8;
+            for (std::uint32_t poll = 0; poll < MaximumRetirementPolls; ++poll) {
+                auto retired = host.PollShutdown(64);
+                if (retired.HasError()) {
+                    std::cerr << "horo-engine: native retirement failed (" << retired.ErrorValue().code.Value()
+                              << "): " << retired.ErrorValue().message << '\n';
+                    std::terminate();
+                }
+                if (retired.Value())
+                    return;
+            }
+            std::cerr << "horo-engine: native retirement remains pending after owned workers settled; retaining owners.\n";
+            std::terminate();
+        }
+
         void CloseProductModules(const ProductLaunch &launch) {
             if (launch.gameplay && launch.gameplay->moduleRetirements) {
                 auto closed = launch.gameplay->moduleRetirements->Close();
@@ -519,7 +554,7 @@ namespace Horo::Application::Internal {
             return 3;
         }
         auto outcome = RunProductFrames(*runtime.Value(), launch.Value(), worlds);
-        runtime.Value()->Shutdown();
+        CloseProductPhysicsOwners(*runtime.Value(), resources.get());
         CloseProductModules(launch.Value());
         if (outcome == 0)
             std::cout << "network product completed " << launch.Value().frames << " frames in mode " << arguments[0] << '\n';
