@@ -101,8 +101,10 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
     }
 
     void State::Cancel() noexcept {
-        closed.store(true, std::memory_order_release);
-        authority->Close();
+        closed.store(true, std::memory_order_seq_cst);
+        const auto actual = std::atomic_load_explicit(&published, std::memory_order_seq_cst);
+        if (actual)
+            actual->Close();
         // Canonical context reset requests cancellation without traversing mutable VM state off-lane.
     }
 

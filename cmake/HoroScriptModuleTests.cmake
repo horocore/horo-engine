@@ -9,6 +9,7 @@ add_executable(HoroScriptModuleRuntimeAdapterTests
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptRuntimeBackendBindingTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleRuntimeParityTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleReplacementTests.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleRecoveryTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleBindingCacheTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleImportDiagnosticsTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleProjectionTests.cpp"
@@ -28,28 +29,38 @@ add_executable(HoroModuleScriptProductHostTests
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleHeadlessTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleSourceOwnerTests.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleCliTests.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/editor/EditorPlayModuleScriptTests.cpp")
+    "${PROJECT_SOURCE_DIR}/tests/unit/editor/EditorPlayModuleScriptTests.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleProductRecoveryTests.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/extensions/ScriptModuleRecoveryCliTests.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/editor/EditorPlayModuleRecoveryTests.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/editor/ScriptModuleProjectRecoveryTests.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/editor/SceneDocumentPersistenceTestSupport.cpp")
 # Explicit test-only forwarders expose just the controller's three qualified contracts.
 set(controller_headers "${CMAKE_CURRENT_BINARY_DIR}/module-script-controller-headers")
 foreach(header IN ITEMS editor/gameplay/EditorPlaySessionController.h
-        editor/document/RuntimeSceneConversion.h editor/document/SceneDocument.h)
+        editor/document/RuntimeSceneConversion.h editor/document/SceneDocument.h
+        editor/gameplay/ProjectGameplayRegistry.h
+        editor/document/SceneDocumentPersistence.h editor/document/SceneFileWatchService.h)
     file(CONFIGURE OUTPUT "${controller_headers}/${header}"
         CONTENT "#include \"${PROJECT_SOURCE_DIR}/src/${header}\"\n" @ONLY)
 endforeach()
 target_include_directories(HoroModuleScriptProductHostTests PRIVATE
-    "${PROJECT_SOURCE_DIR}/tests/support" "${controller_headers}")
+    "${PROJECT_SOURCE_DIR}/tests/support" "${controller_headers}"
+    "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/unit/editor")
 target_link_libraries(HoroModuleScriptProductHostTests PRIVATE HoroScriptModuleHostInternal
     HoroModuleScriptPackageInternal HoroModuleScriptHostBridgeInternal
     HoroScriptModuleTestReferenceInternal HoroScriptModuleRuntimeInternal
     HoroLuaScriptModuleRuntime HoroJavaScriptModuleRuntime HoroEngine::EditorServices
-    HoroHostSignatureDocuments MbedTLS::mbedcrypto)
+    HoroHostSignatureDocuments MbedTLS::mbedcrypto nlohmann_json::nlohmann_json)
 target_compile_definitions(HoroModuleScriptProductHostTests PRIVATE
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
     HORO_NATIVE_SERVICE_PROVIDER_FIXTURE="$<TARGET_FILE:HoroNativeServiceProviderFixture>"
     HORO_NATIVE_SERVICE_CLIENT_FIXTURE="$<TARGET_FILE:HoroNativeServiceClientFixture>"
     HORO_MODULE_SCRIPT_SOURCE_FIXTURE="$<TARGET_FILE:HoroModuleScriptSourceFixture>"
     HORO_MODULE_SCRIPT_CLI="$<TARGET_FILE:horo-engine>")
 add_dependencies(HoroModuleScriptProductHostTests HoroNativeServiceProviderFixture
-    HoroNativeServiceClientFixture HoroModuleScriptSourceFixture horo-engine)
+    HoroNativeServiceClientFixture HoroModuleScriptSourceFixture HoroTestGameModule horo-engine)
 horo_register_catch_test(HoroModuleScriptProductHostTests LABELS "unit;extensions;script;editor;headless")
 
 # Existing scalar CLI regression sources share the same authenticated package contract.

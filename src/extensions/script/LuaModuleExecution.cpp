@@ -30,6 +30,8 @@ namespace Horo::Extensions::LuaModuleDetail {
             Invalid("Module source must be complete UTF-8 text without embedded NUL.");
         if (prepared || source.size() > authority->Limits().maximumSourceBytes)
             Invalid("Module source is oversized or already prepared.");
+        sourceBytes = source.size();
+        sourceDigest = ComputeSha256(std::as_bytes(std::span{source.data(), source.size()}));
         deadline = std::chrono::steady_clock::now() + authority->Limits().executionDeadline;
         const std::string wrapped = std::string{"local horo=...\n"} + std::string{source};
         if (luaL_loadbufferx(thread, wrapped.data(), wrapped.size(), "horo/module-operation.lua", "t") != LUA_OK)
@@ -82,6 +84,7 @@ namespace Horo::Extensions::LuaModuleDetail {
 
     void State::Poll() {
         RequireIdle();
+        static_cast<void>(PollPredecessor());
         RequireLive();
         if (!started)
             Invalid("Module program has not started.");
@@ -105,7 +108,9 @@ namespace Horo::Extensions::LuaModuleDetail {
             Invalid("Asynchronous outcome projection exceeded its declared bound.");
         lua_xmove(lua, thread, 1);
         pending = {};
+        pendingOrigin.reset();
         awaiting = false;
         Resume(1);
+        static_cast<void>(PollPredecessor());
     }
 }  // namespace Horo::Extensions::LuaModuleDetail

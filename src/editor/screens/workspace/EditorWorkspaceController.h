@@ -138,6 +138,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> BeginModuleProgram(std::shared_ptr<const Extensions::ScriptModuleProgram>,
                                                       Extensions::ScriptModuleOperationPolicy, const CancellationToken & = {});
         [[nodiscard]] std::optional<Extensions::ScriptCallResult> TakeModuleProgramResult();
+        [[nodiscard]] Result<void> RequestModuleReferenceUpdate(Extensions::ScriptExportVersion);
+        [[nodiscard]] Result<Extensions::ScriptModuleUpdateReport> RequestNativeModuleUpdate(const Extensions::ScriptModuleProgram &);
+        [[nodiscard]] std::optional<Extensions::ScriptModuleUpdateReport> TakeModuleUpdateReport();
 
         /** @brief Supplies the SAME workspace caches/document through a weak owner-lane fence. */
         [[nodiscard]] EditorXrSceneSourcePort XrSceneSource() const noexcept {

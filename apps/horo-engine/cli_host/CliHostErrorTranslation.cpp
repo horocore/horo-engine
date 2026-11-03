@@ -3,6 +3,7 @@
 #include "Horo/Application/ProjectErrorDomain.h"
 #include "Horo/Assets/AssetErrorDomain.h"
 #include "Horo/Cli/CliErrors.h"
+#include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/Diagnostics/DiagnosticBundle.h"
 #include "Horo/Foundation/FoundationErrorDomains.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
@@ -231,10 +232,29 @@ namespace Horo::Application::Internal {
                                              Entry{&SecurityErrors::MissingEvidence, Permission},
                                              Entry{&SecurityErrors::StaleEvidence, Permission}};
 
+        constexpr std::array ScriptModuleEntries{Entry{&Extensions::ExtensionErrors::ScriptExportDescriptorInvalid, Validation},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptExportDescriptorConflict, Validation},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptExportDescriptorIncompatible, Validation},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptExportDescriptorCapacityExceeded, Operation},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationInvalid, Validation},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationThreadViolation, Invariant},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationReentrant, Invariant},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationUnavailable, Capability},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationProviderDuplicate, Invariant},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationCapacityExceeded, Operation},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationShutdown, Operation},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationBackpressure, Operation},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationCancelled, Cancelled},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationTimeout, Timeout},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationProviderRevoked, Permission},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationContextRevoked, Cancelled},
+                                                 Entry{&Extensions::ExtensionErrors::ScriptInvocationAbandoned, Operation}};
+
         /** @brief Composes the exact peer producer tables without native backend activation. */
         bool AddHostDependencies(std::vector<ModuleDescriptor> &modules, std::vector<Hosts::ErrorMapping> &mappings) {
             return AddEntries(modules, mappings, "horo.physics", PhysicsEntries) && AddEntries(modules, mappings, "horo.mcp", McpEntries) &&
-                   AddEntries(modules, mappings, "horo.security", SecurityEntries);
+                   AddEntries(modules, mappings, "horo.security", SecurityEntries) &&
+                   AddEntries(modules, mappings, "horo.extensions", ScriptModuleEntries);
         }
 
         /** @brief Registers closed producer scopes; every resulting mapping is an exact domain/code pair. */

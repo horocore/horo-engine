@@ -11,6 +11,7 @@ namespace Horo::Application::Internal {
         std::filesystem::path packageRoot, hostTrust, temporaryRoot, script;
         std::string package, module, import, publisher;
         bool moduleOperation{};
+        bool refreshReference{};
         Extensions::ScriptModuleRuntimeKind runtime{Extensions::ScriptModuleRuntimeKind::Lua54};
     };
 

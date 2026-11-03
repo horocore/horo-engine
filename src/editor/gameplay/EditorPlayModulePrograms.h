@@ -14,6 +14,10 @@ namespace Horo::Editor {
         Result<void> Begin(std::shared_ptr<const Extensions::ScriptModuleProgram>, Extensions::ScriptModuleOperationPolicy,
                            const CancellationToken &);
         Result<void> Poll();
+        /** Queue one explicit additive builtin update for the actual owner Poll safe point. */
+        Result<void> RequestReferenceUpdate(Extensions::ScriptExportVersion);
+        Result<Extensions::ScriptModuleUpdateReport> RequestNativeUpdate(const Extensions::ScriptModuleProgram &);
+        std::optional<Extensions::ScriptModuleUpdateReport> TakeUpdateReport();
         std::optional<Extensions::ScriptCallResult> TakeResult();
 
     private:
@@ -24,6 +28,9 @@ namespace Horo::Editor {
         Runtime::SceneRuntimeId sceneId_{};
         const void *actualRuntime_{};
         bool executing_{}, closePending_{};
+        std::optional<Extensions::ScriptExportVersion> requestedUpdate_;
+        std::optional<Extensions::ScriptModuleUpdateReport> updateReport_;
+        Result<void> ApplyRequestedUpdate();
         const std::thread::id owner_{std::this_thread::get_id()};
         void FinishCancelled() noexcept;
     };

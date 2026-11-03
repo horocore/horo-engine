@@ -58,4 +58,29 @@ namespace Horo::Editor {
     std::optional<Extensions::ScriptCallResult> EditorPlaySessionController::TakeModuleScriptResult() {
         return moduleScripts_ ? moduleScripts_->TakeResult() : std::nullopt;
     }
+
+    Result<void> EditorPlaySessionController::RequestModuleReferenceUpdate(Extensions::ScriptExportVersion version) {
+        if (!moduleScripts_ || !behaviors_ || SaveLoading())
+            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::ScriptInvocationContextRevoked));
+        if (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused)
+            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::ScriptInvocationContextRevoked));
+        RefreshModuleScriptEpoch();
+        return moduleScripts_->RequestReferenceUpdate(version);
+    }
+
+    Result<Extensions::ScriptModuleUpdateReport> EditorPlaySessionController::RequestNativeModuleUpdate(
+        const Extensions::ScriptModuleProgram &candidate) {
+        if (!moduleScripts_ || !behaviors_ || SaveLoading())
+            return Result<Extensions::ScriptModuleUpdateReport>::Failure(
+                MakeError(Extensions::ExtensionErrors::ScriptInvocationContextRevoked));
+        if (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused)
+            return Result<Extensions::ScriptModuleUpdateReport>::Failure(
+                MakeError(Extensions::ExtensionErrors::ScriptInvocationContextRevoked));
+        RefreshModuleScriptEpoch();
+        return moduleScripts_->RequestNativeUpdate(candidate);
+    }
+
+    std::optional<Extensions::ScriptModuleUpdateReport> EditorPlaySessionController::TakeModuleUpdateReport() {
+        return moduleScripts_ ? moduleScripts_->TakeUpdateReport() : std::nullopt;
+    }
 }  // namespace Horo::Editor

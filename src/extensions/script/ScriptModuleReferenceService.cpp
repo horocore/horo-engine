@@ -57,6 +57,8 @@ namespace Horo::Extensions {
             return Output::Success(Sum(request.arguments));
         if (request.functionId == "digest")
             return Digest(request.arguments[0].AsBytes(), context);
+        if (request.functionId == "apirevision")
+            return Output::Success(ScriptCallResult::Success({ScriptValue{std::string{"1.1.0"}}}));
         return Output::Success(Failure("horo.reference.rejected", std::string{request.arguments[0].AsString()}));
     }
 }  // namespace Horo::Extensions

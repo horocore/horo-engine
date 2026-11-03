@@ -125,3 +125,5 @@ build/dependency manifest. It does not import upstream CLI/libc/install options.
 Qualification must distinguish object compilation, actual two-VM semantic tests,
 signed native Headless/Play tests, CLI execution, and hosted platform coverage.
 The external author draft itself is not evidence that those product paths passed.
+
+Provider refresh and failure recovery use the same running VM and actual host authorities; see [Script module API recovery](script-module-recovery.md).

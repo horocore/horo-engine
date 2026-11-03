@@ -34,13 +34,13 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         Value promise{context, Checked(JS_NewPromiseCapability(context, callbacks))};
         Value resolve{context, callbacks[0]};
         Value reject{context, callbacks[1]};
-        pending.push_back({std::move(handle), resolve.Get(), reject.Get()});
+        pending.push_back({std::move(handle), resolve.Get(), reject.Get(), authority});
         (void)resolve.Release();
         (void)reject.Release();
         return promise.Release();
     }
 
-    JSValue State::Call(std::size_t imported, std::size_t method, int argc, JSValueConst *argv) {
+    JSValue State::Call(std::string_view imported, std::string_view method, int argc, JSValueConst *argv) {
         RequireLive();
         if (argc < 0)
             InvalidValue("Negative argument count.");
@@ -81,6 +81,8 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             InvalidValue("Module source must be complete UTF-8 text without embedded NUL.");
         if (started || source.size() > authority->Limits().maximumSourceBytes)
             InvalidValue("Module source is too large or has already started.");
+        sourceBytes = source.size();
+        sourceDigest = ComputeSha256(std::as_bytes(std::span{source.data(), source.size()}));
         deadline = std::chrono::steady_clock::now() + authority->Limits().executionDeadline;
         Active active{*this};
         std::string wrapped = "(async function(horo){\"use strict\";\n";
@@ -119,7 +121,9 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
                 ++item;
                 continue;
             }
-            Value outcome{context, values.WriteOutcome(std::move(*snapshot->terminalResult))};
+            auto projector = values;
+            projector.authority = item->origin;
+            Value outcome{context, projector.WriteOutcome(std::move(*snapshot->terminalResult))};
             auto argument = outcome.Get();
             Value delivered{context, Checked(JS_Call(context, item->resolve, JS_UNDEFINED, 1, &argument))};
             JS_FreeValue(context, item->resolve);
@@ -165,6 +169,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     void State::Poll() {
         RequireIdle();
+        static_cast<void>(PollPredecessor());
         RequireLive();
         if (!started)
             InvalidValue("Module program has not started.");
@@ -177,5 +182,6 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         Deliver();
         Jobs();
         Observe();
+        static_cast<void>(PollPredecessor());
     }
 }  // namespace Horo::Extensions::JavaScriptModuleDetail

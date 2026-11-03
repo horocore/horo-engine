@@ -55,7 +55,7 @@ namespace Horo::Application::Internal {
                                                                std::shared_ptr<const Extensions::ScriptModuleProgram> program,
                                                                Extensions::ScriptCapabilityScopeLease project,
                                                                Extensions::ScriptCapabilityScopeLease operation,
-                                                               Cli::CliExecutionContext &context) {
+                                                               Cli::CliExecutionContext &context, bool refreshReference) {
         using Output = Result<Cli::CliCommandResult>;
         auto capabilities = Extensions::ScriptModuleRequestedCapabilities(*program);
         Extensions::ScriptModuleOperationPolicy policy{.projectCapabilities = capabilities,
@@ -67,6 +67,11 @@ namespace Horo::Application::Internal {
         if (running.HasError())
             return Output::Failure(running.ErrorValue());
         auto owner = std::move(running).Value();
+        if (refreshReference) {
+            auto updated = host.RefreshReference({1, 1, 0});
+            if (updated.HasError())
+                return Output::Failure(updated.ErrorValue());
+        }
         while (!owner->ResultSnapshot()) {
             if (context.IsStopRequested()) {
                 owner->Cancel();

@@ -39,6 +39,10 @@ namespace Horo::Application::Internal {
             return flag && *flag;
         }
 
+        bool ReferenceUpdate(const ExtensionScriptOptions &options, const Cli::CliCommandRequest &request) {
+            return options.moduleOperation && Approved(request, "refresh-reference");
+        }
+
         bool Consented(const Cli::CliCommandRequest &request) {
             return Approved(request, "approve-native") && Approved(request, "approve-script");
         }
@@ -82,6 +86,7 @@ namespace Horo::Application::Internal {
             return Invalid<ExtensionScriptOptions>();
         ExtensionScriptOptions options{std::move(package).Value(), std::move(trust).Value(), std::move(temporary).Value(), script.Value()};
         options.moduleOperation = request.command.segments == std::vector<std::string>{"extension", "module-run"};
+        options.refreshReference = ReferenceUpdate(options, request);
         if (auto runtime = RuntimeSelection(options, request); runtime.HasError())
             return Result<ExtensionScriptOptions>::Failure(runtime.ErrorValue());
         const auto extension = options.runtime == Extensions::ScriptModuleRuntimeKind::Lua54 ? ".lua" : ".js";

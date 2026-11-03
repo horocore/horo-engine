@@ -46,6 +46,7 @@ namespace Horo::Editor {
 
     void EditorPlayModulePrograms::FinishCancelled() noexcept {
         operation_.reset();
+        requestedUpdate_.reset();
         operationScope_.reset();
         scene_.reset();
         runtime_.reset();
@@ -92,7 +93,10 @@ namespace Horo::Editor {
             return Result<void>::Success();
         executing_ = true;
         try {
+            auto updated = ApplyRequestedUpdate();
             auto result = operation_->Poll();
+            if (result.HasValue() && updated.HasError())
+                result = std::move(updated);
             executing_ = false;
             if (closePending_)
                 FinishCancelled();

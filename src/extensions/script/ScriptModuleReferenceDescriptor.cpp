@@ -117,6 +117,12 @@ namespace Horo::Extensions {
                                  .type = Named("horo.reference.mode"),
                                  .introducedVersion = Introduced,
                                  .canonicalValue = std::move(constant).Value()});
+        if (version == ScriptExportVersion{1, 1, 0})
+            api.functions.push_back(
+                {.id = "apirevision",
+                 .introducedVersion = {1, 1, 0},
+                 .invocation = ScriptExportInvocationMode::Synchronous,
+                 .results = {{.id = "revision", .type = Primitive(ScriptExportPrimitiveKind::String), .introducedVersion = {1, 1, 0}}}});
         return BuildScriptExportDescriptorSnapshot(std::array{api});
     }
 }  // namespace Horo::Extensions

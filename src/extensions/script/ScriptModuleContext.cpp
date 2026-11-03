@@ -138,6 +138,7 @@ namespace Horo::Extensions {
         state->registry = std::move(registry);
         state->cache = &cache;
         state->scopes = policy.scopes;
+        state->policy = policy;
         state->cancellation = cancellation;
         state->executionOwner = std::move(executionOwner);
         state->work.reserve(limits.maximumPendingCalls);
@@ -169,17 +170,7 @@ namespace Horo::Extensions {
     }
 
     bool ScriptModuleContext::IsUsable() const noexcept {
-        if (impl_->closed.load(std::memory_order_acquire) || impl_->cancellation.IsCancellationRequested() || impl_->registry->IsShutdown())
-            return false;
-        if (impl_->executionOwner && !impl_->executionOwner->capability.IsUsable())
-            return false;
-        if (!std::ranges::all_of(impl_->scopes, [](const auto &scope) {
-            return scope.IsUsable();
-        }))
-            return false;
-        return std::ranges::all_of(impl_->bound, [](const auto &bound) {
-            return bound.backend->IsUsable() && bound.capability.IsUsable();
-        });
+        return !impl_->sealed.load(std::memory_order_acquire) && ScriptModuleContextOwnersUsable(*impl_);
     }
 
     void ScriptModuleContext::Close() noexcept {
@@ -211,7 +202,7 @@ namespace Horo::Extensions {
     Result<ScriptHandle> ScriptModuleContext::IssueHandle(std::string_view alias, std::string type) {
         if (impl_->owner != std::this_thread::get_id())
             return Result<ScriptHandle>::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
-        if (!IsUsable())
+        if (impl_->sealed.load(std::memory_order_acquire) || !IsUsable())
             return Result<ScriptHandle>::Failure(MakeError(ExtensionErrors::ScriptInvocationContextRevoked));
         const auto entry = std::ranges::find(impl_->imports, alias, &ScriptModuleImport::Alias);
         if (entry == impl_->imports.end() || !entry->Backend())
@@ -223,7 +214,7 @@ namespace Horo::Extensions {
     Result<void> ScriptModuleContext::ValidateHandle(const ScriptHandle &handle) const {
         if (impl_->owner != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
-        if (!IsUsable())
+        if (!ScriptModuleContextOwnersUsable(*impl_))
             return Result<void>::Failure(MakeError(ExtensionErrors::ScriptHandleRevoked));
         for (const auto &bound : impl_->bound)
             if (bound.capability.ValidateHandle(handle).HasValue())

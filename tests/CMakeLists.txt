@@ -6222,6 +6222,7 @@ target_link_libraries(HoroCliOutputPublicHeaderConsumer PRIVATE HoroEngine::CliH
 add_test(NAME HoroCliOutputPublicHeaderConsumer COMMAND HoroCliOutputPublicHeaderConsumer)
 set_tests_properties(HoroCliOutputPublicHeaderConsumer PROPERTIES LABELS "cli;headless;sonar-coverage;ci-windows")
 add_executable(HoroNavigationHostErrorTests unit/application/navigation/NavigationHostErrorTests.cpp
+    unit/extensions/ScriptModuleHostErrorTests.cpp
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostErrorTranslation.cpp"
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostInterrupts.cpp"
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/NavigationCliHost.cpp")
@@ -6229,7 +6230,7 @@ target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
 target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
-    HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
+    HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters HoroEngine::Extensions)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroCliProductionOutputContract integration/CliProductionOutputContract.cpp)

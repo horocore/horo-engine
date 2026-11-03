@@ -157,8 +157,10 @@ namespace Horo::Extensions::LuaModuleDetail {
     }
 
     void State::Cancel() noexcept {
-        closed.store(true, std::memory_order_release);
-        authority->Close();
+        closed.store(true, std::memory_order_seq_cst);
+        const auto actual = std::atomic_load_explicit(&published, std::memory_order_seq_cst);
+        if (actual)
+            actual->Close();
     }
 
     State::~State() {

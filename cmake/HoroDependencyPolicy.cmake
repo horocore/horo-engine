@@ -509,9 +509,11 @@ horo_allow_target_dependencies(TARGET HoroScriptModuleRuntime
 horo_allow_target_dependencies(TARGET HoroScriptModuleRuntimeInternal
     DEPENDENCIES HoroScriptModuleRuntime)
 horo_allow_target_dependencies(TARGET HoroLuaScriptModuleRuntime
-    DEPENDENCIES HoroScriptModuleRuntime HoroThirdPartyLua)
+    DEPENDENCIES HoroScriptModuleRuntime HoroThirdPartyLua HoroScriptModuleRebindInternal)
 horo_allow_target_dependencies(TARGET HoroJavaScriptModuleRuntime
-    DEPENDENCIES HoroScriptModuleRuntime HoroThirdPartyQuickJS)
+    DEPENDENCIES HoroScriptModuleRuntime HoroThirdPartyQuickJS HoroScriptModuleRebindInternal)
+horo_allow_target_dependencies(TARGET HoroScriptModuleRebindInternal
+    DEPENDENCIES HoroScriptModuleRuntime)
 horo_allow_target_dependencies(TARGET HoroScriptModuleHost
     DEPENDENCIES HoroScriptModuleRuntimeInternal HoroModuleScriptHostBridgeInternal
         HoroLuaScriptModuleRuntime HoroJavaScriptModuleRuntime)

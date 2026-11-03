@@ -1,5 +1,7 @@
 #include "ScriptModuleReferenceInstallationInternal.h"
 
+#include <cstdint>
+
 namespace Horo::Extensions {
     namespace {
         Result<void> Admit(const std::shared_ptr<ModuleScriptHostAuthority> &host, ScriptCapabilityProfile profile) {
@@ -11,10 +13,13 @@ namespace Horo::Extensions {
         Result<void> Register(auto &state) {
             auto &host = *state.host;
             const auto generation = state.code->generation;
+            // Create admits only the exact builtin1.0.0 and1.1.0 schemas; all version fields fit the backend contract.
+            const auto version = state.code->schema->Find("horo.reference.api")->version;
             state.descriptor = {{"horo.script.reference"},
                                 {"horo.script.reference.v1"},
                                 {"horo.script.reference"},
-                                {1, 0, 0},
+                                {static_cast<std::uint16_t>(version.major), static_cast<std::uint16_t>(version.minor),
+                                 static_cast<std::uint16_t>(version.patch)},
                                 {"horo.script.reference.provider", "horo.script.reference.builtin", generation},
                                 BackendServiceThreadRule::AnyThread};
             auto capability =
@@ -42,8 +47,11 @@ namespace Horo::Extensions {
     }
 
     Result<std::unique_ptr<ScriptModuleReferenceInstallation>> ScriptModuleReferenceInstallation::Create(
-        std::shared_ptr<ModuleScriptHostAuthority> host, ScriptCapabilityProfile profile) {
+        std::shared_ptr<ModuleScriptHostAuthority> host, ScriptCapabilityProfile profile, ScriptExportVersion version) {
         using Output = Result<std::unique_ptr<ScriptModuleReferenceInstallation>>;
+        if (version != ScriptExportVersion{1, 0, 0} && version != ScriptExportVersion{1, 1, 0})
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid,
+                                             "The builtin supports only its real 1.0.0 and additive 1.1.0 schemas."));
         auto admitted = Admit(host, profile);
         if (admitted.HasError())
             return Output::Failure(admitted.ErrorValue());
@@ -51,10 +59,10 @@ namespace Horo::Extensions {
         if (issued.HasError())
             return Output::Failure(issued.ErrorValue());
         const auto generation = issued.Value();
-        auto graph = ScriptModuleReferenceGraph(profile);
+        auto graph = ScriptModuleReferenceGraph(profile, version);
         if (graph.HasError())
             return Output::Failure(graph.ErrorValue());
-        auto schema = BuildScriptModuleReferenceApi("horo.script.reference.provider");
+        auto schema = BuildScriptModuleReferenceApi("horo.script.reference.provider", version);
         if (schema.HasError())
             return Output::Failure(schema.ErrorValue());
         auto caller = host->AdmitReference("horo.script.reference.consumer", generation);
@@ -95,14 +103,20 @@ namespace Horo::Extensions {
         input.provider = state.invocation;
         input.descriptors = state.code->schema;
         input.apiId = "horo.reference.api";
-        input.versions = {{1, 0, 0}, {1, 0, 0}};
+        input.versions = {{1, 0, 0}, Version()};
         input.profile = state.profile;
         input.functions = {"echo", "digest", "sum", "reject"};
+        if (Version() == ScriptExportVersion{1, 1, 0})
+            input.functions.push_back("apirevision");
         input.hostClosed = state.host->ClosedFlag();
         auto port = BindScriptRuntimeBackend<ScriptModuleReferenceService>(std::move(input), &ScriptModuleReferenceService::Invoke);
         if (port.HasError())
             return Output::Failure(port.ErrorValue());
         return BindScriptModuleImport(std::move(alias), std::move(port).Value());
+    }
+
+    ScriptExportVersion ScriptModuleReferenceInstallation::Version() const noexcept {
+        return impl_->code->schema->Find("horo.reference.api")->version;
     }
 
     void ScriptModuleReferenceInstallation::Close() noexcept {

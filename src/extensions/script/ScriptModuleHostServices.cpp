@@ -132,13 +132,16 @@ namespace Horo::Extensions {
         auto context = Context(*impl_, *program, std::move(policy), cancellation);
         if (context.HasError())
             return Output::Failure(context.ErrorValue());
-        auto vm = Runtime(program->Runtime(), std::move(context).Value());
+        auto admittedContext = std::move(context).Value();
+        auto vm = Runtime(program->Runtime(), admittedContext);
         if (vm.HasError())
             return Output::Failure(vm.ErrorValue());
-        auto state = std::make_unique<ScriptModuleOperation::Impl>(shared_from_this(), std::move(vm).Value());
+        auto state =
+            std::make_unique<ScriptModuleOperation::Impl>(shared_from_this(), std::move(vm).Value(), std::move(admittedContext), program);
         ++impl_->activeOperations;
         state->counted = true;
         auto operation = std::unique_ptr<ScriptModuleOperation>{new ScriptModuleOperation{std::move(state)}};
+        *std::ranges::find(impl_->operations, nullptr) = operation.get();
         auto started = operation->impl_->runtime->Start(program->Source());
         if (started.HasError()) {
             SetScriptModuleFailure(operation->impl_->result, operation->impl_->emergency, started.ErrorValue(), {});

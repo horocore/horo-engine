@@ -2,6 +2,8 @@
 #include "ScriptModuleProgram.h"
 
 namespace Horo::Extensions {
+    class ScriptModuleReferenceInstallation;
+
     struct ScriptModuleOperationPolicy final {
         std::vector<ExtensionCapabilityId> projectCapabilities, contextCapabilities;
         std::vector<ScriptCapabilityScopeLease> scopes;
@@ -24,6 +26,13 @@ namespace Horo::Extensions {
         std::unique_ptr<Impl> impl_;
     };
 
+    /** Owner-lane borrowed operation plus freshly admitted imports from this SAME host's actual registries.
+     * The borrow must remain alive throughout synchronous Rebind; imports carry sealed provider evidence. */
+    struct ScriptModuleOperationBindings final {
+        ScriptModuleOperation *operation{};
+        std::vector<ScriptModuleImport> imports;
+    };
+
     /** Product-owned operation factory over actual shared native authorities; no secondary manager, registry or VM scheduler. */
     class ScriptModuleHostServices final : public std::enable_shared_from_this<ScriptModuleHostServices> {
     public:
@@ -39,12 +48,27 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<std::unique_ptr<ScriptModuleOperation>> Begin(std::shared_ptr<const ScriptModuleProgram>,
                                                                            ScriptModuleOperationPolicy,
                                                                            const CancellationToken &cancellation = {});
+        /** Explicit builtin additive-provider request, prepared through the generic all-operation rebind path.
+         * No native library replacement is attempted. One active and one draining predecessor are retained. */
+        [[nodiscard]] Result<std::vector<ScriptModuleUpdateReport>> RefreshReference(ScriptExportVersion);
+        [[nodiscard]] Result<bool> PollProviderRetirement();
+        /** Verify the actual signed candidate under current independent trust, but never stage/unload/replace a live native module.
+         * A real live source owner must exist. Its prior provider stays admitted; unknown native API safety requires restart. */
+        [[nodiscard]] Result<ScriptModuleUpdateReport> RequestNativeUpdate(const ScriptModuleProgram &);
         [[nodiscard]] ScriptModuleBindingCacheStats CacheStats() const noexcept;
+        /** Prepare every namespace/descriptor candidate before committing any. Owner safe point only; no source rerun.
+         * Failure retains every previous active binding. Accepted predecessor work remains deliverable in the same VM.
+         * At most MaximumOperations entries; duplicate/foreign operations and a second draining predecessor fail closed. */
+        [[nodiscard]] Result<std::vector<ScriptModuleUpdateReport>> Rebind(std::vector<ScriptModuleOperationBindings>);
 
     private:
         friend class ScriptModuleOperation;
         struct Impl;
         explicit ScriptModuleHostServices(std::unique_ptr<Impl>);
         std::unique_ptr<Impl> impl_;
+        Result<std::vector<ScriptModuleUpdateReport>> RefreshReferenceOwned(ScriptExportVersion);
+        Result<std::vector<ScriptModuleOperationBindings>> ReferenceUpdates(const ScriptModuleReferenceInstallation &);
+        Result<std::vector<ScriptModuleUpdateReport>> RebindOwned(std::vector<ScriptModuleOperationBindings>);
+        Result<std::vector<ScriptModuleUpdateReport>> CommitOwned(std::vector<struct ScriptModuleHostRebindCandidate> &);
     };
 }  // namespace Horo::Extensions

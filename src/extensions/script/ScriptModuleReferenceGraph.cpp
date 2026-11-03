@@ -32,23 +32,25 @@ namespace Horo::Extensions {
         }
     }  // namespace
 
-    Result<ExtensionModulePlan> ScriptModuleReferenceGraph(ScriptCapabilityProfile profile) {
+    Result<ExtensionModulePlan> ScriptModuleReferenceGraph(ScriptCapabilityProfile profile, ScriptExportVersion version) {
+        const std::string providerVersion = version == ScriptExportVersion{1, 1, 0} ? "1.1.0" : "1.0.0";
         ExtensionManifest declaration;
         declaration.id = "horo.engine.script-reference";
-        declaration.modules = {{.id = "horo.script.reference.provider",
-                                .version = "1.0.0",
-                                .kind = "builtin",
-                                .roles = {ExtensionModuleRole::BackendCapability},
-                                .exports = {{.id = "horo.script.reference", .contract = "horo.script.reference.v1", .version = "1.0.0"}}},
-                               {.id = "horo.script.reference.consumer",
-                                .version = "1.0.0",
-                                .kind = "builtin",
-                                .roles = {ExtensionModuleRole::BackendCapability},
-                                .imports = {{.id = "reference",
-                                             .service = "horo.script.reference",
-                                             .contract = "horo.script.reference.v1",
-                                             .minimumVersion = "1.0.0",
-                                             .required = true}}}};
+        declaration
+            .modules = {{.id = "horo.script.reference.provider",
+                         .version = providerVersion,
+                         .kind = "builtin",
+                         .roles = {ExtensionModuleRole::BackendCapability},
+                         .exports = {{.id = "horo.script.reference", .contract = "horo.script.reference.v1", .version = providerVersion}}},
+                        {.id = "horo.script.reference.consumer",
+                         .version = "1.0.0",
+                         .kind = "builtin",
+                         .roles = {ExtensionModuleRole::BackendCapability},
+                         .imports = {{.id = "reference",
+                                      .service = "horo.script.reference",
+                                      .contract = "horo.script.reference.v1",
+                                      .minimumVersion = "1.0.0",
+                                      .required = true}}}};
         const ExtensionHostEnvironment environment{.profile = profile == ScriptCapabilityProfile::Gameplay
                                                                   ? ExtensionHostProfile::Interactive
                                                                   : ExtensionHostProfile::Headless,

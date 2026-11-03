@@ -2,6 +2,7 @@
 
 #include "Horo/Extensions/ExtensionErrors.h"
 
+#include <algorithm>
 #include <new>
 
 namespace Horo::Extensions {
@@ -18,6 +19,22 @@ namespace Horo::Extensions {
             return Output::Failure(
                 MakeError(ExtensionErrors::ScriptInvocationInvalid, "Function is not admitted or argument count exceeds its descriptor."));
         return Output::Success({&imports[imported], &api, &function});
+    }
+
+    Result<ScriptModuleFunctionView> FindScriptModuleFunction(std::span<const ScriptModuleImport> imports, std::string_view alias,
+                                                              std::string_view function, std::size_t count) {
+        using Output = Result<ScriptModuleFunctionView>;
+        const auto imported = std::ranges::find(imports, alias, &ScriptModuleImport::Alias);
+        if (imported == imports.end())
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationUnavailable));
+        if (!imported->Backend())
+            return Output::Failure(*imported->Unavailable());
+        const auto &methods = imported->Backend()->Descriptor().functions;
+        const auto method = std::ranges::find(methods, function, &ScriptExportFunctionDescriptor::id);
+        if (method == methods.end())
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid));
+        return FindScriptModuleFunction(imports, static_cast<std::size_t>(imported - imports.begin()),
+                                        static_cast<std::size_t>(method - methods.begin()), count);
     }
 
     ScriptCallResult MakeScriptModuleEmergencyResult() {

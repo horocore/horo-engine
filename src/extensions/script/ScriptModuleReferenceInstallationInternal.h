@@ -28,5 +28,5 @@ namespace Horo::Extensions {
               providerAdmission(std::move(provider)) {}
     };
 
-    [[nodiscard]] Result<ExtensionModulePlan> ScriptModuleReferenceGraph(ScriptCapabilityProfile);
+    [[nodiscard]] Result<ExtensionModulePlan> ScriptModuleReferenceGraph(ScriptCapabilityProfile, ScriptExportVersion);
 }  // namespace Horo::Extensions

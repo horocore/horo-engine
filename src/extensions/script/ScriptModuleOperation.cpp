@@ -4,8 +4,10 @@
 #include <cassert>
 
 namespace Horo::Extensions {
-    ScriptModuleOperation::Impl::Impl(std::shared_ptr<ScriptModuleHostServices> host, std::unique_ptr<IScriptModuleRuntime> vm)
-        : owner(std::move(host)), runtime(std::move(vm)), emergency(MakeScriptModuleEmergencyResult()) {}
+    ScriptModuleOperation::Impl::Impl(std::shared_ptr<ScriptModuleHostServices> host, std::unique_ptr<IScriptModuleRuntime> vm,
+                                      std::shared_ptr<ScriptModuleContext> admitted, std::shared_ptr<const ScriptModuleProgram> captured)
+        : owner(std::move(host)), runtime(std::move(vm)), context(std::move(admitted)), program(std::move(captured)),
+          emergency(MakeScriptModuleEmergencyResult()) {}
 
     ScriptModuleOperation::ScriptModuleOperation(std::unique_ptr<Impl> value) : impl_(std::move(value)) {}
 
@@ -17,6 +19,9 @@ namespace Horo::Extensions {
     ScriptModuleOperation::~ScriptModuleOperation() {
         assert(impl_->lane == std::this_thread::get_id());
         Cancel();
+        for (auto &operation : impl_->owner->impl_->operations)
+            if (operation == this)
+                operation = nullptr;
     }
 
     void ScriptModuleOperation::Cancel() noexcept {
@@ -34,6 +39,9 @@ namespace Horo::Extensions {
             Cancel();
             return advanced;
         }
+        auto retired = impl_->owner->PollProviderRetirement();
+        if (retired.HasError())
+            return Result<void>::Failure(retired.ErrorValue());
         impl_->result = impl_->runtime->ResultSnapshot();
         if (impl_->result)
             Cancel();

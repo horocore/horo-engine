@@ -38,6 +38,8 @@ function(horo_add_script_module_runtime_targets)
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleContext.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleCalls.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleReplacement.cpp"
+        "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleRebind.cpp"
+        "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleRecovery.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleProjection.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleNativeBridge.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleProgram.cpp"
@@ -59,6 +61,7 @@ function(horo_add_script_module_runtime_targets)
         "${PROJECT_SOURCE_DIR}/src/extensions/script/LuaModuleCalls.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/LuaModuleOutcomes.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/LuaModuleExecution.cpp"
+        "${PROJECT_SOURCE_DIR}/src/extensions/script/LuaModuleRebind.cpp"
     )
     target_compile_features(HoroLuaScriptModuleRuntime PUBLIC cxx_std_20)
     add_library(HoroEngine::LuaScriptModuleRuntime ALIAS HoroLuaScriptModuleRuntime)
@@ -72,6 +75,7 @@ function(horo_add_script_module_runtime_targets)
         "${PROJECT_SOURCE_DIR}/src/extensions/script/JavaScriptModuleImports.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/JavaScriptModuleOutcomes.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/JavaScriptModuleExecution.cpp"
+        "${PROJECT_SOURCE_DIR}/src/extensions/script/JavaScriptModuleRebind.cpp"
     )
     target_compile_features(HoroJavaScriptModuleRuntime PUBLIC cxx_std_20)
     add_library(HoroEngine::JavaScriptModuleRuntime ALIAS HoroJavaScriptModuleRuntime)
@@ -80,6 +84,8 @@ function(horo_add_script_module_runtime_targets)
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleHostPolicy.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleHostServices.cpp"
         "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleOperation.cpp"
+        "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleHostRebind.cpp"
+        "${PROJECT_SOURCE_DIR}/src/extensions/script/ScriptModuleProviderRefresh.cpp"
     )
     target_compile_features(HoroScriptModuleHost PUBLIC cxx_std_20)
 
@@ -90,10 +96,13 @@ function(horo_add_script_module_runtime_targets)
     horo_stage_module_script_contract(HoroScriptModuleRuntimeInternal
         src/extensions/script/ScriptModuleProgram.h)
     target_link_libraries(HoroScriptModuleRuntimeInternal INTERFACE HoroScriptModuleRuntime)
+    horo_stage_module_script_contract(HoroScriptModuleRebindInternal
+        src/extensions/script/ScriptModuleRebindInternal.h)
+    target_link_libraries(HoroScriptModuleRebindInternal INTERFACE HoroScriptModuleRuntime)
     target_link_libraries(HoroLuaScriptModuleRuntime PUBLIC HoroScriptModuleRuntime
-        PRIVATE HoroThirdParty::Lua)
+        PRIVATE HoroThirdParty::Lua HoroScriptModuleRebindInternal)
     target_link_libraries(HoroJavaScriptModuleRuntime PUBLIC HoroScriptModuleRuntime
-        PRIVATE HoroThirdParty::QuickJS)
+        PRIVATE HoroThirdParty::QuickJS HoroScriptModuleRebindInternal)
     target_link_libraries(HoroScriptModuleHost PRIVATE HoroScriptModuleRuntimeInternal
         HoroModuleScriptHostBridgeInternal HoroLuaScriptModuleRuntime HoroJavaScriptModuleRuntime)
 

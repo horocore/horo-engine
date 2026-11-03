@@ -4359,7 +4359,8 @@ include(HoroScriptModuleRuntime)
 horo_add_script_module_runtime_targets()
 target_sources(HoroEditorServices PRIVATE
     editor/gameplay/EditorPlayModulePrograms.cpp
-    editor/gameplay/EditorPlaySessionControllerModuleScripts.cpp)
+    editor/gameplay/EditorPlaySessionControllerModuleScripts.cpp
+    editor/gameplay/EditorPlayModuleRecovery.cpp)
 target_link_libraries(HoroEditorServices PUBLIC HoroScriptModuleHostInternal)
 if(TARGET HoroGui)
     target_sources(HoroGui PRIVATE editor/screens/workspace/EditorWorkspaceControllerModuleScripts.cpp)

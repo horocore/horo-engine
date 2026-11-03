@@ -70,6 +70,10 @@ namespace Horo::Application::Internal {
                                       .summary = "Closed module runtime: lua or javascript.",
                                       .valueKind = Cli::CliOptionValueKind::String,
                                       .required = true});
+        descriptor.options.push_back({.name = "refresh-reference",
+                                      .summary = "Explicitly request the builtin API's additive 1.1.0 owner-safe-point update without "
+                                                 "rerunning this program; requires its signed reference capability.",
+                                      .valueKind = Cli::CliOptionValueKind::Flag});
         std::ranges::sort(descriptor.options, {}, &Cli::CliOptionDescriptor::name);
         return descriptor;
     }

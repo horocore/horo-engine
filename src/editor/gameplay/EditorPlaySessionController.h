@@ -103,6 +103,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> BeginModuleScript(std::shared_ptr<const Extensions::ScriptModuleProgram>,
                                                      Extensions::ScriptModuleOperationPolicy, const CancellationToken & = {});
         [[nodiscard]] std::optional<Extensions::ScriptCallResult> TakeModuleScriptResult();
+        [[nodiscard]] Result<void> RequestModuleReferenceUpdate(Extensions::ScriptExportVersion);
+        [[nodiscard]] Result<Extensions::ScriptModuleUpdateReport> RequestNativeModuleUpdate(const Extensions::ScriptModuleProgram &);
+        [[nodiscard]] std::optional<Extensions::ScriptModuleUpdateReport> TakeModuleUpdateReport();
         /** @brief Pauses fixed simulation while leaving presentation active. */
         [[nodiscard]] Result<void> Pause();
         /** @brief Resumes continuous fixed simulation. */

@@ -25,5 +25,5 @@ namespace Horo::Application::Internal {
                                                                              std::shared_ptr<const Extensions::ScriptModuleProgram>,
                                                                              Extensions::ScriptCapabilityScopeLease project,
                                                                              Extensions::ScriptCapabilityScopeLease operation,
-                                                                             Cli::CliExecutionContext &);
+                                                                             Cli::CliExecutionContext &, bool refreshReference = false);
 }  // namespace Horo::Application::Internal

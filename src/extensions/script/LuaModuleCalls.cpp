@@ -18,7 +18,7 @@ namespace Horo::Extensions::LuaModuleDetail {
         }
     }
 
-    bool State::PrepareCall(lua_State *current, std::size_t imported, std::size_t method) noexcept {
+    bool State::PrepareCall(lua_State *current, std::string_view imported, std::string_view method) noexcept {
         try {
             RequireLive();
             values.lua = current;
@@ -38,6 +38,7 @@ namespace Horo::Extensions::LuaModuleDetail {
                 return RecordError(call.ErrorValue());
             if (function.invocation == ScriptExportInvocationMode::Asynchronous) {
                 pending = std::move(call).Value();
+                pendingOrigin = authority;
                 awaiting = true;
                 return true;
             }
@@ -68,9 +69,12 @@ namespace Horo::Extensions::LuaModuleDetail {
         auto &state = Owner(lua);
         if (!lua_checkstack(lua, static_cast<int>(state.authority->Limits().values.maximumDepth * 4 + 32)))
             return luaL_error(lua, "Value projection stack limit.");
-        const auto imported = lua_tointeger(lua, lua_upvalueindex(1));
-        const auto method = lua_tointeger(lua, lua_upvalueindex(2));
-        if (imported < 0 || method < 0 || !state.PrepareCall(lua, static_cast<std::size_t>(imported), static_cast<std::size_t>(method)))
+        if (lua_type(lua, lua_upvalueindex(1)) != LUA_TSTRING || lua_type(lua, lua_upvalueindex(2)) != LUA_TSTRING)
+            return luaL_error(lua, "Host call identity is invalid.");
+        std::size_t aliasSize{}, methodSize{};
+        const char *alias = lua_tolstring(lua, lua_upvalueindex(1), &aliasSize);
+        const char *method = lua_tolstring(lua, lua_upvalueindex(2), &methodSize);
+        if (!state.PrepareCall(lua, {alias, aliasSize}, {method, methodSize}))
             return luaL_error(lua, "Host call failed its declared boundary.");
         if (state.awaiting)
             return lua_yieldk(lua, 0, 0, Continue);

@@ -2,6 +2,7 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Extensions/ScriptModuleRuntime.h"
 
+#include <algorithm>
 #include <atomic>
 #include <thread>
 
@@ -27,17 +28,33 @@ namespace Horo::Extensions {
         ScriptModuleRuntimeLimits limits;
         std::vector<ScriptModuleImport> imports;
         std::vector<ScriptCapabilityScopeLease> scopes;
+        ScriptCapabilityContextDescriptor policy;
         CancellationToken cancellation;
         std::optional<ScriptModuleExecutionOwner> executionOwner;
         std::vector<Bound> bound;
         std::vector<Work> work;
         const std::thread::id owner{std::this_thread::get_id()};
-        std::atomic_bool closed{};
+        std::atomic_bool closed{}, sealed{};
 
         Impl(ScriptCapabilityContext value, const JobSystem &system, ScriptModuleRuntimeIdentity identity, ScriptModuleRuntimeLimits policy,
              std::vector<ScriptModuleImport> declarations)
             : context(std::move(value)), jobs(system), runtime(std::move(identity)), limits(policy), imports(std::move(declarations)) {}
     };
+
+    /** Read-only owner/capability liveness, separate from the new-admission seal used during compatible replacement. */
+    bool ScriptModuleContextOwnersUsable(const auto &state) noexcept {
+        if (state.closed.load(std::memory_order_acquire) || state.cancellation.IsCancellationRequested() || state.registry->IsShutdown())
+            return false;
+        if (state.executionOwner && !state.executionOwner->capability.IsUsable())
+            return false;
+        if (!std::ranges::all_of(state.scopes, [](const auto &scope) {
+            return scope.IsUsable();
+        }))
+            return false;
+        return std::ranges::all_of(state.bound, [](const auto &bound) {
+            return bound.backend->IsUsable() && bound.capability.IsUsable();
+        });
+    }
 
     struct ScriptModuleContextAccess final {
         struct ResolvedCall {

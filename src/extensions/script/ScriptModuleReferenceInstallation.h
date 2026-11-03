@@ -6,9 +6,11 @@ namespace Horo::Extensions {
     class ScriptModuleReferenceInstallation final {
     public:
         static Result<std::unique_ptr<ScriptModuleReferenceInstallation>> Create(std::shared_ptr<class ModuleScriptHostAuthority>,
-                                                                                 ScriptCapabilityProfile);
+                                                                                 ScriptCapabilityProfile,
+                                                                                 ScriptExportVersion version = {1, 0, 0});
         ~ScriptModuleReferenceInstallation();
         [[nodiscard]] Result<ScriptModuleImport> Bind(std::string alias) const;
+        [[nodiscard]] ScriptExportVersion Version() const noexcept;
         void Close() noexcept;
 
     private:

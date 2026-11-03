@@ -30,9 +30,10 @@ namespace Horo::Extensions {
             }
 
             Result<void> Start(std::string_view source) override {
+                const auto state = state_;
                 try {
-                    state_->Prepare(source);
-                    state_->Start();
+                    state->Prepare(source);
+                    state->Start();
                     return Result<void>::Success();
                 } catch (const Failure &error) {
                     return Result<void>::Failure(error.error);
@@ -42,8 +43,9 @@ namespace Horo::Extensions {
             }
 
             Result<void> Poll() override {
+                const auto state = state_;
                 try {
-                    state_->Poll();
+                    state->Poll();
                     return Result<void>::Success();
                 } catch (const Failure &error) {
                     return Result<void>::Failure(error.error);
@@ -57,28 +59,36 @@ namespace Horo::Extensions {
                 return state_->result;
             }
 
+            Result<std::unique_ptr<ScriptModulePreparedRebind>> PrepareRebind(std::shared_ptr<ScriptModuleContext> next) override {
+                return LuaModuleDetail::PrepareLuaRebind(state_, std::move(next));
+            }
+
+            Result<bool> PollRebindRetirement() override {
+                try {
+                    state_->RequireIdle();
+                    return Result<bool>::Success(state_->PollPredecessor());
+                } catch (const Failure &error) {
+                    return Result<bool>::Failure(error.error);
+                } catch (...) {
+                    return Result<bool>::Failure(Unexpected());
+                }
+            }
+
             Result<void> ReplaceCompatible(std::shared_ptr<ScriptModuleContext> next, std::string_view source) override {
                 try {
                     state_->RequireIdle();
-                    if (!next)
+                    if (source.size() != state_->sourceBytes ||
+                        ComputeSha256(std::as_bytes(std::span{source.data(), source.size()})) != state_->sourceDigest)
+                        return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid,
+                                                               "A provider binding refresh cannot replace or rerun source."));
+                    auto prepared = PrepareRebind(std::move(next));
+                    if (prepared.HasError())
+                        return Result<void>::Failure(prepared.ErrorValue());
+                    auto ready = prepared.Value()->Validate();
+                    if (ready.HasError())
+                        return ready;
+                    if (!prepared.Value()->Commit())
                         return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid));
-                    auto compatible = state_->authority->ValidateReplacement(*next);
-                    if (compatible.HasError())
-                        return compatible;
-                    auto candidate = std::make_unique<State>(std::move(next));
-                    candidate->Initialize();
-                    candidate->Prepare(source);
-                    auto committed = state_->authority->CommitReplacement(*candidate->authority);
-                    if (committed.HasError())
-                        return committed;
-                    state_.swap(candidate);
-                    try {
-                        state_->Start();
-                    } catch (const Failure &error) {
-                        SetScriptModuleFailure(state_->result, state_->emergency, error.error, state_->authority->Limits().values);
-                    } catch (...) {
-                        state_->result = std::move(state_->emergency);
-                    }
                     return Result<void>::Success();
                 } catch (const Failure &error) {
                     return Result<void>::Failure(error.error);
@@ -92,7 +102,7 @@ namespace Horo::Extensions {
             }
 
         private:
-            std::unique_ptr<State> state_;
+            std::shared_ptr<State> state_;
         };
     }  // namespace
 
