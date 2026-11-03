@@ -267,6 +267,12 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroGameplayNavigationTests
     HoroGameplayNavigationPublicConsumer
     HoroNavigationBakeServiceTests
+    HoroNavigationBakeApplicationTests
+    HoroNavigationBakeAdapterTests
+    HoroNavigationNativeCliTests
+    HoroNavigationHostErrorTests
+    HoroNavigationProjectBakeInputNativeTests
+    HoroEditorNavigationBakeHostTests
 )
 
 set(HORO_CI_NAVIGATION_TARGETS

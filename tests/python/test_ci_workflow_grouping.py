@@ -165,6 +165,15 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroGameplayNavigationIntegrationPublicHeaderConsumer", "HoroGameplayApiPublicHeaderConsumer",
     "HoroGameplayRuntimePublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
     "HoroGameplayLuaPublicHeaderConsumer", "HoroNavigationRuntimePublicHeaderConsumer",
+    # Existing module/prefab delivery owners retain exact reduced-build membership.
+    "HoroScriptModuleRuntimeAdapterTests", "HoroModuleScriptProductHostTests",
+    "HoroScriptModuleRuntimePublicHeaderConsumer", "HoroLuaScriptModuleRuntimePublicHeaderConsumer",
+    "HoroJavaScriptModuleRuntimePublicHeaderConsumer",
+    "HoroPrefabPersistenceTests", "HoroEditorPlaySavePrefabTests", "HoroPrefabPersistencePublicConsumer",
+    "HoroPrefabPersistencePublicHeaderConsumer", "HoroPrefabOverridesPublicHeaderConsumer", "HoroProjectVersionPublicHeaderConsumer",
+    # Navigation automation discovery must have the same actual executable build closure.
+    "HoroNavigationBakeApplicationTests", "HoroNavigationBakeAdapterTests", "HoroNavigationNativeCliTests",
+    "HoroNavigationHostErrorTests", "HoroNavigationProjectBakeInputNativeTests", "HoroEditorNavigationBakeHostTests",
 })
 
 
