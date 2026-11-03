@@ -20,6 +20,9 @@ target_compile_features(HoroHostSignatureDocuments PUBLIC cxx_std_20)
 target_include_directories(HoroHostSignatureDocuments PUBLIC "${HORO_HOST_SIGNATURE_HEADERS}")
 target_link_libraries(HoroHostSignatureDocuments PUBLIC HoroEngine::PackageSecurity PRIVATE HoroFoundationJsonInternal)
 
+include(HoroModuleScriptPackage)
+horo_add_module_script_package_target()
+
 if(HORO_BUILD_XR_OPENXR)
     # First-party installed-component admission belongs to the application root,
     # not XRRuntime, ExtensionHost or a concrete renderer. Only this staged
@@ -263,6 +266,8 @@ target_sources(horo-engine PRIVATE
     horo-engine/cli_host/ExtensionScriptCliHost.cpp
     horo-engine/cli_host/ExtensionScriptCliCommand.cpp)
 target_link_libraries(horo-engine PRIVATE HoroEngine::ExtensionLuaBindings HoroHostSignatureDocuments)
+target_sources(horo-engine PRIVATE horo-engine/cli_host/ModuleScriptCliExecution.cpp)
+target_link_libraries(horo-engine PRIVATE HoroScriptModuleHostInternal HoroModuleScriptPackageInternal)
 target_compile_features(horo-engine PRIVATE cxx_std_20)
 # Only identity consumers depend on the changing Git revision. Keep unrelated
 # application units reusable by compiler and analysis caches across commits.

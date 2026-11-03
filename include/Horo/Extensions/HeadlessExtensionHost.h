@@ -238,6 +238,7 @@ namespace Horo::Extensions {
         void Shutdown() noexcept;
 
     private:
+        friend struct NativeExtensionServiceHostAccess;
         struct Impl;
         explicit HeadlessExtensionHost(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;

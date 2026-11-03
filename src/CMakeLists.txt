@@ -4351,6 +4351,18 @@ add_library(HoroEngine::UiStyleWorkspaceApplication ALIAS HoroUiStyleWorkspaceAp
 target_compile_features(HoroUiStyleWorkspaceApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroUiStyleWorkspaceApplication PUBLIC HoroEngine::RuntimeUi HoroEngine::Assets)
 
+# General module bindings compose the neutral authority with two concrete VMs.
+include(HoroScriptModuleRuntime)
+horo_add_script_module_runtime_targets()
+target_sources(HoroEditorServices PRIVATE
+    editor/gameplay/EditorPlayModulePrograms.cpp
+    editor/gameplay/EditorPlaySessionControllerModuleScripts.cpp)
+target_link_libraries(HoroEditorServices PUBLIC HoroScriptModuleHostInternal)
+if(TARGET HoroGui)
+    target_sources(HoroGui PRIVATE editor/screens/workspace/EditorWorkspaceControllerModuleScripts.cpp)
+    target_link_libraries(HoroGui PRIVATE HoroScriptModuleHostInternal)
+endif()
+
 include(HoroPublicHeaderOwnership)
 
 if(TARGET HoroEditorViewportMetal)

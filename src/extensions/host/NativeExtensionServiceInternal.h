@@ -38,6 +38,7 @@ namespace Horo::Extensions {
         ~NativeScalarService();
         Result<std::int64_t> Invoke(const NativeServiceCall &request, const BackendServiceCallContext &context) const;
         void Shutdown() noexcept;
+        Result<ScriptCallResult> InvokeScript(const ScriptInvocationRequest &, const BackendServiceCallContext &) const;
 
     private:
         NativeServiceShape shape_;
@@ -56,7 +57,7 @@ namespace Horo::Extensions {
         ApplicationCapabilityProviderIdentity provider;
         std::optional<ApplicationCapabilityProviderRegistration> capability;
         std::optional<BackendServiceRegistration> service;
-        std::optional<ScriptInvocationProviderRegistration> script;
+        std::shared_ptr<ScriptInvocationProviderRegistration> script;
         ScriptExportDescriptorSnapshotPtr descriptors;
         void Revoke() noexcept override;
     };
@@ -100,6 +101,12 @@ namespace Horo::Extensions {
     };
 
     struct NativeExtensionServiceHostAccess final {
+        static std::shared_ptr<NativeExtensionServiceState> State(NativeExtensionServiceHost &host) {
+            return host.state_;
+        }
+
+        static Result<std::shared_ptr<NativeExtensionServiceHost>> HeadlessServices(class HeadlessExtensionHost &);
+        static Result<std::shared_ptr<NativeExtensionServiceHost>> ConfiguringHeadlessServices(class HeadlessExtensionHost &);
         static Result<std::shared_ptr<NativeServiceModule>> Stage(NativeExtensionServiceHost &host, AssetImporterRegistrationSession &load,
                                                                   std::span<const ResolvedExtensionServiceImport> imports);
     };

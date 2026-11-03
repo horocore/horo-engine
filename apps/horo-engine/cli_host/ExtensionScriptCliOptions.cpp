@@ -39,10 +39,27 @@ namespace Horo::Application::Internal {
             return flag && *flag;
         }
 
+        bool Consented(const Cli::CliCommandRequest &request) {
+            return Approved(request, "approve-native") && Approved(request, "approve-script");
+        }
+
+        Result<void> RuntimeSelection(ExtensionScriptOptions &options, const Cli::CliCommandRequest &request) {
+            if (!options.moduleOperation)
+                return Result<void>::Success();
+            auto runtime = String(request, "runtime");
+            if (runtime.HasError())
+                return Invalid<void>();
+            if (runtime.Value() == "javascript")
+                options.runtime = Extensions::ScriptModuleRuntimeKind::JavaScriptNg;
+            else if (runtime.Value() != "lua")
+                return Invalid<void>();
+            return Result<void>::Success();
+        }
+
         Result<void> Identities(ExtensionScriptOptions &options, const Cli::CliCommandRequest &request) {
             auto package = String(request, "extension-id");
             auto module = String(request, "module");
-            auto import = String(request, "import");
+            auto import = options.moduleOperation ? Result<std::string>::Success({}) : String(request, "import");
             auto publisher = String(request, "publisher");
             if (package.HasError() || module.HasError() || import.HasError() || publisher.HasError())
                 return Invalid<void>();
@@ -55,7 +72,7 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     Result<ExtensionScriptOptions> ParseExtensionScriptOptions(const Cli::CliCommandRequest &request) {
-        if (!Approved(request, "approve-native") || !Approved(request, "approve-script"))
+        if (!Consented(request))
             return Invalid<ExtensionScriptOptions>();
         auto package = Path(request, "extension-root", true);
         auto trust = Path(request, "host-trust", false);
@@ -64,7 +81,11 @@ namespace Horo::Application::Internal {
         if (package.HasError() || trust.HasError() || temporary.HasError() || script.HasError())
             return Invalid<ExtensionScriptOptions>();
         ExtensionScriptOptions options{std::move(package).Value(), std::move(trust).Value(), std::move(temporary).Value(), script.Value()};
-        if (options.script.extension() != ".lua")
+        options.moduleOperation = request.command.segments == std::vector<std::string>{"extension", "module-run"};
+        if (auto runtime = RuntimeSelection(options, request); runtime.HasError())
+            return Result<ExtensionScriptOptions>::Failure(runtime.ErrorValue());
+        const auto extension = options.runtime == Extensions::ScriptModuleRuntimeKind::Lua54 ? ".lua" : ".js";
+        if (options.script.extension() != extension)
             return Invalid<ExtensionScriptOptions>();
         if (auto ids = Identities(options, request); ids.HasError())
             return Result<ExtensionScriptOptions>::Failure(ids.ErrorValue());

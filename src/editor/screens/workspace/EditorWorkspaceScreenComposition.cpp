@@ -13,6 +13,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabValueOverrides.h"
 #include "PCGPreviewWorkspace.h"
+#include "ScriptModuleHostServices.h"
 
 #include <array>
 #include <span>
@@ -85,10 +86,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                              EditorPlaySceneFactory sceneFactory) {
             const auto *environment = services.TryGet<Application::GameplayBuildEnvironment>();
             auto *saveRetirement = services.TryGet<EditorPlaySaveRetirement>();
+            auto *moduleScripts = services.TryGet<Extensions::ScriptModuleHostServices>();
             return {.builds = services.TryGet<Application::GameplayBuildService>(),
                     .environment = environment ? *environment : Application::GameplayBuildEnvironment{},
                     .retirements = host.GameplayRetirements(),
                     .saveRetirement = saveRetirement ? saveRetirement->shared_from_this() : nullptr,
+                    .moduleScripts = moduleScripts ? moduleScripts->shared_from_this() : nullptr,
                     .sceneFactory = std::move(sceneFactory)};
         }
 

@@ -275,6 +275,7 @@ namespace Horo::Editor {
     /** @copydoc EditorPlaySessionController::RefreshBehaviorBinding */
     void EditorPlaySessionController::RefreshBehaviorBinding() {
         auto *current = behaviorOwner_ ? behaviorOwner_->Active() : nullptr;
+        RefreshModuleScriptEpoch();
         if (current == behaviors_)
             return;
         behaviors_ = current;
@@ -435,6 +436,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPlaySessionController::Stop */
     void EditorPlaySessionController::Stop() noexcept {
+        CancelModuleScripts();
         if (debugger_)
             debugger_->Producer().Detach();
         if (runtimeBinding_) {
@@ -558,6 +560,7 @@ namespace Horo::Editor {
             if (const auto committed = CommitSceneChanges(); committed.HasError())
                 Fail(committed.ErrorValue());
         }
+        PollModuleScripts();
     }
 
     /** @brief Reads immutable actual load state; pending restore advances only the existing Scene lifecycle, not project callbacks. */
@@ -596,6 +599,7 @@ namespace Horo::Editor {
         const auto quiesced = behaviorOwner_->QuiesceForReload();
         if (quiesced.HasError())
             return Result<EditorPlayReloadSnapshot>::Failure(quiesced.ErrorValue());
+        CancelModuleScripts();
         // The owner completed fallible preparation and revoked its real child scopes before destroying callbacks.
         state_ = Reloading;
         sceneHost_->QuiesceGameplay();

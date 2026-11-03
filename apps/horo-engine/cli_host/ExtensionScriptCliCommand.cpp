@@ -6,8 +6,8 @@ namespace Horo::Application::Internal {
     namespace {
         class ScriptCommand final : public Cli::ICliCommandAdapter {
         public:
-            ScriptCommand(ExtensionScriptCliHost &script, Extensions::HeadlessExtensionHost &host)
-                : script_(script), host_(host), descriptor_(DescribeExtensionScriptCommand()) {}
+            ScriptCommand(ExtensionScriptCliHost &script, Extensions::HeadlessExtensionHost &host, bool module = false)
+                : script_(script), host_(host), descriptor_(module ? DescribeModuleScriptCommand() : DescribeExtensionScriptCommand()) {}
 
             const Cli::CliCommandDescriptor &GetDescriptor() const noexcept override {
                 return descriptor_;
@@ -55,6 +55,28 @@ namespace Horo::Application::Internal {
         // Registry admission canonicalizes option order; the actual adapter must present that same descriptor.
         std::ranges::sort(descriptor.options, {}, &Cli::CliOptionDescriptor::name);
         return descriptor;
+    }
+
+    Cli::CliCommandDescriptor DescribeModuleScriptCommand() {
+        auto descriptor = DescribeExtensionScriptCommand();
+        descriptor.path = {{"extension", "module-run"}};
+        descriptor.summary = "Run one explicitly approved signed module program in Lua or JavaScript.";
+        descriptor.requiredCapabilities = {{"horo.extension.module-run"}};
+        descriptor.output.id = "horo.cli.module-script";
+        std::erase_if(descriptor.options, [](const auto &option) {
+            return option.name == "import";
+        });
+        descriptor.options.push_back({.name = "runtime",
+                                      .summary = "Closed module runtime: lua or javascript.",
+                                      .valueKind = Cli::CliOptionValueKind::String,
+                                      .required = true});
+        std::ranges::sort(descriptor.options, {}, &Cli::CliOptionDescriptor::name);
+        return descriptor;
+    }
+
+    Cli::CliCommandAdapterRegistration MakeModuleScriptCommandAdapter(ExtensionScriptCliHost &script,
+                                                                      Extensions::HeadlessExtensionHost &host) {
+        return {.adapter = std::make_unique<ScriptCommand>(script, host, true), .capabilities = {{"horo.extension.module-run"}}};
     }
 
     Cli::CliCommandAdapterRegistration MakeExtensionScriptCommandAdapter(ExtensionScriptCliHost &script,

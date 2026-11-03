@@ -547,7 +547,8 @@ namespace Horo::Extensions {
                 auto path = ResolveModuleLibraryPath(inputs.manifest, inputs.plan.selectedEntries[index]);
                 if (path.HasError())
                     return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(path.ErrorValue());
-                if (auto evidence = VerifyCurrentArtifact(inputs.artifactGate, path.Value()); evidence.HasError())
+                auto evidence = VerifyCurrentArtifact(inputs.artifactGate, path.Value());
+                if (evidence.HasError())
                     return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(evidence.ErrorValue());
                 auto loaded = inputs.loader(path.Value().string());
                 if (loaded.HasError())
@@ -559,6 +560,7 @@ namespace Horo::Extensions {
                 if (activated.HasError())
                     return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(activated.ErrorValue());
                 ActivatedModule native = std::move(activated).Value();
+                native.lifetime->artifactEvidence.emplace(std::move(evidence).Value());
                 dependencies.push_back(native.lifetime);
                 candidates.insert(candidates.end(), std::make_move_iterator(native.platformProviders.begin()),
                                   std::make_move_iterator(native.platformProviders.end()));

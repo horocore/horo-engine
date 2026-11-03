@@ -6607,3 +6607,6 @@ target_link_libraries(HoroSceneDocumentTests PRIVATE nlohmann_json::nlohmann_jso
 target_sources(HoroPrefabSceneCookHostTests PRIVATE unit/application/PrefabLayerCookHostTests.cpp)
 target_sources(HoroFoundationJsonTests PRIVATE unit/foundation/CanonicalJsonWriterTests.cpp support/AllocationProbe.cpp)
 target_include_directories(HoroFoundationJsonTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+
+# Genuine two-VM module operations in both actual product owners.
+include(HoroScriptModuleTests)

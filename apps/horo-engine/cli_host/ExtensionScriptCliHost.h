@@ -16,6 +16,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<Extensions::HeadlessExtensionHostConfiguration> Prepare(const Cli::CliCommandRequest &request,
                                                                                      const CancellationToken &cancellation);
         /** @brief Marks the boundary immediately before native Start; unknown failure retains private staging. */
+        [[nodiscard]] Result<void> ConfigureModuleOperations(Extensions::HeadlessExtensionHost &);
         void BeginActivation() noexcept;
         /** @brief Records actual successful Start, enabling evidence-based cleanup after settled shutdown. */
         void ActivationSucceeded() noexcept;
@@ -33,7 +34,10 @@ namespace Horo::Application::Internal {
 
     /** @brief Inert metadata for the concrete existing CLI dispatcher. */
     [[nodiscard]] Cli::CliCommandDescriptor DescribeExtensionScriptCommand();
+    [[nodiscard]] Cli::CliCommandDescriptor DescribeModuleScriptCommand();
     /** @brief Binds the actual invocation host and authenticated packet; neither registry nor VM enters protocol arguments. */
     [[nodiscard]] Cli::CliCommandAdapterRegistration MakeExtensionScriptCommandAdapter(ExtensionScriptCliHost &script,
                                                                                        Extensions::HeadlessExtensionHost &host);
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakeModuleScriptCommandAdapter(ExtensionScriptCliHost &,
+                                                                                    Extensions::HeadlessExtensionHost &);
 }  // namespace Horo::Application::Internal

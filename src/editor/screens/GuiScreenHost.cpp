@@ -34,6 +34,7 @@
 #include "Horo/Runtime/Input.h"
 #include "LeaveConfirmationView.h"
 #include "NavigationErrors.h"
+#include "ScriptModuleHostServices.h"
 #include "editor/gameplay/EditorPlaySaveRetirement.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/build_release/BuildActivity.h"
@@ -236,6 +237,15 @@ namespace Horo::Editor {
                                                                      extensionScriptInvocations_, composition.extensionServicePolicy);
         services_.Register<Extensions::NativeExtensionServiceHost>(*extensionServices_);
         capabilities.emplace_back("extension.services");
+        capabilities.emplace_back("horo.script.reference");
+        auto moduleScripts = Extensions::ScriptModuleHostServices::Create(extensionServices_, composition.jobs,
+                                                                          Extensions::ScriptCapabilityProfile::Gameplay);
+        if (moduleScripts.HasError()) {
+            LOG_ERROR("editor.extensions", "Module-script composition is unavailable: %s", moduleScripts.ErrorValue().message.c_str());
+            return;
+        }
+        moduleScriptServices_ = std::move(moduleScripts).Value();
+        services_.Register<Extensions::ScriptModuleHostServices>(*moduleScriptServices_);
     }
 
     /** @copydoc GuiScreenHost::InitializeExtensions */

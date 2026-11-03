@@ -1,6 +1,7 @@
 #include "Horo/Extensions/HeadlessExtensionHost.h"
 
 #include "Horo/Extensions/ExtensionErrors.h"
+#include "NativeExtensionServiceInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -32,6 +33,7 @@ namespace Horo::Extensions {
 
     class HeadlessExtensionHost::Impl final {
         friend class HeadlessExtensionHost;
+        friend struct NativeExtensionServiceHostAccess;
 
         HeadlessExtensionHostConfiguration configuration;
         HeadlessHostSynchronization synchronization;
@@ -492,5 +494,38 @@ namespace Horo::Extensions {
         impl_->manager.reset();
         impl_->importers.reset();
         impl_->state.store(HeadlessExtensionHostState::Shutdown);
+    }
+}  // namespace Horo::Extensions
+
+namespace Horo::Extensions {
+    Result<std::shared_ptr<NativeExtensionServiceHost>> NativeExtensionServiceHostAccess::HeadlessServices(HeadlessExtensionHost &host) {
+        using Output = Result<std::shared_ptr<NativeExtensionServiceHost>>;
+        const auto &services = host.impl_->nativeServices;
+        if (!services)
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationUnavailable));
+        if (services->state_->owner != std::this_thread::get_id())
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
+        if (auto failure = host.impl_->ReadyFailure())
+            return Output::Failure(*failure);
+        if (services->state_->closed.load(std::memory_order_acquire))
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationShutdown));
+        return Output::Success(services);
+    }
+}  // namespace Horo::Extensions
+
+namespace Horo::Extensions {
+    Result<std::shared_ptr<NativeExtensionServiceHost>> NativeExtensionServiceHostAccess::ConfiguringHeadlessServices(
+        HeadlessExtensionHost &host) {
+        using Output = Result<std::shared_ptr<NativeExtensionServiceHost>>;
+        const auto &services = host.impl_->nativeServices;
+        if (!services)
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationUnavailable));
+        if (services->state_->owner != std::this_thread::get_id())
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
+        if (auto configuring = host.impl_->RequireConfiguring(); configuring.HasError())
+            return Output::Failure(configuring.ErrorValue());
+        if (services->state_->closed.load(std::memory_order_acquire))
+            return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationShutdown));
+        return Output::Success(services);
     }
 }  // namespace Horo::Extensions

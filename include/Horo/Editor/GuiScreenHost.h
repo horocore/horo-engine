@@ -46,6 +46,7 @@ namespace Horo::Extensions {
     class ExtensionMarketplaceService;
     class ExtensionManager;
     class NativeExtensionServiceHost;
+    class ScriptModuleHostServices;
     class ApplicationCapabilityRegistry;
     class BackendServiceRegistry;
     class ScriptInvocationRegistry;
@@ -296,6 +297,7 @@ namespace Horo::Editor {
         std::shared_ptr<Extensions::BackendServiceRegistry> extensionBackendServices_;
         std::shared_ptr<Extensions::ScriptInvocationRegistry> extensionScriptInvocations_;
         std::shared_ptr<Extensions::NativeExtensionServiceHost> extensionServices_;
+        std::shared_ptr<Extensions::ScriptModuleHostServices> moduleScriptServices_;
         std::unique_ptr<Extensions::ExtensionManager> extensionManager_;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 

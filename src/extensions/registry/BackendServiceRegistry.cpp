@@ -336,6 +336,10 @@ namespace Horo::Extensions {
                                             BackendServiceCallContext{provider->descriptor, caller, provider->cancellation.Token()}});
         }
 
+        const BackendServiceDescriptor *BackendServiceDescriptorOf(const std::shared_ptr<BackendServiceProviderState> &provider) noexcept {
+            return provider ? &provider->descriptor : nullptr;
+        }
+
         void *BackendServiceObject(const std::shared_ptr<BackendServiceProviderState> &provider) noexcept {
             return provider->implementation.service.get();
         }

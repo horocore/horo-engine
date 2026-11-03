@@ -1503,5 +1503,17 @@ horo_configure_target_header_boundary(HoroWorldBakeApplication PUBLIC_HEADERS Ho
 horo_configure_target_header_boundary(HoroShaderHotReload PUBLIC_HEADERS
     Horo/Application/ShaderHotReloadService.h)
 
+horo_configure_target_header_boundary(HoroScriptModuleRuntime PUBLIC_HEADERS
+    Horo/Extensions/ScriptModuleRuntime.h
+    Horo/Extensions/ScriptRuntimeBackendBinding.h
+)
+horo_configure_target_header_boundary(HoroLuaScriptModuleRuntime PUBLIC_HEADERS
+    Horo/Extensions/LuaScriptModuleRuntime.h
+)
+horo_configure_target_header_boundary(HoroJavaScriptModuleRuntime PUBLIC_HEADERS
+    Horo/Extensions/JavaScriptModuleRuntime.h
+)
+horo_configure_target_header_boundary(HoroScriptModuleHost)
+
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

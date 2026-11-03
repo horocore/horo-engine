@@ -75,7 +75,7 @@ namespace Horo::Extensions {
             auto script = host->invocations->RegisterProvider({publication.provider.generation, 64});
             if (script.HasError())
                 return Result<void>::Failure(script.ErrorValue());
-            publication.script.emplace(std::move(script).Value());
+            publication.script = std::make_shared<ScriptInvocationProviderRegistration>(std::move(script).Value());
             return Result<void>::Success();
         }
 

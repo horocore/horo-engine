@@ -172,3 +172,30 @@ namespace Horo::Extensions {
         return std::move(call).Value().Invoke(&NativeScalarService::Invoke, request, cancel);
     }
 }  // namespace Horo::Extensions
+
+namespace Horo::Extensions {
+    namespace {
+        std::uint8_t ScriptCallCancelled(const void *opaque) {
+            return static_cast<const BackendServiceCallContext *>(opaque)->IsCancellationRequested();
+        }
+    }  // namespace
+
+    Result<ScriptCallResult> NativeScalarService::InvokeScript(const ScriptInvocationRequest &request,
+                                                               const BackendServiceCallContext &context) const {
+        using Output = Result<ScriptCallResult>;
+        if (request.arguments.size() > HORO_EXTENSION_SERVICE_MAX_ARGUMENTS)
+            return Output::Failure(MakeError(ExtensionErrors::ScriptValueTypeMismatch));
+        std::array<std::int64_t, HORO_EXTENSION_SERVICE_MAX_ARGUMENTS> arguments{};
+        for (std::size_t index = 0; index < request.arguments.size(); ++index) {
+            const auto *integer = request.arguments[index].AsSignedInteger();
+            if (!integer)
+                return Output::Failure(MakeError(ExtensionErrors::ScriptValueTypeMismatch));
+            arguments[index] = *integer;
+        }
+        auto native =
+            Invoke({request.functionId, std::span{arguments}.first(request.arguments.size()), {&context, ScriptCallCancelled}}, context);
+        if (native.HasError())
+            return Output::Failure(native.ErrorValue());
+        return Output::Success(ScriptCallResult::Success({ScriptValue{native.Value()}}));
+    }
+}  // namespace Horo::Extensions

@@ -5,6 +5,7 @@
  * @brief Isolated editor play-session state machine and runtime-scene ownership.
  */
 
+#include "EditorPlayModulePrograms.h"
 #include "EditorPlaySaveRetirement.h"
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayState.h"
@@ -96,6 +97,12 @@ namespace Horo::Editor {
         void ConfigureSaveError(Error error);
         /** @brief Revokes UI save borrowing and releases old-generation sources only after actual worker/delegate settlement. */
         [[nodiscard]] bool PrepareSaveRetirement() noexcept;
+        /** Explicit product module-program composition; only configurable before Play. No automatic source execution. */
+        [[nodiscard]] Result<void> ConfigureModuleScripts(std::shared_ptr<Extensions::ScriptModuleHostServices>);
+        /** Cold admission from an actual authenticated source capture, current native evidence and explicit project/context consent. */
+        [[nodiscard]] Result<void> BeginModuleScript(std::shared_ptr<const Extensions::ScriptModuleProgram>,
+                                                     Extensions::ScriptModuleOperationPolicy, const CancellationToken & = {});
+        [[nodiscard]] std::optional<Extensions::ScriptCallResult> TakeModuleScriptResult();
         /** @brief Pauses fixed simulation while leaving presentation active. */
         [[nodiscard]] Result<void> Pause();
         /** @brief Resumes continuous fixed simulation. */
@@ -178,6 +185,11 @@ namespace Horo::Editor {
         /** @brief Reports genuine immutable load admission state without touching storage or operation ownership. */
         [[nodiscard]] bool SaveLoading() noexcept;
         void Fail(Error error) noexcept;
+        void RefreshModuleScriptEpoch();
+        void PollModuleScripts();
+        void CancelModuleScripts() noexcept;
+        std::unique_ptr<EditorPlayModulePrograms> moduleScripts_;
+        std::optional<Error> moduleScriptError_;
 
         Application::NetworkDebuggerService *debugger_{};
         std::uint64_t diagnosticGeneration_{};

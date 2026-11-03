@@ -78,6 +78,7 @@ namespace Horo::Editor {
         Application::GameplayBuildEnvironment environment{};
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
         std::shared_ptr<EditorPlaySaveRetirement> saveRetirement;
+        std::shared_ptr<Extensions::ScriptModuleHostServices> moduleScripts;
         EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
     };
 
@@ -132,6 +133,12 @@ namespace Horo::Editor {
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
     public:
+        /** Explicit host operation on actual isolated Play; source must already be an authenticated immutable capture.
+         * Project/context capability policy and both consents remain mandatory. Never runs package entry code automatically. */
+        [[nodiscard]] Result<void> BeginModuleProgram(std::shared_ptr<const Extensions::ScriptModuleProgram>,
+                                                      Extensions::ScriptModuleOperationPolicy, const CancellationToken & = {});
+        [[nodiscard]] std::optional<Extensions::ScriptCallResult> TakeModuleProgramResult();
+
         /** @brief Supplies the SAME workspace caches/document through a weak owner-lane fence. */
         [[nodiscard]] EditorXrSceneSourcePort XrSceneSource() const noexcept {
             return m_xrSceneSource.Port();

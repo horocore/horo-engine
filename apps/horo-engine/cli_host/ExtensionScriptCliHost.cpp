@@ -1,6 +1,7 @@
 #include "ExtensionScriptCliInternal.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Extensions/LuaExtensionServiceBinding.h"
+#include "ScriptModuleHostServices.h"
 
 namespace Horo::Application::Internal {
     struct ExtensionScriptCliHost::Impl final {
@@ -9,6 +10,10 @@ namespace Horo::Application::Internal {
         std::filesystem::path staging;
         std::vector<Extensions::Discovery::PackageLocation> locations;
         Extensions::ScriptCapabilityScope project{Extensions::ScriptCapabilityScopeKind::Project};
+        Extensions::ScriptCapabilityScope operation{Extensions::ScriptCapabilityScopeKind::Operation};
+        std::optional<JobSystem> moduleJobs;
+        std::shared_ptr<Extensions::ScriptModuleHostServices> moduleServices;
+        std::shared_ptr<const Extensions::ScriptModuleProgram> moduleProgram;
         bool settled{};
         bool activated{};
         bool executed{};
@@ -53,7 +58,8 @@ namespace Horo::Application::Internal {
     Result<Extensions::HeadlessExtensionHostConfiguration> ExtensionScriptCliHost::Prepare(const Cli::CliCommandRequest &request,
                                                                                            const CancellationToken &cancellation) {
         using Configuration = Result<Extensions::HeadlessExtensionHostConfiguration>;
-        if (request.command.segments != std::vector<std::string>{"extension", "script-run"})
+        if (request.command.segments != std::vector<std::string>{"extension", "script-run"} &&
+            request.command.segments != std::vector<std::string>{"extension", "module-run"})
             return Configuration::Success({});
         auto options = ParseExtensionScriptOptions(request);
         if (options.HasError())
@@ -77,7 +83,27 @@ namespace Horo::Application::Internal {
                                        Extensions::Discovery::ConfigurationOrigin::UserLocal});
         configuration.artifactGate = std::make_shared<ExtensionScriptArtifactGate>(impl_->staging, impl_->packet);
         configuration.servicePolicy = ServicePolicy();
+        if (impl_->options->moduleOperation)
+            configuration.capabilities.push_back("horo.script.reference");
         return Configuration::Success(std::move(configuration));
+    }
+
+    Result<void> ExtensionScriptCliHost::ConfigureModuleOperations(Extensions::HeadlessExtensionHost &host) {
+        if (!impl_->options || !impl_->options->moduleOperation)
+            return Result<void>::Success();
+        auto program = MakeModuleScriptProgram(impl_->staging, impl_->packet);
+        if (program.HasError())
+            return Result<void>::Failure(program.ErrorValue());
+        impl_->moduleJobs.emplace(JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 64});
+        auto services = Extensions::ScriptModuleHostServices::CreateConfiguringHeadless(host, *impl_->moduleJobs);
+        if (services.HasError())
+            return Result<void>::Failure(services.ErrorValue());
+        auto reference = services.Value()->PrepareReference(program.Value()->RequestsReference());
+        if (reference.HasError())
+            return reference;
+        impl_->moduleProgram = std::move(program).Value();
+        impl_->moduleServices = std::move(services).Value();
+        return Result<void>::Success();
     }
 
     void ExtensionScriptCliHost::BeginActivation() noexcept {
@@ -102,6 +128,12 @@ namespace Horo::Application::Internal {
             return Result<Cli::CliCommandResult>::Failure(trusted.ErrorValue());
         impl_->executed = true;
         const auto &options = *impl_->options;
+        if (options.moduleOperation) {
+            if (!impl_->moduleServices || !impl_->moduleProgram)
+                return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::ExecutionContextInvalid));
+            return ExecuteCapturedModuleProgram(*impl_->moduleServices, impl_->moduleProgram, impl_->project.Lease(),
+                                                impl_->operation.Lease(), context);
+        }
         auto result = Extensions::ExecuteHeadlessLuaExtensionService(host, options.package, options.module, options.import,
                                                                      ScriptPolicy(options, *impl_->packet, impl_->project),
                                                                      impl_->packet->source, context.Cancellation());

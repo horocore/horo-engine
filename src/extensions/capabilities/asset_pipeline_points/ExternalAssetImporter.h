@@ -6,8 +6,10 @@
 #include "Horo/Extensions/ExtensionPlatformProvider.h"
 #include "Horo/Extensions/ExtensionRetirement.h"
 #include "Horo/Platform/DynamicLibrary.h"
+#include "Horo/Security/ArtifactSignature.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,6 +51,8 @@ namespace Horo::Extensions {
 
         std::unique_ptr<ExtensionNativeClosure> code{std::make_unique<ExtensionNativeClosure>()};
         std::string moduleId;
+        std::optional<Security::VerifiedArtifactEvidence> artifactEvidence; /**< Same verified bytes submitted to the actual native loader;
+                                                                               assigned before publication and never replaced. */
         HoroExtensionModuleApi moduleApi{};
         HoroExtensionUnloadFunc unload{};
         bool loaded{};

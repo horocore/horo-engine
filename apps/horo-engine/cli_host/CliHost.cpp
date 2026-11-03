@@ -165,6 +165,8 @@ namespace Horo::Application::Internal {
             if (extensions.HasError())
                 return Result<void>::Failure(extensions.ErrorValue());
             session.extensions = std::move(extensions).Value();
+            if (auto configured = script.ConfigureModuleOperations(*session.extensions); configured.HasError())
+                return configured;
             script.BeginActivation();
             auto started = session.extensions->Start(script.Locations());
             if (started.HasValue())
@@ -194,11 +196,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Explicit product command grants shared by descriptor and executable admission; package trust stays separate. */
         std::vector<CliCapabilityId> CommandCapabilities() {
-            return {{"horo.extension.script-run"},
-                    {"horo.mcp.serve"},
-                    {"horo.observability.smoke"},
-                    {"horo.package.manage"},
-                    {"horo.navigation.bake"}};
+            return {{"horo.extension.module-run"}, {"horo.extension.script-run"}, {"horo.mcp.serve"},
+                    {"horo.observability.smoke"},  {"horo.package.manage"},       {"horo.navigation.bake"}};
         }
 
         /** @brief Owns a mutable admitted dispatcher before invoking its borrowed application services. */
@@ -224,6 +223,7 @@ namespace Horo::Application::Internal {
                 return CompleteError(presenter, configuration.ErrorValue());
             auto adapters = CommandAdapters(descriptors, session.observability, packages, navigation);
             adapters.push_back(MakeExtensionScriptCommandAdapter(script, *session.extensions));
+            adapters.push_back(MakeModuleScriptCommandAdapter(script, *session.extensions));
             auto admitted = CliDispatcher::Create(std::move(registry), std::move(adapters),
                                                   {.activeHost = CliHostKind::HoroEngine,
                                                    .maximumSideEffects = CliSideEffectPolicy::WritesFiles,

@@ -51,7 +51,7 @@ namespace Horo::Extensions {
                                  const NativeServicePublication &publication) noexcept {
             const auto host = module.host.lock();
             return host && !host->closed.load(std::memory_order_acquire) && module.committed.load(std::memory_order_acquire) &&
-                   !module.revoked.load(std::memory_order_acquire) && publication.script.has_value() && binding.IsUsable();
+                   !module.revoked.load(std::memory_order_acquire) && static_cast<bool>(publication.script) && binding.IsUsable();
         }
 
         bool InvocationShape(const std::string_view function, const std::span<const std::int64_t> arguments) noexcept {

@@ -126,6 +126,8 @@ namespace Horo::Editor {
             m_gameplayRetirements = dependencies.gameplay.retirements;
         m_playSaveRetirement = dependencies.gameplay.saveRetirement;
         m_playSession.ConfigureSaveRetirement(m_playSaveRetirement);
+        if (auto modules = m_playSession.ConfigureModuleScripts(dependencies.gameplay.moduleScripts); modules.HasError())
+            LOG_ERROR("editor.extensions", "Play module-script composition is unavailable: %s", modules.ErrorValue().message.c_str());
         m_inspectorDocumentOwner = dependencies.world.documentSessionOwner;
         m_inspectorHost = dependencies.inspectorHost;
         m_physicsDocumentOwner = dependencies.world.documentSessionOwner;
