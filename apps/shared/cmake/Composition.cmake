@@ -30,6 +30,32 @@ target_include_directories(HoroHostModuleComposition PUBLIC
 )
 target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation HoroEngine::PlatformServices)
 
+# Editor and headless samples share one explicit simulator Scene/Input adapter.
+# Stage only this host contract; implementation state remains application-private.
+set(HORO_XR_SIMULATOR_PLAY_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/xr_simulator_play_headers")
+file(MAKE_DIRECTORY "${HORO_XR_SIMULATOR_PLAY_HEADERS}")
+configure_file(shared/xr/SimulatorPlayHost.h "${HORO_XR_SIMULATOR_PLAY_HEADERS}/SimulatorPlayHost.h" COPYONLY)
+add_library(HoroXRSimulatorPlayHost STATIC
+    shared/xr/SimulatorPlayHost.cpp
+    shared/xr/SimulatorPlayInput.cpp
+    shared/xr/SimulatorPlayScene.cpp)
+target_compile_features(HoroXRSimulatorPlayHost PUBLIC cxx_std_20)
+target_include_directories(HoroXRSimulatorPlayHost PUBLIC "${HORO_XR_SIMULATOR_PLAY_HEADERS}")
+target_link_libraries(HoroXRSimulatorPlayHost
+    PUBLIC HoroEngine::EditorXRSimulatorModel HoroEditorPlayXrHostInterface HoroEngine::RuntimeScene HoroEngine::Runtime
+    PRIVATE HoroXRSimulatorHostInterface HoroEditorXrSceneInternal)
+
+set(HORO_XR_SIMULATOR_ARTIFACT_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/xr_simulator_artifact_headers")
+file(MAKE_DIRECTORY "${HORO_XR_SIMULATOR_ARTIFACT_HEADERS}")
+configure_file(shared/xr/SimulatorProjectArtifacts.h
+    "${HORO_XR_SIMULATOR_ARTIFACT_HEADERS}/SimulatorProjectArtifacts.h" COPYONLY)
+add_library(HoroXRSimulatorProjectArtifacts STATIC shared/xr/SimulatorProjectArtifacts.cpp)
+target_compile_features(HoroXRSimulatorProjectArtifacts PUBLIC cxx_std_20)
+target_include_directories(HoroXRSimulatorProjectArtifacts PUBLIC "${HORO_XR_SIMULATOR_ARTIFACT_HEADERS}")
+target_link_libraries(HoroXRSimulatorProjectArtifacts
+    PUBLIC HoroEngine::EditorXRSimulatorModel HoroEngine::ProjectReadFilesApi
+    PRIVATE HoroEngine::Platform)
+
 # Application-only observer; Scene remains the sole native candidate owner. Only
 # this header and its declared non-installed Physics boundary reach consumers.
 set(HORO_SCENE_PHYSICS_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_physics_host_headers")

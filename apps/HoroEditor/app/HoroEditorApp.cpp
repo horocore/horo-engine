@@ -2,6 +2,10 @@
 
 #include "EditorDirectionalShadowOptions.h"
 #include "EditorLightingOptions.h"
+#include "Horo/Editor/XRSimulatorModel.h"
+#include "Horo/Platform/NativeProjectIoOwners.h"
+#include "SimulatorPlayHost.h"
+#include "SimulatorProjectArtifacts.h"
 #if defined(HORO_HAS_RENDER_METAL)
 #include "EditorClusteredLightingStartup.h"
 #endif
@@ -331,6 +335,7 @@ namespace Horo::Editor {
             std::optional<EditorViewportLightingProfile> lighting;
             std::optional<Runtime::SceneObjectId> xrTrackingRoot;
             bool xrTrackingRootValid{true};
+            bool xrSimulator{};
             std::optional<bool> prefabGranted{false};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             bool qualifySurfaceLifecycle = false;
@@ -758,6 +763,9 @@ namespace Horo::Editor {
         EditorGuiOptions opts;
         opts.directionalShadows = Detail::ParseDirectionalShadowArguments(args);
         opts.lighting = Detail::ParseEditorLightingArguments(args);
+        opts.xrSimulator = std::ranges::any_of(args, [](const char *value) {
+            return std::string_view{value} == "--xr-simulator";
+        });
         PendingEditorOption pending = None;
         for (const char *rawArgument : args.subspan(std::min<std::size_t>(1, args.size()))) {
             const std::string_view argument{rawArgument};
@@ -961,6 +969,8 @@ namespace Horo::Editor {
             EditorViewportRendererVulkan *xrViewport{}; /**< Borrow of the exact selected concrete viewport, never a downcast. */
             std::unique_ptr<Application::Internal::OpenXRPlayHost> xrPlay;
 #endif
+            std::shared_ptr<Application::Internal::SimulatorPlayHost> simulator;
+            std::unique_ptr<XRSimulatorModel> simulatorModel;
             Render::RenderTargetHandle viewportTarget;
             std::optional<Application::Internal::RuntimeUiPaintPort> uiRetirement;
             bool retirementBegun{false};
@@ -1441,6 +1451,11 @@ namespace Horo::Editor {
             }
 
             Result<void> OnPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
+                return phase <= Runtime::RuntimePhase::VariableUpdate ? DispatchControlPhase(phase, context)
+                                                                      : DispatchRenderPhase(phase, context);
+            }
+
+            Result<void> DispatchControlPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) {
                 switch (phase) {
                     case Runtime::RuntimePhase::BeginFrame:
                         PollShaderReload();
@@ -1453,22 +1468,18 @@ namespace Horo::Editor {
                     case Runtime::RuntimePhase::PollPlatformEvents:
                         return PollPlatformEvents();
                     case Runtime::RuntimePhase::BuildInputSnapshot:
-#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-                        if (auto *xr = p_->presentation.composition.xrPlay.get()) {
-                            const auto committed = xr->BuildInputSnapshot(context, p_->inputBackend.Commit());
-                            if (committed.HasError())
-                                return committed;
-                        } else
-#endif
-                        {
-                            p_->inputRouter.BeginFrame(p_->inputBackend.Commit());
-                        }
-                        screenHost_->OnInputSnapshot();
-                        return Result<void>::Success();
+                        return BuildEditorInput(context);
                     case Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands:
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::VariableUpdate:
                         return UpdatePresentation(context);
+                    default:
+                        return Result<void>::Success();
+                }
+            }
+
+            Result<void> DispatchRenderPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) {
+                switch (phase) {
                     case Runtime::RuntimePhase::RenderExtraction:
                         return ExtractFrame();
                     case Runtime::RuntimePhase::RenderExecution:
@@ -1486,12 +1497,9 @@ namespace Horo::Editor {
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::EndFrame:
                         return EndRuntimeFrame(context);
-                    case Runtime::RuntimePhase::NetworkPoll:
-                    case Runtime::RuntimePhase::NetworkFlush:
-                    case Runtime::RuntimePhase::FixedUpdate:
-                        break;
+                    default:
+                        return Result<void>::Success();
                 }
-                return Result<void>::Success();
             }
 
             Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
@@ -1629,6 +1637,25 @@ namespace Horo::Editor {
                 return qualification_.EndFrame(snapshot.Value());
             }
 #endif
+
+            Result<void> BuildEditorInput(const Runtime::FrameContext &context) {
+                auto &composition = p_->presentation.composition;
+                const auto raw = p_->inputBackend.Commit();
+                if (composition.simulator) {
+                    if (auto built = composition.simulator->BuildInputSnapshot(context, raw); built.HasError())
+                        return built;
+                }
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                else if (composition.xrPlay) {
+                    if (auto built = composition.xrPlay->BuildInputSnapshot(context, raw); built.HasError())
+                        return built;
+                }
+#endif
+                else
+                    p_->inputRouter.BeginFrame(raw);
+                screenHost_->OnInputSnapshot();
+                return Result<void>::Success();
+            }
 
             Result<void> PollPlatformEvents() {
                 while (const std::optional<EditorMenuInvocation> invocation = PollNativeEditorMenuAction()) {
@@ -2279,10 +2306,19 @@ namespace Horo::Editor {
             auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
             if (registry.HasError())
                 return Result<WorkspaceReadSources>::Failure(registry.ErrorValue());
-            auto world = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
-            if (world.HasError())
-                return Result<WorkspaceReadSources>::Failure(world.ErrorValue());
-            return Result<WorkspaceReadSources>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
+            auto io = Platform::CreateNativeProjectIoOwners(root, owner.ToString(), 1, ".horo/xr-simulator/cache",
+                                                            Application::Internal::SimulatorProjectArtifacts::PublicationDirectory);
+            if (io.HasError())
+                return Result<WorkspaceReadSources>::Failure(io.ErrorValue());
+            auto artifacts = Application::Internal::SimulatorProjectArtifacts::Create(
+                {.source = io.Value().source,
+                 .publication = io.Value().publication,
+                 .context = {.projectIdentity = owner.ToString(), .projectGeneration = 1},
+                 .authorizedRoot = root});
+            if (artifacts.HasError())
+                return Result<WorkspaceReadSources>::Failure(artifacts.ErrorValue());
+            return Result<WorkspaceReadSources>::Success(
+                {owner, std::move(registry).Value(), io.Value().source, std::move(artifacts).Value()});
         }
 
         /** @brief Captures explicit cooked selection and Physics mode before constructing Scene owners. */
@@ -2404,6 +2440,71 @@ namespace Horo::Editor {
             return true;
         }
 #endif
+
+        bool ComposeEditorSimulator(RunEditorMainLoopParams &p, const Runtime::RuntimeHost &runtime, const Duration fixedStep) {
+            if (!p.options.xrSimulator)
+                return true;
+            auto &composition = p.presentation.composition;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (composition.xrSession) {
+                LOG_ERROR("editor.xr", "Simulator and native XR selection are mutually exclusive.");
+                return false;
+            }
+#endif
+            if (!p.options.xrTrackingRootValid || !p.options.xrTrackingRoot) {
+                LOG_ERROR("editor.xr", "Simulator requires an explicit --xr-tracking-root object in the selected project Scene.");
+                return false;
+            }
+            auto created = Application::Internal::SimulatorPlayHost::Create(
+                {p.inputRouter, runtime.DispatchSource(), fixedStep, *p.options.xrTrackingRoot});
+            if (created.HasError()) {
+                LOG_ERROR("editor.xr", "%s", created.ErrorValue().message.c_str());
+                return false;
+            }
+            composition.simulator = std::move(created).Value();
+            composition.simulatorModel = std::make_unique<XRSimulatorModel>(composition.simulator);
+            return true;
+        }
+
+        Result<std::unique_ptr<Runtime::RuntimeHost>> PrepareEditorRuntime(RunEditorMainLoopParams &p, Clock &clock,
+                                                                           const Runtime::FrameSchedulerConfig &config) {
+            auto created = Runtime::RuntimeHost::Create(clock, config);
+            if (created.HasError())
+                return created;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (!ComposeSelectedEditorXrPlay(p, *created.Value(), config.fixedStep))
+                return Result<std::unique_ptr<Runtime::RuntimeHost>>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+#endif
+            if (!ComposeEditorSimulator(p, *created.Value(), config.fixedStep))
+                return Result<std::unique_ptr<Runtime::RuntimeHost>>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+            return created;
+        }
+
+        IEditorPlayXrHost *SelectedEditorPlayHost(EditorRenderComposition &composition) noexcept {
+            if (composition.simulator)
+                return composition.simulator.get();
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            return composition.xrPlay.get();
+#else
+            return nullptr;
+#endif
+        }
+
+        struct SimulatorInputOwnerScope final {
+            Application::Internal::SimulatorPlayHost *host{};
+
+            ~SimulatorInputOwnerScope() {
+                if (host)
+                    host->ReleaseInputOwner();
+            }
+        };
+
+        void RegisterEditorSimulator(GuiScreenHost &screen, EditorRenderComposition &composition) {
+            if (!composition.simulator)
+                return;
+            screen.Services().Register<IEditorPlayXrHost>(*composition.simulator);
+            screen.Services().Register<XRSimulatorModel>(*composition.simulatorModel);
+        }
 
         /** @brief Keeps an optional fallback host and the selected package service in one startup lifetime. */
         struct EditorPackageComposition final {
@@ -2685,18 +2786,16 @@ namespace Horo::Editor {
             const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
             SteadyClock clock;
             const Runtime::FrameSchedulerConfig schedulerConfig{};
-            auto createdRuntime = Runtime::RuntimeHost::Create(clock, schedulerConfig);
+            auto createdRuntime = PrepareEditorRuntime(p, clock, schedulerConfig);
             if (createdRuntime.HasError()) {
                 LOG_ERROR("editor.runtime", "Runtime host creation failed: %s", createdRuntime.ErrorValue().message.c_str());
                 return std::nullopt;
             }
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             auto &xrComposition = p.presentation.composition;
-            if (!ComposeSelectedEditorXrPlay(p, *createdRuntime.Value(), schedulerConfig.fixedStep))
-                return std::nullopt;
-
             XrInputOwnerScope xrInputOwner{xrComposition.xrPlay.get()};
 #endif
+            SimulatorInputOwnerScope simulatorInputOwner{p.presentation.composition.simulator.get()};
             auto preparedUi = PrepareEditorUi(p, createdRuntime.Value()->DispatchSource());
             if (!preparedUi)
                 return std::nullopt;
@@ -2711,9 +2810,7 @@ namespace Horo::Editor {
             auto playPolicy = scenePolicy;
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
-#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-            playPolicy.xrHost = xrComposition.xrPlay.get();
-#endif
+            playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);
             auto playSceneFactory = Application::Internal::MakeEditorProjectSceneFactory(p.background.jobs, std::move(playPolicy));
             auto prefabStageFactory = Application::Internal::MakeEditorProjectPrefabStageFactory(p.background.jobs, scenePolicy);
             // Null is explicit; canonical activation needs an exact owner receipt.
@@ -2832,6 +2929,7 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             RegisterEditorXrPlayServices(screenHost, xrComposition.xrPlay.get());
 #endif
+            RegisterEditorSimulator(screenHost, p.presentation.composition);
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
@@ -3047,6 +3145,78 @@ namespace Horo::Editor {
         return true;
     }
 
+    struct PreparedEditorBootstrap final {
+#if defined(HORO_HAS_OPENXR_HOST)
+        std::unique_ptr<EditorOpenXRBootstrap> owned;
+#endif
+        const EditorOpenXRHostServices *selected{};
+    };
+
+    static bool ValidateXrStartupSelection(const EditorGuiOptions &options, const EditorOpenXRHostServices *host,
+                                           std::span<char *> arguments) {
+        if (!options.xrTrackingRootValid) {
+            LOG_CRITICAL("editor.xr", "Explicit XR tracking-root selection is malformed or duplicated.");
+            return false;
+        }
+        const bool nativeArguments = std::ranges::any_of(arguments, [](const char *value) {
+            return std::string_view{value}.starts_with("--xr-host-");
+        });
+        if (options.xrSimulator && (host || nativeArguments)) {
+            LOG_CRITICAL("editor.xr", "Select Simulator without native XR host services or --xr-host-* arguments.");
+            return false;
+        }
+        return true;
+    }
+
+    static std::optional<PreparedEditorBootstrap> PrepareEditorBootstrap(const EditorGuiOptions &options,
+                                                                         const EditorOpenXRHostServices *host,
+                                                                         std::span<char *> arguments) {
+        if (!ValidateXrStartupSelection(options, host, arguments))
+            return {};
+        PreparedEditorBootstrap result;
+        result.selected = host;
+#if defined(HORO_HAS_OPENXR_HOST)
+        const bool nativeArguments =
+            std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())), [](const char *value) {
+            return std::string_view{value}.starts_with("--xr-host-");
+        });
+        if (host && nativeArguments) {
+            LOG_CRITICAL("editor.xr", "Injected installer services and explicit host bootstrap inputs cannot select two authorities.");
+            return {};
+        }
+        if (!host) {
+            auto installed = EditorOpenXRBootstrap::Create(arguments, options.projectRoot,
+                                                           ResolveEditorSettingsHomeDirectory() / ".cache" / "horo" / "packages",
+                                                           options.xrTrackingRoot.value_or(Runtime::SceneObjectId{}));
+            if (installed.HasError()) {
+                LOG_CRITICAL("editor.xr", "Installed XR bootstrap failed: %s", installed.ErrorValue().message.c_str());
+                return {};
+            }
+            result.owned = std::move(installed).Value();
+            if (result.owned)
+                result.selected = &result.owned->Services();
+        }
+#else
+        if (std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())), [](const char *value) {
+            return std::string_view{value}.starts_with("--xr-host-");
+        })) {
+            LOG_CRITICAL("editor.xr", "This executable contains no installed OpenXR host component.");
+            return {};
+        }
+#endif
+        return result;
+    }
+
+    static const Render::RenderBackendModuleInfo *SelectInteractiveBackend(EditorGuiOptions &options) {
+        const auto *module = ResolveCompiledBackendModuleInfo(options.rendererBackend);
+        if (!module || !module->supportsInteractivePresentation) {
+            LOG_CRITICAL("editor.renderer", "Requested renderer component '%s' is unavailable.", options.rendererBackend.c_str());
+            return nullptr;
+        }
+        options.rendererBackend = module->id.Value();
+        return module;
+    }
+
     /** @brief Validates startup inputs and composes the editor's installed modules. */
     [[nodiscard]] static std::optional<PreparedEditorStartup> PrepareEditorStartup(EditorGuiOptions options,
                                                                                    const EditorOpenXRHostServices *xrHost,
@@ -3056,46 +3226,12 @@ namespace Horo::Editor {
         std::string projectName;
         if (!ConfigureStartupProject(options, projectName))
             return std::nullopt;
-        if (!options.xrTrackingRootValid) {
-            LOG_CRITICAL("editor.xr", "Explicit XR tracking-root selection is malformed or duplicated.");
+        auto bootstrap = PrepareEditorBootstrap(options, xrHost, arguments);
+        if (!bootstrap)
             return std::nullopt;
-        }
-#if defined(HORO_HAS_OPENXR_HOST)
-        std::unique_ptr<EditorOpenXRBootstrap> bootstrap;
-        if (const bool hostArguments = std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())),
-                                                           [](const char *value) {
-            return std::string_view{value}.starts_with("--xr-host-");
-        });
-            xrHost && hostArguments) {
-            LOG_CRITICAL("editor.xr", "Injected installer services and explicit host bootstrap inputs cannot select two authorities.");
+        const auto *moduleInfo = SelectInteractiveBackend(options);
+        if (!moduleInfo)
             return std::nullopt;
-        }
-        if (!xrHost) {
-            auto installed = EditorOpenXRBootstrap::Create(arguments, options.projectRoot,
-                                                           ResolveEditorSettingsHomeDirectory() / ".cache" / "horo" / "packages",
-                                                           options.xrTrackingRoot.value_or(Runtime::SceneObjectId{}));
-            if (installed.HasError()) {
-                LOG_CRITICAL("editor.xr", "Installed XR bootstrap failed: %s", installed.ErrorValue().message.c_str());
-                return std::nullopt;
-            }
-            bootstrap = std::move(installed).Value();
-            if (bootstrap)
-                xrHost = &bootstrap->Services();
-        }
-#else
-        if (std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())), [](const char *value) {
-            return std::string_view{value}.starts_with("--xr-host-");
-        })) {
-            LOG_CRITICAL("editor.xr", "This executable contains no installed OpenXR host component.");
-            return std::nullopt;
-        }
-#endif
-        const Render::RenderBackendModuleInfo *moduleInfo = ResolveCompiledBackendModuleInfo(options.rendererBackend);
-        if (moduleInfo == nullptr || !moduleInfo->supportsInteractivePresentation) {
-            LOG_CRITICAL("editor.renderer", "Requested renderer component '%s' is unavailable.", options.rendererBackend.c_str());
-            return std::nullopt;
-        }
-        options.rendererBackend = moduleInfo->id.Value();
         const RendererAvailabilitySnapshot rendererAvailability = BuildRendererAvailabilitySnapshot(options.rendererBackend);
         auto selectedRenderer = Application::Internal::HostRendererFromBackendId(options.rendererBackend);
         if (selectedRenderer.HasError()) {
@@ -3109,7 +3245,7 @@ namespace Horo::Editor {
             return std::nullopt;
         }
         std::unique_ptr<ModuleHost> modules = std::move(composedModules).Value();
-        auto configuration = PrepareEditorConfiguration(settings, *modules, xrHost);
+        auto configuration = PrepareEditorConfiguration(settings, *modules, bootstrap->selected);
         if (!configuration)
             return std::nullopt;
         PreparedEditorStartup startup{std::move(options),
@@ -3121,9 +3257,9 @@ namespace Horo::Editor {
                                       std::move(configuration->events),
                                       std::move(configuration->service),
 #if defined(HORO_HAS_OPENXR_HOST)
-                                      std::move(bootstrap),
+                                      std::move(bootstrap->owned),
 #endif
-                                      xrHost};
+                                      bootstrap->selected};
         if (!PrepareEditorXrProduct(startup))
             return std::nullopt;
         return startup;

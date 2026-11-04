@@ -6,6 +6,7 @@
  */
 
 #include "Horo/XR/XRContract.h"
+#include "Horo/XR/XRHandTracking.h"
 #include "Horo/XR/XRSpacePose.h"
 
 #include <array>
@@ -21,6 +22,8 @@ namespace Horo::XR {
         LeftController,
         RightController,
         GenericTracker,
+        LeftHand,
+        RightHand,
         Count
     };
 
@@ -42,6 +45,7 @@ namespace Horo::XR {
         PalmPose,
         TrackerPose,
         Haptics,
+        HandJoints,
         Count
     };
 
@@ -134,9 +138,10 @@ namespace Horo::XR {
 
     /** @brief Finite admitted capacities; publication rejects rather than truncates overflow. */
     struct XRTrackingSnapshotLimits final {
-        std::uint32_t maximumDevices{}; /**< Admitted device records, at most MaximumDevices. */
-        std::uint32_t maximumPoses{};   /**< Admitted pose records, at most MaximumPoses. */
-        std::uint32_t maximumActions{}; /**< Admitted scalar-action records; zero preserves tracking-only callers. */
+        std::uint32_t maximumDevices{};    /**< Admitted device records, at most MaximumDevices. */
+        std::uint32_t maximumPoses{};      /**< Admitted pose records, at most MaximumPoses. */
+        std::uint32_t maximumActions{};    /**< Admitted scalar-action records; zero preserves tracking-only callers. */
+        std::uint32_t maximumHandJoints{}; /**< Optional articulated evidence; zero preserves existing native callers. */
         constexpr auto operator<=>(const XRTrackingSnapshotLimits &) const noexcept = default;
     };
 
@@ -163,6 +168,8 @@ namespace Horo::XR {
         std::span<const XRTrackedPoseRecord> poses;                              /**< Canonically ordered device poses. */
         std::uint64_t bindingRevision{};                /**< Non-zero exact resolved-plan revision whenever actions are admitted. */
         std::span<const XRTrackedActionRecord> actions; /**< Canonical (binding index, device) ordered action evidence. */
+        std::span<const XRHandJointRecord>
+            handJoints; /**< Canonical (hand, joint) order; default empty, never inferred from controllers. */
     };
 
     /**
@@ -215,6 +222,9 @@ namespace Horo::XR {
         [[nodiscard]] std::uint64_t BindingRevision() const noexcept;
         /** @brief Returns canonical action evidence. @return Immutable owned populated prefix. */
         [[nodiscard]] std::span<const XRTrackedActionRecord> Actions() const noexcept;
+        /** @brief Returns bounded owned articulated-hand evidence. No capture authority is granted.
+         * @return Immutable populated joint prefix, valid for this snapshot lifetime. */
+        [[nodiscard]] std::span<const XRHandJointRecord> HandJoints() const noexcept;
 
     private:
         [[nodiscard]] static std::array<XRTrackedPoseRecord, XRTrackingSnapshotHardLimits::MaximumPoses> EmptyPoses() noexcept;
@@ -236,6 +246,8 @@ namespace Horo::XR {
         std::size_t deviceCount_{};
         std::size_t poseCount_{};
         std::size_t actionCount_{};
+        std::array<XRHandJointRecord, XRHandTrackingHardLimits::MaximumJoints> handJoints_{};
+        std::size_t handJointCount_{};
         std::uint64_t bindingRevision_{};
     };
 
@@ -266,4 +278,17 @@ namespace Horo::XR {
                                                           XRTrackedPoseKind kind, const XRSessionId &activeSession,
                                                           XRTrackingSnapshotRevision expectedRevision,
                                                           XRWorldOriginRevision activeOriginRevision);
+    /** @brief Queries an exact current hand joint; stale/neutral/lost evidence never returns a prior joint.
+     * @param snapshot Immutable snapshot whose complete provenance is revalidated.
+     * @param device Exact hand source incarnation, never a controller alias.
+     * @param joint Known anatomical joint to inspect.
+     * @param activeSession Current canonical session; invalid after shutdown.
+     * @param expectedRevision Exact publication selected by the consumer.
+     * @param activeOriginRevision Current canonical world-origin revision.
+     * @return Owned joint or typed invalid, stale, unsupported or unavailable denial; no successful-path allocation.
+     */
+    [[nodiscard]] Result<XRHandJointRecord> QueryXRHandJoint(const XRTrackingSnapshot &snapshot, const XRDeviceId &device,
+                                                             XRHandJoint joint, const XRSessionId &activeSession,
+                                                             XRTrackingSnapshotRevision expectedRevision,
+                                                             XRWorldOriginRevision activeOriginRevision);
 }  // namespace Horo::XR

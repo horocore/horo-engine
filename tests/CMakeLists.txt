@@ -199,13 +199,18 @@ endif ()
 add_compile_definitions(HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 function(horo_register_catch_test target)
-    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "" "LABELS;EXTRA_ARGS;PROPERTIES")
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "" "LABELS;EXTRA_ARGS;PROPERTIES;TEST_SPEC")
+    set(test_specification)
+    if(ARG_TEST_SPEC)
+        list(APPEND test_specification TEST_SPEC ${ARG_TEST_SPEC})
+    endif()
     horo_ci_catch_labels(${target})
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_definitions(${target} PRIVATE HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     target_link_libraries(${target} PRIVATE Catch2::Catch2WithMain)
     catch_discover_tests(${target}
             TEST_PREFIX "${target}::"
+            ${test_specification}
             EXTRA_ARGS ${ARG_EXTRA_ARGS}
     )
     horo_ci_catch_properties(${target})
@@ -1741,6 +1746,7 @@ add_executable(HoroXRApiTests
         unit/runtime/xr/XRApiContractTests.cpp
         unit/runtime/xr/XRLoaderPreflightTests.cpp
         unit/runtime/xr/XRSpacePoseTests.cpp
+        unit/runtime/xr/XRHandTrackingTests.cpp
         unit/runtime/xr/XRTrackingSnapshotTests.cpp
         unit/runtime/xr/XRViewRenderPlanTests.cpp
 )
@@ -1754,6 +1760,8 @@ add_executable(HoroXRRuntimeTests
         unit/runtime/xr/XRProjectSettingsTests.cpp
         unit/runtime/xr/XRFeatureNegotiationTests.cpp
         unit/runtime/xr/XRFakeRuntimeTests.cpp
+        unit/runtime/xr/XRFakeRuntimeHostCompositionTests.cpp
+        unit/runtime/xr/XRFakeRuntimeSuppliedStepTests.cpp
         unit/runtime/xr/XRFrameLifecycleTests.cpp
         unit/runtime/xr/XRSessionLifecycleTests.cpp
         unit/runtime/xr/XRTrackingPublicationTests.cpp
@@ -1762,6 +1770,63 @@ target_compile_features(HoroXRRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroXRRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroXRRuntimeTests PRIVATE HoroEngine::XRRuntime HoroXRRuntimeHostInterface)
 horo_register_catch_test(HoroXRRuntimeTests LABELS "unit;xr;headless;lifecycle")
+
+target_sources(HoroXRApiPublicHeaderConsumer PRIVATE public_headers/XRHandTrackingConsumer.cpp)
+add_library(HoroXRFakeRuntimeHostCompositionConsumer OBJECT public_headers/XRFakeRuntimeHostCompositionConsumer.cpp)
+target_compile_features(HoroXRFakeRuntimeHostCompositionConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroXRFakeRuntimeHostCompositionConsumer PRIVATE HoroXRRuntimeHostInterface)
+
+add_executable(HoroXRSimulatorTests
+        support/AllocationProbe.cpp
+        unit/runtime/xr/XRSimulatorScenarioTests.cpp
+        unit/runtime/xr/XRSimulatorRuntimeTests.cpp
+        unit/runtime/xr/XRSimulatorCaptureTests.cpp
+        unit/runtime/xr/XRSimulatorBindingTests.cpp
+)
+target_compile_features(HoroXRSimulatorTests PRIVATE cxx_std_20)
+target_include_directories(HoroXRSimulatorTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroXRSimulatorTests PRIVATE HoroEngine::XRSimulator HoroXRSimulatorHostInterface)
+horo_register_catch_test(HoroXRSimulatorTests LABELS "unit;xr;headless;simulator;lifecycle")
+
+target_sources(HoroXRSimulatorPublicHeaderConsumer PRIVATE public_headers/XRSimulatorConsumer.cpp)
+
+add_library(HoroXRSimulatorHostConsumer OBJECT public_headers/XRSimulatorHostConsumer.cpp)
+target_compile_features(HoroXRSimulatorHostConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroXRSimulatorHostConsumer PRIVATE HoroXRSimulatorHostInterface)
+add_dependencies(HoroXRSimulatorTests HoroXRSimulatorPublicHeaderConsumer HoroXRSimulatorHostConsumer)
+
+add_library(HoroXRSimulatorArtifactsConsumer OBJECT public_headers/SimulatorProjectArtifactsConsumer.cpp)
+target_compile_features(HoroXRSimulatorArtifactsConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroXRSimulatorArtifactsConsumer PRIVATE HoroXRSimulatorProjectArtifacts)
+add_executable(HoroXRSimulatorArtifactTests unit/application/xr/SimulatorProjectArtifactsTests.cpp)
+target_compile_features(HoroXRSimulatorArtifactTests PRIVATE cxx_std_20)
+target_include_directories(HoroXRSimulatorArtifactTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroXRSimulatorArtifactTests PRIVATE HoroXRSimulatorProjectArtifacts HoroEngine::PlatformProjectIo)
+add_dependencies(HoroXRSimulatorArtifactTests HoroXRSimulatorArtifactsConsumer)
+horo_register_catch_test(HoroXRSimulatorArtifactTests LABELS "unit;xr;headless;simulator;project-io")
+
+add_executable(HoroXRSimulatorWorkflowTests
+    integration/xr/XRSimulatorWorkflowTests.cpp
+    integration/xr/SimulatorPlayHostLifecycleTests.cpp
+    support/AllocationProbe.cpp
+    support/xr/XRSimulatorSampleProject.cpp)
+add_library(HoroXRSimulatorWorkflowConsumer OBJECT public_headers/SimulatorProjectWorkflowConsumer.cpp)
+target_compile_features(HoroXRSimulatorWorkflowConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroXRSimulatorWorkflowConsumer PRIVATE HoroXRSimulatorProjectWorkflow)
+add_dependencies(HoroXRSimulatorWorkflowTests HoroXRSimulatorWorkflowConsumer)
+add_library(HoroEditorDocumentInternalConsumer OBJECT public_headers/EditorDocumentInternalConsumer.cpp)
+target_compile_features(HoroEditorDocumentInternalConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorDocumentInternalConsumer PRIVATE HoroEditorDocumentInternal)
+add_dependencies(HoroXRSimulatorWorkflowTests HoroEditorDocumentInternalConsumer)
+target_include_directories(HoroXRSimulatorWorkflowTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroXRSimulatorWorkflowTests PRIVATE HoroXRSimulatorProjectWorkflow
+    HoroEngine::EditorServices HoroEngine::SceneSource HoroEngine::Application
+    HoroXRSimulatorPlayHost HoroEditorXrSceneInternal)
+# The materializer is invoked explicitly with a fresh owned output directory;
+# ordinary CTest discovery must never run it or require an output environment.
+horo_register_catch_test(HoroXRSimulatorWorkflowTests
+    LABELS "unit;xr;headless;simulator;workflow"
+    TEST_SPEC "~[.materialize]")
 
 target_sources(HoroXRInputBindingsPublicHeaderConsumer PRIVATE public_headers/XRInputBindingsConsumer.cpp)
 target_sources(HoroXRRuntimePublicHeaderConsumer PRIVATE public_headers/XRProjectSettingsConsumer.cpp)

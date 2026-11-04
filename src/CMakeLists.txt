@@ -2284,6 +2284,7 @@ add_library(HoroXRApi STATIC
         runtime/xr/api/XRIdentity.cpp
         runtime/xr/api/XRLoaderPreflight.cpp
         runtime/xr/api/XRSpacePose.cpp
+        runtime/xr/api/XRHandTracking.cpp
         runtime/xr/api/XRTrackingSnapshot.cpp
         runtime/xr/api/XRViewRenderPlan.cpp
         runtime/xr/api/XRMultiviewScene.cpp
@@ -2314,6 +2315,7 @@ add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRProjectSettings.cpp
         runtime/xr/runtime/XRFeatureNegotiation.cpp
         runtime/xr/runtime/XRFakeRuntime.cpp
+        runtime/xr/runtime/XRFakeRuntimeHostComposition.cpp
         runtime/xr/runtime/XRFrameLifecycle.cpp
         runtime/xr/runtime/XRSessionErrors.cpp
         runtime/xr/runtime/XRSessionLifecycle.cpp
@@ -2331,6 +2333,8 @@ configure_file(runtime/xr/runtime/host/XRTrackingPublication.h
     "${_horo_xr_runtime_host_headers}/XRTrackingPublication.h" COPYONLY)
 configure_file(runtime/xr/runtime/host/XRSessionHostControl.h
     "${_horo_xr_runtime_host_headers}/XRSessionHostControl.h" COPYONLY)
+configure_file(runtime/xr/runtime/host/XRFakeRuntimeHostComposition.h
+    "${_horo_xr_runtime_host_headers}/XRFakeRuntimeHostComposition.h" COPYONLY)
 add_library(HoroXRRuntimeHostInterface INTERFACE)
 target_include_directories(HoroXRRuntimeHostInterface INTERFACE "${_horo_xr_runtime_host_headers}")
 target_link_libraries(HoroXRRuntimeHostInterface INTERFACE HoroEngine::XRRuntime)
@@ -2341,6 +2345,30 @@ add_library(HoroXRInputBindings STATIC runtime/xr/input/XRActionBindings.cpp run
 add_library(HoroEngine::XRInputBindings ALIAS HoroXRInputBindings)
 target_compile_features(HoroXRInputBindings PUBLIC cxx_std_20)
 target_link_libraries(HoroXRInputBindings PUBLIC HoroEngine::XRApi HoroEngine::Input)
+
+# Headset-free development is explicit composition above canonical XR and Input owners.
+add_library(HoroXRSimulator STATIC
+        runtime/xr/simulator/XRSimulatorScenario.cpp
+        runtime/xr/simulator/XRSimulatorScenarioEncode.cpp
+        runtime/xr/simulator/XRSimulatorScenarioDecode.cpp
+        runtime/xr/simulator/XRSimulatorBindings.cpp
+        runtime/xr/simulator/XRSimulatorRuntime.cpp
+        runtime/xr/simulator/XRSimulatorStream.cpp
+        runtime/xr/simulator/XRSimulatorCapture.cpp
+)
+add_library(HoroEngine::XRSimulator ALIAS HoroXRSimulator)
+target_compile_features(HoroXRSimulator PUBLIC cxx_std_20)
+target_link_libraries(HoroXRSimulator PUBLIC HoroEngine::XRRuntime HoroEngine::XRInputBindings
+        PRIVATE HoroXRRuntimeHostInterface nlohmann_json::nlohmann_json)
+
+set(_horo_xr_simulator_host_headers "${CMAKE_CURRENT_BINARY_DIR}/xr_simulator_host_headers")
+file(MAKE_DIRECTORY "${_horo_xr_simulator_host_headers}")
+configure_file(runtime/xr/simulator/host/XRSimulatorHostComposition.h
+    "${_horo_xr_simulator_host_headers}/XRSimulatorHostComposition.h" COPYONLY)
+add_library(HoroXRSimulatorHostInterface INTERFACE)
+target_include_directories(HoroXRSimulatorHostInterface INTERFACE "${_horo_xr_simulator_host_headers}")
+target_link_libraries(HoroXRSimulatorHostInterface INTERFACE HoroEngine::XRSimulator)
+target_compile_features(HoroXRSimulatorHostInterface INTERFACE cxx_std_20)
 
 if(HORO_BUILD_XR_OPENXR)
     # Deliberate non-installed native composition boundary. Only explicit host
@@ -3561,6 +3589,21 @@ add_library(HoroEditorRenderExtraction STATIC
         editor/screens/workspace/AssetSceneDrop.cpp
 )
 add_library(HoroEngine::EditorRenderExtraction ALIAS HoroEditorRenderExtraction)
+target_sources(HoroEditorRenderExtraction PRIVATE editor/xr/EditorSimulatorSceneSource.cpp)
+target_link_libraries(HoroEditorRenderExtraction PRIVATE HoroEngine::XRApi)
+
+# Explicit inbound document seam for extraction; no editor source root escapes.
+set(HORO_EDITOR_DOCUMENT_INTERNAL_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_document_internal_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_DOCUMENT_INTERNAL_HEADERS}/editor/document")
+foreach(header SceneDocument.h RuntimeSceneConversion.h)
+    configure_file("editor/document/${header}"
+        "${HORO_EDITOR_DOCUMENT_INTERNAL_HEADERS}/editor/document/${header}" COPYONLY)
+endforeach()
+add_library(HoroEditorDocumentInternal INTERFACE)
+target_compile_features(HoroEditorDocumentInternal INTERFACE cxx_std_20)
+target_include_directories(HoroEditorDocumentInternal INTERFACE "${HORO_EDITOR_DOCUMENT_INTERNAL_HEADERS}")
+target_link_libraries(HoroEditorDocumentInternal INTERFACE HoroEngine::EditorModel)
+target_link_libraries(HoroEditorRenderExtraction PRIVATE HoroEditorDocumentInternal)
 
 target_compile_features(HoroEditorRenderExtraction PUBLIC cxx_std_20)
 target_include_directories(HoroEditorRenderExtraction
@@ -3581,6 +3624,7 @@ set(HORO_EDITOR_XR_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_xr_scene_he
 file(MAKE_DIRECTORY "${HORO_EDITOR_XR_SCENE_HEADERS}")
 configure_file(editor/renderer/xr/EditorXrTrackingRoot.h "${HORO_EDITOR_XR_SCENE_HEADERS}/EditorXrTrackingRoot.h" COPYONLY)
 configure_file(editor/renderer/xr/EditorXrSceneGeometry.h "${HORO_EDITOR_XR_SCENE_HEADERS}/EditorXrSceneGeometry.h" COPYONLY)
+configure_file(editor/xr/EditorSimulatorSceneSource.h "${HORO_EDITOR_XR_SCENE_HEADERS}/EditorSimulatorSceneSource.h" COPYONLY)
 add_library(HoroEditorXrSceneInternal INTERFACE)
 target_include_directories(HoroEditorXrSceneInternal INTERFACE "${HORO_EDITOR_XR_SCENE_HEADERS}")
 target_link_libraries(HoroEditorXrSceneInternal INTERFACE HoroEngine::EditorRenderExtraction)
@@ -3653,6 +3697,12 @@ add_library(HoroEditorPlayXrHostInterface INTERFACE)
 target_include_directories(HoroEditorPlayXrHostInterface INTERFACE "${_horo_editor_play_xr_headers}")
 target_link_libraries(HoroEditorPlayXrHostInterface INTERFACE HoroEngine::Input)
 target_compile_features(HoroEditorPlayXrHostInterface INTERFACE cxx_std_20)
+
+# Simulator controls and copied presentation state stay usable without the GUI.
+add_library(HoroEditorXRSimulatorModel STATIC editor/xr/EditorXRSimulatorModel.cpp)
+add_library(HoroEngine::EditorXRSimulatorModel ALIAS HoroEditorXRSimulatorModel)
+target_compile_features(HoroEditorXRSimulatorModel PUBLIC cxx_std_20)
+target_link_libraries(HoroEditorXRSimulatorModel PUBLIC HoroEngine::XRSimulator)
 
 add_library(HoroEditorServices STATIC
         editor/navigation/NavigationBakeWorkspace.cpp
@@ -3933,6 +3983,7 @@ endif ()
 
 if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
+            editor/xr/EditorXRSimulatorPanel.cpp
             editor/design_system/components/EditorUiComponents.cpp
             editor/design_system/components/EditorUiCustomResources.cpp
             editor/design_system/components/SequenceTimelineControl.cpp
@@ -4152,6 +4203,7 @@ if (HORO_BUILD_EDITOR_GUI)
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
     target_link_libraries(HoroGui PUBLIC HoroEngine::Runtime)
+    target_link_libraries(HoroGui PUBLIC HoroEngine::EditorXRSimulatorModel)
     target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
 
     target_compile_features(HoroGui PUBLIC cxx_std_20)

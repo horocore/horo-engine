@@ -13,6 +13,9 @@
 #include <vector>
 
 namespace Horo::XR {
+    namespace RuntimeInternal {
+        class XRFakeRuntimeHostComposition;
+    }
     /** @brief Explicit simulated operation failure; no native or GPU success is claimed. */
     enum class XRFakeFailure : std::uint8_t {
         None,
@@ -116,20 +119,35 @@ namespace Horo::XR {
          * @return Outcome with explicit consumption, current state and frame evidence; exhausted scripts are Unavailable.
          */
         [[nodiscard]] XRFakeOutcome Step(const XRSessionId &session);
+        /** @brief Consumes one validated supplied interactive step through the SAME gates and cleanup path.
+         * No allocation, script copying, I/O or native work occurs. Loaded scripts and supplied steps cannot be mixed.
+         * Rejected input is not consumed; prediction times increase within the issued session.
+         * @param session Exact expected active fake session, fenced before consumption.
+         * @param step Caller-owned complete bounded step; borrowed only until this call returns.
+         * @return Owned consumption/status/session/frame evidence after exact existing cleanup.
+         */
+        [[nodiscard]] XRFakeOutcome Step(const XRSessionId &session, const XRFakeStep &step);
         /** @brief Read current session state. @return Exact generation-fenced production publication. */
         [[nodiscard]] XRSessionSnapshot Snapshot() const noexcept;
         /** @brief Permanently shut down frame and session gates and discard scripts; idempotent. */
         void Shutdown() noexcept;
 
     private:
+        friend class RuntimeInternal::XRFakeRuntimeHostComposition;
+
         /** @brief Immediate fake resource port; lifetime encloses both production gates. */
         class Resources final : public IXRSessionResources {
         public:
             std::optional<XRSessionPreparation> failStage;
+            IXRSessionResources *composition{}; /**< Cold-bound non-installed composition; lifetime encloses resource callbacks. */
             [[nodiscard]] Result<void> Prepare(XRSessionPreparation stage, const XRSessionId &, const XRFeaturePlan &) override;
             void Release(XRSessionPreparation, const XRSessionId &) noexcept override;
         };
 
+        [[nodiscard]] static bool ValidActivationLimits(const XRCapabilitySnapshot &capabilities, const XRFeaturePlan &plan,
+                                                        XRFrameLimits limits) noexcept;
+        [[nodiscard]] XRFakeOutcome BeginStep(const XRSessionId &session) const;
+        [[nodiscard]] XRFakeOutcome ConsumeStep(const XRSessionId &session, const XRFakeStep &step, XRFakeOutcome outcome);
         /** @brief Validate one copied step without changing published evidence. */
         [[nodiscard]] XRFrameStatus ValidateStep(const XRFakeStep &step, const XRSessionId &session) const;
         /** @brief Validate one step's exact-owner predicted view evidence. */
@@ -149,6 +167,7 @@ namespace Horo::XR {
         std::optional<XRFeaturePlan> plan_;
         std::vector<XRFakeStep> script_;
         std::size_t cursor_{};
+        XRRenderPredictionTime previousPrediction_;
         bool shutdown_{};
     };
 }  // namespace Horo::XR

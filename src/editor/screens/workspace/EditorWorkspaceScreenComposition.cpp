@@ -4,6 +4,7 @@
 #include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspaceReadSources.h"
+#include "Horo/Editor/XRSimulatorModel.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
 #include "Horo/Extensions/EditorViewportHost.h"
@@ -120,6 +121,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .navigationOverlays = services_.TryGetConst<NavigationViewportAccess>(),
             .extensionViewport = services_.TryGet<Extensions::EditorViewportHost>(),
             .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
+            .xrSimulatorArtifacts = simulatorArtifacts_,
+            .xrSimulator = panelServices_.xrSimulator,
         };
         contributions_.panels.AttachAll(panelContext);
     }
@@ -149,6 +152,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         };
     }
 
+    /** @copydoc EditorWorkspaceScreen::RevokeSimulatorArtifacts */
+    void EditorWorkspaceScreen::RevokeSimulatorArtifacts() noexcept {
+        if (simulatorArtifacts_)
+            simulatorArtifacts_->Revoke();
+        simulatorArtifacts_.reset();
+    }
+
     /** @copydoc EditorWorkspaceScreen::InitializeController */
     Result<void> EditorWorkspaceScreen::InitializeController(const std::filesystem::path &projectRoot) {
         const Assets::AssetRegistrySnapshot assetSnapshot =
@@ -157,6 +167,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (capturedSources.HasError())
             return Result<void>::Failure(capturedSources.ErrorValue());
         auto sources = std::move(capturedSources).Value();
+        auto simulatorArtifacts = sources.simulatorArtifacts;
         auto resources = PrepareUiInspectorResources(services_, projectRoot, sources.owner);
         if (resources.HasError())
             return Result<void>::Failure(resources.ErrorValue());
@@ -175,6 +186,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             controller_.reset();
             return Result<void>::Failure(error);
         }
+        RevokeSimulatorArtifacts();
+        simulatorArtifacts_ = std::move(simulatorArtifacts);
         uiInspectorResources_ = std::move(uiInspectorResources);
         return Result<void>::Success();
     }

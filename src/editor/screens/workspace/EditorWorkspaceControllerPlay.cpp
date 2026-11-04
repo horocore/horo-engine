@@ -178,7 +178,7 @@ namespace Horo::Editor {
         const Result<void> started =
             m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), m_gameplayRegistry->Components(), m_playSceneFactory,
                                 m_triggerBinding,
-                                m_selectedXrPlayHost ? EditorPlayViewSource::SelectedXr : EditorPlayViewSource::AuthoredCamera,
+                                m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : EditorPlayViewSource::AuthoredCamera,
                                 m_selectedXrPlayHost);
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
@@ -324,27 +324,55 @@ namespace Horo::Editor {
         const auto playScene = m_playSession.SceneView();
         if (!playScene)
             return;
-        if (m_selectedXrPlayHost) {
-            if (const auto updated = m_selectedXrPlayHost->UpdateScene(*playScene); updated.HasError()) {
-                LOG_ERROR("editor.xr", "XR Scene presentation revoked: %s", updated.ErrorValue().message.c_str());
-                StopPlaySession();
-            }
-            return;  // SAME acquired-eye mirror; no independent camera or outgoing Scene borrow escapes.
+        if (!m_selectedXrPlayHost) {
+            ExtractPlayViewportWithCamera(*playScene, ResolvePlayViewportCamera(*playScene));
+            return;
         }
-        const Runtime::RuntimeSceneView runtimeView = *playScene;
-        const EditorViewportCamera camera = ResolvePlayViewportCamera(runtimeView);
+        if (const auto updated = m_selectedXrPlayHost->UpdateScene(*playScene); updated.HasError()) {
+            ClearSimulatorViewport();
+            LOG_ERROR("editor.xr", "XR Scene presentation revoked: %s", updated.ErrorValue().message.c_str());
+            StopPlaySession();
+            return;
+        }
+        if (m_selectedXrPlayHost->ViewSource() != EditorPlayViewSource::Simulator)
+            return;
+        const auto preview = m_selectedXrPlayHost->Preview();
+        if (!preview) {
+            ClearSimulatorViewport();
+            return;
+        }
+        const EditorViewportCamera camera{.position = preview->position,
+                                          .target = preview->position + preview->orientation.Rotate({0, 0, -1}),
+                                          .up = preview->orientation.Rotate({0, 1, 0}),
+                                          .verticalFovRadians = preview->verticalFovRadians,
+                                          .nearPlane = preview->nearPlane,
+                                          .farPlane = preview->farPlane};
+        ExtractPlayViewportWithCamera(*playScene, camera);
+    }
+
+    void EditorWorkspaceController::ClearSimulatorViewport() {
+        m_viewModel.simulatorPreviewAvailable = false;
+        m_viewportScene = {};
+        ++m_viewportSceneRevision;
+    }
+
+    void EditorWorkspaceController::ExtractPlayViewportWithCamera(const Runtime::RuntimeSceneView &runtimeView,
+                                                                  const EditorViewportCamera &camera) {
         LoadDocumentAssetMeshes();
         const SceneDocumentSnapshot document = m_document.Snapshot();
-        Result<EditorViewportSceneSnapshot> extracted =
-            ExtractEditorViewportScene(runtimeView, m_playSession.AuthoringRevision(), camera, m_primitiveMeshCache, &document,
-                                       &m_assetMeshCache, false);
+        auto extracted = ExtractEditorViewportScene(runtimeView, m_playSession.AuthoringRevision(), camera, m_primitiveMeshCache, &document,
+                                                    &m_assetMeshCache, false);
         if (extracted.HasError()) {
+            if (m_selectedXrPlayHost)
+                ClearSimulatorViewport();
             LOG_ERROR("editor.play_mode", "Game viewport extraction failed: %s", extracted.ErrorValue().message.c_str());
             return;
         }
         m_viewportScene = std::move(extracted).Value();
         ++m_viewportSceneRevision;
         m_viewModel.viewportCamera = camera;
+        m_viewModel.simulatorPreviewAvailable =
+            m_selectedXrPlayHost && m_selectedXrPlayHost->ViewSource() == EditorPlayViewSource::Simulator;
         RefreshViewportLightProjection();
     }
 

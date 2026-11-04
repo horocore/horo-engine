@@ -37,6 +37,7 @@
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     struct WorkspacePanelServices {
+        XRSimulatorModel *xrSimulator{};
         IEditorGuiRenderer *guiRenderer{nullptr};
         IEditorViewportRenderer *viewportRenderer{nullptr};
         const Log::IStructuredLogQuery *logQuery{nullptr};
@@ -144,6 +145,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages);
         /** @brief Revokes any failed-enter XR connection before the existing context member is destroyed. */
         ~EditorWorkspaceScreen() override;
+        /** @brief Revoke the same admitted project artifact port before retiring its workspace owner. */
+        void RevokeSimulatorArtifacts() noexcept;
+        /** @brief Restore exactly the previous workspace Input profile before releasing its context. */
+        void RestoreWorkspaceInputProfile();
         /** @brief Reports the workspace route identity. */
         ScreenId Id() const override;
         /** @brief Activates a reserved project session after controller preparation. */
@@ -259,6 +264,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Runtime::RuntimeSceneService &runtimeScene_;
         EditorSettingsService &settings_;
         ProjectOpenService &projectOpenService_;
+        std::shared_ptr<IXRSimulatorArtifacts> simulatorArtifacts_;
         WorkspacePanelServices panelServices_{};
         WorkspaceProjectServices projectServices_{};
         WorkspacePublishedRevisions publishedRevisions_{};

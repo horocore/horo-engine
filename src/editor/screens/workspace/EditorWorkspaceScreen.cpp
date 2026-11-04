@@ -3,6 +3,7 @@
 #include "EditorWorkspaceInputRouting.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/ScreenRegistry.h"
+#include "Horo/Editor/XRSimulatorModel.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -22,6 +23,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
           viewportSceneState_(services.Get<EditorViewportSceneState>()), runtimeScene_(services.Get<Runtime::RuntimeSceneService>()),
           settings_(services.Get<EditorSettingsService>()), projectOpenService_(services.Get<ProjectOpenService>()),
           panelServices_{
+              .xrSimulator = services.TryGet<XRSimulatorModel>(),
               .guiRenderer = services.TryGet<IEditorGuiRenderer>(),
               .viewportRenderer = services.TryGet<IEditorViewportRenderer>(),
               .logQuery = services.TryGetConst<Log::IStructuredLogQuery>(),

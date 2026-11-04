@@ -1,6 +1,7 @@
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Editor/XRSimulatorPanel.h"
 #include "editor/navigation/NavigationTab.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
 #include "editor/screens/workspace/panels/game/GamePanel.h"
@@ -36,6 +37,7 @@ namespace Horo::Editor {
         registry.RegisterPanel(std::move(globalDock));
         registry.RegisterPanel(std::make_shared<ViewportPanel>());
         registry.RegisterPanel(std::make_shared<GamePanel>());
+        registry.RegisterPanel(std::make_shared<XRSimulatorPanel>());
         registry.RegisterPanel(std::make_shared<WorldCompositionTab>());
         registry.RegisterPanel(CreatePCGGraphWorkspacePanel());
     }

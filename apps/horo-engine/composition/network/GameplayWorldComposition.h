@@ -131,9 +131,17 @@ namespace Horo::Application::Internal {
         GameplayWorldComposition &operator=(const GameplayWorldComposition &) = delete;
         /** @brief Dispatch the canonical fixed Gameplay phase. @return First callback/transaction failure. */
         [[nodiscard]] Result<void> FixedUpdate(Gameplay::FixedDeltaTime delta);
+        /** @brief Dispatch the actual host-committed semantic Input through the same Gameplay/Scene command owner.
+         * @param input Existing canonical Input snapshot, borrowed only during this call. @param delta Existing fixed quantum.
+         * @return Original callback/transaction failure; no Input or Scene authority is issued. */
+        [[nodiscard]] Result<void> FixedUpdate(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
         /** @brief Advances exact host tick addressing then invokes Gameplay callbacks. @param context Current host tick.
          * @return Tick/callback failure; admission is revoked on callback failure. */
         [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context);
+        /** @param context Exact existing fixed dispatch. @param input Existing host-committed semantic Input.
+         * @return Original tick/callback failure through the same fixed owner. */
+        [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context,
+                                             std::span<const Gameplay::GameplayInputAction> input);
         /** @brief Advances prefab preparation, commits the actual Scene transaction, and observes its completion.
          * @param phase Host lifecycle phase.
          * @param context Current immutable frame context.

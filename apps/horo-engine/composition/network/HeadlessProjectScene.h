@@ -8,6 +8,8 @@
 #include "HeadlessNetworkServices.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Platform/ProjectReadFiles.h"
+#include "Horo/Scene/SceneSource.h"
 
 namespace Horo::Application::Internal {
     /** @brief Explicit Scene input parsed at the CLI boundary, without backend discovery. */
@@ -18,6 +20,7 @@ namespace Horo::Application::Internal {
         std::string cookTarget;
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
         std::chrono::milliseconds loadTimeout{30'000};
+        std::string publicationNamespace; /**< Empty preserves read-only hosts; explicit derived output selected by the application. */
     };
 
     /** @brief Owns all borrowed assets/jobs/project captures until every world service has retired.
@@ -34,6 +37,10 @@ namespace Horo::Application::Internal {
         CancellationSource cancellation;
         std::chrono::steady_clock::time_point deadline;
         HeadlessSceneLoadBoundary load;
+        std::shared_ptr<const Platform::IProjectReadFiles> sourceFiles;
+        std::shared_ptr<DurableFileSystem> publication;
+        Platform::ProjectReadContext sourceContext;
+        std::optional<SceneSource::SceneSourceDocument> authoredSource; /**< Exact decoded admitted source, never a second parse. */
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         std::optional<Physics::PhysicsSceneActivationSettings> settings;
         Prefab::PrefabMetricHandles prefabMetrics; /**< Process-prebound numeric observations retained by host resources. */

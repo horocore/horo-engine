@@ -15,6 +15,7 @@ add_library(HoroNetworkProductHost STATIC
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PlatformProjectIo)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/horo-engine/composition/network)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
@@ -27,6 +28,22 @@ if(HORO_BUILD_NETWORK_GNS)
     target_sources(HoroNetworkProductHost PRIVATE horo-engine/composition/network/NetworkProductGnsSelection.cpp)
     target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::NetworkTransportGNS HoroNetworkTransportGNSFactoryInternal)
 endif()
+
+# Explicit headset-free sample composition; normal terminal launches do not link it.
+set(HORO_XR_SIMULATOR_WORKFLOW_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/xr_simulator_workflow_headers")
+file(MAKE_DIRECTORY "${HORO_XR_SIMULATOR_WORKFLOW_HEADERS}")
+configure_file(horo-engine/composition/xr/SimulatorProjectWorkflow.h
+    "${HORO_XR_SIMULATOR_WORKFLOW_HEADERS}/SimulatorProjectWorkflow.h" COPYONLY)
+add_library(HoroXRSimulatorProjectWorkflow STATIC horo-engine/composition/xr/SimulatorProjectWorkflow.cpp)
+target_compile_features(HoroXRSimulatorProjectWorkflow PUBLIC cxx_std_20)
+target_include_directories(HoroXRSimulatorProjectWorkflow PUBLIC "${HORO_XR_SIMULATOR_WORKFLOW_HEADERS}")
+target_link_libraries(HoroXRSimulatorProjectWorkflow
+    PUBLIC HoroEngine::EditorXRSimulatorModel HoroEditorPlayXrHostInterface HoroEngine::RuntimeScene
+    PRIVATE HoroNetworkProductHost HoroXRSimulatorPlayHost HoroXRSimulatorProjectArtifacts
+        HoroEditorXrSceneInternal HoroEngine::Runtime HoroEngine::SceneSource HoroEngine::Input)
+add_executable(HoroXRSimulatorSample horo-engine/tools/XRSimulatorSample.cpp)
+target_compile_features(HoroXRSimulatorSample PRIVATE cxx_std_20)
+target_link_libraries(HoroXRSimulatorSample PRIVATE HoroXRSimulatorProjectWorkflow)
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
@@ -82,8 +99,8 @@ if(HORO_BUILD_NETWORK_GNS)
     target_link_libraries(horo-engine PRIVATE HoroEngine::NetworkTransportGNS)
 endif()
 # Validate the actual transitive link graph, including configurations that build GUI peers.
-function(horo_verify_terminal_link_boundary)
-    set(pending horo-engine)
+function(horo_verify_terminal_link_boundary root)
+    set(pending "${root}")
     set(visited)
     while(pending)
         list(POP_FRONT pending current)
@@ -92,7 +109,11 @@ function(horo_verify_terminal_link_boundary)
         endif()
         list(APPEND visited "${current}")
         if(current MATCHES "(HoroNetworkTransportNull|HoroNetworkChaosHarness|HoroGui|ImGui|HoroEditorViewport|HoroRender(OpenGL|Metal|Vulkan|D3D12)|HoroInputSdl|SDL)")
-            message(FATAL_ERROR "horo-engine headless link boundary reaches ${current}")
+            # The simulator extracts a CPU preview from the real Scene. Concrete
+            # viewport/render backends and GUI peers remain forbidden for it too.
+            if(NOT (current STREQUAL "HoroEditorViewportScene" AND "${ARGV1}" STREQUAL "ALLOW_CPU_SCENE_PREVIEW"))
+                message(FATAL_ERROR "${root} headless link boundary reaches ${current}")
+            endif()
         endif()
         get_target_property(alias "${current}" ALIASED_TARGET)
         if(alias)
@@ -111,7 +132,8 @@ function(horo_verify_terminal_link_boundary)
         endforeach()
     endwhile()
 endfunction()
-horo_verify_terminal_link_boundary()
+horo_verify_terminal_link_boundary(horo-engine)
+horo_verify_terminal_link_boundary(HoroXRSimulatorSample ALLOW_CPU_SCENE_PREVIEW)
 
 install(TARGETS horo-engine RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Game)
 

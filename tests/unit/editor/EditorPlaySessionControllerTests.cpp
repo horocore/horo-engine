@@ -117,6 +117,12 @@ namespace {
     public:
         explicit CpuSelectedXrHost(Editor::EditorXrSceneSourcePort source) : source_(std::move(source)) {}
 
+        Editor::EditorPlayViewSource sourceKind{Editor::EditorPlayViewSource::SelectedXr};
+
+        Editor::EditorPlayViewSource ViewSource() const noexcept override {
+            return sourceKind;
+        }
+
         bool failPreparation{};
         bool published{};
         Runtime::SceneRuntimeId current;
@@ -367,6 +373,41 @@ TEST_CASE_METHOD(SelectedXrPlayFixture,
         REQUIRE(xr.current == play.SceneView()->RuntimeId());
         play.Stop();
         REQUIRE(xr.retired == 2);
+    }
+}
+
+TEST_CASE_METHOD(SelectedXrPlayFixture, "Simulator Play shares native selection factory and participant provenance checks",
+                 "[editor][xr][simulator]") {
+    using namespace Editor;
+    SECTION("a Simulator enum cannot relabel a native host") {
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::Simulator, &xr).HasError());
+        REQUIRE_FALSE(xr.published);
+    }
+    SECTION("a Simulator enum requires the actual application host") {
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::Simulator).HasError());
+        REQUIRE_FALSE(xr.published);
+    }
+    SECTION("the actual factory must capture the same Simulator host") {
+        xr.sourceKind = EditorPlayViewSource::Simulator;
+        foreign.sourceKind = EditorPlayViewSource::Simulator;
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::Simulator, &foreign).HasError());
+        REQUIRE_FALSE(xr.published);
+    }
+    SECTION("genuine Simulator participant prepares the camera-free actual Scene") {
+        xr.sourceKind = EditorPlayViewSource::Simulator;
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::Simulator, &xr).HasValue());
+        REQUIRE(xr.published);
+        REQUIRE(play.SceneView().has_value());
+        REQUIRE(xr.current == play.SceneView()->RuntimeId());
+        play.Stop();
+        REQUIRE_FALSE(xr.published);
+    }
+    SECTION("Simulator participant failure cannot publish Play") {
+        xr.sourceKind = EditorPlayViewSource::Simulator;
+        xr.failPreparation = true;
+        REQUIRE(play.Start(document.Snapshot(), registry, factory, {}, EditorPlayViewSource::Simulator, &xr).HasError());
+        REQUIRE_FALSE(xr.published);
+        REQUIRE_FALSE(play.SceneView().has_value());
     }
 }
 

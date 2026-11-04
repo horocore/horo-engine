@@ -977,6 +977,10 @@ namespace Horo::Editor {
         void RefreshPlayStateProjection();
         [[nodiscard]] EditorViewportCamera ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const;
         void ExtractPlayViewportScene();
+        /** @brief Clear unavailable simulated evidence before publishing another viewport revision. */
+        void ClearSimulatorViewport();
+        /** @brief Extract the exact current Play Scene with an explicitly admitted camera. */
+        void ExtractPlayViewportWithCamera(const Runtime::RuntimeSceneView &runtimeView, const EditorViewportCamera &camera);
         [[nodiscard]] Result<EditorViewportCamera> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene);
         void HandleCreatePrimitive(Runtime::PrimitiveId primitive, std::optional<SceneObjectId> parent);
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,

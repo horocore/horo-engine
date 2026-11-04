@@ -997,6 +997,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRContract.h
     Horo/XR/XRErrors.h
     Horo/XR/XRIdentity.h
+    Horo/XR/XRHandTracking.h
     Horo/XR/XRLoaderPreflight.h
     Horo/XR/XRSpacePose.h
     Horo/XR/XRTrackingSnapshot.h
@@ -1010,6 +1011,13 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
     Horo/XR/XRFrameLifecycle.h
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h
+)
+horo_configure_target_header_boundary(HoroXRSimulator PUBLIC_HEADERS
+    Horo/XR/XRSimulatorScenario.h
+    Horo/XR/XRSimulatorRuntime.h
+)
+horo_configure_target_header_boundary(HoroEditorXRSimulatorModel PUBLIC_HEADERS
+    Horo/Editor/XRSimulatorModel.h
 )
 horo_configure_target_header_boundary(HoroXRInputBindings PUBLIC_HEADERS
     Horo/XR/XRActionBindings.h
@@ -1403,6 +1411,7 @@ horo_configure_target_header_boundary(HoroRuntimeUiInput PUBLIC_HEADERS
     Horo/Runtime/Ui/UiPointerInput.h
 )
 horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
+    Horo/Editor/XRSimulatorPanel.h
     Horo/Editor/AssetImportModal.h
     Horo/Editor/DefaultScreenFactories.h
     Horo/Editor/DefaultWorkspacePanels.h

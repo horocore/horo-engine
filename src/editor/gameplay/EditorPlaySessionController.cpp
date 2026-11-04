@@ -1,5 +1,6 @@
 #include "editor/gameplay/EditorPlaySessionController.h"
 
+#include "EditorPlayXrHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "ProjectGameplayRegistry.h"
 
@@ -120,6 +121,16 @@ namespace Horo::Editor {
             return error;
         }
 
+        std::optional<Error> ValidateViewSelection(const EditorPlayViewSource source, const EditorPlaySceneFactory &factory,
+                                                   const IEditorPlayXrHost *host) {
+            if (source > EditorPlayViewSource::Simulator || (source != EditorPlayViewSource::AuthoredCamera && (!factory || !host)) ||
+                (source == EditorPlayViewSource::AuthoredCamera && host))
+                return InvalidTransition("Selected XR Play requires its actual application factory and host.");
+            if (host && host->ViewSource() != source)
+                return InvalidTransition("Selected Play view source must match its actual application host.");
+            return {};
+        }
+
         [[nodiscard]] std::optional<Error> ValidatePlayPrerequisites(const SceneDocumentSnapshot &authoring,
                                                                      const Gameplay::ComponentRegistry &components,
                                                                      const EditorPlayViewSource viewSource) {
@@ -166,12 +177,9 @@ namespace Horo::Editor {
         state_ = EditorPlaySessionState::Starting;
         lastError_.reset();
         authoringRevision_ = authoring.revision;
-        if (viewSource > EditorPlayViewSource::SelectedXr ||
-            (viewSource == EditorPlayViewSource::SelectedXr && (!factory || !selectedXrHost)) ||
-            (viewSource == EditorPlayViewSource::AuthoredCamera && selectedXrHost)) {
-            const auto error = InvalidTransition("Selected XR Play requires its actual application factory and host.");
-            Fail(error);
-            return Result<void>::Failure(error);
+        if (const auto error = ValidateViewSelection(viewSource, factory, selectedXrHost)) {
+            Fail(*error);
+            return Result<void>::Failure(*error);
         }
         viewSource_ = viewSource;
         selectedXrHost_ = selectedXrHost;
@@ -236,7 +244,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(prepared.ErrorValue());
         if (!prepared.Value())
             return Result<void>::Failure(InvalidTransition("The Play Scene host is unavailable."));
-        if (viewSource_ == EditorPlayViewSource::SelectedXr && prepared.Value()->SelectedXrHost() != selectedXrHost_)
+        if (viewSource_ != EditorPlayViewSource::AuthoredCamera && prepared.Value()->SelectedXrHost() != selectedXrHost_)
             return Result<void>::Failure(InvalidTransition("Play factory does not own the selected XR participant."));
         sceneHost_ = std::move(prepared).Value();
         ++nextRuntimeId_;

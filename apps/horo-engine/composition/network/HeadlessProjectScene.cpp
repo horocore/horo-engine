@@ -5,6 +5,7 @@
 #include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Platform/NativeProjectIoOwners.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
 
@@ -24,13 +25,31 @@ namespace Horo::Application::Internal {
             return {value == 0 ? 1 : value};
         }
 
+        Result<void> CaptureProductSourceIo(const HeadlessProjectSceneOptions &launch, HeadlessProjectSceneResources &resources,
+                                            const ProjectMetadata &metadata) {
+            resources.sourceContext = {.projectIdentity = metadata.projectId,
+                                       .projectGeneration = 1,
+                                       .cancellation = resources.cancellation.Token(),
+                                       .deadline = resources.deadline};  // One explicit launch owner.
+            if (launch.publicationNamespace.empty()) {
+                auto source = Platform::CreateNativeProjectReadFiles(launch.projectRoot, metadata.projectId, 1);
+                if (source.HasError())
+                    return Result<void>::Failure(source.ErrorValue());
+                resources.sourceFiles = std::move(source).Value();
+                return Result<void>::Success();
+            }
+            auto io = Platform::CreateNativeProjectIoOwners(launch.projectRoot, metadata.projectId, 1, ".horo/headless/cache",
+                                                            launch.publicationNamespace);
+            if (io.HasError())
+                return Result<void>::Failure(io.ErrorValue());
+            resources.sourceFiles = io.Value().source;
+            resources.publication = io.Value().publication;
+            return Result<void>::Success();
+        }
+
         /** @brief Uses root-owned native reads and canonical conversion; no second Scene parser or asset authority. */
         Result<Runtime::RuntimeSceneDefinition> ReadProductSceneSource(const HeadlessProjectSceneOptions &launch,
-                                                                       const HeadlessProjectSceneResources &resources,
-                                                                       const ProjectMetadata &metadata) {
-            auto files = Platform::CreateNativeProjectReadFiles(launch.projectRoot, metadata.projectId, 1);
-            if (files.HasError())
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(files.ErrorValue());
+                                                                       HeadlessProjectSceneResources &resources) {
             const std::string_view path = std::string_view{launch.scene}.substr(std::string_view{"source:"}.size());
             const auto registry = resources.registry.Snapshot();
             const auto *record = registry.FindByPath(path);
@@ -38,19 +57,18 @@ namespace Horo::Application::Internal {
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid,
                               "The source Scene must be an exact registered core.scene project path."));
-            const Platform::ProjectReadContext context{.projectIdentity = metadata.projectId,
-                                                       .projectGeneration = 1,
-                                                       .cancellation = resources.cancellation.Token(),
-                                                       .deadline = resources.deadline};
-            auto read = files.Value()->SourceText(path, context, {.maximumFileBytes = 16U * 1024U * 1024U});
+            auto read = resources.sourceFiles->SourceText(path, resources.sourceContext, {.maximumFileBytes = 16U * 1024U * 1024U});
             if (read.HasError())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(read.ErrorValue());
             auto source = SceneSource::DecodeSceneSource(*read.Value().text);
             if (source.HasError())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(source.ErrorValue());
-            return SceneSource::ConvertSceneSourceToRuntime({source.Value().objects, source.Value().prefabInstances},
-                                                            SceneCook::SceneDefinitionIdForAsset(record->id),
-                                                            SourceCaptureRevision(*read.Value().text));
+            auto converted = SceneSource::ConvertSceneSourceToRuntime({source.Value().objects, source.Value().prefabInstances},
+                                                                      SceneCook::SceneDefinitionIdForAsset(record->id),
+                                                                      SourceCaptureRevision(*read.Value().text));
+            if (converted.HasValue())
+                resources.authoredSource.emplace(std::move(source).Value());
+            return converted;
         }
 
         /** @brief Resolves only the selected actual Scene envelope; embedded revision is admitted by Scene's canonical decoder. */
@@ -137,14 +155,16 @@ namespace Horo::Application::Internal {
         auto metadata = LoadProjectMetadata(launch.projectRoot);
         if (metadata.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(metadata.ErrorValue());
+        if (auto sources = CaptureProductSourceIo(launch, *resources, metadata.Value()); sources.HasError())
+            return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(sources.ErrorValue());
         const auto prefabSettings = LoadPrefabProjectSettings(launch.projectRoot);
         if (prefabSettings.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(prefabSettings.ErrorValue());
         resources->prefabPolicy = prefabSettings.Value().settings->Limits().Policy();
         if (const auto assets = CaptureProductAssets(launch, *resources); assets.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(assets.ErrorValue());
-        auto definition = launch.scene.starts_with("source:") ? ReadProductSceneSource(launch, *resources, metadata.Value())
-                                                              : ReadProductCookedScene(launch, *resources);
+        auto definition =
+            launch.scene.starts_with("source:") ? ReadProductSceneSource(launch, *resources) : ReadProductCookedScene(launch, *resources);
         if (definition.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(definition.ErrorValue());
         if (!definition.Value().AssetDependencies().empty() && !resources->committed)

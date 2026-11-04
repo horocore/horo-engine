@@ -314,9 +314,15 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::FixedUpdate */
     Result<void> GameplayWorldComposition::FixedUpdate(const Gameplay::FixedDeltaTime delta) {
+        return FixedUpdate({}, delta);
+    }
+
+    /** @copydoc GameplayWorldComposition::FixedUpdate(std::span<const Gameplay::GameplayInputAction>,Gameplay::FixedDeltaTime) */
+    Result<void> GameplayWorldComposition::FixedUpdate(const std::span<const Gameplay::GameplayInputAction> input,
+                                                       const Gameplay::FixedDeltaTime delta) {
         if (!behaviors_)
             return Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable));
-        const auto result = behaviors_->FixedUpdate({}, delta);
+        const auto result = behaviors_->FixedUpdate(input, delta);
         if (result.HasError())
             Shutdown();
         return result;
@@ -324,12 +330,18 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::FixedTick */
     Result<void> GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext &context) {
+        return FixedTick(context, {});
+    }
+
+    /** @copydoc GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext&,std::span<const Gameplay::GameplayInputAction>) */
+    Result<void> GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext &context,
+                                                     const std::span<const Gameplay::GameplayInputAction> input) {
         tick_ = context.simulationTick;
         if (prefabs_) {
             if (auto advanced = prefabs_->OnFixedUpdate(context); advanced.HasError())
                 return advanced;
         }
-        return FixedUpdate(Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
+        return FixedUpdate(input, Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
     }
 
     /** @copydoc GameplayWorldComposition::OnPhase */

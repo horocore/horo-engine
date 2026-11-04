@@ -30,6 +30,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import tempfile
 import textwrap
 import time
 import uuid
@@ -734,6 +735,9 @@ def _binding(directory: Path, commit: str, source: Path, launcher: str,
     environment.update({"CCACHE_DIR": str(directory / "compiler"),
                         "CCACHE_CONFIGPATH": str(directory / (_READONLY_CONFIG if readonly else "writer.conf")),
                         "CCACHE_BASEDIR": str(source.resolve())})
+    if readonly:
+        # read_only alone still updates counters and creates compiler scratch in the generation.
+        environment.update({"CCACHE_NOSTATS": "1", "CCACHE_TEMPDIR": tempfile.gettempdir()})
     return CacheBinding(launcher, environment, directory.name, commit)
 
 

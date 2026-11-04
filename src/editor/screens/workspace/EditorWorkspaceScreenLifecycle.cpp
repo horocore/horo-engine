@@ -127,6 +127,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnLeave */
     void EditorWorkspaceScreen::OnLeave() {
+        RevokeSimulatorArtifacts();
         DetachXrInput();
         workspaceControllerLifetime_.reset();
         view_.ResetSourceSession();
@@ -159,16 +160,21 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         static_cast<void>(contributions_.statusItems.Update("horo.status.document", EditorStatusItemContent{.available = false}));
         static_cast<void>(contributions_.statusItems.Update("horo.status.selection", EditorStatusItemContent{.available = false}));
         contributions_.panels.DetachAll();
+        RestoreWorkspaceInputProfile();
+        input_.context.Reset();
+        viewportSceneState_.Clear();
+        publishedRevisions_ = {};
+        controller_.reset();
+    }
+
+    /** @copydoc EditorWorkspaceScreen::RestoreWorkspaceInputProfile */
+    void EditorWorkspaceScreen::RestoreWorkspaceInputProfile() {
         if (input_.previousProfile.has_value()) {
             if (const Result<void> restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError()) {
                 LOG_ERROR("editor.input", "Unable to restore editor input profile: %s", restored.ErrorValue().message.c_str());
             }
             input_.previousProfile.reset();
         }
-        input_.context.Reset();
-        viewportSceneState_.Clear();
-        publishedRevisions_ = {};
-        controller_.reset();
     }
 
     /** @copydoc EditorWorkspaceScreen::HasDirtyDocuments */

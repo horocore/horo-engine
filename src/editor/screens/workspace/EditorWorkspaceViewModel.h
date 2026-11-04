@@ -555,6 +555,7 @@ namespace Horo::Editor {
         bool canRedo = false;
         EditorPlayState playState{EditorPlayState::Idle};
         EditorPlayViewSource playViewSource{EditorPlayViewSource::AuthoredCamera}; /**< Actual host-selected private projection. */
+        bool simulatorPreviewAvailable{}; /**< Actual current consumed simulator view; false forbids stale texture display. */
         std::string playError;
         float fps = 0.0F;
 

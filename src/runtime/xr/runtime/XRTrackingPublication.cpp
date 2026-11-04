@@ -6,13 +6,32 @@
 
 namespace Horo::XR::RuntimeInternal {
     namespace {
-        /** @brief Checks only the deliberately supported initial physical source profile. */
+        bool IsHand(const XRTrackedDeviceRole role) noexcept {
+            return role == XRTrackedDeviceRole::LeftHand || role == XRTrackedDeviceRole::RightHand;
+        }
+
         bool CapabilitiesMatch(const XRTrackedDeviceRole role, const XRTrackedDeviceCapabilities &capabilities) {
             using enum Horo::XR::XRTrackedDeviceCapability;
-            const bool head = role == XRTrackedDeviceRole::Head;
-            const bool controller = role == XRTrackedDeviceRole::LeftController || role == XRTrackedDeviceRole::RightController;
-            return capabilities.Has(HeadPose) == head && (capabilities.Has(GripPose) || capabilities.Has(AimPose)) == controller &&
-                   !capabilities.Has(PalmPose) && !capabilities.Has(TrackerPose) && !capabilities.Has(Haptics);
+            XRTrackedDeviceCapabilities expected;
+            if (role == XRTrackedDeviceRole::Head)
+                expected.values[static_cast<std::size_t>(HeadPose)] = true;
+            else if (IsHand(role)) {
+                expected.values[static_cast<std::size_t>(HandJoints)] = true;
+                expected.values[static_cast<std::size_t>(PalmPose)] = capabilities.Has(PalmPose);
+            } else {
+                expected.values[static_cast<std::size_t>(GripPose)] = capabilities.Has(GripPose);
+                expected.values[static_cast<std::size_t>(AimPose)] = capabilities.Has(AimPose);
+                if (!capabilities.Has(GripPose) && !capabilities.Has(AimPose))
+                    return false;
+            }
+            return expected == capabilities;
+        }
+
+        bool ValidPublicationLimits(const XRTrackingSnapshotLimits &limits) noexcept {
+            return limits.maximumDevices > 0 && limits.maximumDevices <= 5 && limits.maximumPoses > 0 &&
+                   limits.maximumPoses <= XRTrackingSnapshotHardLimits::MaximumPoses &&
+                   limits.maximumActions <= XRTrackingSnapshotHardLimits::MaximumActions &&
+                   limits.maximumHandJoints <= XRHandTrackingHardLimits::MaximumJoints;
         }
 
         /** @brief Maps only the supported normalized physical role/pose pairs, never a default capability. */
@@ -26,7 +45,29 @@ namespace Horo::XR::RuntimeInternal {
                 if (source.kind == XRTrackedPoseKind::Aim)
                     return AimPose;
             }
+            if (IsHand(source.role) && source.kind == XRTrackedPoseKind::Palm)
+                return PalmPose;
             return std::nullopt;
+        }
+
+        bool Located(const XRPoseDescriptor &pose) noexcept {
+            return pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
+                   pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
+        }
+
+        bool Velocity(const XRPoseDescriptor &pose) noexcept {
+            return pose.components.linearVelocityMetersPerSecond.validity != XRPoseComponentValidity::Invalid ||
+                   pose.components.angularVelocityRadiansPerSecond.validity != XRPoseComponentValidity::Invalid;
+        }
+
+        bool ValidSourceShape(const TrackingSourceEvidence &source) noexcept {
+            return SourceCapability(source).has_value() && (source.active || (!Located(source.pose) && !Velocity(source.pose))) &&
+                   (source.role != XRTrackedDeviceRole::Head || source.active == Located(source.pose));
+        }
+
+        bool ValidSourceTime(const XRPoseDescriptor &pose, const XRTimeEvidence &first) noexcept {
+            return pose.purpose == XRPosePurpose::SimulationInput && pose.time.simulation && !pose.time.renderPrediction &&
+                   pose.time == first;
         }
 
         /** @brief Validates a complete normalized packet before any canonical device generation can change.
@@ -35,23 +76,18 @@ namespace Horo::XR::RuntimeInternal {
          */
         Result<void> ValidateSourceEvidence(const std::span<const TrackingSourceEvidence> sources, const XRSessionId &session,
                                             const XRWorldOriginRevision origin) {
-            if (sources.size() > 5)
+            if (sources.size() > 7)
                 return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
             for (std::size_t index = 0; index < sources.size(); ++index) {
-                using enum Horo::XR::XRPoseComponentValidity;
                 const auto &source = sources[index];
                 const auto &pose = source.pose;
-                const bool located = pose.components.positionMeters.validity != Invalid || pose.components.orientation.validity != Invalid;
-                if (const bool velocity = pose.components.linearVelocityMetersPerSecond.validity != Invalid ||
-                                          pose.components.angularVelocityRadiansPerSecond.validity != Invalid;
-                    !SourceCapability(source) || (!source.active && (located || velocity)) ||
-                    (source.role == XRTrackedDeviceRole::Head && source.active != located) ||
-                    std::ranges::any_of(sources.first(index), [&](const TrackingSourceEvidence &prior) {
+                if (!ValidSourceShape(source))
+                    return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
+                if (std::ranges::any_of(sources.first(index), [&](const TrackingSourceEvidence &prior) {
                     return prior.role == source.role && prior.kind == source.kind;
                 }))
                     return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
-                if (pose.purpose != XRPosePurpose::SimulationInput || !pose.time.simulation || pose.time.renderPrediction ||
-                    (index != 0 && pose.time != sources.front().pose.time))
+                if (!ValidSourceTime(pose, sources.front().pose.time))
                     return Result<void>::Failure(MakeError(XRErrors::TimeDomainIncompatible));
                 if (const auto valid = XRPoseSample::Create(pose, session, origin); valid.HasError())
                     return Result<void>::Failure(valid.ErrorValue());
@@ -65,27 +101,98 @@ namespace Horo::XR::RuntimeInternal {
             XRTrackedDeviceCapabilities capabilities;
         };
 
-        /** @brief Collects one role's normalized observation without mutating device generations or committed snapshots. */
-        std::optional<DeviceUpdate> CollectDeviceUpdate(std::span<const TrackingSourceEvidence> sources, XRTrackedDeviceRole role,
-                                                        const XRTrackedDeviceRecord *prior) {
-            using enum Horo::XR::XRTrackedDeviceState;
-            auto capabilities = prior == nullptr ? XRTrackedDeviceCapabilities{} : prior->capabilities;
-            bool observed = false;
-            bool located = false;
+        struct CollectedRole final {
+            XRTrackedDeviceCapabilities capabilities;
+            bool observed{};
+            bool located{};
+        };
+
+        CollectedRole CollectRole(const std::span<const TrackingSourceEvidence> sources, const XRTrackedDeviceRole role,
+                                  XRTrackedDeviceCapabilities capabilities) {
+            CollectedRole result{capabilities};
             for (const auto &source : sources) {
                 if (source.role != role || !source.active)
                     continue;
-                capabilities.values[static_cast<std::size_t>(*SourceCapability(source))] = true;
-                observed = true;
-                located |= source.pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
-                           source.pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
+                result.capabilities.values[static_cast<std::size_t>(*SourceCapability(source))] = true;
+                result.observed = true;
+                result.located |= Located(source.pose);
             }
-            if (!observed && prior == nullptr)
+            return result;
+        }
+
+        XRTrackedDeviceState SourceState(const CollectedRole &role, const XRTrackedDeviceRecord *prior) noexcept {
+            if (!role.observed && prior && prior->state == XRTrackedDeviceState::Disconnected)
+                return XRTrackedDeviceState::Disconnected;
+            return role.located ? XRTrackedDeviceState::Tracked : XRTrackedDeviceState::TrackingLost;
+        }
+
+        std::optional<DeviceUpdate> CollectDeviceUpdate(const std::span<const TrackingSourceEvidence> sources,
+                                                        const XRTrackedDeviceRole role, const XRTrackedDeviceRecord *prior) {
+            auto collected = CollectRole(sources, role, prior ? prior->capabilities : XRTrackedDeviceCapabilities{});
+            if (!collected.observed && !prior)
                 return std::nullopt;
-            auto state = located ? Tracked : TrackingLost;
-            if (!observed && prior != nullptr && prior->state == Disconnected)
-                state = Disconnected;
-            return DeviceUpdate{role, state, capabilities};
+            if (IsHand(role))
+                collected.capabilities.values[static_cast<std::size_t>(XRTrackedDeviceCapability::HandJoints)] = true;
+            return DeviceUpdate{role, SourceState(collected, prior), collected.capabilities};
+        }
+
+        bool Replaced(const XRTrackedDeviceRecord &prior, const XRTrackedDeviceState state,
+                      const XRTrackedDeviceCapabilities &capabilities) noexcept {
+            return prior.capabilities != capabilities ||
+                   (prior.state == XRTrackedDeviceState::Disconnected && state != XRTrackedDeviceState::Disconnected);
+        }
+
+        Result<XRDeviceId> UpdateDevice(XRTrackedDeviceRecord &record, const XRTrackedDeviceState state,
+                                        const XRTrackedDeviceCapabilities capabilities) {
+            const bool replaced = Replaced(record, state, capabilities);
+            if (replaced && record.id.slot.generation == std::numeric_limits<std::uint32_t>::max())
+                return Result<XRDeviceId>::Failure(MakeError(XRErrors::IdentityStale));
+            if (replaced)
+                ++record.id.slot.generation;
+            record.state = state;
+            record.capabilities = capabilities;
+            return Result<XRDeviceId>::Success(record.id);
+        }
+
+        struct DeviceUpdates final {
+            std::array<DeviceUpdate, 5> values{};
+            std::size_t count{};
+            std::size_t newCount{};
+        };
+
+        Result<DeviceUpdates> PrepareDeviceUpdates(const std::span<const TrackingSourceEvidence> sources,
+                                                   const std::span<const XRTrackedDeviceRecord> existing) {
+            DeviceUpdates result;
+            constexpr std::array roles{XRTrackedDeviceRole::Head, XRTrackedDeviceRole::LeftController, XRTrackedDeviceRole::RightController,
+                                       XRTrackedDeviceRole::LeftHand, XRTrackedDeviceRole::RightHand};
+            for (const auto role : roles) {
+                const auto prior = std::ranges::find(existing, role, &XRTrackedDeviceRecord::role);
+                const auto update = CollectDeviceUpdate(sources, role, prior == existing.end() ? nullptr : std::to_address(prior));
+                if (!update)
+                    continue;
+                if (prior == existing.end())
+                    ++result.newCount;
+                else if (Replaced(*prior, update->state, update->capabilities) &&
+                         prior->id.slot.generation == std::numeric_limits<std::uint32_t>::max())
+                    return Result<DeviceUpdates>::Failure(MakeError(XRErrors::IdentityStale));
+                result.values[result.count++] = *update;
+            }
+            return Result<DeviceUpdates>::Success(result);
+        }
+
+        Result<void> ApplyDeviceUpdates(XRTrackingPublication &owner, const DeviceUpdates &updates) {
+            for (const auto &update : std::span{updates.values}.first(updates.count)) {
+                if (auto result = owner.ObserveDevice(update.role, update.state, update.capabilities); result.HasError())
+                    return Result<void>::Failure(result.ErrorValue());
+            }
+            return Result<void>::Success();
+        }
+
+        bool ValidPublicationTime(const TrackingPublicationRequest &request, const XRSessionSnapshot &lifecycle,
+                                  const XRWorldOriginRevision origin, const std::uint64_t revision) noexcept {
+            return (request.focus == XRTrackingFocusState::Focused) == lifecycle.admitsActions && request.time.runtimeSample.IsValid() &&
+                   request.time.simulation && request.time.simulation->IsValid() && !request.time.renderPrediction &&
+                   request.origin == origin && revision != std::numeric_limits<std::uint64_t>::max();
         }
     }  // namespace
 
@@ -106,9 +213,7 @@ namespace Horo::XR::RuntimeInternal {
             return lane;
         if (session_.IsValid() || !candidate.IsValid() || !origin.IsValid())
             return Result<void>::Failure(MakeError(XRErrors::IdentityInvalid));
-        if (limits.maximumDevices == 0 || limits.maximumDevices > devices_.size() || limits.maximumPoses == 0 ||
-            limits.maximumPoses > XRTrackingSnapshotHardLimits::MaximumPoses ||
-            limits.maximumActions > XRTrackingSnapshotHardLimits::MaximumActions)
+        if (!ValidPublicationLimits(limits))
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         poses_.reserve(limits.maximumPoses);
         session_ = candidate;
@@ -124,9 +229,8 @@ namespace Horo::XR::RuntimeInternal {
         if (const auto lane = Lane(); lane.HasError())
             return Outcome::Failure(lane.ErrorValue());
         current_.reset();
-        if (!session_.IsValid() || role > XRTrackedDeviceRole::RightController || state >= XRTrackedDeviceState::Count ||
-            !CapabilitiesMatch(role, capabilities))
-            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
+        if (auto valid = ValidateDevice(role, state, capabilities); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
         const auto records = std::span{devices_}.first(deviceCount_);
         const auto found = std::ranges::find(records, role, &XRTrackedDeviceRecord::role);
         if (found == records.end()) {
@@ -138,16 +242,23 @@ namespace Horo::XR::RuntimeInternal {
             ++deviceCount_;
             return Outcome::Success(record.id);
         }
-        const bool replaced = (found->state == XRTrackedDeviceState::Disconnected && state != XRTrackedDeviceState::Disconnected) ||
-                              found->capabilities != capabilities;
-        if (replaced && found->id.slot.generation == std::numeric_limits<std::uint32_t>::max())
-            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
-        current_.reset();
-        if (replaced)
-            ++found->id.slot.generation;
-        found->state = state;
-        found->capabilities = capabilities;
-        return Outcome::Success(found->id);
+        return UpdateDevice(*found, state, capabilities);
+    }
+
+    Result<void> XRTrackingPublication::ValidateDevice(const XRTrackedDeviceRole role, const XRTrackedDeviceState state,
+                                                       const XRTrackedDeviceCapabilities capabilities) const {
+        if (!session_.IsValid() || role >= XRTrackedDeviceRole::Count || role == XRTrackedDeviceRole::GenericTracker ||
+            state >= XRTrackedDeviceState::Count || !CapabilitiesMatch(role, capabilities))
+            return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
+        return IsHand(role) ? AdmitHands() : Result<void>::Success();
+    }
+
+    Result<void> XRTrackingPublication::AdmitSources(const std::span<const TrackingSourceEvidence> sources) const {
+        if (std::ranges::any_of(sources, [](const auto &source) {
+            return IsHand(source.role);
+        }))
+            return AdmitHands();
+        return Result<void>::Success();
     }
 
     /** @copydoc XRTrackingPublication::ObserveSources */
@@ -160,34 +271,14 @@ namespace Horo::XR::RuntimeInternal {
         if (auto valid = ValidateSourceEvidence(sources, session_, origin_); valid.HasError())
             return valid;
 
-        std::array<DeviceUpdate, 3> updates{};
-        std::size_t updateCount = 0;
-        std::size_t newCount = 0;
-        const auto existing = Devices();
-        constexpr std::array roles{XRTrackedDeviceRole::Head, XRTrackedDeviceRole::LeftController, XRTrackedDeviceRole::RightController};
-        for (const auto role : roles) {
-            const auto prior = std::ranges::find(existing, role, &XRTrackedDeviceRecord::role);
-            const auto update = CollectDeviceUpdate(sources, role, prior == existing.end() ? nullptr : std::to_address(prior));
-            if (!update)
-                continue;
-            if (prior == existing.end()) {
-                ++newCount;
-            } else if ((prior->capabilities != update->capabilities ||
-                        (prior->state == XRTrackedDeviceState::Disconnected && update->state != XRTrackedDeviceState::Disconnected)) &&
-                       prior->id.slot.generation == std::numeric_limits<std::uint32_t>::max()) {
-                return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-            }
-            updates[updateCount++] = *update;
-        }
-        if (deviceCount_ > limits_.maximumDevices || newCount > limits_.maximumDevices - deviceCount_)
+        if (auto admitted = AdmitSources(sources); admitted.HasError())
+            return admitted;
+        const auto prepared = PrepareDeviceUpdates(sources, Devices());
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        if (deviceCount_ > limits_.maximumDevices || prepared.Value().newCount > limits_.maximumDevices - deviceCount_)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        // Every possible typed failure is prevalidated before the first mutation. The SAME owner/issuer performs all updates.
-        for (const auto &update : std::span{updates}.first(updateCount)) {
-            const auto device = ObserveDevice(update.role, update.state, update.capabilities);
-            if (device.HasError())
-                return Result<void>::Failure(device.ErrorValue());
-        }
-        return Result<void>::Success();
+        return ApplyDeviceUpdates(*this, prepared.Value());
     }
 
     /** @copydoc XRTrackingPublication::Devices */
@@ -195,6 +286,20 @@ namespace Horo::XR::RuntimeInternal {
         if (std::this_thread::get_id() != lane_)
             return {};
         return std::span{devices_}.first(deviceCount_);
+    }
+
+    Result<void> XRTrackingPublication::AdmitHands() const {
+        const auto plan = lifecycle_->AcceptedPlan();
+        if (!plan || limits_.maximumHandJoints == 0)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto decision = plan->Decision(XRCapability::HandTracking).state;
+        if (decision != XRFeatureDecisionState::Required && decision != XRFeatureDecisionState::OptionalEnabled)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        return Result<void>::Success();
+    }
+
+    Result<void> XRTrackingPublication::AdmitJointRecords(const std::span<const XRHandJointRecord> joints) const {
+        return joints.empty() ? Result<void>::Success() : AdmitHands();
     }
 
     /** @copydoc XRTrackingPublication::PreparePoses */
@@ -223,11 +328,10 @@ namespace Horo::XR::RuntimeInternal {
         current_.reset();
         if (auto admitted = lifecycle_->Admit(session_, request.focus == XRTrackingFocusState::Focused); admitted.HasError())
             return admitted;
-        if (const auto lifecycle = lifecycle_->Snapshot();
-            (request.focus == XRTrackingFocusState::Focused) != lifecycle.admitsActions || !request.time.runtimeSample.IsValid() ||
-            !request.time.simulation || !request.time.simulation->IsValid() || request.time.renderPrediction || request.origin != origin_ ||
-            revision_ == std::numeric_limits<std::uint64_t>::max())
+        if (!ValidPublicationTime(request, lifecycle_->Snapshot(), origin_, revision_))
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
+        if (auto hands = AdmitJointRecords(request.handJoints); hands.HasError())
+            return hands;
         if (auto prepared = PreparePoses(request); prepared.HasError())
             return prepared;
         auto revision = XRTrackingSnapshotRevision::Create(revision_ + 1);
@@ -247,7 +351,8 @@ namespace Horo::XR::RuntimeInternal {
                                                      .devices = devices,
                                                      .poses = poses_,
                                                      .bindingRevision = request.bindingRevision,
-                                                     .actions = request.actions},
+                                                     .actions = request.actions,
+                                                     .handJoints = request.handJoints},
                                                     session_, origin_);
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());

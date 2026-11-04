@@ -6,12 +6,13 @@
 
 namespace Horo::Editor {
     /** @brief Existing explicit private Play view policy, projected by the actual selected factory/host.
-     * @details Values are unchanged; this non-installed declaration is shared with the Game panel only.
+     * @details Existing ordinals are preserved; Simulator is appended for explicit synthetic development.
      * SelectedXr is selection intent, never physical renderer or native session readiness.
      */
     enum class EditorPlayViewSource {
         AuthoredCamera,
-        SelectedXr
+        SelectedXr,
+        Simulator
     };
     /** @brief Presentation projection of the editor play-session lifecycle; never another state authority. */
     enum class EditorPlayState : std::uint8_t {
