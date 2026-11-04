@@ -1,7 +1,7 @@
 #pragma once
 
 /** @file SceneAnimationHostSelection.h
- * @brief Explicit application selection shared by Editor and headless Scene compositions.
+ * @brief Explicit animation factory selection for the Editor Scene composition.
  */
 #include "AnimationRuntimeIdentitySource.h"
 #include "Horo/Runtime/Scene/SceneAnimationRuntime.h"

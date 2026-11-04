@@ -108,7 +108,7 @@ contexts.
 
 ## Supported Host Profiles
 
-`apps/common/HostModuleComposition.h` is the non-installed contract shared by
+`apps/shared/modules/HostModuleComposition.h` is the non-installed contract shared by
 the two application composition roots. It translates the modules actually
 linked into each executable into the descriptor graph consumed by `ModuleHost`:
 

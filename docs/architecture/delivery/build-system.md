@@ -129,6 +129,29 @@ options or per-target compile definitions for those.
 Targets are grouped into libraries and executables. Library targets follow the
 module structure defined in [System Design](../foundation/system-design.md).
 
+`apps/CMakeLists.txt` is the assembly list for executable composition. It includes
+the existing target declarations from their owning host:
+
+- `apps/shared/cmake/Composition.cmake`: multi-host packages, signatures,
+  module activation, Scene/Physics lifetime adaptation, animation identities and
+  native navigation preparation.
+- `apps/HoroEditor/cmake/Composition.cmake`: Editor-specific adapter libraries.
+- `apps/HoroEditor/cmake/Host.cmake`: the graphical executable, platform setup,
+  live UI, packaging and concrete backend selection.
+- `apps/HoroEditor/cmake/ShaderTools.cmake`: offline graphical-product cook tools.
+- `apps/horo-engine/cmake/Host.cmake`: terminal/network composition and its
+  headless link-boundary check.
+- `apps/cmake/SdkTools.cmake`: extension validation, conformance, package tools
+  and SDK staging.
+
+These files use `include`, retaining the `apps/` source and binary directory
+scope. Relative sources, source properties and generated internal-header paths
+therefore keep their existing identities. Target names, compile contracts and
+dependencies remain explicit; this organization introduces no additional target
+or public include root. Shared composition is declared before its consumers;
+offline Editor tools follow the optional graphical executable so their existing
+`if(TARGET HoroEditor)` attachment remains effective.
+
 ```text
 apps/
     HoroEditor

@@ -707,7 +707,9 @@ def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composit
     assert "catalog.tsv" in job
     assert "HoroEditorAssetRoot-Debug.txt" in job
     apps = (ROOT / "apps/CMakeLists.txt").read_text(encoding="utf-8")
-    assert "HoroEditorAssetRoot-$<CONFIG>.txt" in apps
+    assert 'include("${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/cmake/Host.cmake")' in apps
+    editor = (ROOT / "apps/HoroEditor/cmake/Host.cmake").read_text(encoding="utf-8")
+    assert "HoroEditorAssetRoot-$<CONFIG>.txt" in editor
 
 
 def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -> None:

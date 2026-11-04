@@ -18,7 +18,7 @@ issues tool approvals nor verifies that an arbitrary injected adapter is trusted
 A project-controlled source path or descriptor cannot authorize a compiler.
 
 The non-installed `HoroShaderHotReloadHostInternal` target exposes the narrow
-`apps/common/render` seam. The editor application entry is declared in
+`apps/HoroEditor/composition/render` seam. The editor application entry is declared in
 `apps/HoroEditor/app/HoroEditorApp.h`. A developer composition that already owns
 `verifiedCompiler`, `qualifiedTarget` and `qualifiedReflectionTool` calls:
 

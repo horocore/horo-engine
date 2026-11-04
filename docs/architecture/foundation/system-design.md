@@ -67,6 +67,34 @@ does not issue clocks, dispatch proofs or simulation commitments.
 workflows above the editor workspace. It owns modal focus and interaction
 exclusivity but not editor, project, build, or release state.
 
+## Application Source Ownership
+
+`src/` contains reusable libraries, including the editor libraries. ImGui screens,
+panels and editor presentation therefore belong under `src/editor/` in their
+existing GUI target; they are not executable bootstrap code.
+
+Executable-specific adapters and composition live with their host:
+
+- `apps/HoroEditor/composition/` owns Editor Play/Save adaptation, project Scene
+  composition, presentation, shader hot reload, terrain preparation and XR host
+  wiring. The shared Save format, capture barrier and Physics restore remain
+  owned by their Runtime/Physics libraries under `src/`.
+- `apps/HoroEditor/tools/shader_cook/` owns the graphical product's offline tool
+  authentication and package publication helpers.
+- `apps/horo-engine/composition/` owns terminal/headless network and Scene
+  composition and module-script package admission.
+- `apps/shared/` contains only composition used by multiple executable hosts:
+  module activation, package sessions, host signatures, navigation preparation,
+  Scene/Physics lifetime adaptation and animation owner identities. Keep each
+  family in its own directory and expose only its existing non-installed target
+  contract.
+
+There is no catch-all `apps/common` include root. Moving a file does not grant
+another target access to its private headers. Shared feature rules, serializers
+and state transitions belong to the owning library, rather than being copied
+into host adapters. The two hosts continue to select concrete services and own
+their lifetimes at their composition roots.
+
 ## Architecture Style
 
 The engine is a layered modular monolith. Modules are separate CMake targets
@@ -897,7 +925,7 @@ publication manifests, immutable generations and provider bytes.
 
 The non-installed executable adapter `HoroEditorUiStyleHostInternal` composes the
 bridge with actual native storage, project read/mutation authority and process
-jobs. It exports only its dedicated `apps/common/ui_style` internal seam, not a
+jobs. It exports only its dedicated `apps/HoroEditor/composition/ui_style` internal seam, not a
 repository-wide source root. Its returned workspace capability cancels/joins work
 before the host services die. GUI/controller clients receive typed themes,
 completion values and commands; they do not discover files, cook assets or select

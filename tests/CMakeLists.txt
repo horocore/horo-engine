@@ -4946,7 +4946,7 @@ target_compile_features(HoroRuntimeSaveOperationTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveOperationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # One deliberate noninstalled host contract; public Runtime owns the operation API.
 set(_horo_save_failure_test_headers "${CMAKE_CURRENT_BINARY_DIR}/play-save-failure-test-headers")
-configure_file("${PROJECT_SOURCE_DIR}/apps/common/EditorPlaySaveFailurePublication.h"
+configure_file("${PROJECT_SOURCE_DIR}/apps/HoroEditor/composition/play/save/EditorPlaySaveFailurePublication.h"
     "${_horo_save_failure_test_headers}/EditorPlaySaveFailurePublication.h" COPYONLY)
 target_include_directories(HoroRuntimeSaveOperationTests PRIVATE
     "${_horo_save_failure_test_headers}" "${PROJECT_SOURCE_DIR}/tests/support")

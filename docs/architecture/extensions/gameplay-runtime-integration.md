@@ -14,7 +14,7 @@ intent uses the shared runtime-safe baseline/delta core. Source-free typed
 initialization, references, exact grant/lifetime requirements and HPFB v3
 migration are defined in the [prefab capability guide](../../guides/gameplay-prefab-spawn-migration.md).
 
-`HoroNetworkProductHost` owns this application composition in `apps/common` and
+`HoroNetworkProductHost` owns this application composition in `apps/horo-engine/composition/network` and
 links `HoroPrefabRuntime` explicitly to construct and retain the spawn service.
 This host edge grants no Prefab dependency to Network runtime or Physics
 integration. Module descriptors remain inert; the host supplies the provider,
