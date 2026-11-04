@@ -3,6 +3,7 @@
 #include "Horo/Extensions/EditorActivityAbi.h"
 #include "Horo/Extensions/ExtensionServiceAbi.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace Horo::Extensions {

@@ -67,6 +67,10 @@ option(HORO_ENABLE_IMGUI_UI_TESTS "Build headless Dear ImGui UI automation tests
 option(HORO_ENABLE_TELEMETRY "Compile Horo telemetry producer instrumentation" ON)
 option(HORO_BUILD_EXAMPLES "Build SDK and extension examples" ${BUILD_TESTING})
 option(HORO_BUILD_PHYSICS_NATIVE "Build the private CanonicalV1 Physics solver" ON)
+if(HORO_BUILD_PHYSICS_NATIVE)
+    # Snapshot compatibility consumes the actual Physics and solver compile recipes.
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
 option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)
 option(HORO_BUILD_AUDIO_SDL3 "Build the SDL3 portability/reference audio backend" ${HORO_BUILD_EDITOR_GUI})
 option(HORO_BUILD_NETWORK_GNS "Build the optional production GameNetworkingSockets transport" OFF)
