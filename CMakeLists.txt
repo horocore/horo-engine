@@ -193,6 +193,11 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/apps/CMakeLists.txt")
     add_subdirectory(apps)
 endif()
 
+include(HoroNetworkChaosBoundary)
+horo_verify_network_chaos_boundary(horo-engine)
+horo_verify_network_chaos_boundary(HoroEditor)
+horo_verify_network_chaos_release_inventory()
+
 # Validate only production targets. Tests and examples consume production
 # contracts but are not layers in the shipped module graph.
 include(HoroDependencyPolicy)

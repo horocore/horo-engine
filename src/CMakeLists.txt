@@ -677,14 +677,20 @@ target_compile_features(HoroNetworkApi PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkApi PUBLIC HoroEngine::Foundation)
 target_include_directories(HoroNetworkApi PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>)
 
-add_library(HoroNetworkTransportNull STATIC
+# Fault-injection implementations have no shipping target or installed activation surface.
+if(BUILD_TESTING)
+    add_library(HoroNetworkTransportNull STATIC
         runtime/networking/null/DeterministicTransport.cpp
-        runtime/networking/null/NetworkChaosScenario.cpp
-        runtime/networking/null/NullTransportBackend.cpp
-)
-add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
-target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
-target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
+        runtime/networking/null/NullTransportBackend.cpp)
+    add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
+    target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
+    target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
+
+    add_library(HoroNetworkChaosHarness STATIC runtime/networking/null/NetworkChaosScenario.cpp)
+    add_library(HoroEngine::NetworkChaosHarness ALIAS HoroNetworkChaosHarness)
+    target_compile_features(HoroNetworkChaosHarness PUBLIC cxx_std_20)
+    target_link_libraries(HoroNetworkChaosHarness PUBLIC HoroEngine::NetworkTransportNull)
+endif()
 
 if(HORO_BUILD_NETWORK_GNS)
     add_library(HoroNetworkTransportGNSFactoryInternal INTERFACE)

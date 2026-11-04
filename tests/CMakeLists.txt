@@ -416,8 +416,22 @@ add_executable(HoroNetworkTransportNullTests
 )
 target_compile_features(HoroNetworkTransportNullTests PRIVATE cxx_std_20)
 target_include_directories(HoroNetworkTransportNullTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
-target_link_libraries(HoroNetworkTransportNullTests PRIVATE HoroEngine::NetworkTransportNull)
+target_link_libraries(HoroNetworkTransportNullTests PRIVATE HoroEngine::NetworkTransportNull HoroEngine::NetworkChaosHarness)
 horo_register_catch_test(HoroNetworkTransportNullTests LABELS "unit;network;headless")
+add_test(NAME HoroNetworkChaosBoundaryTest COMMAND "${CMAKE_COMMAND}"
+    "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/network-chaos-boundary"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunNetworkChaosBoundaryTest.cmake")
+set_tests_properties(HoroNetworkChaosBoundaryTest PROPERTIES LABELS "architecture;network;headless")
+add_executable(HoroNetworkChaosHarnessTests unit/runtime/networking/NetworkChaosHarnessTests.cpp)
+target_compile_features(HoroNetworkChaosHarnessTests PRIVATE cxx_std_20)
+target_include_directories(HoroNetworkChaosHarnessTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/tests/support
+    ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking
+    ${PROJECT_SOURCE_DIR}/tests/integration/network)
+target_link_libraries(HoroNetworkChaosHarnessTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkChaosHarness MbedTLS::mbedcrypto)
+horo_register_catch_test(HoroNetworkChaosHarnessTests LABELS "unit;network;headless;chaos")
+
 if(HORO_BUILD_NETWORK_GNS)
     add_executable(HoroNetworkTransportGnsTests
             support/AllocationProbe.cpp
@@ -449,7 +463,7 @@ add_executable(HoroNetworkDebuggerTests
     unit/runtime/networking/NetworkDebuggerTests.cpp
 )
 target_include_directories(HoroNetworkDebuggerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
-target_link_libraries(HoroNetworkDebuggerTests PRIVATE HoroEngine::NetworkDebuggerApplication HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
+target_link_libraries(HoroNetworkDebuggerTests PRIVATE HoroEngine::NetworkDebuggerApplication HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull HoroEngine::NetworkChaosHarness)
 horo_register_catch_test(HoroNetworkDebuggerTests LABELS "unit;network;debugger;headless")
 add_executable(HoroNetworkDebuggerPublicHeaderConsumer support/NetworkDebuggerPublicHeaderConsumer.cpp)
 target_compile_features(HoroNetworkDebuggerPublicHeaderConsumer PRIVATE cxx_std_20)
@@ -474,7 +488,7 @@ add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/RpcParameterPolicyTests.cpp
 )
 target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
-target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroNetworkModeHostInternal)
+target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroNetworkModeHostInternal HoroEngine::NetworkChaosHarness)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
 horo_register_catch_test(HoroNetworkRuntimeTests LABELS "unit;network;headless")
 add_executable(HoroReplicationStateCaptureTests
@@ -503,7 +517,7 @@ add_executable(HoroReplicationInboundApplyTests
         unit/runtime/networking/ReplicationInboundApplyTests.cpp
 )
 target_compile_features(HoroReplicationInboundApplyTests PRIVATE cxx_std_20)
-target_link_libraries(HoroReplicationInboundApplyTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
+target_link_libraries(HoroReplicationInboundApplyTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull HoroEngine::NetworkChaosHarness)
 horo_register_catch_test(HoroReplicationInboundApplyTests LABELS "unit;network;headless;replication_apply")
 
 add_executable(HoroReplicationSnapshotHistoryTests unit/runtime/networking/ReplicationSnapshotHistoryTests.cpp)
