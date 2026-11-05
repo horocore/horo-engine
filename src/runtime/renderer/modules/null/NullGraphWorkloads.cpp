@@ -55,6 +55,12 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
         }
 
+        /** @brief Null cannot acknowledge unexecuted native exposure work, even with a caller-constructed lease. */
+        [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &, const RenderGraphExecutionRequest &,
+                                                    const RenderGraphExposureGpu &) {
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
+        }
+
         /** @brief Validates one workload against resolved native resources before submission. */
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &resources, const RenderGraphExecutionRequest &request,

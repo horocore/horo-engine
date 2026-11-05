@@ -119,6 +119,8 @@ namespace Horo::Render {
                 return ValidateVfxGpuComputeGraphWorkload(request, pass, *particles).HasValue();
             if (const auto *particles = std::get_if<RenderGraphVfxGpuDraw>(&workload))
                 return ValidateVfxGpuDrawGraphWorkload(request, pass, *particles).HasValue();
+            if (const auto *exposure = std::get_if<RenderGraphExposureGpu>(&workload))
+                return ValidateExposureGpuGraphWorkload(request, pass, *exposure).HasValue();
             if (ExternallyValidated(workload))
                 return true;
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))

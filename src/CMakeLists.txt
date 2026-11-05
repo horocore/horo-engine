@@ -2832,6 +2832,11 @@ target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
 target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
 add_library(HoroRenderApi STATIC
+        runtime/renderer/api/ColorPipeline.cpp
+        runtime/renderer/api/ColorPipelineTransform.cpp
+        runtime/renderer/api/Exposure.cpp
+        runtime/renderer/api/ExposureGpuKernel.cpp
+        runtime/renderer/api/ExposureGpuWorkload.cpp
         runtime/renderer/api/DirectionalShadow.cpp
         runtime/renderer/api/DirectionalShadowFit.cpp
         runtime/renderer/api/DirectionalShadowFingerprint.cpp
@@ -2957,6 +2962,10 @@ add_library(HoroShaderReflectionCookInternal STATIC
     runtime/renderer/shader_cook/LightCullingMetalReflectionSpirv.cpp
     runtime/renderer/shader_cook/LightCullingMetalReflectionStorage.cpp
     runtime/renderer/shader_cook/LightCullingMetalReflectionNormalization.cpp
+    runtime/renderer/shader_cook/ExposureGpuReflectionProfile.cpp
+    runtime/renderer/shader_cook/ExposureGpuReflectionNative.cpp
+    runtime/renderer/shader_cook/ExposureGpuReflectionNormalization.cpp
+    runtime/renderer/shader_cook/ExposureGpuReflectionSpirv.cpp
     runtime/renderer/shader_cook/VfxGpuReflectionProfile.cpp
     runtime/renderer/shader_cook/VfxGpuReflectionSpirv.cpp
     runtime/renderer/shader_cook/VfxGpuReflectionNative.cpp
@@ -3070,6 +3079,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontendVfxDraws.cpp
         runtime/renderer/frontend/RenderFrontendVfxResources.cpp
         runtime/renderer/frontend/LightCullingPreparation.cpp
+        runtime/renderer/frontend/ExposureGpuPreparation.cpp
         runtime/renderer/frontend/VfxPreparation.cpp
         runtime/renderer/frontend/VfxGpuInventoryLease.cpp
         runtime/renderer/frontend/VfxGpuPreparation.cpp
@@ -3270,6 +3280,9 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
             runtime/renderer/modules/metal/MetalResourceGraphRuntime.mm
             runtime/renderer/modules/metal/MetalLightCullingKernel.mm
+            runtime/renderer/modules/metal/ExposureGpuKernel.mm
+            runtime/renderer/modules/metal/ExposureGpuJournal.mm
+            runtime/renderer/modules/metal/ExposureGpuEncoding.mm
             runtime/renderer/modules/metal/MetalVfxGpuKernel.mm
             runtime/renderer/modules/metal/MetalVfxGpuPreparation.mm
             runtime/renderer/modules/metal/MetalVfxGpuJournal.mm

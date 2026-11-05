@@ -41,6 +41,7 @@ namespace Horo::Render {
         VfxGpuSimulation,     /**< Actual cooked particle force/integration dispatch with bounded generation/submission journals. */
         VfxGpuDraw,           /**< Direct vertex consumption of the admitted GPU particle storage ABI. */
         VfxGpuReadback,       /**< Declared normalized observations with actual asynchronous copy/completion ownership. */
+        ExposureGpu,          /**< Closed native histogram/adaptation family; no CPU meter or generic compute implied. */
         Count,                /**< Number of defined capabilities; not itself a capability bit. */
     };
 

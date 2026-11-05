@@ -654,6 +654,11 @@ namespace Horo::Render {
          * @return Owned selected-backend kernel lease or typed capability, lifecycle or native failure.
          * @details Source compilation and implicit quality fallback are prohibited; callers drain leases before frontend destruction.
          */
+        /** @brief Cold owner-thread realization of the fixed native exposure compute family.
+         * @param kernel Complete offline artifacts. @return Native lease or typed admission/backend failure.
+         */
+        [[nodiscard]] Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(const CookedExposureGpuKernel &kernel);
+
         [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
 

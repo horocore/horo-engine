@@ -163,26 +163,94 @@ namespace Horo::Render::Detail {
             [encoder endEncoding];
             return Result<void>::Success();
         }
+
+        /** @brief Checks the canonical single-view native depth attachment shape. */
+        bool DepthShapeValid(const MetalTextureInstance *texture) noexcept {
+            if (!texture)
+                return false;
+            const auto &d = texture->descriptor;
+            return HasTextureUsage(d.usage, RenderTextureUsage::RenderAttachment) && d.dimension == RenderTextureDimension::TwoD &&
+                   d.mipCount == 1 && d.layerCount == 1 && d.sampleCount == 1 &&
+                   (MetalTextureAspectMatches(d.format, RenderTextureAspect::Depth) ||
+                    MetalTextureAspectMatches(d.format, RenderTextureAspect::DepthStencil));
+        }
+
+        /** @brief Validates native depth clear metadata separately from workload dispatch. */
+        Result<void> ValidateGraphDepth(const RenderGraphDepthAttachment &depth, std::span<const RenderGraphResourceInstance> resources,
+                                        const std::unordered_set<MetalTextureInstance *> &textures, MTLRenderPassDescriptor *pass) {
+            const auto *texture = LiveGraphInstance(depth.texture, resources, textures);
+            if (!DepthShapeValid(texture) || !std::isfinite(depth.clearDepth) || depth.clearDepth < 0 || depth.clearDepth > 1 ||
+                pass == nil)
+                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Encodes one already validated graph color attachment. */
+        Result<void> EncodeGraphColor(id<MTLCommandBuffer> commands, MetalTextureInstance *texture,
+                                      const RenderGraphColorAttachment &color) {
+            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            auto *attachment = pass.colorAttachments[0];
+            attachment.texture = texture->texture;
+            ConfigureMetalColorAttachment(attachment, color.operations);
+            id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
+            if (encoder == nil)
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::CommandSubmissionFailed, "Metal graph color encoder creation failed."));
+            [encoder endEncoding];
+            return Result<void>::Success();
+        }
+
+        /** @brief Encodes fixed depth/color/copy operations while retaining their native use evidence. */
+        template <class Impl>
+        Result<void> EncodeBasicGraph(Impl &impl, id<MTLCommandBuffer> commands, const RenderGraphWorkload &workload,
+                                      std::span<const RenderGraphResourceInstance> resources) {
+            if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
+                auto *texture = Decode<MetalTextureInstance>(GraphInstance(depth->texture, resources));
+                if (auto encoded = EncodeDepthAttachment(commands, texture, impl.vfxPass, depth->clearDepth); encoded.HasError())
+                    return encoded;
+                Impl::TrackUse(texture->use, commands);
+            } else if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
+                auto *texture = Decode<MetalTextureInstance>(GraphInstance(color->texture, resources));
+                if (auto encoded = EncodeGraphColor(commands, texture, *color); encoded.HasError())
+                    return encoded;
+                Impl::TrackUse(texture->use, commands);
+            } else if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
+                auto *source = Decode<MetalBufferInstance>(GraphInstance(copy->source, resources));
+                auto *destination = Decode<MetalBufferInstance>(GraphInstance(copy->destination, resources));
+                if (auto encoded = EncodeBufferCopy(commands, source, destination, *copy); encoded.HasError())
+                    return encoded;
+                Impl::TrackUse(source->use, commands);
+                Impl::TrackUse(destination->use, commands);
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Preserves the existing closed light compute operation's resolved native resource uses. */
+        template <class Impl>
+        Result<void> EncodeCullingGraph(Impl &, id<MTLCommandBuffer> commands, const RenderGraphLightCulling &culling,
+                                        std::span<const RenderGraphResourceInstance> resources) {
+            const std::array ids{culling.lights, culling.clusters, culling.membership, culling.references};
+            std::array<MetalBufferInstance *, 4> buffers{};
+            for (std::size_t i = 0; i < ids.size(); ++i)
+                buffers[i] = Decode<MetalBufferInstance>(GraphInstance(ids[i], resources));
+            if (auto encoded = EncodeGraphLightCulling(commands, culling, buffers); encoded.HasError())
+                return encoded;
+            for (auto *buffer : buffers)
+                Impl::TrackUse(buffer->use, commands);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc MetalResourceRuntime::ValidateGraphWorkload */
     Result<void> MetalResourceRuntime::ValidateGraphWorkload(const RenderGraphWorkload &workload,
                                                              const std::span<const RenderGraphResourceInstance> resources) const {
+        if (const auto *exposure = std::get_if<RenderGraphExposureGpu>(&workload))
+            return ValidateExposureGpu(*exposure, resources);
         if (std::holds_alternative<RenderGraphVfx>(workload))
             return Result<void>::Failure(
                 MakeError(VfxFrameErrors::Unavailable, "VFX requires the full captured mesh, target and publication request."));
-        if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
-            const auto *texture = LiveGraphInstance(depth->texture, resources, impl_->textures);
-            if (!texture || !std::isfinite(depth->clearDepth) || depth->clearDepth < 0 || depth->clearDepth > 1 ||
-                !HasTextureUsage(texture->descriptor.usage, RenderTextureUsage::RenderAttachment) ||
-                texture->descriptor.dimension != RenderTextureDimension::TwoD || texture->descriptor.mipCount != 1 ||
-                texture->descriptor.layerCount != 1 || texture->descriptor.sampleCount != 1 ||
-                (!MetalTextureAspectMatches(texture->descriptor.format, RenderTextureAspect::Depth) &&
-                 !MetalTextureAspectMatches(texture->descriptor.format, RenderTextureAspect::DepthStencil)) ||
-                impl_->vfxPass == nil)
-                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid));
-            return Result<void>::Success();
-        }
+        if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
+            return ValidateGraphDepth(*depth, resources, impl_->textures, impl_->vfxPass);
         if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
             return ValidateGraphLightCulling(*culling, resources, impl_->buffers, impl_->lightKernelOwner.get(),
                                              impl_->lightKernelIncarnation, impl_->lightKernelIdentityExhausted);
@@ -196,6 +264,8 @@ namespace Horo::Render::Detail {
     /** @copydoc MetalResourceRuntime::ExecuteGraphWorkload */
     Result<void> MetalResourceRuntime::ExecuteGraphWorkload(void *commandBuffer, const RenderGraphWorkload &workload,
                                                             const std::span<const RenderGraphResourceInstance> resources) {
+        if (const auto *exposure = std::get_if<RenderGraphExposureGpu>(&workload))
+            return ExecuteExposureGpu(commandBuffer, *exposure, resources);
         if (const auto valid = ValidateGraphWorkload(workload, resources); valid.HasError()) {
             return valid;
         }
@@ -203,42 +273,9 @@ namespace Horo::Render::Detail {
         if (commands == nil) {
             return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
         }
-        if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
-            auto *texture = Decode<MetalTextureInstance>(GraphInstance(depth->texture, resources));
-            if (const auto encoded = EncodeDepthAttachment(commands, texture, impl_->vfxPass, depth->clearDepth); encoded.HasError())
-                return encoded;
-            Impl::TrackUse(texture->use, commands);
-        } else if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload)) {
-            const std::array ids{culling->lights, culling->clusters, culling->membership, culling->references};
-            std::array<MetalBufferInstance *, 4> buffers{};
-            for (std::size_t index = 0; index < ids.size(); ++index)
-                buffers[index] = Decode<MetalBufferInstance>(GraphInstance(ids[index], resources));
-            if (const auto encoded = EncodeGraphLightCulling(commands, *culling, buffers); encoded.HasError())
-                return encoded;
-            for (auto *buffer : buffers)
-                Impl::TrackUse(buffer->use, commands);
-        } else if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
-            auto *texture = Decode<MetalTextureInstance>(GraphInstance(color->texture, resources));
-            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-            auto *attachment = pass.colorAttachments[0];
-            attachment.texture = texture->texture;
-            ConfigureMetalColorAttachment(attachment, color->operations);
-            id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
-            if (encoder == nil) {
-                return Result<void>::Failure(
-                    MakeError(MetalBackendErrors::CommandSubmissionFailed, "Metal graph color encoder creation failed."));
-            }
-            [encoder endEncoding];
-            Impl::TrackUse(texture->use, commands);
-        } else if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
-            auto *source = Decode<MetalBufferInstance>(GraphInstance(copy->source, resources));
-            auto *destination = Decode<MetalBufferInstance>(GraphInstance(copy->destination, resources));
-            if (const auto encoded = EncodeBufferCopy(commands, source, destination, *copy); encoded.HasError())
-                return encoded;
-            Impl::TrackUse(source->use, commands);
-            Impl::TrackUse(destination->use, commands);
-        }
-        return Result<void>::Success();
+        if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
+            return EncodeCullingGraph(*impl_, commands, *culling, resources);
+        return EncodeBasicGraph(*impl_, commands, workload, resources);
     }
 
     /** @copydoc MetalResourceRuntime::CaptureGraphOperation */
@@ -247,6 +284,9 @@ namespace Horo::Render::Detail {
                                                                                id<MTLCommandBuffer> commands, id<MTLTexture> primary) {
         if (const auto valid = ValidateGraphWorkload(workload, resources); valid.HasError())
             return Result<MetalRecordedOperation>::Failure(valid.ErrorValue());
+        if (std::holds_alternative<RenderGraphExposureGpu>(workload))
+            return Result<MetalRecordedOperation>::Failure(
+                MakeError(ExposureGpuErrors::Unsupported, "Exposure compute requires owner-thread graph encoding."));
         if (std::holds_alternative<RenderGraphLightCulling>(workload) || std::holds_alternative<RenderGraphDepthAttachment>(workload))
             return Result<MetalRecordedOperation>::Failure(
                 MakeError(LightCullingErrors::Unsupported, "Light compute currently requires owner-thread graph encoding."));
@@ -305,6 +345,7 @@ namespace Horo::Render::Detail {
             Impl::FinishUse(texture->use, commands, committed);
         }
         FinishVfxGpuCommands(commandBuffer, committed);
+        FinishExposureGpuCommands(commandBuffer, committed);
         impl_->DrainRetired(64);
     }
 

@@ -106,3 +106,24 @@ Local managed Sonar was waived. Format and raw complexity measurements are not
 full Codacy, coverage, hosted-gate or vulnerability clearance. Cold preparation,
 Lua VM allocation and Scene command/receipt allocation retain their separate
 allocation scopes described in the migration guide.
+
+## HORO-394 / #394 / RND-013.3 — exposure component, ticket in progress
+
+The typed exposure/color foundation and the real Metal exposure compute family
+are delivered as one component of this ticket. The GPU clears/builds a bounded
+histogram and adapts a device-local exposure state for the next submitted view.
+The native owner validates actual same-queue submission, preserves last-good
+state across abandonment and handles resources ordered earlier in the current
+command buffer. Other backends return explicit unsupported outcomes.
+
+Local qualification: 27 cold API cases, nine captured compiler-evidence cases,
+12 genuine Metal exposure cases and two existing native buffer/color regressions
+passed without failures or skips. Three shader stages were genuinely compiled,
+reflected and atomically packaged with authenticated tools. Public headers and
+owning libraries compiled. MAIN cache contents and counters were preserved.
+
+See [scope, migration and remaining acceptance](scene-color-pipeline-migration.md).
+The native fixture qualifies the private concrete owner, not the public frontend
+association end to end. Final ACES/look/LUT processing, output conversion and
+actual Editor wiring remain outstanding. HORO-394 stays In Progress; no full
+Editor, HDR-display, coverage, Codacy, Sonar or hosted-gate clearance is claimed.

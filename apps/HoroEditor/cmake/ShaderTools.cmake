@@ -50,6 +50,19 @@ add_executable(HoroVfxGpuShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VfxGpuCook
 target_compile_features(HoroVfxGpuShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroVfxGpuShaderCook PRIVATE HoroVfxGpuCookInternal)
 
+# Offline exposure production reuses authenticated tools and atomic publication.
+set(HORO_EXPOSURE_GPU_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/exposure_gpu_cook_headers")
+file(MAKE_DIRECTORY "${HORO_EXPOSURE_GPU_COOK_HEADERS}")
+configure_file(HoroEditor/tools/ExposureGpuCook.h "${HORO_EXPOSURE_GPU_COOK_HEADERS}/ExposureGpuCook.h" COPYONLY)
+add_library(HoroExposureGpuCookInternal STATIC HoroEditor/tools/ExposureGpuCook.cpp)
+target_compile_features(HoroExposureGpuCookInternal PUBLIC cxx_std_20)
+target_include_directories(HoroExposureGpuCookInternal PUBLIC "${HORO_EXPOSURE_GPU_COOK_HEADERS}")
+target_link_libraries(HoroExposureGpuCookInternal PUBLIC HoroEngine::RenderApi HoroEditorShaderCookHostInternal
+    PRIVATE HoroShaderReflectionCookInternal HoroAtomicShaderCookPackageInternal HoroEngine::Platform)
+add_executable(HoroExposureGpuShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/ExposureGpuCookMain.cpp)
+target_compile_features(HoroExposureGpuShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroExposureGpuShaderCook PRIVATE HoroExposureGpuCookInternal)
+
 set(HORO_VFX_GPU_VULKAN_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/vfx_gpu_vulkan_cook_headers")
 file(MAKE_DIRECTORY "${HORO_VFX_GPU_VULKAN_COOK_HEADERS}")
 configure_file(HoroEditor/tools/VfxGpuVulkanCook.h

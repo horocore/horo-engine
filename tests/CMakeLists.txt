@@ -4312,6 +4312,22 @@ add_executable(HoroRenderGraphTests
 )
 target_compile_features(HoroRenderGraphTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderGraphTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroColorPipelineTests
+        unit/runtime/renderer/ColorPipelineTests.cpp
+        unit/runtime/renderer/ExposureTests.cpp
+        unit/runtime/renderer/ExposureGpuKernelTests.cpp
+)
+target_compile_features(HoroColorPipelineTests PRIVATE cxx_std_20)
+target_link_libraries(HoroColorPipelineTests PRIVATE HoroEngine::RenderApi Catch2::Catch2WithMain)
+catch_discover_tests(HoroColorPipelineTests TEST_PREFIX "HoroColorPipelineTests::"
+        DISCOVERY_MODE PRE_TEST PROPERTIES LABELS "unit;renderer;color;exposure")
+add_executable(HoroExposureGpuReflectionTests unit/runtime/renderer/ExposureGpuReflectionTests.cpp)
+target_compile_features(HoroExposureGpuReflectionTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroExposureGpuReflectionTests PRIVATE
+    HORO_EXPOSURE_GPU_REFLECTION_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/exposure_gpu_locked")
+target_link_libraries(HoroExposureGpuReflectionTests PRIVATE HoroShaderReflectionCookInternal)
+horo_register_catch_test(HoroExposureGpuReflectionTests LABELS "unit;renderer;shader;exposure")
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/ColorPipelinePublicHeaderConsumer.cpp)
 add_executable(HoroRenderGraphInspectionTests unit/runtime/renderer/RenderGraphInspectionTests.cpp)
 target_compile_features(HoroRenderGraphInspectionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderGraphInspectionTests PRIVATE HoroEngine::RenderApi nlohmann_json::nlohmann_json)
@@ -6879,6 +6895,8 @@ set_tests_properties(HoroEditorClusteredLightingShaderCookContract PROPERTIES
     LABELS "application;shader;headless" RUN_SERIAL TRUE TIMEOUT 15)
 
 if(TARGET HoroMetalGraphExecutionSmoke)
+    target_sources(HoroMetalGraphExecutionSmoke PRIVATE integration/renderer/MetalExposureGpuSmoke.mm)
+    target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE HoroExposureGpuCookInternal)
     target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_sources(HoroMetalGraphExecutionSmoke PRIVATE
         integration/renderer/MetalClusteredMaterialGraphSmoke.mm

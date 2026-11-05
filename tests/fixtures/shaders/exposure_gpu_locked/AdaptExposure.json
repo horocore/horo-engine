@@ -1,0 +1,174 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "AdaptExposure",
+            "mode" : "comp",
+            "workgroup_size" : [
+                256,
+                1,
+                1
+            ],
+            "workgroup_size_is_spec_constant_id" : [
+                false,
+                false,
+                false
+            ]
+        }
+    ],
+    "types" : {
+        "_11" : {
+            "name" : "type.RWStructuredBuffer.uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 4
+                }
+            ]
+        },
+        "_13" : {
+            "name" : "ExposureGpuState",
+            "members" : [
+                {
+                    "name" : "exposureEv",
+                    "type" : "float",
+                    "offset" : 0
+                },
+                {
+                    "name" : "exposureScale",
+                    "type" : "float",
+                    "offset" : 4
+                },
+                {
+                    "name" : "validSamples",
+                    "type" : "uint",
+                    "offset" : 8
+                },
+                {
+                    "name" : "reason",
+                    "type" : "uint",
+                    "offset" : 12
+                },
+                {
+                    "name" : "generation",
+                    "type" : "uvec2",
+                    "offset" : 16
+                },
+                {
+                    "name" : "sourceSubmission",
+                    "type" : "uvec2",
+                    "offset" : 24
+                }
+            ]
+        },
+        "_12" : {
+            "name" : "type.StructuredBuffer.ExposureGpuState",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "_13",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 32
+                }
+            ]
+        },
+        "_14" : {
+            "name" : "type.RWStructuredBuffer.ExposureGpuState",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "_13",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 32
+                }
+            ]
+        },
+        "_15" : {
+            "name" : "type.Dispatch",
+            "members" : [
+                {
+                    "name" : "Region",
+                    "type" : "uvec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "Limits",
+                    "type" : "vec4",
+                    "offset" : 16
+                },
+                {
+                    "name" : "Adaptation",
+                    "type" : "vec4",
+                    "offset" : 32
+                },
+                {
+                    "name" : "Timing",
+                    "type" : "vec4",
+                    "offset" : 48
+                },
+                {
+                    "name" : "Controls",
+                    "type" : "uvec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "Identity",
+                    "type" : "uvec4",
+                    "offset" : 80
+                }
+            ]
+        }
+    },
+    "ssbos" : [
+        {
+            "type" : "_11",
+            "name" : "Histogram",
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 1
+        },
+        {
+            "type" : "_12",
+            "name" : "PreviousExposure",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 2
+        },
+        {
+            "type" : "_14",
+            "name" : "OutputExposure",
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 3
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_15",
+            "name" : "type.Dispatch",
+            "block_size" : 96,
+            "set" : 0,
+            "binding" : 4
+        }
+    ]
+}

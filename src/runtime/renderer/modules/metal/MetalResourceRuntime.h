@@ -30,6 +30,21 @@ namespace Horo::Render::Detail {
         /** @brief Mutates only a complete reusable native frame slot; pending native references reject before writes. */
         [[nodiscard]] Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update);
         /** @brief Loads an exact cooked Metal library and validates the fixed culling compute ABI before native publication. */
+        /** @brief Realizes the actual fixed Metal exposure family. @param kernel Cooked artifacts. @return Native lease or failure. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(const CookedExposureGpuKernel &kernel);
+        /** @brief Validates exact native resources and kernel provenance. @param work Closed operation. @param resources Graph instances.
+         * @param currentCommands Trusted actual active native command, or null for context-free pre-admission.
+         * @return Admission. Same-command resource ordering grants no exposure predecessor acceptance. */
+        [[nodiscard]] Result<void> ValidateExposureGpu(const RenderGraphExposureGpu &work,
+                                                       std::span<const RenderGraphResourceInstance> resources,
+                                                       void *currentCommands = nullptr) const;
+        /** @brief Executes the fixed native family. @param commands Actual command. @param work Closed operation. @param resources Graph
+         * instances. @return Encoding result. */
+        [[nodiscard]] Result<void> ExecuteExposureGpu(void *commands, const RenderGraphExposureGpu &work,
+                                                      std::span<const RenderGraphResourceInstance> resources);
+        /** @brief Resolves native acceptance/abandonment. @param commands Actual command. @param committed Accepted submission. */
+        void FinishExposureGpuCommands(void *commands, bool committed) noexcept;
+
         [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
         /** @brief Admits the complete authentic GPU simulation/direct-draw family against actual Metal reflection. */

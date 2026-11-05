@@ -142,6 +142,7 @@ namespace Horo::Render::Detail {
             ++impl_->lightKernelIncarnation;
         impl_->device = (__bridge id<MTLDevice>)device;
         impl_->deviceIncarnation = deviceIncarnation;
+        impl_->exposureGpuKernels = {};
         impl_->commandQueue = (__bridge id<MTLCommandQueue>)commandQueue;
     }
 

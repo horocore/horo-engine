@@ -4,6 +4,7 @@
  * @brief Typed workloads bound to one immutable compiled render graph.
  */
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Runtime/Render/ExposureGpuWorkload.h"
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/MultiviewGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
@@ -130,7 +131,7 @@ namespace Horo::Render {
     using RenderGraphWorkload =
         std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
                      RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster,
-                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw>;
+                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {

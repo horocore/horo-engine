@@ -111,6 +111,13 @@ namespace Horo::Render::Detail {
         }
 
         /** @brief Default injected runtimes decline native cooked light preparation explicitly. */
+        /** @brief Prepares the actual closed Metal exposure family. @param kernel Offline artifacts. @return Native lease or unsupported.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(
+            const CookedExposureGpuKernel &) {
+            return Result<std::shared_ptr<IResidentExposureGpuKernel>>::Failure(MakeError(ExposureGpuErrors::Unsupported));
+        }
+
         [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &) {
             return Result<std::shared_ptr<IResidentLightCullingKernel>>::Failure(MakeError(LightCullingErrors::Unsupported));

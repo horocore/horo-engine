@@ -28,6 +28,7 @@ namespace Horo::Render::Detail {
             for (std::size_t index = 0; index < request.graph.Passes().size(); ++index) {
                 const auto &pass = request.graph.Passes()[index];
                 if (pass.kind == RenderPassKind::Compute &&
+                    !std::holds_alternative<RenderGraphExposureGpu>(request.workloads[index].workload) &&
                     !std::holds_alternative<RenderGraphLightCulling>(request.workloads[index].workload) &&
                     !std::holds_alternative<RenderGraphVfxGpuCompute>(request.workloads[index].workload))
                     return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedPassKind));

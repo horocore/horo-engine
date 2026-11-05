@@ -1,5 +1,6 @@
 #include "ShaderCompilerRoute.h"
 
+#include "ExposureGpuReflection.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
@@ -337,6 +338,10 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 if (translator == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
                 auto arguments = RasterTranslationArguments(entry, spirvPath, nativePath, metal, vfxInterface_, registerInterface_);
+                if (metal && invocation_.reflection &&
+                    ValidateExposureGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                        .HasValue())
+                    arguments.emplace_back("--msl-decoration-binding");
                 if (registerInterface_) {
                     if (auto prepared = PrepareRegisterTranslation(entry, spirvPath, metal, arguments); prepared.HasError())
                         return prepared;
@@ -435,6 +440,17 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 return Result<void>::Success();
             }
 
+            /** @brief Qualifies the exact canonical exposure input only after validated binary and native ABI proof. */
+            [[nodiscard]] Result<void> PrepareExposureMetalSource(const std::filesystem::path &nativePath,
+                                                                  std::span<const std::uint8_t> native) {
+                const std::string source(native.begin(), native.end());
+                auto qualified = QualifyExposureGpuMetalInputs(invocation_.manifest, source, validatedReadonlySpirv_);
+                if (qualified.HasError())
+                    return Result<void>::Failure(qualified.ErrorValue());
+                const auto &text = qualified.Value();
+                return WriteFile(nativePath, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
+            }
+
             /** @brief Preserves ordinary routes and qualifies only proven canonical compute inputs before actual Apple compilation. */
             [[nodiscard]] Result<void> PrepareMetalSource(const ShaderEntryPoint &entry, const std::filesystem::path &nativePath) {
                 auto native =
@@ -443,6 +459,9 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     return Result<void>::Failure(native.ErrorValue());
                 if (!invocation_.reflection)
                     return Result<void>::Success();
+                if (ValidateExposureGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                        .HasValue())
+                    return PrepareExposureMetalSource(nativePath, native.Value());
                 if (ValidateVfxGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
                         .HasValue()) {
                     const std::string source(native.Value().begin(), native.Value().end());

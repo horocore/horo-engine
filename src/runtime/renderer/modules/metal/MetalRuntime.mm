@@ -122,6 +122,7 @@ namespace Horo::Render::Detail {
                 deviceIncarnation_ = incarnation.Value();
                 resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_, deviceIncarnation_);
                 capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
+                capabilities.implemented.support.features.Enable(RenderCapability::ExposureGpu);
                 if (SupportsMetalUiPaint(capabilities))
                     capabilities.implemented.support.features.Enable(RenderCapability::UiPaint);
                 auto acquisition = MetalDrawableAcquisition::Create(layer_, device_, MakeMetalDrawableSource());
@@ -225,6 +226,14 @@ namespace Horo::Render::Detail {
                     return valid;
                 EndPrimaryEncoder();
                 return resources_.ExecuteVfxGpuDraw((__bridge void *)commandBuffer_, work, request);
+            }
+
+            /** @copydoc IMetalRuntime::RealizeExposureGpuKernel */
+            Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(const CookedExposureGpuKernel &kernel) override {
+                using Return = Result<std::shared_ptr<IResidentExposureGpuKernel>>;
+                if (std::this_thread::get_id() != ownerThread_ || commandBuffer_ != nil)
+                    return Return::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+                return resources_.RealizeExposureGpuKernel(kernel);
             }
 
             Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
@@ -612,6 +621,8 @@ namespace Horo::Render::Detail {
                     if (const auto encoding = ValidatePrimaryOutput(*primary); encoding.HasError())
                         return encoding;
                 }
+                if (const auto *exposure = std::get_if<RenderGraphExposureGpu>(&workload))
+                    return resources_.ValidateExposureGpu(*exposure, resources, (__bridge void *)commandBuffer_);
                 if (const auto *paint = std::get_if<RenderGraphUiPaint>(&workload))
                     return resources_.ValidateUiPaint(*paint, resources, (__bridge void *)drawable_.texture);
                 return resources_.ValidateGraphWorkload(workload, resources);

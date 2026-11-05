@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/ExposureGpuKernel.h"
 #include "Horo/Runtime/Render/FramePacing.h"
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/LightFrameUpload.h"
@@ -600,6 +601,12 @@ namespace Horo::Render {
          * @return Native preparation lease or typed unsupported/original admission failure.
          * @details No source compilation, discovery or policy fallback. The host drains leases before teardown.
          */
+        /** @brief Realizes only the fixed offline-cooked exposure family; default is typed unsupported.
+         * @param kernel Exact clear/build/adapt artifacts and reflection. @return Native family lease or typed failure.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(
+            const CookedExposureGpuKernel &kernel);
+
         [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
 

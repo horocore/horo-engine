@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ExposureGpuKernel.h"
 #include "MetalLightCullingKernel.h"
 #include "MetalPreparedMaterialState.h"
 #include "MetalRenderBackendErrors.h"
@@ -118,6 +119,8 @@ namespace Horo::Render::Detail {
         __strong id<MTLDevice> device{nil};
         __strong MTLRenderPassDescriptor *vfxPass{[MTLRenderPassDescriptor renderPassDescriptor]};
         std::uint64_t deviceIncarnation{};
+        std::shared_ptr<const ExposureGpuKernelOwner> exposureGpuOwner{std::make_shared<const ExposureGpuKernelOwner>()};
+        std::array<std::weak_ptr<ExposureGpuKernel>, 16> exposureGpuKernels{};
         std::shared_ptr<const MetalLightKernelOwnerIdentity> lightKernelOwner{std::make_shared<const MetalLightKernelOwnerIdentity>()};
         std::shared_ptr<const MetalUiPaintOwnerIdentity> uiPaintKernelOwner{std::make_shared<const MetalUiPaintOwnerIdentity>()};
         std::shared_ptr<const MetalVfxGpuOwner> vfxGpuOwner{std::make_shared<const MetalVfxGpuOwner>()};
@@ -352,10 +355,13 @@ namespace Horo::Render::Detail {
                 RollBackResident(instance, heap, placement, instances, resource, false);
                 return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, trackingError));
             }
+            // Cold creation is serial: each actual GPU upload creates a new staging command in BeginStagingBlit.
+            // Retaining the prior command makes identity comparison safe; empty/shared uploads submit no new command.
+            __strong id<MTLCommandBuffer> previousUpload = lastSubmittedUpload;
             try {
                 Result<void> uploaded = std::forward<Upload>(upload)();
                 if (uploaded.HasValue()) {
-                    instance->use.last = lastSubmittedUpload;
+                    instance->use.last = lastSubmittedUpload != previousUpload ? lastSubmittedUpload : nil;
                     return Result<std::uint64_t>::Success(Identity(instance));
                 }
                 RollBackResident(instance, heap, placement, instances, resource, true);

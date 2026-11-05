@@ -1,3 +1,4 @@
+#include "ExposureGpuReflection.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "LightCullingMetalReflection.h"
@@ -98,6 +99,9 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                                          const std::vector<std::string> &translations,
                                                                          std::span<const std::uint8_t> validatedSpirv) {
         const auto &target = invocation.target.requirement;
+        if (ValidateExposureGpuMetalReflection(invocation.manifest, target, invocation.reflection->names).HasValue())
+            return NormalizeExposureGpuMetalReflection(invocation.manifest, target, stages, translations, invocation.reflection->names,
+                                                       validatedSpirv);
         if (ValidateVfxGpuMetalReflection(invocation.manifest, target, invocation.reflection->names).HasValue())
             return NormalizeVfxGpuMetalReflection(invocation.manifest, target, stages, translations, invocation.reflection->names,
                                                   validatedSpirv);
@@ -169,6 +173,14 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         }
     }  // namespace
 
+    /** @brief Recognizes only closed canonical Metal compute families with exact authored reflection names. */
+    bool UsesClosedComputeReflection(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
+                                     std::span<const ShaderReflectionBindingName> names) {
+        return ValidateExposureGpuMetalReflection(manifest, target, names).HasValue() ||
+               ValidateVfxGpuMetalReflection(manifest, target, names).HasValue() ||
+               ValidateLightCullingMetalReflection(manifest, target, names).HasValue();
+    }
+
     /** @copydoc ValidateRasterReflection */
     Result<void> ValidateRasterReflection(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
                                           const ShaderCompilerReflectionRequest &request, const ShaderCompilerToolInstallation *cross) {
@@ -178,9 +190,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
         if (target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-        if (ValidateVfxGpuMetalReflection(manifest, target, request.names).HasValue())
-            return ValidateRasterTool(request, cross);
-        if (ValidateLightCullingMetalReflection(manifest, target, request.names).HasValue())
+        if (UsesClosedComputeReflection(manifest, target, request.names))
             return ValidateRasterTool(request, cross);
         if (ValidateRegisterRasterReflection(manifest, target, request.names).HasValue())
             return ValidateRasterTool(request, cross);

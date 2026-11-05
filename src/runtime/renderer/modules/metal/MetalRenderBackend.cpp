@@ -152,6 +152,13 @@ namespace Horo::Render {
                 return runtime_->ObserveGraphSubmission(wait);
             }
 
+            /** @copydoc IRenderBackend::RealizeExposureGpuKernel */
+            Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(const CookedExposureGpuKernel &kernel) override {
+                if (!initialized_ || !capabilities_.support.features.Supports(RenderCapability::ExposureGpu))
+                    return Result<std::shared_ptr<IResidentExposureGpuKernel>>::Failure(MakeError(ExposureGpuErrors::Unsupported));
+                return runtime_->RealizeExposureGpuKernel(kernel);
+            }
+
             /** @copydoc IRenderBackend::RealizeLightCullingKernel */
             Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
                 const CookedLightCullingKernel &kernel) override {
