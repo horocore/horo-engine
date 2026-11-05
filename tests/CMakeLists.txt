@@ -1309,6 +1309,8 @@ add_executable(HoroVfxApiTests
         unit/runtime/vfx/VfxFoundationQualificationTests.cpp
         unit/runtime/vfx/VfxIdentityTests.cpp
         unit/runtime/vfx/VfxQualityPolicyTests.cpp
+        unit/runtime/vfx/VfxSpawnRequestTests.cpp
+        unit/runtime/vfx/VfxWorldSpawnTests.cpp
 )
 target_compile_features(HoroVfxApiTests PRIVATE cxx_std_20)
 set(HORO_VFX_WORLD_TEST_INTERNALS "${CMAKE_CURRENT_BINARY_DIR}/vfx_world_test_internals")
@@ -1322,7 +1324,112 @@ target_include_directories(HoroVfxApiTests PRIVATE "${HORO_VFX_WORLD_TEST_INTERN
 target_include_directories(HoroVfxApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(HoroVfxApiTests PRIVATE HORO_VFX_CPU_BASELINE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/vfx/cpu_simulation_baseline.json")
 target_link_libraries(HoroVfxApiTests PRIVATE HoroEngine::VfxApi nlohmann_json::nlohmann_json)
+add_library(HoroVfxSpawnRequestPublicHeaderConsumer OBJECT
+        public_headers/VfxSpawnRequestConsumer.cpp
+        public_headers/VfxSpawnPreparationConsumer.cpp)
+target_compile_features(HoroVfxSpawnRequestPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroVfxSpawnRequestPublicHeaderConsumer PRIVATE HoroEngine::VfxApi)
+add_dependencies(HoroVfxApiTests HoroVfxSpawnRequestPublicHeaderConsumer)
 horo_register_catch_test(HoroVfxApiTests LABELS "unit;vfx;headless")
+
+add_library(HoroGameplayVfxPublicHeaderConsumer OBJECT
+        public_headers/GameplayVfxBindingTableConsumer.cpp
+        public_headers/GameplayVfxContextConsumer.cpp)
+target_compile_features(HoroGameplayVfxPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayVfxPublicHeaderConsumer PRIVATE HoroEngine::GameplayVfxIntegration)
+add_executable(HoroGameplayVfxCodecTests unit/gameplay/GameplayVfxBindingCodecTests.cpp)
+target_compile_features(HoroGameplayVfxCodecTests PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayVfxCodecTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroGameplayVfxCodecTests PRIVATE HoroEngine::GameplayVfxIntegration nlohmann_json::nlohmann_json)
+add_dependencies(HoroGameplayVfxCodecTests HoroGameplayVfxPublicHeaderConsumer)
+horo_register_catch_test(HoroGameplayVfxCodecTests LABELS "unit;gameplay;vfx;codec;headless")
+add_executable(HoroGameplayVfxContextTests
+        unit/gameplay/GameplayVfxContextTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroGameplayVfxContextTests PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayVfxContextTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroGameplayVfxContextTests PRIVATE HoroEngine::GameplayVfxIntegration HoroGameplayVfxHostInternal)
+add_dependencies(HoroGameplayVfxContextTests HoroGameplayVfxPublicHeaderConsumer)
+horo_register_catch_test(HoroGameplayVfxContextTests LABELS "unit;gameplay;vfx;context;headless")
+add_library(HoroGameplayVfxScenePublicHeaderConsumer OBJECT public_headers/GameplayVfxSceneConsumer.cpp)
+target_compile_features(HoroGameplayVfxScenePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayVfxScenePublicHeaderConsumer PRIVATE HoroEngine::GameplayVfxSceneIntegration)
+add_library(HoroCinematicVfxPublicHeaderConsumer OBJECT public_headers/CinematicVfxEventAdapterConsumer.cpp)
+target_compile_features(HoroCinematicVfxPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroCinematicVfxPublicHeaderConsumer PRIVATE HoroEngine::CinematicVfxBridge)
+add_executable(HoroCinematicVfxIntegrationTests
+        unit/runtime/cinematic/CinematicVfxIntegrationTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroCinematicVfxIntegrationTests PRIVATE cxx_std_20)
+target_include_directories(HoroCinematicVfxIntegrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroCinematicVfxIntegrationTests PRIVATE
+        HoroEngine::CinematicVfxBridge HoroEngine::CinematicScriptBridge
+        HoroEngine::GameplayVfxSceneIntegration HoroGameplayVfxHostInternal)
+add_dependencies(HoroCinematicVfxIntegrationTests HoroGameplayVfxScenePublicHeaderConsumer HoroCinematicVfxPublicHeaderConsumer)
+horo_register_catch_test(HoroCinematicVfxIntegrationTests LABELS "unit;integration;cinematic;gameplay;vfx;headless")
+
+add_executable(HoroGameplayVfxSourceSealTests
+        unit/gameplay/GameplayVfxSourceSealTests.cpp support/AllocationProbe.cpp)
+target_compile_features(HoroGameplayVfxSourceSealTests PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayVfxSourceSealTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroGameplayVfxSourceSealTests PRIVATE HoroEngine::GameplayVfxIntegration HoroGameplayVfxHostInternal)
+horo_register_catch_test(HoroGameplayVfxSourceSealTests LABELS "unit;gameplay;vfx;headless")
+
+add_executable(HoroGameplayVfxPipelineTests integration/gameplay/GameplayVfxPipelineTests.cpp)
+target_compile_features(HoroGameplayVfxPipelineTests PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayVfxPipelineTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/helpers)
+set(HORO_GAMEPLAY_VFX_LUA_TEST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/gameplay_vfx_lua_test_headers")
+file(MAKE_DIRECTORY "${HORO_GAMEPLAY_VFX_LUA_TEST_HEADERS}")
+configure_file("${PROJECT_SOURCE_DIR}/src/gameplay/lua/LuaVfxBinding.h"
+        "${HORO_GAMEPLAY_VFX_LUA_TEST_HEADERS}/LuaVfxBinding.h" COPYONLY)
+add_library(HoroGameplayVfxLuaTestInternal INTERFACE)
+target_include_directories(HoroGameplayVfxLuaTestInternal INTERFACE "${HORO_GAMEPLAY_VFX_LUA_TEST_HEADERS}")
+target_link_libraries(HoroGameplayVfxLuaTestInternal INTERFACE HoroEngine::GameplayLua HoroThirdParty::Lua)
+target_link_libraries(HoroGameplayVfxPipelineTests PRIVATE
+        HoroEngine::GameplayRuntime HoroEngine::GameplayLua HoroEngine::GameplayVfxSceneIntegration
+        HoroGameplayVfxLuaTestInternal)
+horo_register_catch_test(HoroGameplayVfxPipelineTests LABELS "integration;gameplay;vfx;headless")
+
+add_executable(HoroGameplayVfxHostCommitTests integration/gameplay/GameplayVfxHostCommitTests.cpp)
+target_compile_features(HoroGameplayVfxHostCommitTests PRIVATE cxx_std_20)
+target_include_directories(HoroGameplayVfxHostCommitTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/helpers)
+target_link_libraries(HoroGameplayVfxHostCommitTests PRIVATE HoroNetworkProductHost HoroEngine::GameplayVfxSceneIntegration)
+horo_register_catch_test(HoroGameplayVfxHostCommitTests LABELS "integration;gameplay;vfx;headless")
+
+if(HORO_BUILD_PHYSICS_NATIVE)
+    # This genuine project-cook fixture consumes one target-private Assets contract.
+    # Stage that exact header rather than introducing another source-directory include.
+    set(HORO_GAMEPLAY_VFX_COOK_TEST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/gameplay_vfx_cook_test_headers")
+    file(MAKE_DIRECTORY "${HORO_GAMEPLAY_VFX_COOK_TEST_HEADERS}")
+    configure_file("${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin/HeadlessMeshCooker.h"
+            "${HORO_GAMEPLAY_VFX_COOK_TEST_HEADERS}/HeadlessMeshCooker.h" COPYONLY)
+    add_library(HoroGameplayVfxCookTestInternal INTERFACE)
+    target_include_directories(HoroGameplayVfxCookTestInternal INTERFACE "${HORO_GAMEPLAY_VFX_COOK_TEST_HEADERS}")
+    target_link_libraries(HoroGameplayVfxCookTestInternal INTERFACE HoroEngine::Assets)
+    add_executable(HoroGameplayVfxConfiguredHostTests integration/gameplay/GameplayVfxConfiguredHostTests.cpp)
+    target_compile_features(HoroGameplayVfxConfiguredHostTests PRIVATE cxx_std_20)
+    target_compile_definitions(HoroGameplayVfxConfiguredHostTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+    target_include_directories(HoroGameplayVfxConfiguredHostTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/unit/application ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroGameplayVfxConfiguredHostTests PRIVATE
+            HoroNetworkProductHost HoroEngine::GameplayVfxSceneIntegration HoroEngine::ProjectSurfaceSettings
+            HoroEngine::PhysicsTriggerVolumeHost HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage
+        HoroGameplayVfxCookTestInternal
+            nlohmann_json::nlohmann_json miniz)
+    horo_register_catch_test(HoroGameplayVfxConfiguredHostTests LABELS "integration;gameplay;vfx;headless;native-physics")
+endif()
+
+add_test(NAME HoroGameplayVfxSdkContract COMMAND "${CMAKE_COMMAND}"
+    "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
+    "-DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay-vfx-sdk"
+    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/gameplay-vfx-sdk-contract"
+    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}" "-DBUILD_CONFIG=$<CONFIG>" "-DGENERATOR=${CMAKE_GENERATOR}"
+    "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}" "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DCMAKE_LINKER=${CMAKE_LINKER}" "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}" "-DCMAKE_CXX_FLAGS_DEBUG=${CMAKE_CXX_FLAGS_DEBUG}"
+    "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}" "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayVfxSdkContract.cmake")
+set_tests_properties(HoroGameplayVfxSdkContract PROPERTIES LABELS "architecture;gameplay;vfx;sdk;headless" TIMEOUT 240)
 
 add_executable(HoroVfxRenderExtractionTests
         support/AllocationProbe.cpp

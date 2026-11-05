@@ -21,11 +21,13 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         return OwnerThreadResult(*state);
     }
 
-    Result<void> Observe(const Detail::CpuParticleSimulatorState &state, const CpuParticleStage stage) {
+    StageResult<void> Observe(const Detail::CpuParticleSimulatorState &state, const CpuParticleStage stage) {
         if (state.stageObserver == nullptr)
-            return Result<void>::Success();
-        return state.stageObserver(state.stageObserverContext, stage);
+            return StageResult<void>::Success();
+        const auto observed = state.stageObserver(state.stageObserverContext, stage);
+        return observed.HasError() ? StageResult<void>::Failure(observed.ErrorValue()) : StageResult<void>::Success();
     }
+
 }  // namespace Horo::Vfx::CpuParticleSimulatorDetail
 
 namespace Horo::Vfx {
@@ -40,6 +42,7 @@ namespace Horo::Vfx {
         using CpuParticleSimulatorDetail::RunIntegrateStage;
         using CpuParticleSimulatorDetail::RunKillStage;
         using CpuParticleSimulatorDetail::RunSpawnStage;
+        using CpuParticleSimulatorDetail::StageResult;
         using CpuParticleSimulatorDetail::ValidateOperationalState;
 
         /** @brief Restores the pre-step input-admission boundary on every exit path. */
@@ -66,9 +69,9 @@ namespace Horo::Vfx {
             return Result<void>::Failure(std::move(error));
         }
 
-        [[nodiscard]] Result<CpuParticleSimulationStepResult> CommitCandidate(Detail::CpuParticleSimulatorState &state,
-                                                                              const Detail::CpuParticleSpawnStageResult &spawn,
-                                                                              const std::uint32_t killed, const std::uint32_t collisions) {
+        [[nodiscard]] CpuParticleSimulationStepResult CommitCandidate(Detail::CpuParticleSimulatorState &state,
+                                                                      const Detail::CpuParticleSpawnStageResult &spawn,
+                                                                      const std::uint32_t killed, const std::uint32_t collisions) {
             std::swap(state.committed, state.candidate);
             std::swap(state.committedOffset, state.candidateOffset);
             state.spawnCarry = spawn.plan.carry;
@@ -81,13 +84,71 @@ namespace Horo::Vfx {
             state.killed += killed;
             state.collisions += collisions;
             state.killRequests.clear();
-            return Result<CpuParticleSimulationStepResult>::Success({.requestedBirths = spawn.plan.requested,
-                                                                     .spawned = spawn.plan.admitted,
-                                                                     .dropped = spawn.plan.requested - spawn.plan.admitted,
-                                                                     .killed = killed,
-                                                                     .collisions = collisions,
-                                                                     .active = state.committed.Statistics().active,
-                                                                     .committedGeneration = state.committedGeneration});
+            return {.requestedBirths = spawn.plan.requested,
+                    .spawned = spawn.plan.admitted,
+                    .dropped = spawn.plan.requested - spawn.plan.admitted,
+                    .killed = killed,
+                    .collisions = collisions,
+                    .active = state.committed.Statistics().active,
+                    .committedGeneration = state.committedGeneration};
+        }
+
+        /** @brief Validates bounded step shape without constructing diagnostics or predicting a second birth plan. */
+        [[nodiscard]] bool StepShapeValid(const Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step) noexcept {
+            return CpuParticleSimulatorDetail::Finite(step.deltaSeconds) && step.deltaSeconds >= 0.0F &&
+                   step.deltaSeconds <= state.maximumDeltaSeconds && step.burstCount <= state.maximumBurstParticles &&
+                   step.tick == state.nextTick;
+        }
+
+        [[nodiscard]] const ErrorCodeDescriptor *ValidateAdvance(const Detail::CpuParticleSimulatorState *state,
+                                                                 const CpuParticleSimulationStep &step) noexcept {
+            if (!state || state->shutDown)
+                return &VfxErrors::ParticleBufferShutDown;
+            if (state->ownerThread != std::this_thread::get_id())
+                return &VfxErrors::ParticleBufferThreadViolation;
+            if (state->advancing)
+                return &VfxErrors::ParticleStageContractViolation;
+            if (step.cancelled)
+                return &VfxErrors::ParticleSimulationStepCancelled;
+            if (!StepShapeValid(*state, step))
+                return &VfxErrors::ParticleSpawnStepInvalid;
+            if (state->committedGeneration == std::numeric_limits<std::uint64_t>::max() ||
+                state->nextTick == std::numeric_limits<std::uint64_t>::max())
+                return &VfxErrors::ParticleGenerationStale;
+            return nullptr;
+        }
+
+        /** @brief The sole runtime stage sequence shared by both public outcome forms. */
+        [[nodiscard]] StageResult<CpuParticleSimulationStepResult> ExecuteStages(Detail::CpuParticleSimulatorState &state,
+                                                                                 const CpuParticleSimulationStep &step) {
+            if (auto prepared = PrepareCandidate(state); prepared.HasError())
+                return StageResult<CpuParticleSimulationStepResult>::Failure(prepared.ErrorValue());
+
+            const auto spawn = RunSpawnStage(state, step);
+            if (spawn.HasError())
+                return StageResult<CpuParticleSimulationStepResult>::Failure(spawn.ErrorValue());
+            if (auto initialized = RunInitializeStage(state, step, spawn.Value()); initialized.HasError())
+                return StageResult<CpuParticleSimulationStepResult>::Failure(initialized.ErrorValue());
+            if (auto forced = RunForcesStage(state, step); forced.HasError())
+                return StageResult<CpuParticleSimulationStepResult>::Failure(forced.ErrorValue());
+            if (auto integrated = RunIntegrateStage(state, step); integrated.HasError())
+                return StageResult<CpuParticleSimulationStepResult>::Failure(integrated.ErrorValue());
+            const auto collisions = RunCollideStage(state, step);
+            if (collisions.HasError())
+                return StageResult<CpuParticleSimulationStepResult>::Failure(collisions.ErrorValue());
+            const auto killed = RunKillStage(state);
+            if (killed.HasError())
+                return StageResult<CpuParticleSimulationStepResult>::Failure(killed.ErrorValue());
+            if (auto extracted = Observe(state, CpuParticleStage::Extract); extracted.HasError())
+                return StageResult<CpuParticleSimulationStepResult>::Failure(extracted.ErrorValue());
+
+            return StageResult<CpuParticleSimulationStepResult>::Success(
+                CommitCandidate(state, spawn.Value(), killed.Value(), collisions.Value()));
+        }
+
+        [[nodiscard]] bool PreparedProfile(const Detail::CpuParticleSimulatorState &state) noexcept {
+            return state.stageObserver == nullptr && state.descriptor.collisionMode != ParticleCollisionMode::PhysicsWorld &&
+                   state.descriptor.collisionMode != ParticleCollisionMode::SceneDepth;
         }
     }  // namespace
 
@@ -115,43 +176,32 @@ namespace Horo::Vfx {
 
     /** @copydoc CpuParticleSimulator::Advance */
     Result<CpuParticleSimulationStepResult> CpuParticleSimulator::Advance(const CpuParticleSimulationStep &step) {
-        if (const auto state = ValidateOperationalState(state_.get()); state.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(state.ErrorValue());
-        if (state_->advancing)
-            return Failure<CpuParticleSimulationStepResult>(VfxErrors::ParticleStageContractViolation);
-        if (step.cancelled)
-            return Failure<CpuParticleSimulationStepResult>(VfxErrors::ParticleSimulationStepCancelled);
-        if (!CpuParticleSimulatorDetail::Finite(step.deltaSeconds) || step.deltaSeconds < 0.0F ||
-            step.deltaSeconds > state_->maximumDeltaSeconds || step.burstCount > state_->maximumBurstParticles ||
-            step.tick != state_->nextTick)
-            return Failure<CpuParticleSimulationStepResult>(VfxErrors::ParticleSpawnStepInvalid);
-        if (state_->committedGeneration == std::numeric_limits<std::uint64_t>::max() ||
-            state_->nextTick == std::numeric_limits<std::uint64_t>::max())
-            return Failure<CpuParticleSimulationStepResult>(VfxErrors::ParticleGenerationStale);
+        if (const auto failure = ValidateAdvance(state_.get(), step))
+            return Failure<CpuParticleSimulationStepResult>(*failure);
         state_->advancing = true;
         const AdvanceScope scope{state_->advancing};
-        if (auto prepared = PrepareCandidate(*state_); prepared.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(prepared.ErrorValue());
+        auto result = ExecuteStages(*state_, step);
+        if (result.HasError())
+            return Result<CpuParticleSimulationStepResult>::Failure(std::move(result.TakeFailure()).Materialize());
+        return Result<CpuParticleSimulationStepResult>::Success(result.Value());
+    }
 
-        const auto spawn = RunSpawnStage(*state_, step);
-        if (spawn.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(spawn.ErrorValue());
-        if (auto initialized = RunInitializeStage(*state_, step, spawn.Value()); initialized.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(initialized.ErrorValue());
-        if (auto forced = RunForcesStage(*state_, step); forced.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(forced.ErrorValue());
-        if (auto integrated = RunIntegrateStage(*state_, step); integrated.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(integrated.ErrorValue());
-        const auto collisions = RunCollideStage(*state_, step);
-        if (collisions.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(collisions.ErrorValue());
-        const auto killed = RunKillStage(*state_);
-        if (killed.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(killed.ErrorValue());
-        if (auto extracted = Observe(*state_, CpuParticleStage::Extract); extracted.HasError())
-            return Result<CpuParticleSimulationStepResult>::Failure(extracted.ErrorValue());
-
-        return CommitCandidate(*state_, spawn.Value(), killed.Value(), collisions.Value());
+    /** @copydoc CpuParticleSimulator::AdvancePrepared */
+    CpuParticleAdvanceOutcome CpuParticleSimulator::AdvancePrepared(const CpuParticleSimulationStep &step) noexcept {
+        if (const auto failure = ValidateAdvance(state_.get(), step))
+            return {CpuParticleAdvanceStatus::Rejected, {}, failure};
+        if (!PreparedProfile(*state_))
+            return {CpuParticleAdvanceStatus::UnsupportedDiagnostics, {}, &VfxErrors::UnsupportedCapability};
+        state_->advancing = true;
+        const AdvanceScope scope{state_->advancing};
+        try {
+            const auto result = ExecuteStages(*state_, step);
+            if (result.HasError())
+                return {CpuParticleAdvanceStatus::Rejected, {}, result.ErrorValue().descriptor};
+            return {CpuParticleAdvanceStatus::Complete, result.Value(), nullptr};
+        } catch (...) {
+            return {CpuParticleAdvanceStatus::Rejected, {}, &VfxErrors::ParticleStageContractViolation};
+        }
     }
 
     /** @copydoc CpuParticleSimulator::SignalKill */

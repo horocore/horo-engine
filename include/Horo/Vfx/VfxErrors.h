@@ -116,4 +116,12 @@ namespace Horo::Vfx::VfxErrors {
     extern const ErrorCodeDescriptor EffectPoolInvalid;
     /** @brief Explicit effect-pool preparation could not allocate its fixed storage. */
     extern const ErrorCodeDescriptor EffectPoolAllocationFailed;
+    /** @brief Cold spawn recipe, scalar schema, reservation or lifecycle inputs are malformed. */
+    extern const ErrorCodeDescriptor SpawnPreparationInvalid;
+    /** @brief A spawn recipe needs a domain, collision adapter or renderer path not prepared by this composition. */
+    extern const ErrorCodeDescriptor SpawnPreparationUnsupported;
+    /** @brief Cold spawn preparation exceeds the single explicit scene reservation. */
+    extern const ErrorCodeDescriptor SpawnPreparationBudgetExceeded;
+    /** @brief Cold fixed spawn storage could not be materialized. */
+    extern const ErrorCodeDescriptor SpawnPreparationAllocationFailed;
 }  // namespace Horo::Vfx::VfxErrors

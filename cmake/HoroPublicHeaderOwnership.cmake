@@ -542,6 +542,13 @@ horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
     Horo/Gameplay/BehaviorRuntimeRestore.h
     Horo/Gameplay/GameplayRegistrationRuntime.h
 )
+horo_configure_target_header_boundary(HoroGameplayVfxIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayVfxBindingTable.h
+    Horo/Gameplay/GameplayVfxContext.h
+)
+horo_configure_target_header_boundary(HoroGameplayVfxSceneIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayVfxScene.h
+)
 horo_configure_target_header_boundary(HoroGameplayPerceptionIntegration PUBLIC_HEADERS
     Horo/Gameplay/PerceptionEventSource.h
 )
@@ -850,6 +857,8 @@ horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/VfxErrors.h
     Horo/Vfx/VfxIdentity.h
     Horo/Vfx/VfxQualityPolicy.h
+    Horo/Vfx/VfxSpawnPreparation.h
+    Horo/Vfx/VfxSpawnRequest.h
 Horo/Vfx/VfxWorld.h
 )
 horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
@@ -911,6 +920,9 @@ horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
     Horo/Cinematic/SequencePlayerErrors.h
     Horo/Cinematic/SequencePlaybackRuntime.h
     Horo/Cinematic/SequencePlaybackRuntimeErrors.h
+)
+horo_configure_target_header_boundary(HoroCinematicVfxBridge PUBLIC_HEADERS
+    Horo/Cinematic/VfxEventAdapter.h
 )
 horo_configure_target_header_boundary(HoroCameraRuntime PUBLIC_HEADERS
     Horo/Runtime/Camera/CameraErrors.h

@@ -182,8 +182,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             return (delta / length) * (force.strength * attenuation);
         }
 
-        [[nodiscard]] Result<CpuParticleCollisionSelection> QueryPlanes(const Detail::CpuParticleSimulatorState &state,
-                                                                        const Math::Vec3 previous, const Math::Vec3 position) {
+        [[nodiscard]] StageResult<CpuParticleCollisionSelection> QueryPlanes(const Detail::CpuParticleSimulatorState &state,
+                                                                             const Math::Vec3 previous, const Math::Vec3 position) {
             CpuParticleCollisionSelection selection{};
             float bestTime = std::numeric_limits<float>::max();
             for (std::uint32_t planeIndex = 0; planeIndex < state.planeCount; ++planeIndex) {
@@ -191,7 +191,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 const float previousDistance = Math::Dot(previous - plane.point, plane.normal);
                 const float currentDistance = Math::Dot(position - plane.point, plane.normal);
                 if (!Finite(previousDistance) || !Finite(currentDistance) || !Finite(previousDistance - currentDistance))
-                    return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
+                    return StageFailure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
                 if (previousDistance < 0.0F || currentDistance > 0.0F || currentDistance >= previousDistance)
                     continue;
                 const float denominator = previousDistance - currentDistance;
@@ -207,58 +207,87 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 selection.stableTarget = planeIndex;
                 selection.stableFeature = planeIndex;
             }
-            return Result<CpuParticleCollisionSelection>::Success(selection);
+            return StageResult<CpuParticleCollisionSelection>::Success(selection);
         }
 
-        /** @brief Samples the frozen endpoint pixel and intersects its reconstructed surface plane. */
-        [[nodiscard]] Result<CpuParticleCollisionSelection> QueryDepth(const Detail::CpuParticleSimulatorState &state,
-                                                                       const Math::Vec3 previous, const Math::Vec3 position) {
-            CpuParticleCollisionSelection selection{};
+        /** @brief Keeps canonical clip-domain predicates separate from sampling and intersection. */
+        [[nodiscard]] bool InsideDepthView(const Math::Vec3 ndc) noexcept {
+            return Finite(ndc) && ndc.x >= -1.0F && ndc.x < 1.0F && ndc.y >= -1.0F && ndc.y < 1.0F && ndc.z >= 0.0F && ndc.z <= 1.0F;
+        }
+
+        struct DepthSurface final {
+            Math::Vec3 ndc;
+            const CpuParticleDepthSample *sample{};
+        };
+
+        /** @brief Selects the same frozen endpoint sample; no native lookup or allocation occurs. */
+        [[nodiscard]] std::optional<DepthSurface> SelectDepthSurface(const Detail::CpuParticleSimulatorState &state,
+                                                                     const Math::Vec3 position) noexcept {
             const auto &depth = state.sceneDepth;
             if (depth.samples.empty())
-                return Result<CpuParticleCollisionSelection>::Success(selection);
+                return std::nullopt;
             const auto clip = Math::TransformHomogeneous(depth.worldToClip, {position.x, position.y, position.z, 1.0F});
             if (!Finite(clip) || clip.w <= std::numeric_limits<float>::epsilon())
-                return Result<CpuParticleCollisionSelection>::Success(selection);
+                return std::nullopt;
             const Math::Vec3 ndc{clip.x / clip.w, clip.y / clip.w, clip.z / clip.w};
-            if (!Finite(ndc) || ndc.x < -1.0F || ndc.x >= 1.0F || ndc.y < -1.0F || ndc.y >= 1.0F || ndc.z < 0.0F || ndc.z > 1.0F)
-                return Result<CpuParticleCollisionSelection>::Success(selection);
+            if (!InsideDepthView(ndc))
+                return std::nullopt;
             const auto x = static_cast<std::uint32_t>((ndc.x * 0.5F + 0.5F) * static_cast<float>(depth.width));
             const auto y = static_cast<std::uint32_t>((ndc.y * 0.5F + 0.5F) * static_cast<float>(depth.height));
             if (x >= depth.width || y >= depth.height)
-                return Result<CpuParticleCollisionSelection>::Success(selection);
+                return std::nullopt;
             const auto &sample = depth.samples[static_cast<std::size_t>(y) * depth.width + x];
             if (!sample.covered || ndc.z < sample.depth)
-                return Result<CpuParticleCollisionSelection>::Success(selection);
+                return std::nullopt;
+            return DepthSurface{ndc, &sample};
+        }
+
+        /** @brief Samples the frozen endpoint pixel and intersects its reconstructed surface plane. */
+        [[nodiscard]] StageResult<CpuParticleCollisionSelection> QueryDepth(const Detail::CpuParticleSimulatorState &state,
+                                                                            const Math::Vec3 previous, const Math::Vec3 position) {
+            CpuParticleCollisionSelection selection{};
+            const auto selected = SelectDepthSurface(state, position);
+            if (!selected)
+                return StageResult<CpuParticleCollisionSelection>::Success(selection);
+            const auto &sample = *selected->sample;
+            const auto ndc = selected->ndc;
+            const auto &depth = state.sceneDepth;
             const auto surface = Math::TryTransformPoint(state.clipToWorld, {ndc.x, ndc.y, sample.depth});
             if (surface.HasError())
-                return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
+                return StageFailure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
             const Math::Vec3 normal = Math::Normalize(sample.normal);
             const float before = Math::Dot(previous - surface.Value(), normal);
             const float after = Math::Dot(position - surface.Value(), normal);
             if (!Finite(before) || !Finite(after))
-                return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
+                return StageFailure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
             if (before < 0.0F || after >= before || after > 0.0F)
-                return Result<CpuParticleCollisionSelection>::Success(selection);
+                return StageResult<CpuParticleCollisionSelection>::Success(selection);
             const float time = before / (before - after);
             selection.hit = true;
             selection.position = previous + ((position - previous) * time);
             selection.normal = normal;
             selection.distance = Math::Length(selection.position - previous);
             selection.restitution = depth.restitution;
-            return Result<CpuParticleCollisionSelection>::Success(selection);
+            return StageResult<CpuParticleCollisionSelection>::Success(selection);
         }
 
-        [[nodiscard]] Result<CpuParticleCollisionSelection> QueryAdapter(const Detail::CpuParticleSimulatorState &state,
-                                                                         const CpuParticleSimulationStep &step,
-                                                                         const CpuParticleCollisionQuerySeam &seam,
-                                                                         const CpuParticleHandle &handle, const Math::Vec3 previous,
-                                                                         const Math::Vec3 position, const Math::Vec3 velocity) {
+        /** @brief Preserves the complete legacy provider hit validation before reducing its values. */
+        [[nodiscard]] bool ValidAdapterHit(const CpuParticleCollisionHit &hit) noexcept {
+            return Finite(hit.position) && Finite(hit.normal) && Finite(hit.distance) && hit.distance >= 0.0F &&
+                   Finite(Math::LengthSquared(hit.normal)) && Math::LengthSquared(hit.normal) > std::numeric_limits<float>::epsilon() &&
+                   Finite(hit.restitution) && hit.restitution >= 0.0F && hit.restitution <= 1.0F;
+        }
+
+        [[nodiscard]] StageResult<CpuParticleCollisionSelection> QueryAdapter(const Detail::CpuParticleSimulatorState &state,
+                                                                              const CpuParticleSimulationStep &step,
+                                                                              const CpuParticleCollisionQuerySeam &seam,
+                                                                              const CpuParticleHandle &handle, const Math::Vec3 previous,
+                                                                              const Math::Vec3 position, const Math::Vec3 velocity) {
             CpuParticleCollisionSelection selection{};
             if (seam.probe == nullptr) {
                 if (seam.required || state.requiredGameplay)
-                    return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryUnavailable);
-                return Result<CpuParticleCollisionSelection>::Success(selection);
+                    return StageFailure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryUnavailable);
+                return StageResult<CpuParticleCollisionSelection>::Success(selection);
             }
             const auto query = seam.probe(seam.context, {.particle = handle.particle,
                                                          .previousPosition = previous,
@@ -269,15 +298,13 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                                                          .sceneGeneration = seam.sceneGeneration,
                                                          .snapshotGeneration = seam.snapshotGeneration});
             if (query.HasError())
-                return Result<CpuParticleCollisionSelection>::Failure(
-                    WrapError(VfxErrors::ParticleCollisionQueryFailed, query.ErrorValue()));
+                return StageResult<CpuParticleCollisionSelection>::Failure(
+                    Detail::CpuParticleStageFailure{&VfxErrors::ParticleCollisionQueryFailed, query.ErrorValue(), true});
             const auto &hit = query.Value();
             if (!hit.hit)
-                return Result<CpuParticleCollisionSelection>::Success(selection);
-            if (!Finite(hit.position) || !Finite(hit.normal) || !Finite(hit.distance) || hit.distance < 0.0F ||
-                !Finite(Math::LengthSquared(hit.normal)) || Math::LengthSquared(hit.normal) <= std::numeric_limits<float>::epsilon() ||
-                !Finite(hit.restitution) || hit.restitution < 0.0F || hit.restitution > 1.0F)
-                return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
+                return StageResult<CpuParticleCollisionSelection>::Success(selection);
+            if (!ValidAdapterHit(hit))
+                return StageFailure<CpuParticleCollisionSelection>(VfxErrors::ParticleCollisionQueryFailed);
             selection.hit = true;
             selection.position = hit.position;
             selection.normal = Math::Normalize(hit.normal);
@@ -285,16 +312,16 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             selection.restitution = hit.restitution;
             selection.stableTarget = hit.stableTarget;
             selection.stableFeature = hit.stableFeature;
-            return Result<CpuParticleCollisionSelection>::Success(selection);
+            return StageResult<CpuParticleCollisionSelection>::Success(selection);
         }
 
-        [[nodiscard]] Result<CpuParticleCollisionSelection> QueryCollision(const Detail::CpuParticleSimulatorState &state,
-                                                                           const CpuParticleSimulationStep &step,
-                                                                           const CpuParticleHandle &handle, const Math::Vec3 previous,
-                                                                           const Math::Vec3 position, const Math::Vec3 velocity) {
+        [[nodiscard]] StageResult<CpuParticleCollisionSelection> QueryCollision(const Detail::CpuParticleSimulatorState &state,
+                                                                                const CpuParticleSimulationStep &step,
+                                                                                const CpuParticleHandle &handle, const Math::Vec3 previous,
+                                                                                const Math::Vec3 position, const Math::Vec3 velocity) {
             switch (state.descriptor.collisionMode) {
                 case ParticleCollisionMode::None:
-                    return Result<CpuParticleCollisionSelection>::Success({});
+                    return StageResult<CpuParticleCollisionSelection>::Success({});
                 case ParticleCollisionMode::Planes:
                     return QueryPlanes(state, previous, position);
                 case ParticleCollisionMode::SceneDepth:
@@ -302,95 +329,14 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 case ParticleCollisionMode::PhysicsWorld:
                     return QueryAdapter(state, step, state.physicsWorld, handle, previous, position, velocity);
                 case ParticleCollisionMode::Count:
-                    return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleSimulationDescriptorInvalid);
+                    return StageFailure<CpuParticleCollisionSelection>(VfxErrors::ParticleSimulationDescriptorInvalid);
             }
-            return Failure<CpuParticleCollisionSelection>(VfxErrors::ParticleSimulationDescriptorInvalid);
+            return StageFailure<CpuParticleCollisionSelection>(VfxErrors::ParticleSimulationDescriptorInvalid);
         }
 
-        [[nodiscard]] Result<Detail::CpuParticleBirthPlan> CalculateBirthPlan(const Detail::CpuParticleSimulatorState &state,
-                                                                              const CpuParticleSimulationStep &step) {
-            const double continuous = state.spawnCarry + (static_cast<double>(state.spawnRate) * step.deltaSeconds);
-            if (!std::isfinite(continuous) || continuous < 0.0)
-                return Failure<Detail::CpuParticleBirthPlan>(VfxErrors::ParticleSimulationDescriptorInvalid);
-            const double integral = std::floor(continuous);
-            const auto continuousBirths = integral >= static_cast<double>(std::numeric_limits<std::uint64_t>::max())
-                                              ? std::numeric_limits<std::uint64_t>::max()
-                                              : static_cast<std::uint64_t>(integral);
-            if (continuousBirths > std::numeric_limits<std::uint64_t>::max() - step.burstCount)
-                return Failure<Detail::CpuParticleBirthPlan>(VfxErrors::ParticleSimulationDescriptorInvalid);
-            const std::uint64_t requested = continuousBirths + step.burstCount;
-            const std::uint32_t available = state.candidate.Statistics().available;
-            if (state.requiredGameplay && requested > available)
-                return Failure<Detail::CpuParticleBirthPlan>(VfxErrors::ParticleStepCapacityExceeded);
-            const auto admitted = static_cast<std::uint32_t>(std::min<std::uint64_t>(requested, available));
-            if (state.nextSimulationIdentity > std::numeric_limits<std::uint64_t>::max() - admitted)
-                return Failure<Detail::CpuParticleBirthPlan>(VfxErrors::ParticleSpawnOrdinalExhausted);
-            return Result<Detail::CpuParticleBirthPlan>::Success(
-                {.requested = requested, .admitted = admitted, .carry = continuous - integral});
-        }
-    }  // namespace
-
-    Result<void> PrepareCandidate(Detail::CpuParticleSimulatorState &state) {
-        if (auto copied = state.candidate.CopyFrom(state.committed); copied.HasError())
-            return copied;
-        const std::uint32_t active = state.committed.Statistics().active;
-        std::copy_n(state.handles.begin() + state.committedOffset, active, state.handles.begin() + state.candidateOffset);
-        std::copy_n(state.baseSizeX.begin() + state.committedOffset, active, state.baseSizeX.begin() + state.candidateOffset);
-        std::copy_n(state.baseSizeY.begin() + state.committedOffset, active, state.baseSizeY.begin() + state.candidateOffset);
-        std::copy_n(state.baseColor.begin() + state.committedOffset, active, state.baseColor.begin() + state.candidateOffset);
-        return Result<void>::Success();
-    }
-
-    Result<CpuParticleSpawnStageResult> RunSpawnStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step) {
-        if (auto observed = Observe(state, CpuParticleStage::Spawn); observed.HasError())
-            return Result<CpuParticleSpawnStageResult>::Failure(observed.ErrorValue());
-        const auto plan = CalculateBirthPlan(state, step);
-        if (plan.HasError())
-            return Result<CpuParticleSpawnStageResult>::Failure(plan.ErrorValue());
-        std::uint64_t nextIdentity = state.nextSimulationIdentity;
-        const std::uint32_t firstDense = state.candidate.Statistics().active;
-        for (std::uint32_t birth = 0; birth < plan.Value().admitted; ++birth) {
-            if (nextIdentity == std::numeric_limits<std::uint64_t>::max())
-                return Failure<CpuParticleSpawnStageResult>(VfxErrors::ParticleSpawnOrdinalExhausted);
-            auto particle = ParticleSimulationId::Create(++nextIdentity);
-            if (particle.HasError())
-                return Result<CpuParticleSpawnStageResult>::Failure(particle.ErrorValue());
-            auto spawned = state.candidate.Spawn(particle.Value());
-            if (spawned.HasError())
-                return Result<CpuParticleSpawnStageResult>::Failure(spawned.ErrorValue());
-            state.handles[state.candidateOffset + firstDense + birth] = spawned.Value();
-        }
-        return Result<CpuParticleSpawnStageResult>::Success({.plan = plan.Value(), .nextSimulationIdentity = nextIdentity});
-    }
-
-    Result<void> RunInitializeStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step,
-                                    const Detail::CpuParticleSpawnStageResult &spawn) {
-        if (auto observed = Observe(state, CpuParticleStage::Initialize); observed.HasError())
-            return observed;
-        const auto viewResult = state.candidate.View();
-        if (viewResult.HasError())
-            return Result<void>::Failure(viewResult.ErrorValue());
-        const auto view = viewResult.Value();
-        const std::uint32_t firstDense = state.candidate.Statistics().active - spawn.plan.admitted;
-        for (std::uint32_t birth = 0; birth < spawn.plan.admitted; ++birth) {
-            const std::uint32_t dense = firstDense + birth;
-            InitializeParticle(state, state.handles[state.candidateOffset + dense], view, dense, step.tick);
-        }
-        return Result<void>::Success();
-    }
-
-    Result<void> RunForcesStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step) {
-        if (auto observed = Observe(state, CpuParticleStage::Forces); observed.HasError())
-            return observed;
-        const auto viewResult = state.candidate.View();
-        if (viewResult.HasError())
-            return Result<void>::Failure(viewResult.ErrorValue());
-        const auto view = viewResult.Value();
-        std::fill_n(state.acceleration.begin(), view.positionX.size(), Math::Vec3{});
-        // Descriptor order is observable for floating-point accumulation. Dispatch once per
-        // module; every particle sees the same ordered stack without a per-particle kind test.
-        for (std::uint32_t forceIndex = 0; forceIndex < state.forceCount; ++forceIndex) {
-            const auto &force = state.forces[forceIndex];
+        /** @brief Dispatches once per authored force while preserving per-particle accumulation order. */
+        void ApplyOrderedForce(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step,
+                               const CpuParticleSoAView view, const CpuParticleForceModule &force) {
             switch (force.kind) {
                 case CpuParticleForceKind::Gravity:
                 case CpuParticleForceKind::Wind: {
@@ -418,15 +364,103 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                     break;
             }
         }
-        return Result<void>::Success();
+
+        [[nodiscard]] StageResult<Detail::CpuParticleBirthPlan> CalculateBirthPlan(const Detail::CpuParticleSimulatorState &state,
+                                                                                   const CpuParticleSimulationStep &step) {
+            const double continuous = state.spawnCarry + (static_cast<double>(state.spawnRate) * step.deltaSeconds);
+            if (!std::isfinite(continuous) || continuous < 0.0)
+                return StageFailure<Detail::CpuParticleBirthPlan>(VfxErrors::ParticleSimulationDescriptorInvalid);
+            const double integral = std::floor(continuous);
+            const auto continuousBirths = integral >= static_cast<double>(std::numeric_limits<std::uint64_t>::max())
+                                              ? std::numeric_limits<std::uint64_t>::max()
+                                              : static_cast<std::uint64_t>(integral);
+            if (continuousBirths > std::numeric_limits<std::uint64_t>::max() - step.burstCount)
+                return StageFailure<Detail::CpuParticleBirthPlan>(VfxErrors::ParticleSimulationDescriptorInvalid);
+            const std::uint64_t requested = continuousBirths + step.burstCount;
+            const std::uint32_t available = state.candidate.Statistics().available;
+            if (state.requiredGameplay && requested > available)
+                return StageFailure<Detail::CpuParticleBirthPlan>(VfxErrors::ParticleStepCapacityExceeded);
+            const auto admitted = static_cast<std::uint32_t>(std::min<std::uint64_t>(requested, available));
+            if (state.nextSimulationIdentity > std::numeric_limits<std::uint64_t>::max() - admitted)
+                return StageFailure<Detail::CpuParticleBirthPlan>(VfxErrors::ParticleSpawnOrdinalExhausted);
+            return StageResult<Detail::CpuParticleBirthPlan>::Success(
+                {.requested = requested, .admitted = admitted, .carry = continuous - integral});
+        }
+    }  // namespace
+
+    StageResult<void> PrepareCandidate(Detail::CpuParticleSimulatorState &state) {
+        if (auto copied = state.candidate.CopyFrom(state.committed); copied.HasError())
+            return StageResult<void>::Failure(copied.ErrorValue());
+        const std::uint32_t active = state.committed.Statistics().active;
+        std::copy_n(state.handles.begin() + state.committedOffset, active, state.handles.begin() + state.candidateOffset);
+        std::copy_n(state.baseSizeX.begin() + state.committedOffset, active, state.baseSizeX.begin() + state.candidateOffset);
+        std::copy_n(state.baseSizeY.begin() + state.committedOffset, active, state.baseSizeY.begin() + state.candidateOffset);
+        std::copy_n(state.baseColor.begin() + state.committedOffset, active, state.baseColor.begin() + state.candidateOffset);
+        return StageResult<void>::Success();
     }
 
-    Result<void> RunIntegrateStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step) {
+    StageResult<CpuParticleSpawnStageResult> RunSpawnStage(Detail::CpuParticleSimulatorState &state,
+                                                           const CpuParticleSimulationStep &step) {
+        if (auto observed = Observe(state, CpuParticleStage::Spawn); observed.HasError())
+            return StageResult<CpuParticleSpawnStageResult>::Failure(observed.ErrorValue());
+        const auto plan = CalculateBirthPlan(state, step);
+        if (plan.HasError())
+            return StageResult<CpuParticleSpawnStageResult>::Failure(plan.ErrorValue());
+        std::uint64_t nextIdentity = state.nextSimulationIdentity;
+        const std::uint32_t firstDense = state.candidate.Statistics().active;
+        for (std::uint32_t birth = 0; birth < plan.Value().admitted; ++birth) {
+            if (nextIdentity == std::numeric_limits<std::uint64_t>::max())
+                return StageFailure<CpuParticleSpawnStageResult>(VfxErrors::ParticleSpawnOrdinalExhausted);
+            auto particle = ParticleSimulationId::Create(++nextIdentity);
+            if (particle.HasError())
+                return StageResult<CpuParticleSpawnStageResult>::Failure(particle.ErrorValue());
+            auto spawned = state.candidate.Spawn(particle.Value());
+            if (spawned.HasError())
+                return StageResult<CpuParticleSpawnStageResult>::Failure(spawned.ErrorValue());
+            state.handles[state.candidateOffset + firstDense + birth] = spawned.Value();
+        }
+        return StageResult<CpuParticleSpawnStageResult>::Success({.plan = plan.Value(), .nextSimulationIdentity = nextIdentity});
+    }
+
+    StageResult<void> RunInitializeStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step,
+                                         const Detail::CpuParticleSpawnStageResult &spawn) {
+        if (auto observed = Observe(state, CpuParticleStage::Initialize); observed.HasError())
+            return observed;
+        const auto viewResult = state.candidate.View();
+        if (viewResult.HasError())
+            return StageResult<void>::Failure(viewResult.ErrorValue());
+        const auto view = viewResult.Value();
+        const std::uint32_t firstDense = state.candidate.Statistics().active - spawn.plan.admitted;
+        for (std::uint32_t birth = 0; birth < spawn.plan.admitted; ++birth) {
+            const std::uint32_t dense = firstDense + birth;
+            InitializeParticle(state, state.handles[state.candidateOffset + dense], view, dense, step.tick);
+        }
+        return StageResult<void>::Success();
+    }
+
+    StageResult<void> RunForcesStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step) {
+        if (auto observed = Observe(state, CpuParticleStage::Forces); observed.HasError())
+            return observed;
+        const auto viewResult = state.candidate.View();
+        if (viewResult.HasError())
+            return StageResult<void>::Failure(viewResult.ErrorValue());
+        const auto view = viewResult.Value();
+        std::fill_n(state.acceleration.begin(), view.positionX.size(), Math::Vec3{});
+        // Descriptor order is observable for floating-point accumulation. Dispatch once per
+        // module; every particle sees the same ordered stack without a per-particle kind test.
+        for (std::uint32_t forceIndex = 0; forceIndex < state.forceCount; ++forceIndex) {
+            const auto &force = state.forces[forceIndex];
+            ApplyOrderedForce(state, step, view, force);
+        }
+        return StageResult<void>::Success();
+    }
+
+    StageResult<void> RunIntegrateStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step) {
         if (auto observed = Observe(state, CpuParticleStage::Integrate); observed.HasError())
             return observed;
         const auto viewResult = state.candidate.View();
         if (viewResult.HasError())
-            return Result<void>::Failure(viewResult.ErrorValue());
+            return StageResult<void>::Failure(viewResult.ErrorValue());
         const auto view = viewResult.Value();
         for (std::uint32_t dense = 0; dense < view.positionX.size(); ++dense) {
             state.previousPositions[dense] = {view.positionX[dense], view.positionY[dense], view.positionZ[dense]};
@@ -440,15 +474,15 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             view.rotation[dense] += view.angularVelocity[dense] * step.deltaSeconds;
             ApplyOverLife(state, view, dense);
         }
-        return Result<void>::Success();
+        return StageResult<void>::Success();
     }
 
-    Result<std::uint32_t> RunCollideStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step) {
+    StageResult<std::uint32_t> RunCollideStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step) {
         if (auto observed = Observe(state, CpuParticleStage::Collide); observed.HasError())
-            return Result<std::uint32_t>::Failure(observed.ErrorValue());
+            return StageResult<std::uint32_t>::Failure(observed.ErrorValue());
         const auto viewResult = state.candidate.View();
         if (viewResult.HasError())
-            return Result<std::uint32_t>::Failure(viewResult.ErrorValue());
+            return StageResult<std::uint32_t>::Failure(viewResult.ErrorValue());
         const auto view = viewResult.Value();
         std::uint32_t collisions{};
         for (std::uint32_t dense = 0; dense < view.positionX.size(); ++dense) {
@@ -456,7 +490,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                                                   {view.positionX[dense], view.positionY[dense], view.positionZ[dense]},
                                                   {view.velocityX[dense], view.velocityY[dense], view.velocityZ[dense]});
             if (collision.HasError())
-                return Result<std::uint32_t>::Failure(collision.ErrorValue());
+                return StageResult<std::uint32_t>::Failure(collision.ErrorValue());
             if (!collision.Value().hit)
                 continue;
             ++collisions;
@@ -479,7 +513,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 view.velocityZ[dense] = reflected.z;
             }
         }
-        return Result<std::uint32_t>::Success(collisions);
+        return StageResult<std::uint32_t>::Success(collisions);
     }
 
     void CommitAuxiliary(Detail::CpuParticleSimulatorState &state, const std::uint32_t survivorCount) noexcept {
@@ -493,19 +527,19 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
     }
 
-    Result<std::uint32_t> RunKillStage(Detail::CpuParticleSimulatorState &state) {
+    StageResult<std::uint32_t> RunKillStage(Detail::CpuParticleSimulatorState &state) {
         const auto viewResult = state.candidate.View();
         if (viewResult.HasError())
-            return Result<std::uint32_t>::Failure(viewResult.ErrorValue());
+            return StageResult<std::uint32_t>::Failure(viewResult.ErrorValue());
         const auto view = viewResult.Value();
         for (const auto &kill : state.killRequests) {
             auto dense = state.candidate.ResolveDenseIndex(kill);
             if (dense.HasError())
-                return Result<std::uint32_t>::Failure(dense.ErrorValue());
+                return StageResult<std::uint32_t>::Failure(dense.ErrorValue());
             view.customFlags[dense.Value()] |= ExplicitKillBit;
         }
         if (auto observed = Observe(state, CpuParticleStage::Kill); observed.HasError())
-            return Result<std::uint32_t>::Failure(observed.ErrorValue());
+            return StageResult<std::uint32_t>::Failure(observed.ErrorValue());
         const std::uint32_t active = state.candidate.Statistics().active;
         std::uint32_t survivorCount{};
         for (std::uint32_t dense = 0; dense < active; ++dense) {
@@ -518,8 +552,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
         const std::span<const CpuParticleHandle> survivors{state.handles.data() + state.candidateOffset, survivorCount};
         if (auto compacted = state.candidate.CompactStable(survivors); compacted.HasError())
-            return Result<std::uint32_t>::Failure(compacted.ErrorValue());
+            return StageResult<std::uint32_t>::Failure(compacted.ErrorValue());
         CommitAuxiliary(state, survivorCount);
-        return Result<std::uint32_t>::Success(active - survivorCount);
+        return StageResult<std::uint32_t>::Success(active - survivorCount);
     }
 }  // namespace Horo::Vfx::CpuParticleSimulatorDetail

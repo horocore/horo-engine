@@ -135,6 +135,7 @@ set_target_properties(HoroSceneIdentity PROPERTIES EXPORT_NAME SceneIdentity)
 set(HORO_GAMEPLAY_COMMON_SDK_TARGETS HoroSceneIdentity HoroAssets HoroRuntime HoroThirdPartyUfbx miniz utf8proc nlohmann_json)
 set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroGameplayPhysicsIntegration HoroGameplayCharacterIntegration HoroPhysics HoroPhysicsModel)
 set(HORO_GAMEPLAY_UI_SDK_TARGETS HoroRuntimeUi harfbuzz HoroThirdPartyUnicode)
+set(HORO_GAMEPLAY_VFX_SDK_TARGETS HoroGameplayVfxIntegration HoroVfxApi HoroVfxSimulationData HoroRenderApi)
 set_target_properties(HoroRuntimeUi PROPERTIES EXPORT_NAME RuntimeUi)
 set_target_properties(HoroThirdPartyUnicode PROPERTIES EXPORT_NAME ThirdPartyUnicode)
 if(TARGET Jolt)
@@ -146,7 +147,11 @@ set_target_properties(HoroPhysics PROPERTIES EXPORT_NAME Physics)
 set_target_properties(HoroPhysicsModel PROPERTIES EXPORT_NAME PhysicsModel)
 set_target_properties(HoroAssets PROPERTIES EXPORT_NAME Assets)
 set_target_properties(HoroRuntime PROPERTIES EXPORT_NAME Runtime)
-foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HORO_GAMEPLAY_COMMON_SDK_TARGETS HORO_GAMEPLAY_UI_SDK_TARGETS)
+set_target_properties(HoroGameplayVfxIntegration PROPERTIES EXPORT_NAME GameplayVfxIntegration)
+set_target_properties(HoroVfxApi PROPERTIES EXPORT_NAME VfxApi)
+set_target_properties(HoroVfxSimulationData PROPERTIES EXPORT_NAME VfxSimulationData)
+set_target_properties(HoroRenderApi PROPERTIES EXPORT_NAME RenderApi)
+foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HORO_GAMEPLAY_COMMON_SDK_TARGETS HORO_GAMEPLAY_UI_SDK_TARGETS HORO_GAMEPLAY_VFX_SDK_TARGETS)
     get_target_property(target_type ${target} TYPE)
     if(target_type STREQUAL "STATIC_LIBRARY")
         set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -180,6 +185,10 @@ set_target_properties(HoroGameplayNavigationIntegration PROPERTIES EXPORT_NAME G
 export(TARGETS HoroNavigationApi HoroNavigationRuntime HoroGameplayNavigationIntegration
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayNavigationTargets.cmake")
+# VFX is an explicit neutral SDK component; Scene/cinematic host services stay private.
+export(TARGETS ${HORO_GAMEPLAY_VFX_SDK_TARGETS}
+       NAMESPACE HoroEngine::
+       FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayVfxTargets.cmake")
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroEngineGameplayConfig.cmake.in"
     "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayConfig.cmake"

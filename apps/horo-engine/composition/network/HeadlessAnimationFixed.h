@@ -52,6 +52,8 @@ public:
         // Catch-up ticks may be consecutive: discard only duplicate references, never the lifetime pins here.
         evaluated_ = {};
         count_ = 0;
+        gameplay_ = {};
+        gameplayCount_ = 0;
         evidence_ = context.dispatchEvidence;
         attempting_ = true;
         return Result<void>::Success();
@@ -68,6 +70,16 @@ public:
         return record->animation->OnFixedUpdate(context);
     }
 
+    /** @brief Tracks the actual attempted gameplay owner before its fallible callback; unrelated pinned Worlds stay untouched. */
+    Result<void> TrackGameplay(const std::shared_ptr<WorldRecord> &record, const Runtime::FixedStepContext &context) {
+        if (!Valid(context) || !Same(context) || !attempting_ || closed_)
+            return Rejected();
+        if (!record || record->closeRequested || !record->activeGameplay || !CanTrackGameplay(record))
+            return Rejected();
+        gameplay_[gameplayCount_++] = record;
+        return Result<void>::Success();
+    }
+
     Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) override {
         if (!Valid(context) || !Same(context) || !attempting_ || closed_)
             return Rejected();
@@ -79,7 +91,7 @@ public:
             if (prepared.HasError())
                 return prepared;
         }
-        return Result<void>::Success();
+        return PrepareGameplay(context);
     }
 
     void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
@@ -92,6 +104,7 @@ public:
             std::terminate();
         for (std::size_t index = 0; index < count_; ++index)
             evaluated_[index]->animation->CommitFixedUpdate(context);
+        CommitGameplay(context);
         Resolve();  // Keep every strong pin until a safe phase/Shutdown, never cold teardown in nofail publication.
     }
 
@@ -102,6 +115,7 @@ public:
         const auto status = context.dispatchEvidence.Read(source_, Runtime::RuntimePhase::FixedUpdate, facts);
         if (status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
             return;
+        AbortGameplay(context);
         for (std::size_t index = count_; index > 0; --index)
             evaluated_[index - 1]->animation->AbortFixedUpdate(context);
         Resolve();
@@ -145,6 +159,38 @@ private:
                facts.frame == context.frameNumber && facts.fixedDuration == context.fixedDelta;
     }
 
+    /** @brief Uses only actual attempted gameplay owners; animation presence never gates source commitment. */
+    Result<void> PrepareGameplay(const Runtime::FixedStepContext &context) {
+        for (std::size_t index = 0; index < gameplayCount_; ++index) {
+            const auto &record = gameplay_[index];
+            if (record->closeRequested || !record->activeGameplay)
+                return Rejected();
+            if (auto prepared = record->activeGameplay->PrepareFixedCommit(context); prepared.HasError())
+                return prepared;
+        }
+        return Result<void>::Success();
+    }
+
+    void CommitGameplay(const Runtime::FixedStepContext &context) noexcept {
+        for (std::size_t index = 0; index < gameplayCount_; ++index)
+            gameplay_[index]->activeGameplay->CommitFixedUpdate(context);
+    }
+
+    void AbortGameplay(const Runtime::FixedStepContext &context) noexcept {
+        for (std::size_t index = gameplayCount_; index > 0; --index) {
+            const auto &record = gameplay_[index - 1];
+            if (record->activeGameplay)
+                record->activeGameplay->AbortFixedUpdate(context);
+        }
+    }
+
+    bool CanTrackGameplay(const std::shared_ptr<WorldRecord> &record) const noexcept {
+        if (std::ranges::find(pins_, record) == pins_.end() || gameplayCount_ == gameplay_.size())
+            return false;
+        const auto end = gameplay_.begin() + gameplayCount_;
+        return std::ranges::find(gameplay_.begin(), end, record) == end;
+    }
+
     Result<void> CapturePins() {
         for (std::size_t index = 0; index < pins_.size(); ++index) {
             auto record = owners_->known[index].lock();
@@ -185,6 +231,8 @@ private:
         }
         evaluated_ = {};
         count_ = 0;
+        gameplay_ = {};
+        gameplayCount_ = 0;
         pins_ = {};
         pinsHeld_ = false;
     }
@@ -195,6 +243,8 @@ private:
     std::array<std::shared_ptr<WorldRecord>, 4> pins_;
     std::array<std::shared_ptr<WorldRecord>, 4> evaluated_;
     std::size_t count_{};
+    std::array<std::shared_ptr<WorldRecord>, 4> gameplay_;
+    std::size_t gameplayCount_{};
     bool pinsHeld_{};
     bool started_{};
     bool attempting_{};

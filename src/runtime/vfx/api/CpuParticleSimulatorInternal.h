@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CpuParticleStageResult.h"
 #include "Horo/Vfx/CpuParticleSimulator.h"
 
 #include <algorithm>
@@ -114,6 +115,12 @@ namespace Horo::Vfx::Detail {
 }  // namespace Horo::Vfx::Detail
 
 namespace Horo::Vfx::CpuParticleSimulatorDetail {
+    template <typename Value> using StageResult = Detail::CpuParticleStageResult<Value>;
+
+    template <typename Value> [[nodiscard]] inline StageResult<Value> StageFailure(const ErrorCodeDescriptor &descriptor) {
+        return StageResult<Value>::Failure(Detail::CpuParticleStageFailure{&descriptor, std::nullopt, false});
+    }
+
     template <typename T> [[nodiscard]] inline Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
         return Result<T>::Failure(MakeError(descriptor));
     }
@@ -177,19 +184,20 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
 
     [[nodiscard]] Result<void> OwnerThreadResult(const Detail::CpuParticleSimulatorState &state);
     [[nodiscard]] Result<void> ValidateOperationalState(const Detail::CpuParticleSimulatorState *state);
-    [[nodiscard]] Result<void> Observe(const Detail::CpuParticleSimulatorState &state, CpuParticleStage stage);
+    [[nodiscard]] StageResult<void> Observe(const Detail::CpuParticleSimulatorState &state, CpuParticleStage stage);
 
     [[nodiscard]] Result<std::unique_ptr<Detail::CpuParticleSimulatorState>> PrepareState(const ParticleSystemDescriptor &descriptor,
                                                                                           const CpuParticleSimulatorCreateInfo &info);
 
-    [[nodiscard]] Result<void> PrepareCandidate(Detail::CpuParticleSimulatorState &state);
-    [[nodiscard]] Result<Detail::CpuParticleSpawnStageResult> RunSpawnStage(Detail::CpuParticleSimulatorState &state,
-                                                                            const CpuParticleSimulationStep &step);
-    [[nodiscard]] Result<void> RunInitializeStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step,
-                                                  const Detail::CpuParticleSpawnStageResult &spawn);
-    [[nodiscard]] Result<void> RunForcesStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step);
-    [[nodiscard]] Result<void> RunIntegrateStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step);
-    [[nodiscard]] Result<std::uint32_t> RunCollideStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step);
-    [[nodiscard]] Result<std::uint32_t> RunKillStage(Detail::CpuParticleSimulatorState &state);
+    [[nodiscard]] StageResult<void> PrepareCandidate(Detail::CpuParticleSimulatorState &state);
+    [[nodiscard]] StageResult<Detail::CpuParticleSpawnStageResult> RunSpawnStage(Detail::CpuParticleSimulatorState &state,
+                                                                                 const CpuParticleSimulationStep &step);
+    [[nodiscard]] StageResult<void> RunInitializeStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step,
+                                                       const Detail::CpuParticleSpawnStageResult &spawn);
+    [[nodiscard]] StageResult<void> RunForcesStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step);
+    [[nodiscard]] StageResult<void> RunIntegrateStage(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step);
+    [[nodiscard]] StageResult<std::uint32_t> RunCollideStage(Detail::CpuParticleSimulatorState &state,
+                                                             const CpuParticleSimulationStep &step);
+    [[nodiscard]] StageResult<std::uint32_t> RunKillStage(Detail::CpuParticleSimulatorState &state);
     void CommitAuxiliary(Detail::CpuParticleSimulatorState &state, std::uint32_t survivorCount) noexcept;
 }  // namespace Horo::Vfx::CpuParticleSimulatorDetail

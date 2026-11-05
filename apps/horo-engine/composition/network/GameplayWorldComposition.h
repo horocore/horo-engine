@@ -13,6 +13,11 @@
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 
+namespace Horo::Gameplay {
+    class GameplayVfxContext;
+    class GameplayVfxScene;
+}  // namespace Horo::Gameplay
+
 namespace Horo::Application::Internal {
     /** @brief Trusted host policy resolved before invoking project code; no ambient grant. */
     enum class GameplayPhysicsPermission {
@@ -46,7 +51,10 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Explicit host grant; absent means typed unavailable. */
         GameplayCharacterPermission characterPermission{GameplayCharacterPermission::Denied};
         std::optional<Gameplay::GameplayReplicationAdmissionPolicy>
-            replicationAdmission; /**< Complete host inventory; absent only for non-network hosts. */
+            replicationAdmission;                                /**< Complete host inventory; absent only for non-network hosts. */
+        std::shared_ptr<const Gameplay::GameplayVfxContext> vfx; /**< Explicit module capability; no ambient asset grant. */
+        std::shared_ptr<Gameplay::GameplayVfxScene>
+            vfxScene; /**< Explicit Scene owner; configured factories clone its original cold policy per WorldRecord. */
     };
 
     /** @brief Explicit asset authorities and bounds for a composition-owned cooked prefab provider.
@@ -148,6 +156,16 @@ namespace Horo::Application::Internal {
          * @return Typed owner failure. This composition owns Scene safe-point dispatch for the service-backed path.
          */
         [[nodiscard]] Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context);
+        /** @brief Arms source metadata after all fixed work succeeds; preparation does not commit a tick.
+         * @param context Exact attempted fixed opportunity. @return Typed source reservation/admission outcome.
+         */
+        [[nodiscard]] Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context);
+        /** @brief Seals metadata only at the genuine scheduler commitment; World work still waits for actual Scene publication.
+         * @param context Same fixed opportunity whose actual commitment was verified by the owning participant.
+         */
+        void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
+        /** @brief Cancels only the matching unsuccessful source attempt. @param context Exact attempted opportunity. */
+        void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
         /** @brief Revoke the whole world scope before any shutdown callback or storage retirement. */
         void Shutdown() noexcept;
         /** @brief Retire just the module/script; the explicit Physics world may stay active. */
@@ -195,6 +213,24 @@ namespace Horo::Application::Internal {
         /** @brief Pins and admits the loaded generation before any behavior callback. @param selection Complete host policy.
          * @return Original acquisition or declaration failure; native pre-Start admission already ran in its loader. */
         [[nodiscard]] Result<void> AdmitReplication(const GameplayWorldSelection &selection);
+        /** @brief Admits an exact host tick before behavior callbacks; never synthesizes a clock. */
+        [[nodiscard]] Result<void> BeginVfxTick(const Runtime::FixedStepContext &context);
+        /** @brief Publishes staged VFX only after the actual Scene lifecycle commit succeeds. */
+        [[nodiscard]] Result<void> FlushVfxTicks();
+        /** @brief Cancels this composition's open source tick before callback or owner retirement. */
+        void AbortVfxTick() noexcept;
+        /** @brief Derives this module's exact Scene-scoped UI client before callbacks start. */
+        [[nodiscard]] Result<void> ResolveRuntimeUi(const GameplayWorldSelection &selection);
+        /** @brief Revokes admitted host capabilities before module shutdown callbacks. */
+        void RevokeCapabilities() noexcept;
+        /** @brief Binds only the explicitly supplied module capability or published Scene participant. */
+        [[nodiscard]] Result<void> ResolveVfx(const GameplayWorldSelection &selection);
+        /** @brief Checks that the explicit client and optional source owner match this exact Scene and module. */
+        [[nodiscard]] Result<void> ValidateVfxBinding(const GameplayWorldSelection &selection) const;
+        std::string vfxModuleId_;
+        std::shared_ptr<const Gameplay::GameplayVfxContext> vfx_;
+        std::shared_ptr<Gameplay::GameplayVfxScene> vfxScene_;
+        bool vfxTickOpen_{};
         std::shared_ptr<Gameplay::GameplayPhysicsContext> physics_;
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi_;
         std::shared_ptr<Gameplay::GameplayCharacterContext> character_;

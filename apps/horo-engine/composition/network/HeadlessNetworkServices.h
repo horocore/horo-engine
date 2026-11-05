@@ -13,6 +13,10 @@
 
 #include <memory>
 
+namespace Horo::Vfx {
+    struct VfxExtractionOutcome;
+}
+
 namespace Horo::Application::Internal {
     // Installs the real gameplay-world participants shared by standalone and dedicated products.
     // Network and presentation factories remain explicit application decisions.
@@ -56,6 +60,12 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition, HeadlessSceneActivationInput input,
         Network::NetworkModeFactories selectedFactories = {}, const std::optional<GameplayWorldSelection> &gameplay = std::nullopt,
         const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission = std::nullopt);
+
+    /** @brief Borrows the actual configured Scene's latest immutable VFX frame on its real owner lane.
+     * @param service Actual retained Scene/Physics service facade.
+     * @return Current frame, or null when unavailable/retired/foreign-lane. Borrow ends at next extraction or Scene teardown.
+     */
+    [[nodiscard]] const Vfx::VfxExtractionOutcome *InspectHeadlessVfxFrame(const Network::INetworkModeService &service) noexcept;
 
     /** @brief Borrow canonical Animation observation on the service owner lane; no ownership or mutation grant. */
     [[nodiscard]] const Runtime::SceneAnimationRuntime *InspectHeadlessAnimation(const Network::INetworkModeService &service) noexcept;

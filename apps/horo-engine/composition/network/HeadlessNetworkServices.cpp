@@ -1,5 +1,6 @@
 #include "HeadlessNetworkServices.h"
 
+#include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
 #include "Horo/Physics/PhysicsErrors.h"
@@ -27,6 +28,7 @@ namespace Horo::Application::Internal {
             std::shared_ptr<Runtime::RuntimeScene> scene;
             std::weak_ptr<const Gameplay::GameplayPhysicsContext> gameplay;
             GameplayWorldComposition *activeGameplay{};
+            std::shared_ptr<Gameplay::GameplayVfxScene> vfxScene;
             CancellationToken sceneCancellation;
             ScenePhysicsHost native;
             std::unique_ptr<Runtime::SceneAnimationRuntime> animation;
@@ -123,6 +125,13 @@ namespace Horo::Application::Internal {
         public:
             [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept {
                 return gameplay_ ? gameplay_->PhysicsContext() : nullptr;
+            }
+
+            const Vfx::VfxExtractionOutcome *VfxFrame() const noexcept {
+                if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || record_->closed ||
+                    !record_->scenes)
+                    return nullptr;
+                return &record_->scenes->VfxFrame();
             }
 
             const Runtime::SceneAnimationRuntime *AnimationOwner() const noexcept {
@@ -341,6 +350,8 @@ namespace Horo::Application::Internal {
                     return ai;
                 if (auto animation = PrepareConfiguredAnimation(*owners_, *record_); animation.HasError())
                     return animation;
+                if (auto vfx = PrepareConfiguredVfx(); vfx.HasError())
+                    return vfx;
                 if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary);
                     prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
@@ -381,6 +392,23 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             }
 
+            /** @brief Each genuine current/replacement World gets an independent source owner copied from explicit policy. */
+            Result<void> PrepareConfiguredVfx() {
+                if (!owners_->gameplay || !owners_->gameplay->vfxScene)
+                    return Result<void>::Success();
+                if (!owners_->fixed)
+                    return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
+                                                           "Configured VFX requires the actual fixed attempt participant."));
+                auto created = owners_->gameplay->vfxScene->CreateSibling();
+                if (created.HasError())
+                    return Result<void>::Failure(created.ErrorValue());
+                auto source = std::move(created).Value();
+                if (auto registered = record_->scenes->AddActivationParticipant(source->MakeActivationParticipant()); registered.HasError())
+                    return registered;
+                record_->vfxScene = std::move(source);
+                return Result<void>::Success();
+            }
+
             Result<void> PrepareConfiguredTemplates() {
                 const auto &input = *owners_->configured;
                 const auto &boundary = input.load;
@@ -404,12 +432,13 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(scope.ErrorValue());
                 if (!selectedGameplay_)
                     return Result<void>::Success();
-                auto gameplay =
-                    record_->templates
-                        ? GameplayWorldComposition::Create(*record_->scenes, *record_->templates, &scope.Value().physics,
-                                                           request_.scene.value, *selectedGameplay_, nullptr, &scope.Value().character)
-                        : GameplayWorldComposition::Create(*record_->scenes, &scope.Value().physics, request_.scene.value,
-                                                           *selectedGameplay_, &scope.Value().character);
+                auto selected = *selectedGameplay_;
+                selected.vfxScene = record_->vfxScene;
+                auto gameplay = record_->templates
+                                    ? GameplayWorldComposition::Create(*record_->scenes, *record_->templates, &scope.Value().physics,
+                                                                       request_.scene.value, selected, nullptr, &scope.Value().character)
+                                    : GameplayWorldComposition::Create(*record_->scenes, &scope.Value().physics, request_.scene.value,
+                                                                       selected, &scope.Value().character);
                 if (gameplay.HasError())
                     return Result<void>::Failure(gameplay.ErrorValue());
                 gameplay_ = std::move(gameplay).Value();
@@ -418,14 +447,23 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             }
 
+            /** @brief Records actual participation before a fallible gameplay source callback can partially stage work. */
+            Result<void> RunConfiguredGameplay(const Runtime::FixedStepContext &context) {
+                if (!gameplay_)
+                    return Result<void>::Success();
+                if (owners_->fixed) {
+                    if (const auto tracked = owners_->fixed->TrackGameplay(record_, context); tracked.HasError())
+                        return tracked;
+                }
+                return gameplay_->FixedTick(context);
+            }
+
             /** @brief Uses ordinary fixed stages only after readiness; load progress never dispatches a tick. */
             Result<void> RunConfiguredTick(const Runtime::FixedStepContext &context) {
                 if (!configuredActivated_ || !record_ || record_->closeRequested)
                     return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
-                if (gameplay_) {
-                    if (const auto advanced = gameplay_->FixedTick(context); advanced.HasError())
-                        return advanced;
-                }
+                if (const auto gameplay = RunConfiguredGameplay(context); gameplay.HasError())
+                    return gameplay;
                 if (record_->animation) {
                     auto animation = owners_->fixed->Evaluate(record_, context);
                     if (animation.HasError())
@@ -623,14 +661,20 @@ namespace Horo::Application::Internal {
                                               [owners](std::uint32_t maximumRecords) {
             return owners->PollRetirement(maximumRecords);
         }};
-        if (owners->configured->animationIdentities) {
-            if (!owners->configured->animationTarget.IsValid())
+        if (owners->configured->animationIdentities || (owners->gameplay && owners->gameplay->vfxScene)) {
+            if (owners->configured->animationIdentities && !owners->configured->animationTarget.IsValid())
                 return Result<NetworkProductComposition>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
             composition.fixedParticipant = [owners](Runtime::RuntimeDispatchSource source) {
                 return HeadlessFixedParticipant::Create(owners, std::move(source));
             };
         }
         return Result<NetworkProductComposition>::Success(std::move(composition));
+    }
+
+    /** @copydoc InspectHeadlessVfxFrame */
+    const Vfx::VfxExtractionOutcome *InspectHeadlessVfxFrame(const Network::INetworkModeService &service) noexcept {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->VfxFrame() : nullptr;
     }
 
     const Runtime::SceneAnimationRuntime *InspectHeadlessAnimation(const Network::INetworkModeService &service) noexcept {

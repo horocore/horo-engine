@@ -1,6 +1,7 @@
 #include "Horo/Vfx/VfxWorld.h"
 
 #include "VfxWorldCoordinates.h"
+#include "VfxWorldSpawnInternal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -211,6 +212,7 @@ namespace Horo::Vfx {
             emitter.live = false;
         }
         ShutdownGpu();
+        ShutdownSpawns();
         shutDown_ = true;
         return Result<void>::Success();
     }
@@ -276,7 +278,7 @@ namespace Horo::Vfx {
         for (const auto &emitter : emitters_)
             if (emitter.live && !extractor_.AppendEmitter(emitter.binding, emitter.particles, data, origin, report))
                 return false;
-        return true;
+        return AppendSpawnEmitters(data, origin, report);
     }
 
     /** @copydoc VfxRenderExtractor::Extract */

@@ -5,6 +5,33 @@ namespace Horo::Vfx::VfxErrors {
         const ErrorDomainId VfxDomain{"horo.vfx"};
     }
 
+    const ErrorCodeDescriptor
+        SpawnPreparationInvalid{.domain = VfxDomain,
+                                .code = ErrorCode{"vfx.spawn.preparation_invalid"},
+                                .defaultSeverity = ErrorSeverity::Error,
+                                .summary = "The prepared spawn recipe or reservation is invalid.",
+                                .remediationHint = "Prepare validated recipes and disjoint finite Scene reservations before playback."};
+    const ErrorCodeDescriptor
+        SpawnPreparationUnsupported{.domain = VfxDomain,
+                                    .code = ErrorCode{"vfx.spawn.preparation_unsupported"},
+                                    .defaultSeverity = ErrorSeverity::Error,
+                                    .summary = "The spawn recipe requires an unavailable prepared execution path.",
+                                    .remediationHint =
+                                        "Admit an explicitly supported CPU recipe; do not silently change simulation domains."};
+    const ErrorCodeDescriptor
+        SpawnPreparationBudgetExceeded{.domain = VfxDomain,
+                                       .code = ErrorCode{"vfx.spawn.preparation_budget_exceeded"},
+                                       .defaultSeverity = ErrorSeverity::Error,
+                                       .summary = "Spawn preparation exceeds its single Scene-wide reservation.",
+                                       .remediationHint = "Reduce prepared concurrency or obtain an explicit larger host reservation."};
+    const ErrorCodeDescriptor
+        SpawnPreparationAllocationFailed{.domain = VfxDomain,
+                                         .code = ErrorCode{"vfx.spawn.preparation_allocation_failed"},
+                                         .defaultSeverity = ErrorSeverity::Error,
+                                         .summary = "Fixed spawn storage could not be allocated during preparation.",
+                                         .remediationHint =
+                                             "Preserve the prior Scene and retry only at an explicit cold preparation boundary."};
+
     const ErrorCodeDescriptor IdentityInvalid{.domain = VfxDomain,
                                               .code = ErrorCode{"vfx.identity.invalid"},
                                               .defaultSeverity = ErrorSeverity::Error,

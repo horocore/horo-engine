@@ -60,6 +60,7 @@ namespace Horo::Gameplay {
                 impl->physics->Revoke();
             if (impl->prefabs)
                 impl->prefabs->Revoke();
+            Detail::GameplayVfxHostAccess::RevokeClient(impl->vfx);
             bool rollbackComplete = true;
             for (auto iterator = impl->instances.rbegin(); iterator != impl->instances.rend(); ++iterator) {
                 rollbackComplete = impl->RollbackInstance(*iterator) && rollbackComplete;
@@ -79,6 +80,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
     Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta) const {
+        impl_->vfxStructuralReceipt.reset();
         if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
             impl_->ShutdownNow();
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
@@ -96,6 +98,11 @@ namespace Horo::Gameplay {
                 return Result<void>::Failure(committed.ErrorValue());
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc BehaviorRuntime::VfxStructuralReceipt */
+    std::shared_ptr<const Runtime::SceneStructuralReceipt> BehaviorRuntime::VfxStructuralReceipt() const noexcept {
+        return impl_->vfxStructuralReceipt;
     }
 
     Result<void> BehaviorRuntime::RunFixedInstance(std::size_t index, std::span<const GameplayInputAction> input, FixedDeltaTime delta,

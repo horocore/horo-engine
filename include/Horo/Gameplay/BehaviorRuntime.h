@@ -48,6 +48,8 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayNavigationContext> navigation;   /**< Exact module/Scene Navigation scope. */
         std::shared_ptr<const GameplayCharacterContext> character;     /**< Character scope dependent on the admitted Physics scope. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact host UI grant, independently derived by the runner. */
+        std::shared_ptr<const GameplayVfxContext> vfx;                 /**< Explicit module/Scene presentation grant. */
+        std::string vfxModuleId; /**< Trusted composition principal; never inferred from an effect tag or behavior type. */
     };
 
     /** @brief Owns every behavior instance attached to one active runtime scene. */
@@ -92,6 +94,12 @@ namespace Horo::Gameplay {
         BehaviorRuntime(const BehaviorRuntime &) = delete;
         BehaviorRuntime &operator=(const BehaviorRuntime &) = delete;
 
+        /** @brief Copies the genuine latest VFX source transaction's Scene publication witness.
+         * @return Read-only tracked receipt, or empty for a source tick with no structural commands.
+         * @details Cleared before every FixedUpdate attempt. This is not a commit grant; the host must inspect its actual outcome.
+         */
+        [[nodiscard]] std::shared_ptr<const Runtime::SceneStructuralReceipt> VfxStructuralReceipt() const noexcept;
+
         /** @brief Delivers queued events/input, runs one deterministic tick, and commits mutations.
          * @param input Current tick input. @param delta Validated fixed step. @return Success or a lifecycle/callback error. */
         [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta) const;
@@ -132,6 +140,7 @@ namespace Horo::Gameplay {
         friend class BehaviorRuntimeRestoreAccess;
         [[nodiscard]] static bool RestoreBindingAdmitted(const Impl &) noexcept;
         [[nodiscard]] static Result<std::shared_ptr<void>> AcquireRestoreGeneration(const BehaviorRegistry &);
+        [[nodiscard]] static Result<void> BindRestoreVfx(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestorePhysics(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestoreNavigationUi(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestoreServices(Impl &, BehaviorRuntimeServiceBindings,

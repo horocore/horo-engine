@@ -15,6 +15,7 @@ add_library(HoroNetworkProductHost STATIC
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::GameplayVfxSceneIntegration)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PlatformProjectIo)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/horo-engine/composition/network)

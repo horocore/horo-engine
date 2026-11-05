@@ -224,6 +224,20 @@ namespace Horo::Vfx {
         constexpr auto operator<=>(const CpuParticleSimulationStepResult &) const noexcept = default;
     };
 
+    /** @brief Prepared execution distinguishes an exact kernel rejection from a legacy diagnostic-provider profile. */
+    enum class CpuParticleAdvanceStatus : std::uint8_t {
+        Complete,
+        Rejected,
+        UnsupportedDiagnostics
+    };
+
+    /** @brief Nonallocating copied result; failure descriptors have process lifetime and retain their original typed code. */
+    struct CpuParticleAdvanceOutcome final {
+        CpuParticleAdvanceStatus status{CpuParticleAdvanceStatus::Rejected};
+        CpuParticleSimulationStepResult step;
+        const ErrorCodeDescriptor *failure{};
+    };
+
     /** @brief Read-only committed CPU particle streams valid until the next owner-thread mutation. */
     struct CpuParticleExtractView final {
         std::uint64_t committedGeneration{};
@@ -249,6 +263,16 @@ namespace Horo::Vfx {
         std::uint64_t collisions{};
         std::uint64_t nextSpawnOrdinal{};
         std::uint32_t active{};
+    };
+
+    /** @brief Allocation-free prepared activation transition evidence. */
+    enum class CpuParticleResetStatus : std::uint8_t {
+        Complete,
+        InvalidActivation,
+        ThreadViolation,
+        ActiveStep,
+        ShutDown,
+        GenerationExhausted
     };
 
     /**
@@ -285,6 +309,13 @@ namespace Horo::Vfx {
          * @return Committed result or a typed zero-mutation failure.
          */
         [[nodiscard]] Result<CpuParticleSimulationStepResult> Advance(const CpuParticleSimulationStep &step);
+        /** @brief Executes the same candidate/stages/commit using static typed failure evidence for a prepared no-provider profile.
+         * @param step Same fixed-clock request accepted by Advance.
+         * @return Exact committed result or static rejection descriptor without constructing diagnostic strings.
+         * Observer, Physics-provider and scene-depth diagnostic profiles are explicitly unsupported and never invoked here.
+         * Legacy Advance preserves full provider errors/causes and remains available for those explicitly prepared profiles.
+         */
+        [[nodiscard]] CpuParticleAdvanceOutcome AdvancePrepared(const CpuParticleSimulationStep &step) noexcept;
 
         /**
          * @brief Queues one exact committed particle for the next Kill stage.
@@ -322,6 +353,18 @@ namespace Horo::Vfx {
 
         /** @brief Returns allocation-free committed diagnostics. @return Current lifetime counters. */
         [[nodiscard]] CpuParticleSimulationStatistics Statistics() const noexcept;
+
+        /** @brief Reuses admitted storage for a newer activation without resetting particle, tick or committed-generation identities.
+         * @param activation Same prepared scope/slot and a strictly newer generation issued by its effect owner.
+         * @return Allocation-free transition status; rejection preserves all state.
+         * @pre Owner has retired all borrowed views/readers and prior activation work. Immutable extraction copies remain independent.
+         */
+        [[nodiscard]] CpuParticleResetStatus Reset(EffectSystemId activation) noexcept;
+
+        /** @brief Reports actual prepared storage charges, including both buffers and scratch vector capacities.
+         * @return Bytes retained by this simulator; zero after move. No allocation or mutation occurs.
+         */
+        [[nodiscard]] std::uint64_t PreparedBytes() const noexcept;
 
         /** @brief Idempotently closes the simulator and both generations. @return Success or thread failure. */
         [[nodiscard]] Result<void> Shutdown();

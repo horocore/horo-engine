@@ -22,6 +22,7 @@ namespace Horo::Gameplay {
     class GameplayPhysicsContext;
     class GameplayCharacterContext;
     class GameplayNavigationContext;
+    class GameplayVfxContext;
     class GameplayPrefabContext;
     inline constexpr std::size_t MaximumBehaviorReloadStateBytes = 1024U * 1024U;
     inline constexpr std::size_t MaximumBehaviorReloadSnapshotBytes = 16U * 1024U * 1024U;
@@ -144,6 +145,11 @@ namespace Horo::Gameplay {
             [[nodiscard]] virtual std::shared_ptr<const GameplayPrefabContext> PrefabContext() const noexcept {
                 return {};
             }
+
+            /** @brief Queries explicit VFX admission. @return Exact entity scope, or empty when no grant was composed. */
+            [[nodiscard]] virtual std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept {
+                return {};
+            }
         };
     }  // namespace Detail
 
@@ -181,6 +187,13 @@ namespace Horo::Gameplay {
         }
 
         /** @brief Returns the revocable native/script navigation scope. @return Null when omitted by host. */
+        /** @brief Queries the explicitly composed presentation capability.
+         * @return Entity-scoped VFX holder; retaining it never extends its callback or Scene authority.
+         */
+        [[nodiscard]] std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept {
+            return backend_->VfxContext();
+        }
+
         [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept {
             return backend_->NavigationContext();
         }

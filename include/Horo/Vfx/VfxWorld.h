@@ -6,11 +6,18 @@
 #include "Horo/Runtime/Render/RenderWorldSnapshot.h"
 #include "Horo/Vfx/CpuParticleBuffer.h"
 #include "Horo/Vfx/GpuParticleSimulator.h"
+#include "Horo/Vfx/VfxSpawnPreparation.h"
 
 #include <thread>
 #include <vector>
 
 namespace Horo::Vfx {
+    namespace Detail {
+        struct VfxWorldSpawnState;
+        struct VfxSpawnAsset;
+        struct VfxSpawnInstance;
+    }  // namespace Detail
+
     /** @brief Fixed cooked emitter binding realized before scene activation. */
     struct VfxEmitterPreparation final {
         EffectSystemId effect{};
@@ -130,6 +137,10 @@ namespace Horo::Vfx {
         [[nodiscard]] bool AppendEmitter(const VfxEmitterPreparation &binding, const CpuParticleBuffer &particles,
                                          Render::RenderWorldFrameData &data, const Math::WorldCoordinate64 &origin,
                                          VfxExtractionReport &report) const noexcept;
+        [[nodiscard]] bool AppendSpawnEmitter(Detail::VfxSpawnAsset &, Detail::VfxSpawnInstance &, Render::RenderWorldFrameData &,
+                                              const Math::WorldCoordinate64 &, VfxExtractionReport &) const noexcept;
+        [[nodiscard]] static bool CopySpawnParticles(Detail::VfxSpawnInstance &, const CpuParticleExtractView &,
+                                                     Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &) noexcept;
 
     private:
         friend class VfxWorld;
@@ -149,8 +160,12 @@ namespace Horo::Vfx {
         static constexpr std::size_t MaximumGpuAcknowledgements = 64;
         VfxWorld(const VfxWorld &) = delete;
         VfxWorld &operator=(const VfxWorld &) = delete;
-        VfxWorld(VfxWorld &&) noexcept = default;
-        VfxWorld &operator=(VfxWorld &&) noexcept = default;
+        /** @brief Transfers prepared ownership; owner-thread affinity is preserved. */
+        VfxWorld(VfxWorld &&) noexcept;
+        /** @brief Replaces quiescent prepared ownership. @return This world. */
+        VfxWorld &operator=(VfxWorld &&) noexcept;
+        /** @brief Destroys Scene-owned prepared state after all external users retire. */
+        ~VfxWorld();
         /** @brief Prepares fixed live emitters and aggregate frame capacity before scene activation.
          * @param scene Exact scene incarnation. @param emitters Immutable cooked bindings, grouped by effect.
          * @param budget Host-reserved aggregate extraction slice. @return Owned world or typed preparation failure.
@@ -185,6 +200,48 @@ namespace Horo::Vfx {
          * @pre Caller must not retain the pointer past Stop or world destruction, or transfer it across threads.
          */
         [[nodiscard]] Result<CpuParticleBuffer *> Particles(EffectSystemId effect, EmitterId emitter);
+
+        /** @brief Atomically creates the canonical spawn World with fully prepared CPU recipes and immutable extraction storage.
+         * @param scene Exact published-candidate Scene incarnation.
+         * @param assets Cold validated host-admitted recipes.
+         * @param budget One aggregate spawn reservation.
+         * @param extraction Separate host-reserved frame storage; the spawn slice must fit its work capacities.
+         * @return Complete owned World or typed failure without publishing partial ownership.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<VfxWorld>> PrepareSpawns(VfxIdentityScope scene,
+                                                                             std::span<const VfxSpawnAssetPreparation> assets,
+                                                                             VfxSpawnBudget budget, VfxExtractionBudget extraction);
+        /** @brief Admits one exact host-issued owner incarnation before it may submit requests.
+         * @param owner Explicit application owner scope. @param generation Nonzero never-reused incarnation.
+         * @return Accepted, duplicate/stale/capacity/thread/lifecycle status; no allocation occurs.
+         */
+        [[nodiscard]] VfxSpawnStatus AdmitSpawnOwner(VfxIdentityScope owner, std::uint64_t generation) noexcept;
+        /** @brief Validates and copies one complete authored fan-out atomically without allocation.
+         * @param requests Canonical layer order for one occurrence, at most the hard layer ceiling.
+         * @return Correlated acceptance or typed zero-mutation rejection. No completion runs inline.
+         */
+        [[nodiscard]] VfxSpawnOutcome TryEnqueueSpawns(std::span<const VfxSpawnRequest> requests) noexcept;
+        /** @brief Freezes/drains the accepted tick prefix and advances real prepared CPU kernels on the Scene owner.
+         * @param tick Strictly increasing owner tick. @param deltaSeconds Finite prepared-clock delta.
+         * @return Bounded processing counts; correlated results consume pre-reserved result credits.
+         */
+        [[nodiscard]] VfxSpawnUpdate UpdateSpawns(std::uint64_t tick, float deltaSeconds) noexcept;
+        /** @brief Revokes one exact owner and retires its queued/live work before service destruction.
+         * @param owner Admitted owner scope. @param generation Exact incarnation; a stale call cannot revoke a replacement.
+         * @return Accepted or a typed affinity/lifecycle/stale-owner denial.
+         */
+        [[nodiscard]] VfxSpawnStatus CancelSpawnOwner(VfxIdentityScope owner, std::uint64_t generation) noexcept;
+        /** @brief Borrows immutable terminal result storage until ClearSpawnResults or the next owner mutation.
+         * @return Bounded result prefix, empty on wrong thread or after shutdown.
+         */
+        [[nodiscard]] std::span<const VfxSpawnOutcome> SpawnResults() const noexcept;
+        /** @brief Acknowledges terminal evidence without clearing deduplication watermarks. */
+        void ClearSpawnResults() noexcept;
+        /** @brief Copies cold prepared asset/schema facts without exposing any simulation state.
+         * @param asset Exact prepared identity. @param output Filled only on success.
+         * @return Accepted or typed missing/thread/lifecycle outcome.
+         */
+        [[nodiscard]] VfxSpawnStatus InspectSpawnAsset(Assets::AssetId asset, VfxSpawnAssetInfo &output) const noexcept;
         /** @brief Captures all live effects into the sole immutable channel.
          * @param frame Increasing frame ordinal. @param origin Captured render origin. @param originRevision Captured revision.
          * @return Immutable values and typed bounds/backpressure evidence.
@@ -232,6 +289,12 @@ namespace Horo::Vfx {
         void ShutdownGpu() noexcept;
         [[nodiscard]] bool AppendCpuEmitters(Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
                                              VfxExtractionReport &) const noexcept;
+        [[nodiscard]] bool AppendSpawnEmitters(Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
+                                               VfxExtractionReport &) const noexcept;
+        /** @brief Prepares only the unpublished atomic factory candidate. */
+        [[nodiscard]] Result<void> PrepareSpawnPalette(std::span<const VfxSpawnAssetPreparation>, VfxSpawnBudget);
+        void ShutdownSpawns() noexcept;
+        [[nodiscard]] VfxSpawnStatus SpawnAdmissionStatus() const noexcept;
 
         /** @brief Takes already materialized scene/frame storage. */
         explicit VfxWorld(VfxIdentityScope scene, VfxRenderExtractor extractor);
@@ -239,6 +302,7 @@ namespace Horo::Vfx {
         VfxRenderExtractor extractor_;
         std::vector<Emitter> emitters_;
         std::vector<GpuEmitter> gpuEmitters_;
+        std::unique_ptr<Detail::VfxWorldSpawnState> spawn_;
         std::thread::id owner_{};
         bool shutDown_{};
     };

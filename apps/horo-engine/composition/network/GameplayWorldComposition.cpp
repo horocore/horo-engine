@@ -1,5 +1,6 @@
 #include "GameplayWorldComposition.h"
 
+#include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Prefab/PrefabErrors.h"
@@ -46,6 +47,34 @@ namespace Horo::Application::Internal {
             return GameplayCharacterContext::Create(binding, world, &physics);
         }
 
+        /** @brief Separates source-owner contract failures from ordinary effect admission/simulation outcomes. */
+        bool IsVfxOwnerFailure(const Vfx::VfxSpawnStatus status) noexcept {
+            switch (status) {
+                case Vfx::VfxSpawnStatus::ThreadViolation:
+                case Vfx::VfxSpawnStatus::Reentrant:
+                case Vfx::VfxSpawnStatus::OutOfOrder:
+                case Vfx::VfxSpawnStatus::StaleScene:
+                case Vfx::VfxSpawnStatus::StaleOwner:
+                case Vfx::VfxSpawnStatus::ShutDown:
+                case Vfx::VfxSpawnStatus::PermissionDenied:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /** @brief Checks standalone activation inputs before any owner or capability is created. */
+        Result<void> ValidateStandaloneSelection(const GameplayWorldSelection &selection, const std::uint64_t generation) {
+            using namespace Gameplay;
+            if (selection.vfxScene)
+                return Result<void>::Failure(MakeError(GameplayVfxErrors::ScopeInvalid));
+            if (!selection.enabled || selection.prefabPermission == GameplayPrefabPermission::Granted)
+                return Result<void>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
+            if (selection.moduleId.empty() || generation == 0 || (selection.nativeArtifact.empty() == selection.scriptSource.empty()))
+                return Result<void>::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor));
+            return Result<void>::Success();
+        }
+
         /** @brief Explicit host slot, not a backend locator; the active module runner owns every constructed attachment. */
         class GameplayStructuralParticipant final : public Runtime::SceneStructuralParticipant {
         public:
@@ -84,10 +113,8 @@ namespace Horo::Application::Internal {
                                                                                        const GameplayWorldSelection &selection,
                                                                                        Character::CharacterWorld *character) {
         using namespace Gameplay;
-        if (!selection.enabled || selection.prefabPermission == GameplayPrefabPermission::Granted)
-            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
-        if (selection.moduleId.empty() || sceneGeneration == 0 || (selection.nativeArtifact.empty() == selection.scriptSource.empty()))
-            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor));
+        if (auto valid = ValidateStandaloneSelection(selection, sceneGeneration); valid.HasError())
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(valid.ErrorValue());
         auto composition = std::make_unique<GameplayWorldComposition>();
         GameplayPhysicsBinding binding{selection.moduleId,
                                        scene.View().RuntimeId().value,
@@ -113,7 +140,11 @@ namespace Horo::Application::Internal {
         if (auto registered = RegisterModule(selection); registered.HasError())
             return registered;
         auto runtime = Gameplay::BehaviorRuntime::Create(scene, registry_, {},
-                                                         {.physics = physics_, .character = CharacterContext(), .runtimeUi = runtimeUi_});
+                                                         {.physics = physics_,
+                                                          .character = CharacterContext(),
+                                                          .runtimeUi = runtimeUi_,
+                                                          .vfx = vfx_,
+                                                          .vfxModuleId = vfxModuleId_});
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
         behaviors_ = std::move(runtime).Value();
@@ -123,16 +154,10 @@ namespace Horo::Application::Internal {
     /** @copydoc GameplayWorldComposition::RegisterModule */
     Result<void> GameplayWorldComposition::RegisterModule(const GameplayWorldSelection &selection) {
         using namespace Gameplay;
-        if (selection.runtimeUi) {
-            if (const auto &grant = selection.runtimeUi->Grant(); grant.moduleId != selection.moduleId ||
-                                                                  grant.scene != physics_->Binding().scene ||
-                                                                  grant.sceneGeneration != physics_->Binding().sceneGeneration)
-                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::HandleOwnerMismatch));
-            auto child = selection.runtimeUi->Derive();
-            if (child.HasError())
-                return Result<void>::Failure(child.ErrorValue());
-            runtimeUi_ = std::move(child).Value();
-        }
+        if (auto admitted = ResolveVfx(selection); admitted.HasError())
+            return admitted;
+        if (auto admitted = ResolveRuntimeUi(selection); admitted.HasError())
+            return admitted;
         if (!selection.nativeArtifact.empty()) {
             if (auto registered = RegisterNativeModule(selection); registered.HasError())
                 return registered;
@@ -276,7 +301,11 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(frozen.ErrorValue());
         }
         auto runtime = Gameplay::BehaviorRuntime::Create(scenes, registry_, {},
-                                                         {.physics = physics_, .character = CharacterContext(), .runtimeUi = runtimeUi_},
+                                                         {.physics = physics_,
+                                                          .character = CharacterContext(),
+                                                          .runtimeUi = runtimeUi_,
+                                                          .vfx = vfx_,
+                                                          .vfxModuleId = vfxModuleId_},
                                                          prefabContext_);
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
@@ -322,6 +351,8 @@ namespace Horo::Application::Internal {
                                                        const Gameplay::FixedDeltaTime delta) {
         if (!behaviors_)
             return Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable));
+        if (vfxScene_ && !vfxTickOpen_)
+            return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
         const auto result = behaviors_->FixedUpdate(input, delta);
         if (result.HasError())
             Shutdown();
@@ -336,10 +367,14 @@ namespace Horo::Application::Internal {
     /** @copydoc GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext&,std::span<const Gameplay::GameplayInputAction>) */
     Result<void> GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext &context,
                                                      const std::span<const Gameplay::GameplayInputAction> input) {
+        if (auto begun = BeginVfxTick(context); begun.HasError())
+            return begun;
         tick_ = context.simulationTick;
         if (prefabs_) {
-            if (auto advanced = prefabs_->OnFixedUpdate(context); advanced.HasError())
+            if (auto advanced = prefabs_->OnFixedUpdate(context); advanced.HasError()) {
+                AbortVfxTick();
                 return advanced;
+            }
         }
         return FixedUpdate(input, Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
     }
@@ -349,13 +384,118 @@ namespace Horo::Application::Internal {
         if (!scenes_)
             return Result<void>::Success();
         if (prefabs_) {
-            if (auto advanced = prefabs_->OnPhase(phase, context); advanced.HasError())
+            if (auto advanced = prefabs_->OnPhase(phase, context); advanced.HasError()) {
+                AbortVfxTick();
                 return advanced;
+            }
         }
-        if (auto committed = scenes_->OnPhase(phase, context); committed.HasError())
+        if (auto committed = scenes_->OnPhase(phase, context); committed.HasError()) {
+            AbortVfxTick();
             return committed;
-        return prefabs_ && phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges ? prefabs_->Advance(tick_)
-                                                                                          : Result<void>::Success();
+        }
+        if (phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges)
+            return Result<void>::Success();
+        if (prefabs_) {
+            if (auto advanced = prefabs_->Advance(tick_); advanced.HasError()) {
+                AbortVfxTick();
+                return advanced;
+            }
+        }
+        return FlushVfxTicks();
+    }
+
+    /** @copydoc GameplayWorldComposition::ResolveRuntimeUi */
+    Result<void> GameplayWorldComposition::ResolveRuntimeUi(const GameplayWorldSelection &selection) {
+        if (selection.runtimeUi) {
+            if (const auto &grant = selection.runtimeUi->Grant(); grant.moduleId != selection.moduleId ||
+                                                                  grant.scene != physics_->Binding().scene ||
+                                                                  grant.sceneGeneration != physics_->Binding().sceneGeneration)
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::HandleOwnerMismatch));
+            auto child = selection.runtimeUi->Derive();
+            if (child.HasError())
+                return Result<void>::Failure(child.ErrorValue());
+            runtimeUi_ = std::move(child).Value();
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GameplayWorldComposition::ResolveVfx */
+    Result<void> GameplayWorldComposition::ResolveVfx(const GameplayWorldSelection &selection) {
+        vfxScene_ = selection.vfxScene;
+        vfx_ = selection.vfx ? selection.vfx : (vfxScene_ ? vfxScene_->Module(selection.moduleId) : nullptr);
+        if (auto valid = ValidateVfxBinding(selection); valid.HasError())
+            return valid;
+        vfxModuleId_ = vfx_ ? selection.moduleId : std::string{};
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GameplayWorldComposition::ValidateVfxBinding */
+    Result<void> GameplayWorldComposition::ValidateVfxBinding(const GameplayWorldSelection &selection) const {
+        using Return = Result<void>;
+        if (!vfx_)
+            return selection.vfx || vfxScene_ ? Return::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid)) : Return::Success();
+        if (!vfx_->IsUsable() || vfx_->ModuleId() != selection.moduleId || vfx_->Scene().Value() != physics_->Binding().scene)
+            return Return::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
+        if (vfxScene_ && vfxScene_->Scene() != vfx_->Scene())
+            return Return::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
+        return Return::Success();
+    }
+
+    /** @copydoc GameplayWorldComposition::BeginVfxTick */
+    Result<void> GameplayWorldComposition::BeginVfxTick(const Runtime::FixedStepContext &context) {
+        if (!vfxScene_)
+            return Result<void>::Success();
+        if (vfxTickOpen_)
+            return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
+        const auto seconds = static_cast<float>(static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
+        if (vfxScene_->BeginTick(context.simulationTick, seconds) != Vfx::VfxSpawnStatus::Accepted)
+            return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
+        vfxTickOpen_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GameplayWorldComposition::FlushVfxTicks */
+    Result<void> GameplayWorldComposition::FlushVfxTicks() {
+        if (!vfxScene_)
+            return Result<void>::Success();
+        if (IsVfxOwnerFailure(vfxScene_->FlushSealedTicks().status))
+            return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GameplayWorldComposition::PrepareFixedCommit */
+    Result<void> GameplayWorldComposition::PrepareFixedCommit(const Runtime::FixedStepContext &context) {
+        if (!vfxScene_)
+            return Result<void>::Success();
+        if (!vfxTickOpen_ || context.simulationTick != tick_ || !behaviors_)
+            return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
+        if (vfxScene_->PrepareSealTick(tick_, behaviors_->VfxStructuralReceipt()) != Vfx::VfxSpawnStatus::Accepted)
+            return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GameplayWorldComposition::CommitFixedUpdate */
+    void GameplayWorldComposition::CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        if (!vfxScene_)
+            return;
+        if (!vfxTickOpen_ || context.simulationTick != tick_)
+            std::terminate();
+        vfxScene_->SealTick(tick_);
+        vfxTickOpen_ = false;
+    }
+
+    /** @copydoc GameplayWorldComposition::AbortFixedUpdate */
+    void GameplayWorldComposition::AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        if (context.simulationTick == tick_)
+            AbortVfxTick();
+    }
+
+    /** @copydoc GameplayWorldComposition::AbortVfxTick */
+    void GameplayWorldComposition::AbortVfxTick() noexcept {
+        if (vfxTickOpen_) {
+            vfxScene_->AbortTick(tick_);
+            vfxTickOpen_ = false;
+        }
     }
 
     /** @copydoc GameplayWorldComposition::Shutdown */
@@ -363,8 +503,8 @@ namespace Horo::Application::Internal {
         UnloadModule();
     }
 
-    /** @copydoc GameplayWorldComposition::UnloadModule */
-    void GameplayWorldComposition::UnloadModule() noexcept {
+    /** @copydoc GameplayWorldComposition::RevokeCapabilities */
+    void GameplayWorldComposition::RevokeCapabilities() noexcept {
         if (runtimeUi_)
             runtimeUi_->Revoke();
         if (prefabContext_)
@@ -375,9 +515,18 @@ namespace Horo::Application::Internal {
             character_->Revoke();
         if (physics_)
             physics_->Revoke();
+    }
+
+    /** @copydoc GameplayWorldComposition::UnloadModule */
+    void GameplayWorldComposition::UnloadModule() noexcept {
+        AbortVfxTick();
+        RevokeCapabilities();
         if (behaviors_)
             behaviors_->Shutdown();
         behaviors_.reset();
+        vfx_.reset();
+        vfxModuleId_.clear();
+        vfxScene_.reset();
         prefabContext_.reset();
         prefabs_.reset();
         if (ownedTemplates_)

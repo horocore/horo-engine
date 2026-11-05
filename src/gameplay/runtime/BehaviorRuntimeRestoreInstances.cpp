@@ -69,6 +69,25 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
+    Result<void> BehaviorRuntime::BindRestoreVfx(Impl &impl, BehaviorRuntimeServiceBindings &services) {
+        if (!services.vfx) {
+            if (!services.vfxModuleId.empty())
+                return Result<void>::Failure(MakeError(GameplayVfxErrors::ScopeInvalid));
+            Detail::GameplayVfxHostAccess::RevokeClient(impl.vfx);
+            impl.vfx.reset();
+            return Result<void>::Success();
+        }
+        if (services.vfxModuleId.empty() || services.vfx->ModuleId() != services.vfxModuleId ||
+            services.vfx->Scene().Value() != impl.sceneIdentity.value || !services.vfx->IsUsable())
+            return Result<void>::Failure(MakeError(GameplayVfxErrors::ScopeInvalid));
+        auto child = Detail::GameplayVfxHostAccess::ForkRuntime(services.vfx);
+        if (child.HasError())
+            return Result<void>::Failure(child.ErrorValue());
+        Detail::GameplayVfxHostAccess::RevokeClient(impl.vfx);
+        impl.vfx = std::move(child).Value();
+        return Result<void>::Success();
+    }
+
     Result<void> BehaviorRuntime::BindRestorePhysics(Impl &impl, BehaviorRuntimeServiceBindings &services) {
         if (services.physics && services.physics->Binding().scene != impl.sceneIdentity.value)
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::HandleWorldMismatch));
@@ -155,6 +174,8 @@ namespace Horo::Gameplay {
                                                       std::shared_ptr<const GameplayPrefabContext> prefabs) {
         if (prefabs && prefabs->Binding().scene != impl.sceneIdentity)
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
+        if (auto vfx = BindRestoreVfx(impl, services); vfx.HasError())
+            return vfx;
         if (auto physics = BindRestorePhysics(impl, services); physics.HasError())
             return physics;
         if (auto others = BindRestoreNavigationUi(impl, services); others.HasError())

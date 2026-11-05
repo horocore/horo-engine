@@ -1160,6 +1160,7 @@ target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime 
 add_library(HoroGameplayLua STATIC
     gameplay/lua/LuaDecisionNode.cpp
         gameplay/lua/LuaBehavior.cpp
+        gameplay/lua/LuaVfxBinding.cpp
         gameplay/lua/LuaBehaviorSandbox.cpp
         gameplay/lua/LuaBehaviorSandbox.h
         gameplay/lua/LuaBehaviorMetadata.cpp
@@ -2012,6 +2013,7 @@ add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleBuffer.cpp
         runtime/vfx/api/CpuParticleSimulator.cpp
         runtime/vfx/api/CpuParticleSimulatorPreparation.cpp
+        runtime/vfx/api/CpuParticleSimulatorReset.cpp
         runtime/vfx/api/CpuParticleSimulatorStages.cpp
         runtime/vfx/api/GpuParticleSimulator.cpp
         runtime/vfx/api/GpuParticleSimulatorPreparation.cpp
@@ -2023,6 +2025,12 @@ add_library(HoroVfxApi STATIC
         runtime/vfx/api/VfxErrors.cpp
         runtime/vfx/api/VfxIdentity.cpp
         runtime/vfx/api/VfxQualityPolicy.cpp
+        runtime/vfx/api/VfxSpawnRequest.cpp
+        runtime/vfx/api/VfxWorldSpawn.cpp
+        runtime/vfx/api/VfxWorldSpawnAdmission.cpp
+        runtime/vfx/api/VfxWorldSpawnExtraction.cpp
+        runtime/vfx/api/VfxWorldSpawnPreparation.cpp
+        runtime/vfx/api/VfxWorldSpawnUpdate.cpp
         runtime/vfx/api/VfxWorld.cpp
 )
 add_library(HoroEngine::VfxApi ALIAS HoroVfxApi)
@@ -2031,6 +2039,45 @@ target_link_libraries(HoroVfxApi
         PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::VfxSimulationData
         PRIVATE nlohmann_json::nlohmann_json
 )
+
+add_library(HoroGameplayVfxIntegration STATIC
+        gameplay/vfx/GameplayVfxErrors.cpp
+        gameplay/vfx/GameplayVfxBindingTable.cpp
+        gameplay/vfx/GameplayVfxBindingCompile.cpp
+        gameplay/vfx/GameplayVfxBindingValidation.cpp
+        gameplay/vfx/GameplayVfxBindingDecode.cpp
+        gameplay/vfx/GameplayVfxBindingEncode.cpp
+        gameplay/vfx/GameplayVfxContext.cpp
+        gameplay/vfx/GameplayVfxHostAccess.cpp
+        gameplay/vfx/GameplayVfxSourceCommit.cpp
+        gameplay/vfx/GameplayVfxSourceSeal.cpp)
+add_library(HoroEngine::GameplayVfxIntegration ALIAS HoroGameplayVfxIntegration)
+target_compile_features(HoroGameplayVfxIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayVfxIntegration
+        PUBLIC HoroEngine::GameplayApi HoroEngine::VfxApi HoroEngine::Assets
+        PRIVATE nlohmann_json::nlohmann_json)
+
+# Trusted host controls stay outside the optional gameplay SDK client surface.
+set(HORO_GAMEPLAY_VFX_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/gameplay_vfx_host_headers")
+file(MAKE_DIRECTORY "${HORO_GAMEPLAY_VFX_HOST_HEADERS}")
+configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/gameplay/vfx/GameplayVfxHostAccess.h"
+        "${HORO_GAMEPLAY_VFX_HOST_HEADERS}/GameplayVfxHostAccess.h"
+        COPYONLY)
+add_library(HoroGameplayVfxHostInternal INTERFACE)
+target_include_directories(HoroGameplayVfxHostInternal INTERFACE "${HORO_GAMEPLAY_VFX_HOST_HEADERS}")
+target_link_libraries(HoroGameplayVfxHostInternal INTERFACE HoroEngine::GameplayVfxIntegration)
+
+add_library(HoroGameplayVfxSceneIntegration STATIC gameplay/vfx/GameplayVfxScene.cpp)
+add_library(HoroEngine::GameplayVfxSceneIntegration ALIAS HoroGameplayVfxSceneIntegration)
+target_compile_features(HoroGameplayVfxSceneIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayVfxSceneIntegration
+        PUBLIC HoroEngine::GameplayVfxIntegration HoroEngine::RuntimeScene HoroEngine::Runtime
+        PRIVATE HoroGameplayVfxHostInternal)
+
+
+target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayVfxIntegration HoroGameplayVfxHostInternal)
+target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayVfxIntegration HoroGameplayVfxHostInternal)
 
 add_library(HoroDestructionApi STATIC
         runtime/destruction/api/DestructionCanonicalState.cpp
@@ -2148,6 +2195,16 @@ add_library(HoroCinematicRuntime STATIC
 add_library(HoroEngine::CinematicRuntime ALIAS HoroCinematicRuntime)
 target_compile_features(HoroCinematicRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroCinematicRuntime PUBLIC HoroEngine::CinematicModel)
+
+add_library(HoroCinematicVfxBridge STATIC
+        runtime/cinematic/vfx/CinematicVfxEventAdapter.cpp
+        runtime/cinematic/vfx/CinematicVfxPayloadPreparation.cpp)
+add_library(HoroEngine::CinematicVfxBridge ALIAS HoroCinematicVfxBridge)
+target_compile_features(HoroCinematicVfxBridge PUBLIC cxx_std_20)
+target_link_libraries(HoroCinematicVfxBridge
+        PUBLIC HoroEngine::CinematicRuntime HoroEngine::GameplayVfxIntegration
+        PRIVATE HoroEngine::Extensions)
+
 
 add_library(HoroCameraRuntime STATIC
         runtime/camera/CameraErrors.cpp
@@ -2877,7 +2934,13 @@ target_include_directories(HoroRenderApi
         PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation HoroEngine::VfxSimulationData PRIVATE HoroFoundationJsonInternal)
+# This header-only codec contract is a compile dependency, not an SDK link dependency.
+# Keep its non-installed headers private while exporting the neutral RenderApi archive.
+target_include_directories(HoroRenderApi PRIVATE
+        $<TARGET_PROPERTY:HoroFoundationJsonInternal,INTERFACE_INCLUDE_DIRECTORIES>)
+add_dependencies(HoroRenderApi HoroFoundationJsonInternal)
+target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation HoroEngine::VfxSimulationData
+        PRIVATE nlohmann_json::nlohmann_json)
 
 # Portable normalization of actual tool evidence; runtime value/identity consumers remain in RenderApi.
 add_library(HoroShaderReflectionCookInternal STATIC

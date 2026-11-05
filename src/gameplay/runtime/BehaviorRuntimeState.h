@@ -1,6 +1,7 @@
 #pragma once
 
 /** @file BehaviorRuntimeState.h @brief Target-private behavior instances, event queues and structural publication state. */
+#include "GameplayVfxHostAccess.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
@@ -75,12 +76,20 @@ namespace Horo::Gameplay {
             bool started{};
             bool destroyed{};
             std::shared_ptr<const GameplayPrefabContext> prefabs;
+            std::shared_ptr<const GameplayVfxContext> vfx;
         };
 
         struct ContextBackend final : Detail::IBehaviorContextBackend {
             ContextBackend(Impl &runtime, Instance &instance, const std::span<const GameplayInputAction> input,
                            Runtime::SceneCommandBuffer &commands, const bool allowSimulationMutation = true) noexcept
                 : runtime(runtime), instance(instance), input(input), commands(commands), allowSimulationMutation(allowSimulationMutation) {
+                if (allowSimulationMutation)
+                    vfxEntered = Detail::GameplayVfxHostAccess::EnterCallback(instance.vfx);
+            }
+
+            ~ContextBackend() override {
+                if (vfxEntered)
+                    Detail::GameplayVfxHostAccess::LeaveCallback(instance.vfx);
             }
 
             Impl &runtime;
@@ -88,6 +97,11 @@ namespace Horo::Gameplay {
             std::span<const GameplayInputAction> input;
             Runtime::SceneCommandBuffer &commands;
             bool allowSimulationMutation{true};
+            bool vfxEntered{};
+
+            [[nodiscard]] std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept override {
+                return instance.vfx;
+            }
 
             [[nodiscard]] GameplayEntityRef Entity() const noexcept override {
                 return BehaviorRuntimeDetail::ToGameplay(instance.entity);
@@ -185,9 +199,19 @@ namespace Horo::Gameplay {
             if (commands.Empty())
                 return Result<void>::Success();
             if (scenes)
-                return scenes->QueueStructuralCommands(std::move(commands));
+                return QueueServiceCommands(std::move(commands));
             auto committed = scene->Commit(commands);
             return committed.HasError() ? Result<void>::Failure(committed.ErrorValue()) : Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> QueueServiceCommands(Runtime::SceneCommandBuffer commands) const {
+            if (!vfx)
+                return scenes->QueueStructuralCommands(std::move(commands));
+            auto tracked = scenes->QueueTrackedStructuralCommands(std::move(commands));
+            if (tracked.HasError())
+                return Result<void>::Failure(tracked.ErrorValue());
+            vfxStructuralReceipt = std::move(tracked).Value();
+            return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> InstantiateEntityBehaviors(const Runtime::RuntimeEntityView &entity,
@@ -215,7 +239,20 @@ namespace Horo::Gameplay {
         }
 
         /** @brief Derives a callback capability once per attachment, preserving inherited immutable lineage. */
+        [[nodiscard]] Result<void> InitializeVfxContext(Instance &instance) const {
+            if (!vfx)
+                return Result<void>::Success();
+            auto child = Detail::GameplayVfxHostAccess::ForEntity(vfx, BehaviorRuntimeDetail::ToGameplay(instance.entity));
+            if (child.HasError())
+                return Result<void>::Failure(child.ErrorValue());
+            Detail::GameplayVfxHostAccess::RevokeClient(instance.vfx);
+            instance.vfx = std::move(child).Value();
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> InitializePrefabContext(Instance &instance) const {
+            if (auto bound = InitializeVfxContext(instance); bound.HasError())
+                return bound;
             if (!prefabs || !prefabs->Binding().AdmitsBehavior(instance.component.typeId))
                 return Result<void>::Success();
             auto context = prefabs->ForEntity(instance.entity);
@@ -317,15 +354,37 @@ namespace Horo::Gameplay {
                 if (!published || notified)
                     return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
                 notified = true;
-                bool teardownComplete = true;
+                const bool teardownComplete = RetireCommittedAttachments();
+                const std::size_t first = owner.instances.size();
+                if (auto attached = AttachCommittedInstances(first); attached.HasError())
+                    return attached;
+                std::ranges::sort(owner.instances, [](const Instance &left, const Instance &right) {
+                    if (left.component.typeId != right.component.typeId)
+                        return left.component.typeId < right.component.typeId;
+                    if (left.entity.entity.index != right.entity.entity.index)
+                        return left.entity.entity.index < right.entity.entity.index;
+                    return left.component.instanceId < right.component.instanceId;
+                });
+                return teardownComplete ? Result<void>::Success()
+                                        : Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed,
+                                                                          "Retired behavior callbacks failed after structural commit."));
+            }
+
+            /** @brief Retires only attachments in the genuinely published aggregate before constructing replacements. */
+            [[nodiscard]] bool RetireCommittedAttachments() noexcept {
+                bool complete = true;
                 for (Instance &instance : owner.instances) {
                     if (std::ranges::find(destroyed, instance.entity) != destroyed.end())
-                        teardownComplete = owner.RollbackInstance(instance) && teardownComplete;
+                        complete = owner.RollbackInstance(instance, true) && complete;
                 }
                 std::erase_if(owner.instances, [](const Instance &instance) {
                     return instance.destroyed;
                 });
-                const std::size_t first = owner.instances.size();
+                return complete;
+            }
+
+            /** @brief Constructs and activates the prepared new suffix, retaining the existing exact rollback boundary. */
+            [[nodiscard]] Result<void> AttachCommittedInstances(const std::size_t first) {
                 for (Instance &instance : additions) {
                     if (owner.shutdownRequested)
                         return FailAdditions(first, "Gameplay shutdown requested during structural notifications.");
@@ -345,16 +404,7 @@ namespace Horo::Gameplay {
                     RollbackAdditions(first);
                     return Result<void>::Failure(error);
                 }
-                std::ranges::sort(owner.instances, [](const Instance &left, const Instance &right) {
-                    if (left.component.typeId != right.component.typeId)
-                        return left.component.typeId < right.component.typeId;
-                    if (left.entity.entity.index != right.entity.entity.index)
-                        return left.entity.entity.index < right.entity.entity.index;
-                    return left.component.instanceId < right.component.instanceId;
-                });
-                return teardownComplete ? Result<void>::Success()
-                                        : Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed,
-                                                                          "Retired behavior callbacks failed after structural commit."));
+                return Result<void>::Success();
             }
 
             /** @brief Contains arbitrary native project factory exceptions without allocating error/rollback state. */
@@ -452,7 +502,9 @@ namespace Horo::Gameplay {
             Impl &owner;
         };
 
-        [[nodiscard]] bool RollbackInstance(Instance &instance) noexcept {
+        [[nodiscard]] bool RollbackInstance(Instance &instance, const bool committedRetirement = false) noexcept {
+            if (committedRetirement)
+                Detail::GameplayVfxHostAccess::RetireEntityClient(instance.vfx);
             bool complete = true;
             if (instance.created) {
                 Runtime::SceneCommandBuffer commands;
@@ -473,6 +525,8 @@ namespace Horo::Gameplay {
                     LOG_WARN("gameplay.runtime", "Behavior OnDestroy threw during teardown; factory instance will still be released.");
                 }
             }
+            if (!committedRetirement)
+                Detail::GameplayVfxHostAccess::RevokeClient(instance.vfx);
             instance.factory.destroy(instance.factory.userData, instance.implementation);
             instance.destroyed = true;
             return complete;
@@ -483,6 +537,7 @@ namespace Horo::Gameplay {
             if (shutdown)
                 return;
             shutdown = true;
+            Detail::GameplayVfxHostAccess::RevokeClient(vfx);
             if (character)
                 character->Revoke();
             if (navigation)
@@ -514,6 +569,8 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayCharacterContext> character;
         std::shared_ptr<const GameplayNavigationContext> navigation;
         std::shared_ptr<const GameplayPrefabContext> prefabs;
+        std::shared_ptr<const GameplayVfxContext> vfx;
+        mutable std::shared_ptr<const Runtime::SceneStructuralReceipt> vfxStructuralReceipt;
         std::vector<Instance> instances;
         bool shutdown{};
         bool structuralPending{};
