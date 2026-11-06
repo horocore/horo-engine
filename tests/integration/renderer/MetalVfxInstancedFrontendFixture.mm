@@ -38,6 +38,8 @@ namespace Horo::Render::Test {
         using namespace std::chrono_literals;
         constexpr FramebufferExtent Extent{64, 32};
         constexpr FramebufferExtent BenchmarkExtent{1920, 1080};
+        constexpr FramebufferExtent CubeExtent{1600, 900};
+        constexpr float CubeSize = .04F, CubeSpacing = .05F;
         constexpr Math::Vec3 Eye{.7F, .25F, .5F}, Left{-.6F, 0, -3}, Right{.6F, 0, -3};
         constexpr float AuthoredZ = .55F;
 
@@ -123,6 +125,7 @@ namespace Horo::Render::Test {
             __strong id<MTLSharedEvent> gate{nil};
             std::uint64_t frame{};
             FramebufferExtent extent{Extent};
+            RenderResourceRetirementLimits retirementLimits{};
 
             /** @brief Releases a fixture-only gate and drains real native work before surface/resource owner destruction. */
             ~NativeOwner() {
@@ -139,8 +142,10 @@ namespace Horo::Render::Test {
             }
 
             /** @brief Creates a separate unfocused fixture window and registers the real selected Metal implementation. */
-            void Initialize(FramebufferExtent requested = Extent, bool validation = true, PresentMode mode = PresentMode::Immediate) {
+            void Initialize(FramebufferExtent requested = Extent, bool validation = true, PresentMode mode = PresentMode::Immediate,
+                            RenderResourceRetirementLimits selectedLimits = {}) {
                 extent = requested;
+                retirementLimits = selectedLimits;
                 REQUIRE(SDL_Init(SDL_INIT_VIDEO));
                 REQUIRE(SDL_SetHint(SDL_HINT_VIDEO_METAL_AUTO_RESIZE_DRAWABLE, "0"));
                 REQUIRE(SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0"));
@@ -155,7 +160,8 @@ namespace Horo::Render::Test {
                                                         {.requirePresentation = true,
                                                          .enableValidation = validation,
                                                          .maxFramesInFlight = 2,
-                                                         .presentMode = mode}));
+                                                         .presentMode = mode},
+                                                        {}, {}, retirementLimits));
                 REQUIRE(SDL_ShowWindow(window));
                 const auto topology = Value(Detail::RenderFrontendResourceAccess::QueueAssignments(*frontend));
                 queues.assign(topology.begin(), topology.end());
@@ -338,6 +344,26 @@ namespace Horo::Render::Test {
             RenderBufferHandle vertices, indices;
         };
 
+        /** @brief Issues actual canonical geometry from bounded cold mesh values, without synthesizing native identities. */
+        MeshFixture UploadMesh(NativeOwner &owner, std::span<const MeshVertex> vertices, std::span<const std::uint32_t> indices,
+                               Math::Aabb bounds) {
+            const auto vertex =
+                Value(owner.frontend->CreateBuffer({vertices.size_bytes(), RenderBufferUsage::Vertex}, std::as_bytes(vertices))).handle;
+            const auto index =
+                Value(owner.frontend->CreateBuffer({indices.size_bytes(), RenderBufferUsage::Index}, std::as_bytes(indices))).handle;
+            owner.Ready(vertex);
+            owner.Ready(index);
+            const auto mesh = Value(owner.frontend->CreateMesh({.vertexBuffer = vertex,
+                                                                .indexBuffer = index,
+                                                                .vertexStride = sizeof(MeshVertex),
+                                                                .vertexCount = static_cast<std::uint32_t>(vertices.size()),
+                                                                .indexCount = static_cast<std::uint32_t>(indices.size()),
+                                                                .localBounds = bounds}))
+                                  .handle;
+            owner.Ready(mesh);
+            return {mesh, vertex, index};
+        }
+
         /** @brief Issues canonical indexed quad geometry or a mesh with deliberately nonzero authored Z and sentinel UVs. */
         MeshFixture Mesh(NativeOwner &owner, float z) {
             std::array<MeshVertex, 4> vertices{{{{-.5F, -.5F, z}, {0, 0, 1}, {0, 0}},
@@ -348,22 +374,59 @@ namespace Horo::Render::Test {
                 for (auto &vertex : vertices)
                     vertex.uv = {.75F, .25F};
             constexpr std::array<std::uint32_t, 6> indices{0, 1, 2, 2, 3, 0};
-            const auto vertex =
-                Value(owner.frontend->CreateBuffer({sizeof(vertices), RenderBufferUsage::Vertex}, std::as_bytes(std::span{vertices})))
-                    .handle;
-            const auto index =
-                Value(owner.frontend->CreateBuffer({sizeof(indices), RenderBufferUsage::Index}, std::as_bytes(std::span{indices}))).handle;
-            owner.Ready(vertex);
-            owner.Ready(index);
-            const auto mesh = Value(owner.frontend->CreateMesh({.vertexBuffer = vertex,
-                                                                .indexBuffer = index,
-                                                                .vertexStride = sizeof(MeshVertex),
-                                                                .vertexCount = 4,
-                                                                .indexCount = 6,
-                                                                .localBounds = {{-.5F, -.5F, z}, {.5F, .5F, z}}}))
-                                  .handle;
-            owner.Ready(mesh);
-            return {mesh, vertex, index};
+            return UploadMesh(owner, vertices, indices, {{-.5F, -.5F, z}, {.5F, .5F, z}});
+        }
+
+        /** @brief Bakes the fixed Z extent because the canonical particle contract scales only local X/Y. */
+        MeshFixture Cube(NativeOwner &owner) {
+            constexpr float z = CubeSize * .5F;
+            constexpr std::array<Math::Vec3, 8> corners{{{-.5F, -.5F, -z},
+                                                         {.5F, -.5F, -z},
+                                                         {.5F, .5F, -z},
+                                                         {-.5F, .5F, -z},
+                                                         {-.5F, -.5F, z},
+                                                         {.5F, -.5F, z},
+                                                         {.5F, .5F, z},
+                                                         {-.5F, .5F, z}}};
+            constexpr std::array<std::array<unsigned, 4>, 6> faces{
+                {{4, 5, 6, 7}, {1, 0, 3, 2}, {5, 1, 2, 6}, {0, 4, 7, 3}, {7, 6, 2, 3}, {0, 1, 5, 4}}};
+            constexpr std::array<Math::Vec3, 6> normals{{{0, 0, 1}, {0, 0, -1}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}}};
+            constexpr std::array<Math::Vec2, 4> uv{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
+            constexpr std::array<unsigned, 6> triangle{0, 1, 2, 2, 3, 0};
+            std::array<MeshVertex, 24> vertices;
+            std::array<std::uint32_t, 36> indices;
+            for (unsigned face = 0; face < 6; ++face) {
+                for (unsigned i = 0; i < 4; ++i)
+                    vertices[face * 4 + i] = {corners[faces[face][i]], normals[face], uv[i]};
+                for (unsigned i = 0; i < 6; ++i)
+                    indices[face * 6 + i] = face * 4 + triangle[i];
+            }
+            return UploadMesh(owner, vertices, indices, {{-.5F, -.5F, -z}, {.5F, .5F, z}});
+        }
+
+        struct CubeGrid final {
+            std::uint32_t x{}, y{}, z{};
+        };
+
+        /** @brief Gives a deterministic, bounded 3D lattice with fixed cube size and spacing, independent of simulation. */
+        CubeGrid CubeDimensions(std::uint32_t count) {
+            const auto x = static_cast<std::uint32_t>(std::ceil(std::cbrt(double(count) * 4.0)));
+            const auto y = (x + 1) / 2;
+            return {x, y, (count + x * y - 1) / (x * y)};
+        }
+
+        /** @brief Keeps the existing profile's resolution and selects a separately declared cube context resolution. */
+        FramebufferExtent SceneExtent(std::uint32_t count, bool cubes) noexcept {
+            if (cubes)
+                return CubeExtent;
+            return count ? BenchmarkExtent : Extent;
+        }
+
+        /** @brief Cold-admits the actual maximum shader-sized draw count, without changing production limits. */
+        std::uint32_t NativeDrawCapacity(std::uint32_t count, bool cubes) noexcept {
+            if (cubes)
+                return (count + 127) / 128;
+            return count ? 512 : 16;
         }
 
         /** @brief Builds the independent off-axis camera with Metal zero-to-one clip depth and an actually issued logical view. */
@@ -422,6 +485,7 @@ namespace Horo::Render::Test {
             RenderTargetHandle target;
             std::vector<MaterialFixture> materials, chunkMaterials;
             std::uint32_t benchmarkCount{};
+            bool cubeProfile{};
             FramebufferExtent extent{Extent};
             std::uint32_t maximumInstances{64}, maximumDraws{16};
             std::unique_ptr<Vfx::VfxWorld> world;
@@ -429,13 +493,15 @@ namespace Horo::Render::Test {
             std::array<Sha256Digest, 2> artifactKeys;
 
             /** @brief Creates real fixed scene resources outside frame encoding and measurement windows. */
-            Scene(NativeOwner &native, const std::filesystem::path &root, bool cutout = false, std::uint32_t measuredCount = 0)
-                : owner(native), benchmarkCount(measuredCount), extent(measuredCount ? BenchmarkExtent : Extent),
-                  maximumInstances(measuredCount ? measuredCount : 64), maximumDraws(measuredCount ? 512 : 16), view(View(native, extent)) {
+            Scene(NativeOwner &native, const std::filesystem::path &root, bool cutout = false, std::uint32_t measuredCount = 0,
+                  bool cubes = false)
+                : owner(native), benchmarkCount(measuredCount), cubeProfile(cubes), extent(SceneExtent(measuredCount, cubes)),
+                  maximumInstances(measuredCount ? measuredCount : 64), maximumDraws(NativeDrawCapacity(measuredCount, cubes)),
+                  view(View(native, extent)) {
                 const std::size_t bytes = measuredCount ? 32'000'000 : 1'000'000;
                 Accepted(owner.frontend->PrepareVfxScheduling({maximumInstances, 1, bytes, maximumDraws}));
                 billboard = Mesh(owner, 0);
-                mesh = Mesh(owner, AuthoredZ);
+                mesh = cubeProfile ? Cube(owner) : Mesh(owner, AuthoredZ);
                 color = Texture(owner,
                                 {.extent = extent,
                                  .format = RenderTextureFormat::Rgba16Float,
@@ -452,11 +518,12 @@ namespace Horo::Render::Test {
                 owner.Ready(target);
                 const std::array artifacts{Load(root, false), Load(root, true)};
                 artifactKeys = {artifacts[0].artifactKey, artifacts[1].artifactKey};
-                for (unsigned i = 0; i < 5; ++i)
+                for (unsigned i = 0; i < FamilyNumber(); ++i)
                     materials.push_back(Material(owner, i, artifacts, cutout));
                 const auto scope = Value(Vfx::VfxIdentityScope::Create(17));
                 const auto emitters = Emitters(scope);
-                world = Value(Vfx::VfxWorld::Prepare(scope, emitters, {16, maximumInstances, ExtractionDrawCredits(), 2, bytes}));
+                world = Value(Vfx::VfxWorld::Prepare(scope, std::span{emitters}.first(FamilyNumber()),
+                                                     {16, maximumInstances, ExtractionDrawCredits(), 2, bytes}));
                 Populate(emitters);
             }
 
@@ -477,19 +544,28 @@ namespace Horo::Render::Test {
                 }
             }
 
+            /** @brief The separate cube profile has one opaque emitter; legacy mixed behavior retains all five. */
+            unsigned FamilyNumber() const noexcept {
+                return cubeProfile ? 1U : 5U;
+            }
+
             /** @brief Distributes the exact total deterministically over five declared blend/topology families. */
             std::uint32_t FamilyCount(unsigned index) const noexcept {
+                if (cubeProfile)
+                    return index == 0 ? benchmarkCount : 0;
                 return benchmarkCount / 5 + std::uint32_t(index < benchmarkCount % 5);
             }
 
             /** @brief Reserves canonical conservative translucent-per-particle and solid depth/color extraction credits. */
             std::uint32_t ExtractionDrawCredits() const noexcept {
+                if (cubeProfile)
+                    return 2 * maximumDraws;
                 return benchmarkCount ? FamilyCount(2) + 7 : 128;
             }
 
             /** @brief Prepares one unique upload/material generation per canonical 128-instance chunk, outside measurement. */
             void PrepareChunks() {
-                for (unsigned family = 0; family < 5; ++family) {
+                for (unsigned family = 0; family < FamilyNumber(); ++family) {
                     const auto chunks = (FamilyCount(family) + MaximumVfxDrawInstances - 1) / MaximumVfxDrawInstances;
                     for (std::size_t chunk = 1; chunk < chunks; ++chunk)
                         chunkMaterials.push_back(ChunkMaterial(owner, materials[family]));
@@ -533,6 +609,25 @@ namespace Horo::Render::Test {
                 }
             }
 
+            /** @brief Populates one genuine CPU particle buffer; IDs are strictly increasing with no cross-emitter stride reuse. */
+            void PopulateCubeEmitter(const Vfx::VfxEmitterPreparation &emitter) {
+                Accepted(world->Play(emitter.effect));
+                const auto particles = Value(world->Particles(emitter.effect, emitter.emitter));
+                for (std::uint32_t i = 0; i < benchmarkCount; ++i)
+                    Value(particles->Spawn(Value(Vfx::ParticleSimulationId::Create(std::uint64_t(i) + 1))));
+                auto values = Value(particles->View());
+                const auto grid = CubeDimensions(benchmarkCount);
+                for (std::uint32_t i = 0; i < benchmarkCount; ++i) {
+                    values.positionX[i] = (float(i % grid.x) - float(grid.x - 1) * .5F) * CubeSpacing;
+                    values.positionY[i] = (float((i / grid.x) % grid.y) - float(grid.y - 1) * .5F) * CubeSpacing;
+                    values.positionZ[i] = -3.F - float(i / (grid.x * grid.y)) * CubeSpacing;
+                    values.sizeX[i] = CubeSize;
+                    values.sizeY[i] = CubeSize;
+                    values.rotation[i] = .17F;
+                    values.packedColor[i] = 0xFFFFFFFF;
+                }
+            }
+
             /** @brief Preserves canonical solid-mesh admission; only translucent/additive emitters use camera-facing billboards. */
             bool UsesBillboard(unsigned index) const noexcept {
                 return index == 2 || index == 4;
@@ -540,6 +635,8 @@ namespace Horo::Render::Test {
 
             /** @brief Selects only actual mesh identities; camera-facing billboard emitters carry no mesh handle. */
             RenderMeshHandle EmitterMesh(unsigned index) const noexcept {
+                if (cubeProfile)
+                    return mesh.mesh;
                 if (UsesBillboard(index))
                     return {};
                 return index == 1 ? mesh.mesh : billboard.mesh;
@@ -552,7 +649,7 @@ namespace Horo::Render::Test {
                 constexpr std::array blends{MaterialAlphaMode::Opaque, MaterialAlphaMode::Opaque, MaterialAlphaMode::Translucent,
                                             MaterialAlphaMode::Masked, MaterialAlphaMode::Additive};
                 std::array<Vfx::VfxEmitterPreparation, 5> emitters;
-                for (unsigned i = 0; i < 5; ++i)
+                for (unsigned i = 0; i < FamilyNumber(); ++i)
                     emitters[i] = {.effect = {scope, i, 1},
                                    .emitter = {scope, i, 1},
                                    .particles = {.buffer = {scope, i, 1}, .capacity = benchmarkCount ? FamilyCount(i) : 8},
@@ -591,6 +688,10 @@ namespace Horo::Render::Test {
             void Populate(const std::array<Vfx::VfxEmitterPreparation, 5> &emitters) {
                 if (benchmarkCount) {
                     PrepareChunks();
+                    if (cubeProfile) {
+                        PopulateCubeEmitter(emitters[0]);
+                        return;
+                    }
                     for (unsigned i = 0; i < 5; ++i)
                         PopulateBenchmarkEmitter(emitters[i], i);
                     return;
@@ -622,7 +723,7 @@ namespace Horo::Render::Test {
             const std::array mesh{Value(recipe.builder.ImportBuffer(scene.mesh.vertices, RenderGraphResourceClass::Persistent)),
                                   Value(recipe.builder.ImportBuffer(scene.mesh.indices, RenderGraphResourceClass::Persistent))};
             std::array<RenderGraphResourceId, 5> samples;
-            for (std::size_t i = 0; i < samples.size(); ++i)
+            for (std::size_t i = 0; i < scene.materials.size(); ++i)
                 samples[i] = Value(recipe.builder.ImportTexture(scene.materials[i].texture.texture, RenderGraphResourceClass::Persistent));
             for (const auto &record : recipe.schedule.Workloads()) {
                 const auto &vfx = std::get<RenderGraphVfx>(record.workload);
@@ -864,6 +965,16 @@ namespace Horo::Render::Test {
             double encode{}, submit{};
         };
 
+        /** @brief Drops only the diagnostic alias of a command that never entered the native queue. */
+        struct UnsubmittedDiagnostic final {
+            NativeOwner &owner;
+
+            ~UnsubmittedDiagnostic() {
+                if (owner.commands && owner.commands.status == MTLCommandBufferStatusNotEnqueued)
+                    owner.commands = nil;
+            }
+        };
+
         /** @brief Executes the real graph through its owning frame, measuring only encoding/submission after drawable acquisition. */
         EncodingTimes Execute(NativeOwner &owner, const CompiledRenderGraphExecution &graph,
                               std::span<const RenderGraphPassWorkload> workloads, bool submit, bool gated = false,
@@ -871,6 +982,7 @@ namespace Horo::Render::Test {
             auto frame = owner.Begin(deadline);
             owner.commands = (__bridge id<MTLCommandBuffer>)owner.bridge.CurrentCommandBuffer();
             REQUIRE(owner.commands);
+            UnsubmittedDiagnostic diagnostic{owner};
             if (gated) {
                 id<MTLDevice> device = (__bridge id<MTLDevice>)owner.bridge.Device();
                 owner.gate = [device newSharedEvent];
@@ -1013,16 +1125,24 @@ namespace Horo::Render::Test {
             std::optional<double> coldSchedulePackMs;
             bool complete{}, written{};
 
-            BenchmarkReceipt(const std::filesystem::path &path, std::uint32_t count) : instances(count) {
+            BenchmarkReceipt(const std::filesystem::path &path, std::uint32_t count, bool cubes = false) : instances(count) {
                 REQUIRE(path.is_absolute());
                 REQUIRE_FALSE(std::filesystem::exists(path));
                 file.reset(std::fopen(path.c_str(), "wx"));
                 REQUIRE(file);
-                std::fprintf(file.get(),
-                             "{\"type\":\"invocation\",\"schema\":1,\"profileRevision\":2,\"instances\":%u,"
-                             "\"requestedExtent\":[1920,1080],\"presentModeRequested\":\"Fifo\","
-                             "\"budgetStatus\":\"UNSET_NON_GATING\",\"deviceQualification\":false}\n",
-                             count);
+                if (cubes)
+                    std::fprintf(file.get(),
+                                 "{\"type\":\"invocation\",\"schema\":1,\"profile\":\"opaque-cube-scalability-v1\","
+                                 "\"profileRevision\":2,\"instances\":%u,\"requestedExtent\":[1600,900],"
+                                 "\"presentModeRequested\":\"Fifo\",\"budgetStatus\":\"UNSET_NON_GATING\",\"deviceQualification\":false}\n",
+                                 count);
+                else {
+                    std::fprintf(file.get(),
+                                 "{\"type\":\"invocation\",\"schema\":1,\"profileRevision\":2,\"instances\":%u,"
+                                 "\"requestedExtent\":[1920,1080],\"presentModeRequested\":\"Fifo\","
+                                 "\"budgetStatus\":\"UNSET_NON_GATING\",\"deviceQualification\":false}\n",
+                                 count);
+                }
                 REQUIRE(std::fflush(file.get()) == 0);
                 samples.reserve(BenchmarkMaximumFrames);
             }
@@ -1046,6 +1166,23 @@ namespace Horo::Render::Test {
 #else
                 std::fputs(",\"ndebug\":false", out);
 #endif
+                if (scene.cubeProfile)
+                    CubeCohort(out, owner, scene, recipe);
+                else
+                    MixedCohort(out, scene, recipe);
+                std::fprintf(out, "],\"extractorDrawCredits\":%u,\"nativeDrawCapacity\":%u,\"compiledArtifactKeys\":[",
+                             scene.ExtractionDrawCredits(), scene.maximumDraws);
+                JsonText(out, FormatSha256(scene.artifactKeys[0]));
+                if (!scene.cubeProfile) {
+                    std::fputc(',', out);
+                    JsonText(out, FormatSha256(scene.artifactKeys[1]));
+                }
+                std::fputs("]}\n", out);
+                REQUIRE(std::fflush(out) == 0);
+            }
+
+            /** @brief Preserves the original mixed-profile metadata and workload declaration. */
+            static void MixedCohort(std::FILE *out, const Scene &scene, const Recipe &recipe) {
                 std::
                     fprintf(out,
                             ",\"validationRequested\":false,\"presentModeRequested\":\"Fifo\","
@@ -1062,13 +1199,43 @@ namespace Horo::Render::Test {
                             "\"maximumMeasuredFrames\":10000,\"maximumIterationSeconds\":300,\"families\":[",
                             recipe.schedule.drawCalls, double(AuthoredZ));
                 Families(out, scene);
-                std::fprintf(out, "],\"extractorDrawCredits\":%u,\"nativeDrawCapacity\":%u,\"compiledArtifactKeys\":[",
-                             scene.ExtractionDrawCredits(), scene.maximumDraws);
-                JsonText(out, FormatSha256(scene.artifactKeys[0]));
-                std::fputc(',', out);
-                JsonText(out, FormatSha256(scene.artifactKeys[1]));
-                std::fputs("]}\n", out);
-                REQUIRE(std::fflush(out) == 0);
+            }
+
+            /** @brief Describes a separately named static cube stress cohort, not a simulation port or cross-engine parity result. */
+            static void CubeCohort(std::FILE *out, const NativeOwner &owner, const Scene &scene, const Recipe &recipe) {
+                const auto grid = CubeDimensions(scene.benchmarkCount);
+                std::fprintf(out,
+                             ",\"maximumSubmissionPins\":%u,\"submissionPinBudgetReason\":\"cold_material_pins_plus_two_inflight_graphs\"",
+                             owner.retirementLimits.maximumSubmissionPins);
+                std::fprintf(out,
+                             ",\"profile\":\"opaque-cube-scalability-v1\",\"profileRevision\":2,"
+                             "\"validationRequested\":false,\"presentModeRequested\":\"Fifo\",\"configuredMaxFramesInFlight\":2,"
+                             "\"measurementInflightDepth\":1,\"serialCompletionFpsIsNotProductThroughput\":true,"
+                             "\"indexedDraws\":%u,\"maximumInstancesPerDraw\":128,\"meshVertices\":24,\"meshIndices\":36,"
+                             "\"trianglesPerInstance\":12,\"cubeSizeWorld\":%.9g,\"localCubeZHalfExtent\":%.9g,"
+                             "\"latticeSpacingWorld\":%.9g,\"latticeDimensions\":[%u,%u,%u],\"latticeFrontCenterZ\":-3,"
+                             "\"latticeXYCentered\":true,\"lastLayerMayBePartial\":true,\"rotationZRadians\":0.17,"
+                             "\"placementOrder\":\"x_fastest_then_y_then_negative_z_layers\",\"localCubeXYHalfExtent\":0.5,"
+                             "\"cameraEye\":[0.7,0.25,0.5],\"cameraTarget\":[0,0,-3],\"cameraUp\":[0,1,0],"
+                             "\"verticalFovRadians\":1.1,\"nearFar\":[0.2,80],\"clipDepth\":\"ZeroToOne\","
+                             "\"clearColor\":[0,0,0,1],\"clearDepth\":1,\"attachmentStore\":true,"
+                             "\"extractionFrameSlots\":2,\"extractionFrameArenaLimitBytes\":32000000,"
+                             "\"schedulingArenaLimitBytes\":32000000,"
+                             "\"particleIds\":\"strictly_increasing_1_to_count_single_emitter\",\"packedRGBA\":\"FFFFFFFF\","
+                             "\"material\":\"unlit_white_linear_RGBA8_nearest_clamp_no_mips\",\"blend\":\"disabled\","
+                             "\"depthTest\":true,\"depthWrite\":true,\"depthCompare\":\"LessEqual\",\"cull\":\"None\",\"msaa\":1,"
+                             "\"color\":\"RGBA16F\",\"depth\":\"Depth32F\",\"outputExtent\":[1600,900],"
+                             "\"staticPreparedGraph\":true,\"simulationExecutedPerFrame\":false,\"extractionExecutedPerFrame\":false,"
+                             "\"shadows\":false,\"postProcessing\":false,\"sceneImageCopiedToPresentation\":false,"
+                             "\"publishedUnityWorkloadPort\":false,\"engineParityQualified\":false,\"catchAssertionInstrumentation\":true,"
+                             "\"completionObservation\":\"serial_native_status_poll_1ms\","
+                             "\"cpuScope\":\"encode_and_present_calls_after_drawable_acquisition\","
+                             "\"gpuScope\":\"entire_native_command_buffer\",\"wholeFrameCpuMeasured\":false,"
+                             "\"minimumWarmupFrames\":300,\"minimumMeasuredFrames\":1200,\"minimumMeasuredSeconds\":20,"
+                             "\"maximumMeasuredFrames\":10000,\"maximumIterationSeconds\":300,"
+                             "\"families\":[{\"name\":\"opaque_cube\",\"instances\":%u}",
+                             recipe.schedule.drawCalls, double(CubeSize), double(CubeSize * .5F), double(CubeSpacing), grid.x, grid.y,
+                             grid.z, scene.benchmarkCount);
             }
 
             /** @brief Exposes the deterministic submitted geometry/depth/blend mix, not an inferred production workload. */
@@ -1196,6 +1363,31 @@ namespace Horo::Render::Test {
             receipt.complete = true;
             receipt.phase = "finished";
         }
+
+        /** @brief Shares only the existing bounded native measurement lifecycle; workload profiles remain explicit. */
+        void RunStaticProfile(const std::filesystem::path &root, std::uint32_t instances, const std::filesystem::path &path, bool cubes) {
+            const auto deadline = BenchmarkClock::now() + 300s;
+            NativeOwner owner;
+            BenchmarkReceipt receipt{path, instances, cubes};
+            RenderResourceRetirementLimits retirementLimits;
+            if (cubes)
+                retirementLimits.maximumSubmissionPins = 8192;
+            owner.Initialize(SceneExtent(instances, cubes), false, PresentMode::Fifo, retirementLimits);
+            Scene scene(owner, root, !cubes, instances, cubes);
+            const auto cold = BenchmarkClock::now();
+            Recipe recipe{scene};
+            receipt.coldSchedulePackMs = std::chrono::duration<double, std::milli>(BenchmarkClock::now() - cold).count();
+            const auto graph = Compile(owner, recipe);
+            auto workloads = Workloads(recipe, graph);
+            std::uint32_t expectedDraws{};
+            for (unsigned family = 0; family < scene.FamilyNumber(); ++family)
+                expectedDraws += (scene.FamilyCount(family) + 127) / 128;
+            VerifyCounts(recipe, instances, expectedDraws, expectedDraws);
+            receipt.Describe(owner, scene, recipe);
+            BenchmarkWarmup(owner, graph, workloads, receipt, deadline);
+            BenchmarkWindow(owner, graph, workloads, receipt, deadline);
+            REQUIRE(receipt.Write());
+        }
     }  // namespace
 
     /** @copydoc RunMetalVfxInstancedPixels */
@@ -1282,27 +1474,41 @@ namespace Horo::Render::Test {
         CheckPixels(owner, scene);
     }
 
+    /** @copydoc RunMetalVfxInstancedPinBudgetRejection */
+    void RunMetalVfxInstancedPinBudgetRejection(const std::filesystem::path &root) {
+        NativeOwner owner;
+        owner.Initialize(CubeExtent, false, PresentMode::Fifo, {.maximumSubmissionPins = 20});
+        Scene scene(owner, root, false, 512, true);
+        Recipe recipe{scene};
+        const auto graph = Compile(owner, recipe);
+        auto workloads = Workloads(recipe, graph);
+        VerifyCounts(recipe, 512, 4, 4);
+        for (unsigned attempt = 0; attempt < 2; ++attempt) {
+            {
+                auto frame = owner.Begin();
+                owner.commands = (__bridge id<MTLCommandBuffer>)owner.bridge.CurrentCommandBuffer();
+                REQUIRE(owner.commands);
+                UnsubmittedDiagnostic diagnostic{owner};
+                const auto result = frame.ExecuteGraph(graph, workloads);
+                REQUIRE(result.HasError());
+                CHECK(result.ErrorValue().code.Value() == "render.frontend.resource.submission_capacity_exceeded");
+                CHECK(owner.commands.status == MTLCommandBufferStatusNotEnqueued);
+            }
+            CHECK(owner.commands == nil);
+        }
+    }
+
     /** @copydoc RunMetalVfxInstancedBenchmark */
     void RunMetalVfxInstancedBenchmark(const std::filesystem::path &root, std::uint32_t instances, const std::filesystem::path &path) {
         REQUIRE((instances == 1024 || instances == 4096 || instances == 16384));
-        const auto deadline = BenchmarkClock::now() + 300s;
-        NativeOwner owner;
-        BenchmarkReceipt receipt{path, instances};
-        owner.Initialize(BenchmarkExtent, false, PresentMode::Fifo);
-        Scene scene(owner, root, true, instances);
-        const auto cold = BenchmarkClock::now();
-        Recipe recipe{scene};
-        receipt.coldSchedulePackMs = std::chrono::duration<double, std::milli>(BenchmarkClock::now() - cold).count();
-        const auto graph = Compile(owner, recipe);
-        auto workloads = Workloads(recipe, graph);
-        std::uint32_t expectedDraws{};
-        for (unsigned family = 0; family < 5; ++family)
-            expectedDraws += (scene.FamilyCount(family) + 127) / 128;
-        VerifyCounts(recipe, instances, expectedDraws, expectedDraws);
-        receipt.Describe(owner, scene, recipe);
-        BenchmarkWarmup(owner, graph, workloads, receipt, deadline);
-        BenchmarkWindow(owner, graph, workloads, receipt, deadline);
-        REQUIRE(receipt.Write());
+        RunStaticProfile(root, instances, path, false);
+    }
+
+    /** @copydoc RunMetalVfxInstancedOpaqueCubeScalability */
+    void RunMetalVfxInstancedOpaqueCubeScalability(const std::filesystem::path &root, std::uint32_t instances,
+                                                   const std::filesystem::path &path) {
+        REQUIRE((instances == 5000 || instances == 90000));
+        RunStaticProfile(root, instances, path, true);
     }
 
 }  // namespace Horo::Render::Test

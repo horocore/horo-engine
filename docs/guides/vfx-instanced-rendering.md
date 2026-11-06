@@ -560,3 +560,104 @@ performance parity and HORO-1735 throughput acceptance remain open.
 
 The benchmark stays manual, disabled by default and outside normal build and
 CTest execution. These measurements are a baseline for comparison, not a CI gate.
+
+### Published engine workloads informing the next measurements
+
+The [Procedural Pixels Unity case study](https://www.proceduralpixels.com/blog/rendering-90000-particles-in-unity)
+reports 90,000 moving cube particles in Unity 6000.3.11f1/URP, using a Windows
+IL2CPP Master build with DX12 at 1600x900 on an i5-10400F and RTX 3060. Its
+procedural rendering route reports a 3.40 ms CPU frame median and approximately
+3.02 ms GPU frame time. Those are the author's observations, not independently
+reproduced Horo reference results. They include simulation, uploads and a rendered
+URP frame; Horo's static five-family quad workload and p99 values have different
+boundaries. Use the published 5,000/90,000 count range to inform scalability
+coverage, rather than copying its milliseconds into an Apple M3 acceptance gate.
+
+[GPU Instancer's published asteroid test](https://gurbu.com/performance) uses
+10,000 through 500,000 instances at 1080p, with three prefabs, two LODs and much
+heavier geometry than the Horo quads. It measures a commercial Unity extension
+as well as Unity's ordinary instancing, so its extension results do not establish
+baseline Unity performance. Its methodology reinforces recording actual geometry,
+LOD, visibility, draw count and residual scene work alongside instance count.
+
+[Puget's Unreal Niagara scalability workload](https://www.pugetsystems.com/pugetbench/creators/unreal-engine/)
+maintains approximately 750,000 GPU-simulated particles, with 148,000 spawns per
+second and a five-second lifetime, measured over a 30-second 1080p editor window.
+It is a useful separate GPU simulation stress model. Neither its frame-rate
+metric nor a fluid simulation is interchangeable with Horo's CPU-world static
+instancing microbenchmark.
+
+Published results guide workload selection without requiring a reference engine
+installation here. Comparable performance remains a target; an online number on
+different hardware cannot establish an engine speed ratio. Keep static rendering
+scalability, per-frame simulation/extraction/upload and whole-engine frame timing
+as distinct measurements, with every omitted stage stated in the result.
+
+### Separate opaque cube scalability profile
+
+The manual executable also accepts the explicitly selected
+`opaque-cube-scalability-v1` profile, with exactly 5,000 or 90,000 instances at
+1600x900. It uses one opaque emitter and actual indexed cubes: 24 vertices and
+36 indices per mesh, with uniform world size 0.04. A deterministic three-dimensional
+lattice provides bounded placement. Canonical 128-instance chunks require 40 or
+704 indexed draws. The shader, renderer, preparation and resource admission remain
+the real production paths; no production limit is raised for the measurement.
+
+The cube profile explicitly selects the existing host retirement configuration
+with 8,192 submission pins. At 704 chunks, resident material generations hold
+3,520 pins and one graph needs 713 more, exceeding the default 4,096. Two in-flight
+graphs require 4,946 pins. This changes only this fixture's requested envelope;
+production, legacy mixed and functional-test defaults remain unchanged. The
+original revision-1 90,000-instance attempt failed this admission before any
+warm-up frame or measured sample; its raw failure is retained separately.
+Cube cohort revision 2 records the selected pin envelope explicitly.
+
+```sh
+HORO_VFX_BENCHMARK_PROFILE=opaque-cube-scalability-v1 \
+HORO_VFX_INSTANCED_ASSET_ROOT=/absolute/path/to/cooked-metal-package \
+HORO_VFX_BENCHMARK_COUNT=90000 \
+HORO_VFX_BENCHMARK_RECEIPT=/absolute/path/to/new-cube-iteration.jsonl \
+MTL_DEBUG_LAYER=0 \
+  build/vfx-metal-release/tests/HoroMetalVfxInstancedBenchmark
+```
+
+An absent profile variable selects the original mixed profile and its original
+1,024/4,096/16,384 counts. An explicitly empty or unknown profile is rejected.
+The cube profile shares the bounded warm-up/window and raw receipt protocol but
+has a separate workload identity. Keep its results separate from the 21 mixed
+profile measurements above.
+
+The hidden manual case `[.manual-vfx-pin-budget-rejection]` exercises intentional
+resource-budget rejection and cleanup without a long timing window. It runs only
+when explicitly selected and is outside ordinary build/CTest execution.
+
+Revision 2 completed seven independent processes per count on the same Apple M3,
+with AC power observed, for 29,210 measured frames and no invalid GPU timestamps.
+Each process used the declared 300-frame warm-up and at least 1,200 frames/20
+seconds. These are medians of seven per-process nearest-rank quantiles, without
+pooling or filtering samples:
+
+| Cubes | Draws | CPU encode median (ms) | CPU encode p99 (ms) | GPU command-buffer median (ms) | GPU command-buffer p99 (ms) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 5,000 | 40 | 0.427 | 0.834 | 0.559 | 2.948 |
+| 90,000 | 704 | 3.015 | 4.771 | 5.068 | 9.083 |
+
+Cold schedule/packing medians were 1.146 and 20.648 ms respectively, outside the
+measured replay loop. This startup measurement is not sustained moving-particle
+throughput. The reference Unity CPU number includes different work and comes from
+different hardware; neither the table nor a ratio of these times establishes
+engine parity. No numerical pass/fail threshold was applied.
+
+The corrected executable also passed all four original functional cases with
+1,891 assertions and no skips, plus the hidden budget-rejection case with 1,244
+assertions. A fresh legacy mixed-profile run completed 2,397 measured frames;
+its invocation and cohort metadata exactly matched the original mixed workload.
+These compatibility observations are separate from both measurement aggregates.
+
+This extends count and geometry scalability coverage inspired by the published
+Unity workload. It remains static, unlit, offscreen rendering: no per-frame
+particle simulation, extraction, sorting, packing, uploads, shadows or final image
+copy to the drawable is timed. It is not a reproduction of the moving, shadowed
+Unity scene, a whole-engine FPS result, or evidence of matching Unity's speed.
+The original mixed profile's conservative transparency admission also remains
+authoritative; this opaque profile does not qualify 90,000 mixed particles.

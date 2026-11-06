@@ -19,4 +19,13 @@ namespace Horo::Render::Test {
      * actual command buffer. Serial completion observation and requested validation-off form a separate diagnostic cohort.
      */
     void RunMetalVfxInstancedBenchmark(const std::filesystem::path &root, std::uint32_t instances, const std::filesystem::path &receipt);
+    /** @brief Measures a separately named static opaque cube count cohort, without simulation or engine parity claims.
+     * @param root Existing authentic instanced-shader package. @param instances Exactly 5000 or 90000.
+     * @param receipt New absolute exclusive JSONL destination. @details 1600x900, fixed 0.04 world-size 12-triangle cubes,
+     * one opaque CPU-world emitter, canonical indexed chunks and unchanged bounded Fifo measurement protocol.
+     */
+    void RunMetalVfxInstancedOpaqueCubeScalability(const std::filesystem::path &root, std::uint32_t instances,
+                                                   const std::filesystem::path &receipt);
+    /** @brief Repeats a real bounded submission-pin rejection and checks unsent diagnostic cleanup without measurement. */
+    void RunMetalVfxInstancedPinBudgetRejection(const std::filesystem::path &root);
 }  // namespace Horo::Render::Test

@@ -18,13 +18,16 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Admits only the user-approved count sweep without accepting numeric prefixes or alternate profiles. */
-        std::uint32_t Count() {
+        std::uint32_t Count(bool cubes) {
             const auto text = Required("HORO_VFX_BENCHMARK_COUNT");
             std::uint32_t count{};
             const auto parsed = std::from_chars(text.data(), text.data() + text.size(), count);
             REQUIRE(parsed.ec == std::errc{});
             REQUIRE(parsed.ptr == text.data() + text.size());
-            REQUIRE((count == 1024 || count == 4096 || count == 16384));
+            if (cubes)
+                REQUIRE((count == 5000 || count == 90000));
+            else
+                REQUIRE((count == 1024 || count == 4096 || count == 16384));
             return count;
         }
 
@@ -38,6 +41,17 @@ namespace Horo::Render::Test {
 
     // This case exists ONLY in the OFF-by-default EXCLUDE_FROM_ALL manual executable, never CTest/discovery/shared smoke.
     TEST_CASE("Manual Metal static indexed VFX measurement iteration", "[manual-vfx-instanced-benchmark]") {
-        RunMetalVfxInstancedBenchmark(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"), Count(), Absolute("HORO_VFX_BENCHMARK_RECEIPT"));
+        const auto *profile = std::getenv("HORO_VFX_BENCHMARK_PROFILE");
+        if (profile == nullptr) {
+            RunMetalVfxInstancedBenchmark(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"), Count(false), Absolute("HORO_VFX_BENCHMARK_RECEIPT"));
+            return;
+        }
+        REQUIRE(std::string_view{profile} == "opaque-cube-scalability-v1");
+        RunMetalVfxInstancedOpaqueCubeScalability(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"), Count(true),
+                                                  Absolute("HORO_VFX_BENCHMARK_RECEIPT"));
+    }
+
+    TEST_CASE("Manual Metal submission-pin rejection cleans unsent diagnostics", "[.manual-vfx-pin-budget-rejection]") {
+        RunMetalVfxInstancedPinBudgetRejection(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"));
     }
 }  // namespace Horo::Render::Test
