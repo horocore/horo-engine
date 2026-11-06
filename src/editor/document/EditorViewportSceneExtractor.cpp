@@ -351,9 +351,12 @@ namespace Horo::Editor {
         const EditorGeometryExtractionPolicy policy) {
         EditorViewportSceneSnapshot extracted{.documentRevision = documentRevision, .runtimeSceneId = scene.RuntimeId()};
         std::array<Render::IdentifiedRenderLight, Render::MaximumSceneLights> canonicalLights;
-        const auto canonical = Render::ExtractSceneLights(scene, Render::MaximumSceneLights, canonicalLights);
+        // Explicit Editor migration interpretation for currently untagged authored lights; this does not prove their historical encoding.
+        const Render::SceneColorSourcePolicy sourceColorPolicy{Render::SceneColorEncoding::LegacyLinearRec709D65, 1};
+        const auto canonical = Render::ExtractSceneLights(scene, Render::MaximumSceneLights, canonicalLights, sourceColorPolicy);
         if (canonical.HasError())
             return Result<EditorViewportSceneSnapshot>::Failure(canonical.ErrorValue());
+        extracted.lightColorSourcePolicy = canonical.Value().sourceColorPolicy;
         const std::size_t capacity = std::min(scene.SlotCount(), policy.maximumInstances);
         extracted.instances.reserve(capacity);
         extracted.instanceObjects.reserve(capacity);

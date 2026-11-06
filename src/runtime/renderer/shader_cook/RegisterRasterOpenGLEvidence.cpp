@@ -78,12 +78,12 @@ namespace Horo::Render::RegisterRasterCookDetail {
 
         /** @brief One native combined sampler proves a paired logical image/sampler, not two independent units. */
         void CombinedSampler(const TokenView tokens, const std::size_t at, NativeStage &result) {
-            if (result.texture || at + 3 >= tokens.size() || tokens[at + 1] != "sampler2D")
+            if (!result.textures.empty() || at + 3 >= tokens.size() || tokens[at + 1] != "sampler2D")
                 throw InvalidEvidence{};
             if (!Identifier(tokens[at + 2]) || tokens[at + 3] != ";")
                 throw InvalidEvidence{};
-            result.texture = NativeResource{std::string{tokens[at + 2]}, 0};
-            result.sampler = result.texture;
+            result.textures.push_back({std::string{tokens[at + 2]}, 0});
+            result.samplers = result.textures;
         }
 
         /** @brief Handles global declarations separately from function-body nesting. */

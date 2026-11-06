@@ -1,0 +1,107 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "PSMain",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_15" : {
+            "name" : "type.StructuredBuffer.uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 4
+                }
+            ]
+        },
+        "_16" : {
+            "name" : "type.ColorOutputParameters",
+            "members" : [
+                {
+                    "name" : "SourceSize",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "ExposureSelection",
+                    "type" : "vec4",
+                    "offset" : 16
+                },
+                {
+                    "name" : "ExposureIdentity",
+                    "type" : "vec4",
+                    "offset" : 32
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "horo_color_reach_m_table_0",
+            "set" : 0,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "horo_color_gamut_cusp_table_0",
+            "set" : 0,
+            "binding" : 5
+        },
+        {
+            "type" : "texture2D",
+            "name" : "SceneColor",
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "horo_color_reach_m_table_0Sampler",
+            "set" : 0,
+            "binding" : 2
+        },
+        {
+            "type" : "sampler",
+            "name" : "horo_color_gamut_cusp_table_0Sampler",
+            "set" : 0,
+            "binding" : 6
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_15",
+            "name" : "ExposureWords",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 3
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_16",
+            "name" : "type.ColorOutputParameters",
+            "block_size" : 48,
+            "set" : 0,
+            "binding" : 4
+        }
+    ]
+}

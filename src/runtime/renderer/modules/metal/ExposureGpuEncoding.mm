@@ -2,6 +2,7 @@
 #include "MetalResourceRuntimeInternal.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -97,24 +98,25 @@ namespace Horo::Render::Detail {
 
         /** @brief Resolves exact fixed native resources and checks their device-local bounds. */
         template <class Impl>
-        bool ResolveResources(const Impl &impl, const RenderGraphExposureGpu &w, std::span<const RenderGraphResourceInstance> resources,
-                              ExposureResources &r, id<MTLCommandBuffer> current) noexcept {
+        const char *ResolveResources(const Impl &impl, const RenderGraphExposureGpu &w,
+                                     std::span<const RenderGraphResourceInstance> resources, ExposureResources &r,
+                                     id<MTLCommandBuffer> current) noexcept {
             r.source = Resolve(w.sceneColor, resources, impl.textures);
             if (!TextureValid(r.source, w.sourceExtent))
-                return false;
+                return "Exposure source texture shape or residency is invalid.";
             if (!SameQueueUse(r.source->use, impl.commandQueue, current))
-                return false;
+                return "Exposure source texture queue provenance is invalid.";
             const std::array ids{w.histogram, w.previousExposure, w.outputExposure};
             const std::array<std::size_t, 3> sizes{ExposureHistogramBins * sizeof(std::uint32_t), sizeof(ExposureGpuState),
                                                    sizeof(ExposureGpuState)};
             for (std::size_t i = 0; i < ids.size(); ++i) {
                 r.buffers[i] = Resolve(ids[i], resources, impl.buffers);
                 if (!BufferValid(r.buffers[i], sizes[i], impl.deviceIncarnation))
-                    return false;
+                    return "Exposure buffer shape, device, or residency is invalid.";
                 if (!SameQueueUse(r.buffers[i]->use, impl.commandQueue, current))
-                    return false;
+                    return "Exposure buffer queue provenance is invalid.";
             }
-            return BuffersDistinct(r);
+            return BuffersDistinct(r) ? nullptr : "Exposure native buffers alias.";
         }
 
         /** @brief Checks the explicit reset seed is inactive and admits a real GPU fill. */
@@ -169,21 +171,31 @@ namespace Horo::Render::Detail {
     Result<void> MetalResourceRuntime::ValidateExposureGpu(const RenderGraphExposureGpu &work,
                                                            std::span<const RenderGraphResourceInstance> resources,
                                                            void *currentCommands) const {
-        if (auto portable = ValidateExposureGpuWorkload(work); portable.HasError())
-            return portable;
+        if (auto portable = ValidateExposureGpuWorkload(work); portable.HasError()) {
+            auto error = portable.ErrorValue();
+            error.message += " [portable exposure workload admission]";
+            return Result<void>::Failure(std::move(error));
+        }
         auto *kernel = dynamic_cast<ExposureGpuKernel *>(work.kernel.get());
         if (!KernelValid(*impl_, kernel, work))
-            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput, "Exposure kernel owner, lane, or device is invalid."));
         id<MTLCommandBuffer> current = (__bridge id<MTLCommandBuffer>)currentCommands;
         if (current != nil && current.commandQueue != impl_->commandQueue)
-            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput, "Exposure current command queue is invalid."));
         ExposureResources resolved;
-        if (!ResolveResources(*impl_, work, resources, resolved, current))
-            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
-        if (!ResetValid<Impl>(work, resolved) || !ForeignBuffersValid(*impl_, kernel, work, resolved))
-            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+        if (const auto *rejection = ResolveResources(*impl_, work, resources, resolved, current))
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput, rejection));
+        if (!ResetValid<Impl>(work, resolved))
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput, "Exposure reset seed usage or completion is invalid."));
+        if (!ForeignBuffersValid(*impl_, kernel, work, resolved))
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput, "Exposure buffer belongs to another native journal."));
         auto journal = kernel->Prepare(work, resolved.buffers[1]->buffer, resolved.buffers[2]->buffer, impl_->commandQueue);
-        return journal.HasError() ? Result<void>::Failure(journal.ErrorValue()) : Result<void>::Success();
+        if (journal.HasError()) {
+            auto error = journal.ErrorValue();
+            error.message += " [native exposure journal admission]";
+            return Result<void>::Failure(std::move(error));
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc MetalResourceRuntime::ExecuteExposureGpu */
@@ -196,8 +208,8 @@ namespace Horo::Render::Detail {
             return valid;
         auto &kernel = *dynamic_cast<ExposureGpuKernel *>(work.kernel.get());
         ExposureResources resolved;
-        if (!ResolveResources(*impl_, work, resources, resolved, commands))
-            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+        if (const auto *rejection = ResolveResources(*impl_, work, resources, resolved, commands))
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput, rejection));
         auto slot = kernel.Prepare(work, resolved.buffers[1]->buffer, resolved.buffers[2]->buffer, commands.commandQueue);
         if (slot.HasError())
             return Result<void>::Failure(slot.ErrorValue());

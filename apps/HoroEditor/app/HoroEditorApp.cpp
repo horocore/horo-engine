@@ -7,7 +7,11 @@
 #include "SimulatorPlayHost.h"
 #include "SimulatorProjectArtifacts.h"
 #if defined(HORO_HAS_RENDER_METAL)
+#include "EditorBaselineLightingAssets.h"
 #include "EditorClusteredLightingStartup.h"
+#include "EditorColorOptions.h"
+#include "EditorColorPipelineStartup.h"
+#include "Horo/Runtime/Render/SceneColorEncoding.h"
 #endif
 #include "Horo/Runtime/Render/DirectionalShadowErrors.h"
 #if defined(HORO_HAS_OPENXR_HOST)
@@ -333,6 +337,9 @@ namespace Horo::Editor {
             bool cookOptionsValid{true};
             std::optional<Render::DirectionalShadowProfile> directionalShadows;
             std::optional<EditorViewportLightingProfile> lighting;
+            Detail::EditorColorOptions color;
+            std::optional<std::filesystem::path> lightingRoot;
+            bool lightingRootValid{true};
             std::optional<Runtime::SceneObjectId> xrTrackingRoot;
             bool xrTrackingRootValid{true};
             bool xrSimulator{};
@@ -758,11 +765,26 @@ namespace Horo::Editor {
             opts.cookTarget = argument.substr(std::string_view{"--cook-target="}.size());
     }
 
+    /** @brief Reads one explicit Metal lighting family root, independent of executable-relative default assets. */
+    static void ParseEditorLightingRoot(EditorGuiOptions &options, std::span<char *const> arguments) {
+        const auto root = Detail::ReadLightingOption(arguments, "--lighting-root");
+        if (root.state == Detail::LightingOptionState::Invalid) {
+            options.lightingRootValid = false;
+            return;
+        }
+        if (root.state == Detail::LightingOptionState::Value) {
+            options.lightingRoot = std::filesystem::path{root.value};
+            options.lightingRootValid = options.lightingRoot->is_absolute();
+        }
+    }
+
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
         using enum PendingEditorOption;
         EditorGuiOptions opts;
         opts.directionalShadows = Detail::ParseDirectionalShadowArguments(args);
         opts.lighting = Detail::ParseEditorLightingArguments(args);
+        opts.color = Detail::ParseEditorColorArguments(args);
+        ParseEditorLightingRoot(opts, args);
         opts.xrSimulator = std::ranges::any_of(args, [](const char *value) {
             return std::string_view{value} == "--xr-simulator";
         });
@@ -838,6 +860,13 @@ namespace Horo::Editor {
 
         [[nodiscard]] int RelaunchEditorForProject(const char *executable, const EditorRendererRestartRequest &request,
                                                    const EditorGuiOptions &options) {
+            if (options.color.root || options.color.lookRoot || options.color.settingsRequested || options.lightingRoot) {
+                const auto error = MakeError(Render::ColorPipelineErrors::IncompatibleInput,
+                                             "Project restart would replace an explicitly requested color/lighting profile. Start the "
+                                             "project with compatible renderer settings and the complete explicit profile.");
+                std::fprintf(stderr, "[%s/%s] %s\n", error.domain.Value().c_str(), error.code.Value().c_str(), error.message.c_str());
+                return 1;
+            }
             std::vector<std::string> arguments{executable,
                                                "--renderer",
                                                request.backendId,
@@ -1147,9 +1176,74 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+#if defined(HORO_HAS_RENDER_METAL)
+        /** @brief Loads the exact selected raster family, without substituting a culling kernel in baseline mode. */
+        Result<Render::RenderLightPreparationReadiness> PrepareEditorMetalLighting(EditorViewportRendererMetal &owner,
+                                                                                   Render::RenderFrontend &frontend,
+                                                                                   const EditorViewportLightingProfile &profile,
+                                                                                   const EditorGuiOptions &options, bool color) {
+            using Output = Result<Render::RenderLightPreparationReadiness>;
+            const auto lightingRoot = options.lightingRoot.value_or(EditorAssetRoot());
+            if (color && profile.requested == Render::LightPreparationMode::BaselineForwardCpu) {
+                const auto assets = LoadPackagedMetalBaselineLighting(lightingRoot);
+                if (assets.HasError())
+                    return Output::Failure(assets.ErrorValue());
+                const auto family = assets.Value().ProgramViews();
+                if (const auto prepared = owner.PrepareBaselineLighting(family, profile); prepared.HasError())
+                    return Output::Failure(prepared.ErrorValue());
+                return Output::Success({});
+            }
+            return PreparePackagedMetalViewportLighting(owner, frontend, profile, lightingRoot);
+        }
+
+        /** @brief Loads explicit color data before the actual Metal lighting family, preserving one cold startup boundary. */
+        Result<Render::RenderLightPreparationReadiness> PrepareEditorMetalProducts(EditorViewportRendererMetal &owner,
+                                                                                   Render::RenderFrontend &frontend,
+                                                                                   const EditorViewportLightingProfile &profile,
+                                                                                   const EditorGuiOptions &options) {
+            using Output = Result<Render::RenderLightPreparationReadiness>;
+            const auto root = ResolveEditorColorPipelineRoot(options.color.root, EditorAssetRoot());
+            if (root.HasError())
+                return Output::Failure(root.ErrorValue());
+            if (!root.Value() && (options.color.settingsRequested || options.color.lookRoot))
+                return Output::Failure(
+                    MakeError(Render::ColorPipelineErrors::InvalidTransform,
+                              "Requested exposure/look controls require an installed core color package or --color-pipeline-root."));
+            if (root.Value()) {
+                const auto color = PrepareEditorColorPipeline(owner, *root.Value(), options.color.exposure, options.color.lookRoot);
+                if (color.HasError())
+                    return Output::Failure(color.ErrorValue());
+            }
+            return PrepareEditorMetalLighting(owner, frontend, profile, options, root.Value().has_value());
+        }
+
+        /** @brief Composes only the already-selected Metal GUI/viewport owners and genuine cold product preparation. */
+        Result<void> InstallEditorMetalRenderers(SDL_Window &window, const EditorGuiOptions &options,
+                                                 EditorRenderComposition &composition) {
+            auto &bridge = *composition.metalGraphicsBridge;
+            return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererMetal>(window, bridge, *composition.frontend),
+                                          std::make_unique<EditorViewportRendererMetal>(*composition.frontend, bridge),
+                                          *options.directionalShadows, *options.lighting,
+                                          [&options](EditorViewportRendererMetal &owner, Render::RenderFrontend &frontend,
+                                                     const EditorViewportLightingProfile &profile) {
+                return PrepareEditorMetalProducts(owner, frontend, profile, options);
+            });
+        }
+#endif
+
+        /** @brief Admits explicit color/lighting asset options only on the currently implemented native product route. */
+        Result<void> ValidateColorBackendSelection(const EditorGuiOptions &options) {
+            if ((options.color.root || options.color.lookRoot || options.color.settingsRequested || options.lightingRoot) &&
+                options.rendererBackend != "metal")
+                return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
+            return Result<void>::Success();
+        }
+
         /** @brief Installs the concrete GUI/viewport pair for the already selected and owned frontend. */
         [[nodiscard]] Result<void> InstallSelectedEditorRenderers(SDL_Window &window, const EditorGuiOptions &options,
                                                                   EditorRenderComposition &composition) {
+            if (const auto admitted = ValidateColorBackendSelection(options); admitted.HasError())
+                return admitted;
             if (options.rendererBackend == "opengl") {
 #if defined(HORO_HAS_RENDER_OPENGL)
                 const auto &port = static_cast<const SdlOpenGLPresentationPort &>(*composition.openGlPresentationPort);
@@ -1164,19 +1258,7 @@ namespace Horo::Editor {
 #endif
             } else if (options.rendererBackend == "metal") {
 #if defined(HORO_HAS_RENDER_METAL)
-                auto &graphicsBridge = *composition.metalGraphicsBridge;
-                auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
-                auto viewportRenderer = std::make_unique<EditorViewportRendererMetal>(*composition.frontend, graphicsBridge);
-                if (const Result<void> initialized =
-                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer),
-                                               *options.directionalShadows, *options.lighting,
-                                               [](EditorViewportRendererMetal &owner, Render::RenderFrontend &frontend,
-                                                  const EditorViewportLightingProfile &profile) {
-                    return PreparePackagedMetalViewportLighting(owner, frontend, profile, EditorAssetRoot());
-                });
-                    initialized.HasError()) {
-                    return Result<void>::Failure(initialized.ErrorValue());
-                }
+                return InstallEditorMetalRenderers(window, options, composition);
 #endif
             } else if (options.rendererBackend == "vulkan") {
 #if defined(HORO_HAS_RENDER_VULKAN)
@@ -1612,11 +1694,35 @@ namespace Horo::Editor {
                     p_->telemetry.droppedRecords.Set(static_cast<double>(statistics.droppedRecords));
                     p_->telemetry.sinkFailures.Set(static_cast<double>(statistics.sinkFailures));
                 }
+                RequestBoundedCloseIfReady();
+                return Result<void>::Success();
+            }
+
+            /** @brief Applies only the existing requested bounded-exit policy after actual successful presentations. */
+            void RequestBoundedCloseIfReady() {
                 if ((p_->options.exitAfterFirstFrame && HasPresentedFrame()) ||
                     (p_->options.exitAfterFrames > 0 && presentedFrames_ >= p_->options.exitAfterFrames)) {
+                    ReportColorAtBoundedExit();
                     static_cast<void>(screenHost_->RequestCloseApplication());
                 }
-                return Result<void>::Success();
+            }
+
+            /** @brief Emits one bounded factual owner snapshot at an already-requested bounded exit, never per-frame GPU values. */
+            void ReportColorAtBoundedExit() {
+                if (colorExitReported_)
+                    return;
+                colorExitReported_ = true;
+                const auto color = p_->presentation.viewportRenderer.ColorDiagnostics();
+                const auto scene = viewportSceneState_->View();
+                LOG_INFO("editor.color",
+                         "status=%u active=%d automatic=%d accepted=%llu exposure_generation=%llu settings_generation=%llu reset=%d "
+                         "output_revision=%llu unmanaged_sdr_preview=%d viewport_scene_domain=%llu viewport_instances=%zu",
+                         static_cast<unsigned>(color.status), color.active, color.automatic,
+                         static_cast<unsigned long long>(color.acceptedSubmission),
+                         static_cast<unsigned long long>(color.exposureGeneration),
+                         static_cast<unsigned long long>(color.settingsGeneration), color.resetPending,
+                         static_cast<unsigned long long>(color.outputRevision), color.unmanagedSdrPreview,
+                         static_cast<unsigned long long>(scene.lightSceneDomain), scene.instances.size());
             }
 
             /** @brief Invokes the retained frontend resize only from the frozen surface safe point. */
@@ -1817,6 +1923,18 @@ namespace Horo::Editor {
                 }
             }
 
+            /** @brief Declares the historical linear scene background's version-one ingress separately from the UI backdrop. */
+            Render::ClearColor ViewportSceneClearColor() const {
+                const Render::ClearColor legacy{0.035F, 0.045F, 0.070F, 1.0F};
+                if (!p_->presentation.viewportRenderer.ColorDiagnostics().active)
+                    return legacy;
+                const auto ap1 = Render::ConvertSceneColorToAcesCg({legacy.red, legacy.green, legacy.blue},
+                                                                   {Render::SceneColorEncoding::LegacyLinearRec709D65, 1});
+                if (ap1.HasError())
+                    std::terminate();  // Fixed finite literal and pinned matrix; no fallible external data reaches this policy.
+                return {ap1.Value().x, ap1.Value().y, ap1.Value().z, legacy.alpha};
+            }
+
             Result<void> ExtractFrame() {
                 if (!frameState_.guiFrameStarted)
                     return Result<void>::Success();
@@ -1855,7 +1973,8 @@ namespace Horo::Editor {
                                                                                                           viewportScene.lightSceneDomain,
                                                                                                       .lightSnapshotRevision =
                                                                                                           viewportScene
-                                                                                                              .lightSnapshotRevision}}};
+                                                                                                              .lightSnapshotRevision},
+                                                                                  .clearColor = ViewportSceneClearColor()}};
                 }
                 frameState_.preparedPasses.descriptors[frameState_.preparedPasses.count++] =
                     Render::RenderPassDescriptor{.id = Render::RenderPassId{2},
@@ -1989,16 +2108,29 @@ namespace Horo::Editor {
                 return available;
             }
 
+            /** @brief Preserves unread normalized view time across deferred/canceled attempts without creating a clock. */
+            void PrepareColorClock(const Runtime::FrameContext &context) {
+                colorCandidateTime_ = context.presentationAdmittedDuration;
+                const auto elapsed = colorClockAccepted_ ? (colorCandidateTime_ - colorAcceptedTime_).ToNanoseconds() : 0;
+                const float seconds = std::clamp(static_cast<float>(elapsed) / 1'000'000'000.0F, 0.0F, 1.0F);
+                p_->presentation.viewportRenderer.SetColorFrameDelta(seconds);
+            }
+
             Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
                 const auto available = PollFrozenPresentationFrame();
                 if (available.HasError())
                     return Result<bool>::Failure(available.ErrorValue());
                 if (!available.Value())
                     return Result<bool>::Success(false);
+                PrepareColorClock(context);
                 const auto preparedLighting = PrepareViewportLightingFrame();
-                if (preparedLighting.HasError())
+                if (preparedLighting.HasError()) {
+                    p_->presentation.viewportRenderer.FinishColorFrame(false);
+                    if (preparedLighting.ErrorValue().code.Value() == ViewportColorErrors::Pending.code.Value())
+                        return Result<bool>::Success(false);
                     return IsDeferredFrameAdmission(preparedLighting.ErrorValue()) ? Result<bool>::Success(false)
                                                                                    : Result<bool>::Failure(preparedLighting.ErrorValue());
+                }
                 const Render::FramebufferExtent outputExtent = pacing_.committedOutputExtent;
                 pacing_.presentingFrameNumber = context.frameNumber;
 
@@ -2007,8 +2139,10 @@ namespace Horo::Editor {
 #endif
                 auto begun = p_->presentation.renderFrontend.BeginFrame(
                     Render::FrameDescriptor{.frameNumber = context.frameNumber, .outputExtent = outputExtent});
-                if (begun.HasError() && IsDeferredFrameAdmission(begun.ErrorValue()))
+                if (begun.HasError() && IsDeferredFrameAdmission(begun.ErrorValue())) {
+                    p_->presentation.viewportRenderer.FinishColorFrame(false);
                     return Result<bool>::Success(false);
+                }
                 if (begun.HasError())
                     return Result<bool>::Failure(begun.ErrorValue());
                 frameState_.frame.emplace(std::move(begun).Value());
@@ -2062,6 +2196,7 @@ namespace Horo::Editor {
 
             /** @brief Cancels only this prepared acquisition; the retained teardown owner keeps all native/queue debt. */
             Result<void> CancelPreparedXrFrame() {
+                p_->presentation.viewportRenderer.FinishColorFrame(false);
                 Result<void> canceled = Result<void>::Success();
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 if (std::exchange(frameState_.xrFramePrepared, false))
@@ -2160,6 +2295,12 @@ namespace Horo::Editor {
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Presentation);
 #endif
                 Result<void> result = frameState_.frame->Present(timing);
+                const auto beforeColor = p_->presentation.viewportRenderer.ColorDiagnostics().acceptedSubmission;
+                p_->presentation.viewportRenderer.FinishColorFrame(result.HasValue());
+                if (p_->presentation.viewportRenderer.ColorDiagnostics().acceptedSubmission != beforeColor) {
+                    colorAcceptedTime_ = colorCandidateTime_;
+                    colorClockAccepted_ = true;
+                }
                 if (const auto uiReceipt = authorities_.ui.Presented(pacing_.presentingFrameNumber, result.HasValue());
                     uiReceipt.HasError())
                     return result.HasError() ? Result<void>::Failure(WithCause(uiReceipt.ErrorValue(), result.ErrorValue())) : uiReceipt;
@@ -2216,6 +2357,9 @@ namespace Horo::Editor {
             EditorPacingState pacing_;
             bool surfaceClosed_{};
             std::uint64_t presentedFrames_{};
+            bool colorExitReported_{};
+            Duration colorAcceptedTime_{}, colorCandidateTime_{};
+            bool colorClockAccepted_{};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             EditorSurfaceLifecycleQualification qualification_;
             bool qualificationPassed_{};
@@ -2983,7 +3127,8 @@ namespace Horo::Editor {
                                                               : "Project version is not compatible with this editor.");
             return false;
         }
-        options.rendererBackend = compatibility.metadata->renderBackend;
+        if (options.rendererBackend.empty())
+            options.rendererBackend = compatibility.metadata->renderBackend;
         projectName = compatibility.metadata->name;
         return true;
     }
@@ -3058,9 +3203,21 @@ namespace Horo::Editor {
         return false;
     }
 
+    /** @brief Rejects ambiguous color roots and nonfinite/unbounded declared exposure controls before native startup. */
+    static bool ValidateEditorColorOptions(const EditorGuiOptions &options) {
+        if (options.color.valid && options.lightingRootValid)
+            return true;
+        const auto error = MakeError(Render::ExposureErrors::InvalidSettings,
+                                     "Use unique absolute --color-pipeline-root/--lighting-root paths, --exposure-mode manual|automatic, "
+                                     "and finite bounded --exposure-ev/--exposure-compensation values.");
+        LOG_CRITICAL("editor.color", "%s", error.message.c_str());
+        return false;
+    }
+
     /** @brief Composes independent startup option validation without merging subsystem policy. */
     [[nodiscard]] static bool ValidateEditorStartupOptions(const EditorGuiOptions &options) {
-        return ValidateEditorPhysicsOptions(options) && ValidateEditorShadowOptions(options) && ValidateEditorLightingOptions(options);
+        return ValidateEditorColorOptions(options) && ValidateEditorPhysicsOptions(options) && ValidateEditorShadowOptions(options) &&
+               ValidateEditorLightingOptions(options);
     }
 
     /** @brief Canonical configuration/event lifetime pair transferred intact into one prepared startup. */

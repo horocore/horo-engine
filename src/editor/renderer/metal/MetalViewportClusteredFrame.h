@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EditorViewportColorGraph.h"
+#include "EditorViewportForwardLighting.h"
 #include "EditorViewportShaderParameters.h"
 #include "Horo/Runtime/Render/ClusteredLightGrid.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
@@ -17,17 +19,19 @@ namespace Horo::Editor {
     class MetalViewportClusteredFrame final {
     public:
         static constexpr std::size_t MaximumDraws = Render::RenderGraphMaterialRaster::MaximumDraws;
-        static constexpr std::size_t MaximumPasses = 9;
-        static constexpr std::size_t MaximumUniformDraws = MaximumDraws * 7;
+        static constexpr std::size_t MaximumPasses = 13;
+        static constexpr std::size_t MaximumUniformDraws = MaximumDraws * 8;
         static constexpr std::size_t MaximumUniformBytes = 4096;
 
         MetalViewportClusteredFrame(Render::RenderFrontend &frontend, MetalViewportClusteredLighting &programs,
                                     EditorViewportResources &resources, Render::MetalEditorGraphicsBridge &bridge,
-                                    const EditorViewportLightingProfile &profile);
+                                    const EditorViewportLightingProfile &profile, EditorViewportColorPipeline *color = nullptr);
         ~MetalViewportClusteredFrame();
         [[nodiscard]] Result<void> Prepare(const Render::StaticMeshPassDescriptor &descriptor, Render::RenderViewId view);
         [[nodiscard]] Result<void> Execute(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &descriptor,
                                            const Render::PrimaryOutputAttachment &output);
+        /** @brief Admits the actual frontend-selected CPU forward recipe before any baseline preparation. */
+        [[nodiscard]] Result<void> ConfigureBaseline(const Render::LightPreparationSelection &selection);
         [[nodiscard]] EditorViewportLightingDiagnostics Diagnostics() const noexcept;
         [[nodiscard]] bool MatchesProfile(const EditorViewportLightingProfile &profile) const noexcept;
         void SetPresentation(const EditorViewportGridOptions &grid, const EditorViewportLightVisualizerOptions &visualizer) noexcept;
@@ -55,9 +59,12 @@ namespace Horo::Editor {
             std::array<Render::RenderBufferHandle, 3> uniformBuffers;
 
             struct Variant final {
+                EditorViewportColorGraph colorGraph;
+                std::array<Render::RenderGraphMaterialDraw, MaximumDraws> selectionDraws;
+                std::array<Render::RenderGraphMaterialRead, MaximumDraws * 2 + 1> selectionReads;
                 std::array<std::array<Render::RenderGraphMaterialDraw, MaximumDraws>, 7> draws;
                 std::array<std::array<Render::RenderGraphMaterialRead, MaximumDraws + 4>, 7> reads;
-                std::array<Render::RenderGraphPassWorkload, MaximumPasses> workloads;
+                std::array<Render::RenderGraphPassWorkload, MaximumPasses> workloads, orderedWorkloads;
                 std::optional<Render::CompiledRenderGraphExecution> graph;
             };
 
@@ -66,6 +73,7 @@ namespace Horo::Editor {
             Render::RenderTextureHandle color, depth, atlas;
             std::array<Render::RenderMeshHandle, MaximumDraws> meshes;
             std::size_t meshCount{};
+            Render::RenderBufferHandle colorPrevious, colorOutput;
             std::uint64_t atlasGeneration{};
             std::uint64_t materialRevision{};
             void *recordedCommands{}; /**< Compared only against owning native-use evidence; never dereferenced by this owner. */
@@ -74,11 +82,34 @@ namespace Horo::Editor {
             bool diagnosticsPending{};
         };
 
+        void RefreshSceneWorkloads(Slot &slot, Slot::Variant &variant, const Render::StaticMeshPassDescriptor &descriptor,
+                                   const Render::PrimaryOutputAttachment &output);
+        void RecordEncoding(Slot &slot, const Render::StaticMeshPassDescriptor &descriptor, void *commands) noexcept;
+        void RefreshColorWorkloads(Slot::Variant &variant) noexcept;
+        [[nodiscard]] bool MatchesAttachmentTopology(const Slot &slot, const Render::RenderSceneView &scene) const noexcept;
+        [[nodiscard]] Result<void> PrepareSelectionMaterials(Slot &slot, const Render::RenderSceneView &scene);
+        [[nodiscard]] Result<void> AppendColorPasses(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author,
+                                                     const Render::StaticMeshPassDescriptor &descriptor);
+        void AttachRaster(MetalViewportGraphAuthor &author, Render::RenderGraphMaterialRaster &raster, std::size_t pass);
+        [[nodiscard]] Result<void> OrderWorkloads(Slot::Variant &variant);
         [[nodiscard]] Result<void> PrepareCanonical(const Render::RenderSceneView &scene, Render::RenderViewId view,
                                                     Render::FramebufferExtent extent);
         [[nodiscard]] Result<void> ValidateCanonical(const Render::RenderSceneView &scene) const;
         [[nodiscard]] Result<void> ValidateReadyMeshes(const Render::RenderSceneView &scene) const;
         void CloseSlot(Slot &slot) noexcept;
+        [[nodiscard]] Result<void> UploadLights(Slot &slot, const Render::StaticMeshPassDescriptor &descriptor);
+        [[nodiscard]] Result<void> WriteBaselineLit(Slot &slot, std::size_t draw, const Render::StaticMeshPassDescriptor &descriptor,
+                                                    const Math::Mat4 &matrix);
+
+        [[nodiscard]] std::size_t BasePassCount() const noexcept {
+            return programs_->UsesCulling() ? 9 : 8;
+        }
+
+        [[nodiscard]] std::size_t RasterIndex(std::size_t role) const noexcept {
+            return role + (programs_->UsesCulling() && role > 0 ? 1 : 0);
+        }
+
+        EditorViewportForwardLighting forward_;
         [[nodiscard]] Result<void> PrepareSlot(Slot &slot, const Render::StaticMeshPassDescriptor &descriptor);
         [[nodiscard]] Result<void> CollectDiagnostics(Slot &slot);
         [[nodiscard]] Result<void> PrepareGraphMaterials(Slot &slot, const Render::RenderSceneView &scene);
@@ -93,6 +124,10 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> WriteVisualizerOverlay(Slot &slot, const Render::StaticMeshPassDescriptor &descriptor,
                                                           const Math::Mat4 &matrix);
         [[nodiscard]] Result<void> WriteOverlays(Slot &slot, const Render::StaticMeshPassDescriptor &descriptor);
+        [[nodiscard]] Result<void> BuildSelectionRaster(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author,
+                                                        Render::RenderGraphPassRef pass, Render::RenderGraphResourceId display,
+                                                        const Render::StaticMeshPassDescriptor &descriptor);
+        [[nodiscard]] Result<void> WriteSelection(Slot &slot, const Render::StaticMeshPassDescriptor &descriptor);
         [[nodiscard]] Result<void> BuildOverlayRaster(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author,
                                                       Render::RenderGraphMaterialRaster &raster);
         [[nodiscard]] Result<void> BuildGraph(Slot &slot, const Render::StaticMeshPassDescriptor &descriptor);
@@ -105,6 +140,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareMaterial(Slot &slot, std::size_t pass, std::size_t draw);
         [[nodiscard]] bool MatchesTopology(const Slot &slot, const Render::RenderSceneView &scene) const noexcept;
         [[nodiscard]] std::uint64_t FrameSignature(const Render::StaticMeshPassDescriptor &descriptor) const noexcept;
+        EditorViewportColorPipeline *color_{};
         Render::RenderFrontend *frontend_;
         MetalViewportClusteredLighting *programs_;
         EditorViewportResources *resources_;

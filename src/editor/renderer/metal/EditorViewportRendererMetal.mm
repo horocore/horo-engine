@@ -87,6 +87,9 @@ namespace Horo::Editor {
         EditorViewportLightVisualizerOptions lightVisualizerOptions{};
         EditorViewportForwardLighting forwardLighting;
         std::unique_ptr<MetalViewportClusteredLighting> clusteredLighting;
+        std::unique_ptr<EditorViewportColorPipeline> color, colorCandidate;
+        float colorDelta{};
+        std::uint64_t colorSceneDomain{};
         std::unique_ptr<MetalViewportClusteredFrame> clusteredFrame;
         EditorViewportLightingProfile clusteredProfile;
         bool nativeLightingActive{};
@@ -130,6 +133,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> CreateShadowPipeline(ProgramGeneration &candidate);
         void AdoptProgram(ProgramGeneration &candidate) noexcept;
         [[nodiscard]] Result<void> CreateSupportResources();
+        [[nodiscard]] Result<void> ConfigureBaselineProfile(const EditorViewportLightingProfile &profile,
+                                                            const Render::LightPreparationSelection &selection);
         [[nodiscard]] Result<void> ValidatePassRequest(const Render::StaticMeshPassDescriptor &descriptor,
                                                        EditorViewportExtent renderExtent);
         [[nodiscard]] Result<MetalViewportFrameResources> ResolveFrameResources() const;
@@ -590,6 +595,7 @@ namespace Horo::Editor {
         sceneLighting.shadowBiasFilter = {parameters.shadowBiasFilter[0], parameters.shadowBiasFilter[1], parameters.shadowBiasFilter[2],
                                           parameters.shadowBiasFilter[3]};
         sceneLighting.shadowTexel = {parameters.shadowSettings[3], parameters.cameraForward[3]};
+        sceneLighting.baseColor = {parameters.baseColor[0], parameters.baseColor[1], parameters.baseColor[2], parameters.baseColor[3]};
         [encoder setFragmentBytes:&sceneLighting length:sizeof(sceneLighting) atIndex:1];
     }
 
@@ -648,6 +654,8 @@ namespace Horo::Editor {
     void EditorViewportRendererMetal::Shutdown() noexcept {
         impl_->graphicsBridge->WaitUntilIdle();
         impl_->clusteredFrame.reset();
+        impl_->color.reset();
+        impl_->colorCandidate.reset();
         impl_->clusteredLighting.reset();
         impl_->nativeLightingActive = false;
         impl_->resources.Shutdown();
@@ -669,8 +677,22 @@ namespace Horo::Editor {
         impl_->initialized = false;
     }
 
+    /** @brief Keeps baseline graph admission coupled to its actual prepared raster family and canonical CPU selector. */
+    Result<void> EditorViewportRendererMetal::Impl::ConfigureBaselineProfile(const EditorViewportLightingProfile &profile,
+                                                                             const Render::LightPreparationSelection &selection) {
+        if (!clusteredFrame || clusteredLighting->UsesCulling() || !clusteredFrame->MatchesProfile(profile))
+            return Result<void>::Failure(MakeError(Render::LightCullingErrors::Unsupported));
+        const auto admitted = clusteredFrame->ConfigureBaseline(selection);
+        if (admitted.HasValue())
+            nativeLightingActive = true;
+        return admitted;
+    }
+
     Result<void> EditorViewportRendererMetal::RequestLightingProfile(const EditorViewportLightingProfile &profile,
                                                                      const Render::LightPreparationSelection &selection) {
+        if (impl_->color && selection.mode == Render::LightPreparationMode::BaselineForwardCpu) {
+            return impl_->ConfigureBaselineProfile(profile, selection);
+        }
         if (selection.mode == Render::LightPreparationMode::ClusteredForwardNative) {
             if (!impl_->clusteredFrame || !impl_->clusteredFrame->MatchesProfile(profile) || selection.missingPredicates != 0)
                 return Result<void>::Failure(MakeError(Render::LightCullingErrors::Unsupported));
@@ -691,15 +713,31 @@ namespace Horo::Editor {
             return Result<void>::Failure(state.ErrorValue());
         if (state.Value().liveGeneration == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::InvalidRequest));
-        auto candidate = std::make_unique<MetalViewportClusteredLighting>(*impl_->frontend);
+        auto candidate = std::make_unique<MetalViewportClusteredLighting>(*impl_->frontend, impl_->color != nullptr);
         if (const auto prepared = candidate->Prepare(family, kernel, profile); prepared.HasError())
             return prepared;
-        auto frame =
-            std::make_unique<MetalViewportClusteredFrame>(*impl_->frontend, *candidate, impl_->resources, *impl_->graphicsBridge, profile);
+        auto frame = std::make_unique<MetalViewportClusteredFrame>(*impl_->frontend, *candidate, impl_->resources, *impl_->graphicsBridge,
+                                                                   profile, impl_->color.get());
         impl_->clusteredLighting.swap(candidate);
         impl_->clusteredFrame.swap(frame);
         impl_->clusteredProfile = profile;
         ++impl_->liveGeneration;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererMetal::PrepareBaselineLighting */
+    Result<void> EditorViewportRendererMetal::PrepareBaselineLighting(std::span<const Render::ShaderHotReloadProgramView> family,
+                                                                      const EditorViewportLightingProfile &profile) {
+        if (!impl_->color || impl_->clusteredLighting)
+            return Result<void>::Failure(MakeError(Render::LightCullingErrors::InvalidInput));
+        auto candidate = std::make_unique<MetalViewportClusteredLighting>(*impl_->frontend, true);
+        if (const auto prepared = candidate->PrepareBaseline(family, profile); prepared.HasError())
+            return prepared;
+        auto frame = std::make_unique<MetalViewportClusteredFrame>(*impl_->frontend, *candidate, impl_->resources, *impl_->graphicsBridge,
+                                                                   profile, impl_->color.get());
+        impl_->clusteredLighting = std::move(candidate);
+        impl_->clusteredFrame = std::move(frame);
+        impl_->clusteredProfile = profile;
         return Result<void>::Success();
     }
 
@@ -798,7 +836,7 @@ namespace Horo::Editor {
             .v0 = 0.0F,
             .u1 = 1.0F,
             .v1 = 1.0F,
-            .sampledView = impl_->resources.ColorTextureView(),
+            .sampledView = impl_->resources.PresentationTextureView(),
         };
     }
 

@@ -14,6 +14,9 @@ namespace Horo::Editor {
             });
             for (std::uint32_t id = 16; id <= 19; ++id)
                 manifest.parameters.push_back({{id}, {1}, ShaderValueType::Float32, 1, 4, 1});
+            std::ranges::sort(manifest.parameters, {}, [](const ShaderParameter &parameter) {
+                return parameter.id.value;
+            });
         }
 
         void AddClusterStorage(ShaderManifest &manifest) {
@@ -50,7 +53,7 @@ namespace Horo::Editor {
             return result;
         auto manifest = std::move(result).Value();
         manifest.sourceIdentity = "engine/editor/viewport_clustered_lit.hlsl";
-        manifest.sourceRevision = 1;
+        manifest.sourceRevision = 3;
         AddClusterUniforms(manifest);
         AddClusterStorage(manifest);
         if (const auto valid = Render::ValidateShaderManifest(manifest); valid.HasError())

@@ -4,6 +4,7 @@
  * @brief Authenticated offline production of the closed exposure compute family.
  */
 #include "AuthenticatedMetalCookConfiguration.h"
+#include "ColorOutputPackage.h"
 #include "Horo/Runtime/Render/ExposureGpuKernel.h"
 
 #include <array>

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/SceneColorEncoding.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "editor/document/EditorAssetMeshCache.h"
@@ -66,6 +67,7 @@ namespace Horo::Editor {
     struct EditorViewportSceneSnapshot {
         DocumentRevision documentRevision;
         Runtime::SceneRuntimeId runtimeSceneId;
+        Render::SceneColorSourcePolicy lightColorSourcePolicy; /**< Explicit Editor interpretation retained for all light previews. */
         EditorViewportCamera camera;
         std::vector<Runtime::PrimitiveMeshLease> meshLeases;
         std::vector<EditorAssetMeshLease> importedMeshLeases;

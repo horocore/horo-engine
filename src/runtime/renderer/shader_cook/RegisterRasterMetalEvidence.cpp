@@ -138,17 +138,28 @@ namespace Horo::Render::RegisterRasterCookDetail {
             }
         }
 
+        /** @brief Retains independently named native resources without duplicate slots in their actual namespace. */
+        void RetainSampled(std::vector<NativeResource> &resources, NativeResource resource) {
+            if (resources.size() == MaximumSampledResources)
+                throw InvalidEvidence{};
+            if (std::ranges::any_of(resources, [&](const NativeResource &previous) {
+                return previous.name == resource.name || previous.binding == resource.binding;
+            }))
+                throw InvalidEvidence{};
+            resources.push_back(std::move(resource));
+        }
+
         /** @brief Captures an ordinary sampled 2D float image or independent sampler argument. */
         void SampledResource(const TokenView argument, const std::size_t attribute, const bool texture, NativeStage &result) {
-            auto &resource = texture ? result.texture : result.sampler;
-            if (resource || attribute == 0 || !Identifier(argument[attribute - 1]))
+            if (attribute == 0 || !Identifier(argument[attribute - 1]))
                 throw InvalidEvidence{};
             constexpr std::array<std::string_view, 4> image{"texture2d", "<", "float", ">"};
             const bool validType =
                 texture ? attribute == 5 && std::ranges::equal(argument.first(4), image) : attribute == 2 && argument[0] == "sampler";
             if (!validType)
                 throw InvalidEvidence{};
-            resource = NativeResource{std::string{argument[attribute - 1]}, ResourceIndex(argument, attribute + 3)};
+            auto &resources = texture ? result.textures : result.samplers;
+            RetainSampled(resources, {std::string{argument[attribute - 1]}, ResourceIndex(argument, attribute + 3)});
         }
 
         /** @brief Requires the entire stage-in attribute instead of accepting a matching prefix. */
@@ -162,6 +173,14 @@ namespace Horo::Render::RegisterRasterCookDetail {
                 !Identifier(argument[1]))
                 throw InvalidEvidence{};
             result.fragmentPosition = true;
+        }
+
+        /** @brief Proves the sole actual vertex-index builtin without inventing a logical vertex attribute. */
+        void VertexIndex(const TokenView argument, const std::size_t attribute, const ShaderStage stage, NativeStage &result) {
+            if (stage != ShaderStage::Vertex || result.vertexIndex || !StageInput(argument, attribute) || argument[0] != "uint" ||
+                !Identifier(argument[1]))
+                throw InvalidEvidence{};
+            result.vertexIndex = true;
         }
 
         /** @brief Routes one whole actual selected-entry parameter; unknown native roles fail closed. */
@@ -179,6 +198,8 @@ namespace Horo::Render::RegisterRasterCookDetail {
                 Interfaces(tokens, argument[0], stage, ShaderInterfaceDirection::Input, result);
             else if (kind == "position")
                 FragmentPosition(argument, at, stage, result);
+            else if (kind == "vertex_id")
+                VertexIndex(argument, at, stage, result);
             else
                 throw InvalidEvidence{};
         }

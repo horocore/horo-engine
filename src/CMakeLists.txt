@@ -2833,8 +2833,10 @@ target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::Ru
 
 add_library(HoroRenderApi STATIC
         runtime/renderer/api/ColorPipeline.cpp
+        runtime/renderer/api/ColorOutputProgram.cpp
         runtime/renderer/api/ColorPipelineTransform.cpp
         runtime/renderer/api/Exposure.cpp
+        runtime/renderer/api/SceneColorEncoding.cpp
         runtime/renderer/api/ExposureGpuKernel.cpp
         runtime/renderer/api/ExposureGpuWorkload.cpp
         runtime/renderer/api/DirectionalShadow.cpp
@@ -3018,6 +3020,33 @@ add_library(HoroShaderHotReload STATIC
 add_library(HoroEngine::ShaderHotReload ALIAS HoroShaderHotReload)
 target_compile_features(HoroShaderHotReload PUBLIC cxx_std_20)
 target_link_libraries(HoroShaderHotReload PUBLIC HoroEngine::ShaderBuild)
+
+# Backend-neutral, non-installed product color shader recipes shared by cook and native hosts.
+add_library(HoroColorOutputShaderRecipeInternal STATIC
+    runtime/renderer/color/ColorOutputShaderRecipe.cpp)
+target_compile_features(HoroColorOutputShaderRecipeInternal PUBLIC cxx_std_20)
+target_include_directories(HoroColorOutputShaderRecipeInternal PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/color/include")
+target_link_libraries(HoroColorOutputShaderRecipeInternal PUBLIC HoroEngine::RenderApi)
+
+# Read-only cooked product data has no compiler, process or editor dependency.
+set(HORO_COLOR_OUTPUT_PACKAGE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/color_output_package_headers")
+file(MAKE_DIRECTORY "${HORO_COLOR_OUTPUT_PACKAGE_HEADERS}")
+configure_file(runtime/renderer/color/assets/include/ColorOutputPackage.h
+    "${HORO_COLOR_OUTPUT_PACKAGE_HEADERS}/ColorOutputPackage.h" COPYONLY)
+configure_file(runtime/renderer/color/assets/include/ColorCreativeLookPackage.h
+    "${HORO_COLOR_OUTPUT_PACKAGE_HEADERS}/ColorCreativeLookPackage.h" COPYONLY)
+add_library(HoroColorOutputPackageInternal STATIC
+    runtime/renderer/color/assets/ColorOutputPackageCommon.cpp
+    runtime/renderer/color/assets/ColorOutputAnalyticBundle.cpp
+    runtime/renderer/color/assets/ColorOutputPackage.cpp
+    runtime/renderer/color/assets/ColorCreativeLookPackage.cpp
+    runtime/renderer/color/assets/ExposureGpuPackage.cpp)
+target_compile_features(HoroColorOutputPackageInternal PUBLIC cxx_std_20)
+target_include_directories(HoroColorOutputPackageInternal PUBLIC "${HORO_COLOR_OUTPUT_PACKAGE_HEADERS}")
+target_link_libraries(HoroColorOutputPackageInternal
+    PUBLIC HoroEngine::RenderApi
+    PRIVATE HoroFoundationJsonInternal nlohmann_json::nlohmann_json HoroColorOutputShaderRecipeInternal)
 
 add_library(HoroEditorViewportShaderRecipeInternal STATIC
     editor/renderer/shader/EditorViewportShaderRecipe.cpp
@@ -3655,6 +3684,33 @@ target_link_libraries(HoroEditorViewportResources
         HoroEngine::RenderFrontend
 )
 
+# Editor color behavior owns frontend resources, but never selects a native backend.
+set(HORO_EDITOR_VIEWPORT_COLOR_CONTRACT_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_viewport_color_contract_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_VIEWPORT_COLOR_CONTRACT_HEADERS}")
+file(GENERATE OUTPUT "${HORO_EDITOR_VIEWPORT_COLOR_CONTRACT_HEADERS}/EditorViewportColorTypes.h"
+        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/EditorViewportColorTypes.h\"\n")
+add_library(HoroEditorViewportColorContractInternal INTERFACE)
+target_include_directories(HoroEditorViewportColorContractInternal INTERFACE "${HORO_EDITOR_VIEWPORT_COLOR_CONTRACT_HEADERS}")
+target_link_libraries(HoroEditorViewportColorContractInternal INTERFACE HoroEngine::RenderApi)
+
+set(HORO_EDITOR_VIEWPORT_COLOR_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_viewport_color_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_VIEWPORT_COLOR_HEADERS}")
+foreach(color_header EditorViewportColorPipeline EditorViewportColorGraph EditorViewportDisplayColor)
+    file(GENERATE OUTPUT "${HORO_EDITOR_VIEWPORT_COLOR_HEADERS}/${color_header}.h"
+        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/editor/renderer/${color_header}.h\"\n")
+endforeach()
+add_library(HoroEditorViewportColorInternal STATIC
+        editor/renderer/EditorViewportColorPipeline.cpp
+        editor/renderer/EditorViewportColorPrograms.cpp
+        editor/renderer/EditorViewportColorMaterials.cpp
+        editor/renderer/EditorViewportColorHistory.cpp
+        editor/renderer/EditorViewportColorGraph.cpp)
+target_compile_features(HoroEditorViewportColorInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorViewportColorInternal PUBLIC "${HORO_EDITOR_VIEWPORT_COLOR_HEADERS}")
+target_link_libraries(HoroEditorViewportColorInternal
+        PUBLIC HoroEditorViewportColorContractInternal HoroEngine::RenderApi HoroEngine::RenderFrontend
+        PRIVATE HoroColorOutputPackageInternal HoroColorOutputShaderRecipeInternal HoroRenderFrontendResourceAccessInternal)
+
 add_library(HoroEditorRenderExtraction STATIC
         editor/document/EditorAssetMeshCache.cpp
         editor/document/EditorRenderExtractionErrors.cpp
@@ -3706,6 +3762,15 @@ target_include_directories(HoroEditorXrSceneInternal INTERFACE "${HORO_EDITOR_XR
 target_link_libraries(HoroEditorXrSceneInternal INTERFACE HoroEngine::EditorRenderExtraction)
 
 if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
+    # Window presentation is shared by the viewport and focused native products.
+    # It owns no viewport graph, scene extraction or editor UI behavior.
+    add_library(HoroSdlMetalPresentationInternal STATIC editor/renderer/metal/SdlMetalPresentationPort.mm)
+    target_compile_features(HoroSdlMetalPresentationInternal PUBLIC cxx_std_20)
+    target_compile_options(HoroSdlMetalPresentationInternal PRIVATE -fobjc-arc)
+    target_include_directories(HoroSdlMetalPresentationInternal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(HoroSdlMetalPresentationInternal
+            PUBLIC HoroEngine::RenderMetal ${HORO_SDL3_TARGET}
+            PRIVATE "-framework AppKit" "-framework Metal" "-framework QuartzCore")
     add_library(HoroEditorViewportMetal STATIC
             editor/renderer/metal/EditorGuiRendererMetal.mm
             editor/renderer/metal/EditorViewportRendererMetal.mm
@@ -3716,7 +3781,8 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
             editor/renderer/metal/MetalViewportClusteredGraph.cpp
             editor/renderer/metal/MetalViewportClusteredExecution.cpp
             editor/renderer/metal/MetalViewportClusteredOverlay.cpp
-            editor/renderer/metal/SdlMetalPresentationPort.mm
+            editor/renderer/metal/MetalViewportClusteredSelection.cpp
+            editor/renderer/metal/EditorViewportBaselineDrawParameters.cpp
     )
     add_library(HoroEngine::EditorViewportMetal ALIAS HoroEditorViewportMetal)
 
@@ -3735,6 +3801,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
             HoroEngine::RenderFrontend
             ${HORO_SDL3_TARGET}
             PRIVATE
+            HoroSdlMetalPresentationInternal
             HoroThirdParty::ImGuiMetal
             "-framework AppKit"
             "-framework Metal"
@@ -4607,8 +4674,13 @@ include(HoroPublicHeaderOwnership)
 
 if(TARGET HoroEditorViewportMetal)
     target_link_libraries(HoroEditorViewportMetal PUBLIC HoroEditorViewportShaderRecipeInternal
-        PRIVATE HoroRenderFrontendResourceAccessInternal)
+        PRIVATE HoroRenderFrontendResourceAccessInternal HoroEditorViewportColorInternal)
 endif()
+foreach(color_consumer HoroGui HoroEditorViewportMetal HoroEditorViewportOpenGL HoroEditorVulkanGuiInternal)
+    if(TARGET ${color_consumer})
+        target_link_libraries(${color_consumer} PUBLIC HoroEditorViewportColorContractInternal)
+    endif()
+endforeach()
 if(TARGET HoroEditorViewportOpenGL)
     set(_horo_gl_validation_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/opengl-program-validation")
     file(MAKE_DIRECTORY "${_horo_gl_validation_headers}")
@@ -4623,6 +4695,9 @@ endif()
 
 if(TARGET HoroEditorVulkanShaderInternal)
     target_link_libraries(HoroEditorVulkanShaderInternal PRIVATE HoroEditorViewportShaderRecipeInternal)
+endif()
+if(TARGET HoroEditorVulkanGuiInternal)
+    target_link_libraries(HoroEditorVulkanGuiInternal PRIVATE HoroEditorViewportShaderRecipeInternal)
 endif()
 
 foreach(HORO_LIGHTING_CONSUMER IN ITEMS HoroEditorViewportOpenGL HoroEditorViewportMetal HoroEditorVulkanGuiInternal)

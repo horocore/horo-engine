@@ -404,7 +404,8 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportGeometryCreationFailed, "Viewport image resolver is unavailable."));
         }
-        auto image = config_.resolveImage(*frontend_, pendingViewportTarget_.colorView);
+        auto image =
+            config_.resolveImage(*frontend_, colorPipeline_ ? pendingViewportTarget_.presentationView : pendingViewportTarget_.colorView);
         if (image.HasError())
             return Result<void>::Failure(image.ErrorValue());
         pendingViewportTarget_.imageIdentity = image.Value();
@@ -419,6 +420,11 @@ namespace Horo::Editor {
             return texturesReady;
         if (const auto viewsReady = AdvanceViewportViews(resources); viewsReady.HasError() || !viewsReady.Value())
             return viewsReady;
+        if (colorPipeline_) {
+            const auto color = AdvanceColorPipelineTargets(resources);
+            if (color.HasError() || !color.Value())
+                return color;
+        }
         const Render::FramebufferExtent extent{resources.extent.width, resources.extent.height};
         return AdvanceRenderTarget(*frontend_,
                                    {.colorAttachment = resources.colorView, .depthAttachment = resources.depthView, .extent = extent},
@@ -430,7 +436,9 @@ namespace Horo::Editor {
         const Render::FramebufferExtent extent{resources.extent.width, resources.extent.height};
         const auto color =
             AdvanceTexture(*frontend_, config_.memoryScope,
-                           {.extent = extent, .format = Render::RenderTextureFormat::Rgba8Unorm, .usage = Sampled | RenderAttachment},
+                           {.extent = extent,
+                            .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float : Render::RenderTextureFormat::Rgba8Unorm,
+                            .usage = colorPipeline_ ? Sampled | RenderAttachment | CopySource : Sampled | RenderAttachment},
                            resources.colorTexture, resources.colorTextureOperation);
         if (color.HasError())
             return Result<bool>::Failure(color.ErrorValue());
@@ -445,7 +453,8 @@ namespace Horo::Editor {
     Result<bool> EditorViewportResources::AdvanceViewportViews(ViewportTargetResources &resources) {
         const auto color = AdvanceTextureView(*frontend_,
                                               {.texture = resources.colorTexture,
-                                               .format = Render::RenderTextureFormat::Rgba8Unorm,
+                                               .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float
+                                                                        : Render::RenderTextureFormat::Rgba8Unorm,
                                                .aspect = Render::RenderTextureAspect::Color},
                                               resources.colorView, resources.colorViewOperation);
         if (color.HasError())
@@ -457,6 +466,75 @@ namespace Horo::Editor {
         if (depth.HasError())
             return Result<bool>::Failure(depth.ErrorValue());
         return Result<bool>::Success(color.Value() && depth.Value());
+    }
+
+    /** @copydoc EditorViewportResources::EnableColorPipeline */
+    Result<void> EditorViewportResources::EnableColorPipeline() {
+        if (viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        colorPipeline_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::DisplayTexture */
+    Render::RenderTextureHandle EditorViewportResources::DisplayTexture() const noexcept {
+        return viewportTarget_.displayTexture;
+    }
+
+    /** @copydoc EditorViewportResources::DisplayTextureView */
+    Render::RenderTextureViewHandle EditorViewportResources::DisplayTextureView() const noexcept {
+        return viewportTarget_.displayView;
+    }
+
+    /** @copydoc EditorViewportResources::PresentationTexture */
+    Render::RenderTextureHandle EditorViewportResources::PresentationTexture() const noexcept {
+        return colorPipeline_ ? viewportTarget_.presentationTexture : viewportTarget_.colorTexture;
+    }
+
+    /** @copydoc EditorViewportResources::PresentationTextureView */
+    Render::RenderTextureViewHandle EditorViewportResources::PresentationTextureView() const noexcept {
+        return colorPipeline_ ? viewportTarget_.presentationView : viewportTarget_.colorView;
+    }
+
+    /** @copydoc EditorViewportResources::AdvanceColorPipelineTargets */
+    Result<bool> EditorViewportResources::AdvanceColorPipelineTargets(ViewportTargetResources &resources) {
+        using namespace Render;
+
+        struct Attachment {
+            RenderTextureHandle *texture;
+            RenderTextureViewHandle *view;
+            ResourceOperationId *operation;
+            ResourceOperationId *viewOperation;
+            RenderTextureFormat format;
+        };
+
+        const std::array attachments{Attachment{&resources.displayTexture, &resources.displayView, &resources.displayOperation,
+                                                &resources.displayViewOperation, RenderTextureFormat::Rgba16Float},
+                                     Attachment{&resources.presentationTexture, &resources.presentationView,
+                                                &resources.presentationOperation, &resources.presentationViewOperation,
+                                                RenderTextureFormat::Rgba8Unorm}};
+        bool ready = true;
+        for (const auto &a : attachments) {
+            const auto texture = AdvanceTexture(*frontend_, config_.memoryScope,
+                                                {.extent = {resources.extent.width, resources.extent.height},
+                                                 .format = a.format,
+                                                 .usage = a.format == RenderTextureFormat::Rgba8Unorm
+                                                              ? RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment |
+                                                                    RenderTextureUsage::CopySource
+                                                              : RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment},
+                                                *a.texture, *a.operation);
+            if (texture.HasError())
+                return Result<bool>::Failure(texture.ErrorValue());
+            if (!texture.Value()) {
+                ready = false;
+                continue;
+            }
+            const auto view = AdvanceTextureView(*frontend_, {.texture = *a.texture, .format = a.format}, *a.view, *a.viewOperation);
+            if (view.HasError())
+                return Result<bool>::Failure(view.ErrorValue());
+            ready = ready && view.Value();
+        }
+        return Result<bool>::Success(ready);
     }
 
     Result<void> EditorViewportResources::RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) {
@@ -563,6 +641,12 @@ namespace Horo::Editor {
             static_cast<void>(frontend_->ReleaseTexture(resources.depthTexture));
         if (resources.colorTexture.IsValid())
             static_cast<void>(frontend_->ReleaseTexture(resources.colorTexture));
+        for (const auto view : {resources.displayView, resources.presentationView})
+            if (view.IsValid())
+                static_cast<void>(frontend_->ReleaseTextureView(view));
+        for (const auto texture : {resources.displayTexture, resources.presentationTexture})
+            if (texture.IsValid())
+                static_cast<void>(frontend_->ReleaseTexture(texture));
         resources = {};
     }
 }  // namespace Horo::Editor

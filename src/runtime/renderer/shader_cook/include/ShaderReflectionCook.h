@@ -17,7 +17,9 @@ namespace Horo::Render {
 
     /** @brief Validates a bounded float-register raster interface before invoking native translators.
      * @details Supports one read-only uniform block of float4/float4x4 fields and literal arrays,
-     * with at most one ordinary sampled texture/sampler pair. This validates logical inputs only;
+     * with at most one ordinary sampled texture/sampler pair on OpenGL; Metal admits up to eight independent
+     * ordinary sampled images and eight independent samplers. Multi-resource Metal evidence establishes
+     * exact independent native bindings, not inferred image/sampler usage pairs. This validates logical inputs only;
      * it provides no native offsets, slots, shader compatibility or execution evidence.
      */
     [[nodiscard]] Result<void> ValidateRegisterRasterReflection(const ShaderManifest &manifest, const ShaderTargetRequirement &target,

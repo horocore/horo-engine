@@ -8,9 +8,20 @@ namespace Horo::Editor {
     using namespace Render;
 
     struct MetalViewportGraphAuthor final {
-        MetalViewportGraphAuthor(RenderGraphBuilder &source, const RenderQueueId graphics) : builder(source), queue(graphics) {}
+        MetalViewportGraphAuthor(RenderGraphBuilder &source, const RenderQueueId graphics, bool clustered)
+            : builder(source), culling(clustered), queue(graphics) {}
 
         RenderGraphBuilder &builder;
+        bool culling;
+
+        std::size_t BaseCount() const noexcept {
+            return culling ? 9 : 8;
+        }
+
+        std::size_t RasterIndex(std::size_t role) const noexcept {
+            return role + (culling && role > 0 ? 1 : 0);
+        }
+
         RenderQueueId queue;
         std::vector<std::pair<RenderBufferHandle, RenderGraphResourceId>> buffers;
         std::vector<RenderGraphImportedState> initial;
@@ -18,7 +29,7 @@ namespace Horo::Editor {
         RenderGraphResourceId color, depth, atlas;
         std::array<RenderGraphResourceId, 4> lightBuffers;
         std::array<RenderBufferHandle, 4> bufferHandles;
-        std::array<RenderGraphPassRef, MetalViewportClusteredFrame::MaximumPasses> passes;
+        std::array<RenderGraphPassRef, 9> passes;
 
         template <typename T> T Take(Result<T> result) {
             if (result.HasError()) {
@@ -60,18 +71,25 @@ namespace Horo::Editor {
         }
 
         void AuthorPassesAndCulling() {
-            for (std::size_t index = 0; index < this->lightBuffers.size(); ++index)
-                this->lightBuffers[index] = Buffer(this->bufferHandles[index], RenderGraphSynchronizationOperation::Storage);
             auto &passes = this->passes;
-            for (std::size_t index = 0; index < passes.size(); ++index) {
-                passes[index] =
-                    Take(builder.AddPass(index == 1 ? RenderPassKind::Compute : RenderPassKind::Graphics, RenderQueueRole::Graphics));
+            for (std::size_t index = 0; index < BaseCount(); ++index) {
+                passes[index] = Take(
+                    builder.AddPass(culling && index == 1 ? RenderPassKind::Compute : RenderPassKind::Graphics, RenderQueueRole::Graphics));
                 if (index != 0)
                     Take(builder.AddDependency({passes[index - 1], passes[index], RenderGraphDependencyKind::ExecutionOrder}));
             }
-            const auto culling = passes[1];
+            AuthorCulling();
+        }
+
+        /** @brief Adds only the real closed culling operation when the selected family contains its native kernel. */
+        void AuthorCulling() {
+            if (!culling)
+                return;
+            for (std::size_t i = 0; i < lightBuffers.size(); ++i)
+                lightBuffers[i] = Buffer(bufferHandles[i], RenderGraphSynchronizationOperation::Storage);
+            const auto compute = passes[1];
             for (std::size_t index = 0; index < this->lightBuffers.size(); ++index)
-                Use(culling, this->lightBuffers[index], index < 2 ? RenderGraphAccess::Read : RenderGraphAccess::Write,
+                Use(compute, this->lightBuffers[index], index < 2 ? RenderGraphAccess::Read : RenderGraphAccess::Write,
                     RenderGraphUsageKind::Storage);
         }
     };
@@ -146,6 +164,10 @@ namespace Horo::Editor {
         for (std::uint32_t cascades = 0; cascades < slot.variants.size(); ++cascades)
             if (const auto built = BuildVariant(slot, slot.variants[cascades], cascades, descriptor); built.HasError())
                 return built;
+        if (color_) {
+            slot.colorPrevious = color_->Previous().buffer;
+            slot.colorOutput = color_->Produced().buffer;
+        }
         slot.meshCount = descriptor.scene.instances.size();
         slot.color = resources_->ColorTexture();
         slot.depth = resources_->DepthTexture();
@@ -153,6 +175,15 @@ namespace Horo::Editor {
         slot.atlasGeneration = resources_->ShadowGeneration();
         for (std::size_t draw = 0; draw < slot.meshCount; ++draw)
             slot.meshes[draw] = resources_->FindMesh(descriptor.scene.instances[draw].mesh.id.value)->mesh;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc MetalViewportClusteredFrame::PrepareSelectionMaterials */
+    Result<void> MetalViewportClusteredFrame::PrepareSelectionMaterials(Slot &slot, const RenderSceneView &scene) {
+        if (color_)
+            for (std::size_t draw = 0; draw < scene.instances.size(); ++draw)
+                if (const auto material = PrepareMaterial(slot, 7, draw); material.HasError())
+                    return material;
         return Result<void>::Success();
     }
 
@@ -168,6 +199,40 @@ namespace Horo::Editor {
         for (std::size_t draw = 0; draw < slot.overlays.size(); ++draw)
             if (const auto material = PrepareMaterial(slot, 6, draw); material.HasError())
                 return material;
+        if (const auto selection = PrepareSelectionMaterials(slot, scene); selection.HasError())
+            return selection;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc MetalViewportClusteredFrame::AppendColorPasses */
+    Result<void> MetalViewportClusteredFrame::AppendColorPasses(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author,
+                                                                const StaticMeshPassDescriptor &descriptor) {
+        if (!color_)
+            return Result<void>::Success();
+        const auto &passes = author.passes;
+        const auto display = author.Texture(resources_->DisplayTexture());
+        auto pre = variant.colorGraph.AppendScene(author.builder, *color_, author.queue, author.initial, author.color, display,
+                                                  resources_->DisplayTextureView(), passes[author.RasterIndex(5)], descriptor.extent);
+        if (pre.HasError())
+            return Result<void>::Failure(pre.ErrorValue());
+        author.Take(author.builder.AddDependency({pre.Value(), passes[author.RasterIndex(6)], RenderGraphDependencyKind::ExecutionOrder}));
+        auto &overlay = std::get<RenderGraphMaterialRaster>(variant.workloads[author.RasterIndex(6)].workload);
+        overlay.color = display;
+        overlay.colorView = resources_->DisplayTextureView();
+        author.Use(passes[author.RasterIndex(6)], display, RenderGraphAccess::ReadWrite, RenderGraphUsageKind::ColorAttachment);
+        const auto selection = author.Take(author.builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+        author.Take(author.builder.AddDependency({passes[author.RasterIndex(6)], selection, RenderGraphDependencyKind::ExecutionOrder}));
+        if (const auto selected = BuildSelectionRaster(slot, variant, author, selection, display, descriptor); selected.HasError())
+            return selected;
+        const auto final = author.Texture(resources_->PresentationTexture());
+        const auto encoded =
+            variant.colorGraph.AppendEncode(author.builder, *color_, final, resources_->PresentationTextureView(), selection);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        author.Take(
+            author.builder.AddDependency({encoded.Value(), passes[author.BaseCount() - 1], RenderGraphDependencyKind::ExecutionOrder}));
+        const auto colorWork = variant.colorGraph.Workloads();
+        std::copy(colorWork.begin(), colorWork.end(), variant.workloads.begin() + author.BaseCount());
         return Result<void>::Success();
     }
 
@@ -181,11 +246,11 @@ namespace Horo::Editor {
         if (graphics == queues.Value().end())
             return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
         auto created = RenderGraphBuilder::Create(
-            {.maxPasses = MaximumPasses, .maxResources = 300, .maxUsages = 2500, .maxDependencies = MaximumPasses});
+            {.maxPasses = MaximumPasses, .maxResources = 300, .maxUsages = 2500, .maxDependencies = MaximumPasses * 2});
         if (created.HasError())
             return Result<void>::Failure(created.ErrorValue());
         auto builder = std::move(created).Value();
-        MetalViewportGraphAuthor author{builder, graphics->queue};
+        MetalViewportGraphAuthor author{builder, graphics->queue, programs_->UsesCulling()};
         author.color = author.Texture(resources_->ColorTexture());
         author.depth = author.Texture(resources_->DepthTexture());
         author.atlas = author.Texture(resources_->ShadowDepthTexture());
@@ -195,12 +260,15 @@ namespace Horo::Editor {
         author.AuthorPassesAndCulling();
         const auto &passes = author.passes;
         const auto culling = passes[1];
-        variant.workloads[1] = {culling, RenderGraphLightCulling{lightBuffers[0], lightBuffers[1], lightBuffers[2], lightBuffers[3],
-                                                                 slot.uploaded.dispatch, slot.uploaded.revision, programs_->Kernel()}};
+        if (programs_->UsesCulling())
+            variant.workloads[1] = {culling, RenderGraphLightCulling{lightBuffers[0], lightBuffers[1], lightBuffers[2], lightBuffers[3],
+                                                                     slot.uploaded.dispatch, slot.uploaded.revision, programs_->Kernel()}};
         for (std::size_t pass = 0; pass < variant.draws.size(); ++pass)
             if (auto raster = BuildRaster(slot, variant, author, pass, cascadeCount, descriptor); raster.HasError())
                 return raster;
-        variant.workloads[8] = {passes[8], PrimaryOutputAttachment{}};
+        if (const auto color = AppendColorPasses(slot, variant, author, descriptor); color.HasError())
+            return color;
+        variant.workloads[author.BaseCount() - 1] = {passes[author.BaseCount() - 1], PrimaryOutputAttachment{}};
         auto graph = CompileViewportGraph(author, queues.Value());
         if (graph.HasError())
             return Result<void>::Failure(graph.ErrorValue());
@@ -208,13 +276,23 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc MetalViewportClusteredFrame::AttachRaster */
+    void MetalViewportClusteredFrame::AttachRaster(MetalViewportGraphAuthor &author, RenderGraphMaterialRaster &raster, std::size_t pass) {
+        if (color_ && pass == 6) {
+            raster.color = {};  // Assigned with the actual display resource after the analytic pass is appended.
+            author.Use(author.passes[author.RasterIndex(pass)], raster.depth, RenderGraphAccess::ReadWrite,
+                       RenderGraphUsageKind::DepthStencilAttachment);
+        } else
+            AddAttachmentUses(author, author.passes[author.RasterIndex(pass)], raster);
+    }
+
     Result<void> MetalViewportClusteredFrame::BuildRaster(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author,
                                                           const std::size_t pass, const std::uint32_t cascadeCount,
                                                           const Render::StaticMeshPassDescriptor &descriptor) {
         auto raster = CreateViewportRaster(*resources_, author, pass, descriptor);
         const bool isShadow = pass >= 1 && pass <= 4;
-        const auto graphIndex = pass == 0 ? 0 : pass + 1;
-        AddAttachmentUses(author, author.passes[graphIndex], raster);
+        const auto graphIndex = author.RasterIndex(pass);
+        AttachRaster(author, raster, pass);
         if (pass == 6) {
             if (auto overlay = BuildOverlayRaster(slot, variant, author, raster); overlay.HasError())
                 return overlay;
@@ -232,7 +310,7 @@ namespace Horo::Editor {
                                                                const RenderSceneView &scene) {
         if (scene.instances.empty())
             return Result<void>::Success();
-        const auto graphPass = author.passes[pass == 0 ? 0 : pass + 1];
+        const auto graphPass = author.passes[author.RasterIndex(pass)];
         std::vector<RenderGraphResourceId> used;
         std::size_t readCount{};
         const auto uniform = slot.uniformBuffers[pass == 5 ? 0 : 2];
@@ -242,10 +320,11 @@ namespace Horo::Editor {
         if (pass == 5) {
             author.Use(graphPass, author.atlas, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled);
             variant.reads[pass][readCount++] = {author.atlas, {}, resources_->ShadowTextureView()};
-            for (const auto index : {0U, 2U, 3U}) {
-                author.Use(graphPass, author.lightBuffers[index], RenderGraphAccess::Read, RenderGraphUsageKind::Storage);
-                variant.reads[pass][readCount++] = {author.lightBuffers[index], author.bufferHandles[index], {}};
-            }
+            if (programs_->UsesCulling())
+                for (const auto index : {0U, 2U, 3U}) {
+                    author.Use(graphPass, author.lightBuffers[index], RenderGraphAccess::Read, RenderGraphUsageKind::Storage);
+                    variant.reads[pass][readCount++] = {author.lightBuffers[index], author.bufferHandles[index], {}};
+                }
         }
         for (std::size_t draw = 0; draw < scene.instances.size(); ++draw) {
             const auto mesh = resources_->FindMesh(scene.instances[draw].mesh.id.value);
@@ -262,9 +341,43 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc MetalViewportClusteredFrame::BuildSelectionRaster */
+    Result<void> MetalViewportClusteredFrame::BuildSelectionRaster(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author,
+                                                                   RenderGraphPassRef pass, RenderGraphResourceId display,
+                                                                   const StaticMeshPassDescriptor &descriptor) {
+        const auto uniform = author.Buffer(slot.uniformBuffers[1], RenderGraphSynchronizationOperation::GraphicsInputBuffer);
+        author.Use(pass, uniform, RenderGraphAccess::Read, RenderGraphUsageKind::UniformBuffer);
+        variant.selectionReads[0] = {uniform, slot.uniformBuffers[1], {}};
+        std::size_t count = 1;
+        std::vector<RenderGraphResourceId> used;
+        for (std::size_t draw = 0; draw < descriptor.scene.instances.size(); ++draw) {
+            const auto mesh = resources_->FindMesh(descriptor.scene.instances[draw].mesh.id.value);
+            if (!mesh)
+                return Result<void>::Failure(MakeError(LightCullingErrors::Pending));
+            const auto vertex = author.Buffer(mesh->descriptor.vertexBuffer, RenderGraphSynchronizationOperation::GraphicsInputBuffer);
+            const auto index = author.Buffer(mesh->descriptor.indexBuffer, RenderGraphSynchronizationOperation::GraphicsInputBuffer);
+            AddUniqueUse(author, pass, vertex, RenderGraphUsageKind::VertexBuffer, used);
+            AddUniqueUse(author, pass, index, RenderGraphUsageKind::IndexBuffer, used);
+            variant.selectionDraws[draw] = {mesh->mesh, vertex, index, slot.uniforms[7 * MaximumDraws + draw].material};
+        }
+        author.Use(pass, display, RenderGraphAccess::ReadWrite, RenderGraphUsageKind::ColorAttachment);
+        author.Use(pass, author.depth, RenderGraphAccess::ReadWrite, RenderGraphUsageKind::DepthStencilAttachment);
+        variant.workloads[author.BaseCount() + 3] =
+            {pass, RenderGraphMaterialRaster{.color = display,
+                                             .depth = author.depth,
+                                             .colorView = resources_->DisplayTextureView(),
+                                             .depthView = resources_->DepthTextureView(),
+                                             .extent = descriptor.extent,
+                                             .colorOperations = {.loadOperation = AttachmentLoadOperation::Load},
+                                             .depthClear = std::nullopt,
+                                             .draws = std::span{variant.selectionDraws}.first(descriptor.scene.instances.size()),
+                                             .reads = std::span{variant.selectionReads}.first(count)}};
+        return author.error ? Result<void>::Failure(*author.error) : Result<void>::Success();
+    }
+
     Result<void> MetalViewportClusteredFrame::BuildOverlayRaster(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author,
                                                                  RenderGraphMaterialRaster &raster) {
-        const auto pass = author.passes[7];
+        const auto pass = author.passes[author.RasterIndex(6)];
         const auto uniform = author.Buffer(slot.uniformBuffers[1], RenderGraphSynchronizationOperation::GraphicsInputBuffer);
         author.Use(pass, uniform, RenderGraphAccess::Read, RenderGraphUsageKind::UniformBuffer);
         variant.reads[6][0] = {uniform, slot.uniformBuffers[1], {}};

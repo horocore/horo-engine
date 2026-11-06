@@ -536,6 +536,7 @@ namespace Horo::Editor {
         candidate.uniforms.shadowBiasFilter = glGetUniformLocation(candidate.program, "uShadowBiasFilter");
         candidate.uniforms.selectionColor = glGetUniformLocation(candidate.program, "uSelectionColor");
         candidate.uniforms.selectionStrength = glGetUniformLocation(candidate.program, "uSelectionStrength");
+        candidate.uniforms.baseColor = glGetUniformLocation(candidate.program, "uBaseColor");
         if (const std::array locations{
                 candidate.uniforms.mvp,
                 candidate.uniforms.model,
@@ -557,6 +558,7 @@ namespace Horo::Editor {
                 candidate.uniforms.shadowBiasFilter,
                 candidate.uniforms.selectionColor,
                 candidate.uniforms.selectionStrength,
+                candidate.uniforms.baseColor,
             };
             !std::ranges::all_of(locations, [](const std::int32_t location) {
             return location >= 0;
@@ -696,6 +698,7 @@ namespace Horo::Editor {
             cones[index * 2 + 1] = light.outerConeCosine;
         }
         glUniform3f(uniforms_.cameraPosition, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z);
+        glUniform3fv(uniforms_.baseColor, 1, reloadParameters_.baseColor.data());
         glUniform1i(uniforms_.lightCount, static_cast<GLint>(scene.lights.size()));
         glUniformMatrix4fv(uniforms_.shadowViewProjection, 4, GL_FALSE, reloadParameters_.shadow.data());
         glUniform4fv(uniforms_.cascadeSplits, 4, reloadParameters_.cascadeSplits.data());

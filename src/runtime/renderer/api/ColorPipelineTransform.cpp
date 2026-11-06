@@ -22,32 +22,23 @@ namespace Horo::Render {
             const std::array lows{low.x, low.y, low.z};
             const std::array highs{high.x, high.y, high.z};
             for (std::size_t i = 0; i < lows.size(); ++i)
-                if (!std::isfinite(lows[i]) || !std::isfinite(highs[i]) || lows[i] >= highs[i])
+                if (!std::isfinite(lows[i]) || !std::isfinite(highs[i]) || lows[i] >= highs[i] || !std::isfinite(highs[i] - lows[i]))
                     return false;
             return true;
         }
 
-        /** @brief Checks bounded target luminance metadata. */
-        bool LuminanceValid(const ColorTransformDescriptor &d) noexcept {
-            const std::array values{d.referenceWhiteNits, d.peakNits, d.blackNits};
-            for (float value : values)
-                if (!std::isfinite(value) || value < 0 || value > 10'000)
-                    return false;
-            return d.referenceWhiteNits > 0 && d.blackNits < d.referenceWhiteNits && d.referenceWhiteNits <= d.peakNits;
-        }
-
         /** @brief Checks complete versioned cook provenance metadata. */
         bool IdentityValid(const ColorTransformDescriptor &d) noexcept {
-            return d.schemaVersion == 1 && d.configurationRelease > 0 && DigestPresent(d.configurationDigest) &&
+            return d.schemaVersion == 2 && d.configurationRelease > 0 && DigestPresent(d.configurationDigest) &&
                    DigestPresent(d.payloadDigest) && DigestPresent(d.referenceDigest);
         }
 
         /** @brief Checks the closed LUT descriptor vocabulary and finite bounds. */
         bool DescriptorValid(const ColorTransformDescriptor &d) noexcept {
-            const bool enums = static_cast<unsigned>(d.role) <= static_cast<unsigned>(ColorTransformRole::NeutralDiagnostic) &&
+            const bool enums = d.role == ColorTransformRole::CreativeLook &&
                                static_cast<unsigned>(d.interpolation) <= static_cast<unsigned>(ColorLutInterpolation::Tetrahedral);
-            return enums && IdentityValid(d) && d.dimension >= 2 && d.dimension <= 65 && DomainValid(d.domainMinimum, d.domainMaximum) &&
-                   d.output.IsValid() && LuminanceValid(d);
+            return enums && d.domainPolicy == ColorLookDomainPolicy::RejectOutsideV1 && IdentityValid(d) && d.dimension >= 2 &&
+                   d.dimension <= 65 && DomainValid(d.domainMinimum, d.domainMaximum);
         }
 
         /** @brief Hashes canonical little-endian IEEE754 sample bytes without native-endian dependence. */
@@ -63,11 +54,31 @@ namespace Horo::Render {
             }
             return hash.Finalize();
         }
+
+        /** @brief Appends one exact IEEE754 value in canonical little-endian byte order. */
+        void AppendFloat(std::vector<std::byte> &bytes, float value) {
+            const auto bits = std::bit_cast<std::uint32_t>(value);
+            for (unsigned shift = 0; shift < 32; shift += 8)
+                bytes.push_back(std::byte((bits >> shift) & 255U));
+        }
+
+        /** @brief Derives only storage padding; no color sample is converted, interpolated or approximated. */
+        std::vector<std::byte> Atlas(std::span<const float> rgb) {
+            std::vector<std::byte> bytes;
+            bytes.reserve(rgb.size() / 3 * 16);
+            for (std::size_t i = 0; i < rgb.size(); i += 3) {
+                AppendFloat(bytes, rgb[i]);
+                AppendFloat(bytes, rgb[i + 1]);
+                AppendFloat(bytes, rgb[i + 2]);
+                AppendFloat(bytes, 1.0F);
+            }
+            return bytes;
+        }
     }  // namespace
 
     /** @copydoc CookedColorTransform::CookedColorTransform */
     CookedColorTransform::CookedColorTransform(ColorTransformDescriptor descriptor, std::vector<float> rgb)
-        : descriptor_(std::move(descriptor)), rgb_(std::move(rgb)) {}
+        : descriptor_(std::move(descriptor)), rgb_(std::move(rgb)), atlas_(Atlas(rgb_)), atlasDigest_(ComputeSha256(atlas_)) {}
 
     /** @copydoc CookedColorTransform::Create */
     Result<std::shared_ptr<const CookedColorTransform>> CookedColorTransform::Create(ColorTransformDescriptor descriptor,
@@ -99,5 +110,30 @@ namespace Horo::Render {
     /** @copydoc CookedColorTransform::Rgb */
     std::span<const float> CookedColorTransform::Rgb() const noexcept {
         return rgb_;
+    }
+}  // namespace Horo::Render
+
+namespace Horo::Render {
+    /** @copydoc CookedColorTransform::AtlasDescriptor */
+    RenderTextureDescriptor CookedColorTransform::AtlasDescriptor() const noexcept {
+        const auto n = descriptor_.dimension;
+        return {.extent = {n * n, n},
+                .format = RenderTextureFormat::Rgba32Float,
+                .usage = RenderTextureUsage::Sampled | RenderTextureUsage::CopyDestination};
+    }
+
+    /** @copydoc CookedColorTransform::AtlasUpload */
+    std::span<const std::byte> CookedColorTransform::AtlasUpload() const noexcept {
+        return atlas_;
+    }
+
+    /** @copydoc CookedColorTransform::AtlasDigest */
+    Sha256Digest CookedColorTransform::AtlasDigest() const noexcept {
+        return atlasDigest_;
+    }
+
+    /** @copydoc CookedColorTransform::PayloadBytes */
+    std::uint64_t CookedColorTransform::PayloadBytes() const noexcept {
+        return rgb_.size() * sizeof(float) + atlas_.size();
     }
 }  // namespace Horo::Render

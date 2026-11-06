@@ -34,6 +34,10 @@ namespace Horo::Tests::RenderFrontendTesting {
             const auto incarnation = AcquireRenderDeviceIncarnation();
             if (incarnation.HasError())
                 return Result<void>::Failure(incarnation.ErrorValue());
+            if (lifecycleState.syntheticCapabilities) {
+                capabilities_.support = *lifecycleState.syntheticCapabilities;
+                capabilities_.support.synthetic = true;
+            }
             capabilities_.support.deviceIncarnation = incarnation.Value();
             if (lifecycleState.completeMultiviewViews != 0) {
                 capabilities_.support.capabilityRevision = 1;
@@ -70,6 +74,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+            ++lifecycleState.textureMemoryCostQueries;
             if (lifecycleState.textureMemoryCostFailure)
                 return Result<RenderMemoryCostPlan>::Failure(*lifecycleState.textureMemoryCostFailure);
             const std::size_t bytes = RenderTextureBaseLevelByteSize(descriptor).value_or(0);

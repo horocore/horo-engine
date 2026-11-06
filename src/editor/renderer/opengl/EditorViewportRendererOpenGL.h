@@ -98,6 +98,7 @@ namespace Horo::Editor {
                 shadowBiasFilter{-1};
             std::int32_t selectionColor{-1};
             std::int32_t selectionStrength{-1};
+            std::int32_t baseColor{-1};
         };
 
         [[nodiscard]] Result<void> LoadUniformLocations(ProgramGeneration &candidate);

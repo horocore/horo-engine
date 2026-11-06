@@ -15,12 +15,13 @@ namespace Horo::Editor {
                     {{9}, {1}, ShaderValueType::Float32, 1, 4, 1},  {{10}, {1}, ShaderValueType::Float32, 1, 4, 1},
                     {{11}, {1}, ShaderValueType::Float32, 1, 4, 1}, {{12}, {1}, ShaderValueType::Float32, 1, 4, 4},
                     {{13}, {1}, ShaderValueType::Float32, 1, 4, 4}, {{14}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                    {{15}, {1}, ShaderValueType::Float32, 1, 4, 1}};
+                    {{15}, {1}, ShaderValueType::Float32, 1, 4, 1}, {{20}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                    {{21}, {1}, ShaderValueType::Float32, 1, 4, 1}};
         }
 
         void DescribeLit(ShaderManifest &manifest) {
             manifest.sourceIdentity = "engine/editor/viewport_lit.hlsl";
-            manifest.sourceRevision = 2;
+            manifest.sourceRevision = 4;
             manifest
                 .bindings = {{{1},
                               ShaderResourceKind::UniformBuffer,
@@ -34,6 +35,7 @@ namespace Horo::Editor {
 
         void DescribeGrid(ShaderManifest &manifest) {
             manifest.sourceIdentity = "engine/editor/viewport_grid.hlsl";
+            manifest.sourceRevision = 2;
             manifest.bindings = {{{1},
                                   ShaderResourceKind::UniformBuffer,
                                   ShaderResourceAccess::ReadOnly,
@@ -111,7 +113,9 @@ namespace Horo::Editor {
                           {{12}, "CascadeSplits"},
                           {{13}, "AtlasRects"},
                           {{14}, "CameraForward"},
-                          {{15}, "ShadowBiasFilter"}}},
+                          {{15}, "ShadowBiasFilter"},
+                          {{20}, "BaseColor"},
+                          {{21}, "SceneColorPolicy"}}},
                         {{2}, "ShadowMap", {}},
                         {{3}, "ShadowSampler", {}}};
             case EditorViewportShaderProgram::Grid:

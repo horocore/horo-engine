@@ -6,6 +6,7 @@
  */
 
 #include "EditorRendererErrors.h"
+#include "EditorViewportColorTypes.h"
 #include "EditorViewportLighting.h"
 #include "EditorViewportTextureView.h"
 #include "Horo/Foundation/Result.h"
@@ -56,6 +57,36 @@ namespace Horo::Editor {
     class IEditorViewportRenderer : public Render::IStaticMeshPassExecutor {
     public:
         virtual ~IEditorViewportRenderer() = default;
+
+        /** @brief Activates only explicit genuine cooked color inputs at cold startup. @param inputs Exact decoded generation.
+         * @return Typed unsupported on implementations without the actual complete color executor. */
+        [[nodiscard]] virtual Result<void> PrepareColorPipeline(const EditorViewportColorInputs &inputs) {
+            static_cast<void>(inputs);
+            return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
+        }
+
+        /** @brief Selects exact authored exposure settings. @param settings Next settings. @return Admission result. */
+        [[nodiscard]] virtual Result<void> RequestColorSettings(const Render::ExposureSettings &settings) {
+            static_cast<void>(settings);
+            return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
+        }
+
+        /** @brief Supplies actual normalized host clock delta before the existing pre-frame preparation. @param deltaSeconds Selected view
+         * seconds. */
+        virtual void SetColorFrameDelta(float deltaSeconds) noexcept {
+            static_cast<void>(deltaSeconds);
+        }
+
+        /** @brief Finishes a prepared candidate only after actual native Present, or cancels it. @param accepted Actual frame acceptance.
+         */
+        virtual void FinishColorFrame(bool accepted) noexcept {
+            static_cast<void>(accepted);
+        }
+
+        /** @brief Observes explicit pending/unavailable/reset lifecycle metadata. @return Bounded typed status, no fabricated EV. */
+        [[nodiscard]] virtual EditorViewportColorDiagnostics ColorDiagnostics() const noexcept {
+            return {};
+        }
 
         /** @brief Requests a validated shadow budget for the next resource boundary.
          * @param profile Explicit product quality, filtering and atlas budget.

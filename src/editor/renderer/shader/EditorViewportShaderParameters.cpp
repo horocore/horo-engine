@@ -3,9 +3,12 @@
 #include "../EditorRendererErrors.h"
 #include "EditorViewportMatrixComponents.h"
 #include "EditorViewportShaderRecipe.h"
+#include "Horo/Runtime/Render/SceneColorEncoding.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 
 #include <algorithm>
+#include <cmath>
+#include <exception>
 
 namespace Horo::Editor {
     namespace {
@@ -43,6 +46,20 @@ namespace Horo::Editor {
         if (valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
         return Outcome::Success(&artifact);
+    }
+
+    /** @copydoc EditorViewportFixedMaterialBaseColor */
+    std::array<float, 4> EditorViewportFixedMaterialBaseColor() noexcept {
+        static const auto prepared = [] {
+            // Explicit interpretation of this authored Editor constant, not an inference about historical project colors.
+            const auto converted =
+                Render::ConvertSceneColorToAcesCg({0.68F, 0.70F, 0.74F}, {Render::SceneColorEncoding::LegacyLinearRec709D65, 1});
+            if (converted.HasError())
+                std::terminate();
+            const auto color = converted.Value();
+            return std::array<float, 4>{color.x, color.y, color.z, 1.0F};
+        }();
+        return prepared;
     }
 
     void EditorViewportShaderParameters::SetScene(const Render::RenderSceneView &scene,
@@ -85,12 +102,14 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorViewportShaderParameters::PackLit */
     Result<std::size_t> EditorViewportShaderParameters::PackLit(const Render::MaterialBindingLayout &layout,
                                                                 const std::span<std::byte> destination) const {
         const auto mvpComponents = Detail::MatrixRowMajorComponents(mvp.values);
         const auto modelComponents = Detail::MatrixRowMajorComponents(model.values);
         const auto shadowComponents = Detail::MatrixRowMajorComponents(shadow);
-        const std::array<Render::MaterialParameterValue, 15> values{{{{1}, std::span<const float>{mvpComponents}},
+        const std::array<float, 4> sceneColorPolicy{unexposedAcesCg ? 1.0F : 0.0F, 0, 0, 0};
+        const std::array<Render::MaterialParameterValue, 17> values{{{{1}, std::span<const float>{mvpComponents}},
                                                                      {{2}, std::span<const float>{modelComponents}},
                                                                      {{3}, std::span<const float>{shadowComponents}},
                                                                      {{4}, std::span<const float>{camera}},
@@ -104,7 +123,9 @@ namespace Horo::Editor {
                                                                      {{12}, std::span<const float>{cascadeSplits}},
                                                                      {{13}, std::span<const float>{atlasRects}},
                                                                      {{14}, std::span<const float>{cameraForward}},
-                                                                     {{15}, std::span<const float>{shadowBiasFilter}}}};
+                                                                     {{15}, std::span<const float>{shadowBiasFilter}},
+                                                                     {{20}, std::span<const float>{baseColor}},
+                                                                     {{21}, std::span<const float>{sceneColorPolicy}}}};
         return Render::PackMaterialParameterBinding(layout, {1}, values, destination);
     }
 
@@ -118,9 +139,11 @@ namespace Horo::Editor {
     }
 
     Result<std::size_t> PackEditorViewportGrid(const Render::MaterialBindingLayout &layout, const Math::Mat4 &mvp, const Math::Vec3 color,
-                                               const std::span<std::byte> destination) {
+                                               const std::span<std::byte> destination, float alpha) {
+        if (!std::isfinite(alpha) || alpha < 0 || alpha > 1)
+            return Result<std::size_t>::Failure(MakeError(RendererErrors::ViewportShaderContractInvalid));
         const auto mvpComponents = Detail::MatrixRowMajorComponents(mvp.values);
-        const std::array<float, 4> rgba{color.x, color.y, color.z, 1};
+        const std::array<float, 4> rgba{color.x, color.y, color.z, alpha};
         const std::array<Render::MaterialParameterValue, 2> values{
             {{{1}, std::span<const float>{mvpComponents}}, {{2}, std::span<const float>{rgba}}}};
         return Render::PackMaterialParameterBinding(layout, {1}, values, destination);

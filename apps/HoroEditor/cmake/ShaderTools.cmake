@@ -12,13 +12,20 @@ target_link_libraries(HoroEditorVulkanShaderCook PRIVATE HoroEditorVulkanShaderI
 
 include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorClusteredLightingAssets.cmake")
 horo_add_editor_clustered_lighting_assets_target()
+include(HoroEditorBaselineLightingAssets)
+horo_add_editor_baseline_lighting_assets_target()
 
 if(TARGET HoroEditor)
-    target_link_libraries(HoroEditor PRIVATE HoroEditorClusteredLightingAssetsInternal HoroEngine::EditorViewportLightingInternal)
+    target_link_libraries(HoroEditor PRIVATE HoroEditorClusteredLightingAssetsInternal
+        HoroEditorBaselineLightingAssetsInternal HoroEngine::EditorViewportLightingInternal)
 endif()
 
 if(TARGET HoroEditor AND TARGET HoroEditorViewportMetal)
     target_sources(HoroEditor PRIVATE HoroEditor/app/EditorClusteredLightingStartup.cpp)
+    target_sources(HoroEditor PRIVATE HoroEditor/app/EditorColorPipelineStartup.cpp)
+    target_link_libraries(HoroEditor PRIVATE HoroColorOutputPackageInternal HoroEditorViewportColorInternal)
+    include(HoroEditorColorPipelineAssets)
+    horo_stage_editor_color_pipeline()
 endif()
 
 # Explicit offline preparation; never linked into the running editor or runtime.
@@ -37,6 +44,23 @@ target_link_libraries(HoroEditorClusteredLightingCookInternal PUBLIC HoroEditorS
 add_executable(HoroEditorClusteredLightingShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/ClusteredLightingCookMain.cpp)
 target_compile_features(HoroEditorClusteredLightingShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorClusteredLightingShaderCook PRIVATE HoroEditorClusteredLightingCookInternal)
+
+# Forward rendering consumes its own complete generic raster family, with no compute artifact.
+set(HORO_BASELINE_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/baseline_cook_headers")
+file(MAKE_DIRECTORY "${HORO_BASELINE_COOK_HEADERS}")
+configure_file(HoroEditor/tools/BaselineLightingCook.h
+    "${HORO_BASELINE_COOK_HEADERS}/BaselineLightingCook.h" COPYONLY)
+add_library(HoroEditorBaselineLightingCookInternal STATIC
+    HoroEditor/tools/BaselineLightingCook.cpp
+    HoroEditor/tools/BaselineLightingCookPackage.cpp)
+target_compile_features(HoroEditorBaselineLightingCookInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorBaselineLightingCookInternal PUBLIC "${HORO_BASELINE_COOK_HEADERS}")
+target_link_libraries(HoroEditorBaselineLightingCookInternal PUBLIC HoroEditorShaderCookHostInternal
+    PRIVATE HoroEditorBaselineLightingAssetsInternal HoroEditorViewportShaderRecipeInternal
+    HoroShaderReflectionCookInternal HoroEngine::Platform HoroAtomicShaderCookPackageInternal)
+add_executable(HoroEditorBaselineLightingShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/BaselineLightingCookMain.cpp)
+target_compile_features(HoroEditorBaselineLightingShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorBaselineLightingShaderCook PRIVATE HoroEditorBaselineLightingCookInternal)
 
 set(HORO_VFX_GPU_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/vfx_gpu_cook_headers")
 file(MAKE_DIRECTORY "${HORO_VFX_GPU_COOK_HEADERS}")
@@ -57,11 +81,28 @@ configure_file(HoroEditor/tools/ExposureGpuCook.h "${HORO_EXPOSURE_GPU_COOK_HEAD
 add_library(HoroExposureGpuCookInternal STATIC HoroEditor/tools/ExposureGpuCook.cpp)
 target_compile_features(HoroExposureGpuCookInternal PUBLIC cxx_std_20)
 target_include_directories(HoroExposureGpuCookInternal PUBLIC "${HORO_EXPOSURE_GPU_COOK_HEADERS}")
-target_link_libraries(HoroExposureGpuCookInternal PUBLIC HoroEngine::RenderApi HoroEditorShaderCookHostInternal
+target_link_libraries(HoroExposureGpuCookInternal PUBLIC HoroEngine::RenderApi HoroEditorShaderCookHostInternal HoroColorOutputPackageInternal
     PRIVATE HoroShaderReflectionCookInternal HoroAtomicShaderCookPackageInternal HoroEngine::Platform)
 add_executable(HoroExposureGpuShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/ExposureGpuCookMain.cpp)
 target_compile_features(HoroExposureGpuShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroExposureGpuShaderCook PRIVATE HoroExposureGpuCookInternal)
+
+# Product color cook keeps analytic source/tables and real reflected native artifacts in one generation.
+set(HORO_COLOR_OUTPUT_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/color_output_cook_headers")
+file(MAKE_DIRECTORY "${HORO_COLOR_OUTPUT_COOK_HEADERS}")
+configure_file(HoroEditor/tools/ColorOutputCook.h "${HORO_COLOR_OUTPUT_COOK_HEADERS}/ColorOutputCook.h" COPYONLY)
+add_library(HoroColorOutputCookInternal STATIC
+    HoroEditor/tools/ColorOutputCook.cpp
+    HoroEditor/tools/ColorOutputCookBundle.cpp
+    HoroEditor/tools/ColorOutputCookPackage.cpp)
+target_compile_features(HoroColorOutputCookInternal PUBLIC cxx_std_20)
+target_include_directories(HoroColorOutputCookInternal PUBLIC "${HORO_COLOR_OUTPUT_COOK_HEADERS}")
+target_link_libraries(HoroColorOutputCookInternal PUBLIC HoroEngine::RenderApi HoroEditorShaderCookHostInternal HoroColorOutputPackageInternal
+    PRIVATE HoroColorOutputShaderRecipeInternal HoroShaderReflectionCookInternal
+    HoroAtomicShaderCookPackageInternal HoroEngine::Platform HoroFoundationJsonInternal)
+add_executable(HoroColorOutputShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/ColorOutputCookMain.cpp)
+target_compile_features(HoroColorOutputShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroColorOutputShaderCook PRIVATE HoroColorOutputCookInternal)
 
 set(HORO_VFX_GPU_VULKAN_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/vfx_gpu_vulkan_cook_headers")
 file(MAKE_DIRECTORY "${HORO_VFX_GPU_VULKAN_COOK_HEADERS}")

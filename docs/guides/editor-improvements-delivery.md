@@ -107,23 +107,35 @@ full Codacy, coverage, hosted-gate or vulnerability clearance. Cold preparation,
 Lua VM allocation and Scene command/receipt allocation retain their separate
 allocation scopes described in the migration guide.
 
-## HORO-394 / #394 / RND-013.3 — exposure component, ticket in progress
+## HORO-394 / #394 / RND-013.3 — scene color integration ready for review
 
-The typed exposure/color foundation and the real Metal exposure compute family
-are delivered as one component of this ticket. The GPU clears/builds a bounded
-histogram and adapts a device-local exposure state for the next submitted view.
-The native owner validates actual same-queue submission, preserves last-good
-state across abandonment and handles resources ordered earlier in the current
-command buffer. Other backends return explicit unsupported outcomes.
+The backend-neutral contracts now feed a genuine Metal Editor graph: unexposed
+FP16 mesh shading, bounded GPU histogram/adaptation, optional AP1 creative LUT,
+pinned analytic ACES 2 SDR100 output, display-linear grid/selection and final SDR
+encoding. Both genuine forward and clustered lighting families are integrated.
+Requested unsupported profiles and incompatible project restarts fail explicitly.
 
-Local qualification: 27 cold API cases, nine captured compiler-evidence cases,
-12 genuine Metal exposure cases and two existing native buffer/color regressions
-passed without failures or skips. Three shader stages were genuinely compiled,
-reflected and atomically packaged with authenticated tools. Public headers and
-owning libraries compiled. MAIN cache contents and counters were preserved.
+Local macOS Debug evidence, kept as separate scopes rather than an aggregate:
 
-See [scope, migration and remaining acceptance](scene-color-pipeline-migration.md).
-The native fixture qualifies the private concrete owner, not the public frontend
-association end to end. Final ACES/look/LUT processing, output conversion and
-actual Editor wiring remain outstanding. HORO-394 stays In Progress; no full
-Editor, HDR-display, coverage, Codacy, Sonar or hosted-gate clearance is claimed.
+- 18 producer unit tests and actual pinned OCIO analytic/look data generation.
+- 11 look-loader JUnit entries, including original two-mode producer data;
+  307 frontend entries including 901/1024/1025 retention boundaries; 108 captured
+  shader-reflection entries and 12 viewport resource entries: zero failures/skips.
+- Four full viewport native cases cover both lighting recipes, raw/final pixels,
+  HDR values, both nonidentity LUT modes and selection/grid depth/meter separation.
+  Six common-owner native cases cover real upload readiness, cancellation, reset,
+  in-flight resize, signed/HDR identity LUTs and next-frame GPU adaptation. All pass
+  with Metal validation and zero skips.
+- Actual Editor runs opened a Metal project and its default scene with one mesh.
+  Clustered/trilinear and forward/tetrahedral each completed 60 presented frames
+  and 52 accepted color/exposure generations. An incompatible OpenGL project
+  returned the expected typed profile-preservation denial.
+- All 125 changed C++ paths pass format19; all 760 new/changed functions have
+  cyclomatic complexity at most 10. MAIN cache contents/counters remain unchanged.
+
+See [current integration, API migration and limitations](scene-color-pipeline-migration.md).
+The implemented output is an explicitly diagnosed unmanaged SDR preview; physical
+calibrated HDR/PQ/EDR and hardware device-loss injection are not qualified. Local
+managed Sonar is waived; no full Codacy, coverage, hosted-gate or vulnerability
+clearance is claimed. Earlier exposure-component evidence remains scoped to its
+original source and native fixture.

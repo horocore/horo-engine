@@ -1,0 +1,174 @@
+{
+  "scope": "actual strict compiler raw capture; parsing fixture does not execute tools, prove publisher trust or GPU rendering",
+  "sourceSHA256": {
+    "assets/shaders/editor/viewport_clustered_lit.hlsl": "f42983870cf051109334f2e55d426c53da173bbc2b19876a2a5597e40fdb493f",
+    "assets/shaders/editor/viewport_lit.hlsl": "622e615dbba84cc065250bcf78445af142ee4391220f2f2826a0643923d25197"
+  },
+  "files": {
+    "vertex.json": "52a1e3bf5193c62570347d82ce0d1292d8caac34f352a9cd424a4848cb76f954",
+    "vertex.metal": "296389dc8907fcac6456a9165b775509349d68604c70ebb1021a40c5017694a3",
+    "vertex.spv": "88d3a9ac03bf794d20bca3ae4566a93ddb8ec8f8e9b08e60841513c23e65b4cc",
+    "fragment.json": "426176122a0612df5eb6aee70a26e1f03ba9efe75d7199092653686f865b5d9d",
+    "fragment.metal": "9233ca0643e778b23053121aa7bfb15ad78190eac8ed74f3c9902880c29b6efd",
+    "fragment.spv": "2ed1a02971aac6ee3223a1d90f96ee4baef16d6f784400a47d184aa3f5789813"
+  },
+  "compilerCapture": [
+    {
+      "family": "viewport_clustered_lit",
+      "entry": "VSMain",
+      "commands": [
+        [
+          "<metal-sdk-root>/sdk/macOS/bin/dxc-3.7",
+          "-nologo",
+          "-HV",
+          "2021",
+          "-Ges",
+          "-Zpc",
+          "-T",
+          "vs_6_0",
+          "-E",
+          "VSMain",
+          "-Gis",
+          "-O3",
+          "-spirv",
+          "-fspv-target-env=vulkan1.3",
+          "-fvk-use-gl-layout",
+          "-Fo",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-vert.spv",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit.hlsl"
+        ],
+        [
+          "<metal-sdk-root>/sdk/macOS/bin/spirv-val",
+          "--target-env",
+          "vulkan1.3",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-vert.spv"
+        ],
+        [
+          "<metal-sdk-root>/sdk/macOS/bin/spirv-cross",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-vert.spv",
+          "--reflect",
+          "--output",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-vert.json"
+        ],
+        [
+          "<metal-sdk-root>/sdk/macOS/bin/spirv-cross",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-vert.spv",
+          "--output",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-vert.metal",
+          "--entry",
+          "VSMain",
+          "--stage",
+          "vert",
+          "--msl",
+          "--msl-version",
+          "20400",
+          "--msl-decoration-binding"
+        ],
+        [
+          "/usr/bin/xcrun",
+          "-sdk",
+          "macosx",
+          "metal",
+          "-std=macos-metal2.4",
+          "-fno-fast-math",
+          "-c",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-vert.metal",
+          "-o",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-vert.air"
+        ]
+      ],
+      "imageTypeOperands": [],
+      "files": {
+        "viewport_clustered_lit-vert.spv": "88d3a9ac03bf794d20bca3ae4566a93ddb8ec8f8e9b08e60841513c23e65b4cc",
+        "viewport_clustered_lit-vert.json": "52a1e3bf5193c62570347d82ce0d1292d8caac34f352a9cd424a4848cb76f954",
+        "viewport_clustered_lit-vert.metal": "296389dc8907fcac6456a9165b775509349d68604c70ebb1021a40c5017694a3",
+        "viewport_clustered_lit-vert.air": "a410dfa9d2cc522d24b63fe313f11f9cd1e2b0c6e5fa0c37540ea04d35a73e37"
+      }
+    },
+    {
+      "family": "viewport_clustered_lit",
+      "entry": "PSMain",
+      "commands": [
+        [
+          "<metal-sdk-root>/sdk/macOS/bin/dxc-3.7",
+          "-nologo",
+          "-HV",
+          "2021",
+          "-Ges",
+          "-Zpc",
+          "-T",
+          "ps_6_0",
+          "-E",
+          "PSMain",
+          "-Gis",
+          "-O3",
+          "-spirv",
+          "-fspv-target-env=vulkan1.3",
+          "-fvk-use-gl-layout",
+          "-Fo",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-frag.spv",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit.hlsl"
+        ],
+        [
+          "<metal-sdk-root>/sdk/macOS/bin/spirv-val",
+          "--target-env",
+          "vulkan1.3",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-frag.spv"
+        ],
+        [
+          "<metal-sdk-root>/sdk/macOS/bin/spirv-cross",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-frag.spv",
+          "--reflect",
+          "--output",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-frag.json"
+        ],
+        [
+          "<metal-sdk-root>/sdk/macOS/bin/spirv-cross",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-frag.spv",
+          "--output",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-frag.metal",
+          "--entry",
+          "PSMain",
+          "--stage",
+          "frag",
+          "--msl",
+          "--msl-version",
+          "20400",
+          "--msl-decoration-binding"
+        ],
+        [
+          "/usr/bin/xcrun",
+          "-sdk",
+          "macosx",
+          "metal",
+          "-std=macos-metal2.4",
+          "-fno-fast-math",
+          "-c",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-frag.metal",
+          "-o",
+          "<coord>/394-lit-tool-evidence-c74/viewport_clustered_lit-frag.air"
+        ]
+      ],
+      "imageTypeOperands": [
+        [
+          14,
+          128,
+          1,
+          2,
+          0,
+          0,
+          1,
+          0
+        ]
+      ],
+      "files": {
+        "viewport_clustered_lit-frag.spv": "2ed1a02971aac6ee3223a1d90f96ee4baef16d6f784400a47d184aa3f5789813",
+        "viewport_clustered_lit-frag.json": "426176122a0612df5eb6aee70a26e1f03ba9efe75d7199092653686f865b5d9d",
+        "viewport_clustered_lit-frag.metal": "9233ca0643e778b23053121aa7bfb15ad78190eac8ed74f3c9902880c29b6efd",
+        "viewport_clustered_lit-frag.air": "2fc460c9e0c337ffab57b063854a82e0bb994d8dea285aef4fde8dc7e55eb2f8"
+      }
+    }
+  ],
+  "uniformBlockBytes": 704,
+  "sceneColorPolicyOffset": 688
+}

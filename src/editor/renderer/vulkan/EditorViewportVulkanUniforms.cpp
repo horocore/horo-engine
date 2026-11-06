@@ -1,4 +1,5 @@
 #include "EditorViewportRendererVulkan.h"
+#include "EditorViewportShaderParameters.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <algorithm>
@@ -61,7 +62,8 @@ namespace Horo::Editor {
             if (const auto written = WriteParameter(layout, bytes, {static_cast<std::uint32_t>(index + 6)}, parameters[index]);
                 written.HasError())
                 return written;
-        return Result<void>::Success();
+        const auto baseColor = EditorViewportFixedMaterialBaseColor();
+        return WriteParameter(layout, bytes, {20}, baseColor);
     }
 
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteDraw */

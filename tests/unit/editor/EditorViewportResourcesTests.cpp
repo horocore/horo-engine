@@ -98,6 +98,64 @@ namespace {
     };
 }  // namespace
 
+TEST_CASE("Color viewport publishes its encoded image while retaining distinct scene and display targets",
+          "[unit][headless][renderer][resource][color]") {
+    auto frontend = CreateFrontend();
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    REQUIRE(resources.EnableColorPipeline().HasValue());
+    SettleResources(resources, *frontend, {}, {128, 128});
+    REQUIRE(resources.ColorTexture().IsValid());
+    REQUIRE(resources.DisplayTexture().IsValid());
+    REQUIRE(resources.PresentationTexture().IsValid());
+    CHECK(resources.ColorTexture() != resources.DisplayTexture());
+    CHECK(resources.ColorTexture() != resources.PresentationTexture());
+    CHECK(resources.DisplayTexture() != resources.PresentationTexture());
+    CHECK(imageResolver.lastView == resources.PresentationTextureView());
+    CHECK(resources.ImageIdentity() == resources.PresentationTextureView().slot);
+
+    const auto previousScene = resources.ColorTexture();
+    const auto previousDisplay = resources.DisplayTexture();
+    const auto previousPresentation = resources.PresentationTexture();
+    const auto previousImage = resources.ImageIdentity();
+    imageResolver.reject = true;
+    bool failed = false;
+    for (int step = 0; step < MaxResourcePasses && !failed; ++step) {
+        const auto replacement = resources.Prepare({}, {256, 256});
+        failed = replacement.HasError();
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    }
+    REQUIRE(failed);
+    CHECK(resources.IsReady());
+    CHECK((resources.AllocatedExtent() == EditorViewportExtent{128, 128}));
+    CHECK(resources.ColorTexture() == previousScene);
+    CHECK(resources.DisplayTexture() == previousDisplay);
+    CHECK(resources.PresentationTexture() == previousPresentation);
+    CHECK(resources.ImageIdentity() == previousImage);
+    imageResolver.reject = false;
+    SettleResources(resources, *frontend, {}, {256, 256});
+    CHECK(resources.ColorTexture() != previousScene);
+    CHECK(resources.DisplayTexture() != previousDisplay);
+    CHECK(resources.PresentationTexture() != previousPresentation);
+    CHECK(imageResolver.lastView == resources.PresentationTextureView());
+    resources.Shutdown();
+}
+
+TEST_CASE("Color activation cannot reinterpret already published legacy viewport storage", "[unit][headless][renderer][resource][color]") {
+    auto frontend = CreateFrontend();
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    SettleResources(resources, *frontend, {}, {128, 128});
+    const auto color = resources.ColorTexture();
+    const auto view = resources.ColorTextureView();
+    REQUIRE(resources.EnableColorPipeline().HasError());
+    CHECK(resources.IsReady());
+    CHECK(resources.ColorTexture() == color);
+    CHECK(resources.PresentationTextureView() == view);
+    CHECK_FALSE(resources.DisplayTexture().IsValid());
+    resources.Shutdown();
+}
+
 TEST_CASE("Viewport light admission defers newer draw bounds until their exact resident mesh generation is ready",
           "[unit][headless][renderer][resource][lighting]") {
     auto frontend = CreateFrontend();

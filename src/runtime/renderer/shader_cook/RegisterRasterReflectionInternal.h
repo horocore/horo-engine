@@ -66,10 +66,11 @@ namespace Horo::Render::RegisterRasterCookDetail {
     /** @brief Native declarations, never a map copied from another target's reflection. */
     struct NativeStage final {
         std::optional<NativeUniform> uniform;
-        std::optional<NativeResource> texture;
-        std::optional<NativeResource> sampler;
+        std::vector<NativeResource> textures;
+        std::vector<NativeResource> samplers;
         std::vector<ShaderReflectedInterfaceVariable> interfaces;
         std::vector<NativeStorage> storage;
+        bool vertexIndex{};      /**< At most one exact selected-vertex uint [[vertex_id]] builtin; no logical input is invented. */
         bool fragmentPosition{}; /**< At most one exact selected-fragment float4 [[position]] builtin; not a logical varying. */
     };
 
@@ -77,6 +78,7 @@ namespace Horo::Render::RegisterRasterCookDetail {
     constexpr std::uint32_t MaximumArrayElements = 512;
     constexpr std::size_t MaximumNameBytes = 256;
     constexpr std::size_t MaximumStorageBuffers = 4;
+    constexpr std::size_t MaximumSampledResources = 8; /**< Independent Metal images/samplers; GL retains one pair. */
 
     /** @brief Admits an exact ASCII shader symbol; arbitrary expressions are not names. */
     [[nodiscard]] bool Identifier(std::string_view value) noexcept;

@@ -9,7 +9,7 @@ namespace {
     using namespace Horo::Render::Test;
 }  // namespace
 
-TEST_CASE("Cooked color admission owns copied finite RGB data without claiming ACES conformance", "[renderer][color]") {
+TEST_CASE("Creative look admission owns copied finite RGB data without claiming output conformance", "[renderer][color]") {
     ColorPipelineFixture fixture;
     auto descriptor = fixture.Descriptor();
     auto cooked = CookedColorTransform::Create(descriptor, fixture.rgb);
@@ -51,7 +51,7 @@ TEST_CASE("Cooked color requires pinned provenance and closed schema interpolati
         descriptor.configurationRelease = 0;
     }
     SECTION("schema") {
-        descriptor.schemaVersion = 2;
+        descriptor.schemaVersion = 3;
     }
     SECTION("dimension") {
         descriptor.dimension = 66;
@@ -107,12 +107,14 @@ TEST_CASE("Color output requires the exact admitted native encoding without neut
     SECTION("missing") {
         request.outputTransform.reset();
     }
-    SECTION("neutral not ACES substitute") {
-        auto descriptor = fixture.Descriptor();
-        descriptor.role = ColorTransformRole::NeutralDiagnostic;
-        auto neutral = CookedColorTransform::Create(descriptor, fixture.rgb);
-        REQUIRE(neutral.HasValue());
-        request.outputTransform = std::move(neutral).Value();
+    SECTION("foreign primaries") {
+        request.output.active.colorSpace = RenderDisplayColorSpace::DisplayP3;
+    }
+    SECTION("foreign transfer") {
+        request.output.active.transfer = RenderDisplayTransferFunction::Linear;
+    }
+    SECTION("HDR") {
+        request.output.active.dynamicRange = RenderDisplayDynamicRange::High;
     }
     SECTION("different format") {
         request.output.active.format = RenderTextureFormat::Rgba16Float;
@@ -142,5 +144,33 @@ TEST_CASE("Color candidate capacity failure and cancellation leave previous cand
     denied = PrepareColorPipeline(request);
     REQUIRE(denied.HasError());
     CHECK(denied.ErrorValue().code.Value() == ColorPipelineErrors::Cancelled.code.Value());
-    CHECK(prior.Value().Inputs().outputTransform->Rgb().size() == 24);
+    CHECK(prior.Value().Inputs().outputTransform->TableUpload(1).size() == 5792);
+}
+
+TEST_CASE("Color plan charges complete immutable program and creative look payloads at the exact budget", "[renderer][color]") {
+    ColorPipelineFixture fixture;
+    auto request = fixture.Request();
+    const auto look = CookedColorTransform::Create(fixture.Descriptor(), fixture.rgb);
+    REQUIRE(look.HasValue());
+    request.look = look.Value();
+    request.maximumTransformBytes = request.outputTransform->PayloadBytes() + look.Value()->PayloadBytes();
+    const auto admitted = PrepareColorPipeline(request);
+    REQUIRE(admitted.HasValue());
+    CHECK(admitted.Value().Inputs().look == request.look);
+    --request.maximumTransformBytes;
+    const auto denied = PrepareColorPipeline(request);
+    REQUIRE(denied.HasError());
+    CHECK(denied.ErrorValue().code.Value() == ColorPipelineErrors::CapacityExceeded.code.Value());
+    CHECK(admitted.Value().Inputs().outputTransform->Source() == request.outputTransform->Source());
+}
+
+TEST_CASE("Creative look cannot attach a foreign configuration to the closed output program", "[renderer][color]") {
+    ColorPipelineFixture fixture;
+    auto request = fixture.Request();
+    auto descriptor = fixture.Descriptor();
+    descriptor.configurationDigest.bytes[0] ^= 1;
+    const auto look = CookedColorTransform::Create(descriptor, fixture.rgb);
+    REQUIRE(look.HasValue());
+    request.look = look.Value();
+    REQUIRE(PrepareColorPipeline(request).HasError());
 }

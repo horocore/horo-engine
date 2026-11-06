@@ -1,3 +1,4 @@
+#include "EditorViewportDisplayColor.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "MetalViewportClusteredFrame.h"
 
@@ -144,6 +145,13 @@ namespace Horo::Editor {
         if (!BuildLightVisualizerGeometry({descriptor.scene.camera, *visualizerOptions_.selectedLight}, visualizerGeometry_))
             return Result<void>::Failure(MakeError(Render::LightCullingErrors::InvalidInput));
         slot.overlays[2].color = visualizerGeometry_.color;
+        if (color_) {
+            const auto display = LightOverlayDisplayLinearV1(visualizerOptions_.selectedLight->color);
+            if (display.HasError())
+                return Result<void>::Failure(display.ErrorValue());
+            slot.overlays[2].color = {std::clamp(display.Value().x, 0.35F, 1.0F), std::clamp(display.Value().y, 0.35F, 1.0F),
+                                      std::clamp(display.Value().z, 0.20F, 1.0F)};
+        }
         if (const auto lines = ExpandLines(visualizerGeometry_.Lines(), matrix, descriptor.extent, slot.overlays[2].vertices);
             lines.HasError())
             return lines;
@@ -165,7 +173,12 @@ namespace Horo::Editor {
         for (std::size_t index = 0; index < slot.overlays.size(); ++index) {
             auto &overlay = slot.overlays[index];
             auto &uniform = slot.uniforms[6 * MaximumDraws + index];
-            const auto packed = PackEditorViewportGrid(programs_->Role(1).layout, overlay.matrix, overlay.color, uniform.bytes);
+            auto color = Result<Math::Vec3>::Success(overlay.color);
+            if (color_ && index < 2)
+                color = DecodeEditorOverlaySrgbV1(overlay.color);
+            if (color.HasError())
+                return Result<void>::Failure(color.ErrorValue());
+            const auto packed = PackEditorViewportGrid(programs_->Role(1).layout, overlay.matrix, color.Value(), uniform.bytes);
             if (packed.HasError())
                 return Result<void>::Failure(packed.ErrorValue());
             overlayUpdates_[index * 2] = {overlay.descriptor.vertexBuffer, std::as_bytes(std::span{overlay.vertices}), 0};

@@ -27,8 +27,9 @@ namespace Horo::Tests::ShaderCook {
         {"name":"ShadowAtlasScaleBias","type":"vec4","offset":1616,"array":[4],"array_size_is_literal":[true],"array_stride":16},
         {"name":"ShadowSettings","type":"vec4","offset":1680},
         {"name":"ShadowBiasAndTexel","type":"vec4","offset":1696},
-        {"name":"ShadowCameraForward","type":"vec4","offset":1712}]}},
-        "ubos":[{"type":"_1","name":"type.ViewportParameters","block_size":1728,"set":0,"binding":0}])";
+        {"name":"ShadowCameraForward","type":"vec4","offset":1712},
+        {"name":"BaseColor","type":"vec4","offset":1728}]}},
+        "ubos":[{"type":"_1","name":"type.ViewportParameters","block_size":1744,"set":0,"binding":0}])";
 
     inline std::array<SpirvReflectionStage, 2> Evidence() {
         return {{{ShaderStage::Vertex, "VSMain",

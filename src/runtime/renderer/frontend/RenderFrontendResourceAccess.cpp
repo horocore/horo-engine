@@ -50,6 +50,41 @@ namespace Horo::Render {
         return CreationRolledBack(frontend, released, creation.operation) ? Result<void>::Success() : std::move(released);
     }
 
+    /** @copydoc Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+    Result<void> Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &frontend,
+                                                                      const ResourceCreation<RenderBufferHandle> &creation) {
+        auto released = frontend.ReleaseBuffer(creation.handle);
+        return CreationRolledBack(frontend, released, creation.operation) ? Result<void>::Success() : std::move(released);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+    Result<void> Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &frontend,
+                                                                      const ResourceCreation<RenderMeshHandle> &creation) {
+        auto released = frontend.ReleaseMesh(creation.handle);
+        return CreationRolledBack(frontend, released, creation.operation) ? Result<void>::Success() : std::move(released);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+    Result<void> Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &frontend,
+                                                                      const ResourceCreation<RenderShaderModuleHandle> &creation) {
+        auto released = frontend.ReleaseShaderModule(creation.handle);
+        return CreationRolledBack(frontend, released, creation.operation) ? Result<void>::Success() : std::move(released);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+    Result<void> Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &frontend,
+                                                                      const ResourceCreation<RenderPipelineHandle> &creation) {
+        auto released = frontend.ReleaseGraphicsPipeline(creation.handle);
+        return CreationRolledBack(frontend, released, creation.operation) ? Result<void>::Success() : std::move(released);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+    Result<void> Detail::RenderFrontendResourceAccess::RetireCreation(RenderFrontend &frontend,
+                                                                      const ResourceCreation<RenderSamplerHandle> &creation) {
+        auto released = frontend.ReleaseSampler(creation.handle);
+        return CreationRolledBack(frontend, released, creation.operation) ? Result<void>::Success() : std::move(released);
+    }
+
     /** @copydoc Detail::RenderFrontendResourceAccess::CreateMultiviewDepth */
     Result<ResourceCreation<RenderTextureHandle>> Detail::RenderFrontendResourceAccess::CreateMultiviewDepth(
         RenderFrontend &frontend, const RenderMemoryScopeId scope, const FramebufferExtent extent, const std::uint32_t viewCount) {

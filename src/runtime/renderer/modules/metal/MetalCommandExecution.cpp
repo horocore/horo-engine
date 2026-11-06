@@ -75,8 +75,8 @@ namespace Horo::Render::Detail {
         if (const auto passes = ValidateGraphPasses(request); passes.HasError())
             return passes;
         if (const auto valid = ValidateRenderGraphExecutionRequest(request); valid.HasError())
-            return Result<void>::Failure(
-                MakeError(MetalBackendErrors::InvalidExecutionPlan, "Graph operation, bindings or declared resource uses are invalid."));
+            return Result<void>::Failure(WrapError(MetalBackendErrors::InvalidExecutionPlan, valid.ErrorValue(),
+                                                   "Graph operation, bindings or declared resource uses are invalid."));
         for (const auto &binding : request.workloads)
             if (const auto valid = ValidateNativeWorkload(runtime, binding.workload, request); valid.HasError())
                 return valid;

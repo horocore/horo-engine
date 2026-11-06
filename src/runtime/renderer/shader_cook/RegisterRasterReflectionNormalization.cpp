@@ -151,11 +151,20 @@ namespace Horo::Render {
             }
         }
 
+        /** @brief Distinguishes independent Metal resources from the preserved one-pair register/GL contract. */
+        bool IndependentSamples(const ShaderManifest &manifest, const ShaderTargetRequirement &target) {
+            if (target.backend != ShaderTargetBackend::Metal)
+                return false;
+            const auto images = std::ranges::count(manifest.bindings, ShaderResourceKind::SampledTexture, &ShaderResourceBinding::kind);
+            const auto samplers = std::ranges::count(manifest.bindings, ShaderResourceKind::Sampler, &ShaderResourceBinding::kind);
+            return images > 1 || samplers > 1 || images != samplers;
+        }
+
         class Normalizer final {
         public:
             Normalizer(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
                        std::span<const ShaderReflectionBindingName> names)
-                : manifest_(manifest), names_(names) {
+                : manifest_(manifest), names_(names), independentSamples_(IndependentSamples(manifest, target)) {
                 candidate_.backend = target.backend;
                 candidate_.interfaceSchemaVersion = target.interfaceSchemaVersion;
                 for (const auto &binding : manifest.bindings) {
@@ -173,8 +182,8 @@ namespace Horo::Render {
                 const auto visibility =
                     stage.stage == ShaderStage::Vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment;
                 Uniform(json, native, visibility);
-                Sample(json, native.texture, ShaderResourceKind::SampledTexture, visibility);
-                Sample(json, native.sampler, ShaderResourceKind::Sampler, visibility);
+                Samples(json, native.textures, ShaderResourceKind::SampledTexture, visibility);
+                Samples(json, native.samplers, ShaderResourceKind::Sampler, visibility);
                 NormalizeRegisterStorage(json, native, manifest_, names_, visibility, candidate_);
                 Interfaces(json, stage.stage, native, candidate_);
             }
@@ -204,7 +213,7 @@ namespace Horo::Render {
                 binding.active = true;
                 binding.stages = static_cast<ShaderStageVisibility>(static_cast<unsigned>(previous) | static_cast<unsigned>(visibility));
                 mapping = {.id = binding.id, .nativeBinding = native.binding, .nativeName = native.name};
-                if (binding.kind == ShaderResourceKind::SampledTexture)
+                if (binding.kind == ShaderResourceKind::SampledTexture && !independentSamples_)
                     mapping.pairedSampler = manifest_.bindings[Role(ShaderResourceKind::Sampler)].id;
             }
 
@@ -243,10 +252,10 @@ namespace Horo::Render {
                 Activate(role, {native.uniform->name, native.uniform->binding}, visibility);
             }
 
-            void Sample(const Json &json, const std::optional<NativeResource> &native, ShaderResourceKind kind,
+            void Sample(const Json &json, std::span<const NativeResource> native, ShaderResourceKind kind,
                         ShaderStageVisibility visibility) {
                 const auto &entries = Rows(json, kind == ShaderResourceKind::Sampler ? "separate_samplers" : "separate_images", 1);
-                if (entries.empty() != !native)
+                if (entries.size() != native.size())
                     throw InvalidEvidence{};
                 if (entries.empty())
                     return;
@@ -257,12 +266,78 @@ namespace Horo::Render {
                     Unsigned(entry.at("set")) != 0 || entry.contains("array"))
                     throw InvalidEvidence{};
                 static_cast<void>(Unsigned(entry.at("binding")));
-                Activate(role, *native, visibility);
+                Activate(role, native.front(), visibility);
+            }
+
+            /** @brief Resolves an independently evidenced resource to its exact authored ID rather than ordinal position. */
+            std::size_t SampleRole(ShaderResourceKind kind, std::string_view name) const {
+                for (std::size_t i = 0; i < manifest_.bindings.size(); ++i) {
+                    const auto &binding = manifest_.bindings[i];
+                    if (binding.kind != kind)
+                        continue;
+                    const auto *authored = FindName(names_, binding.id);
+                    if (authored && authored->name == name)
+                        return i;
+                }
+                throw InvalidEvidence{};
+            }
+
+            /** @brief Requires an actual readonly ordinary nonarray resource in the admitted register space. */
+            void SampleEntry(const Json &entry, ShaderResourceKind kind) const {
+                const auto expected = kind == ShaderResourceKind::Sampler ? "sampler" : "texture2D";
+                if (entry.at("type") != expected || Unsigned(entry.at("set")) != 0 || entry.contains("array"))
+                    throw InvalidEvidence{};
+                if (entry.value("writeonly", false) || !entry.value("readonly", true))
+                    throw InvalidEvidence{};
+                if (entry.contains("physical_pointer") || entry.contains("buffer_reference"))
+                    throw InvalidEvidence{};
+                static_cast<void>(Unsigned(entry.at("binding")));
+            }
+
+            /** @brief Rejects duplicate actual Cross names or registers within each independent resource namespace. */
+            void UniqueSampleEntries(const Json &entries) const {
+                for (std::size_t i = 0; i < entries.size(); ++i)
+                    for (std::size_t prior = 0; prior < i; ++prior)
+                        if (entries[i].at("name") == entries[prior].at("name") || entries[i].at("binding") == entries[prior].at("binding"))
+                            throw InvalidEvidence{};
+            }
+
+            /** @brief Exhausts both actual evidence sets and rejects duplicated, foreign or silently omitted resources. */
+            void IndependentSampleSet(const Json &json, std::span<const NativeResource> native, ShaderResourceKind kind,
+                                      ShaderStageVisibility visibility) {
+                const auto key = kind == ShaderResourceKind::Sampler ? "separate_samplers" : "separate_images";
+                const auto &entries = Rows(json, key, MaximumSampledResources);
+                if (entries.size() != native.size())
+                    throw InvalidEvidence{};
+                UniqueSampleEntries(entries);
+                std::array<bool, MaximumSampledResources> used{};
+                for (const auto &entry : entries) {
+                    SampleEntry(entry, kind);
+                    const auto name = entry.at("name").get<std::string>();
+                    const auto found = std::ranges::find(native, name, &NativeResource::name);
+                    if (found == native.end())
+                        throw InvalidEvidence{};
+                    const auto index = static_cast<std::size_t>(found - native.begin());
+                    if (used[index])
+                        throw InvalidEvidence{};
+                    used[index] = true;
+                    Activate(SampleRole(kind, name), *found, visibility);
+                }
+            }
+
+            /** @brief Preserves the sole-pair/GL path while admitting bounded independent Metal namespaces. */
+            void Samples(const Json &json, std::span<const NativeResource> native, ShaderResourceKind kind,
+                         ShaderStageVisibility visibility) {
+                if (independentSamples_)
+                    IndependentSampleSet(json, native, kind, visibility);
+                else
+                    Sample(json, native, kind, visibility);
             }
 
             const ShaderManifest &manifest_;
             std::span<const ShaderReflectionBindingName> names_;
             ShaderReflectionCandidate candidate_;
+            bool independentSamples_{};
         };
     }  // namespace
 

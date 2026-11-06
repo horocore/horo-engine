@@ -1219,7 +1219,9 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/LightFrameUpload.h
     Horo/Runtime/Render/PostProcessSettings.h
     Horo/Runtime/Render/ColorPipeline.h
+    Horo/Runtime/Render/ColorOutputProgram.h
     Horo/Runtime/Render/Exposure.h
+    Horo/Runtime/Render/SceneColorEncoding.h
     Horo/Runtime/Render/ExposureGpuKernel.h
     Horo/Runtime/Render/ExposureGpuWorkload.h
     Horo/Runtime/Render/PostProcessVolumes.h

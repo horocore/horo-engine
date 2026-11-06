@@ -85,7 +85,7 @@ TEST_CASE("Viewport lit and clustered material writers preserve native matrix co
         written = source.PackLit(layout, bytes);
     }
     REQUIRE(written.HasValue());
-    CHECK(written.Value() == (clustered ? 672 : 1632));
+    CHECK(written.Value() == (clustered ? 704 : 1664));
     RequireNativeMatrix(bytes, 0, source.mvp);
     RequireNativeMatrix(bytes, 64, source.model);
     for (std::size_t cascade = 0; cascade < cascades.size(); ++cascade)

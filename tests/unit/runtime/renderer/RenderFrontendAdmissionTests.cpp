@@ -436,4 +436,52 @@ namespace {
         CHECK(lifecycleState.createTextureCount == 0);
         CHECK(frontend->MemorySnapshot().reservationCount == 0);
     }
+
+    TEST_CASE("Owned buffer creation rollback is distinct from unknown or released generations",
+              "[unit][renderer][resource][creation-retirement]") {
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        const auto failed = frontend->CreateBuffer({64, RenderBufferUsage::Vertex, RenderBufferAccess::DeviceLocal}, {});
+        REQUIRE(failed.HasValue());
+        lifecycleState.failResourceCreation = true;
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend->ResourceOperationResult(failed.Value().operation).HasError());
+        auto unknown = failed.Value();
+        unknown.operation = {};
+        CHECK(Detail::RenderFrontendResourceAccess::RetireCreation(*frontend, unknown).HasError());
+        REQUIRE(Detail::RenderFrontendResourceAccess::RetireCreation(*frontend, failed.Value()).HasValue());
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+        CHECK(frontend->MemorySnapshot().allocationCount == 0);
+        lifecycleState.failResourceCreation = false;
+        const auto retry = frontend->CreateBuffer({64, RenderBufferUsage::Vertex, RenderBufferAccess::DeviceLocal}, {});
+        REQUIRE(retry.HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(Detail::RenderFrontendResourceAccess::RetireCreation(*frontend, retry.Value()).HasValue());
+        CHECK(Detail::RenderFrontendResourceAccess::RetireCreation(*frontend, retry.Value()).HasError());
+        REQUIRE(frontend->BeginShutdown().HasValue());
+        REQUIRE(frontend->PollDrain().HasValue());
+    }
+
+    TEST_CASE("Owned mesh rollback does not retire its ready vertex and index buffers", "[unit][renderer][resource][creation-retirement]") {
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        const auto buffers = QueueTriangleBuffers(*frontend);
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        const auto mesh = frontend->CreateMesh(MeshDescriptor(buffers.vertex.handle, buffers.index.handle));
+        REQUIRE(mesh.HasValue());
+        lifecycleState.failResourceCreation = true;
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend->ResourceOperationResult(mesh.Value().operation).HasError());
+        REQUIRE(Detail::RenderFrontendResourceAccess::RetireCreation(*frontend, mesh.Value()).HasValue());
+        const auto vertexState = frontend->ResourceState(buffers.vertex.handle);
+        const auto indexState = frontend->ResourceState(buffers.index.handle);
+        REQUIRE(vertexState.HasValue());
+        REQUIRE(indexState.HasValue());
+        CHECK(vertexState.Value() == RenderResourceState::Ready);
+        CHECK(indexState.Value() == RenderResourceState::Ready);
+        REQUIRE(Detail::RenderFrontendResourceAccess::RetireCreation(*frontend, buffers.vertex).HasValue());
+        REQUIRE(Detail::RenderFrontendResourceAccess::RetireCreation(*frontend, buffers.index).HasValue());
+        REQUIRE(frontend->BeginShutdown().HasValue());
+        REQUIRE(frontend->PollDrain().HasValue());
+    }
 }  // namespace

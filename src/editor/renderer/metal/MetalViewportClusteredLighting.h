@@ -12,13 +12,13 @@ namespace Horo::Editor {
     public:
         struct Program final {
             Render::RenderShaderModuleHandle vertex, fragment;
-            Render::RenderPipelineHandle pipeline;
+            Render::RenderPipelineHandle pipeline, selectionPipeline;
             Render::MaterialBindingLayout layout;
             std::unique_ptr<Render::MaterialBindingTable> materials;
             std::size_t uniformBytes{};
         };
 
-        explicit MetalViewportClusteredLighting(Render::RenderFrontend &frontend) noexcept;
+        explicit MetalViewportClusteredLighting(Render::RenderFrontend &frontend, bool canonicalColor = false) noexcept;
         ~MetalViewportClusteredLighting();
         MetalViewportClusteredLighting(const MetalViewportClusteredLighting &) = delete;
         MetalViewportClusteredLighting &operator=(const MetalViewportClusteredLighting &) = delete;
@@ -26,6 +26,14 @@ namespace Horo::Editor {
         /** @brief Creates actual native stages, pipelines and finite frame storage; failure rolls back this unpublished owner. */
         [[nodiscard]] Result<void> Prepare(std::span<const Render::ShaderHotReloadProgramView> family,
                                            const Render::CookedLightCullingKernel &kernel, const EditorViewportLightingProfile &profile);
+        /** @brief Prepares the actual generic raster family without creating a culling kernel or fictitious light buffers. */
+        [[nodiscard]] Result<void> PrepareBaseline(std::span<const Render::ShaderHotReloadProgramView> family,
+                                                   const EditorViewportLightingProfile &profile);
+
+        [[nodiscard]] bool UsesCulling() const noexcept {
+            return clustered_;
+        }
+
         [[nodiscard]] Result<void> Close();
         /** @brief Rebuilds all raster roles while retaining the exact already-admitted compute kernel lease. */
         [[nodiscard]] Result<void> PrepareReplacement(std::span<const Render::ShaderHotReloadProgramView> family,
@@ -58,6 +66,8 @@ namespace Horo::Editor {
                                                    const Render::CompiledShaderArtifact &artifact, std::size_t role);
         [[nodiscard]] Result<void> PrepareMaterialOwner(Program &program, const Render::NormalizedShaderReflection &reflection);
         [[nodiscard]] Result<void> PrepareStorage(const EditorViewportLightingProfile &profile);
+        bool canonicalColor_{};
+        bool clustered_{true};
         Render::RenderFrontend *frontend_;
         std::array<Program, 3> programs_;
         std::unique_ptr<Render::LightFrameBufferPool> frames_;

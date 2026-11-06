@@ -22,10 +22,12 @@ namespace Horo::Editor {
         }
 
         std::size_t UniformRole(const std::size_t pass) noexcept {
-            return pass == 5 ? 0 : (pass == 6 ? 1 : 2);
+            return pass == 5 ? 0 : (pass >= 6 ? 1 : 2);
         }
 
         std::size_t UniformOffset(const std::size_t pass, const std::size_t draw) noexcept {
+            if (pass == 7)
+                return (draw + 3) * MetalViewportClusteredFrame::MaximumUniformBytes;
             const auto block = pass < 5 ? pass : 0;
             return (block * MetalViewportClusteredFrame::MaximumDraws + draw) * MetalViewportClusteredFrame::MaximumUniformBytes;
         }
@@ -33,10 +35,11 @@ namespace Horo::Editor {
 
     MetalViewportClusteredFrame::MetalViewportClusteredFrame(Render::RenderFrontend &frontend, MetalViewportClusteredLighting &programs,
                                                              EditorViewportResources &resources, Render::MetalEditorGraphicsBridge &bridge,
-                                                             const EditorViewportLightingProfile &profile)
-        : frontend_(&frontend), programs_(&programs), resources_(&resources), bridge_(&bridge), profile_(profile),
+                                                             const EditorViewportLightingProfile &profile,
+                                                             EditorViewportColorPipeline *color)
+        : color_(color), frontend_(&frontend), programs_(&programs), resources_(&resources), bridge_(&bridge), profile_(profile),
           slots_(std::make_unique<Slot[]>(programs.SlotCount())) {
-        diagnostics_.selection = {Render::LightPreparationMode::ClusteredForwardNative, 0};
+        diagnostics_.selection = {profile.requested, 0};
     }
 
     MetalViewportClusteredFrame::~MetalViewportClusteredFrame() {
@@ -68,7 +71,8 @@ namespace Horo::Editor {
     Result<void> MetalViewportClusteredFrame::ValidateCanonical(const Render::RenderSceneView &scene) const {
         if (!scene.IsValid() || scene.instances.size() > MaximumDraws || scene.lights.size() > profile_.budget.maximumLights)
             return Result<void>::Failure(MakeError(Render::LightCullingErrors::Capacity));
-        if (profile_.budget.requireCompleteCoverage && scene.lights.size() > profile_.budget.referencesPerCluster)
+        if (programs_->UsesCulling() && profile_.budget.requireCompleteCoverage &&
+            scene.lights.size() > profile_.budget.referencesPerCluster)
             return Result<void>::Failure(MakeError(Render::LightCullingErrors::Coverage));
         return Result<void>::Success();
     }
@@ -82,6 +86,8 @@ namespace Horo::Editor {
         using namespace Render;
         if (const auto valid = ValidateCanonical(scene); valid.HasError())
             return valid;
+        if (!programs_->UsesCulling())
+            return forward_.Prepare(scene);
         for (std::size_t index = 0; index < scene.lights.size(); ++index)
             lights_[index] = {{scene.lights[index].stableIdentity}, scene.lights[index]};
         std::ranges::sort(std::span{lights_}.first(scene.lights.size()), {}, &IdentifiedRenderLight::identity);
@@ -110,7 +116,7 @@ namespace Horo::Editor {
 
     Result<void> MetalViewportClusteredFrame::PrepareUniforms(Slot &slot) {
         using namespace Render;
-        constexpr std::array<std::size_t, 3> counts{MaximumDraws, 3, MaximumDraws * 5};
+        constexpr std::array<std::size_t, 3> counts{MaximumDraws, MaximumDraws + 3, MaximumDraws * 5};
         for (std::size_t role = 0; role < slot.uniformBuffers.size(); ++role) {
             if (slot.uniformBuffers[role].IsValid())
                 continue;
@@ -124,7 +130,7 @@ namespace Horo::Editor {
         }
         if (const auto processed = frontend_->ProcessResourceRequests(); processed.HasError())
             return Result<void>::Failure(processed.ErrorValue());
-        for (std::size_t pass = 0; pass < 7; ++pass)
+        for (std::size_t pass = 0; pass < 8; ++pass)
             for (std::size_t draw = 0; draw < MaximumDraws; ++draw) {
                 auto &uniform = slot.uniforms[pass * MaximumDraws + draw];
                 uniform.buffer = slot.uniformBuffers[UniformRole(pass)];
@@ -143,24 +149,26 @@ namespace Horo::Editor {
         if (role == 0) {
             resources.push_back({{2}, 0, resources_->ShadowTextureView()});
             resources.push_back({{3}, 0, programs_->Sampler()});
-            resources.push_back({{4},
-                                 0,
-                                 MaterialBufferBinding{slot.uploaded.buffers.lights, 0,
-                                                       std::size_t{profile_.budget.maximumLights} * sizeof(PackedRenderLight)}});
-            resources.push_back({{5},
-                                 0,
-                                 MaterialBufferBinding{slot.uploaded.buffers.membership, 0,
-                                                       std::size_t{profile_.budget.maximumClusters} * sizeof(PackedLightMembership)}});
-            resources.push_back({{6},
-                                 0,
-                                 MaterialBufferBinding{slot.uploaded.buffers.references, 0,
-                                                       std::size_t{profile_.budget.maximumClusters} * profile_.budget.referencesPerCluster *
-                                                           sizeof(std::uint32_t)}});
+            if (programs_->UsesCulling()) {
+                resources.push_back({{4},
+                                     0,
+                                     MaterialBufferBinding{slot.uploaded.buffers.lights, 0,
+                                                           std::size_t{profile_.budget.maximumLights} * sizeof(PackedRenderLight)}});
+                resources.push_back({{5},
+                                     0,
+                                     MaterialBufferBinding{slot.uploaded.buffers.membership, 0,
+                                                           std::size_t{profile_.budget.maximumClusters} * sizeof(PackedLightMembership)}});
+                resources.push_back({{6},
+                                     0,
+                                     MaterialBufferBinding{slot.uploaded.buffers.references, 0,
+                                                           std::size_t{profile_.budget.maximumClusters} *
+                                                               profile_.budget.referencesPerCluster * sizeof(std::uint32_t)}});
+            }
         }
         const auto identity = static_cast<std::uint64_t>(&slot - slots_.get()) * MaximumUniformDraws + pass * MaximumDraws + draw + 1;
         const auto published = program.materials->Publish({.material = {identity},
                                                            .revision = ++slot.materialRevision,
-                                                           .pipeline = program.pipeline,
+                                                           .pipeline = pass == 7 ? program.selectionPipeline : program.pipeline,
                                                            .layout = program.layout,
                                                            .resources = std::move(resources)});
         if (published.HasError())
@@ -174,9 +182,17 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc MetalViewportClusteredFrame::MatchesAttachmentTopology */
+    bool MetalViewportClusteredFrame::MatchesAttachmentTopology(const Slot &slot, const Render::RenderSceneView &scene) const noexcept {
+        if (color_ && (slot.colorPrevious != color_->Previous().buffer || slot.colorOutput != color_->Produced().buffer))
+            return false;
+        return slot.variants.front().graph.has_value() && slot.color == resources_->ColorTexture() &&
+               slot.depth == resources_->DepthTexture() && slot.atlas == resources_->ShadowDepthTexture() &&
+               slot.meshCount == scene.instances.size();
+    }
+
     bool MetalViewportClusteredFrame::MatchesTopology(const Slot &slot, const Render::RenderSceneView &scene) const noexcept {
-        if (!slot.variants.front().graph || slot.color != resources_->ColorTexture() || slot.depth != resources_->DepthTexture() ||
-            slot.atlas != resources_->ShadowDepthTexture() || slot.meshCount != scene.instances.size())
+        if (!MatchesAttachmentTopology(slot, scene))
             return false;
         for (std::size_t draw = 0; draw < slot.meshCount; ++draw) {
             const auto mesh = resources_->FindMesh(scene.instances[draw].mesh.id.value);
@@ -209,7 +225,12 @@ namespace Horo::Editor {
     }
 
     EditorViewportLightingDiagnostics MetalViewportClusteredFrame::Diagnostics() const noexcept {
-        return diagnostics_;
+        return programs_->UsesCulling() ? diagnostics_ : forward_.Diagnostics();
+    }
+
+    /** @copydoc MetalViewportClusteredFrame::ConfigureBaseline */
+    Result<void> MetalViewportClusteredFrame::ConfigureBaseline(const Render::LightPreparationSelection &selection) {
+        return forward_.Configure(profile_, selection);
     }
 
     bool MetalViewportClusteredFrame::MatchesProfile(const EditorViewportLightingProfile &profile) const noexcept {

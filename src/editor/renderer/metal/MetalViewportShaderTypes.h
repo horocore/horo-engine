@@ -35,6 +35,7 @@ namespace Horo::Editor {
         std::array<Math::Vec4, 4> cascadeSplits{}, atlasRects{};
         Math::Vec4 cameraForward{}, shadowBiasFilter{};
         Math::Vec2 shadowTexel{}, shadowPadding{};
+        Math::Vec4 baseColor{}; /**< Host-converted canonical AP1 fixed material; matches fallback Metal ABI append. */
     };
 
     static_assert(sizeof(MetalSceneLighting) % 16 == 0);

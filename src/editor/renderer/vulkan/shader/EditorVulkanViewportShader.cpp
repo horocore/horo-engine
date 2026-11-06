@@ -21,7 +21,7 @@ namespace Horo::Editor {
         using namespace Render;
         return {.schemaVersion = 1,
                 .sourceIdentity = "engine/editor/viewport.hlsl",
-                .sourceRevision = 3,
+                .sourceRevision = 4,
                 .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
                 .bindings = {{{1},
                               ShaderResourceKind::UniformBuffer,
@@ -45,7 +45,8 @@ namespace Horo::Editor {
                                {{13}, {1}, ShaderValueType::Float32, 1, 4, 4},
                                {{14}, {1}, ShaderValueType::Float32, 1, 4, 1},
                                {{15}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                               {{16}, {1}, ShaderValueType::Float32, 1, 4, 1}},
+                               {{16}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                               {{20}, {1}, ShaderValueType::Float32, 1, 4, 1}},
                 .targets = {EditorVulkanViewportShaderTarget()}};
     }
 
@@ -68,7 +69,8 @@ namespace Horo::Editor {
                   {{13}, "ShadowAtlasScaleBias"},
                   {{14}, "ShadowSettings"},
                   {{15}, "ShadowBiasAndTexel"},
-                  {{16}, "ShadowCameraForward"}}},
+                  {{16}, "ShadowCameraForward"},
+                  {{20}, "BaseColor"}}},
                 {{2}, "DirectionalShadowAtlas", {}},
                 {{3}, "DirectionalShadowSampler", {}}};
     }

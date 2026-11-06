@@ -51,6 +51,17 @@ namespace Horo::Render::Detail {
         /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
         [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend,
                                                          const ResourceCreation<RenderTextureViewHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderBufferHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderMeshHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend,
+                                                         const ResourceCreation<RenderShaderModuleHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderPipelineHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderSamplerHandle> &creation);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderBufferHandle buffer);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderMeshHandle mesh);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderTextureViewHandle view);

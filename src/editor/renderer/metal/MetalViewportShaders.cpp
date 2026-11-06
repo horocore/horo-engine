@@ -23,6 +23,7 @@ struct SceneLighting {
     float4 shadowBiasFilter;
     float2 shadowTexel;
     float2 shadowPadding;
+    float4 baseColor;
 };
 struct ObjectTransforms { float4x4 mvp; float4x4 model; };
 struct VertexOut {
@@ -117,7 +118,7 @@ fragment float4 viewport_fragment(VertexOut input [[stage_in]],
 {
     float3 normal = normalize(input.worldNormal);
     float3 viewDirection = normalize(float3(scene.cameraPosition) - input.worldPosition);
-    float3 baseColor = float3(0.68, 0.70, 0.74);
+    float3 baseColor = scene.baseColor.xyz;
     float3 lighting = baseColor * 0.08;
     for (uint index = 0; index < scene.lightCount; ++index)
     {

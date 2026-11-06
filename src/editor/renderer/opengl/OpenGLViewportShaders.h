@@ -50,6 +50,7 @@ uniform vec2 uShadowTexel;
 uniform vec4 uShadowBiasFilter;
 uniform vec3 uSelectionColor;
 uniform float uSelectionStrength;
+uniform vec3 uBaseColor;
 float SampleCascade(int cascade, vec3 worldPosition, vec3 normal, vec3 lightDirection)
 {
     vec3 localized = worldPosition - uCameraPosition + normal * uShadowBiasFilter.z;
@@ -97,7 +98,7 @@ void main()
 {
     vec3 normal = normalize(vWorldNormal);
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
-    vec3 baseColor = vec3(0.68, 0.70, 0.74);
+    vec3 baseColor = uBaseColor;
     vec3 lighting = baseColor * 0.08;
     for (int index = 0; index < uLightCount; ++index)
     {

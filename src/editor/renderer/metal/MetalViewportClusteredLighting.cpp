@@ -21,15 +21,17 @@ namespace Horo::Editor {
                     profile.fallback == LightPreparationFallback::AllowBaselineForwardCpu);
         }
 
-        Result<const CompiledShaderArtifact *> ClusteredArtifact(const ShaderHotReloadProgramView &view, const std::size_t role) {
+        Result<const CompiledShaderArtifact *> ClusteredArtifact(const ShaderHotReloadProgramView &view, const std::size_t role,
+                                                                 bool clustered) {
             using Outcome = Result<const CompiledShaderArtifact *>;
             if (!ClusteredProgramEnvelope(view, role))
                 return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
             const auto &artifact = view.compiled->artifacts.front();
             if (artifact.backend != ShaderTargetBackend::Metal || !artifact.reflection)
                 return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidAdapterOutput));
-            const auto canonical = MakeEditorViewportClusteredShaderManifest(static_cast<EditorViewportShaderProgram>(role + 1),
-                                                                             view.manifest->targets.front());
+            const auto program = static_cast<EditorViewportShaderProgram>(role + 1);
+            const auto canonical = clustered ? MakeEditorViewportClusteredShaderManifest(program, view.manifest->targets.front())
+                                             : MakeEditorViewportShaderManifest(program, view.manifest->targets.front());
             if (canonical.HasError())
                 return Outcome::Failure(canonical.ErrorValue());
             const auto expected = ComputeShaderInterfaceCompatibilityId(canonical.Value());
@@ -60,6 +62,12 @@ namespace Horo::Editor {
 
         Result<void> CloseClusteredProgram(RenderFrontend &frontend, MetalViewportClusteredLighting::Program &program) {
             program.materials.reset();
+            if (program.selectionPipeline.IsValid()) {
+                const auto released = frontend.ReleaseGraphicsPipeline(program.selectionPipeline);
+                if (released.HasError())
+                    return released;
+                program.selectionPipeline = {};
+            }
             if (program.pipeline.IsValid()) {
                 if (auto released = frontend.ReleaseGraphicsPipeline(program.pipeline); released.HasError())
                     return released;
@@ -76,7 +84,8 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    MetalViewportClusteredLighting::MetalViewportClusteredLighting(Render::RenderFrontend &frontend) noexcept : frontend_(&frontend) {}
+    MetalViewportClusteredLighting::MetalViewportClusteredLighting(Render::RenderFrontend &frontend, bool canonicalColor) noexcept
+        : canonicalColor_(canonicalColor), frontend_(&frontend) {}
 
     MetalViewportClusteredLighting::~MetalViewportClusteredLighting() {
         static_cast<void>(Close());
@@ -98,13 +107,28 @@ namespace Horo::Editor {
         return PrepareStorage(profile);
     }
 
+    /** @copydoc MetalViewportClusteredLighting::PrepareBaseline */
+    Result<void> MetalViewportClusteredLighting::PrepareBaseline(std::span<const Render::ShaderHotReloadProgramView> family,
+                                                                 const EditorViewportLightingProfile &profile) {
+        if (!profile.IsValid() || profile.requested != Render::LightPreparationMode::BaselineForwardCpu ||
+            family.size() != programs_.size() || kernel_)
+            return Result<void>::Failure(MakeError(Render::LightCullingErrors::InvalidInput));
+        clustered_ = false;
+        slots_ = frontend_->Capabilities().support.limits.maxFramesInFlight;
+        for (std::size_t role = 0; role < programs_.size(); ++role)
+            if (const auto ready = PrepareProgram(family[role], role); ready.HasError())
+                return ready;
+        return PrepareStorage(profile);
+    }
+
     Result<void> MetalViewportClusteredLighting::PrepareReplacement(const std::span<const Render::ShaderHotReloadProgramView> family,
                                                                     const MetalViewportClusteredLighting &previous,
                                                                     const EditorViewportLightingProfile &profile) {
-        if (frontend_ != previous.frontend_ || !previous.kernel_ || family.size() != programs_.size() ||
-            !ClusteredProfileAdmitted(profile) || frames_)
+        if (frontend_ != previous.frontend_ || family.size() != programs_.size() || frames_)
             return Result<void>::Failure(MakeError(Render::LightCullingErrors::InvalidInput));
         slots_ = previous.slots_;
+        canonicalColor_ = previous.canonicalColor_;
+        clustered_ = previous.clustered_;
         for (std::size_t role = 0; role < programs_.size(); ++role)
             if (const auto ready = PrepareProgram(family[role], role); ready.HasError())
                 return ready;
@@ -113,10 +137,12 @@ namespace Horo::Editor {
     }
 
     Result<void> MetalViewportClusteredLighting::PrepareStorage(const EditorViewportLightingProfile &profile) {
-        auto frames = Render::LightFrameBufferPool::Create(*frontend_, profile.budget, slots_);
-        if (frames.HasError())
-            return Result<void>::Failure(frames.ErrorValue());
-        frames_ = std::move(frames).Value();
+        if (clustered_) {
+            auto frames = Render::LightFrameBufferPool::Create(*frontend_, profile.budget, slots_);
+            if (frames.HasError())
+                return Result<void>::Failure(frames.ErrorValue());
+            frames_ = std::move(frames).Value();
+        }
         const auto sampler = frontend_->CreateSampler({});
         if (sampler.HasError())
             return Result<void>::Failure(sampler.ErrorValue());
@@ -127,7 +153,7 @@ namespace Horo::Editor {
     }
 
     Result<void> MetalViewportClusteredLighting::PrepareProgram(const Render::ShaderHotReloadProgramView &view, const std::size_t role) {
-        const auto admitted = ClusteredArtifact(view, role);
+        const auto admitted = ClusteredArtifact(view, role, clustered_);
         if (admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
         const auto &artifact = *admitted.Value();
@@ -154,7 +180,10 @@ namespace Horo::Editor {
     Result<void> MetalViewportClusteredLighting::PreparePipeline(Program &program, const Render::ShaderHotReloadProgramView &view,
                                                                  const Render::CompiledShaderArtifact &artifact, const std::size_t role) {
         Render::RenderGraphicsPipelineState state{.cull = Render::RenderCullMode::None,
+                                                  .blend = role == 1 ? Render::RenderBlendMode::Alpha : Render::RenderBlendMode::Disabled,
                                                   .depthWrite = role != 1,
+                                                  .colorFormat = canonicalColor_ ? Render::RenderTextureFormat::Rgba16Float
+                                                                                 : Render::RenderTextureFormat::Rgba8Unorm,
                                                   .depthFormat = Render::RenderTextureFormat::Depth32Float,
                                                   .depthOnly = role == 2};
         const auto &target = view.manifest->targets.front();
@@ -167,6 +196,17 @@ namespace Horo::Editor {
         if (pipeline.HasError())
             return Result<void>::Failure(pipeline.ErrorValue());
         program.pipeline = pipeline.Value().handle;
+        if (role == 1 && canonicalColor_) {
+            state.depthCompare = Render::RenderCompareFunction::Equal;
+            const auto selectionCompatibility = ClusteredCompatibility(*frontend_, target, metadata, state);
+            if (selectionCompatibility.HasError())
+                return Result<void>::Failure(selectionCompatibility.ErrorValue());
+            const auto selection = frontend_->CreateGraphicsPipeline(
+                {program.vertex, program.fragment, *view.manifest, target, metadata.reflection, state, selectionCompatibility.Value()});
+            if (selection.HasError())
+                return Result<void>::Failure(selection.ErrorValue());
+            program.selectionPipeline = selection.Value().handle;
+        }
         return Result<void>::Success();
     }
 

@@ -258,7 +258,12 @@ namespace Horo::Render::Detail {
         const auto attachments = impl_->RasterAttachments(raster, request).Value();
         MaterialEncoder scope{impl_->vfxPass};
         ConfigureRasterAttachments(scope.pass, raster, attachments);
-        TrackParallelGraphUse(commands, request.resources);
+        // Serial encoding records only this pass's actual uses; future graph resources remain untouched.
+        const auto nativeCommands = (__bridge id<MTLCommandBuffer>)commands;
+        if (attachments.color)
+            Impl::TrackUse(attachments.color->sourceInstance->use, nativeCommands);
+        if (attachments.depth)
+            Impl::TrackUse(attachments.depth->sourceInstance->use, nativeCommands);
         scope.encoder = [(__bridge id<MTLCommandBuffer>)commands renderCommandEncoderWithDescriptor:scope.pass];
         if (!scope.encoder)
             return Result<void>::Failure(MakeError(MetalBackendErrors::CommandSubmissionFailed));
@@ -270,7 +275,11 @@ namespace Horo::Render::Detail {
             const auto *material = dynamic_cast<const MetalMaterialBinding *>(&draw.material->BackendBinding().NativeBinding());
             const auto mapped = std::ranges::find(request.meshes, draw.mesh, &RenderGraphMeshInstance::mesh);
             const auto *mesh = Decode<MetalMeshInstance>(mapped->instance);
-            impl_->TrackRasterMaterialUse(*material, (__bridge id<MTLCommandBuffer>)commands);
+            auto *vertices = Decode<MetalBufferInstance>(MaterialGraphInstance(request, draw.vertices));
+            auto *indices = Decode<MetalBufferInstance>(MaterialGraphInstance(request, draw.indices));
+            Impl::TrackUse(vertices->use, nativeCommands);
+            Impl::TrackUse(indices->use, nativeCommands);
+            impl_->TrackRasterMaterialUse(*material, nativeCommands);
             BindMetalMaterial(scope.encoder, *material);
             [scope.encoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:MetalMeshVertexBufferIndex];
             [scope.encoder

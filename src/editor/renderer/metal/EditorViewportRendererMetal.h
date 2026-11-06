@@ -23,6 +23,9 @@ namespace Horo::Editor {
 
         /** @brief Admits the complete actual cooked clustered family and culling kernel on the cold graphics owner.
          * @details All borrowed manifests and batches expire on return; failed preparation retains the last accepted family. */
+        /** @brief Creates the actual CPU-forward-selected raster graph from a complete cooked generic family. */
+        [[nodiscard]] Result<void> PrepareBaselineLighting(std::span<const Render::ShaderHotReloadProgramView> family,
+                                                           const EditorViewportLightingProfile &profile);
         [[nodiscard]] Result<void> PrepareClusteredLighting(std::span<const Render::ShaderHotReloadProgramView> family,
                                                             const Render::CookedLightCullingKernel &kernel,
                                                             const EditorViewportLightingProfile &profile);
@@ -36,6 +39,16 @@ namespace Horo::Editor {
         [[nodiscard]] Result<Render::ShaderHotReloadTargetState> Adopt(std::unique_ptr<Render::IShaderHotReloadCandidate> candidate,
                                                                        Render::ShaderHotReloadTargetState expected) override;
 
+        /** @copydoc IEditorViewportRenderer::PrepareColorPipeline */
+        [[nodiscard]] Result<void> PrepareColorPipeline(const EditorViewportColorInputs &inputs) override;
+        /** @copydoc IEditorViewportRenderer::RequestColorSettings */
+        [[nodiscard]] Result<void> RequestColorSettings(const Render::ExposureSettings &settings) override;
+        /** @copydoc IEditorViewportRenderer::SetColorFrameDelta */
+        void SetColorFrameDelta(float deltaSeconds) noexcept override;
+        /** @copydoc IEditorViewportRenderer::FinishColorFrame */
+        void FinishColorFrame(bool accepted) noexcept override;
+        /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
+        [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
         [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
                                                         std::span<const Render::RenderPassDescriptor> passes) override;
         void RequestExtent(EditorViewportExtent extent) noexcept override;

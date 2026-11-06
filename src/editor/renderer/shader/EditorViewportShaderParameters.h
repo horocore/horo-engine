@@ -14,12 +14,19 @@ namespace Horo::Editor {
                                                                                         Render::ShaderTargetBackend backend,
                                                                                         std::size_t role);
 
+    /** @brief Returns the explicitly interpreted fixed Editor material in canonical scene-linear AP1.
+     * @return Immutable prepared float4 RGB/1; source legacy-linearRec709D65V1 is converted once before lighting.
+     */
+    [[nodiscard]] std::array<float, 4> EditorViewportFixedMaterialBaseColor() noexcept;
+
     struct EditorViewportShaderParameters final {
         Math::Mat4 mvp{Math::Mat4::Identity()}, model{Math::Mat4::Identity()};
         std::array<float, 64> shadow{};
         std::array<float, 16> cascadeSplits{}, atlasRects{};
         std::array<float, 4> cameraForward{}, shadowBiasFilter{};
         std::array<float, 4> camera{}, selection{}, shadowSettings{}, shadowCoordinates{};
+        std::array<float, 4> baseColor = EditorViewportFixedMaterialBaseColor();
+        bool unexposedAcesCg{}; /**< Explicit host recipe: true emits unexposed AP1; false retains legacy display shading. */
         std::array<std::array<float, 64>, 4> lights{};
         /** @brief Captures the bounded canonical 16-light scene and current backend shadow coordinates. */
         void SetScene(const Render::RenderSceneView &scene, const std::optional<Render::DirectionalShadowFrame> &shadowFrame,
@@ -46,7 +53,7 @@ namespace Horo::Editor {
 
     /** @brief Packs one grid/visualizer draw through its accepted reflected layout. */
     [[nodiscard]] Result<std::size_t> PackEditorViewportGrid(const Render::MaterialBindingLayout &layout, const Math::Mat4 &mvp,
-                                                             Math::Vec3 color, std::span<std::byte> destination);
+                                                             Math::Vec3 color, std::span<std::byte> destination, float alpha = 1.0F);
     /** @brief Packs one directional depth draw through its accepted reflected layout. */
     [[nodiscard]] Result<std::size_t> PackEditorViewportShadow(const Render::MaterialBindingLayout &layout, const Math::Mat4 &mvp,
                                                                std::span<std::byte> destination);

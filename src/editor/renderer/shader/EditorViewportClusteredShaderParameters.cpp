@@ -75,12 +75,14 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportClusteredShaderParameters::PackLit */
     Result<std::size_t> EditorViewportClusteredShaderParameters::PackLit(const Render::MaterialBindingLayout &layout,
                                                                          const std::span<std::byte> destination) const {
         const auto mvpComponents = Detail::MatrixRowMajorComponents(common.mvp.values);
         const auto modelComponents = Detail::MatrixRowMajorComponents(common.model.values);
         const auto shadowComponents = Detail::MatrixRowMajorComponents(common.shadow);
-        const std::array<Render::MaterialParameterValue, 15> values{{{{1}, std::span<const float>{mvpComponents}},
+        const std::array<float, 4> sceneColorPolicy{common.unexposedAcesCg ? 1.0F : 0.0F, 0, 0, 0};
+        const std::array<Render::MaterialParameterValue, 17> values{{{{1}, std::span<const float>{mvpComponents}},
                                                                      {{2}, std::span<const float>{modelComponents}},
                                                                      {{3}, std::span<const float>{shadowComponents}},
                                                                      {{4}, std::span<const float>{common.camera}},
@@ -94,7 +96,9 @@ namespace Horo::Editor {
                                                                      {{16}, std::span<const float>{dimensions}},
                                                                      {{17}, std::span<const float>{depth}},
                                                                      {{18}, std::span<const float>{viewport}},
-                                                                     {{19}, std::span<const float>{shadowIdentity}}}};
+                                                                     {{19}, std::span<const float>{shadowIdentity}},
+                                                                     {{20}, std::span<const float>{common.baseColor}},
+                                                                     {{21}, std::span<const float>{sceneColorPolicy}}}};
         return Render::PackMaterialParameterBinding(layout, {1}, values, destination);
     }
 }  // namespace Horo::Editor

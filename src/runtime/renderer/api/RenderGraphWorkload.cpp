@@ -98,7 +98,7 @@ namespace Horo::Render {
 
         bool ExternallyValidated(const RenderGraphWorkload &workload) {
             return std::holds_alternative<RenderGraphMaterialRaster>(workload) || std::holds_alternative<RenderGraphMultiview>(workload) ||
-                   std::holds_alternative<RenderGraphVfx>(workload);
+                   std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphExposureGpu>(workload);
         }
 
         bool MatchesBasic(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
@@ -119,8 +119,6 @@ namespace Horo::Render {
                 return ValidateVfxGpuComputeGraphWorkload(request, pass, *particles).HasValue();
             if (const auto *particles = std::get_if<RenderGraphVfxGpuDraw>(&workload))
                 return ValidateVfxGpuDrawGraphWorkload(request, pass, *particles).HasValue();
-            if (const auto *exposure = std::get_if<RenderGraphExposureGpu>(&workload))
-                return ValidateExposureGpuGraphWorkload(request, pass, *exposure).HasValue();
             if (ExternallyValidated(workload))
                 return true;
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
@@ -317,16 +315,24 @@ namespace Horo::Render {
             });
         }
 
+        /** @brief Preserves semantic validator failures instead of collapsing them into a generic boolean graph error. */
+        Result<void> ValidateTypedPass(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
+                                       const RenderGraphWorkload &workload) {
+            if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&workload))
+                return ValidateMaterialRasterWorkload(request, pass, *raster);
+            if (const auto *vfx = std::get_if<RenderGraphVfx>(&workload))
+                return ValidateVfxGraphWorkload(request, pass, *vfx);
+            if (const auto *exposure = std::get_if<RenderGraphExposureGpu>(&workload))
+                return ValidateExposureGpuGraphWorkload(request, pass, *exposure);
+            return Result<void>::Success();
+        }
+
         Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
             std::size_t multiviewCount = 0;
             for (std::size_t index = 0; index < request.workloads.size(); ++index) {
                 const auto &binding = request.workloads[index];
-                if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&binding.workload))
-                    if (auto valid = ValidateMaterialRasterWorkload(request, request.graph.Passes()[index], *raster); valid.HasError())
-                        return valid;
-                if (const auto *vfx = std::get_if<RenderGraphVfx>(&binding.workload))
-                    if (const auto valid = ValidateVfxGraphWorkload(request, request.graph.Passes()[index], *vfx); valid.HasError())
-                        return valid;
+                if (auto valid = ValidateTypedPass(request, request.graph.Passes()[index], binding.workload); valid.HasError())
+                    return valid;
                 if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
                     if (++multiviewCount > 1)
                         return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,

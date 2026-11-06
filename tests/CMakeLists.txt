@@ -4314,13 +4314,34 @@ target_compile_features(HoroRenderGraphTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderGraphTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroColorPipelineTests
         unit/runtime/renderer/ColorPipelineTests.cpp
+        unit/runtime/renderer/ColorOutputProgramTests.cpp
+        unit/runtime/renderer/ColorCreativeLookTests.cpp
+        unit/runtime/renderer/SceneColorEncodingTests.cpp
         unit/runtime/renderer/ExposureTests.cpp
         unit/runtime/renderer/ExposureGpuKernelTests.cpp
 )
 target_compile_features(HoroColorPipelineTests PRIVATE cxx_std_20)
-target_link_libraries(HoroColorPipelineTests PRIVATE HoroEngine::RenderApi Catch2::Catch2WithMain)
+target_link_libraries(HoroColorPipelineTests PRIVATE HoroEngine::RenderApi Catch2::Catch2WithMain HoroColorOutputShaderRecipeInternal)
 catch_discover_tests(HoroColorPipelineTests TEST_PREFIX "HoroColorPipelineTests::"
         DISCOVERY_MODE PRE_TEST PROPERTIES LABELS "unit;renderer;color;exposure")
+add_executable(HoroColorCreativeLookPackageTests
+        unit/runtime/renderer/ColorCreativeLookPackageTests.cpp
+        unit/runtime/renderer/ColorCreativeLookProducedPackageTests.cpp)
+target_compile_features(HoroColorCreativeLookPackageTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroColorCreativeLookPackageTests PRIVATE
+        HORO_CREATIVE_LOOK_FIXTURE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/renderer/color/creative-look-produced")
+target_link_libraries(HoroColorCreativeLookPackageTests PRIVATE
+        HoroColorOutputPackageInternal Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
+catch_discover_tests(HoroColorCreativeLookPackageTests TEST_PREFIX "HoroColorCreativeLookPackageTests::"
+        DISCOVERY_MODE PRE_TEST PROPERTIES LABELS "unit;renderer;color;look-package")
+add_executable(HoroRegisterRasterMultiSampledReflectionTests
+        unit/runtime/renderer/RegisterRasterMultiSampledReflectionTests.cpp)
+target_compile_features(HoroRegisterRasterMultiSampledReflectionTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroRegisterRasterMultiSampledReflectionTests PRIVATE
+    HORO_COLOR_OUTPUT_REFLECTION_FIXTURE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/shaders/color_output_locked")
+target_link_libraries(HoroRegisterRasterMultiSampledReflectionTests PRIVATE
+    HoroShaderReflectionCookInternal HoroColorOutputShaderRecipeInternal)
+horo_register_catch_test(HoroRegisterRasterMultiSampledReflectionTests LABELS "unit;renderer;color;shader;headless")
 add_executable(HoroExposureGpuReflectionTests unit/runtime/renderer/ExposureGpuReflectionTests.cpp)
 target_compile_features(HoroExposureGpuReflectionTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroExposureGpuReflectionTests PRIVATE
@@ -4520,9 +4541,11 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderFrontendTests.cpp
         unit/runtime/renderer/RenderFrontendLightPreparationTests.cpp
         unit/runtime/renderer/RenderGraphMaterialRasterTests.cpp
+        unit/runtime/renderer/RenderGraphMaterialRetentionBoundaryTests.cpp
         unit/runtime/renderer/RenderSubmissionAllocatorTests.cpp
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
+        unit/runtime/renderer/RenderFrontendColorTextureAdmissionTests.cpp
         unit/runtime/renderer/RenderMultiviewContentsTests.cpp
         unit/runtime/renderer/RenderFrontendLifecycleTests.cpp
             unit/runtime/renderer/RenderFrontendGuiCompositionTests.cpp
@@ -6859,6 +6882,11 @@ target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorVie
 include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorClusteredLightingAssets.cmake")
 horo_add_editor_clustered_lighting_assets_target()
 add_executable(HoroEditorClusteredLightingAssetsTests unit/editor/EditorClusteredLightingAssetsTests.cpp)
+add_executable(HoroEditorBaselineLightingAssetsTests unit/editor/EditorBaselineLightingAssetsTests.cpp)
+target_compile_features(HoroEditorBaselineLightingAssetsTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorBaselineLightingAssetsTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroEditorBaselineLightingAssetsTests PRIVATE HoroEditorBaselineLightingAssetsInternal)
+horo_register_catch_test(HoroEditorBaselineLightingAssetsTests LABELS "unit;editor;renderer;shader;headless")
 target_compile_features(HoroEditorClusteredLightingAssetsTests PRIVATE cxx_std_20)
 target_include_directories(HoroEditorClusteredLightingAssetsTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(HoroEditorClusteredLightingAssetsTests PRIVATE HoroEditorClusteredLightingAssetsInternal
@@ -6881,6 +6909,12 @@ target_compile_features(HoroEditorClusteredLightingCookTests PRIVATE cxx_std_20)
 target_include_directories(HoroEditorClusteredLightingCookTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(HoroEditorClusteredLightingCookTests PRIVATE HoroEditorClusteredLightingCookInternal Catch2::Catch2WithMain)
 horo_register_catch_test(HoroEditorClusteredLightingCookTests LABELS "unit;application;shader;headless")
+
+add_executable(HoroAtomicShaderCookPackageTests unit/editor/AtomicShaderCookPackageTests.cpp)
+target_compile_features(HoroAtomicShaderCookPackageTests PRIVATE cxx_std_20)
+target_include_directories(HoroAtomicShaderCookPackageTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroAtomicShaderCookPackageTests PRIVATE HoroAtomicShaderCookPackageInternal)
+horo_register_catch_test(HoroAtomicShaderCookPackageTests LABELS "unit;application;shader;headless")
 
 add_executable(HoroVfxGpuCookTests unit/editor/VfxGpuCookTests.cpp)
 target_compile_features(HoroVfxGpuCookTests PRIVATE cxx_std_20)
@@ -6909,6 +6943,49 @@ if(TARGET HoroMetalGraphExecutionSmoke)
         HoroEditorClusteredLightingAssetsInternal HoroEditorViewportShaderRecipeInternal
         HoroRenderFrontendResourceAccessInternal HoroEngine::VfxApi HoroVfxGpuCookInternal)
     target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+endif()
+
+if(TARGET HoroSdlMetalPresentationInternal AND TARGET HoroColorOutputCookInternal)
+    add_executable(HoroMetalColorOutputSmoke integration/renderer/MetalColorOutputFrontendSmoke.mm)
+    target_compile_features(HoroMetalColorOutputSmoke PRIVATE cxx_std_20)
+    target_compile_options(HoroMetalColorOutputSmoke PRIVATE -fobjc-arc)
+    target_include_directories(HoroMetalColorOutputSmoke PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(HoroMetalColorOutputSmoke PRIVATE Catch2::Catch2WithMain
+        HoroEngine::RenderMetal HoroEngine::RenderFrontend HoroSdlMetalPresentationInternal
+        HoroExposureGpuCookInternal HoroColorOutputCookInternal HoroColorOutputShaderRecipeInternal
+        HoroRenderFrontendResourceAccessInternal nlohmann_json::nlohmann_json "-framework Metal")
+    if(HORO_ENABLE_GPU_SMOKE_TESTS)
+        horo_register_catch_test(HoroMetalColorOutputSmoke LABELS "integration;renderer;metal;color;gpu")
+    endif()
+endif()
+
+if(TARGET HoroEditorViewportMetal AND TARGET HoroColorOutputPackageInternal)
+    add_executable(HoroMetalEditorViewportColorSmoke
+        integration/renderer/MetalEditorViewportColorSmoke.mm
+        support/renderer/MetalEditorViewportColorFixture.mm)
+    target_compile_features(HoroMetalEditorViewportColorSmoke PRIVATE cxx_std_20)
+    target_compile_options(HoroMetalEditorViewportColorSmoke PRIVATE -fobjc-arc)
+    target_include_directories(HoroMetalEditorViewportColorSmoke PRIVATE
+        "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/tests" "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(HoroMetalEditorViewportColorSmoke PRIVATE Catch2::Catch2WithMain
+        HoroEditorViewportMetal HoroEditorViewportColorInternal HoroColorOutputPackageInternal
+        HoroEditorBaselineLightingAssetsInternal HoroEditorClusteredLightingAssetsInternal
+        HoroSdlMetalPresentationInternal HoroEngine::RenderMetal HoroEngine::RenderFrontend
+        HoroRenderFrontendResourceAccessInternal nlohmann_json::nlohmann_json "-framework Metal")
+    if(HORO_ENABLE_GPU_SMOKE_TESTS)
+        horo_register_catch_test(HoroMetalEditorViewportColorSmoke LABELS "integration;renderer;metal;color;gpu")
+    endif()
+    add_executable(HoroMetalEditorColorPipelineSmoke integration/renderer/MetalEditorColorPipelineSmoke.mm)
+    target_compile_features(HoroMetalEditorColorPipelineSmoke PRIVATE cxx_std_20)
+    target_compile_options(HoroMetalEditorColorPipelineSmoke PRIVATE -fobjc-arc)
+    target_include_directories(HoroMetalEditorColorPipelineSmoke PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(HoroMetalEditorColorPipelineSmoke PRIVATE Catch2::Catch2WithMain
+        HoroEditorViewportColorInternal HoroColorOutputPackageInternal HoroEditorViewportMetal
+        HoroSdlMetalPresentationInternal HoroEngine::RenderMetal HoroEngine::RenderFrontend
+        HoroRenderFrontendResourceAccessInternal nlohmann_json::nlohmann_json "-framework Metal")
+    if(HORO_ENABLE_GPU_SMOKE_TESTS)
+        horo_register_catch_test(HoroMetalEditorColorPipelineSmoke LABELS "integration;renderer;metal;color;gpu")
+    endif()
 endif()
 
 target_sources(HoroShaderReflectionCookTests PRIVATE unit/runtime/renderer/RegisterRasterCapturedMetalTests.cpp)

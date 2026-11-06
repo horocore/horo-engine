@@ -1,137 +1,166 @@
-# Scene color pipeline migration
+# Scene color pipeline integration
 
-HORO-394 / #394 / RND-013.3 is in progress. This document separates the
-backend-neutral contract work from the native rendering changes still required
-before the ticket can move to review.
+HORO-394 / #394 / [RND-013.3] introduces a backend-neutral color contract and an
+explicitly admitted Metal Editor path. The implemented output is ACES 2 SDR100
+Rec.709 into display-linear Rec.709, followed by SDR transfer encoding. The
+Editor presents an explicitly diagnosed unmanaged SDR preview. This is not
+calibrated display or HDR/PQ/EDR qualification.
 
-## Existing behavior and migration boundary
+## Scene and overlay interpretation
 
-The Editor viewport currently applies Reinhard-style display conversion and
-approximate gamma inside mesh shaders, then writes an RGBA8 target. Adding a
-final exposure pass after that target would operate on already clipped,
-display-encoded values. It would not implement scene-referred exposure.
+`SceneColorEncoding.h` requires a versioned source policy for canonical light
+construction, including an empty light set. Linear ACEScg passes through;
+version 1 can interpret legacy linear Rec.709/D65 or decode sRGB Rec.709/D65
+before a pinned AP1 conversion. Nonfinite, unspecified and unrepresentable inputs
+return typed errors; finite negative working components remain legal. The
+serialized scene's separate prohibition on negative authored light RGB remains.
 
-## Current foundation
+The Editor explicitly interprets its existing untagged authored light and
+preview material colors as legacy linear Rec.709/D65 version 1. This is a new
+host interpretation, not historical provenance or a persisted format change.
+Extracted light tables and scene snapshots retain that source policy. New import
+paths must declare their actual encoding.
 
-`Exposure.h` defines finite stop-based settings, exact view/device/settings
-generations and an 80-byte portable dispatch-parameter layout. Automatic state
-identifies producer submission N and consumer N+1 of the same view. Validating
-that metadata does not prove that GPU work ran or completed. Manual/initial
-exposure carries its selected CPU value; it cannot claim an automatic GPU buffer.
-Dispatch preparation admits at most 16,777,216 source samples and a caller-selected
-finite delta between zero and one second. It neither reads pixels nor submits work.
+With the admitted color family, mesh shading writes unexposed linear AP1 into
+RGBA16F, without per-mesh Reinhard/gamma or selection decoration. BaseColor is
+logical parameter 20; Metal SceneColorPolicy is parameter 21. Existing clustered
+parameters 16–19 retain their identities. Current Metal lit uniform blocks are
+704 bytes clustered and 1664 bytes forward; old cooked interfaces must be rebuilt.
+The old BaseColor-only raw compiler fixture remains separately preserved.
 
-`ColorPipeline.h` admits immutable, bounded cubic RGB32F payloads and a cold color
-plan over exact scene, exposure, output and history identities. Payload SHA-256
-uses little-endian IEEE754 float bytes, including signed zero. The factory copies
-the payload; hashes establish integrity only. Configuration and reference digests
-are required identity fields, not independent proof of cook trust, an Academy
-conformance test or a native renderer result. The production output role never
-silently falls back to `NeutralDiagnostic`.
+The frame graph runs scene shading, bounded GPU exposure, optional creative
+look, the pinned analytic output, display-linear grid/selection, and final SDR
+encoding. Overlays therefore cannot affect the meter. Existing Editor UI tint
+values are interpreted as sRGB code values by the explicit versioned overlay
+adapter and decoded before display-linear composition; they are not AP1 scene
+colors. Scene clear color is converted at the host boundary as well.
 
-The foundation was compiled on macOS Debug together with the RenderApi public
-header consumers. Twenty focused cold-value tests passed with no failures or
-skips, covering finite bounds, enum vocabulary, region overflow/work limits,
-submission compatibility, payload corruption, ownership, exact output admission,
-cancellation and prior-candidate preservation. All 55 measured functions in the
-nine new C++ files have cyclomatic complexity at most 10; clang-format 19 passed.
-These are local foundation results, not native rendering or full-ticket clearance.
+Without an admitted color family the existing bootstrap raster path remains.
+Requesting a new color/exposure setting without its required package returns a
+typed failure, rather than silently activating that legacy path.
 
-## GPU exposure work in progress
+## Exposure, history and resource ownership
 
-The closed compute family in `assets/shaders/runtime/exposure.hlsl` clears 256
-integer bins, builds them from bounded RGBA16F scene tiles, then performs a fixed
-prefix/reduction and rate-limited EV adaptation. It uses AP1 luminance, the Y row
-of AP1-to-XYZ in the [Khronos Data Format Specification, section 14.7](https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.pdf).
-Finite negative scene components remain legal; non-finite samples are excluded.
-Percentile selection weights the overlap of each histogram bin, so bin-center
-quantization is part of this versioned meter, not an exact continuous-luminance
-measurement.
+`Exposure.h` describes finite stop-based settings, exact view/device/settings
+identities and an 80-byte portable dispatch layout. Dispatch preparation admits
+at most 16,777,216 source samples and a finite delta from zero to one second.
+It does not read pixels or submit work.
 
-The device output is 32 bytes and retains split 64-bit generation/submission
-identity. Dispatch constants are 96 bytes. The following view consumes the GPU
-buffer; recording a graph or supplying matching ordinals does not establish native
-submission. The native owner must independently authorize the exact preceding
-buffer, view, device and genuinely committed same-queue command.
+The genuine three-stage GPU family clears 256 bins, meters bounded RGBA16F tiles,
+then reduces percentiles and performs rate-limited EV adaptation. AP1 luminance
+uses the Y row of AP1-to-XYZ. Finite negative components remain legal; nonfinite
+samples are excluded. Bin-center quantization is part of this versioned meter.
+Native constants are 96 bytes; the output state is 32 bytes with split 64-bit
+submission/generation identity. No CPU histogram readback drives production.
 
-Offline `HoroExposureGpuShaderCook` uses explicitly authenticated compiler tools,
-the real shader compilation/reflection pipeline and atomic package publication.
-Package creation requires all three genuine stage artifacts and a successful
-decode of the written bytes. All three current stages were genuinely compiled,
-reflected, native-compiled and atomically published on the local Mac. No catalog,
-trust policy or analyzer configuration was changed to admit them.
+Accepted submission N supplies the GPU exposure consumed by N+1 of the same
+view. Metadata or a successful graph encoding alone does not establish acceptance:
+actual Present and the native same-queue submission journal do. Unsent/cancelled
+candidates preserve accepted history. Scene-domain, settings, output and device
+identities govern reset and compatibility. The Editor uses accepted view-clock
+cursors; its simulation-clock mode returns explicit unsupported status.
 
-The actual Metal fixture passed 12 exposure cases with zero failures/skips:
-AP1 luminance, partial tiles, percentile weighting, EV sign/adaptation, finite and
-empty samples, next-submission identity including 32-bit carry, invalid-state
-propagation, explicit reset, uncommitted/abandoned/foreign/stale evidence and
-last-good preservation. A real render-attachment clear feeds the meter earlier
-in the same native command buffer. A different unsent command remains rejected.
-Two existing native buffer-copy/color-clear regressions also passed. Execution
-was explicitly selected with `[exposure]` and the two regression names, using
-the genuine package through `HORO_EXPOSURE_GPU_PACKAGE`; this does not claim
-that GPU CTest discovery was enabled globally.
+Four bounded color slots retain in-flight resources without ordinary frame waits.
+Resource preparation gates each actual creation result; rollback retires only
+that creation. Candidate resets defer to the acceptance boundary. Closed/failed
+owners cannot be initialized again; recreate the owner through host lifecycle.
+Native completion remains separate from CPU upload readiness.
 
-The cold API suite passed 27 cases and the captured compiler-evidence suite
-passed nine cases. Those exact executables and their inputs were unchanged by
-the final native resource/test correction; their prior passing execution is
-retained rather than counted again. Public RenderApi consumers compiled, as did
-the owning Metal/frontend and explicit unsupported Null/OpenGL paths.
+Serial material draws track only their validated attachments, geometry buffers
+and actual material resources. They must not mark later graph resources, such as
+the exposure reset seed, as used by an unsent earlier draw. Genuine parallel graph
+submission retains its separate whole-graph tracking. Strict seed completion and
+foreign/predecessor rejection remain intact. The frontend aggregate retains up
+to 1024 draws across individually bounded 128-draw passes; failed admission rolls
+back material references and pool occupancy.
 
-Successful resource creation now associates only its own GPU upload. Empty
-buffers cannot inherit an unrelated texture's pending upload; the global upload
-retention needed for shutdown remains intact. Journal pruning retains the last
-actually accepted state while a replacement remains unsubmitted, so abandoning
-the replacement preserves retry from the accepted predecessor.
+## Analytic output and creative look data
 
-The native encoder packs explicit reset in bit 31 of the GPU clock lane while
-leaving the portable authored clock enum unchanged. Without reset, an invalid
-GPU predecessor produces `Invalid` state and stays invalid until explicit reset.
-No mismatching predecessor silently becomes an initial-value success.
+`CookedColorOutputProgram` owns original generated HLSL and two auxiliary tables,
+with pinned CG config 4.0.0 / OpenColorIO 2.5.0 identities. The analytic output is
+not a baked cubic approximation. Source/table hashes establish integrity, not
+publisher trust, ACES conformance or native execution.
 
-This is scoped exposure qualification using the concrete private native owner.
-It does not establish public frontend import/handle association end to end, an
-interactive Editor result, the final ACES/look/LUT color pass, calibrated HDR
-presentation, or complete HORO-394 acceptance. Local managed Sonar was waived;
-format and complexity checks do not constitute full Codacy/coverage/hosted gates.
-The added backend virtual and graph workload require engine, frontend and
-concrete renderer consumers to rebuild together; old C++ binary compatibility
-is not claimed.
+`CookedColorTransform` is creative-look-only. Executable descriptors use schema 2
+and `RejectOutsideV1`; recreate obsolete schema-1 look descriptors from their
+original samples. The analytic processor remains schema 1. A 2–65 cube retains
+original finite red-fastest RGB and a derived RGBA32F atlas at `(r + N*g, b)` with
+alpha-one padding. Trilinear and tetrahedral modes are explicit; exposure is
+applied once before the look, and the original analytic processor follows it.
+Outside-domain samples produce the declared diagnostic instead of implicit
+clamping. Disabled look mode does not require look storage.
 
-The migration therefore needs a retained RGBA16F linear ACEScg scene target.
-Mesh shading, scene-referred VFX and other scene effects must write that target
-without output encoding. Exposure and creative look processing consume scene
-color before one final pinned output transform. Display-referred UI joins in
-display-linear space afterward; accessibility processing covers the complete
-composition before final transfer encoding. UI and editor selection decoration
-must not contribute to the scene luminance meter.
+`PrepareColorTransformSelection` is the shared cold validator for immutable
+analytic/look pins, matching configuration and complete storage budget. It does
+not invent history or output identities. Nondefault numeric grading controls
+currently return `UnsupportedGrading`; they are not silently ignored.
 
-Presentation output negotiation remains owned by
-`RenderPresentationOutput`. A successfully negotiated native encoding does not
-mean the source image has received a scene-to-display conversion. The color
-pipeline must target that exact admitted encoding; it cannot silently select a
-different transfer function, gamut or precision.
+`scripts/renderer/color_pipeline_cook.py` produces the original analytic source,
+tables and direct CPU reference corpus. `color_look_cook.py` accepts explicit
+linear-AP1/red-fastest JSON samples and writes a closed three-file package:
+`manifest.json`, `look.rgb.f32le`, `reference.json`. It uses the pinned actual OCIO
+CPU processor for reference values; it does not import arbitrary cube formats or
+claim GPU execution. The runtime loader validates fixed paths, sizes, hashes,
+finite values and the canonical transform factory.
 
-## Full-ticket acceptance checklist
+Authenticated offline `HoroColorOutputShaderCook --with-look` compiles the actual
+third program; its schema-2 generation contains 22 files. Legacy schema-1,
+18-file two-program generations remain readable. Exposure has three genuine
+programs in its separate package. Runtime `HoroColorOutputPackageInternal` links
+no compiler or process runner. Its ordinary-file checks reject observed symlinks
+and static escapes; the host must keep the explicit cold-load root stable. They
+are not a race-free rooted-file capability or publisher authentication.
 
-- [x] Establish finite, typed exposure and color-plan inputs with complete view,
-  output, transform and resource-generation identities.
-- [ ] Cook and verify the exact pinned ACES 2 output transform and creative LUT
-  data. A diagnostic identity transform is never a production fallback.
-- [x] Meter actual GPU scene color and adapt exposure with bounded work, retaining
-  one published state per view for the next submitted view. Same-frame CPU
-  histogram readback and CPU metering are outside this production contract.
-- [ ] Preserve scene-linear FP16 values through the actual viewport render path;
-  remove per-mesh display conversion when the final native path takes over.
-- [ ] Execute the admitted look and output transform with the selected backend,
-  preserving native resource and completion leases through in-flight work.
-- [ ] Integrate actual host publication, diagnostics, reset, cancellation, resize,
-  output change and device-loss behavior. Failed candidates retain a compatible
-  previous plan or return an explicit typed unavailable state.
-- [ ] Run native pixel comparisons with real cooked transforms, HDR input values,
-  identity and nonidentity LUTs, successive-frame adaptation and lifecycle
-  transitions. Unit and graph-plan tests alone do not establish this result.
+## Editor configuration
 
-The canonical policy is ADR-037 and the scene-color section of the rendering
-architecture. No native backend, calibrated HDR display, full Editor rendering
-or complete ticket acceptance is qualified by this in-progress migration note.
+Provide `--color-pipeline-root ABS` with complete `color/` and `exposure/` packages.
+Add `--color-look-root ABS` to enable a separate three-file creative look package;
+absence explicitly selects Disabled. Missing or foreign requested look data fails
+with a typed error. There is no runtime cook or ambient SDK discovery.
+
+Use `--lighting forward` with a genuine three-raster baseline package, or
+`--lighting clustered` with genuine raster plus compute programs. Both feed the
+same color graph; the baseline does not manufacture a culling kernel. Select the
+package with `--lighting-root ABS`; `--lighting-fallback forbid` makes selection
+explicit. `--exposure-mode automatic` enables the bounded GPU meter.
+
+The optional CMake setting `HORO_EDITOR_COLOR_PIPELINE_ROOT` stages and installs
+only the declared inventory under `assets/color-pipeline/`. Configure checks are
+structural; runtime still validates the generation. Project renderer settings
+must be compatible with the requested profile. An incompatible project restart
+returns an observable typed error rather than dropping color/lighting options.
+
+Presentation negotiation remains owned by `RenderPresentationOutput`. The
+current Editor path requires the actual unmanaged native output contract and
+reports it as an unmanaged SDR preview. HDR, PQ, EDR, and unsupported backend
+profiles return typed errors; no different output is substituted.
+
+## Local qualification and limits
+
+Actual authenticated Metal cooks and raw compiler captures establish the current
+shader interfaces. Separate native tests cover the public frontend, analytic
+F32/F16 precision, both LUT interpolation modes, signed/HDR inputs, prior GPU
+exposure consumption, pending uploads, cancellation, reset and in-flight resize.
+CPU reference generation alone is not counted as GPU evidence.
+
+The full viewport fixture executes both genuine forward and clustered recipes:
+raw mesh FP16 and final pixels against independent pinned OCIO references,
+actual directional HDR values above one, visible/occluded selection, grid depth
+and complete raw-scene equality across overlay changes, and nonidentity LUTs in
+both modes. UI tint expectations use independent IEC sRGB inverse-transfer
+constants. FP16 storage and final one-LSB budgets remain separate; no universal
+GPU rounding mode is claimed. Copies use admitted CopySource storage and actual
+completion through the selected queue; no portable public readback API is added.
+
+Real Editor runs opened a Metal project and its default scene with one mesh.
+Both clustered/trilinear and forward/tetrahedral profiles completed 60 presented
+frames, with 52 accepted color/exposure generations. An incompatible OpenGL
+project produced the expected typed profile-preservation denial. These are local
+macOS results, not hosted CI or other-platform clearance.
+
+Physical calibrated display/HDR acceptance and actual hardware device-loss
+injection are not established by these runs. Native generation rejection and
+explicit shutdown/owner replacement are separate contracts. Local managed Sonar
+is waived; no full Codacy, vulnerability or coverage clearance is claimed. The
+canonical policy remains ADR-037 and the rendering architecture's scene-color
+section. No persisted scene migration or old C++ binary compatibility is implied.

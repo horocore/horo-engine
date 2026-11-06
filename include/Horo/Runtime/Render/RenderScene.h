@@ -39,7 +39,7 @@ namespace Horo::Render {
         RenderLightKind kind{RenderLightKind::Directional};
         Math::Vec3 position{};
         Math::Vec3 direction{0.0F, 0.0F, -1.0F};
-        Math::Vec3 color{1.0F, 1.0F, 1.0F};
+        Math::Vec3 color{1.0F, 1.0F, 1.0F}; /**< Canonical finite signed scene-linear ACEScg/AP1 RGB; never untagged source RGB. */
         float intensity{1.0F};
         float range{10.0F};
         float innerConeCosine{0.9396926F};
@@ -48,15 +48,29 @@ namespace Horo::Render {
          * Clustered/per-draw preparation requires a real nonzero identity before sorting or selection. */
         std::uint64_t stableIdentity{};
 
-        /** @brief Reports whether the light has finite, normalized, and ordered render values. */
+        /** @brief Reports finite signed canonical RGB, normalized pose and ordered physical bounds. @return Valid light. */
         [[nodiscard]] bool IsValid() const noexcept {
             using enum RenderLightKind;
             const bool kindValid = kind == Directional || kind == Point || kind == Spot;
-            const float directionLength = Math::Length(direction);
-            return kindValid && Math::IsFinite(position) && Math::IsFinite(direction) && Math::IsFinite(color) && color.x >= 0.0F &&
-                   color.y >= 0.0F && color.z >= 0.0F && std::isfinite(directionLength) &&
-                   Math::NearlyEqual(directionLength, 1.0F, 0.001F) && std::isfinite(intensity) && intensity >= 0.0F &&
-                   std::isfinite(range) && range >= 0.0F && std::isfinite(innerConeCosine) && std::isfinite(outerConeCosine) &&
+            return kindValid && ValidPose() && ValidRadiometry() && ValidRangeAndCone();
+        }
+
+    private:
+        /** @brief Checks finite world pose and normalized direction. @return Valid renderer pose. */
+        [[nodiscard]] bool ValidPose() const noexcept {
+            const float length = Math::Length(direction);
+            return Math::IsFinite(position) && Math::IsFinite(direction) && std::isfinite(length) &&
+                   Math::NearlyEqual(length, 1.0F, 0.001F);
+        }
+
+        /** @brief Preserves finite signed AP1 channels while retaining nonnegative physical intensity. @return Valid radiometric values. */
+        [[nodiscard]] bool ValidRadiometry() const noexcept {
+            return Math::IsFinite(color) && std::isfinite(intensity) && intensity >= 0.0F;
+        }
+
+        /** @brief Checks existing finite world range and ordered cone limits. @return Valid attenuation bounds. */
+        [[nodiscard]] bool ValidRangeAndCone() const noexcept {
+            return std::isfinite(range) && range >= 0.0F && std::isfinite(innerConeCosine) && std::isfinite(outerConeCosine) &&
                    innerConeCosine >= outerConeCosine && innerConeCosine <= 1.0F && outerConeCosine >= -1.0F;
         }
     };

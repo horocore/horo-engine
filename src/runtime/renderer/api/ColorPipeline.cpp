@@ -41,33 +41,29 @@ namespace Horo::Render {
                 return false;
             if (!BitDepthValid(r))
                 return false;
-            if (r.output.active.dynamicRange == RenderDisplayDynamicRange::High)
-                return r.outputBitDepth >= 10 && r.output.display.hdr == RenderDisplayHdrSupport::Supported;
             return true;
         }
 
-        /** @brief Admits only the separately named SDR sRGB and HDR10 PQ routes. */
+        /** @brief Admits only the actual analytic program's named SDR100 sRGB output route. */
         bool OutputRouteValid(const ColorPipelineRequest &r) noexcept {
             const auto &c = r.output.active;
-            if (c.dynamicRange == RenderDisplayDynamicRange::Standard)
-                return c.colorSpace == RenderDisplayColorSpace::Srgb && c.transfer == RenderDisplayTransferFunction::Srgb;
-            return c.colorSpace == RenderDisplayColorSpace::Rec2020 && c.transfer == RenderDisplayTransferFunction::Pq;
+            return c.dynamicRange == RenderDisplayDynamicRange::Standard && c.colorSpace == RenderDisplayColorSpace::Srgb &&
+                   c.transfer == RenderDisplayTransferFunction::Srgb;
         }
 
-        /** @brief Checks explicit output role and common look configuration identity. */
-        bool TransformCompatible(const ColorPipelineRequest &r) noexcept {
-            if (!r.outputTransform)
+        /** @brief Checks the distinct analytic output identity and an optional same-configuration AP1 creative look. */
+        bool TransformCompatible(const std::shared_ptr<const CookedColorOutputProgram> &analytic, ColorLookMode mode,
+                                 const std::shared_ptr<const CookedColorTransform> &look) noexcept {
+            if (!analytic || static_cast<unsigned>(mode) > static_cast<unsigned>(ColorLookMode::Enabled))
                 return false;
-            const auto &d = r.outputTransform->Descriptor();
-            if (d.role != r.requiredOutput || d.output != r.output.active)
+            const auto &d = analytic->Descriptor();
+            if (d.profile != ColorOutputProfile::Aces2Sdr100Rec709LinearV1)
                 return false;
-            if (r.requiredOutput != ColorTransformRole::Aces2Output && r.requiredOutput != ColorTransformRole::NeutralDiagnostic)
-                return false;
-            if (!r.look)
-                return true;
-            const auto &look = r.look->Descriptor();
-            return look.role == ColorTransformRole::CreativeLook && look.configurationRelease == d.configurationRelease &&
-                   look.configurationDigest == d.configurationDigest;
+            if (!look)
+                return mode == ColorLookMode::Disabled;
+            const auto &asset = look->Descriptor();
+            return asset.role == ColorTransformRole::CreativeLook && asset.configurationRelease == d.configurationRelease &&
+                   asset.configurationDigest == d.configurationDigest;
         }
 
         /** @brief Checks manual or initial state values against the authored exposure selection. */
@@ -81,7 +77,7 @@ namespace Horo::Render {
                    s.diagnosticEv == r.exposureSettings.initialEv + r.exposureSettings.compensationEv;
         }
 
-        /** @brief Checks cold identity and output admission without changing active state. */
+        /** @brief Checks actual frame identity and output admission without changing active state. */
         Result<void> ValidateRequest(const ColorPipelineRequest &r) {
             if (r.cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(ColorPipelineErrors::Cancelled));
@@ -89,34 +85,79 @@ namespace Horo::Render {
                 return Result<void>::Failure(MakeError(ColorPipelineErrors::IncompatibleInput));
             if (!OutputValid(r) || !OutputRouteValid(r))
                 return Result<void>::Failure(MakeError(ColorPipelineErrors::UnsupportedOutput));
-            if (!TransformCompatible(r) || static_cast<unsigned>(r.dither) > static_cast<unsigned>(ColorDitherPolicy::Ordered))
+            if (static_cast<unsigned>(r.dither) > static_cast<unsigned>(ColorDitherPolicy::Ordered))
                 return Result<void>::Failure(MakeError(ColorPipelineErrors::InvalidTransform));
             return Result<void>::Success();
         }
 
-        /** @brief Reuses canonical exposure and grading validation. */
-        Result<void> ValidateExposureAndGrading(const ColorPipelineRequest &r) {
+        /** @brief Reuses canonical exposure settings/state validation independently of cold transform selection. */
+        Result<void> ValidateExposure(const ColorPipelineRequest &r) {
             if (auto settings = ValidateExposureSettings(r.exposureSettings); settings.HasError())
                 return settings;
             if (auto state = ValidateExposureState(r.exposure, r.compatibility, r.settingsGeneration, r.submission); state.HasError())
                 return state;
             if (!ExposureModeCompatible(r))
                 return Result<void>::Failure(MakeError(ExposureErrors::IncompatibleState));
-            PostProcessSettings settings;
-            settings.colorGrading = r.grading;
-            return ValidatePostProcessSettings(settings);
+            return Result<void>::Success();
         }
 
-        /** @brief Checks complete pinned LUT bytes against the declared hard ceiling. */
-        bool WithinBudget(const ColorPipelineRequest &r) noexcept {
-            if (r.maximumTransformBytes == 0 || r.maximumTransformBytes > 64U * 1024U * 1024U)
+        /** @brief Reuses canonical numeric ranges before explicitly rejecting unsupported nondefault grading semantics. */
+        Result<void> ValidateGrading(const ColorGradingSettings &grading) {
+            PostProcessSettings settings;
+            settings.colorGrading = grading;
+            if (auto valid = ValidatePostProcessSettings(settings); valid.HasError())
+                return valid;
+            if (grading != ColorGradingSettings{})
+                return Result<void>::Failure(MakeError(ColorPipelineErrors::UnsupportedGrading));
+            return Result<void>::Success();
+        }
+
+        /** @brief Accounts for analytic source/original/upload tables plus optional original/atlas look bytes. */
+        bool WithinBudget(const CookedColorOutputProgram &analytic, const std::shared_ptr<const CookedColorTransform> &look,
+                          std::uint64_t maximum) noexcept {
+            if (maximum == 0 || maximum > 64U * 1024U * 1024U)
                 return false;
-            auto bytes = static_cast<std::uint64_t>(r.outputTransform->Rgb().size()) * sizeof(float);
-            if (r.look)
-                bytes += static_cast<std::uint64_t>(r.look->Rgb().size()) * sizeof(float);
-            return bytes <= r.maximumTransformBytes;
+            auto bytes = analytic.PayloadBytes();
+            if (look)
+                bytes += look->PayloadBytes();
+            return bytes <= maximum;
         }
     }  // namespace
+
+    /** @copydoc ColorTransformSelection::ColorTransformSelection */
+    ColorTransformSelection::ColorTransformSelection(std::shared_ptr<const CookedColorOutputProgram> analytic, ColorLookMode mode,
+                                                     std::shared_ptr<const CookedColorTransform> look) noexcept
+        : analytic_(std::move(analytic)), look_(std::move(look)), mode_(mode) {}
+
+    /** @copydoc ColorTransformSelection::Analytic */
+    const std::shared_ptr<const CookedColorOutputProgram> &ColorTransformSelection::Analytic() const noexcept {
+        return analytic_;
+    }
+
+    /** @copydoc ColorTransformSelection::Look */
+    const std::shared_ptr<const CookedColorTransform> &ColorTransformSelection::Look() const noexcept {
+        return look_;
+    }
+
+    /** @copydoc ColorTransformSelection::Mode */
+    ColorLookMode ColorTransformSelection::Mode() const noexcept {
+        return mode_;
+    }
+
+    /** @copydoc PrepareColorTransformSelection */
+    Result<ColorTransformSelection> PrepareColorTransformSelection(const std::shared_ptr<const CookedColorOutputProgram> &analytic,
+                                                                   ColorLookMode mode,
+                                                                   const std::shared_ptr<const CookedColorTransform> &look,
+                                                                   const ColorGradingSettings &grading, std::uint64_t maximumBytes) {
+        using Return = Result<ColorTransformSelection>;
+        if (!TransformCompatible(analytic, mode, look))
+            return Return::Failure(MakeError(ColorPipelineErrors::InvalidTransform));
+        if (auto valid = ValidateGrading(grading); valid.HasError())
+            return Return::Failure(valid.ErrorValue());
+        if (!WithinBudget(*analytic, look, maximumBytes))
+            return Return::Failure(MakeError(ColorPipelineErrors::CapacityExceeded));
+        return Return::Success(ColorTransformSelection{analytic, mode, look});
+    }
 
     /** @copydoc ColorPipelinePlan::ColorPipelinePlan */
     ColorPipelinePlan::ColorPipelinePlan(ColorPipelineRequest request) : request_(std::move(request)) {}
@@ -130,10 +171,12 @@ namespace Horo::Render {
     Result<ColorPipelinePlan> PrepareColorPipeline(const ColorPipelineRequest &request) {
         if (auto valid = ValidateRequest(request); valid.HasError())
             return Result<ColorPipelinePlan>::Failure(valid.ErrorValue());
-        if (auto valid = ValidateExposureAndGrading(request); valid.HasError())
+        if (auto valid = ValidateExposure(request); valid.HasError())
             return Result<ColorPipelinePlan>::Failure(valid.ErrorValue());
-        if (!WithinBudget(request))
-            return Result<ColorPipelinePlan>::Failure(MakeError(ColorPipelineErrors::CapacityExceeded));
+        if (auto selection = PrepareColorTransformSelection(request.outputTransform, request.lookMode, request.look, request.grading,
+                                                            request.maximumTransformBytes);
+            selection.HasError())
+            return Result<ColorPipelinePlan>::Failure(selection.ErrorValue());
         if (request.cancellation.IsCancellationRequested())
             return Result<ColorPipelinePlan>::Failure(MakeError(ColorPipelineErrors::Cancelled));
         return Result<ColorPipelinePlan>::Success(ColorPipelinePlan{request});
@@ -144,10 +187,17 @@ namespace Horo::Render {
             const ErrorDomainId Domain{"render.color_pipeline"};
         }
 
+        const ErrorCodeDescriptor UnsupportedGrading =
+            Detail::MakeErrorDescriptor(Domain, "render.color_pipeline.grading_unsupported", ErrorSeverity::Error,
+                                        "Numeric creative grading is unsupported by this output route.",
+                                        "Use default numeric controls and an explicitly cooked creative look until numeric grading "
+                                        "semantics are implemented.");
+
         const ErrorCodeDescriptor InvalidTransform =
             Detail::MakeErrorDescriptor(Domain, "render.color_pipeline.transform_invalid", ErrorSeverity::Error,
                                         "Cooked color transform metadata or payload is invalid.",
-                                        "Supply exact versioned finite RGB32F data, domain, pinned digests and explicit transform role.");
+                                        "Supply the exact pinned analytic output program/tables and separately declared finite "
+                                        "creative-look data.");
         const ErrorCodeDescriptor IncompatibleInput =
             Detail::MakeErrorDescriptor(Domain, "render.color_pipeline.input_incompatible", ErrorSeverity::Error,
                                         "Scene color identity is incompatible.",
@@ -155,12 +205,12 @@ namespace Horo::Render {
         const ErrorCodeDescriptor UnsupportedOutput =
             Detail::MakeErrorDescriptor(Domain, "render.color_pipeline.output_unsupported", ErrorSeverity::Error,
                                         "Requested output is unsupported by this color plan.",
-                                        "Supply exact named SDR sRGB or HDR10 PQ output admission and actual display facts; no implicit "
-                                        "fallback is selected.");
+                                        "Supply exact named SDR100 sRGB output admission and actual display facts; other profiles have no "
+                                        "implicit fallback.");
         const ErrorCodeDescriptor CapacityExceeded =
             Detail::MakeErrorDescriptor(Domain, "render.color_pipeline.capacity_exceeded", ErrorSeverity::Error,
                                         "Color transform storage exceeds the declared bound.",
-                                        "Reserve the complete look and output LUTs within the 64 MiB hard limit.");
+                                        "Reserve the complete analytic source/tables and optional look within the 64 MiB hard limit.");
         const ErrorCodeDescriptor Cancelled =
             Detail::MakeErrorDescriptor(Domain, "render.color_pipeline.cancelled", ErrorSeverity::Error,
                                         "Color plan preparation was cancelled.",

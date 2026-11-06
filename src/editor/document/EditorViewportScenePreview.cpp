@@ -103,9 +103,11 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Converts a posed preview light using the source policy retained by its actual extracted snapshot. */
         Result<Render::RenderLight> ResolveLight(const Runtime::RuntimeSceneView &scene, const EditorViewportLightSource &source,
                                                  const Runtime::LightComponent &component,
-                                                 const std::span<const EditorViewportTransformOverride> overrides) {
+                                                 const std::span<const EditorViewportTransformOverride> overrides,
+                                                 Render::SceneColorSourcePolicy sourceColorPolicy) {
             const auto pose = ResolvePose(scene, source.entity, overrides);
             if (pose.HasError())
                 return Result<Render::RenderLight>::Failure(pose.ErrorValue());
@@ -115,7 +117,7 @@ namespace Horo::Editor {
             const auto direction = pose.Value().rotation.TryRotate({0, 0, -1});
             if (direction.HasError())
                 return Result<Render::RenderLight>::Failure(direction.ErrorValue());
-            auto light = Render::BuildRenderLightValue(component, position.Value(), direction.Value());
+            auto light = Render::BuildRenderLightValue(component, position.Value(), direction.Value(), sourceColorPolicy);
             if (light.HasError())
                 return light;
             auto value = std::move(light).Value();
@@ -133,9 +135,11 @@ namespace Horo::Editor {
             return Result<Runtime::LightComponent>::Success(*source.disabledAuthoredLight);
         }
 
+        /** @brief Stages one preview under the same explicit interpretation as the published light bank. */
         Result<void> StageLight(const Runtime::RuntimeSceneView &scene, const EditorViewportLightSource &source,
                                 const SceneObjectLightPreview *preview, const std::span<const EditorViewportTransformOverride> overrides,
-                                EditorViewportLightStaging &bank, std::size_t &count, const DocumentRevision documentRevision) {
+                                EditorViewportLightStaging &bank, std::size_t &count, const DocumentRevision documentRevision,
+                                Render::SceneColorSourcePolicy sourceColorPolicy) {
             const auto view = scene.Get(source.entity);
             if (view.HasError())
                 return Result<void>::Failure(view.ErrorValue());
@@ -149,7 +153,7 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             if (count == Render::MaximumSceneLights)
                 return Result<void>::Failure(MakeError(Render::LightCullingErrors::Capacity));
-            const auto light = ResolveLight(scene, source, component, overrides);
+            const auto light = ResolveLight(scene, source, component, overrides, sourceColorPolicy);
             if (light.HasError())
                 return Result<void>::Failure(light.ErrorValue());
             bank.lights[count] = light.Value();
@@ -175,7 +179,8 @@ namespace Horo::Editor {
                                         const EditorViewportSceneSnapshot &snapshot, EditorViewportLightStaging &bank) {
             std::size_t count = 0;
             for (const auto &source : snapshot.eligibleLights) {
-                const auto result = StageLight(scene, source, preview, overrides, bank, count, snapshot.documentRevision);
+                const auto result =
+                    StageLight(scene, source, preview, overrides, bank, count, snapshot.documentRevision, snapshot.lightColorSourcePolicy);
                 if (result.HasError())
                     return Result<std::size_t>::Failure(result.ErrorValue());
             }

@@ -67,6 +67,15 @@ namespace Horo::Editor {
         [[nodiscard]] Render::RenderTextureViewHandle ColorTextureView() const noexcept;
         /** @brief Exact existing color storage, borrowed to compile a clear recipe at its resource boundary. */
         [[nodiscard]] Render::RenderTextureHandle ColorTexture() const noexcept;
+        /** @brief Enables canonical scene/display/presentation separation before allocating the first viewport target.
+         * @return Typed invalid lifecycle failure if resources already exist. */
+        [[nodiscard]] Result<void> EnableColorPipeline();
+        /** @brief Returns the display-linear post-ACES target. @return Exact owned FP16 storage/view. */
+        [[nodiscard]] Render::RenderTextureHandle DisplayTexture() const noexcept;
+        [[nodiscard]] Render::RenderTextureViewHandle DisplayTextureView() const noexcept;
+        /** @brief Returns only the final encoded GUI target. @return Exact owned UNORM storage/view. */
+        [[nodiscard]] Render::RenderTextureHandle PresentationTexture() const noexcept;
+        [[nodiscard]] Render::RenderTextureViewHandle PresentationTextureView() const noexcept;
         /** @brief Exact current viewport depth storage and its whole attachment view; borrowed under this resource owner. */
         [[nodiscard]] Render::RenderTextureHandle DepthTexture() const noexcept;
         [[nodiscard]] Render::RenderTextureViewHandle DepthTextureView() const noexcept;
@@ -90,6 +99,9 @@ namespace Horo::Editor {
         struct ViewportTargetResources {
             Render::RenderTextureHandle colorTexture;
             Render::RenderTextureHandle depthTexture;
+            Render::RenderTextureHandle displayTexture, presentationTexture;
+            Render::RenderTextureViewHandle displayView, presentationView;
+            Render::ResourceOperationId displayOperation, presentationOperation, displayViewOperation, presentationViewOperation;
             Render::RenderTextureViewHandle colorView;
             Render::RenderTextureViewHandle depthView;
             Render::RenderTargetHandle target;
@@ -116,6 +128,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> AdvanceViewportTarget(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceViewportTextures(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceViewportViews(ViewportTargetResources &resources);
+        [[nodiscard]] Result<bool> AdvanceColorPipelineTargets(ViewportTargetResources &resources);
         [[nodiscard]] Result<void> SynchronizeShadowResources();
 
         struct ShadowResources {
@@ -144,5 +157,6 @@ namespace Horo::Editor {
         std::uint64_t shadowGeneration_{};
         EditorViewportExtent allocatedExtent_;
         bool meshesReady_{false};
+        bool colorPipeline_{};
     };
 }  // namespace Horo::Editor

@@ -79,19 +79,28 @@ namespace Horo::Render {
             }
         }
 
-        bool ResourceEnvelope(const ShaderManifest &manifest) {
+        /** @brief Keeps legacy GL categories singular while bounding independent Metal sampling namespaces. */
+        std::size_t ResourceMaximum(std::size_t category, const ShaderTargetRequirement &target) noexcept {
+            if (category == 3)
+                return MaximumStorageBuffers;
+            if (target.backend == ShaderTargetBackend::Metal && (category == 1 || category == 2))
+                return MaximumSampledResources;
+            return 1;
+        }
+
+        /** @brief Checks unchanged readonly schemas plus explicit finite target-specific resource limits. */
+        bool ResourceEnvelope(const ShaderManifest &manifest, const ShaderTargetRequirement &target) {
             std::array<std::size_t, 4> counts{};
             for (const auto &binding : manifest.bindings) {
                 const auto category = ResourceClass(binding.kind);
                 if (!category || binding.access != ShaderResourceAccess::ReadOnly || binding.arrayCount != 1)
                     return false;
-                const auto maximum = *category == 3 ? MaximumStorageBuffers : 1;
-                if (++counts[*category] > maximum)
+                if (++counts[*category] > ResourceMaximum(*category, target))
                     return false;
                 if (*category == 3 && !StorageKind(manifest, binding.id))
                     return false;
             }
-            return counts[0] == 1 && counts[1] == counts[2];
+            return counts[0] == 1 && (target.backend == ShaderTargetBackend::Metal || counts[1] == counts[2]);
         }
 
         bool NameEnvelope(const ShaderManifest &manifest, const std::span<const ShaderReflectionBindingName> names) {
@@ -148,7 +157,7 @@ namespace Horo::Render {
             return invalid();
         if (!RasterStages(manifest) || !RegisterParameters(manifest))
             return invalid();
-        if (!ResourceEnvelope(manifest) || !NameEnvelope(manifest, names) || !StorageTarget(manifest, target))
+        if (!ResourceEnvelope(manifest, target) || !NameEnvelope(manifest, names) || !StorageTarget(manifest, target))
             return invalid();
         return Result<void>::Success();
     }

@@ -78,6 +78,28 @@ namespace Horo::Editor {
         });
     }
 
+    /** @copydoc MetalViewportResourceBridge::ColorBufferReadiness */
+    Result<EditorViewportColorReadiness> MetalViewportResourceBridge::ColorBufferReadiness(const Render::RenderFrontend &frontend,
+                                                                                           Render::RenderBufferHandle buffer) {
+        using Outcome = Result<EditorViewportColorReadiness>;
+        const auto boundary = Render::Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend);
+        if (boundary.HasError())
+            return Outcome::Failure(boundary.ErrorValue());
+        const auto resolved = ResolveMetalInstance<
+            Render::Detail::MetalBufferInstance>(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, buffer));
+        if (resolved.HasError())
+            return Outcome::Failure(resolved.ErrorValue());
+        const auto *native = resolved.Value();
+        if (native->use.retired || native->deviceIncarnation != frontend.Capabilities().support.deviceIncarnation)
+            return Outcome::Failure(MakeError(Render::MetalBackendErrors::ResourceIdentityInvalid));
+        const auto complete = ViewportBufferCompletion(native->use);
+        if (complete.HasValue())
+            return Outcome::Success(EditorViewportColorReadiness::Ready);
+        if (complete.ErrorValue().code.Value() == Render::LightCullingErrors::Pending.code.Value())
+            return Outcome::Success(EditorViewportColorReadiness::Pending);
+        return Outcome::Failure(complete.ErrorValue());
+    }
+
     Result<void *> MetalViewportResourceBridge::ResolveBuffer(const Render::RenderFrontend &frontend,
                                                               const Render::RenderBufferHandle buffer) {
         const auto instance = ResolveMetalInstance<

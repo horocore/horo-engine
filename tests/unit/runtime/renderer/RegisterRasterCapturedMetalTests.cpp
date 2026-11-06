@@ -1,6 +1,7 @@
 #include "EditorViewportShaderRecipe.h"
 #include "ShaderReflectionCook.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -13,8 +14,8 @@ namespace {
     using namespace Horo::Render;
 
     std::string Capture(const char *name) {
-        const auto path =
-            std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "tests/fixtures/shaders/register_raster_metal_lit_20261101" / name;
+        const auto path = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} /
+                          "tests/fixtures/shaders/register_raster_metal_lit_scene_color_policy_v1" / name;
         std::ifstream input{path, std::ios::binary};
         REQUIRE(input.good());
         return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
@@ -61,7 +62,13 @@ TEST_CASE("Real captured Metal clustered lit reflection admits the native fragme
     const auto normalized = capture.Normalize();
     REQUIRE(normalized.HasValue());
     CHECK(normalized.Value().bindings.size() == 6);
-    CHECK(normalized.Value().parameters.size() == 27);
+    CHECK(normalized.Value().parameters.size() == 29);
+    const auto &parameters = normalized.Value().parameters;
+    const auto policy = std::find_if(parameters.begin(), parameters.end(), [](const auto &parameter) {
+        return parameter.id == ShaderParameterId{21};
+    });
+    REQUIRE(policy != parameters.end());
+    CHECK(policy->byteOffset == 688);
     CHECK(normalized.Value().stageInterface.size() == 7);
     const auto &targets = normalized.Value().targetBindings;
     REQUIRE(targets.size() == 6);

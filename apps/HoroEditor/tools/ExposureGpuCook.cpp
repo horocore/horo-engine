@@ -87,59 +87,33 @@ namespace Horo::Editor::Offline {
             return Output::Success(std::move(kernel));
         }
 
-        /** @brief Decodes actual candidate bytes and compares their identity with the compiler's genuine output. */
-        Result<void> ReadWritten(const std::filesystem::path &root, std::string_view prefix, CookedExposureGpuStage &stage) {
-            auto payload = ReadShaderCookInput(root / (std::string{prefix} + ".horoshdr"), 16U * 1024U * 1024U);
-            if (payload.HasError())
-                return Result<void>::Failure(payload.ErrorValue());
-            auto metadata = ReadShaderCookInput(root / (std::string{prefix} + ".reflection.json"), 16U * 1024U * 1024U);
-            if (metadata.HasError())
-                return Result<void>::Failure(metadata.ErrorValue());
-            auto decoded = DecodeReflectedShaderArtifact(stage.manifest, stage.target, payload.Value(), metadata.Value());
-            if (decoded.HasError())
-                return Result<void>::Failure(decoded.ErrorValue());
-            if (payload.Value() != stage.artifact.payload ||
-                decoded.Value().cookedArtifactKey != stage.artifact.reflection->cookedArtifactKey)
-                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-            stage.artifact.payload = std::move(payload).Value();
-            stage.artifact.reflection = std::make_shared<const ReflectedShaderArtifact>(std::move(decoded).Value());
-            stage.reflection = Candidate(stage.artifact.reflection->reflection);
-            return Result<void>::Success();
-        }
-
-        /** @brief Revalidates every written stage before the private directory becomes a published package. */
+        /** @brief Uses the shared read-only decoder then compares exact written native outputs with the compiler family. */
         Result<void> ValidateWritten(const std::filesystem::path &root, const void *context) {
-            auto cooked = Cooked(*static_cast<const ExposureGpuCookFamily *>(context));
-            if (cooked.HasError())
-                return Result<void>::Failure(cooked.ErrorValue());
-            auto kernel = std::move(cooked).Value();
-            for (std::size_t index = 0; index < kernel.stages.size(); ++index) {
-                if (auto loaded = ReadWritten(root, ExposureGpuCookPrefixes()[index], kernel.stages[index]); loaded.HasError())
-                    return loaded;
+            const auto &family = *static_cast<const ExposureGpuCookFamily *>(context);
+            auto expected = Cooked(family);
+            if (expected.HasError())
+                return Result<void>::Failure(expected.ErrorValue());
+            auto actual = Render::Internal::LoadExposureGpuCookPackage(root);
+            if (actual.HasError())
+                return Result<void>::Failure(actual.ErrorValue());
+            for (std::size_t i = 0; i < 3; ++i) {
+                const auto &a = actual.Value().stages[i].artifact;
+                const auto &e = expected.Value().stages[i].artifact;
+                if (a.payload != e.payload || a.reflection->cookedArtifactKey != e.reflection->cookedArtifactKey)
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
             }
-            auto valid = ValidateCookedExposureGpuKernel(kernel, ShaderTargetBackend::Metal);
-            return valid.HasError() ? Result<void>::Failure(valid.ErrorValue()) : Result<void>::Success();
+            return Result<void>::Success();
         }
     }  // namespace
 
     /** @copydoc ExposureGpuMetalCookTarget */
     ShaderTargetRequirement ExposureGpuMetalCookTarget() {
-        return {.backend = ShaderTargetBackend::Metal,
-                .payloadFormat = ShaderPayloadFormat::MetalLibrary24,
-                .descriptorVersion = 1,
-                .interfaceSchemaVersion = 1,
-                .maximumBindings = 32,
-                .maximumInlineConstantBytes = 128,
-                .supportsCompute = true,
-                .supportsStorageResources = true};
+        return Render::Internal::ExposureGpuMetalCookTarget();
     }
 
     /** @copydoc ExposureGpuCookPrefixes */
     std::span<const std::string_view, 3> ExposureGpuCookPrefixes() noexcept {
-        static constexpr std::array<std::string_view, 3> prefixes{"shaders/runtime/exposure-clear-metal",
-                                                                  "shaders/runtime/exposure-histogram-metal",
-                                                                  "shaders/runtime/exposure-adapt-metal"};
-        return prefixes;
+        return Render::Internal::ExposureGpuCookPrefixes();
     }
 
     /** @copydoc ExposureGpuCookSourcePath */

@@ -115,7 +115,7 @@ namespace Horo::Render {
     struct RenderGraphMaterialRaster final {
         static constexpr std::size_t MaximumDraws = 128;
         static constexpr std::size_t MaximumReads = RenderGraphLimits::HardMaxResources;
-        static constexpr std::size_t MaximumRetainedDraws = MaximumDraws * 7;
+        static constexpr std::size_t MaximumRetainedDraws = MaximumDraws * 8;
         RenderGraphResourceId color, depth;
         RenderTextureViewHandle colorView, depthView;
         FramebufferExtent extent;
