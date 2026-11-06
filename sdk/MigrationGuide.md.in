@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 28 / `gameplay-sdk28`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 29 / `gameplay-sdk29`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -32,6 +32,19 @@ or that this snapshot has passed every platform. The extension SDK has no engine
 library link dependency; native libraries still require matching OS/architecture
 and their own private dependency/toolchain compatibility. No Android, mobile,
 cross-architecture, or generic C++ binary compatibility is promised here.
+
+## Gameplay SDK28 → SDK29 (Scoped VFX spawn pipeline)
+
+Rebuild the host, native gameplay modules and generated descriptor bundles together
+with the exact `gameplay-sdk29` engine/toolchain/platform/configuration fingerprint.
+The Scene-owned VFX spawn pipeline extends native gameplay context and binding
+contracts. Require boundary 29 before invoking a module factory; do not relabel
+SDK28 objects or retain an SDK28 fingerprint around SDK29 headers.
+
+Keep VFX identity, request admission and lifetime authority in the Scene-owned
+runtime. This native migration does not renumber particle asset, package or
+snapshot schemas. For rollback, restore the SDK28 host, modules and original
+manifests together; mixed native generations remain unsupported.
 
 ## Gameplay SDK27 → SDK28 (Physics state and restore publication)
 

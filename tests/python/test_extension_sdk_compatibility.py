@@ -125,6 +125,7 @@ def test_gameplay_generation_is_distinct_and_matches_real_native_boundary(offlin
     "Gameplay SDK25 → SDK26 (Prefab persistence and Scene group contracts)",
     "Gameplay SDK26 → SDK27 (Animation components and Scene activation)",
     "Gameplay SDK27 → SDK28 (Physics state and restore publication)",
+    "Gameplay SDK28 → SDK29 (Scoped VFX spawn pipeline)",
     "Gameplay SDK10 → SDK15 (Character and Navigation runtime boundary 10 → 15)",
     "Retirement source API migration in this snapshot",
 ))

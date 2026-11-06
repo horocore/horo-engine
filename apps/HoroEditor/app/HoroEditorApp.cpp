@@ -1,5 +1,6 @@
 #include "HoroEditorApp.h"
 
+#include "EditorColorOptions.h"
 #include "EditorDirectionalShadowOptions.h"
 #include "EditorLightingOptions.h"
 #include "Horo/Editor/XRSimulatorModel.h"
@@ -9,7 +10,6 @@
 #if defined(HORO_HAS_RENDER_METAL)
 #include "EditorBaselineLightingAssets.h"
 #include "EditorClusteredLightingStartup.h"
-#include "EditorColorOptions.h"
 #include "EditorColorPipelineStartup.h"
 #include "Horo/Runtime/Render/SceneColorEncoding.h"
 #endif

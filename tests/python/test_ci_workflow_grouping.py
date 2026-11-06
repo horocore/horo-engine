@@ -770,7 +770,7 @@ def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:
     assert "max-parallel: 1" in workflow_job("shaders")
     android = (ROOT / ".github/workflows/android-package.yml").read_text(encoding="utf-8")
     assert "max-parallel: 1" in android
-    assert "profile: [qualification-debug, qualification-release]" in android
+    assert "profile: [qualification-debug, qualification-release, qualification-vulkan-development]" in android
     assert preset("buildPresets", "ci-audio-release")["jobs"] == 2
     assert preset("testPresets", "ci-audio-release")["execution"]["jobs"] == 1
 
