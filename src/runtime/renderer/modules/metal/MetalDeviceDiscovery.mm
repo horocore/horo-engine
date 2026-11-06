@@ -77,9 +77,19 @@ namespace Horo::Render::Detail {
                 formats.usages[static_cast<std::size_t>(format)] = RenderTextureUsage::Sampled | RenderTextureUsage::CopyDestination;
         }
 
+        /** @brief Advertises depth observation only for an actual private render-target allocation; blits need no extra native usage. */
+        void QueryDepthFormat(id<MTLDevice> device, MetalFormatCapabilities &formats) noexcept {
+            using enum RenderTextureUsage;
+            auto usage = static_cast<RenderTextureUsage>(0);
+            if (CanCreatePaintTexture(device, MTLPixelFormatDepth32Float, MTLTextureUsageRenderTarget))
+                usage = RenderAttachment | CopySource;
+            if (CanCreatePaintTexture(device, MTLPixelFormatDepth32Float, MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget))
+                usage = usage | Sampled | RenderAttachment;
+            formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = usage;
+        }
+
         [[nodiscard]] MetalFormatCapabilities QueryFormats(id<MTLDevice> device) noexcept {
             MetalFormatCapabilities formats;
-            const auto sampledAttachment = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
             const auto enableUsage = [&formats](const RenderTextureFormat format, const RenderTextureUsage usage) {
                 formats.usages[static_cast<std::size_t>(format)] = usage;
             };
@@ -88,7 +98,7 @@ namespace Horo::Render::Detail {
             QueryColorTableFormat(device, formats, RenderTextureFormat::R32Float, MTLPixelFormatR32Float);
             QueryColorFormat(device, formats, RenderTextureFormat::Rgba32Float, MTLPixelFormatRGBA32Float);
             // Native depth textures can also be sampled by the viewport's shadow pass.
-            enableUsage(RenderTextureFormat::Depth32Float, sampledAttachment);
+            QueryDepthFormat(device, formats);
             if (device.depth24Stencil8PixelFormatSupported) {
                 enableUsage(RenderTextureFormat::Depth24Stencil8, RenderTextureUsage::RenderAttachment);
             }

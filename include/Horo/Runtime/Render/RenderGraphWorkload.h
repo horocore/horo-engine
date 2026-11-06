@@ -13,6 +13,7 @@
 #include "Horo/Runtime/Render/VfxGpuSimulation.h"
 #include "Horo/Runtime/Render/VfxGraphWorkload.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <variant>
 
@@ -36,6 +37,19 @@ namespace Horo::Render {
         std::size_t sourceOffset{0};
         std::size_t destinationOffset{0};
         std::size_t byteCount{0};
+    };
+
+    /** @brief Copies one tightly packed whole RGBA8 base level from a registered host-visible buffer to a registered texture.
+     * @details Source requires CopySource and exactly byteCount bytes. Destination requires CopyDestination and exactly extent,
+     * TwoD, one mip, one layer, one sample and Rgba8Unorm. No offsets, row padding, partial uploads, allocation or wait is implied.
+     * Graph uses are source Read/CopySource and destination Write/CopyDestination. Submission leases retain both resources;
+     * subsequent compiled graph uses establish the final layout. This operation does not implement CreateTexture(initialData).
+     */
+    struct RenderGraphTextureUpload final {
+        RenderGraphResourceId source;
+        RenderGraphResourceId destination;
+        FramebufferExtent extent;
+        std::size_t byteCount{};
     };
 
     /** @brief One bounded cooked light-culling dispatch over four distinct whole graph buffers.
@@ -131,7 +145,16 @@ namespace Horo::Render {
     using RenderGraphWorkload =
         std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
                      RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster,
-                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu>;
+                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu, RenderGraphTextureUpload>;
+
+    /** @brief Checks exact whole-upload shape and byte bounds against captured resource descriptors without native mutation.
+     * @param upload Explicit tightly packed upload value. @param source Exact source buffer descriptor.
+     * @param destination Exact destination texture descriptor.
+     * @return Success or typed InvalidGraph; descriptor admission does not establish residency, contents or completion.
+     */
+    [[nodiscard]] Result<void> ValidateTextureUploadDescriptors(const RenderGraphTextureUpload &upload,
+                                                                const RenderBufferDescriptor &source,
+                                                                const RenderTextureDescriptor &destination);
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {
@@ -256,6 +279,15 @@ namespace Horo::Render {
     [[nodiscard]] Result<void> ValidateMaterialRasterWorkload(const RenderGraphExecutionRequest &request,
                                                               const RenderGraphExecutionPass &pass,
                                                               const RenderGraphMaterialRaster &raster);
+
+    /** @brief Checks exact copy-pass uses and graph-local buffer/texture identities for a whole upload.
+     * @param request Validated graph request envelope. @param pass Retained copy pass with a valid usage range.
+     * @param upload Typed workload for this pass.
+     * @return Success or typed InvalidGraph; native descriptor/content checks remain mandatory before encoding.
+     */
+    [[nodiscard]] Result<void> ValidateTextureUploadGraphWorkload(const RenderGraphExecutionRequest &request,
+                                                                  const RenderGraphExecutionPass &pass,
+                                                                  const RenderGraphTextureUpload &upload);
 
     /**
      * @brief Validates a finite graph request before selected-backend native validation.

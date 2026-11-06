@@ -456,6 +456,7 @@ namespace Horo::Render {
                     .maxFramesInFlight = config.maxFramesInFlight,
                     .enableVertexLayerRouting = candidate->vertexLayerRouting,
                     .enableSwapchainMaintenance = config.requirePresentation,
+                    .enableShaderDemote = candidate->shaderDemote,
                 });
             }
 

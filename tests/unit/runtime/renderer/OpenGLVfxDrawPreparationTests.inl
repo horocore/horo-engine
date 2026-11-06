@@ -221,6 +221,7 @@ TEST_CASE("VFX graph encodes the accepted instance count and retains the exact o
     REQUIRE(frontend->PrepareVfxDraws(fixture.builder, fixture.schedule, fixture.view, fixture.bindings).HasValue());
     auto source = CompileVfxDrawFixture(fixture);
     const std::weak_ptr<const VfxDrawOrder> retained = std::get<RenderGraphVfx>(fixture.schedule.records[0].workload).order;
+    bool ownerClosedByCallback = false;
     OpenGLBackendTests::commandState.pollStatus = 0x911BU;  // GL_TIMEOUT_EXPIRED
     SECTION("Successful encoding") {
         auto begun = frontend->BeginFrame({1, {64, 32}});
@@ -239,10 +240,10 @@ TEST_CASE("VFX graph encodes the accepted instance count and retains the exact o
         CHECK(frame.ExecuteGraph(source.execution, source.workloads).HasError());
     }
     SECTION("Callback closes owner before native call returns") {
-        bool closed = false, fenceDeferred = false;
+        bool fenceDeferred = false;
         native.onDraw = [&] {
             const auto before = OpenGLBackendTests::commandState.fenceCount;
-            closed = frontend->BeginShutdown().HasValue();
+            ownerClosedByCallback = frontend->BeginShutdown().HasValue();
             fenceDeferred = OpenGLBackendTests::commandState.fenceCount == before;
             const auto pending = frontend->PollDrain();
             CHECK(pending.HasValue());
@@ -252,7 +253,7 @@ TEST_CASE("VFX graph encodes the accepted instance count and retains the exact o
         REQUIRE(begun.HasValue());
         auto frame = std::move(begun).Value();
         CHECK(frame.ExecuteGraph(source.execution, source.workloads).HasError());
-        CHECK(closed);
+        CHECK(ownerClosedByCallback);
         CHECK(fenceDeferred);
         CHECK(OpenGLBackendTests::commandState.fenceCount > 0);
     }
@@ -261,13 +262,69 @@ TEST_CASE("VFX graph encodes the accepted instance count and retains the exact o
     source.workloads.clear();
     fixture.schedule = {};
     fixture.world.reset();
-    CHECK(retained.use_count() > 1);  // Pool ownership alone does not prove a submitted revision is still borrowed.
+    // A callback-closed owner already dropped its inventory. Other sections still own
+    // both the internal slot and the pending backend completion lease at this point.
+    CHECK(retained.use_count() == (ownerClosedByCallback ? 1 : 2));
     REQUIRE(frontend->BeginShutdown().HasValue());
     const auto pending = frontend->PollDrain();
     REQUIRE(pending.HasValue());
     CHECK(pending.Value() == RenderBackendDrainProgress::Pending);
-    CHECK(retained.use_count() > 1);
+    // Caller workload/schedule aliases are gone and BeginShutdown dropped the inventory;
+    // only the accepted backend completion lease may retain this exact order now.
+    CHECK(retained.use_count() == 1);
     OpenGLBackendTests::commandState.pollStatus = 0x911AU;  // GL_ALREADY_SIGNALED
     Horo::Render::Test::RequireDrainedOwner(*frontend);
-    CHECK(retained.use_count() == 1);  // Only the canonical reusable scheduling slot remains.
+    CHECK(retained.expired());  // Terminal shutdown also retires the frontend-owned scheduling inventory.
+}
+
+/** @brief Proves an unsubmitted internal order no longer owns native material leases when backend shutdown starts. */
+TEST_CASE("VFX shutdown releases unsubmitted internal material leases before native teardown", "[renderer][opengl][vfx][unit][shutdown]") {
+    OpenGLResourceTests::ResourcePresentationPort port;
+    auto frontend = Create(port);
+    std::weak_ptr<const ResidentMaterialBinding> material;
+    std::weak_ptr<const VfxDrawOrder> order;
+    {
+        auto fixture = PrepareVfxDrawFixture(*frontend);
+        REQUIRE(frontend->PrepareVfxDraws(fixture.builder, fixture.schedule, fixture.view, fixture.bindings).HasValue());
+        material = fixture.bindings[0].slot->Material();
+        order = std::get<RenderGraphVfx>(fixture.schedule.records[0].workload).order;
+    }
+    REQUIRE_FALSE(material.expired());
+    REQUIRE_FALSE(order.expired());
+    REQUIRE(frontend->BeginShutdown().HasValue());
+    CHECK(material.expired());
+    CHECK(order.expired());
+    Horo::Render::Test::RequireDrainedOwner(*frontend);
+}
+
+/** @brief Proves actual frontend graph retention survives shutdown until the injected protocol completion arrives. */
+TEST_CASE("VFX shutdown preserves accepted graph material leases until observed completion", "[renderer][opengl][vfx][unit][shutdown]") {
+    OpenGLResourceTests::ResourcePresentationPort port;
+    auto frontend = Create(port);
+    const SignaledCompletionOnExit completionOnExit;
+    std::weak_ptr<const ResidentMaterialBinding> material;
+    std::weak_ptr<const VfxDrawOrder> order;
+    {
+        auto fixture = PrepareVfxDrawFixture(*frontend);
+        REQUIRE(frontend->PrepareVfxDraws(fixture.builder, fixture.schedule, fixture.view, fixture.bindings).HasValue());
+        material = fixture.bindings[0].slot->Material();
+        order = std::get<RenderGraphVfx>(fixture.schedule.records[0].workload).order;
+        auto source = CompileVfxDrawFixture(fixture);
+        OpenGLBackendTests::commandState.pollStatus = 0x911BU;  // Injected GL_TIMEOUT_EXPIRED; protocol evidence only.
+        auto begun = frontend->BeginFrame({1, {64, 32}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        REQUIRE(frame.ExecuteGraph(source.execution, source.workloads).HasValue());
+        REQUIRE(frame.Present().HasValue());
+    }
+    REQUIRE(frontend->BeginShutdown().HasValue());
+    const auto pending = frontend->PollDrain();
+    REQUIRE(pending.HasValue());
+    CHECK(pending.Value() == RenderBackendDrainProgress::Pending);
+    CHECK_FALSE(material.expired());
+    CHECK_FALSE(order.expired());
+    OpenGLBackendTests::commandState.pollStatus = 0x911AU;  // Injected GL_ALREADY_SIGNALED releases the genuine graph lease.
+    Horo::Render::Test::RequireDrainedOwner(*frontend);
+    CHECK(material.expired());
+    CHECK(order.expired());
 }

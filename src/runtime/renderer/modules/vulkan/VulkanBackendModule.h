@@ -102,6 +102,7 @@ namespace Horo::Render {
         bool hostAllowed{true};           /**< Actual selected runtime's physical-device admission, independent of driver qualification. */
         bool vertexLayerRouting{false};   /**< Queried optional shaderOutputLayer feature; never part of baseline admission. */
         bool swapchainMaintenance{false}; /**< Actual optional feature; required only for interactive present-resource retirement. */
+        bool shaderDemote{false};         /**< Queried optional fragment demotion support; never part of baseline admission. */
     };
 
     /** @brief One bounded physical-device enumeration and its non-zero revision. */
@@ -138,6 +139,7 @@ namespace Horo::Render {
         std::uint32_t maxFramesInFlight{2};
         bool enableVertexLayerRouting{false};   /**< Exact optional feature request captured before VkDevice creation. */
         bool enableSwapchainMaintenance{false}; /**< Requires admitted extension and instance dependencies; never enabled headless. */
+        bool enableShaderDemote{false};         /**< Exact supported optional shader demotion feature enabled on the logical device. */
     };
 
     /**

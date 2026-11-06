@@ -236,7 +236,8 @@ namespace Horo::Render {
                     if (candidate.HasError()) {
                         return Result<VulkanAdapterEnumeration>::Failure(std::move(candidate).ErrorValue());
                     }
-                    nativeAdapters_.push_back(NativeAdapter{.id = candidate.Value().id, .device = device});
+                    nativeAdapters_.push_back(
+                        NativeAdapter{.id = candidate.Value().id, .device = device, .shaderDemote = candidate.Value().shaderDemote});
                     enumeration.adapters.push_back(std::move(candidate).Value());
                 }
                 enumeration.revision = Detail::VulkanAdapterRevision(enumeration.adapters);
@@ -262,7 +263,11 @@ namespace Horo::Render {
             }
 
             /** @brief Revalidates the same-instance runtime device and exact required extension request before native creation. */
-            Result<void> ValidateHostDevice(const VkPhysicalDevice device, const VulkanDeviceRequest &request) const {
+            Result<void> ValidateHostDevice(const VkPhysicalDevice device, const VulkanDeviceRequest &request,
+                                            const bool shaderDemoteSupported) const {
+                if (request.enableShaderDemote && !shaderDemoteSupported)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
+                                                           "The selected physical device does not support shader demotion."));
                 const auto allowed = loaderPort_->AcceptPhysicalDevice(instance_, device);
                 if (allowed.HasError())
                     return Result<void>::Failure(allowed.ErrorValue());
@@ -284,7 +289,7 @@ namespace Horo::Render {
                 if (selected == nativeAdapters_.end()) {
                     return Result<void>::Failure(MakeError(VulkanBackendErrors::AdapterNotFound));
                 }
-                if (const auto host = ValidateHostDevice(selected->device, admitted); host.HasError())
+                if (const auto host = ValidateHostDevice(selected->device, admitted, selected->shaderDemote); host.HasError())
                     return host;
                 constexpr float priority{1.0F};
                 std::array<VkDeviceQueueCreateInfo, 3> queueInfos{};
@@ -296,6 +301,7 @@ namespace Horo::Render {
                 VkPhysicalDeviceVulkan13Features features13{
                     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                     .pNext = admitted.enableSwapchainMaintenance ? &maintenance : nullptr,
+                    .shaderDemoteToHelperInvocation = admitted.enableShaderDemote,
                     .synchronization2 = admitted.enabledFeatures.synchronization2,
                     .dynamicRendering = admitted.enabledFeatures.dynamicRendering,
                 };
@@ -384,8 +390,9 @@ namespace Horo::Render {
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError())
                     return Result<void>::Failure(incarnation.ErrorValue());
-                if (auto shaders = resources_.InitializeShaders(properties.properties, request.adapter, dispatch_.getDeviceProcAddr,
-                                                                incarnation.Value(), request.enableVertexLayerRouting);
+                if (auto shaders =
+                        resources_.InitializeShaders(properties.properties, request.adapter, dispatch_.getDeviceProcAddr,
+                                                     incarnation.Value(), request.enableVertexLayerRouting, request.enableShaderDemote);
                     shaders.HasError())
                     return shaders;
                 if (auto prepared = graph_.Initialize({.device = device_,
@@ -624,6 +631,7 @@ namespace Horo::Render {
             struct NativeAdapter {
                 RenderAdapterId id;
                 VkPhysicalDevice device{VK_NULL_HANDLE};
+                bool shaderDemote{false};
             };
 
             /** @brief Intersects actual enabled draw/layer dispatch with the selected device's framebuffer layer limit. */
@@ -655,6 +663,16 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            /** @brief Publishes only the actual initialized forward draw and GPU simulation routes. */
+            void PublishVfxCapabilities() {
+                if (graph_.SupportsVfxForwardInstancing())
+                    resourceCapabilities_.features.Enable(RenderCapability::VfxForwardInstancing);
+                if (graph_.SupportsVfxGpu())
+                    for (const auto capability :
+                         {RenderCapability::VfxGpuSimulation, RenderCapability::VfxGpuDraw, RenderCapability::VfxGpuReadback})
+                        resourceCapabilities_.features.Enable(capability);
+            }
+
             /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
             Result<void> PublishResourceCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties,
                                                      const VkDeviceSize allocationLimit, const std::uint64_t incarnation) {
@@ -684,7 +702,7 @@ namespace Horo::Render {
                                   "vkGetPhysicalDeviceFormatProperties is required to publish native resource capabilities."));
                 }
                 snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
-                for (const auto format : {Rgba8Unorm, Depth24Stencil8, Depth32Float}) {
+                for (const auto format : {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float}) {
                     using enum RenderTextureUsage;
                     VkFormatProperties native{};
                     query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);
@@ -700,10 +718,7 @@ namespace Horo::Render {
                         usage = usage | CopyDestination;
                     snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
                 }
-                if (graph_.SupportsVfxGpu())
-                    for (const auto capability :
-                         {RenderCapability::VfxGpuSimulation, RenderCapability::VfxGpuDraw, RenderCapability::VfxGpuReadback})
-                        snapshot.features.Enable(capability);
+                PublishVfxCapabilities();
                 return PublishMultiviewCapabilities(device, properties);
             }
 
@@ -830,6 +845,7 @@ namespace Horo::Render {
                     .hostAllowed = hostAllowed.Value(),
                     .vertexLayerRouting = features12.shaderOutputLayer == VK_TRUE,
                     .swapchainMaintenance = hasMaintenance && maintenance.swapchainMaintenance1 == VK_TRUE,
+                    .shaderDemote = features13.shaderDemoteToHelperInvocation == VK_TRUE,
                 });
             }
 

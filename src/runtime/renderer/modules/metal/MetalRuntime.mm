@@ -121,6 +121,7 @@ namespace Horo::Render::Detail {
                 capabilities.implemented.support.deviceIncarnation = incarnation.Value();
                 deviceIncarnation_ = incarnation.Value();
                 resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_, deviceIncarnation_);
+                capabilities.implemented.support.features.Enable(RenderCapability::VfxForwardInstancing);
                 capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
                 capabilities.implemented.support.features.Enable(RenderCapability::ExposureGpu);
                 if (SupportsMetalUiPaint(capabilities))

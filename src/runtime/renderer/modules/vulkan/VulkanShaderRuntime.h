@@ -75,10 +75,11 @@ namespace Horo::Render::Detail {
         using IssueIdentity = std::function<std::optional<std::uint64_t>()>;
         using ResolveResource = std::function<Result<VulkanMaterialResource>(const MaterialResidentResource &, ShaderResourceKind)>;
 
-        /** @brief Exact incarnation and enabled layer routing of the selected logical device. */
+        /** @brief Exact incarnation and enabled optional shader features of the selected logical device. */
         struct DeviceFeatures {
             std::uint64_t deviceIncarnation{0};
             bool vertexLayerEnabled{false};
+            bool shaderDemoteEnabled{false}; /**< Actual optional demotion feature enabled at device creation. */
         };
 
         VulkanShaderRuntime();

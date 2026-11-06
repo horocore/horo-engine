@@ -116,3 +116,17 @@ target_link_libraries(HoroVfxGpuVulkanCookInternal PUBLIC HoroEngine::RenderApi 
 add_executable(HoroVfxGpuVulkanShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VfxGpuVulkanCookMain.cpp)
 target_compile_features(HoroVfxGpuVulkanShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroVfxGpuVulkanShaderCook PRIVATE HoroVfxGpuVulkanCookInternal)
+
+# Ordinary and masked indexed-particle shaders share one authenticated offline producer.
+set(HORO_VFX_INSTANCED_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/vfx_instanced_cook_headers")
+file(MAKE_DIRECTORY "${HORO_VFX_INSTANCED_COOK_HEADERS}")
+configure_file(HoroEditor/tools/VfxInstancedCook.h
+    "${HORO_VFX_INSTANCED_COOK_HEADERS}/VfxInstancedCook.h" COPYONLY)
+add_library(HoroVfxInstancedCookInternal STATIC HoroEditor/tools/VfxInstancedCook.cpp)
+target_compile_features(HoroVfxInstancedCookInternal PUBLIC cxx_std_20)
+target_include_directories(HoroVfxInstancedCookInternal PUBLIC "${HORO_VFX_INSTANCED_COOK_HEADERS}")
+target_link_libraries(HoroVfxInstancedCookInternal PUBLIC HoroEngine::RenderApi HoroEditorShaderCookHostInternal
+    PRIVATE HoroAtomicShaderCookPackageInternal HoroEngine::Platform)
+add_executable(HoroVfxInstancedShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VfxInstancedCookMain.cpp)
+target_compile_features(HoroVfxInstancedShaderCook PRIVATE cxx_std_20)
+target_link_libraries(HoroVfxInstancedShaderCook PRIVATE HoroVfxInstancedCookInternal)

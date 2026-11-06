@@ -96,6 +96,7 @@ namespace Horo::Render::Detail {
         RenderPipelineDeviceIdentity identity;
         VulkanShaderOwnerIdentity ownerIdentity;
         bool vertexLayerEnabled{false};
+        bool shaderDemoteEnabled{false};
         IssueIdentity issue;
         ResolveResource resolve;
         std::thread::id owner;

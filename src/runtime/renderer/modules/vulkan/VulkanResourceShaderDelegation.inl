@@ -71,12 +71,12 @@ Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialView(
 /** @copydoc VulkanResourceRuntime::InitializeShaders */
 Result<void> VulkanResourceRuntime::InitializeShaders(const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
                                                       const VulkanShaderRuntime::Resolver &resolver, const std::uint64_t deviceIncarnation,
-                                                      const bool vertexLayerEnabled) {
+                                                      const bool vertexLayerEnabled, const bool shaderDemoteEnabled) {
     return shaders_.Initialize(impl_->device, properties, std::move(adapter), resolver, [this] {
         return impl_->IssueIdentity();
     }, [this](const MaterialResidentResource &resident, ShaderResourceKind kind) {
         return kind == ShaderResourceKind::UniformBuffer ? impl_->ResolveMaterialBuffer(resident) : impl_->ResolveMaterialView(resident);
-    }, VulkanShaderRuntime::DeviceFeatures{deviceIncarnation, vertexLayerEnabled});
+    }, VulkanShaderRuntime::DeviceFeatures{deviceIncarnation, vertexLayerEnabled, shaderDemoteEnabled});
 }
 
 /** @copydoc VulkanResourceRuntime::QueryPipelineDeviceIdentity */

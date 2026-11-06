@@ -127,6 +127,17 @@ namespace Horo::Render::Detail {
             return found;
         }
 
+        /** @brief Detects the exact demotion capability in a structurally validated module before native creation. */
+        bool RequiresDemote(std::span<const std::uint32_t> words) {
+            for (std::size_t offset = 5; offset < words.size();) {
+                const auto count = words[offset] >> 16;
+                if ((words[offset] & 0xffffU) == 17 && count == 2 && words[offset + 1] == 5379)
+                    return true;
+                offset += count;
+            }
+            return false;
+        }
+
         /** @brief Detects Layer built-ins, including interface-block members, in a structurally validated module. */
         bool WritesLayer(std::span<const std::uint32_t> words) {
             for (std::size_t offset = 5; offset < words.size();) {
@@ -139,6 +150,18 @@ namespace Horo::Render::Detail {
                 offset += count;
             }
             return false;
+        }
+
+        /** @brief Rejects optional module features absent from the actual initialized logical device. */
+        Result<void> ValidateModuleFeatures(std::span<const std::uint32_t> words, bool writesLayer, ShaderStage stage,
+                                            bool vertexLayerEnabled, bool shaderDemoteEnabled) {
+            if (writesLayer && (!vertexLayerEnabled || stage != ShaderStage::Vertex))
+                return Result<void>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceUnsupported, "Layer output requires explicitly enabled vertex layer routing."));
+            if (!shaderDemoteEnabled && RequiresDemote(words))
+                return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
+                                                       "SPIR-V shader demotion requires the enabled optional Vulkan 1.3 device feature."));
+            return Result<void>::Success();
         }
     }  // namespace VulkanShaderDetail
 
@@ -203,6 +226,7 @@ namespace Horo::Render::Detail {
         impl_->properties = properties;
         impl_->ownerIdentity.deviceIncarnation = features.deviceIncarnation;
         impl_->vertexLayerEnabled = features.vertexLayerEnabled;
+        impl_->shaderDemoteEnabled = features.shaderDemoteEnabled;
         impl_->issue = std::move(issue);
         impl_->resolve = std::move(resolve);
         Sha256Builder hash;
@@ -296,9 +320,10 @@ namespace Horo::Render::Detail {
                     MakeError(VulkanBackendErrors::ResourceRequestInvalid,
                               "SPIR-V header, instruction bounds or exact stage entry point is invalid; recook the artifact."));
             Impl::Shader shader{.descriptor = descriptor, .bytes = code.size(), .writesLayer = VulkanShaderDetail::WritesLayer(words)};
-            if (shader.writesLayer && (!impl_->vertexLayerEnabled || descriptor.stage != ShaderStage::Vertex))
-                return Result<std::uint64_t>::Failure(
-                    MakeError(VulkanBackendErrors::ResourceUnsupported, "Layer output requires explicitly enabled vertex layer routing."));
+            if (const auto feature = VulkanShaderDetail::ValidateModuleFeatures(words, shader.writesLayer, descriptor.stage,
+                                                                                impl_->vertexLayerEnabled, impl_->shaderDemoteEnabled);
+                feature.HasError())
+                return Result<std::uint64_t>::Failure(feature.ErrorValue());
             const auto id = impl_->issue();
             if (!id.has_value())
                 return Result<std::uint64_t>::Failure(

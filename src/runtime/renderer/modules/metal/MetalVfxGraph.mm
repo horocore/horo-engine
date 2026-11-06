@@ -168,11 +168,20 @@ namespace Horo::Render::Detail {
         const auto extent = target->descriptor.extent;
         [encoder setViewport:MTLViewport{0, 0, static_cast<double>(extent.width), static_cast<double>(extent.height), 0, 1}];
         [encoder setScissorRect:MTLScissorRect{0, 0, extent.width, extent.height}];
-        TrackParallelGraphUse(commands, request.resources);
+        // Serial draws retain only actual pass resources; future graph resources keep their original completion provenance.
+        auto *color = Decode<MetalTextureInstance>(Instance(request, workload.color));
+        auto *depth = Decode<MetalTextureInstance>(Instance(request, workload.depth));
+        Impl::TrackUse(color->use, commandBuffer);
+        Impl::TrackUse(depth->use, commandBuffer);
         for (const auto &draw : workload.order->draws) {
             const auto *material = dynamic_cast<const MetalMaterialBinding *>(&draw.slot->Material()->BackendBinding().NativeBinding());
             const auto mapped = std::ranges::find(request.meshes, draw.mesh, &RenderGraphMeshInstance::mesh);
             const auto *mesh = Decode<MetalMeshInstance>(mapped->instance);
+            auto *vertices = Decode<MetalBufferInstance>(Instance(request, draw.vertices));
+            auto *indices = Decode<MetalBufferInstance>(Instance(request, draw.indices));
+            Impl::TrackUse(vertices->use, commandBuffer);
+            Impl::TrackUse(indices->use, commandBuffer);
+            impl_->TrackRasterMaterialUse(*material, commandBuffer);
             BindMetalMaterial(encoder, *material);
             [encoder setVertexBuffer:mesh->vertexBuffer offset:0 atIndex:MetalMeshVertexBufferIndex];
             [encoder

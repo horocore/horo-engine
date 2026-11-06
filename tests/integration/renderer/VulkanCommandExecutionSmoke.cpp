@@ -5,6 +5,7 @@
 #include "Horo/Vfx/GpuParticleSimulator.h"
 #include "Horo/Vfx/VfxWorld.h"
 #include "VfxGpuVulkanCook.h"
+#include "VulkanVfxInstancedReadback.h"
 #include "support/VfxTestSupport.h"
 
 #include <VulkanBackendModule.h>
@@ -315,4 +316,5 @@ namespace {
     }
 
 #include "VulkanVfxGpuNativeSmoke.inl"
+#include "VulkanVfxInstancedNativeSmoke.inl"
 }  // namespace

@@ -2887,6 +2887,7 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
         runtime/renderer/api/RenderGraphLifetime.cpp
         runtime/renderer/api/RenderGraphWorkload.cpp
+        runtime/renderer/api/RenderGraphTextureUpload.cpp
         runtime/renderer/api/UiPaintWorkload.cpp
         runtime/renderer/api/UiPaintKernel.cpp
         runtime/renderer/api/UiPaintFrameUpload.cpp

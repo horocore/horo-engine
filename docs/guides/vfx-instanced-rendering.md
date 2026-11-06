@@ -3,8 +3,9 @@
 Delivery identity: HORO-1735 / #1778 [VFX-004.3].
 
 This document records the implementation and migration boundary for native
-billboard and mesh drawing. Source authoring is in progress. Packing tests,
-shader source, or headless graph tests do not qualify native execution.
+billboard and mesh drawing. Metal and desktop OpenGL have native functional
+evidence below; software Vulkan functional qualification has also passed. Packing tests, shader source,
+or headless graph tests do not qualify native execution.
 
 The source was reconciled onto merged main `6b7830dd`, which includes the
 OpenXR application-host (#3544) and runtime-UI deliveries. Their canonical
@@ -62,11 +63,11 @@ MSL and GLSL. The previous `column_major` declaration produced a different MSL
 operation; accepting it with canonical column-major packing transposed a
 non-symmetric off-axis transform. The selected logical-to-native map therefore
 remains canonical column-major packing, without a backend-specific CPU transpose.
-The actual native off-axis fixture is still required; mathematical translation
-evidence does not qualify pixels or device execution.
+The native off-axis fixtures below exercise this mapping; mathematical translation
+evidence alone does not qualify pixels or device execution.
 The shared HLSL qualifier also changes Vulkan and DXIL lowering. Neither route
-is qualified by the GL/MSL diagnostic: Vulkan and D3D12 VFX admission remains
-disabled or unsupported pending its own layout, native draw and lifetime evidence.
+is qualified by the GL/MSL diagnostic: Vulkan needs its own layout, native draw
+and lifetime evidence. D3D12 graphics remains unsupported.
 
 `MakeVfxShaderManifest` in the existing `HoroRenderApi`-owned
 `VfxShaderParameters.h` is the canonical logical cook interface: Instances,
@@ -176,8 +177,8 @@ production tool catalog.
 Metal's narrow instance-array admission requires the canonical VFX interface,
 actual reflected `float4x4[128]` and `float4[128]` element types, exact native
 offsets/array strides, column-matrix packing and a 10240-byte block. Ordinary
-material arrays/matrices remain unsupported. Native malformed-layout and block
-extent cases are authored but have not run. Immutable Material constants retain
+material arrays/matrices remain unsupported. The native preparation regression
+target exercises malformed layout and block extent admission. Immutable Material constants retain
 their logical 20-byte member extent: the existing frontend queries native block
 size and pads the allocation before publication, including Metal's native struct
 extent. Callers must not substitute a 20-byte native buffer for that query.
@@ -188,8 +189,7 @@ two distinct billboard instances, a mesh with authored nonzero Z, masked discard
 foreground alpha, depth-occluded alpha and additive color. Pixel-center ray/plane
 depth is computed independently from the VFX packer. Actual GPU completion and
 ordinary frame admission precede publication reuse; test-only readback/teardown
-barriers do not change the production frame path. These new native assertions are
-source-only until the opt-in GPU target is configured, built and run.
+barriers do not change the production frame path. The opt-in desktop OpenGL target has now run with the result recorded below.
 The authored-Z mesh selects a deliberate quadrant of a nonuniform 2x2 texture;
 normal-field reads, swapped UV components and a flipped V coordinate produce
 different expected texels. Its UV remains the proven canonical MeshVertex input
@@ -202,7 +202,7 @@ resource owner now admits `Rgba16Float` sampled/render attachments using
 This supplies the existing scheduler contract; it does not add tone mapping,
 exposure, a look policy, or a fallback to normalized color. `Rgba32Float` remains
 unsupported on this GL path. Storage mapping/attachment regression sources and
-the native VFX color oracle must qualify this addition before delivery.
+the native VFX color oracle exercise this addition, as recorded below.
 
 Each uniform draw is bounded by 128 instances. That bound is an admission ceiling,
 not a claim that a device supports the reflected block: actual native block size,
@@ -314,13 +314,14 @@ policies. Shadow, depth-prepass and GBuffer VFX encoders remain unsupported in
 this phase. Generic GL depth-clear graph support now has source coverage for
 whole depth/depth-stencil attachments, preserving stencil, the depth write mask
 and the caller's clear value. CPU dispatch and an existing native smoke fixture
-have new depth/abort/readback assertions; none has run for the current source.
-Full VFX pixel/depth fixtures remain pending. Metal and Vulkan now have source routes
+have depth/abort/readback assertions with native results below.
+Metal and Vulkan now have source routes
 through their canonical prepared material/mesh/target owners, exact native
 publication checks and indexed instance counts. Metal uses the existing native
 command-use retirement records; Vulkan retains the existing graph submission
-lease and resource-state/timeline authority. Both still keep this bit disabled
-pending compile and native qualification. D3D12 remains an explicit graphics
+lease and resource-state/timeline authority. Both publish the capability only
+after their actual native resource/command prerequisites are initialized; the
+bit does not itself prove platform qualification. D3D12 remains an explicit graphics
 foundation dependency. None of these source changes constitutes platform
 qualification.
 
@@ -329,6 +330,11 @@ Shutdown revokes that marker before teardown. The host must release slots and
 graph borrowers before destroying the frontend: their canonical material leases
 still obey the existing registry/native retirement contract. Staging destruction
 does not allocate; it does not create another retirement or fence authority.
+Shutdown drops the frontend's scheduling inventory after aborting an active frame.
+It does not clear a borrowed order: an accepted graph retains its slot until actual
+command completion, then releases the slot's material backing while the device is
+still alive. Host-owned material and scheduling aliases must still be released in
+the order required by `MaterialBindingLease`; shutdown cannot revoke those leases.
 
 The new `IRenderBackend::UpdateVfxFrame` virtual is an intentional source/ABI
 change for custom backend providers. Existing source implementations inherit a
@@ -367,3 +373,91 @@ Existing plan-only `ScheduleVfx` consumers remain source-compatible. Native
 execution must reject absent, stale, foreign or unready preparation explicitly;
 it cannot turn an unencoded graph into successful rendering. No backend fallback
 or reduced assertion policy is part of this migration.
+
+## Registered graph texture uploads
+
+`RenderGraphTextureUpload` adds one closed Vulkan upload operation to the existing
+render graph. The host creates a registered `HostVisible | CopySource` buffer with
+the actual pixels and an ordinary registered `CopyDestination` texture, then submits
+the upload through the normal graph and frontend submission owner.
+
+The workload contains the graph-local source/destination IDs, exact extent and
+byte count. It accepts only a complete tightly packed RGBA8 2D base level: one mip,
+one layer, one sample, depth one, and exactly `width * height * 4` bytes. The source
+buffer must have that exact size. Offsets, row padding, partial updates and other
+formats are rejected rather than reinterpreted or clamped.
+
+The pass declares exactly two uses: source `Read/CopySource` and destination
+`Write/CopyDestination`. Compiled synchronization supplies the image transitions;
+subsequent graph uses supply the sampling layout. Existing resource resolution and
+submission leases retain both registered resources. Destination contents are
+published only by actual accepted submission; an unsent abort discards candidate
+state. This adds no private staging allocation, queue, timeline or normal-frame wait.
+
+Vulkan records the operation with its existing `vkCmdCopyBufferToImage2` entry
+point. OpenGL, Metal and Null reject this new workload explicitly. Vulkan's
+`CreateTexture(initialData)` remains unsupported; callers use the declared graph
+upload instead of inventing ready state or issuing an untracked native write.
+
+The workload alternative is appended to `RenderGraphWorkload`, preserving existing
+alternative indices. Providers and consumers must rebuild for the changed C++
+variant type; preserved indices are not a binary compatibility promise.
+
+### Depth-copy descriptor admission
+
+The frontend also admits exactly a single-sample, single-mip/layer 2D Depth32Float
+attachment with `RenderAttachment | CopySource`, only when the selected backend's
+valid support snapshot reports those roles. Initial bytes, extra roles and other
+shapes remain unsupported by this narrow extension.
+
+Metal reports the copy-source role after its bounded native private render-target
+allocation probe succeeds, and probes sampled attachment support separately.
+Vulkan derives the role from actual native format properties. Existing allocation,
+resource retirement and submission ownership remain authoritative.
+
+The native VFX tests use terminal diagnostic copies to inspect actual color/depth.
+Those test observations do not introduce a general public texture-to-buffer graph
+workload or a normal-frame readback policy.
+
+## Native functional evidence (2026-11-06)
+
+The Debug macOS build has GUI/live UI and opt-in GPU smoke enabled. Physical
+Apple M3 Metal ran four instanced cases with 1,875 assertions, zero failures and
+zero skips, with the Metal validation layer enabled. The cases exercise off-axis
+billboards, authored-Z mesh/UV canaries, floating-point blend/depth, masked discard,
+actual in-flight retention, and unsent abort/retry. Desktop OpenGL ran its named
+billboard/authored-Z mesh case with 669 assertions, zero failures and zero skips.
+These are selected native functional cases, not full-platform qualification.
+
+The ordinary and masked Metal libraries and Vulkan SPIR-V packages were produced
+by the admitted host tools through the authenticated cook route. The offline
+`HoroVfxInstancedShaderCook` tool publishes decoded, validated packages atomically;
+it does not compile shaders in the runtime or supply handwritten reflection.
+
+Authentic Linux ARM64 GCC 15 compilation succeeded for the owning Vulkan, graph,
+frontend, reflection and native smoke targets. The latest Vulkan unit run had 137
+cases, zero failures and three explicit existing unsupported shader/stereo skips.
+The actual software Vulkan native run passed both cases with 1,122 assertions,
+zero failures, zero skips and no Vulkan validation errors. This covers the main
+pixel/depth scene and abandoned-first/committed-retry execution. The fresh frontend
+suite also passed all 311 cases without skips. Graph (84) and reflection (108)
+results are carried from byte-identical executables, not rerun results.
+This is software Vulkan evidence, not physical Vulkan hardware qualification.
+
+The earlier unenabled shader demotion, duplicate graph texture identities,
+frontend-owned shutdown inventory and stale per-pass material alias cache were
+corrected; raw failing runs remain separate from current evidence. Material alias
+scratch is reset for every pass and abandoned attempt; accepted resource states
+still publish only through successful submission.
+
+Shader demotion is optional, queried from the actual Vulkan 1.3 device and enabled
+only when supported. A module declaring the demotion capability is rejected before
+driver creation if the feature is unavailable. Ordinary non-demoting shaders and
+baseline adapter admission do not acquire a new mandatory feature requirement.
+
+The Metal diagnostic used seven particles, five indexed draws, two instanced
+batches and a 64x32 floating-point color/depth target. One warm-up and eight frames
+with validation enabled are diagnostic timing only. No reviewed reference scene,
+performance cohort or numeric throughput budget has been supplied. This does not
+satisfy ADR-051 measurement windows or the ticket's throughput acceptance.
+The ticket remains In Progress until the remaining acceptance is resolved.

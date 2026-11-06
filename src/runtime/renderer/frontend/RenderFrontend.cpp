@@ -406,6 +406,10 @@ namespace Horo::Render {
         if (activeFrameScope_ != nullptr) {
             activeFrameScope_->Abort();
         }
+        // Release only the frontend's scheduling inventory. Submitted graph leases still own
+        // their exact orders/materials until native completion; external host borrows must retire
+        // before terminal drain under the existing material lifetime contract.
+        vfxScheduling_.reset();
         resourceUploadQueue_->StopAdmission();
         while (!resourceUploadQueue_->Empty()) {
             const Detail::RenderResourceUploadQueue::Request request = resourceUploadQueue_->Pop();

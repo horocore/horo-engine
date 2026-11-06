@@ -77,6 +77,12 @@ namespace Horo::Render::Detail {
              */
             void EncodeDepthAttachment(VkCommandBuffer command, const RenderGraphDepthAttachment &depth,
                                        std::span<const VulkanGraphResource> resident) const noexcept;
+            /** @brief Emits an admitted tightly packed whole RGBA8 upload through the existing native transfer command.
+             * @param command Existing recording command. @param upload Validated closed upload.
+             * @param resident Exact retained native resource bindings.
+             */
+            void EncodeTextureUpload(VkCommandBuffer command, const RenderGraphTextureUpload &upload,
+                                     std::span<const VulkanGraphResource> resident) const noexcept;
             PFN_vkCmdPipelineBarrier2 barrier{};
             PFN_vkCmdCopyBuffer2 copy{};
             PFN_vkCmdCopyBufferToImage2 copyImage{};
@@ -259,6 +265,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateDepthAttachment(const RenderGraphDepthAttachment &depth, RenderQueueId queue);
         /** @brief Validates native copy roles, checked ranges and defined contents before recording. */
         [[nodiscard]] Result<void> ValidateBufferCopy(const RenderGraphBufferCopy &copy);
+        /** @brief Checks exact native upload descriptors and defined source contents before recording.
+         * @param upload Closed whole-base-level operation. @return Success or typed failure without persistent state mutation.
+         */
+        [[nodiscard]] Result<void> ValidateTextureUpload(const RenderGraphTextureUpload &upload);
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphWorkload &workload, RenderQueueId queue);
         [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
         void Encode(VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept;

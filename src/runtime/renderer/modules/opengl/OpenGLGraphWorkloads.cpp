@@ -118,6 +118,12 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
         }
 
+        /** @brief This graph executor has no implemented whole-base texture transfer operation. */
+        [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &, const OpenGLGraphResources &,
+                                                    const RenderGraphTextureUpload &) {
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
         /** @brief This OpenGL executor has no native exposure family and must never treat it as ordering-only. */
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &, const OpenGLGraphResources &,
                                                     const RenderGraphExposureGpu &) {

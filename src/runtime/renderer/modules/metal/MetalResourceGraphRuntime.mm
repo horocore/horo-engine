@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "MetalColorAttachmentEncoding.h"
 #include "MetalLightCullingKernel.h"
@@ -244,6 +245,9 @@ namespace Horo::Render::Detail {
     /** @copydoc MetalResourceRuntime::ValidateGraphWorkload */
     Result<void> MetalResourceRuntime::ValidateGraphWorkload(const RenderGraphWorkload &workload,
                                                              const std::span<const RenderGraphResourceInstance> resources) const {
+        if (std::holds_alternative<RenderGraphTextureUpload>(workload))
+            return Result<void>::Failure(
+                MakeError(RenderGraphExecutionErrors::UnsupportedWorkload, "Metal graph texture uploads are unsupported."));
         if (const auto *exposure = std::get_if<RenderGraphExposureGpu>(&workload))
             return ValidateExposureGpu(*exposure, resources);
         if (std::holds_alternative<RenderGraphVfx>(workload))

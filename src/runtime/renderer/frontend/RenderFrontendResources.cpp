@@ -99,12 +99,24 @@ namespace Horo::Render {
             return supported ? Supported : Unsupported;
         }
 
-        /** @brief Keeps legacy admission while requiring complete advertised facts for the additional color path. */
+        /** @brief Identifies the closed single-subresource depth attachment observation contract. */
+        [[nodiscard]] constexpr bool IsDepthCopySourceDescriptor(const RenderTextureDescriptor &descriptor) noexcept {
+            return IsSingleColorTexture(descriptor) && descriptor.format == RenderTextureFormat::Depth32Float &&
+                   descriptor.usage == (RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource);
+        }
+
+        /** @brief Requires selected-backend depth copy facts without admitting depth uploads or other depth roles. */
+        [[nodiscard]] constexpr bool AdmitDepthCopySourceDescriptor(const RenderTextureDescriptor &descriptor,
+                                                                    const RenderCapabilitySnapshot &support) noexcept {
+            return IsDepthCopySourceDescriptor(descriptor) && support.IsValid() && support.Supports(descriptor);
+        }
+
+        /** @brief Keeps legacy admission while requiring complete advertised facts for additional copy roles. */
         [[nodiscard]] constexpr bool TextureDescriptorAdmitted(const RenderTextureDescriptor &descriptor,
                                                                const RenderCapabilitySnapshot &support) noexcept {
             return AdmitCurrentTextureDescriptor(descriptor, support.features.Supports(RenderCapability::UiPaint)) ==
                        ResourceDescriptorAdmission::Supported ||
-                   AdmitColorTextureDescriptor(descriptor, support);
+                   AdmitColorTextureDescriptor(descriptor, support) || AdmitDepthCopySourceDescriptor(descriptor, support);
         }
 
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,
@@ -123,6 +135,9 @@ namespace Horo::Render {
         /** @brief Validates compact initialization bytes separately from capability and upload-queue admission. */
         [[nodiscard]] Result<void> ValidateInitialTextureBytes(const RenderTextureDescriptor &descriptor,
                                                                std::span<const std::byte> initialData) {
+            if (IsDepthCopySourceDescriptor(descriptor) && !initialData.empty())
+                return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUnsupported,
+                                                               "Depth copy-source attachments do not admit initial upload bytes."));
             const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
             if (!bytes || (!initialData.empty() && initialData.size() != *bytes))
                 return Result<void>::Failure(

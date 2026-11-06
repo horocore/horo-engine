@@ -98,7 +98,8 @@ namespace Horo::Render {
 
         bool ExternallyValidated(const RenderGraphWorkload &workload) {
             return std::holds_alternative<RenderGraphMaterialRaster>(workload) || std::holds_alternative<RenderGraphMultiview>(workload) ||
-                   std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphExposureGpu>(workload);
+                   std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphExposureGpu>(workload) ||
+                   std::holds_alternative<RenderGraphTextureUpload>(workload);
         }
 
         bool MatchesBasic(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
@@ -318,6 +319,8 @@ namespace Horo::Render {
         /** @brief Preserves semantic validator failures instead of collapsing them into a generic boolean graph error. */
         Result<void> ValidateTypedPass(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                        const RenderGraphWorkload &workload) {
+            if (const auto *upload = std::get_if<RenderGraphTextureUpload>(&workload))
+                return ValidateTextureUploadGraphWorkload(request, pass, *upload);
             if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&workload))
                 return ValidateMaterialRasterWorkload(request, pass, *raster);
             if (const auto *vfx = std::get_if<RenderGraphVfx>(&workload))

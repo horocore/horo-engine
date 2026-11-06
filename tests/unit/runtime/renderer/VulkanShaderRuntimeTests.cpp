@@ -36,6 +36,7 @@ namespace {
         bool matrixParameters{false};
         std::size_t resolvedBufferBytes{16};
         std::uint64_t deviceIncarnation{};
+        bool shaderDemoteEnabled{false};
         ShaderTargetRequirement target{.backend = ShaderTargetBackend::Vulkan,
                                        .payloadFormat = ShaderPayloadFormat::SpirV16,
                                        .descriptorVersion = 1,
@@ -92,7 +93,7 @@ namespace {
                 if (r.instance != 99 || kind != ShaderResourceKind::UniformBuffer || r.kind != MaterialResidentResourceKind::Buffer)
                     return Result<VulkanMaterialResource>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
                 return Result<VulkanMaterialResource>::Success({.buffer = Handle<VkBuffer>(99), .bytes = resolvedBufferBytes});
-            }, VulkanShaderRuntime::DeviceFeatures{deviceIncarnation, false});
+            }, VulkanShaderRuntime::DeviceFeatures{deviceIncarnation, false, shaderDemoteEnabled});
         }
 
         void UseSampledMaterial() {
@@ -505,6 +506,37 @@ TEST_CASE("Vulkan layer routing rejects mismatched cooked output and disabled de
         const auto calls = f.state.shaders;
         CHECK(f.runtime.CreateShaderModule(descriptor, bytes, TestSupport::PlacementFor(cost.Value(), 99)).HasError());
         CHECK(f.state.shaders == calls);
+    }
+}
+
+TEST_CASE("Vulkan demotion modules require the enabled optional logical device feature", "[vulkan][shader][demote][protocol-fake]") {
+    Fixture f;
+    SECTION("unsupported demotion never reaches the driver") {}
+    SECTION("enabled demotion reaches the existing native module owner") {
+        f.shaderDemoteEnabled = true;
+    }
+    REQUIRE(f.Initialize().HasValue());
+    f.Reflect();
+    auto bytes = f.Code(ShaderStage::Fragment);
+    const std::array<std::uint32_t, 2> capability{(2U << 16) | 17U, 5379U};
+    const auto capabilityBytes = std::as_bytes(std::span{capability});
+    std::array<std::uint8_t, sizeof(capability)> encoded{};
+    std::ranges::transform(capabilityBytes, encoded.begin(), [](std::byte value) {
+        return std::to_integer<std::uint8_t>(value);
+    });
+    bytes.insert(bytes.begin() + 20, encoded.begin(), encoded.end());
+    const RenderShaderModuleDescriptor descriptor{f.target, ShaderStage::Fragment, "main", f.artifact, f.reflection.interfaceCompatibility};
+    const auto cost = f.runtime.QueryShaderModuleMemoryCost(descriptor, bytes.size());
+    REQUIRE(cost.HasValue());
+    const auto result = f.runtime.CreateShaderModule(descriptor, bytes, TestSupport::PlacementFor(cost.Value(), 99));
+    if (f.shaderDemoteEnabled) {
+        REQUIRE(result.HasValue());
+        CHECK(f.state.shaders == 1);
+        f.runtime.DestroyShaderModule(result.Value());
+    } else {
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == VulkanBackendErrors::ResourceUnsupported.code.Value());
+        CHECK(f.state.shaders == 0);
     }
 }
 

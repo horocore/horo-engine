@@ -103,6 +103,80 @@ TEST_CASE("Frontend color additions require a valid advertised capability snapsh
     Unsupported(*frontend, Color(RenderTextureFormat::Rgba8Unorm, RenderTextureUsage::CopySource));
 }
 
+TEST_CASE("Frontend depth observation admits only the exact advertised attachment copy source",
+          "[renderer][resource][depth-copy-admission]") {
+    auto support = AdvertisedColors();
+    constexpr auto roles = RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource;
+    support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = roles;
+    auto frontend = FrontendWith(support);
+    AdmitAndRelease(*frontend, Color(RenderTextureFormat::Depth32Float, roles));
+}
+
+TEST_CASE("Frontend depth observation rejects unsupported facts and expanded descriptors before allocation",
+          "[renderer][resource][depth-copy-admission]") {
+    auto support = AdvertisedColors();
+    constexpr auto roles = RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource;
+    support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = roles;
+    auto descriptor = Color(RenderTextureFormat::Depth32Float, roles);
+    SECTION("missing copy source fact") {
+        support.formats.usages[static_cast<std::size_t>(descriptor.format)] = RenderTextureUsage::RenderAttachment;
+    }
+    SECTION("missing attachment fact") {
+        support.formats.usages[static_cast<std::size_t>(descriptor.format)] = RenderTextureUsage::CopySource;
+    }
+    SECTION("invalid snapshot") {
+        support.capabilityRevision = 0;
+    }
+    SECTION("another depth format") {
+        descriptor.format = RenderTextureFormat::Depth24Stencil8;
+        support.formats.usages[static_cast<std::size_t>(descriptor.format)] = roles;
+    }
+    SECTION("copy destination is separate") {
+        descriptor.usage = roles | RenderTextureUsage::CopyDestination;
+        support.formats.usages[static_cast<std::size_t>(descriptor.format)] = descriptor.usage;
+    }
+    SECTION("storage is separate") {
+        descriptor.usage = roles | RenderTextureUsage::Storage;
+        support.formats.usages[static_cast<std::size_t>(descriptor.format)] = descriptor.usage;
+    }
+    auto frontend = FrontendWith(support);
+    Unsupported(*frontend, descriptor);
+}
+
+TEST_CASE("Frontend depth observation keeps texture shape and initial upload closed", "[renderer][resource][depth-copy-admission]") {
+    auto support = AdvertisedColors();
+    constexpr auto roles = RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource;
+    support.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = roles;
+    support.formats.sampleCountMask |= std::uint64_t{1} << 2;
+    auto descriptor = Color(RenderTextureFormat::Depth32Float, roles);
+    SECTION("3D") {
+        descriptor.dimension = RenderTextureDimension::ThreeD;
+        descriptor.depth = 2;
+    }
+    SECTION("mips") {
+        descriptor.mipCount = 2;
+    }
+    SECTION("layers") {
+        descriptor.layerCount = 2;
+    }
+    SECTION("MSAA") {
+        descriptor.sampleCount = 2;
+    }
+    SECTION("complete initial bytes") {
+        auto frontend = FrontendWith(support);
+        const std::array<std::byte, 64> bytes{};
+        const auto result = frontend->CreateTexture(descriptor, bytes);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == "render.frontend.resource.unsupported");
+        NoAdmission(*frontend);
+        return;
+    }
+    auto frontend = FrontendWith(support);
+    const auto result = frontend->CreateTexture(descriptor);
+    REQUIRE(result.HasError());
+    NoAdmission(*frontend);
+}
+
 TEST_CASE("Frontend requires every requested color usage bit to be independently advertised", "[renderer][resource][color-admission]") {
     auto support = AdvertisedColors();
     for (const auto format : ColorFormats)

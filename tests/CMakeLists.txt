@@ -4312,6 +4312,7 @@ add_executable(HoroRenderGraphTests
         unit/runtime/renderer/RenderGraphTests.cpp
         unit/runtime/renderer/RenderGraphValidationTests.cpp
         unit/runtime/renderer/RenderGraphSynchronizationTests.cpp
+        unit/runtime/renderer/RenderGraphTextureUploadTests.cpp
 )
 target_compile_features(HoroRenderGraphTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderGraphTests PRIVATE HoroEngine::RenderApi)
@@ -6287,6 +6288,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             unit/runtime/renderer/VulkanShaderRuntimeTests.cpp
             unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
             unit/runtime/renderer/VulkanGraphRuntimeTests.cpp
+            unit/runtime/renderer/VulkanTextureUploadTests.cpp
             unit/runtime/renderer/VulkanGuiCommandTests.cpp
             unit/runtime/renderer/VulkanExternalImageTests.cpp
     )
@@ -6941,6 +6943,9 @@ if(TARGET HoroMetalGraphExecutionSmoke)
         integration/renderer/MetalVfxGpuEndToEndSmoke.mm
         integration/renderer/MetalVfxGpuEndToEndFixture.mm
         integration/renderer/MetalVfxGpuEndToEndFixture.h
+        integration/renderer/MetalVfxInstancedFrontendFixture.h
+        integration/renderer/MetalVfxInstancedFrontendFixture.mm
+        integration/renderer/MetalVfxInstancedFrontendSmoke.mm
         integration/renderer/MetalVfxGpuProgramsSmoke.mm)
     target_link_libraries(HoroMetalGraphExecutionSmoke PRIVATE HoroEngine::RenderFrontend
         HoroEditorClusteredLightingAssetsInternal HoroEditorViewportShaderRecipeInternal

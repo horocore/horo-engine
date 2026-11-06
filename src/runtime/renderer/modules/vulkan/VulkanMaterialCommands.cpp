@@ -57,6 +57,18 @@ namespace Horo::Render::Detail {
             return {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
                     RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue};
         }
+
+        /** @brief Denies incompatible same-pass roles and inconsistent scratch entries without dereferencing a missing update. */
+        template <class Iterator>
+        Result<void> ValidateRepeatedMaterialState(Iterator existing, Iterator end, const RenderGraphLogicalState &next) {
+            if (existing == end)
+                return Result<void>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceRequestInvalid, "A material pass state has no matching pending update."));
+            return existing->value.logical == next
+                       ? Result<void>::Success()
+                       : Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid,
+                                                         "A material pass aliases incompatible resource roles."));
+        }
     }  // namespace
 
     /** @brief Prepares one whole-resource state; queue transfers require the graph's explicit matched release path. */
@@ -68,8 +80,7 @@ namespace Horo::Render::Detail {
         const auto states = std::span{materialPassStates}.first(materialPassStateCount);
         const bool currentPass = std::ranges::find(states, resource.state) != states.end();
         if (currentPass)
-            return existing->value.logical == next ? Result<void>::Success()
-                                                   : Result<void>::Failure(Invalid("A material pass aliases incompatible resource roles."));
+            return ValidateRepeatedMaterialState(existing, updates.end(), next);
         const std::array capacity{materialPassStateCount < materialPassStates.size(), updates.size() < RenderGraphLimits::HardMaxResources};
         if (!std::ranges::all_of(capacity, [](bool valid) {
             return valid;

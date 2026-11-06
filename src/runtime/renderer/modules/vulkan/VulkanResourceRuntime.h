@@ -108,7 +108,7 @@ namespace Horo::Render::Detail {
         /** @brief Attaches the shader owner to this registry after native device creation. */
         [[nodiscard]] Result<void> InitializeShaders(const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
                                                      const VulkanShaderRuntime::Resolver &resolver, std::uint64_t deviceIncarnation = 0,
-                                                     bool vertexLayerEnabled = false);
+                                                     bool vertexLayerEnabled = false, bool shaderDemoteEnabled = false);
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &,
                                                                                std::size_t) const override;

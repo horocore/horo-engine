@@ -5,6 +5,12 @@
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Requires every actual entry point used by indexed forward VFX encoding. */
+        template <typename Dispatch> bool VfxDrawDispatchReady(const Dispatch &native) noexcept {
+            return native.beginRendering && native.endRendering && native.bindPipeline && native.bindSets && native.bindVertices &&
+                   native.bindIndex && native.viewport && native.scissor && native.drawIndexed;
+        }
+
         /** @brief Reads an exact frontend-authored graph identity after portable request validation. */
         std::uint64_t Instance(const RenderGraphExecutionRequest &request, const RenderGraphResourceId id) {
             if (id.owner != request.graph.Owner() || id.value == 0 || id.value > request.resources.size())
@@ -35,6 +41,12 @@ namespace Horo::Render::Detail {
             return found != descriptor.resources.end() && std::holds_alternative<MaterialParameterBinding>(found->value);
         }
     }  // namespace
+
+    /** @copydoc VulkanGraphRuntime::SupportsVfxForwardInstancing */
+    bool VulkanGraphRuntime::SupportsVfxForwardInstancing() const noexcept {
+        return impl_->owner != std::thread::id{} && impl_->resources != nullptr && !impl_->lifecycle.closing &&
+               VfxDrawDispatchReady(impl_->native);
+    }
 
     /** @copydoc VulkanGraphRuntime::Impl::PrepareVfxMaterialBindings */
     Result<void> VulkanGraphRuntime::Impl::PrepareVfxMaterialBindings(const MaterialBindingDescriptor &descriptor,

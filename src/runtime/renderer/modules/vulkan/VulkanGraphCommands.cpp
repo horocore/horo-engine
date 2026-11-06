@@ -49,6 +49,24 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::ValidateTextureUpload */
+    Result<void> VulkanGraphRuntime::Impl::ValidateTextureUpload(const RenderGraphTextureUpload &upload) {
+        const auto &source = bindings[upload.source.value - 1];
+        const auto &destination = bindings[upload.destination.value - 1];
+        if (!native.copyImage)
+            return Result<void>::Failure(Unsupported("Texture upload requires the actual Vulkan buffer-to-image copy entry point."));
+        if (source.kind != RenderGraphResourceKind::Buffer || destination.kind != RenderGraphResourceKind::Texture ||
+            source.buffer == VK_NULL_HANDLE || destination.image == VK_NULL_HANDLE)
+            return Result<void>::Failure(Invalid("Texture upload differs from its retained native buffer/image kinds."));
+        if (const auto valid = ValidateTextureUploadDescriptors(upload, source.bufferDescriptor, destination.textureDescriptor);
+            valid.HasError())
+            return valid;
+        if (!states[upload.source.value - 1].contentsDefined)
+            return Result<void>::Failure(Invalid("Texture upload source contents are undefined."));
+        states[upload.destination.value - 1].contentsDefined = true;
+        return Result<void>::Success();
+    }
+
     Result<void> VulkanGraphRuntime::Impl::ValidateColor(const RenderGraphColorAttachment &operation, RenderQueueId queue) {
         const auto *color = &operation;
 
@@ -88,6 +106,8 @@ namespace Horo::Render::Detail {
             return Result<void>::Success();
         if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload))
             return ValidateBufferCopy(*copy);
+        if (const auto *upload = std::get_if<RenderGraphTextureUpload>(&workload))
+            return ValidateTextureUpload(*upload);
         if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload))
             return ValidateColor(*color, queue);
         if (std::holds_alternative<PrimaryOutputAttachment>(workload))
@@ -124,6 +144,21 @@ namespace Horo::Render::Detail {
         copy(command, &commandInfo);
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeTextureUpload */
+    void VulkanGraphRuntime::Impl::Dispatch::EncodeTextureUpload(const VkCommandBuffer command, const RenderGraphTextureUpload &upload,
+                                                                 const std::span<const VulkanGraphResource> resident) const noexcept {
+        const VkBufferImageCopy2 region{.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                        .imageExtent = {upload.extent.width, upload.extent.height, 1}};
+        const VkCopyBufferToImageInfo2 copy{.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+                                            .srcBuffer = resident[upload.source.value - 1].buffer,
+                                            .dstImage = resident[upload.destination.value - 1].image,
+                                            .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            .regionCount = 1,
+                                            .pRegions = &region};
+        copyImage(command, &copy);
+    }
+
     /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeColor */
     void VulkanGraphRuntime::Impl::Dispatch::EncodeColor(const VkCommandBuffer command, const RenderGraphColorAttachment &operation,
                                                          const std::span<const VulkanGraphResource> resident) const noexcept {
@@ -157,6 +192,8 @@ namespace Horo::Render::Detail {
                 native.EncodeDepthAttachment(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphBufferCopy>) {
                 native.EncodeCopy(command, operation, bindings);
+            } else if constexpr (std::is_same_v<Operation, RenderGraphTextureUpload>) {
+                native.EncodeTextureUpload(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphColorAttachment>) {
                 native.EncodeColor(command, operation, bindings);
             } else if constexpr (!std::is_same_v<Operation, std::monostate>) {

@@ -53,6 +53,7 @@ namespace Horo::Render::Detail {
     Result<void> VulkanGraphRuntime::Impl::Prepare(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins) {
         barriers.clear();
         updates.clear();
+        materialPassStateCount = 0;
         submissions.clear();
         vfxDraws.clear();
         identities.clear();
@@ -238,6 +239,8 @@ namespace Horo::Render::Detail {
 
     Result<void> VulkanGraphRuntime::Impl::PreparePass(const RenderGraphExecutionRequest &request, std::size_t index,
                                                        VulkanCommandRetention &pins) {
+        // MaterialState's alias cache belongs to this pass, while updates retains the whole attempt.
+        materialPassStateCount = 0;
         const auto &pass = request.graph.Passes()[index];
         auto &prepared = passes[index];
         prepared.vfxDraws = {};

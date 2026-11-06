@@ -75,6 +75,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
                                                                      const VfxGpuStepIdentity &step);
         [[nodiscard]] bool SupportsVfxGpu() const noexcept;
+        /** @brief Reports the initialized indexed forward draw route without requiring GPU particle compute.
+         * @return True only for the live resource owner and all required native raster entry points.
+         */
+        [[nodiscard]] bool SupportsVfxForwardInstancing() const noexcept;
         /** @brief Submits exact copied Horo records; partial success retains accepted work and closes admission on failure. */
         [[nodiscard]] Result<void> SubmitFrame(FrameToken frame);
         void AbortFrame(FrameToken frame) noexcept;

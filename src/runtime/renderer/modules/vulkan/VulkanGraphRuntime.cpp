@@ -241,6 +241,7 @@ namespace Horo::Render::Detail {
             commands.Abort(submission.ticket);
         submissions.clear();
         updates.clear();
+        materialPassStateCount = 0;
         barriers.clear();
         if (lifecycle.pins != nullptr && lifecycle.pins->references == 0) {
             lifecycle.pins->resources.clear();
