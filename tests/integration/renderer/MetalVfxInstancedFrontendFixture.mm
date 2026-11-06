@@ -418,7 +418,9 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Keeps the existing profile's resolution and selects a separately declared cube context resolution. */
-        FramebufferExtent SceneExtent(std::uint32_t count, bool cubes) noexcept {
+        FramebufferExtent SceneExtent(std::uint32_t count, bool cubes, bool dynamic = false) noexcept {
+            if (dynamic)
+                return BenchmarkExtent;
             if (cubes)
                 return CubeExtent;
             return count ? BenchmarkExtent : Extent;
@@ -536,7 +538,7 @@ namespace Horo::Render::Test {
             Scene(NativeOwner &native, const std::filesystem::path &root, bool cutout = false, std::uint32_t measuredCount = 0,
                   bool cubes = false, bool dynamic = false)
                 : owner(native), benchmarkCount(measuredCount), cubeProfile(cubes), dynamicProfile(dynamic),
-                  extent(SceneExtent(measuredCount, cubes)), maximumInstances(measuredCount ? measuredCount : 64),
+                  extent(SceneExtent(measuredCount, cubes, dynamic)), maximumInstances(measuredCount ? measuredCount : 64),
                   maximumDraws(NativeDrawCapacity(measuredCount, cubes || dynamic)), view(View(native, extent)) {
                 const std::size_t bytes = measuredCount ? 32'000'000 : 1'000'000;
                 Accepted(owner.frontend->PrepareVfxScheduling({maximumInstances, 1, bytes, maximumDraws}));
@@ -1237,10 +1239,10 @@ namespace Horo::Render::Test {
                 REQUIRE(file);
                 if (dynamic)
                     std::fprintf(file.get(),
-                                 "{\"type\":\"invocation\",\"schema\":1,\"profile\":\"cpu-world-additive-v1\","
+                                 "{\"type\":\"invocation\",\"schema\":1,\"profile\":\"%s\","
                                  "\"profileRevision\":1,\"instances\":%u,\"requestedExtent\":[1920,1080],"
                                  "\"presentModeRequested\":\"Fifo\",\"budgetStatus\":\"UNSET_NON_GATING\",\"deviceQualification\":false}\n",
-                                 count);
+                                 cubes ? "cpu-world-opaque-cubes-v1" : "cpu-world-additive-v1", count);
                 else if (cubes)
                     std::fprintf(file.get(),
                                  "{\"type\":\"invocation\",\"schema\":1,\"profile\":\"opaque-cube-scalability-v1\","
@@ -1317,17 +1319,16 @@ namespace Horo::Render::Test {
             /** @brief Declares the bounded production CPU-simulation path and its distinct stage/graph-allocation costs. */
             static void DynamicCohort(std::FILE *out, const NativeOwner &owner, const Scene &scene, const Recipe &recipe) {
                 std::fprintf(out,
-                             ",\"profile\":\"cpu-world-additive-v1\",\"profileRevision\":1,\"maximumSubmissionPins\":%u,"
+                             ",\"profileRevision\":1,\"maximumSubmissionPins\":%u,"
                              "\"instances\":%u,\"indexedDraws\":%u,\"maximumInstancesPerDraw\":128,"
-                             "\"meshVertices\":4,\"meshIndices\":6,\"topology\":\"camera_facing_billboard\","
-                             "\"validationRequested\":false,\"material\":\"unlit_white_RGBA8_default_sampler\",\"blend\":\"Additive\","
-                             "\"depthTest\":true,\"depthWrite\":false,\"cull\":\"None\","
+                             "\"validationRequested\":false,\"material\":\"unlit_white_RGBA8_default_sampler\","
+                             "\"depthTest\":true,\"cull\":\"None\","
                              "\"color\":\"RGBA16F\",\"depth\":\"Depth32F\",\"outputExtent\":[1920,1080],"
                              "\"presentModeRequested\":\"Fifo\",\"configuredMaxFramesInFlight\":2,\"measurementInflightDepth\":1,"
                              "\"simulationDeltaSeconds\":%.17g,\"initialBurst\":%u,\"continuousSpawnRate\":0,"
                              "\"maximumSimulationTicks\":3301,\"particleLifetimeSeconds\":60,\"effectDurationSeconds\":60,\"seed\":1735,"
                              "\"spawnShape\":\"unit_sphere_volume\",\"originMeters\":[0,0,-3],\"radialSpeed\":0.002,"
-                             "\"particleSize\":0.01,\"particleOpacity\":0.05,\"sort\":\"None\",\"collision\":\"None\","
+                             "\"sort\":\"None\",\"collision\":\"None\","
                              "\"cameraEye\":[0.7,0.25,0.5],\"cameraTarget\":[0,0,-3],\"cameraUp\":[0,1,0],"
                              "\"verticalFovRadians\":1.1,\"nearFar\":[0.2,80],\"clearColor\":[0,0,0,1],\"clearDepth\":1,"
                              "\"simulationExecutedPerFrame\":true,\"extractionExecutedPerFrame\":true,\"staticPreparedGraph\":false,"
@@ -1343,10 +1344,30 @@ namespace Horo::Render::Test {
                              "\"simulationBudgetBytes\":67108864,\"extractionFrameSlots\":2,\"extractionArenaBytes\":32000000,"
                              "\"retainedSchedulingViews\":1,\"schedulingArenaBytes\":32000000,"
                              "\"sceneImageCopiedToPresentation\":false,\"shadows\":false,\"postProcessing\":false,"
-                             "\"engineParityQualified\":false,\"catchAssertionInstrumentation\":true,"
-                             "\"families\":[{\"name\":\"cpu_world_additive_billboard\",\"instances\":%u}",
+                             "\"engineParityQualified\":false,\"catchAssertionInstrumentation\":true",
                              owner.retirementLimits.maximumSubmissionPins, scene.benchmarkCount, recipe.schedule.drawCalls,
-                             double(DynamicDelta), scene.benchmarkCount, scene.benchmarkCount);
+                             double(DynamicDelta), scene.benchmarkCount);
+                DynamicVisualCohort(out, scene);
+            }
+
+            /** @brief Describes actual dynamic geometry and blend without borrowing static-cube or billboard metadata. */
+            static void DynamicVisualCohort(std::FILE *out, const Scene &scene) {
+                if (scene.cubeProfile) {
+                    std::fprintf(out,
+                                 ",\"profile\":\"cpu-world-opaque-cubes-v1\",\"meshVertices\":24,\"meshIndices\":36,"
+                                 "\"trianglesPerInstance\":12,\"topology\":\"instanced_mesh\",\"blend\":\"Opaque\","
+                                 "\"depthWrite\":true,\"depthCompare\":\"LessEqual\",\"particleSize\":%.9g,"
+                                 "\"localCubeZHalfExtent\":%.9g,\"particleOpacity\":1,"
+                                 "\"families\":[{\"name\":\"cpu_world_opaque_cubes\",\"instances\":%u}",
+                                 double(CubeSize), double(CubeSize * .5F), scene.benchmarkCount);
+                    return;
+                }
+                std::fprintf(out,
+                             ",\"profile\":\"cpu-world-additive-v1\",\"meshVertices\":4,\"meshIndices\":6,"
+                             "\"topology\":\"camera_facing_billboard\",\"blend\":\"Additive\",\"depthWrite\":false,"
+                             "\"particleSize\":0.01,\"particleOpacity\":0.05,"
+                             "\"families\":[{\"name\":\"cpu_world_additive_billboard\",\"instances\":%u}",
+                             scene.benchmarkCount);
             }
 
             /** @brief Describes a separately named static cube stress cohort, not a simulation port or cross-engine parity result. */
@@ -1982,46 +2003,45 @@ namespace Horo::Render::Test {
         RunStaticProfile(root, instances, path, true);
     }
 
-    /** @copydoc RunMetalVfxInstancedDynamicBenchmark */
-    void RunMetalVfxInstancedDynamicBenchmark(const std::filesystem::path &root, std::uint32_t instances,
-                                              const std::filesystem::path &path) {
-        REQUIRE((instances == 1024 || instances == 4096 || instances == 16384));
-        NativeOwner owner;
-        BenchmarkReceipt receipt{path, instances, false, true};
-        owner.Initialize(BenchmarkExtent, false, PresentMode::Fifo);
-        Scene scene(owner, root, false, instances, false, true);
-        std::uint64_t tick{1};
-        AdvanceDynamic(scene, tick);
-        const auto initial = DynamicParticles(scene);
-        std::vector<std::byte> initialNative;
-        const auto memory = owner.frontend->MemorySnapshot();
-        const auto deadline = BenchmarkClock::now() + 300s;
-        {
-            DynamicPhases phases;
-            Recipe description{scene, &phases};
-            receipt.Describe(owner, scene, description);
-            RestoreSlots(scene, description);
-        }
-        // Cold packing is not a simulation or presented frame; retain its real native bytes as the initial data-change probe.
-        initialNative = DynamicNativeBytes(scene);
-        DynamicWindow(scene, receipt, tick, deadline);
-        CheckDynamicProgress(scene, initial);
-        REQUIRE(DynamicNativeBytes(scene) != initialNative);
-        CheckDynamicMemory(owner, memory);
-        std::fprintf(receipt.file.get(),
-                     "{\"type\":\"validation\",\"stableIdentities\":true,\"motionObserved\":true,"
-                     "\"nativeUniformBytesChanged\":true,\"finalTick\":%llu}\n",
-                     static_cast<unsigned long long>(tick));
-        receipt.complete = true;
-        receipt.phase = "finished";
-        REQUIRE(receipt.Write());
-    }
-
     namespace {
+        /** @brief Measures one explicitly named canonical CPU World workload with identical phase accounting and bounds. */
+        void RunDynamicProfile(const std::filesystem::path &root, std::uint32_t instances, const std::filesystem::path &path, bool cubes) {
+            REQUIRE((instances == 1024 || instances == 4096 || instances == 16384));
+            NativeOwner owner;
+            BenchmarkReceipt receipt{path, instances, cubes, true};
+            owner.Initialize(BenchmarkExtent, false, PresentMode::Fifo);
+            Scene scene(owner, root, false, instances, cubes, true);
+            std::uint64_t tick{1};
+            AdvanceDynamic(scene, tick);
+            const auto initial = DynamicParticles(scene);
+            std::vector<std::byte> initialNative;
+            const auto memory = owner.frontend->MemorySnapshot();
+            const auto deadline = BenchmarkClock::now() + 300s;
+            {
+                DynamicPhases phases;
+                Recipe description{scene, &phases};
+                receipt.Describe(owner, scene, description);
+                RestoreSlots(scene, description);
+            }
+            // Cold packing is not a simulation or presented frame; retain its real native bytes as the initial data-change probe.
+            initialNative = DynamicNativeBytes(scene);
+            DynamicWindow(scene, receipt, tick, deadline);
+            CheckDynamicProgress(scene, initial);
+            REQUIRE(DynamicNativeBytes(scene) != initialNative);
+            CheckDynamicMemory(owner, memory);
+            std::fprintf(receipt.file.get(),
+                         "{\"type\":\"validation\",\"stableIdentities\":true,\"motionObserved\":true,"
+                         "\"nativeUniformBytesChanged\":true,\"finalTick\":%llu}\n",
+                         static_cast<unsigned long long>(tick));
+            receipt.complete = true;
+            receipt.phase = "finished";
+            REQUIRE(receipt.Write());
+        }
+
         /** @brief Reuses real World spawn chunks without altering native retirement, abort or population checks. */
         void DynamicReuse(const std::filesystem::path &root, bool cubes) {
             NativeOwner owner;
-            owner.Initialize(SceneExtent(512, cubes), true, PresentMode::Fifo);
+            owner.Initialize(SceneExtent(512, cubes, true), true, PresentMode::Fifo);
             Scene scene(owner, root, false, 512, cubes, true);
             AdvanceDynamic(scene, 1);
             const auto initial = DynamicParticles(scene);
@@ -2044,6 +2064,18 @@ namespace Horo::Render::Test {
         }
     }  // namespace
 
+    /** @copydoc RunMetalVfxInstancedDynamicBenchmark */
+    void RunMetalVfxInstancedDynamicBenchmark(const std::filesystem::path &root, std::uint32_t instances,
+                                              const std::filesystem::path &path) {
+        RunDynamicProfile(root, instances, path, false);
+    }
+
+    /** @copydoc RunMetalVfxInstancedDynamicMeshBenchmark */
+    void RunMetalVfxInstancedDynamicMeshBenchmark(const std::filesystem::path &root, std::uint32_t instances,
+                                                  const std::filesystem::path &path) {
+        RunDynamicProfile(root, instances, path, true);
+    }
+
     /** @copydoc RunMetalVfxInstancedDynamicReuse */
     void RunMetalVfxInstancedDynamicReuse(const std::filesystem::path &root) {
         DynamicReuse(root, false);
@@ -2057,7 +2089,7 @@ namespace Horo::Render::Test {
     /** @copydoc RunMetalVfxInstancedSpawnMaskedMeshPixels */
     void RunMetalVfxInstancedSpawnMaskedMeshPixels(const std::filesystem::path &root) {
         NativeOwner owner;
-        owner.Initialize(CubeExtent, true, PresentMode::Fifo);
+        owner.Initialize(BenchmarkExtent, true, PresentMode::Fifo);
         Scene scene(owner, root, true, 1, true, true);
         AdvanceDynamic(scene, 1);
         const auto sample = DynamicFrame(scene, 2, BenchmarkClock::now() + 30s);

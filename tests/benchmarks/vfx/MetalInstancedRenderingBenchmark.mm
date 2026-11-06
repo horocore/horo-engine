@@ -51,6 +51,11 @@ namespace Horo::Render::Test {
                                                  Absolute("HORO_VFX_BENCHMARK_RECEIPT"));
             return;
         }
+        if (std::string_view{profile} == "cpu-world-opaque-cubes-v1") {
+            RunMetalVfxInstancedDynamicMeshBenchmark(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"), Count(false),
+                                                     Absolute("HORO_VFX_BENCHMARK_RECEIPT"));
+            return;
+        }
         REQUIRE(std::string_view{profile} == "opaque-cube-scalability-v1");
         RunMetalVfxInstancedOpaqueCubeScalability(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"), Count(true),
                                                   Absolute("HORO_VFX_BENCHMARK_RECEIPT"));

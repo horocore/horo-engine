@@ -31,6 +31,12 @@ namespace Horo::Render::Test {
     /** @brief Measures the canonical finite CPU World simulation and rebuilt native additive billboard graph; static profiles unchanged. */
     void RunMetalVfxInstancedDynamicBenchmark(const std::filesystem::path &root, std::uint32_t instances,
                                               const std::filesystem::path &receipt);
+    /** @brief Measures real CPU World opaque cube simulation, extraction and native rendering at 1080p.
+     * @param root Authentic ordinary/masked shader package. @param instances Exactly 1024, 4096 or 16384.
+     * @param receipt New exclusive JSONL destination. @details Opt-in manual profile; no engine-parity or throughput gate.
+     */
+    void RunMetalVfxInstancedDynamicMeshBenchmark(const std::filesystem::path &root, std::uint32_t instances,
+                                                  const std::filesystem::path &receipt);
     /** @brief Proves bounded multi-chunk dynamic reuse and genuine simulation/native uniform progress outside long measurements. */
     void RunMetalVfxInstancedDynamicReuse(const std::filesystem::path &root);
     /** @brief Qualifies actual World-spawned opaque cube pixels, native reuse, retirement and abort controls. */

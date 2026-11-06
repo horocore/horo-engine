@@ -915,3 +915,51 @@ exercises 241 simulation ticks, retained native/client frames and abort/reuse.
 Ten changed C++ files passed formatting; reviewed production and native helper
 functions had cyclomatic complexity at most ten. These results do not establish
 new throughput, cross-engine parity, or current hosted quality-gate clearance.
+
+#### Moving opaque cube measurement
+
+`cpu-world-opaque-cubes-v1` measures genuine prepared CPU World mesh spawns at
+1920x1080 with the existing 1,024 / 4,096 / 16,384 count choices. Each opaque cube
+has 24 vertices, 36 indices and 0.04 world-unit sides. A deterministic seed-1735
+sphere burst moves at 0.002 units/second through the real simulator; every frame
+extracts, schedules, packs/uploads and rebuilds/compiles the actual native graph.
+Depth testing/writes are enabled. This is a moving opaque workload, distinct from
+the static 90,000-cube diagnostic and the additive billboard profile.
+
+Use the existing opt-in Release build and authentic shader package described
+above, with a new absolute receipt path for each invocation:
+
+```sh
+HORO_VFX_BENCHMARK_PROFILE=cpu-world-opaque-cubes-v1 \
+HORO_VFX_BENCHMARK_COUNT=16384 \
+HORO_VFX_INSTANCED_ASSET_ROOT=/absolute/authentic/package \
+HORO_VFX_BENCHMARK_RECEIPT=/absolute/new-moving-cubes.jsonl \
+MTL_DEBUG_LAYER=0 \
+  build/vfx-metal-release/tests/HoroMetalVfxInstancedBenchmark
+```
+
+An Apple M3/Metal Release pilot completed one independent process per count,
+300 warmup frames followed by at least 1,200 measured frames and 20 seconds.
+All 7,142 measured mesh frames completed with valid GPU timestamps, stable
+identities and observed simulation/native-buffer changes; no samples were
+filtered. Per-process nearest-rank quantiles were:
+
+| Moving cubes | Frames | CPU owner p50 / p99 (ms) | GPU buffer p50 / p99 (ms) |
+| --- | ---: | ---: | ---: |
+| 1,024 | 2,400 | 0.605 / 1.370 | 0.726 / 2.093 |
+| 4,096 | 2,386 | 1.767 / 3.555 | 0.572 / 1.586 |
+| 16,384 | 2,356 | 3.256 / 5.103 | 1.633 / 2.421 |
+
+The owner total includes same-frame simulation, extraction, scheduling, packing,
+graph allocation/compilation/destruction and assertion instrumentation; it omits
+acquisition/completion waits and autorelease-pool cleanup. GPU time covers the
+whole native command buffer. Serial completion, offscreen output and one process
+per count prevent interpreting these as product FPS, a stable hardware baseline
+or Unity/Unreal performance parity. The non-monotonic smaller-count GPU values
+are retained as observed, not replaced by a fitted scaling claim.
+
+All eight native functional controls passed after the shared helper change,
+including opaque/masked pixel-depth and reuse/abort checks now at 1080p. A fresh
+16,384-particle additive run also passed and matched all 79 previous cohort fields.
+The isolated manual target remains disabled/excluded by default and unregistered
+with CTest; neither the count sweep nor a throughput threshold runs on each build.
