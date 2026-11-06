@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import subprocess
 
 from generate_physics_state_build_facts import atomic_write, canonical, require
 
@@ -78,7 +79,98 @@ def effective_facts(profile, recipes):
     return solver, physics, platform
 
 
-def collect(profile, database):
+def windows_arguments(command, exporter, directory):
+    """Use the configured MSVC CRT, not CommandLineToArgvW or a POSIX approximation.
+
+    subprocess passes this original string as lpCommandLine while executable
+    selects only our inert wmain exporter. The compiler is never executed.
+    """
+    require(isinstance(command, str) and command and '\0' not in command, 'Invalid Windows compilation command')
+    require(len(command.encode('utf-16-le')) <= 65_532, 'Oversized Windows compilation command')
+    require(exporter is not None, 'Windows recipes require same-toolchain argument-array export')
+    tool = Path(exporter).resolve(strict=True)
+    require(tool.is_file(), 'Missing Windows CRT argument exporter')
+    completed = subprocess.run(command, executable=str(tool), cwd=directory, shell=False,
+                               stdin=subprocess.DEVNULL, capture_output=True, timeout=10, check=False)
+    require(completed.returncode == 0 and len(completed.stdout) <= 1024 * 1024,
+            'Windows CRT argument export failed or exceeded its bound')
+    arguments = json.loads(completed.stdout)
+    require(isinstance(arguments, list) and 0 < len(arguments) <= 32_767, 'Invalid Windows CRT argument array')
+    require(all(isinstance(value, str) and '\0' not in value for value in arguments), 'Invalid Windows CRT argument value')
+    return arguments
+
+
+def recipe_arguments(entry, profile, exporter):
+    arguments = entry.get('arguments')
+    if arguments is not None:
+        return arguments
+    if os.name != 'nt':
+        return shlex.split(entry['command'], posix=True)
+    require(profile['platform']['compiler'].startswith('MSVC:'), 'Unsupported Windows compiler argument semantics')
+    return windows_arguments(entry['command'], exporter, entry['directory'])
+
+
+def validate_windows_compiler(arguments, profile):
+    """Selected Physics recipes must name the exact configured MSVC compiler, never a guessed wrapper."""
+    declared = profile['platform']['compiler'].split(':', 2)
+    require(len(declared) == 3 and declared[0] == 'MSVC', 'Unsupported Windows compiler argument semantics')
+    require(bool(arguments), 'Missing Windows compiler argument')
+    require(Path(arguments[0]).resolve(strict=True) == Path(declared[2]).resolve(strict=True),
+            'Windows recipe does not name the configured compiler')
+
+
+def owned_recipe(entry, target, source, build, jolt):
+    require(Path(entry['directory']).resolve(strict=True) == build, 'Recipe belongs to another build')
+    path = actual_source(entry)
+    owner = jolt if target == 'Jolt' else source / 'src/physics'
+    model_scene = is_model_scene_source(target, path, source)
+    pch = is_generated_pch_source(target, path, build)
+    require(path.is_relative_to(owner) or model_scene or pch, 'Unexpected source owner in Physics target: ' + str(path))
+    return path, model_scene, pch
+
+
+def is_model_scene_source(target, path, source):
+    return (target == 'HoroPhysicsModel' and path.is_relative_to(source) and
+            path.relative_to(source).as_posix() in MODEL_SCENE_SOURCES)
+
+
+def is_generated_pch_source(target, path, build):
+    return (target == 'Jolt' and path.is_relative_to(build / 'third-party/horo_jolt/CMakeFiles/Jolt.dir') and
+            path.name in {'cmake_pch.hxx.cxx', 'cmake_pch.cxx'})
+
+
+def unrelated_output(entry):
+    # Actual CMake output ownership can exclude unrelated rows without launching
+    # one CRT process per unrelated translation unit. Missing output stays strict.
+    return bool(entry.get('output')) and target_name(entry, []) is None
+
+
+def collect_recipes(profile, database, exporter, source, build, jolt, roots):
+    recipes = {name: [] for name in TARGETS}
+    model_scene_files, generated_solver_files = {}, {}
+    for entry in database:
+        if unrelated_output(entry):
+            continue
+        arguments = recipe_arguments(entry, profile, exporter)
+        require(isinstance(arguments, list) and all(isinstance(x, str) for x in arguments), 'Invalid compilation recipe')
+        target = target_name(entry, arguments)
+        if target is None:
+            continue
+        if os.name == 'nt':
+            validate_windows_compiler(arguments, profile)
+        path, model_scene, generated_pch = owned_recipe(entry, target, source, build, jolt)
+        if generated_pch:
+            generated_solver_files[path.name] = required_input(path, 'jolt-generated/' + path.name)
+            header = path.with_name('cmake_pch.hxx')
+            generated_solver_files[header.name] = required_input(header, 'jolt-generated/' + header.name)
+        if model_scene:
+            relative = path.relative_to(source).as_posix()
+            model_scene_files[relative] = required_input(path, 'engine/' + relative)
+        recipes[target].append(normalize_recipe(arguments, roots))
+    return recipes, model_scene_files, generated_solver_files
+
+
+def collect(profile, database, windows_argv_exporter=None):
     require(set(profile) == PROFILE_KEYS and profile['version'] == 1, 'Unsupported configured Physics profile')
     source = Path(profile['sourceRoot']).resolve(strict=True)
     build = Path(profile['buildRoot']).resolve(strict=True)
@@ -90,36 +182,8 @@ def collect(profile, database):
                [('sourceRoot', '$SOURCE'), ('buildRoot', '$BUILD'), ('joltRoot', '$JOLT')]}
     aliases.update({(source, '$SOURCE'), (build, '$BUILD'), (jolt, '$JOLT')})
     roots = sorted(aliases, key=lambda item: (-len(str(item[0])), str(item[0])))
-    recipes = {name: [] for name in TARGETS}
-    model_scene_files = {}
-    generated_solver_files = {}
-    for entry in database:
-        arguments = entry.get('arguments')
-        if arguments is None:
-            require(os.name != 'nt', 'Windows recipes require argument-array export; POSIX parsing is not authentic')
-            arguments = shlex.split(entry['command'], posix=True)
-        require(isinstance(arguments, list) and all(isinstance(x, str) for x in arguments), 'Invalid compilation recipe')
-        target = target_name(entry, arguments)
-        if target is None:
-            continue
-        require(Path(entry['directory']).resolve(strict=True) == build, 'Recipe belongs to another build')
-        path = actual_source(entry)
-        owner = jolt if target == 'Jolt' else source / 'src/physics'
-        model_scene = (target == 'HoroPhysicsModel' and path.is_relative_to(source) and
-                       path.relative_to(source).as_posix() in MODEL_SCENE_SOURCES)
-        pch_root = build / 'third-party/horo_jolt/CMakeFiles/Jolt.dir'
-        generated_pch = (target == 'Jolt' and path.is_relative_to(pch_root) and
-                         path.name in {'cmake_pch.hxx.cxx', 'cmake_pch.cxx'})
-        require(path.is_relative_to(owner) or model_scene or generated_pch,
-                'Unexpected source owner in Physics target: ' + str(path))
-        if generated_pch:
-            generated_solver_files[path.name] = required_input(path, 'jolt-generated/' + path.name)
-            header = path.with_name('cmake_pch.hxx')
-            generated_solver_files[header.name] = required_input(header, 'jolt-generated/' + header.name)
-        if model_scene:
-            relative = path.relative_to(source).as_posix()
-            model_scene_files[relative] = required_input(path, 'engine/' + relative)
-        recipes[target].append(normalize_recipe(arguments, roots))
+    recipes, model_scene_files, generated_solver_files = collect_recipes(
+        profile, database, windows_argv_exporter, source, build, jolt, roots)
     require(all(recipes.values()), 'Missing actual native Physics/PhysicsModel/Jolt recipes; omitted profile is unavailable')
     solver_files = source_inventory(jolt / 'Jolt', 'jolt/Jolt')
     solver_files += list(generated_solver_files.values())
@@ -153,12 +217,13 @@ def main():
     parser.add_argument('--profile', type=Path, required=True)
     parser.add_argument('--compile-commands', type=Path, required=True)
     parser.add_argument('--manifest', type=Path, required=True)
+    parser.add_argument('--windows-argv-exporter', type=Path)
     args = parser.parse_args()
     profile = read_bounded(args.profile, 1024 * 1024)
     database = read_bounded(args.compile_commands, 128 * 1024 * 1024)
     expected = Path(profile['buildRoot']).resolve(strict=True) / 'compile_commands.json'
     require(args.compile_commands.resolve(strict=True) == expected, 'Compilation database is not from the configured build')
-    atomic_write(args.manifest, canonical(collect(profile, database)) + b'\n')
+    atomic_write(args.manifest, canonical(collect(profile, database, args.windows_argv_exporter)) + b'\n')
 
 
 if __name__ == '__main__':

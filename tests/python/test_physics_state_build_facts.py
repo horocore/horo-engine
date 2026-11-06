@@ -282,9 +282,80 @@ class CollectorTests(unittest.TestCase):
     def test_windows_command_string_cannot_be_posix_reinterpreted(self):
         self.database[0]["command"] = "untrusted Windows quoting"
         del self.database[0]["arguments"]
+        self.profile["platform"]["compiler"] = "MSVC:19.44:C:/configured/cl.exe"
         with patch.object(collector, "os", types.SimpleNamespace(name="nt")):
             with self.assertRaisesRegex(ValueError, "argument-array export"):
                 self.manifest()
+
+    def exporter(self):
+        path = self.root / "synthetic-argv-exporter.exe"
+        path.write_bytes(b"NOT_EXECUTABLE_UNIT_FIXTURE")
+        return path
+
+    def test_windows_export_uses_original_string_and_fixed_executable_without_shell(self):
+        command = r'"C:\compiler path\cl.exe" /DVALUE="a b" /c source.cpp'
+        arguments = [r'C:\compiler path\cl.exe', '/DVALUE=a b', '/c', 'source.cpp']
+        completed = types.SimpleNamespace(returncode=0, stdout=json.dumps(arguments).encode())
+        exporter = self.exporter()
+        with patch.object(collector.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(collector.windows_arguments(command, exporter, self.build), arguments)
+        self.assertEqual(run.call_args.args, (command,))
+        self.assertEqual(run.call_args.kwargs["executable"], str(exporter.resolve()))
+        self.assertIs(run.call_args.kwargs["shell"], False)
+        self.assertEqual(run.call_args.kwargs["timeout"], 10)
+
+    def test_windows_export_failure_or_invalid_output_cannot_become_arguments(self):
+        cases = [(1, b'[]'), (0, b'{}'), (0, b'[]'), (0, b'[1]'), (0, b'["bad\\u0000value"]')]
+        exporter = self.exporter()
+        for status, output in cases:
+            with self.subTest(status=status, output=output):
+                completed = types.SimpleNamespace(returncode=status, stdout=output)
+                with patch.object(collector.subprocess, "run", return_value=completed):
+                    with self.assertRaises(ValueError):
+                        collector.windows_arguments('cl.exe /c unit.cpp', exporter, self.build)
+
+    def test_windows_invalid_or_oversized_command_is_rejected_before_process(self):
+        exporter = self.exporter()
+        for command in ['', 'cl.exe\0foreign', 'a' * 32_767]:
+            with patch.object(collector.subprocess, "run") as run:
+                with self.assertRaises(ValueError):
+                    collector.windows_arguments(command, exporter, self.build)
+                run.assert_not_called()
+
+    def test_windows_selected_rows_require_exact_configured_msvc_compiler(self):
+        compiler = self.root / 'configured-cl.exe'
+        compiler.write_bytes(b'SYNTHETIC_COMPILER_FILE')
+        foreign = self.root / 'foreign-cl.exe'
+        foreign.write_bytes(b'FOREIGN_SYNTHETIC_COMPILER_FILE')
+        self.profile['platform']['compiler'] = 'MSVC:19.44:' + str(compiler)
+        collector.validate_windows_compiler([str(compiler), '/c', 'unit.cpp'], self.profile)
+        with self.assertRaisesRegex(ValueError, 'configured compiler'):
+            collector.validate_windows_compiler([str(foreign)], self.profile)
+        self.profile['platform']['compiler'] = 'Unknown:1:' + str(compiler)
+        with self.assertRaisesRegex(ValueError, 'Unsupported Windows compiler'):
+            collector.validate_windows_compiler([str(compiler)], self.profile)
+
+    def test_windows_command_recipes_preserve_provenance_and_response_denial(self):
+        compiler = self.root / 'configured-cl.exe'
+        compiler.write_bytes(b'SYNTHETIC_COMPILER_FILE')
+        self.profile['platform']['compiler'] = 'MSVC:19.44:' + str(compiler)
+        decoded = []
+        for entry in self.database:
+            args = entry.pop('arguments')
+            args[0] = str(compiler)
+            entry['command'] = 'SYNTHETIC_RAW_NOT_EXECUTED'
+            decoded.append(args)
+        with patch.object(collector, 'os', types.SimpleNamespace(name='nt')):
+            with patch.object(collector, 'windows_arguments', side_effect=decoded):
+                self.assertEqual(len(collector.collect(self.profile, self.database, self.exporter())['solver']['recipes']), 1)
+            decoded[0].append('@unadmitted.rsp')
+            with patch.object(collector, 'windows_arguments', side_effect=decoded):
+                with self.assertRaisesRegex(ValueError, 'Response-file'):
+                    collector.collect(self.profile, self.database, self.exporter())
+
+    def test_unrelated_cmake_output_avoids_unnecessary_command_decoding(self):
+        self.database.append({'output': 'CMakeFiles/Unrelated.dir/unit.obj', 'command': 'NOT_EXECUTED'})
+        self.manifest()
 
     def test_missing_required_patch_or_license_is_rejected(self):
         (self.source / "cmake/patches/HoroJoltConstraintReservation.cmake").unlink()

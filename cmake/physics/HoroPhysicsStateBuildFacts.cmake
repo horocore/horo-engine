@@ -42,6 +42,22 @@ function(horo_configure_physics_state_build_facts)
 }
 ")
 
+    # Only the same native MSVC CRT can authentically observe its command-string recipes.
+    # Passing the original compiler command as lpCommandLine never executes that compiler.
+    set(windows_argv_arguments)
+    if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        add_executable(HoroPhysicsWindowsArgvExporter EXCLUDE_FROM_ALL
+            "${tool_root}/PhysicsWindowsArgvExporter.cpp")
+        target_compile_features(HoroPhysicsWindowsArgvExporter PRIVATE cxx_std_20)
+        add_custom_target(HoroPhysicsWindowsArgvCheck
+            COMMAND "${Python3_EXECUTABLE}" "${tool_root}/check_physics_windows_argv.py"
+                --exporter "$<TARGET_FILE:HoroPhysicsWindowsArgvExporter>"
+            DEPENDS HoroPhysicsWindowsArgvExporter
+            COMMENT "Checking authentic configured MSVC CRT argument decoding"
+            VERBATIM)
+        list(APPEND windows_argv_arguments --windows-argv-exporter "$<TARGET_FILE:HoroPhysicsWindowsArgvExporter>")
+    endif()
+
     # Revalidate actual inputs on every invocation. Atomic output writes preserve
     # object-cache hits when the facts are unchanged, without a second stale inventory.
     add_custom_target(HoroPhysicsStateBuildFacts
@@ -49,6 +65,7 @@ function(horo_configure_physics_state_build_facts)
             --profile "${facts_root}/profile.json"
             --compile-commands "${CMAKE_BINARY_DIR}/compile_commands.json"
             --manifest "${facts_root}/manifest.json"
+            ${windows_argv_arguments}
         COMMAND "${Python3_EXECUTABLE}" "${tool_root}/generate_physics_state_build_facts.py"
             --manifest "${facts_root}/manifest.json"
             --header "${facts_root}/HoroPhysicsStateBuildFacts.h"
@@ -57,6 +74,9 @@ function(horo_configure_physics_state_build_facts)
             "${facts_root}/manifest.json" "${facts_root}/report.json"
         COMMENT "Checking canonical Physics state compatibility inputs from configured recipes"
         VERBATIM)
+    if(TARGET HoroPhysicsWindowsArgvExporter)
+        add_dependencies(HoroPhysicsStateBuildFacts HoroPhysicsWindowsArgvCheck)
+    endif()
     add_dependencies(HoroPhysics HoroPhysicsStateBuildFacts)
     target_include_directories(HoroPhysics PRIVATE "${facts_root}")
 endfunction()
