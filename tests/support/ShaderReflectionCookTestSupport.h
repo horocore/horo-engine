@@ -63,6 +63,15 @@ namespace Horo::Tests::ShaderCook {
         json.replace(position, before.size(), after);
     }
 
+    /** @brief Scripted same-boundary fixture for loader validation only; its payload is never native execution evidence. */
+    inline std::array<SpirvReflectionStage, 2> ShadowEvidence() {
+        return {{{ShaderStage::Vertex, "VSMain", R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
+          "types":{"_shadow":{"members":[{"name":"Mvp","type":"mat4","offset":0,"matrix_stride":16}]}},
+          "ubos":[{"name":"type.ShadowParameters","type":"_shadow","set":0,"binding":0,"block_size":64}],
+          "inputs":[{"name":"position","type":"vec3","location":0}]})"},
+                 {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}]})"}}};
+    }
+
     enum class CookFixtureRole {
         Viewport,
         Multiview,

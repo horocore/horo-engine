@@ -19,7 +19,7 @@ namespace Horo::Tests::OpenXRApplication {
             driver = &state;
             state.specializationCount = 0;
             state.admittedAttributeCounts = {1, 3};
-            state.admittedUniformRanges = {1296, 2624};
+            state.admittedUniformRanges = {1744, 64, 2624};
         }
 
         ShaderDriverScope(const ShaderDriverScope &) = delete;
@@ -58,7 +58,7 @@ namespace Horo::Tests::OpenXRApplication {
                                       const std::span<const std::byte> bytes) override {
             if (!native_.graph.CanWriteFrameInputs(frame))
                 return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-            REQUIRE((bytes.size() == 1296 || bytes.size() == 2624));
+            REQUIRE((bytes.size() == 1744 || bytes.size() == 64 || bytes.size() == 2624));
             if (bytes.size() == 2624) {
                 CHECK(std::ranges::all_of(bytes.subspan(2612), [](const std::byte value) {
                     return value == std::byte{};
@@ -162,6 +162,14 @@ namespace Horo::Tests::OpenXRApplication {
                                     Render::ShaderArtifactStage{Render::ShaderStage::Fragment, "PSMain",
                                                                 Code(Render::ShaderStage::Fragment)}};
             return ShaderCook::CookFixture{multiview ? ShaderCook::MultiviewEvidence() : ShaderCook::Evidence(), stages, multiview};
+        }
+
+        /** @brief Uses the shared canonical shadow role and unchanged scripted evidence; this is never native shader execution proof. */
+        static ShaderCook::CookFixture CookShadow() {
+            const std::array stages{Render::ShaderArtifactStage{Render::ShaderStage::Vertex, "VSMain", Code(Render::ShaderStage::Vertex)},
+                                    Render::ShaderArtifactStage{Render::ShaderStage::Fragment, "PSMain",
+                                                                Code(Render::ShaderStage::Fragment)}};
+            return ShaderCook::CookFixture{ShaderCook::CookFixtureRole::Shadow, ShaderCook::ShadowEvidence(), stages};
         }
     };
 }  // namespace Horo::Tests::OpenXRApplication

@@ -14,15 +14,6 @@ namespace {
     using namespace Horo::Render;
     using namespace Horo::Tests::ShaderCook;
 
-    /** @brief Scripted same-boundary fixture for loader validation only; its payload is never native execution evidence. */
-    std::array<SpirvReflectionStage, 2> ShadowEvidence() {
-        return {{{ShaderStage::Vertex, "VSMain", R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
-          "types":{"_shadow":{"members":[{"name":"Mvp","type":"mat4","offset":0,"matrix_stride":16}]}},
-          "ubos":[{"name":"type.ShadowParameters","type":"_shadow","set":0,"binding":0,"block_size":64}],
-          "inputs":[{"name":"position","type":"vec3","location":0}]})"},
-                 {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}]})"}}};
-    }
-
     struct Bundle final {
         std::filesystem::path root =
             std::filesystem::temp_directory_path() /
