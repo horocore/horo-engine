@@ -588,7 +588,7 @@ def canonical_apk(source: Path, destination: Path, provenance_bytes: bytes | Non
         names = original.namelist()
         for name in sorted(names):
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_STORED if name.endswith(".so") else zipfile.ZIP_DEFLATED
+            info.compress_type = zipfile.ZIP_STORED if name.endswith(".so") or name == "resources.arsc" else zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
             payload = provenance_bytes if name == PROVENANCE_ASSET and provenance_bytes is not None else original.read(name)
             result.writestr(info, payload)
@@ -609,6 +609,8 @@ def inspect_package(package: Path, expected: dict) -> dict:
         names = archive.namelist()
         if len(names) != len(set(names)) or "classes.dex" not in names or "AndroidManifest.xml" not in names:
             raise AndroidError("APK is ambiguous or missing its Android application payload.")
+        if "resources.arsc" in names and archive.getinfo("resources.arsc").compress_type != zipfile.ZIP_STORED:
+            raise AndroidError("Android resource tables must be uncompressed before four-byte zip alignment.")
         provenance_bytes = archive.read(PROVENANCE_ASSET)
         if provenance_bytes != canonical_json(expected):
             raise AndroidError("APK provenance differs from its admitted inputs.")

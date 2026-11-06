@@ -93,7 +93,7 @@ ARM64 and x86_64. Package assembly and actual device lifecycle runs remain
 separate pending evidence. Fresh host regression qualification passed 399 cases
 across window, lifecycle, application admission, Vulkan protocol, graph inspection,
 frontend and material binding suites, with no failures or skips. Affected
-public-header consumers built. The package suite passed 35 tests, including actual
+public-header consumers built. The package suite passed 36 tests, including actual
 command dispatch of the new profile. These tests do not substitute for an Android
 runtime run.
 
@@ -110,6 +110,12 @@ Vulkan definition; the explicit renderers-disabled profile remains independent.
 The package command accepts `--profile qualification-vulkan-development` and the
 existing serialized Android package CI matrix includes it with both declared
 development ABIs. That workflow has not yet qualified this source revision.
+
+Canonicalization keeps `resources.arsc` uncompressed, then the existing `zipalign`
+step aligns stored entries to four bytes (native libraries additionally use
+16 KiB alignment). Package inspection rejects compressed resource tables.
+This preserves the [Android 11+ resource-table installation requirement](https://developer.android.com/about/versions/11/behavior-changes-11#app-packaging)
+for the declared target API, beyond merely verifying an APK signature.
 
 The pinned NDK 28.2.13676358 and CMake 3.31.6 are available locally. GameActivity
 3.0.5 was checked against the repository's archive digest. Existing package

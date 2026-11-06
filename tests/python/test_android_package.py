@@ -237,12 +237,27 @@ class AndroidPackageTests(unittest.TestCase):
         evidence, native = self.evidence()
         source = self.root / "source.apk"
         self.package(source, evidence, native)
+        with zipfile.ZipFile(source, "a") as archive:
+            archive.writestr("resources.arsc", b"resource table", compress_type=zipfile.ZIP_DEFLATED)
         first, second = self.root / "first.apk", self.root / "second.apk"
         canonical_apk(source, first)
         canonical_apk(source, second)
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with zipfile.ZipFile(first) as archive:
             self.assertEqual(archive.getinfo("lib/arm64-v8a/libentry.so").compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(archive.getinfo("resources.arsc").compress_type, zipfile.ZIP_STORED)
+
+    def test_inspection_rejects_compressed_android_resource_tables(self):
+        evidence, native = self.evidence()
+        source = self.root / "compressed-resources.apk"
+        self.package(source, evidence, native)
+        with zipfile.ZipFile(source, "a") as archive:
+            archive.writestr("resources.arsc", b"resource table", compress_type=zipfile.ZIP_DEFLATED)
+        with self.assertRaisesRegex(AndroidError, "resource tables must be uncompressed"):
+            inspect_package(source, evidence)
+        canonical = self.root / "uncompressed-resources.apk"
+        canonical_apk(source, canonical)
+        self.assertEqual(len(inspect_package(canonical, evidence)["contents"]), 5)
 
     def test_declared_release_generated_assets_are_bound_to_provenance(self):
         evidence, native = self.evidence()
