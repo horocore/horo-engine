@@ -33,7 +33,7 @@ namespace Horo::Render::AndroidVulkan {
         vk_.destroyFramebuffer = device.operator()<PFN_vkDestroyFramebuffer>("vkDestroyFramebuffer");
         vk_.createFence = device.operator()<PFN_vkCreateFence>("vkCreateFence");
         vk_.destroyFence = device.operator()<PFN_vkDestroyFence>("vkDestroyFence");
-        vk_.fenceStatus = device.operator()<PFN_vkGetFenceStatus>("vkGetFenceStatus");
+        vk_.waitFences = device.operator()<PFN_vkWaitForFences>("vkWaitForFences");
         vk_.resetFences = device.operator()<PFN_vkResetFences>("vkResetFences");
         vk_.createSemaphore = device.operator()<PFN_vkCreateSemaphore>("vkCreateSemaphore");
         vk_.destroySemaphore = device.operator()<PFN_vkDestroySemaphore>("vkDestroySemaphore");
@@ -66,7 +66,7 @@ namespace Horo::Render::AndroidVulkan {
                                    bool(vk_.destroyFramebuffer),
                                    bool(vk_.createFence),
                                    bool(vk_.destroyFence),
-                                   bool(vk_.fenceStatus),
+                                   bool(vk_.waitFences),
                                    bool(vk_.resetFences),
                                    bool(vk_.createSemaphore),
                                    bool(vk_.destroySemaphore),

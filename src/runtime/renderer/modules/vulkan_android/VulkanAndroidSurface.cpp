@@ -1,6 +1,7 @@
 #include "VulkanAndroidRuntime.h"
 
 #include <algorithm>
+#include <format>
 #include <limits>
 
 namespace Horo::Render::AndroidVulkan {
@@ -21,7 +22,8 @@ namespace Horo::Render::AndroidVulkan {
                 if (format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
                     (format.format == VK_FORMAT_R8G8B8A8_UNORM || format.format == VK_FORMAT_B8G8R8A8_UNORM))
                     return Result<VkFormat>::Success(format.format);
-            return Result<VkFormat>::Failure(MakeError(Errors::Unsupported));
+            return Result<VkFormat>::Failure(
+                MakeError(Errors::Unsupported, "The Android surface exposes no supported RGB8 UNORM/sRGB nonlinear pair."));
         }
 
         /** @brief Confirms actual FIFO presentation support from the same physical-device/surface pair. */
@@ -37,15 +39,26 @@ namespace Horo::Render::AndroidVulkan {
             if (result != VK_SUCCESS)
                 return Result<void>::Failure(NativeError("vkGetPhysicalDeviceSurfacePresentModesKHR", result));
             if (std::ranges::find(std::span{modes}.first(count), VK_PRESENT_MODE_FIFO_KHR) == std::span{modes}.first(count).end())
-                return Result<void>::Failure(MakeError(Errors::Unsupported));
+                return Result<void>::Failure(MakeError(Errors::Unsupported, "The Android surface does not expose FIFO presentation."));
             return Result<void>::Success();
         }
 
-        /** @brief Checks the closed attachment/opaque/single-layer profile against actual native surface limits. */
+        /** @brief Selects only reported opaque or explicitly native-window-default alpha composition. */
+        Result<VkCompositeAlphaFlagBitsKHR> SelectCompositeAlpha(VkCompositeAlphaFlagsKHR supported) {
+            if ((supported & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) != 0)
+                return Result<VkCompositeAlphaFlagBitsKHR>::Success(VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+            if ((supported & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) != 0)
+                return Result<VkCompositeAlphaFlagBitsKHR>::Success(VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR);
+            return Result<VkCompositeAlphaFlagBitsKHR>::Failure(
+                MakeError(Errors::Unsupported,
+                          std::format("Android surface alpha mask {} exposes neither OPAQUE nor native-window-default INHERIT.",
+                                      supported)));
+        }
+
+        /** @brief Checks the closed attachment/single-layer profile against actual native surface limits. */
         bool AdmitsSurface(const VkSurfaceCapabilitiesKHR &caps, FramebufferExtent extent) {
             const std::array facts{extent.IsValid(),
                                    bool(caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
-                                   bool(caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR),
                                    caps.maxImageArrayLayers >= 1,
                                    extent.width >= caps.minImageExtent.width,
                                    extent.height >= caps.minImageExtent.height,
@@ -148,13 +161,24 @@ namespace Horo::Render::AndroidVulkan {
         const auto result = vk_.surfaceCapabilities(physical_, surface_->native, &caps);
         if (result != VK_SUCCESS)
             return Result<VkSwapchainCreateInfoKHR>::Failure(NativeError("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", result));
+        const auto alpha = SelectCompositeAlpha(caps.supportedCompositeAlpha);
+        if (alpha.HasError())
+            return Result<VkSwapchainCreateInfoKHR>::Failure(alpha.ErrorValue());
         const auto window = surface_->window.Snapshot();
         surface_->extent = {window.extent.width, window.extent.height};
         surface_->format = format.Value();
+        surface_->compositeAlpha = alpha.Value();
         if (caps.currentExtent.width != std::numeric_limits<std::uint32_t>::max())
             surface_->extent = {caps.currentExtent.width, caps.currentExtent.height};
         if (!AdmitsSurface(caps, surface_->extent))
-            return Result<VkSwapchainCreateInfoKHR>::Failure(MakeError(Errors::Unsupported));
+            return Result<VkSwapchainCreateInfoKHR>::Failure(
+                MakeError(Errors::Unsupported,
+                          std::format("Android surface rejects the attachment/single-layer profile: usage={}, alpha={}, layers={}, "
+                                      "extent={}x{}, "
+                                      "limits={}x{}..{}x{}.",
+                                      caps.supportedUsageFlags, caps.supportedCompositeAlpha, caps.maxImageArrayLayers,
+                                      surface_->extent.width, surface_->extent.height, caps.minImageExtent.width,
+                                      caps.minImageExtent.height, caps.maxImageExtent.width, caps.maxImageExtent.height)));
         if (!AdmitsImageCount(caps))
             return Result<VkSwapchainCreateInfoKHR>::Failure(MakeError(Errors::Capacity));
         const VkSwapchainCreateInfoKHR info{.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -167,7 +191,7 @@ namespace Horo::Render::AndroidVulkan {
                                             .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                                             .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
                                             .preTransform = caps.currentTransform,
-                                            .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                                            .compositeAlpha = surface_->compositeAlpha,
                                             .presentMode = VK_PRESENT_MODE_FIFO_KHR,
                                             .clipped = VK_TRUE};
         return Result<VkSwapchainCreateInfoKHR>::Success(info);

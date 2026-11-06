@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/Internal/VulkanAndroidBackendModule.h"
 #include "VulkanAndroidProtocolFixture.h"
 
+#include <string>
 #include <thread>
 
 namespace Horo::Render::AndroidVulkan::Testing {
@@ -175,6 +176,96 @@ namespace Horo::Render::AndroidVulkan::Testing {
         CHECK(f.driver.submits == 0);
     }
 
+    TEST_CASE("Android Vulkan prefers reported opaque composition and preserves its finite clear alpha contract",
+              "[renderer][vulkan-android][protocol-fake][alpha]") {
+        Fixture f;
+        SECTION("opaque only") {}
+        SECTION("both opaque and inherit") {
+            f.driver.supportedAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR | VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+        }
+        f.Initialize();
+        f.Available();
+        CHECK(Value(f.runtime->Availability({640, 480})));
+        CHECK(f.driver.chosenAlpha == VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+        const auto frame = Value(f.runtime->Begin({1, {640, 480}}));
+        PrimaryOutputAttachment attachment;
+        attachment.clearColor.alpha = 0.25F;
+        const std::array passes{RenderPassDescriptor{.id = {1}, .primaryOutput = attachment}};
+        Accepted(f.runtime->Execute({frame, passes}));
+        CHECK(f.driver.commandBegins == 1);
+        CHECK(f.driver.recordedClearAlpha == 0.25F);
+        Accepted(f.runtime->Present(frame));
+    }
+
+    TEST_CASE("Android Vulkan admits reported inherit as native window default with unchanged unit alpha",
+              "[renderer][vulkan-android][protocol-fake][alpha]") {
+        Fixture f;
+        f.driver.supportedAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+        f.Initialize();
+        f.Available();
+        CHECK(Value(f.runtime->Availability({640, 480})));
+        CHECK(f.driver.chainCreates == 1);
+        CHECK(f.driver.chosenAlpha == VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR);
+        f.Draw();
+        CHECK(f.driver.recordedClearAlpha == 1.0F);
+        CHECK(f.driver.submits == 1);
+        CHECK(f.driver.presents == 1);
+    }
+
+    TEST_CASE("Android Vulkan rejects unrelated composite alpha modes before native swapchain creation",
+              "[renderer][vulkan-android][protocol-fake][alpha]") {
+        Fixture f;
+        SECTION("premultiplied only") {
+            f.driver.supportedAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+        }
+        SECTION("postmultiplied only") {
+            f.driver.supportedAlpha = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
+        }
+        SECTION("both unrelated modes") {
+            f.driver.supportedAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR | VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
+        }
+        f.Initialize();
+        f.Available();
+        const auto available = f.runtime->Availability({640, 480});
+        REQUIRE(available.HasError());
+        CHECK(available.ErrorValue().code.Value() == Errors::Unsupported.code.Value());
+        CHECK(f.driver.chainCreates == 0);
+        CHECK(f.driver.commandBegins == 0);
+        CHECK(f.driver.surfaceDestroys == 1);
+    }
+
+    TEST_CASE("Android Vulkan inherit rejects nonunit clear alpha before any command recording",
+              "[renderer][vulkan-android][protocol-fake][alpha]") {
+        Fixture f;
+        f.driver.supportedAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+        PrimaryOutputAttachment attachment;
+        SECTION("transparent") {
+            attachment.clearColor.alpha = 0.0F;
+        }
+        SECTION("fractional") {
+            attachment.clearColor.alpha = 0.5F;
+        }
+        SECTION("above one") {
+            attachment.clearColor.alpha = 2.0F;
+        }
+        SECTION("negative") {
+            attachment.clearColor.alpha = -1.0F;
+        }
+        f.Initialize();
+        f.Available();
+        CHECK(Value(f.runtime->Availability({640, 480})));
+        const auto frame = Value(f.runtime->Begin({1, {640, 480}}));
+        const std::array passes{RenderPassDescriptor{.id = {1}, .primaryOutput = attachment}};
+        const auto executed = f.runtime->Execute({frame, passes});
+        REQUIRE(executed.HasError());
+        CHECK(executed.ErrorValue().code.Value() == Errors::Unsupported.code.Value());
+        CHECK(f.driver.commandBegins == 0);
+        CHECK(f.driver.passes == 0);
+        CHECK(f.driver.submits == 0);
+        CHECK(f.driver.presents == 0);
+        f.runtime->Abort(frame);
+    }
+
     TEST_CASE("Android Vulkan native output stays available while every frame credit is busy",
               "[renderer][vulkan-android][protocol-fake]") {
         Fixture f;
@@ -200,6 +291,59 @@ namespace Horo::Render::AndroidVulkan::Testing {
         CHECK(Value(f.runtime->Availability({640, 480})));
         CHECK(Value(f.windows->Snapshot()).window == original.window);
         CHECK(Value(f.windows->Snapshot()).revision == original.revision);
+    }
+
+    TEST_CASE("Android Vulkan zero-time waits preserve independent acquisition rendering and presentation debt",
+              "[renderer][vulkan-android][protocol-fake][fence]") {
+        Fixture f;
+        f.Initialize();
+        const auto window = f.Available();
+        CHECK(Value(f.runtime->Availability({640, 480})));
+        f.driver.acquireReady = false;
+        const auto pending = f.runtime->Begin({1, {640, 480}});
+        REQUIRE(pending.HasError());
+        CHECK(IsVulkanAndroidBackpressure(pending.ErrorValue()));
+        CHECK(f.driver.waitsByKind[static_cast<std::size_t>(Driver::Kind::Acquire)] > 0);
+        CHECK(f.driver.submits == 0);
+        CHECK(f.driver.surfaceDestroys == 0);
+
+        f.driver.acquireReady = true;
+        f.driver.renderReady = false;
+        f.driver.presentReady = false;
+        f.Draw();
+        CHECK(Value(f.runtime->Availability({640, 480})));
+        CHECK(f.driver.waitsByKind[static_cast<std::size_t>(Driver::Kind::Render)] > 0);
+        CHECK(f.driver.waitsByKind[static_cast<std::size_t>(Driver::Kind::Present)] > 0);
+        Accepted(f.windows->ObserveLost(window));
+        f.Commit();
+        CHECK_FALSE(Value(f.runtime->Availability({640, 480})));
+        CHECK(f.native[0].references > 0);
+        CHECK(f.driver.surfaceDestroys == 0);
+        f.driver.renderReady = true;
+        CHECK_FALSE(Value(f.runtime->Availability({640, 480})));
+        CHECK(f.driver.surfaceDestroys == 0);
+        f.driver.presentReady = true;
+        CHECK_FALSE(Value(f.runtime->Availability({640, 480})));
+        CHECK(f.driver.surfaceDestroys == 1);
+        CHECK(f.native[0].references == 0);
+    }
+
+    TEST_CASE("Android Vulkan zero-time native fence failures propagate without releasing live resources",
+              "[renderer][vulkan-android][protocol-fake][fence]") {
+        Fixture f;
+        f.Initialize();
+        f.Available();
+        CHECK(Value(f.runtime->Availability({640, 480})));
+        f.Draw();
+        f.driver.fenceFailure = VK_ERROR_OUT_OF_HOST_MEMORY;
+        const auto failed = f.runtime->Availability({640, 480});
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().domain.Value() == Errors::NativeFailure.domain.Value());
+        CHECK(failed.ErrorValue().code.Value() == Errors::NativeFailure.code.Value());
+        CHECK(failed.ErrorValue().message.find("vkWaitForFences") != std::string::npos);
+        CHECK(f.driver.surfaceDestroys == 0);
+        CHECK(f.native[0].references > 0);
+        f.driver.fenceFailure = VK_SUCCESS;
     }
 
     TEST_CASE("Android Vulkan loss retains authentic old windows until both render and present proofs retire",

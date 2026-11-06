@@ -39,7 +39,7 @@ namespace Horo::Render::AndroidVulkan {
         PFN_vkDestroyFramebuffer destroyFramebuffer{};
         PFN_vkCreateFence createFence{};
         PFN_vkDestroyFence destroyFence{};
-        PFN_vkGetFenceStatus fenceStatus{};
+        PFN_vkWaitForFences waitFences{};
         PFN_vkResetFences resetFences{};
         PFN_vkCreateSemaphore createSemaphore{};
         PFN_vkDestroySemaphore destroySemaphore{};
@@ -80,6 +80,7 @@ namespace Horo::Render::AndroidVulkan {
         VkSwapchainKHR swapchain{};
         VkRenderPass renderPass{};
         VkFormat format{};
+        VkCompositeAlphaFlagBitsKHR compositeAlpha{}; /**< Actual selected OPAQUE or native-window-default INHERIT mode. */
         FramebufferExtent extent;
         std::array<Image, 8> images{};
         std::uint32_t imageCount{};

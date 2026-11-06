@@ -123,8 +123,9 @@ def validate_renderer_profile(profile: dict) -> None:
         if "graphicsProfile" in profile:
             raise AndroidError("Assembly-only profiles cannot declare native graphics support.")
         return
-    expected = {"schema": 1, "api": "Vulkan1.1", "presentMode": "Fifo",
-                "swapchainMaintenance1Required": True, "singleGraphicsPresentQueue": True}
+    expected = {"schema": 2, "api": "Vulkan1.1", "presentMode": "Fifo",
+                "swapchainMaintenance1Required": True, "singleGraphicsPresentQueue": True,
+                "compositeAlphaPolicy": "prefer-opaque-else-inherit-alpha-one"}
     if profile["renderer"] != "vulkan-android" or not exact_graphics_profile(profile.get("graphicsProfile"), expected):
         raise AndroidError("Unsupported Android development graphics profile; select the declared effective Vulkan tuple.")
     if profile["preset"] != "android-vulkan-development" or profile["configuration"] != "Debug":

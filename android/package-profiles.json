@@ -90,11 +90,12 @@
       ],
       "generatedAssets": [],
       "graphicsProfile": {
-        "schema": 1,
+        "schema": 2,
         "api": "Vulkan1.1",
         "presentMode": "Fifo",
         "swapchainMaintenance1Required": true,
-        "singleGraphicsPresentQueue": true
+        "singleGraphicsPresentQueue": true,
+        "compositeAlphaPolicy": "prefer-opaque-else-inherit-alpha-one"
       }
     }
   }

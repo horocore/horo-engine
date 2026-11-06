@@ -4,13 +4,13 @@
 #include <limits>
 
 namespace Horo::Render::AndroidVulkan {
-    /** @brief Nonblocking exact-fence observation; no accepted submission is treated as completion. */
+    /** @brief Observes the exact native fence with a zero-time wait; accepted submission never substitutes for completion. */
     Result<bool> Runtime::Fence(VkFence fence) const {
-        const auto result = vk_.fenceStatus(device_, fence);
-        if (result == VK_NOT_READY)
+        const auto result = vk_.waitFences(device_, 1, &fence, VK_TRUE, 0);
+        if (result == VK_TIMEOUT)
             return Result<bool>::Success(false);
         if (result != VK_SUCCESS)
-            return Result<bool>::Failure(NativeError("vkGetFenceStatus", result));
+            return Result<bool>::Failure(NativeError("vkWaitForFences", result));
         return Result<bool>::Success(true);
     }
 

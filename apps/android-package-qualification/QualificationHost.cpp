@@ -5,10 +5,12 @@
 #include "Horo/Runtime/Render/Internal/VulkanAndroidBackendModule.h"
 #include "PresentationAdmission.h"
 
+#include <android/log.h>
 #include <array>
 #include <exception>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 #include <limits>
+#include <optional>
 #include <thread>
 
 namespace Horo::AndroidQualification {
@@ -17,6 +19,38 @@ namespace Horo::AndroidQualification {
     using namespace Horo::Render;
 
     namespace {
+        enum class FrameStage : std::size_t {
+            Begin,
+            Execute,
+            Present
+        };
+
+        /** @brief Value-only diagnostic projection; equality observes transitions without querying another owner. */
+        struct HostObservation final {
+            AndroidActivityGeneration activity;
+            AndroidWindowGeneration window;
+            AndroidPresentationGeneration presentation;
+            std::uint64_t factsRevision{};
+            AndroidProcessState process{};
+            AndroidActivityState activityState{};
+            AndroidWindowExtent extent;
+            bool nativeAvailable{}, ready{}, hasWindow{}, hasPresentation{};
+            bool operator==(const HostObservation &) const noexcept = default;
+        };
+
+        /** @brief Uses fixed text for the actual stage, without frame-hot string construction. */
+        const char *StageName(FrameStage stage) noexcept {
+            constexpr std::array names{"begin", "execute", "present"};
+            return names[static_cast<std::size_t>(stage)];
+        }
+
+        /** @brief Labels only the observed outcome; accepted Present is not GPU/display completion. */
+        const char *OutcomeName(const Result<void> &outcome) noexcept {
+            if (outcome.HasValue())
+                return "accepted";
+            return IsVulkanAndroidBackpressure(outcome.ErrorValue()) ? "backpressure" : "failed";
+        }
+
         /** @brief Skips only exact native backpressure; success here is not a presented-frame receipt. */
         Result<void> RetryOrFailure(Result<void> outcome) {
             if (outcome.HasError() && IsVulkanAndroidBackpressure(outcome.ErrorValue()))
@@ -43,6 +77,74 @@ namespace Horo::AndroidQualification {
         AndroidWindowGeneration window;
         std::uint64_t frame{}; /**< Monotonic attempted request identity, never a presented-frame counter. */
         bool closing{}, drained{};
+        std::array<std::uint64_t, 3> pending{};
+        std::uint64_t presentAccepted{}; /**< At most one accepted Present per bounded frame request; never completion evidence. */
+        std::optional<HostObservation> observation;
+        bool reportNextOutcome{true}, reportFirstPresent{true};
+
+        /** @brief Reports transition-only canonical/window facts already obtained by the ordinary host pump. */
+        void Observe(const AndroidLifecycleSnapshot &current, const AndroidWindowSnapshot &native, bool ready) noexcept {
+            const HostObservation next{current.activityGeneration,
+                                       current.windowGeneration,
+                                       current.presentationGeneration,
+                                       native.revision,
+                                       current.process,
+                                       current.activity,
+                                       native.extent,
+                                       native.available,
+                                       ready,
+                                       current.hasWindow,
+                                       current.hasPresentation};
+            if (observation && *observation == next)
+                return;
+            observation = next;
+            reportNextOutcome = true;
+            reportFirstPresent = true;
+            __android_log_print(ANDROID_LOG_INFO, "HoroPackageQualification",
+                                "host-state lifecycleRevision=%llu activity=%llu state=%u process=%u window=%llu presentation=%llu "
+                                "factsRevision=%llu extent=%ux%u nativeAvailable=%u ready=%u hasWindow=%u hasPresentation=%u "
+                                "attempts=%llu presentAccepted=%llu",
+                                static_cast<unsigned long long>(current.revision),
+                                static_cast<unsigned long long>(current.activityGeneration.value), static_cast<unsigned>(current.activity),
+                                static_cast<unsigned>(current.process), static_cast<unsigned long long>(current.windowGeneration.value),
+                                static_cast<unsigned long long>(current.presentationGeneration.value),
+                                static_cast<unsigned long long>(native.revision), native.extent.width, native.extent.height,
+                                static_cast<unsigned>(native.available), static_cast<unsigned>(ready),
+                                static_cast<unsigned>(current.hasWindow), static_cast<unsigned>(current.hasPresentation),
+                                static_cast<unsigned long long>(frame), static_cast<unsigned long long>(presentAccepted));
+        }
+
+        /** @brief Logs the first outcome/accepted Present after a state transition, then at most every 64 attempts. */
+        bool ReportOutcome(bool acceptedPresent) noexcept {
+            if (acceptedPresent && reportFirstPresent) {
+                reportFirstPresent = false;
+                reportNextOutcome = false;
+                return true;
+            }
+            if (reportNextOutcome) {
+                reportNextOutcome = false;
+                return true;
+            }
+            return frame % 64 == 0;
+        }
+
+        /** @brief Counts exact observed outcomes; each counter is bounded by the existing nonwrapping request sequence. */
+        Result<void> FinishAttempt(Result<void> outcome, FrameStage stage) {
+            const bool acceptedPresent = outcome.HasValue() && stage == FrameStage::Present;
+            if (acceptedPresent)
+                ++presentAccepted;
+            else if (outcome.HasError() && IsVulkanAndroidBackpressure(outcome.ErrorValue()))
+                ++pending[static_cast<std::size_t>(stage)];
+            if (ReportOutcome(acceptedPresent))
+                __android_log_print(ANDROID_LOG_INFO, "HoroPackageQualification",
+                                    "host-frame stage=%s outcome=%s attempts=%llu presentAccepted=%llu beginPending=%llu "
+                                    "executePending=%llu "
+                                    "presentPending=%llu completion=unobserved",
+                                    StageName(stage), OutcomeName(outcome), static_cast<unsigned long long>(frame),
+                                    static_cast<unsigned long long>(presentAccepted), static_cast<unsigned long long>(pending[0]),
+                                    static_cast<unsigned long long>(pending[1]), static_cast<unsigned long long>(pending[2]));
+            return RetryOrFailure(std::move(outcome));
+        }
 
         /** @brief Commits the one canonical lifecycle cutoff before publishing native window facts. */
         Result<void> Drain() {
@@ -117,7 +219,7 @@ namespace Horo::AndroidQualification {
                 return Result<void>::Failure(MakeError(FrameRequestExhausted));
             auto begun = backend->BeginFrame({++frame, extent});
             if (begun.HasError())
-                return RetryOrFailure(Result<void>::Failure(begun.ErrorValue()));
+                return FinishAttempt(Result<void>::Failure(begun.ErrorValue()), FrameStage::Begin);
             const auto token = begun.Value();
 
             struct AbortGuard {
@@ -136,10 +238,10 @@ namespace Horo::AndroidQualification {
                                                          .primaryOutput = PrimaryOutputAttachment{
                                                              .clearColor = {.red = .08F, .green = .16F, .blue = .24F, .alpha = 1.F}}}};
             if (auto executed = backend->Execute({token, passes}); executed.HasError())
-                return RetryOrFailure(std::move(executed));
+                return FinishAttempt(std::move(executed), FrameStage::Execute);
             auto presented = backend->Present(token);
             guard.committed = presented.HasValue();
-            return RetryOrFailure(std::move(presented));
+            return FinishAttempt(std::move(presented), FrameStage::Present);
         }
     };
 
@@ -202,6 +304,7 @@ namespace Horo::AndroidQualification {
         auto lifecycle = state_->lifecycle->Snapshot();
         if (lifecycle.HasError())
             return Result<void>::Failure(lifecycle.ErrorValue());
+        state_->Observe(lifecycle.Value(), native.Value(), available.Value());
         if (!available.Value() || lifecycle.Value().process != AndroidProcessState::Running ||
             lifecycle.Value().activity != AndroidActivityState::Resumed)
             return Result<void>::Success();

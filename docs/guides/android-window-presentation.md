@@ -17,6 +17,15 @@ dependencies, and one graphics queue that supports the actual Android surface.
 Missing support returns a typed unsupported result. This narrower profile is not
 a claim that every Android Vulkan Baseline device supports this implementation.
 
+Graphics profile schema 2 declares `prefer-opaque-else-inherit-alpha-one`.
+Swapchain creation prefers a reported OPAQUE composite-alpha bit. If the surface
+reports only INHERIT among those choices, the backend selects that exact bit as
+native-window-default composition, without claiming verified native opacity.
+This path accepts only clear alpha 1; other alpha values fail before command
+recording. PRE_MULTIPLIED and POST_MULTIPLIED are not substituted. Schema 1's
+OPAQUE-only declaration is intentionally replaced, and stale or altered policy
+metadata fails closed. Renderer, mode, maintenance and queue constraints remain.
+
 The implemented renderer operations are primary-output clear, presentation and
 their lifecycle. Resource creation, material/geometry graphs, compute and other
 unimplemented operations reject explicitly; their capability bits remain absent.
@@ -61,6 +70,15 @@ unused acquired image is returned only after its acquisition and any accepted
 rendering have completed. The old swapchain, surface and window lease remain
 owned until all relevant debt retires. The backend never calls device/queue idle
 as a normal-frame resize, replacement or shutdown shortcut.
+
+Fence observation uses `vkWaitForFences` with exactly one fence, `waitAll = true`
+and timeout zero. `VK_TIMEOUT` preserves pending ownership; only actual
+`VK_SUCCESS` supplies the signal proof. The [zero-time operation does not wait](https://docs.vulkan.org/refpages/latest/refpages/source/vkWaitForFences.html).
+The development emulator produced disagreeing `vkGetFenceStatus` and zero-time
+wait results for maintenance present fences; this path still requires a direct
+successful native query of that exact fence. Completed image
+reacquisition does not substitute for the separate present-fence signal, and no
+elapsed-time, accepted-submit count or extra blocking wait releases its resources.
 
 After destroying an old surface tuple, the readiness poll returns unavailable
 with that native output genuinely absent. A later poll imports the replacement;
@@ -121,6 +139,34 @@ The pinned NDK 28.2.13676358 and CMake 3.31.6 are available locally. GameActivit
 3.0.5 was checked against the repository's archive digest. Existing package
 assembly policy remains Linux-only; a macOS native compile does not establish a
 qualified Linux package or physical Android tuple.
+
+### Native correction-batch runtime evidence
+
+The alpha-selection and exact one-fence zero-time polling correction passed
+21 Vulkan protocol cases and five application-admission cases without failures
+or skips. Both pinned NDK API 29 development ABIs compiled and linked again.
+The package parser suite passed 36 tests. These are separate evidence streams.
+
+A local diagnostic APK rebuilt both native ABIs from this correction batch,
+retaining the previously qualified CI Java/assets and recording dirty-source
+provenance. Both native link recipes and binary markers were checked to exclude
+the diagnostic dlsym wrapper and calibration probes. On the owned API 35 ARM64
+emulator with host GPU, the untraced package produced the expected clear pixels
+and sustained accepted Present calls before and after Home/resume. Window and
+presentation generations advanced from one to two on native window replacement.
+A 320x640 to 640x320 change retained window generation two, changed the actual
+native extent and facts revision, temporarily revoked readiness, then published
+presentation generation three and the expected pixels. Returning to 320x640
+published generation four. A separate 320x640 to 480x800 change recreated the
+Activity and recovered at the new native extent. Accepted Present counters are
+not GPU/display-completion receipts. The emulator exited cleanly; the measured
+owned process-tree peak stayed below 2.5 GiB.
+
+These are bounded emulator results, not physical-device, all-driver or 16 KiB
+runtime acceptance. The locally assembled diagnostic package does not replace
+the Linux-only delivery assembly path or CI qualification of this unpublished
+correction batch. Local managed Sonar is waived on this Mac; Codacy was not run,
+and no overall local-analysis clearance is claimed.
 
 ## Shared Render API portability migrations
 

@@ -15,6 +15,10 @@ namespace Horo::Render::AndroidVulkan {
             return fact;
         }))
             return Result<void>::Failure(MakeError(Errors::Unsupported));
+        if (surface_->compositeAlpha == VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR && attachment.clearColor.alpha != 1.0F)
+            return Result<void>::Failure(
+                MakeError(Errors::Unsupported,
+                          "Native-window-default INHERIT composition requires clear alpha exactly one; native opacity is not verified."));
         return Result<void>::Success();
     }
 

@@ -46,9 +46,14 @@ namespace Horo::Render::AndroidVulkan::Testing {
         std::size_t fenceCount{};
         bool maintenance{true}, acquireReady{true}, renderReady{true}, presentReady{true}, surfaceSupported{true}, failSwapchain{};
         std::size_t instanceCreates{}, deviceCreates{}, surfaceCreates{}, surfaceDestroys{}, chainDestroys{}, submits{}, presents{},
-            releases{}, passes{}, acquisitions{};
+            releases{}, passes{}, acquisitions{}, chainCreates{}, commandBegins{};
+        VkCompositeAlphaFlagsKHR supportedAlpha{VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR};
+        VkCompositeAlphaFlagBitsKHR chosenAlpha{};
+        float recordedClearAlpha{};
         bool enabledMaintenance{}, requested11{};
         std::uint32_t acquiredImage{};
+        std::array<std::size_t, 4> waitsByKind{};
+        VkResult fenceFailure{VK_SUCCESS};
         VkResult acquireResult{VK_SUCCESS}, presentResult{VK_SUCCESS};
 
         Driver() {
@@ -174,7 +179,7 @@ namespace Horo::Render::AndroidVulkan::Testing {
                     .maxImageExtent = {2048, 2048},
                     .maxImageArrayLayers = 1,
                     .currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
-                    .supportedCompositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                    .supportedCompositeAlpha = current->supportedAlpha,
                     .supportedUsageFlags = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT};
             return VK_SUCCESS;
         }
@@ -196,8 +201,10 @@ namespace Horo::Render::AndroidVulkan::Testing {
         }
 
         /** @brief Injects exact cold swapchain failure or supplies one fake chain. */
-        static VkResult VKAPI_CALL CreateChain(VkDevice, const VkSwapchainCreateInfoKHR *, const VkAllocationCallbacks *,
+        static VkResult VKAPI_CALL CreateChain(VkDevice, const VkSwapchainCreateInfoKHR *info, const VkAllocationCallbacks *,
                                                VkSwapchainKHR *out) {
+            ++current->chainCreates;
+            current->chosenAlpha = info->compositeAlpha;
             if (current->failSwapchain)
                 return VK_ERROR_OUT_OF_DEVICE_MEMORY;
             *out = Issue<VkSwapchainKHR>();
@@ -286,19 +293,28 @@ namespace Horo::Render::AndroidVulkan::Testing {
         /** @brief Observes fence teardown. */
         static void VKAPI_CALL DestroyFence(VkDevice, VkFence, const VkAllocationCallbacks *) {}
 
-        /** @brief Returns only the separately configured native protocol completion class. */
-        static VkResult VKAPI_CALL FenceStatus(VkDevice, VkFence fence) {
-            const auto found = std::ranges::find(current->fences, fence);
+        /** @brief Validates exact zero-time native observation and returns independent fence state or an injected native failure. */
+        static VkResult VKAPI_CALL WaitFences(VkDevice, std::uint32_t count, const VkFence *fences, VkBool32 waitAll,
+                                              std::uint64_t timeout) {
+            REQUIRE(count == 1);
+            REQUIRE(fences);
+            CHECK(waitAll == VK_TRUE);
+            CHECK(timeout == 0);
+            const auto found = std::ranges::find(current->fences, fences[0]);
             REQUIRE(found != current->fences.end());
-            switch (current->kinds[found - current->fences.begin()]) {
+            const auto kind = current->kinds[found - current->fences.begin()];
+            ++current->waitsByKind[static_cast<std::size_t>(kind)];
+            if (current->fenceFailure != VK_SUCCESS)
+                return current->fenceFailure;
+            switch (kind) {
                 case Kind::Acquire:
-                    return current->acquireReady ? VK_SUCCESS : VK_NOT_READY;
+                    return current->acquireReady ? VK_SUCCESS : VK_TIMEOUT;
                 case Kind::Render:
-                    return current->renderReady ? VK_SUCCESS : VK_NOT_READY;
+                    return current->renderReady ? VK_SUCCESS : VK_TIMEOUT;
                 case Kind::Present:
-                    return current->presentReady ? VK_SUCCESS : VK_NOT_READY;
+                    return current->presentReady ? VK_SUCCESS : VK_TIMEOUT;
                 default:
-                    return VK_NOT_READY;
+                    return VK_TIMEOUT;
             }
         }
 
@@ -342,6 +358,7 @@ namespace Horo::Render::AndroidVulkan::Testing {
 
         /** @brief Accepts fake command recording. */
         static VkResult VKAPI_CALL BeginCommand(VkCommandBuffer, const VkCommandBufferBeginInfo *) {
+            ++current->commandBegins;
             return VK_SUCCESS;
         }
 
@@ -351,8 +368,9 @@ namespace Horo::Render::AndroidVulkan::Testing {
         }
 
         /** @brief Records actual production begin-render-pass execution, not a GPU pixel result. */
-        static void VKAPI_CALL BeginPass(VkCommandBuffer, const VkRenderPassBeginInfo *, VkSubpassContents) {
+        static void VKAPI_CALL BeginPass(VkCommandBuffer, const VkRenderPassBeginInfo *info, VkSubpassContents) {
             ++current->passes;
+            current->recordedClearAlpha = info->pClearValues[0].color.float32[3];
         }
 
         /** @brief Completes the fake render-pass callback. */
@@ -404,7 +422,7 @@ namespace Horo::Render::AndroidVulkan::Testing {
                                    std::pair{"vkDestroyFramebuffer", Proc(&DestroyFramebuffer)},
                                    std::pair{"vkCreateFence", Proc(&CreateFence)},
                                    std::pair{"vkDestroyFence", Proc(&DestroyFence)},
-                                   std::pair{"vkGetFenceStatus", Proc(&FenceStatus)},
+                                   std::pair{"vkWaitForFences", Proc(&WaitFences)},
                                    std::pair{"vkResetFences", Proc(&ResetFences)},
                                    std::pair{"vkCreateSemaphore", Proc(&CreateSemaphore)},
                                    std::pair{"vkDestroySemaphore", Proc(&DestroySemaphore)},

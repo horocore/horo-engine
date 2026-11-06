@@ -103,6 +103,9 @@ class AndroidPackageTests(unittest.TestCase):
             evidence = android_package.provenance(self.tools, profile, {}, [])
         self.assertEqual(evidence["profile"], profile)
         self.assertTrue(evidence["profile"]["graphicsProfile"]["swapchainMaintenance1Required"])
+        self.assertEqual(evidence["profile"]["graphicsProfile"]["schema"], 2)
+        self.assertEqual(evidence["profile"]["graphicsProfile"]["compositeAlphaPolicy"],
+                         "prefer-opaque-else-inherit-alpha-one")
 
     def test_vulkan_development_profile_reaches_package_assembly_from_cli(self):
         arguments = ["--profile", "qualification-vulkan-development", "--abi", "arm64-v8a"]
@@ -134,6 +137,9 @@ class AndroidPackageTests(unittest.TestCase):
         invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], unknown=True)))
         invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], swapchainMaintenance1Required=1)))
         invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], schema=True)))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], schema=2.0)))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], schema=1)))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], compositeAlphaPolicy="opaque-only")))
         invalid.append(dict(profile, assets={"qualification.json": "android/qualification.json"}))
         for candidate in invalid:
             with self.subTest(candidate=candidate), self.assertRaises(AndroidError):
