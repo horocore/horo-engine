@@ -17,7 +17,14 @@ static_assert(!std::is_constructible_v<Horo::Prefab::PrefabTemplateLease, Horo::
 using PreparedGroupMethod = Horo::Result<std::vector<Horo::Runtime::DeferredEntity>> (Horo::Prefab::PrefabTemplateProvider::*)(
     const Horo::Prefab::PrefabTemplateLease &, std::vector<Horo::Runtime::RuntimeComponentSet>, const Horo::CancellationToken &,
     Horo::Prefab::PrefabPreparedGroupOptions);
-static_assert(std::is_same_v<decltype(&Horo::Prefab::PrefabTemplateProvider::QueuePreparedGroup), PreparedGroupMethod>);
+static_assert(std::is_same_v<decltype(static_cast<PreparedGroupMethod>(&Horo::Prefab::PrefabTemplateProvider::QueuePreparedGroup)),
+                             PreparedGroupMethod>);
+
+using PreparedSpawnGroupMethod = Horo::Result<std::vector<Horo::Runtime::DeferredEntity>> (Horo::Prefab::PrefabTemplateProvider::*)(
+    const Horo::Prefab::PreparedPrefabSpawn &, std::vector<Horo::Runtime::RuntimeComponentSet>, const Horo::CancellationToken &,
+    Horo::Prefab::PrefabPreparedGroupOptions);
+static_assert(std::is_same_v<decltype(static_cast<PreparedSpawnGroupMethod>(&Horo::Prefab::PrefabTemplateProvider::QueuePreparedGroup)),
+                             PreparedSpawnGroupMethod>);
 
 int main() {
     const Horo::Prefab::PrefabTemplateLease lease;
